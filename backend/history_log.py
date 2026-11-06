@@ -172,7 +172,8 @@ def install(app, store, auth):
         vault = getattr(app.state, "vault", None)
         if not ids or vault is None or who.role not in ("human", "owner"):
             return {}
-        own = V.owned(c, who)
+        from .api_tools import hidden_keys
+        own = V.owned(c, who) - hidden_keys(c, who, vault.admins)     # never a key of a tool they may not see
         return {row["id"]: row["name"] for row in c.execute(
             f"SELECT id,substr(name,1,{TEXT_MAX + 1}) AS name FROM credentials WHERE id IN (%s)" % ",".join("?" * len(ids)), list(ids))
             if row["id"] in own or V.permitted(c, who, row["id"], vault.admins)}

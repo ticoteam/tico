@@ -24,6 +24,19 @@ sees every row. Anyone else reads the page of a tool they hold a grant on or add
 access row and the grants they made, and only the calls they or a bot they may see made. A bot reads the tools it is
 granted. Key values appear in no response here; the vault's reveal stays the only door to one.
 
+Who can see it (`tools.audience`, `visible`): NULL is Everyone, the rules above. A list (the audience shape pages use,
+backend/teammate_access.py: people, groups with the groups nested in them, bots) is Only listed: the tool is then seen by
+the company owner, whoever the list names and whoever can use it (an effective grant on one of its keys), and by nobody
+else, not another credential administrator, not Tico support, not the person who once added a key. A tool someone may
+not see is a 404 "No such tool" on every route here, its keys are left out of the vault's lists and refused by its
+reveal, grant, change and delete as if they did not exist (backend/credentials.py `key_hidden`), and it lists nowhere:
+not on Tools, not in a bot's tools, not by a name an Add would collide with. The owner, or a credential administrator who
+can see the tool, changes it (`set_audience`, event `tool.audience_changed`); a non-owner who narrows it stays on the
+list. The proxy follows grants alone, so it keeps working for whoever can use the tool.
+
+A Finance connection (`fin_connections.credential_ref`, backend/finance) that reads one of a tool's keys shows under
+Who can use it as Finance, read-only: it goes when the source is disconnected. Finance is not on the audience.
+
 tool-index rows other than API tools come from backend/connections.py's gatherers with their visibility already
 applied (mailboxes from backend/mailboxes.py, whose rows say who may use each): Tico addresses and numbers, mailing
 mail, Slack, GitHub, meeting importers, Listening and outgoing webhooks. Incoming webhooks and triggers are not tools:
@@ -31,8 +44,10 @@ they live in Automations. A tool a bot's bot.yaml declares with no tools row of 
 and tool_checks older than RETENTION_DAYS go with the storage trim (`sweep`).
 """
 
+import json
 import logging
 import re
+import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
 
@@ -41,7 +56,7 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import tool_services as TS
 from .credentials import CredentialWrite, administrator, effective_grant, owned, require_admin
-from .models import Contract
+from .models import AccessAudience, Contract
 from .store import H, Problem, encode
 
 log = logging.getLogger(__name__)
@@ -204,9 +219,101 @@ def may_read(c, who, tool_id, admins):
     return bool(set(keys) & owned(c, who))
 
 
-def _readable(c, who, tool_id, admins):
-    if not may_read(c, who, tool_id, admins):
+AUDIENCE_LISTS = ("people", "teams", "bots")
+
+
+def _field(row, name):
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
+
+
+def audience_of(tool):
+    """A tool's Only listed audience as one level ({everyone: False, people, teams, bots}), or None for Everyone. A stored
+    value that cannot be read lists nobody: a private tool never opens up by accident."""
+    raw = _field(tool, "audience")
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        value = None
+    value = value if isinstance(value, dict) else {}
+    return {"everyone": False, **{k: [str(v) for v in value[k] if v] if isinstance(value.get(k), list) else []
+                                  for k in AUDIENCE_LISTS}}
+
+
+def _can_use(c, tool_id, actor):
+    return any(effective_grant(c, k["id"], actor) for k in _keys(c, tool_id))
+
+
+def visible(c, who, tool, admins, auth=None):
+    """Whether `who` may know this tool exists: the one rule every route, list and the vault follow. `tool` is its row
+    (or its id). Everyone (audience NULL) is `may_read`; Only listed is the owner, whoever the audience names, and
+    whoever can use it."""
+    if isinstance(tool, str):
+        tool = c.execute("SELECT * FROM tools WHERE id=?", (tool,)).fetchone()
+        if tool is None:
+            return False
+    level = audience_of(tool)
+    if level is None:
+        return may_read(c, who, tool["id"], admins)
+    role = getattr(who, "role", "")
+    if getattr(who, "support", None) or role not in ("owner", "human", "bot"):
+        return False
+    if role == "owner":
+        return True
+    from . import teammate_access
+    if teammate_access.in_audience(c, who, level, auth):
+        return True
+    return _can_use(c, tool["id"], who.actor)
+
+
+def private_tools(c):
+    """Every Only listed tool's row."""
+    try:
+        return c.execute("SELECT * FROM tools WHERE audience IS NOT NULL").fetchall()
+    except sqlite3.OperationalError as exc:      # a file before the tools migrations
+        if "no such" not in str(exc):
+            raise
+        return []
+
+
+def hidden_keys(c, who, admins, auth=None):
+    """The ids of the keys (vault credentials) whose tool `who` may not see: a list leaves them out."""
+    out = set()
+    for tool in private_tools(c):
+        if not visible(c, who, tool, admins, auth):
+            out.update(k["id"] for k in _keys(c, tool["id"]))
+    return out
+
+
+def key_hidden(c, who, credential_id, admins, auth=None):
+    """Whether this credential is a key of a tool `who` may not see: the vault then answers as if it did not exist."""
+    try:
+        tool = c.execute("SELECT t.* FROM credentials k JOIN tools t ON t.id=k.tool_id WHERE k.id=? "
+                         "AND t.audience IS NOT NULL", (str(credential_id or ""),)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such" not in str(exc):
+            raise
+        return False
+    return tool is not None and not visible(c, who, tool, admins, auth)
+
+
+def _readable(c, who, tool_id, admins, auth=None):
+    """The tool's row, or a 404 "No such tool" when it does not exist or `who` may not see it."""
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (str(tool_id or ""),)).fetchone()
+    if tool is None or not visible(c, who, tool, admins, auth):
         raise Problem("not_found", "No such tool", 404)
+    return tool
+
+
+def may_set_audience(c, who, tool, admins, auth=None):
+    """The owner, or a credential administrator who can see the tool now."""
+    if getattr(who, "role", "") == "owner" and not getattr(who, "support", None):
+        return True
+    return _admin(c, who, admins) and visible(c, who, tool, admins, auth)
 
 
 def _initials(name):
@@ -257,6 +364,76 @@ def access_rows(c, who, tool_id, admins, auth=None):
     return sorted(out, key=lambda r: (r["kind"] != "person", r["name"].lower()))
 
 
+def finance_rows(c, tool_id):
+    """Who can use it, Finance's part: one row while a Finance connection (fin_connections, on installs with Finance)
+    reads one of the tool's keys, at Read and write when that is the Read and write key, last used at its last sync.
+    Read-only here: it goes when the source is disconnected."""
+    from . import connections as CN
+    keys = {k["id"]: k for k in _keys(c, tool_id)}
+    if not keys or not CN.table(c, "fin_connections"):
+        return []
+    marks = ",".join("?" * len(keys))
+    level, used = None, None
+    for row in c.execute(f"SELECT credential_ref, last_sync_at FROM fin_connections WHERE credential_ref IN ({marks}) "
+                         "AND status<>'disconnected'", list(keys)):
+        lv = "read_write" if keys[row["credential_ref"]]["access_level"] == "read_write" else "read"
+        level = lv if RANK[lv] > RANK.get(level, 0) else level
+        if (row["last_sync_at"] or "") > (used or ""):
+            used = row["last_sync_at"]
+    if level is None:
+        return []
+    return [{"subject": "finance", "kind": "finance", "id": "finance", "name": "Finance", "initials": "F", "level": level,
+             "last_used_at": used, "fixed": True}]
+
+
+def seen_by(c, tool, auth=None):
+    """Who can see an Only listed tool, and why, for whoever may change it: the owner ("Owner"), each audience entry
+    ("Listed"), then each person, bot and Finance that can use it ("Can use it"). Empty for Everyone."""
+    level = audience_of(tool)
+    if level is None:
+        return []
+    from . import names, views
+    rows, seen = [], set()
+
+    def add(subject, kind, name, why):
+        if subject in seen:
+            return
+        seen.add(subject)
+        rows.append({"subject": subject, "kind": kind, "id": subject.split(":", 1)[-1], "name": name, "why": why})
+    owner = auth.owner_id(c) if auth is not None else ""
+    listed = {"human:" + p for p in level["people"]} | {"bot:" + b for b in level["bots"]}
+    grants = {r["subject"] for r in access_rows_all(c, tool["id"])}
+    label = names.lookup(c, ({"human:" + owner} if owner else set()) | listed | grants)
+    if owner:
+        add("human:" + owner, "person", label.get("human:" + owner) or owner, "Owner")
+    groups = views.roster(c, shared=True).get("org_groups") or {}
+    for pid in level["people"]:
+        add("human:" + pid, "person", label.get("human:" + pid) or pid, "Listed")
+    for gid in level["teams"]:
+        add("group:" + gid, "group", str((groups.get(gid) or {}).get("name") or gid), "Listed")
+    for slug in level["bots"]:
+        add("bot:" + slug, "bot", label.get("bot:" + slug) or slug, "Listed")
+    for subject in sorted(grants, key=lambda s: (not s.startswith("human:"), (label.get(s) or s).lower())):
+        add(subject, "bot" if subject.startswith("bot:") else "person", label.get(subject) or H.actor_id(subject),
+            "Can use it")
+    if finance_rows(c, tool["id"]):
+        add("finance", "finance", "Finance", "Can use it")
+    return rows
+
+
+def access_rows_all(c, tool_id):
+    """[{subject, level}] for every person and bot with an effective grant on one of the tool's keys."""
+    found = {}
+    for key in _keys(c, tool_id):
+        for grant in c.execute("SELECT * FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL", (key["id"],)):
+            subject = grant["subject"]
+            if subject.startswith(("bot:", "human:")) and effective_grant(c, key["id"], subject) is not None:
+                level = "read" if key["access_level"] == "read" or grant["access_level"] == "read" else "read_write"
+                if RANK[level] > RANK.get(found.get(subject), 0):
+                    found[subject] = level
+    return [{"subject": s, "level": lv} for s, lv in found.items()]
+
+
 def _key_view(c, who, key, admin, admins):
     from .credentials import last_used, permitted
     shown = admin or permitted(c, who, key["id"], admins)
@@ -267,7 +444,8 @@ def _key_view(c, who, key, admin, admins):
 
 
 def _tool_view(tool):
-    return {k: tool[k] for k in ("id", "name", "service", "base_url", "auth_scheme", "check_path", "delivery")}
+    return {**{k: tool[k] for k in ("id", "name", "service", "base_url", "auth_scheme", "check_path", "delivery")},
+            "private": _field(tool, "audience") is not None}
 
 
 def _call_view(row):
@@ -286,8 +464,7 @@ def _call_visible(c, who, auth, admin, row):
 
 def detail(c, who, tool_id, admins, auth=None):
     """`GET /api-tools/{id}`: the tool, its keys (never a value), who can use it, its last checks and calls."""
-    _readable(c, who, tool_id, admins)
-    tool = tool_row(c, tool_id)
+    tool = _readable(c, who, tool_id, admins, auth)
     admin = _admin(c, who, admins)
     keys = _keys(c, tool_id)
     checks = [{"ok": bool(r["ok"]), "status_code": r["status_code"], "detail": r["detail"], "checked_at": r["checked_at"],
@@ -301,18 +478,21 @@ def detail(c, who, tool_id, admins, auth=None):
             if len(recent) == RECENT:
                 break
     state = status(tool, keys, latest_checks(c, tool_id))
-    return {"tool": _tool_view(tool), "keys": [_key_view(c, who, k, admin, admins) for k in keys],
-            "access": access_rows(c, who, tool_id, admins, auth), "checks": checks, "recent": recent,
-            "status": {"tone": state["tone"], "text": state["text"]}, "needs_you": state["needs_you"],
-            "can_manage": admin}
+    out = {"tool": _tool_view(tool), "keys": [_key_view(c, who, k, admin, admins) for k in keys],
+           "access": access_rows(c, who, tool_id, admins, auth) + (finance_rows(c, tool_id) if admin else []),
+           "checks": checks, "recent": recent, "status": {"tone": state["tone"], "text": state["text"]},
+           "needs_you": state["needs_you"], "can_manage": admin, "private": _field(tool, "audience") is not None,
+           "can_set_audience": False}
+    if may_set_audience(c, who, tool, admins, auth):
+        out.update(can_set_audience=True, audience=audience_of(tool), seen_by=seen_by(c, tool, auth))
+    return out
 
 
 def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
     """Calls through the proxy and, for a tool whose key goes to computers, the newest time each caller's run took a
     key (credential_uses keeps one row a caller), newest first. A proxied tool's uses are its calls, already listed, so
     its use rows are left out. `cursor` is the last row's `<at>|<id>`."""
-    _readable(c, who, tool_id, admins)
-    proxied = tool_row(c, tool_id)["delivery"] == "proxy"
+    proxied = _readable(c, who, tool_id, admins, auth)["delivery"] == "proxy"
     admin = _admin(c, who, admins)
     at, _, last = str(cursor or "").partition("|")
     if cursor and not last:
@@ -485,6 +665,8 @@ class ToolUpdate(Contract):
     auth_scheme: str | None = Field(default=None, max_length=80)
     check_path: str | None = Field(default=None, max_length=300)
     delivery: str | None = Field(default=None, pattern=r"^(proxy|computer)$")
+    # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
+    audience: AccessAudience | None = None
 
 
 class KeyCreate(Contract):
@@ -528,9 +710,15 @@ class _Receipt:
 _slug = TS.slug
 
 
-def _unique_id(c, base):
+def _unique_id(c, base, who=None, admins=()):
+    """`base`, else `base-2`, `base-3`...; an Only listed tool `who` may not see is never counted out loud: past one,
+    the id takes a random suffix instead, so a new tool's id does not say a hidden one of that name exists."""
     tid, n = base, 1
-    while c.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+    while (row := c.execute("SELECT * FROM tools WHERE id=?", (tid,)).fetchone()) is not None:
+        if who is not None and row["audience"] is not None and not visible(c, who, row, admins):
+            while c.execute("SELECT 1 FROM tools WHERE id=?", (tid := f"{base}-{H.new_id()[:8].lower()}",)).fetchone():
+                pass
+            return tid
         n += 1
         tid = f"{base}-{n}"
     return tid
@@ -568,7 +756,7 @@ def create_tool(c, who, body, admins):
     known = TS.defaults(service)
     # A known service's check path belongs to its own address: a tool given another address gets none by default.
     own = not fields["base_url"] or fields["base_url"] == known.get("base_url")
-    tool = {"id": _unique_id(c, _slug(fields["name"])), "name": fields["name"].strip(),
+    tool = {"id": _unique_id(c, _slug(fields["name"]), who, admins), "name": fields["name"].strip(),
             "service": service or fields["service"] or "",
             "base_url": fields["base_url"] or known.get("base_url", ""),
             "auth_scheme": fields["auth_scheme"] or known.get("auth_scheme", "bearer"),
@@ -583,10 +771,17 @@ def create_tool(c, who, body, admins):
     return _tool_view(tool_row(c, tool["id"]))
 
 
-def update_tool(c, who, tool_id, body, admins):
-    require_admin(c, who, admins)
-    tool = dict(tool_row(c, tool_id))
-    fields = {k: v for k, v in _clean(body.model_dump(exclude_none=True)).items()}
+def update_tool(c, who, tool_id, body, admins, auth=None):
+    """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
+    asked = body.model_dump(exclude_none=True, exclude={"audience"})
+    audience_set = "audience" in body.model_fields_set
+    if asked or not audience_set or getattr(who, "role", "") != "owner":
+        require_admin(c, who, admins)
+    tool = dict(_readable(c, who, tool_id, admins, auth))
+    if audience_set:
+        set_audience(c, who, tool, body.audience.model_dump() if body.audience is not None else None, admins, auth)
+        tool = dict(tool_row(c, tool_id))
+    fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
@@ -607,10 +802,47 @@ def _drop_key(c, who, key_id):
     c.execute("DELETE FROM credentials WHERE id=?", (key_id,))
 
 
+def set_audience(c, who, tool, value, admins, auth=None):
+    """Who can see the tool: None (Everyone) or an audience (Only listed). The owner, or a credential administrator who
+    can see it; one who is not the owner stays on the list they set, so they never lock themselves out. Event
+    `tool.audience_changed` with the before and after."""
+    from . import teammate_access
+    if not may_set_audience(c, who, tool, admins, auth):
+        raise Problem("forbidden", "Only the owner, or a credential administrator who can see it, changes who can see "
+                      f"{tool['name']}", 403)
+    stored = None
+    if value is not None:
+        level = teammate_access.parse_audience(c, value)
+        if not level["everyone"]:
+            level = {"everyone": False, **{k: list(level[k]) for k in AUDIENCE_LISTS}}
+            if getattr(who, "role", "") != "owner" and not teammate_access.in_audience(c, who, level, auth):
+                level["people"].append(H.actor_id(who.actor))
+            stored = json.dumps(level, sort_keys=True, separators=(",", ":"))
+    if stored == _field(tool, "audience"):
+        return
+    before = audience_of(tool)
+    c.execute("UPDATE tools SET audience=?, updated_at=? WHERE id=?", (stored, H.now(), tool["id"]))
+    H.event(c, who.actor, "tool.audience_changed", tool["id"],
+            {"before": before, "after": audience_of({"audience": stored})})
+
+
+def forget_audience_member(c, actor, field, ident):
+    """A removed person, group or bot leaves every tool's audience (backend/pages.py's hook calls this): a teammate made
+    later under the same id is never on a list by inheritance. A list left empty stays Only listed."""
+    for tool in private_tools(c):
+        before = audience_of(tool)
+        if ident not in before[field]:
+            continue
+        after = {**before, field: [v for v in before[field] if v != ident]}
+        c.execute("UPDATE tools SET audience=?, updated_at=? WHERE id=?",
+                  (json.dumps(after, sort_keys=True, separators=(",", ":")), H.now(), tool["id"]))
+        H.event(c, actor, "tool.audience_changed", tool["id"], {"before": before, "after": after, "removed": ident})
+
+
 def delete_tool(c, who, tool_id, admins):
     """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool."""
     require_admin(c, who, admins)
-    tool = tool_row(c, tool_id)
+    tool = _readable(c, who, tool_id, admins)
     keys = [k["id"] for k in _keys(c, tool_id)]
     for key_id in keys:
         _drop_key(c, who, key_id)
@@ -634,7 +866,7 @@ def _taken(tool, level):
 def add_key(c, who, vault, tool_id, body):
     """A new key for the tool at its level, stored by the vault under the tool's variable."""
     require_admin(c, who, vault.admins)
-    tool = tool_row(c, tool_id)
+    tool = _readable(c, who, tool_id, vault.admins)
     if _key_at(c, tool_id, body.access_level):
         raise _taken(tool, body.access_level)
     _day(body.expires_on)
@@ -655,8 +887,10 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     """Put a key stored outside Tools (Settings' vault, a chat's credential card, a computer's file migration) on a
     tool, in the caller's transaction, so every tool key shows on Tools: the first tool of its service that has no Read
     and write key yet takes it as that key, else a new tool is made for it, on the proxy when its service's address is
-    known and on computers otherwise. The same rule as the data migration (`TS.is_tool_key`). A key Tools stored
-    itself (`tool:` source) already has its tool; anything else is left alone. `from_computer`: a key a bot already
+    known and on computers otherwise. The same rule as the data migration (`TS.is_tool_key`). An Only listed tool never
+    takes a key this way (whoever stored it may not see that tool: a key joins a private tool from its own page), nor
+    counts toward the new tool's id or name. A key Tools stored itself (`tool:` source) already has its tool; anything
+    else is left alone. `from_computer`: a key a bot already
     uses from its computer's files (the file migration) stays on computers, on a computer tool, like the data
     migration's: moving it to the proxy unasked would change a working bot. The tool id, or None."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
@@ -670,12 +904,18 @@ def ensure_tool(c, who, credential_id, from_computer=False):
         return None
     service = TS.match(env=row["env"], name=row["name"])
     free = service and c.execute(
-        "SELECT id FROM tools t WHERE service=? AND NOT EXISTS (SELECT 1 FROM credentials k WHERE k.tool_id=t.id"
+        "SELECT id FROM tools t WHERE service=? AND audience IS NULL AND NOT EXISTS (SELECT 1 FROM credentials k WHERE k.tool_id=t.id"
         " AND k.access_level='read_write')" + (" AND delivery='computer'" if from_computer else "") +
         " ORDER BY created_at, id LIMIT 1", (service,)).fetchone()
     proxy = not from_computer and TS.defaults(service).get("base_url")
-    tid = free["id"] if free else TS.insert_tool(c, service, row["name"], "proxy" if proxy else "computer",
-                                                 who.actor, H.now())
+    if free:
+        tid = free["id"]
+    else:
+        base = TS.slug(service or row["name"])
+        made = _unique_id(c, base, who)
+        first = made == base or c.execute("SELECT 1 FROM tools WHERE id=? AND audience IS NULL", (base,)).fetchone() is None
+        tid = TS.insert_tool(c, service, row["name"], "proxy" if proxy else "computer", who.actor, H.now(), tid=made,
+                             first=first)
     c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
     H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": "read_write"})
     return tid
@@ -695,7 +935,7 @@ def _tool_key(c, tool_id, key_id):
 
 def update_key(c, who, vault, tool_id, key_id, body):
     require_admin(c, who, vault.admins)
-    tool = tool_row(c, tool_id)
+    tool = _readable(c, who, tool_id, vault.admins)
     key = _tool_key(c, tool_id, key_id)
     if body.access_level and body.access_level != key["access_level"] and _key_at(c, tool_id, body.access_level, key_id):
         raise _taken(tool, body.access_level)
@@ -714,6 +954,7 @@ def update_key(c, who, vault, tool_id, key_id, body):
 
 def delete_key(c, who, vault, tool_id, key_id):
     require_admin(c, who, vault.admins)
+    _readable(c, who, tool_id, vault.admins)
     key = _tool_key(c, tool_id, key_id)
     _drop_key(c, who, key_id)
     H.event(c, who.actor, "tool.key_deleted", tool_id, {"credential": key_id, "name": key["name"]})
@@ -731,7 +972,7 @@ def set_level(c, who, vault, tool_id, subject, level):
     """Give `subject` Read, Read and write or no access: grant the one key that level uses, at that level, and take the
     subject's grants on the tool's other keys away first (one value per variable per run)."""
     require_admin(c, who, vault.admins)
-    tool = tool_row(c, tool_id)
+    tool = _readable(c, who, tool_id, vault.admins)
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
@@ -776,7 +1017,7 @@ def _api_rows(c, who, admins, view):
     admin = _admin(c, who, admins)
     out = []
     for tool in c.execute("SELECT * FROM tools ORDER BY lower(name), id").fetchall():
-        if not admin and not may_read(c, who, tool["id"], admins):
+        if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
             continue
         keys = _keys(c, tool["id"])
         state = status(tool, keys, latest_checks(c, tool["id"]))
@@ -790,7 +1031,8 @@ def _api_rows(c, who, admins, view):
         out.append(_index_row("api:" + tool["id"], "api", tool["name"], state, "#/tools/api/" + tool["id"],
                               detail=host, way="Proxy" if tool["delivery"] == "proxy" else "On computers",
                               who=[{k: r[k] for k in ("kind", "id", "name", "initials")} for r in people],
-                              who_total=len(people), needs_you=state["needs_you"], service=tool["service"]))
+                              who_total=len(people), needs_you=state["needs_you"], service=tool["service"],
+                              private=tool["audience"] is not None))
     return out
 
 
@@ -907,7 +1149,10 @@ def index_rows(c, who, auth, settings, admins):
     view = CN.view(c, auth, who, settings)
     rows = _api_rows(c, who, admins, view)
     covered = {r["service"] for r in rows if r.get("service")}
-    envs = {r[0] for r in c.execute("SELECT env FROM credentials WHERE tool_id IS NOT NULL AND env<>''")}
+    # A tool the reader may not see covers nothing: the list reads as if it did not exist.
+    shown = {r["id"][len("api:"):] for r in rows}
+    envs = {r[0] for r in c.execute("SELECT env, tool_id FROM credentials WHERE tool_id IS NOT NULL AND env<>''")
+            if r[1] in shown}
     rows += _mailbox_rows(c, who, view)
     rows += _connection_rows(view)
     rows += _declared_rows(c, who, view, covered, envs)
@@ -968,10 +1213,15 @@ def install(app, store, auth, settings):
     def create_api_tool(request: Request, body: ToolCreate):
         return change(request, body, manager, lambda c: create_tool(c, request.state.identity, body, vault().admins))
 
+    def setter(c, w):
+        if w.role != "owner":                       # the owner may change Who can see it (update_tool says what else)
+            require_admin(c, w, vault().admins)
+
     @app.patch("/api/v2/api-tools/{tool_id}")
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):
-        return change(request, body, manager,
-                      lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins))
+        """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
+        return change(request, body, setter,
+                      lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins, auth))
 
     def plain(request, fn):
         """A delete, like the vault's: no receipt (a repeat finds nothing and says so)."""

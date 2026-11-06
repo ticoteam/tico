@@ -805,6 +805,7 @@ class ToolRow(TypedDict):
     created_by: str
     created_at: str
     updated_at: str
+    audience: str | None
 
 
 class ToolCheckRow(TypedDict):
