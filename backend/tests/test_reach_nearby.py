@@ -325,11 +325,18 @@ def test_a_dm_a_person_brought_the_bot_into_is_solicited_and_a_legacy_message_ch
         headers=headers("ben-test"),
     )
     assert dm.status_code == 200, dm.text
-    # Ben wrote to it there, so it may answer him; Cara did not write to it, so a post that reaches her is refused.
+    # A person wrote in this DM, so the bot may answer every person in it, Cara included.
     r = api.post(
         f"/api/v2/threads/{dm.json()['id']}/messages", json={"text": "Here is the plan."}, headers=headers("pd-test")
     )
-    assert r.status_code == 409 and r.json()["error"]["receiver"] == "human:cara", r.text
+    assert r.status_code == 200, r.text
+    # Ben writing to the bot in a DIFFERENT conversation does not open this one for Cara.
+    other = api.post(
+        "/api/v2/threads/dm",
+        json={"members": ["human:cara"], "body": "A new one", "title": "Quiet"},
+        headers=headers("pd-test"),
+    )
+    assert other.status_code == 409 and other.json()["error"]["receiver"] == "human:cara", other.text
     own = api.post(
         "/api/v2/threads/dm",
         json={"members": ["bot:product-design"], "body": "Plan?", "title": "Plan"},

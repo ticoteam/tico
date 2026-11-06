@@ -802,7 +802,8 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
     receiver's message. `conversation_id` and `in_reply_to` may each be several (a sub-thread and its parent thread; a
     reply and the message its sub-thread hangs from). `before`: only what was written before then (the dry-run's
     history). `person`: the receiver is a person, so only what they wrote to the sender in these conversations counts
-    (no open task they gave it, nothing written elsewhere, nobody else's words in a DM)."""
+    (no open task they gave it, nothing written elsewhere). In a DM named by the write, any person's message there
+    counts, so a group DM people opened with the bot keeps working."""
     for message_id in _many(in_reply_to):
         row = c.execute("SELECT sender_id FROM messages WHERE id=?", (message_id,)).fetchone()
         if row and row["sender_id"] == receiver:
@@ -836,7 +837,7 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
     # A DM the bot is in: what the receiver wrote there was written to the bot, and a person who wrote there brought
     # its members together.
     dms = [p for p in places if _is_dm(c, p)]
-    others = "sender_id=?" if person else "(sender_id=? OR sender_id LIKE 'human:%')"
+    others = "(sender_id=? OR sender_id LIKE 'human:%')"
     return (
         bool(dms)
         and c.execute(
