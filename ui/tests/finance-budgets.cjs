@@ -180,6 +180,7 @@ async function shot(page, name) {
       assert.equal(await row(page, 'b-rental-g').locator('.fin-bar-m:not(.warn):not(.bad)').count(), 1, tag + ': used under warn at is green');
       assert.equal((await cell(page, 'b-rental-g', 6).innerText()).trim(), '80%', tag + ': warn at on a leaf');
       assert.equal((await cell(page, 'b-mkt', 6).innerText()).trim(), '', tag + ': no warn at on a row with children');
+      assert.equal((await cell(page, 'b-video', 6).innerText()).trim(), '', tag + ': nor on one with no amount');
       // Search keeps the matches and the budgets above them.
       await page.locator('[data-fin-q]').fill('social');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Rental Marketing Manager', 'Rental Social Ad Owner'], tag + ': search keeps the path');
@@ -296,6 +297,8 @@ async function shot(page, name) {
       assert.deepEqual(await dlg.locator('label.fin-check').allInnerTexts(), ['Mercury · Read · ••••a1f', 'Mercury · Read and write · ••••9z2'], tag + ': one radio per key');
       assert.equal(await dlg.locator('input[name=token]').count(), 0, tag + ': no paste with a key on Tools');
       await shot(page, 'sources-connect-desktop');
+      assert.equal(await dlg.locator('input[name=key]:checked').getAttribute('value'), 'k-merc', tag + ': the Read and write key is picked first');
+      await dlg.locator('input[name=key][value="k-merc-r"]').check();
       await dlg.locator('input[name=key][value="k-merc"]').check();
       await dlg.locator('[type=submit]').click();
       await dlg.waitFor({state: 'detached'});

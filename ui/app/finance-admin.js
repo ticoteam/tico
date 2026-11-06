@@ -212,8 +212,10 @@ async function finConnectKey(provider) {
   const keys = tools.flatMap(t => t.keys.filter(k => k.stored).map(k => ({tool: t, key: k})));
   const approver = provider === 'mercury' ? '<label>Approver email<input name="approver" type="email" autocomplete="off" spellcheck="false"></label>' : '';
   if (keys.length) {
+    // A Read and write key is picked first: Mercury payments and Stripe refunds need it.
+    const pick = Math.max(0, keys.findIndex(({key}) => key.access_level === 'read_write'));
     finDialog('Connect ' + src.name, `<fieldset class="fin-radios"><legend>Use the ${esc(src.name)} key from Tools</legend>${keys.map(({tool, key}, i) =>
-      `<label class="fin-check"><input type="radio" name="key" value="${esc(key.id)}"${i ? '' : ' checked'}>${esc(finKeyLabel(tool, key))}</label>`).join('')}</fieldset>${approver}`,
+      `<label class="fin-check"><input type="radio" name="key" value="${esc(key.id)}"${i === pick ? ' checked' : ''}>${esc(finKeyLabel(tool, key))}</label>`).join('')}</fieldset>${approver}`,
     'Connect', async form => {
       const id = form.querySelector('input[name=key]:checked')?.value;
       if (!id) throw new Error('Pick a key');

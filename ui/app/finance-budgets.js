@@ -143,7 +143,7 @@ function finBudDraw() {
       <td class="fin-n${edit ? ' fin-edit' : ''}"${edit ? ` data-fin-bud-amt="${esc(b.id)}" tabindex="0" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[m - 1])}"` : ''}>${finBudAmount(b)}</td>
       <td class="fin-n"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '<span class="muted">—</span>' : finUsd(s.actual)}</td>
       <td>${pct == null ? '' : `<span class="fin-bar-m${finBudMeterCls(b, pct)}" role="img" aria-label="${pct}% used"><i style="width:${Math.min(100, pct)}%"></i></span>`}</td>
-      <td class="fin-n">${pace}</td><td class="fin-n">${kids ? '' : esc(b.warn_pct + '%')}</td></tr>`;
+      <td class="fin-n">${pace}</td><td class="fin-n">${kids || s.amount == null ? '' : esc(b.warn_pct + '%')}</td></tr>`;
   }).join('');
   const head = `<tr><th>Budget</th><th>Platform</th><th class="fin-n">Budget / mo${finExcl(state.read)}</th><th class="fin-n">Spent</th><th>Used</th><th class="fin-n">Pace by ${FIN_MON[m - 1]} ${last}</th><th class="fin-n">Warn at</th></tr>`;
   box.innerHTML = !state.rows.length ? finNote('No budgets yet.') : !rows ? finNote('No budgets match.')
