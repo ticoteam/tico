@@ -255,14 +255,14 @@ hosted server asleep when idle wakes for it. Each deadline fires once, across re
 deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
 themselves, up to 20 a turn; the rest wait for the next turn.
 
-Defaults, for a send that names no way (the API, CLI, MCP and Slack): Steer for a message and a comment on a task a
+Defaults, for a send that names no way (the API, CLI, MCP and Slack messages): Steer for a message and a comment on a task a
 bot owns, as before (when the bot is idle that is the same as Queue). A comment on a task a bot filed for a
-person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
+person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A comment from someone
+not on the task (not its owner, requester or a mover) is a Defer with no deadline. Otherwise a deferred comment or
 task has a 24-hour deadline unless you pick one; a deferred thread message or deferred message has none. Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 
-In the web app a bot's chat (its Home and your DM with it) and a task's thread name a way every time. Send's icon shows it: an arrow for Steer, an arrow over
-lines for Queue, a clock for Defer (with its deadline), a target for Set as goal. The caret beside Send (or a
+In the web app a bot's chat (its Home and your DM with it) and a task's thread with a bot on it name a way every time. Send's icon shows it: an arrow for Steer, stacked lines with an arrow for Queue, a clock for Defer (with its deadline), a target for Set as goal. The caret beside Send (or a
 right-click or long press on Send) offers **Steer now**, **Queue** and **Defer** with its durations, then **Set as
 goal**. The way you pick is kept for you on the server, across devices; it starts as Steer. Set as goal is for one
 goal (a **Goal** chip shows before the words), then Send goes back to your way. Someone who may not message the bot
