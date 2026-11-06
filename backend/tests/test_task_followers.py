@@ -179,6 +179,19 @@ def test_a_task_in_a_shared_chat_has_no_followers(api):
     assert r.status_code == 422 and r.json()["error"]["code"] == "no-thread", r.text
 
 
+def test_a_chat_task_made_private_gets_a_room_its_owner_follows(api):
+    """A task filed into a shared chat has no thread of its own; made private, it moves to its own room
+    (hubdb.isolate_private_task), and its owner follows that room."""
+    row = made(api, owner="ben")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET kind='chat', task_id=NULL WHERE id=?", (row["conversation_id"],))
+    assert followers(api, row["id"])["followers"] is None
+    post(api, "tasks/" + row["id"], {"version": row["version"], "private": True})
+    moved = get(api, "tasks/" + row["id"])["task"]
+    assert moved["conversation_id"] != row["conversation_id"]
+    assert who(api, row["id"]) == {"human:ben": ("live", "owner")}
+
+
 def _migration(name):
     path = Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)

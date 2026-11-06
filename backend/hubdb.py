@@ -8463,6 +8463,8 @@ def _task_room(conn, row, parties):
     conn.execute("INSERT INTO conversations(id,kind,subject,participants,created_at,scope,task_id) "
                  "VALUES(?,?,?,?,?,?,?)", (room, "task", row["title"], _dump(parties), now(), "task", row["id"]))
     conn.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (room, row["id"]))
+    from . import task_followers
+    task_followers.seed_owner(conn, task(conn, row["id"]))     # its owner follows the new room (docs/tasks.md)
     return conversation(conn, room)
 
 
