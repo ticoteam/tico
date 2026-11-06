@@ -1139,7 +1139,8 @@ def subject(payload):
     """What a suggestion is about, whatever its words: the KPI it links or the measure it names. Two suggestions for
     different measures on one goal are different subjects."""
     payload = payload if isinstance(payload, dict) else {}
-    kpi_part = payload.get("kpi") if isinstance(payload.get("kpi"), dict) else {}
+    kpi_part = payload.get("kpi")
+    kpi_part = kpi_part if isinstance(kpi_part, dict) else {}
     return str(payload.get("kpi_id") or kpi_part.get("name") or "").strip().lower()
 
 
