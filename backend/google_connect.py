@@ -244,7 +244,10 @@ def revoke_at_google(token):
     try:
         post_token({"token": token}, REVOKE_URI)
         return True
-    except (urllib.error.HTTPError, OSError, ValueError):
+    except urllib.error.HTTPError as error:
+        with error:
+            return False
+    except (OSError, ValueError):
         return False
 
 
@@ -255,13 +258,14 @@ def google_token(client, fields):
     try:
         answer = post_token(fields)
     except urllib.error.HTTPError as e:
-        try:
-            error = str(json.loads(e.read().decode() or "{}").get("error") or "")
-        except (OSError, ValueError, AttributeError):
-            error = ""
-        # Google's own outage is a network failure to the person, not a refused grant.
-        kind = "network" if e.code >= 500 else TOKEN_ERRORS.get(error.strip().lower(), "error")
-        raise Problem("google_refused", f"Google refused it ({error or e.code})", 409, extra={"kind": kind})
+        with e:
+            try:
+                error = str(json.loads(e.read().decode() or "{}").get("error") or "")
+            except (OSError, ValueError, AttributeError):
+                error = ""
+            # Google's own outage is a network failure to the person, not a refused grant.
+            kind = "network" if e.code >= 500 else TOKEN_ERRORS.get(error.strip().lower(), "error")
+            raise Problem("google_refused", f"Google refused it ({error or e.code})", 409, extra={"kind": kind})
     except (OSError, ValueError) as e:
         raise Problem("google_refused", f"Tico's server could not reach Google ({type(e).__name__})", 409,
                       extra={"kind": "network"})

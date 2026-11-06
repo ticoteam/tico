@@ -172,6 +172,8 @@ def download_icon(icon_url):
             with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
                 icon = response.read(1024 * 1024 + 1)
         except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
+            if isinstance(exc, HTTPError):
+                exc.close()         # the retry or the raise below does not read the answer
             if isinstance(exc, HTTPError) and exc.code not in (408, 429) and not 500 <= exc.code < 600:
                 raise
             if attempt == 8:

@@ -208,11 +208,12 @@ class Demo:
                 raw = answer.read()
                 return answer.status, (json.loads(raw) if raw else {})
         except urllib.error.HTTPError as e:
-            raw = e.read()
-            try:
-                return e.code, json.loads(raw)
-            except ValueError:
-                return e.code, {"raw": raw[:300].decode(errors="replace")}
+            with e:
+                raw = e.read()
+                try:
+                    return e.code, json.loads(raw)
+                except ValueError:
+                    return e.code, {"raw": raw[:300].decode(errors="replace")}
 
     def mcp(self, token, name, args):
         """One tools/call on the hub's MCP endpoint. Returns (is_error, payload)."""

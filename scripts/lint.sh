@@ -7,4 +7,5 @@ args=(--check)
 if [ -n "${LINT_BASE_REF:-}" ]; then
   args+=(--base "$LINT_BASE_REF")
 fi
+python3 scripts/pytest_warning_ignores.py ${LINT_BASE_REF:+--base "$LINT_BASE_REF"}
 exec python3 scripts/lint_baseline.py "${args[@]}"

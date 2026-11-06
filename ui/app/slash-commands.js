@@ -112,7 +112,6 @@ function slashRun(P, text) {
     return true;
   };
   if (cmd?.kind === 'harness') {
-    if (!isKeeper(P.slug)) return 'plain';
     void (P.command ? P.command(text) : v2ChatSend(P, text, P.slug, {}, {command: true}));
     return true;
   }
@@ -129,7 +128,7 @@ function slashRun(P, text) {
   if (name === 'task' && cmd) {
     if (!arg) { pq(P, '.p-text').value = '/task '; return true; }
     pq(P, '.p-text').value = arg;                       // what the task path acknowledges and clears
-    void (P.task ? P.task(arg) : isKeeper(P.slug) ? v2PillTask(P, arg) : pillTask(P, arg));
+    void (P.task ? P.task(arg) : v2PillTask(P, arg));
     return true;
   }
   if (name === 'branch' && cmd) {

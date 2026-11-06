@@ -79,7 +79,7 @@
 "backend/health.py" = ["BLE001"]
 "backend/hook_relay.py" = ["B018", "BLE001", "S110"]
 "backend/hosted_updates.py" = ["BLE001", "S110"]
-"backend/hubdb.py" = ["B034", "BLE001", "S110"]
+"backend/hubdb.py" = ["BLE001", "S110"]
 "backend/idea_triage.py" = ["BLE001"]
 "backend/idempotency_messages.py" = ["B023", "BLE001"]
 "backend/inbound.py" = ["B023", "BLE001", "S110"]

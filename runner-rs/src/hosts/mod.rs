@@ -208,8 +208,6 @@ pub struct Settings {
     /// The turn's staged company skills folder (crate::company_skills::stage): Codex loads its skills as the app
     /// server's extra skill root. Claude reads the same folder through `add_dirs`.
     pub company_skills: Option<String>,
-    /// A bot with branches: Claude reads only the project's settings and MCP servers (hosts/claude.py).
-    pub shared: bool,
     /// The bot's own MCP servers from bot.yaml, this harness's transports only (crate::perbot::mcp_for_run).
     pub mcp_servers: Vec<Value>,
     /// How long a Claude turn that has answered may wait on nothing but its background shells before it ends and

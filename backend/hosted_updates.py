@@ -136,7 +136,8 @@ def _ask(key, base, body):
         with (OPENER or G._send)(request, timeout=WAIT) as response:
             raw, status = response.read(MAX_ANSWER + 1), getattr(response, "status", 200)
     except urllib.error.HTTPError as error:
-        return error.code, None
+        with error:
+            return error.code, None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return 0, None
     if len(raw) > MAX_ANSWER:

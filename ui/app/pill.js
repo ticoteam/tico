@@ -320,13 +320,13 @@ const touchKeyboard = () => matchMedia('(pointer: coarse)').matches || (navigato
 function makePill(cfg) {
   const P = {
     mode: cfg.mode, slug: cfg.slug || null, dest: cfg.slug,
-    action: 'chat', needsIssue: null,
+    action: 'chat',
     el: null, files: [], send: cfg.send || null,
   };
   const attach = cfg.files !== false;
   const el = P.el = document.createElement('div');
   el.className = 'ask pill-' + P.mode;
-  el.innerHTML = `<div class="p-hint muted" hidden></div>
+  el.innerHTML = `
     <div class="p-pill">
       ${P.mode === 'chat' && P.slug ? pillBotHTML(P.slug) : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="${esc(cfg.label || 'Message this bot')}" placeholder="${esc(cfg.placeholder || 'Type a message…')}"></textarea>
@@ -531,7 +531,7 @@ const pillGoalMode = P => !!P.goalMode && P.action === 'chat' && !P.send && !P.f
 function pillLabel(P) {
   const btn = pq(P, '.p-send'); if (!btn) return;
   const goal = pillGoalMode(P);
-  const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : P.action === 'reply' ? `Reply on #${P.needsIssue}` : 'Send';
+  const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : 'Send';
   // A redraw that replaces the arrow between press and release loses the click in every engine, so the
   // contents change only when goal mode swaps the arrow for words (and ui/styles/chat.css makes the button itself
   // the press target).
@@ -546,19 +546,6 @@ function pillLabel(P) {
     box.dataset.placeholder ??= box.placeholder;
     box.placeholder = goal ? `Goal for ${botDisplayName(P.slug)}…` : box.dataset.placeholder;
   }
-  const hint = pq(P, '.p-hint');
-  const waiting = P.needsIssue && P.action === 'reply';
-  hint.hidden = !waiting;
-  if (waiting) hint.innerHTML = `<strong>${empName(P.slug)}</strong> needs you — your answer goes there and clears "Needs you".`;
-}
-// the bot page tells the pill when the newest task needs the viewer
-function pillNeeds(P, issue) {
-  if (!P) return;
-  const was = P.needsIssue;
-  P.needsIssue = issue || null;
-  if (issue && !was && P.action === 'chat') P.action = 'reply';        // default to answering
-  if (!issue && P.action === 'reply') P.action = 'chat';
-  pillLabel(P);
 }
 function pillMenu(P, open) {
   const menu = pq(P, '.p-menu'); if (!menu) return;
@@ -567,8 +554,7 @@ function pillMenu(P, open) {
   if (!open) return;
   const row = (val, label, art, on) => `<button type="button" role="menuitemradio" data-val="${esc(val)}" aria-checked="${on}">${art}<span>${label}</span>${on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
   menu.innerHTML = row('chat', 'Send <span class="muted">(chat)</span>', '<span class="auto" aria-hidden="true">✦</span>', P.action === 'chat')
-      + row('task', 'Send as task', '<span class="auto" aria-hidden="true">＋</span>', P.action === 'task')
-      + (P.needsIssue ? row('reply', `Reply on #${esc(P.needsIssue)}`, '<span class="auto" aria-hidden="true">↩</span>', P.action === 'reply') : '');
+      + row('task', 'Send as task', '<span class="auto" aria-hidden="true">＋</span>', P.action === 'task');
   menu.querySelectorAll('[data-val]').forEach(b => b.onclick = () => {
     P.action = b.dataset.val;
     pillLabel(P); pillButtons(P); pillMenu(P, false); pq(P, '.p-text').focus();
@@ -592,73 +578,6 @@ function pillClear(P, keepText) {
   P.files.length = 0; pillChips(P); chatDraftSave(P);
   if (keepText) pillButtons(P);
 }
-// a chat message: the run starts at once and the thread tails it
-async function pillChat(P, text) {
-  const btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Sending…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  const names = files.map(f => f.name);
-  try {
-    const fd = new FormData();
-    fd.append('text', text);
-    P.files.forEach(f => fd.append('files', f, f.name));
-    const res = await fetch(`${API}/employees/${encodeURIComponent(P.slug)}/chat`, {method: 'POST', body: await memoryBody(fd)});
-    const j = await res.json().catch(() => ({}));
-    if (res.status === 409) { pillBusy(P, j, text); return; }
-    if (!res.ok) throw new Error(j.error || res.statusText);
-    convChatStarted(P.slug, j, text, names);
-    pillAcknowledge(P, text, files, scope);
-  } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P); }
-}
-function pillBusy(P, j, text) {
-  const out = pq(P, '.p-cmd'); if (!out) return;
-  const name = empName(P.slug);
-  out.hidden = false;
-  out.innerHTML = j.error === 'busy' && j.issue
-    ? `<div class="cmd-out"><span>${name} is busy on  — send this as a task instead, or wait.</span>
-       <div class="row" style="margin-top:7px"><button class="primary" type="button" data-busy="task">Send as task</button>
-       <button class="ghost" type="button" data-busy="wait">Wait</button></div></div>`
-    : `<div class="cmd-out"><span>${name} cannot take a chat message right now${j.error ? ` (${esc(j.error)})` : ''}. Send it as a task instead, or wait.</span>
-       <div class="row" style="margin-top:7px"><button class="primary" type="button" data-busy="task">Send as task</button>
-       <button class="ghost" type="button" data-busy="wait">Wait</button></div></div>`;
-  out.querySelector('[data-busy="wait"]').onclick = () => { out.hidden = true; out.innerHTML = ''; };
-  out.querySelector('[data-busy="task"]').onclick = () => {
-    out.hidden = true; out.innerHTML = '';
-    P.action = 'task'; pillLabel(P);
-    if (text) { pq(P, '.p-text').value = text; pillButtons(P); }
-    pillSend(P);
-  };
-}
-async function pillTask(P, text) {
-  const slug = P.slug, btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Creating…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  try {
-    const fd = new FormData();
-    fd.append('slug', slug); fd.append('title', text.split('\n')[0].trim().slice(0, 80));
-    fd.append('body', text); fd.append('priority', 'p2'); fd.append('type', 'task');
-    P.files.forEach(f => fd.append('files', f, f.name));
-    const res = await fetch(`${API}/issues`, {method: 'POST', body: await memoryBody(fd)});
-    const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || res.statusText);
-    if (CONV?.slug === slug) { CONV.pending.push({text, number: j.number, url: j.url}); CONV.sent = true; convRender(CONV); }
-    pillAcknowledge(P, text, files, scope); toast(`Queued as #${j.number}`);
-    await refresh(true); if (BOT?.slug === slug) loadBotIssues(slug);
-  } catch (e) { toast(e.message, true); }
-  btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P);
-}
-async function pillReply(P, text) {
-  const n = P.needsIssue, btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Replying…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  try {
-    await post(`/issues/${n}/comment`, {body: text, clear_needs_human: true});
-    toast(`Replied on #${n}`);
-    pillAcknowledge(P, text, files, scope); await refresh(true);
-    if (CONV?.slug === P.slug) loadConversation(P.slug, CONV);
-  } catch (e) { toast(e.message, true); }
-  btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P);
-}
 async function pillSend(P) {
   if (!P.el) return;
   const box = pq(P, '.p-text'), text = box.value.trim();
@@ -676,10 +595,5 @@ async function pillSend(P) {
   if (slash !== 'plain' && runCommand(text, pq(P, '.p-cmd'), P.slug)) {
     sessionAcknowledge(box); pillClear(P, true); return;
   }
-  if (isKeeper(P.slug)) {                                     // hub.db, not an Issue comment
-    return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
-  }
-  if (P.action === 'task') return pillTask(P, text);
-  if (P.action === 'reply' && P.needsIssue) return pillReply(P, text);
-  return pillChat(P, text);
+  return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
 }

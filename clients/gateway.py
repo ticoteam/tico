@@ -205,12 +205,13 @@ def letters(key, base, path="", *, body=None, idempotency_key=None, pdf=False):
                 raise LettersError(502, "response_too_large")
             return data if pdf else json.loads(data)
     except urllib.error.HTTPError as exc:
-        code = _code(exc.read(4096))
-        allowed = {"unconfigured", "cannot_cancel", "quote_changed", "quote_expired", "idempotency_conflict",
-                   "quote_already_used", "invalid", "provider_rejected", "provider_error", "address_pending",
-                   "out_of_credit", "cap_reached", "billing_required", "rate_limited", "not_found", "revoked_key", "unknown_key",
-                   "idempotency_key_abandoned"}
-        raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
+        with exc:
+            code = _code(exc.read(4096))
+            allowed = {"unconfigured", "cannot_cancel", "quote_changed", "quote_expired", "idempotency_conflict",
+                       "quote_already_used", "invalid", "provider_rejected", "provider_error", "address_pending",
+                       "out_of_credit", "cap_reached", "billing_required", "rate_limited", "not_found", "revoked_key", "unknown_key",
+                       "idempotency_key_abandoned"}
+            raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
     except (OSError, ValueError, urllib.error.URLError):
         raise LettersError(502, "gateway_unavailable") from None
 
@@ -267,11 +268,12 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
                    if isinstance(payload, dict) and isinstance(payload.get(k), (int, float))
                    and not isinstance(payload.get(k), bool) and payload[k] >= 0}
     except urllib.error.HTTPError as exc:
-        try:
-            code = _code(exc.read())
-        except Exception:
-            code = ""
-        state, used = state_of_error(exc.code, code), None
+        with exc:
+            try:
+                code = _code(exc.read())
+            except Exception:
+                code = ""
+            state, used = state_of_error(exc.code, code), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         state, used = "unreachable", None
     return {"state": state, "working": state not in REFUSED, "message": describe(state, used),
@@ -360,11 +362,12 @@ def _post(url, body, headers, timeout, opener):
             payload = json.load(response)
         return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
     except urllib.error.HTTPError as exc:
-        try:
-            code = _code(exc.read())
-        except Exception:
-            code = ""
-        return exc.code, {}, code or str(exc.code)
+        with exc:
+            try:
+                code = _code(exc.read())
+            except Exception:
+                code = ""
+            return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return 0, {}, "unreachable"
 
@@ -451,9 +454,10 @@ def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
         with _send(request, timeout=timeout) as response:
             return response.status, response.read(RELAY_LIMIT)
     except urllib.error.HTTPError as exc:
-        try:
-            return exc.code, exc.read(RELAY_LIMIT)
-        except OSError:
-            return exc.code, b""
+        with exc:
+            try:
+                return exc.code, exc.read(RELAY_LIMIT)
+            except OSError:
+                return exc.code, b""
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return 0, b""

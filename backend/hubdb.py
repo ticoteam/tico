@@ -3,8 +3,7 @@
 
 The contract is `docs/history/hub-v2.md` §0-§5. This module is the whole database layer: the cloud
 service (`backend/store.py` and everything behind it) goes through it and nowhere else. Pure
-stdlib, one file. It grew up under the local keeper; the `dispatcher` host default in the bot
-config is that history, kept because configs and callers still carry it.
+stdlib, one file. It grew up under the local keeper, which is the only host there is.
 
 Shape of every write:
 
@@ -244,7 +243,7 @@ NOTICE_DAYS = 14                # how long a notice stays in the inbox
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
-  cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
+  cwd TEXT, host TEXT DEFAULT 'keeper', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);
 
 CREATE TABLE IF NOT EXISTS humans (
@@ -1979,7 +1978,7 @@ LINT_NOT_VERBS = {
 
 def _is_verb_opener(head):
     """True when a title's first word can start an imperative. Only what is clearly not a verb is refused."""
-    first = re.split(r"[\s,;]+", head.strip(), 1)[0]
+    first = re.split(r"[\s,;]+", head.strip(), maxsplit=1)[0]
     word = first.strip("\"'`*_-()[]").lower()
     if not word:
         return False
@@ -2193,7 +2192,7 @@ def _asks_for_something(sentence):
 
     def first_word(clause):
         clause = re.sub(r"^(?:(?:and|please|also|then)\s+)+", "", clause.strip(), flags=re.I)
-        return re.split(r"[\s,;:]+", clause, 1)[0].strip("\"'*_()").lower()
+        return re.split(r"[\s,;:]+", clause, maxsplit=1)[0].strip("\"'*_()").lower()
 
     if not LINT_OUTCOME.match(sentence):
         return any(first_word(clause) in LINT_VERBS for clause in re.split(r"[,;]\s*", sentence))
@@ -2228,7 +2227,7 @@ def person_ask_rewrite(text):
     i = asks[0]
     after = [s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)]
     outcome = next((s for s in after if LINT_IF_YES.match(s)
-                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, 1)[0])),
+                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, maxsplit=1)[0])),
                    after[0] if after else None)
     kept = [sentences[i], *([outcome] if outcome else [])]
     rewrite = " ".join(kept)
@@ -2286,7 +2285,7 @@ def person_ask_of_body(body, title=""):
     lines = str(body or "").strip().splitlines()
     if lines and str(title or "").strip() and lines[0].strip() == str(title).strip():
         lines = lines[1:]
-    return re.split(r"\n\s*\n", "\n".join(lines).strip(), 1)[0].strip()
+    return re.split(r"\n\s*\n", "\n".join(lines).strip(), maxsplit=1)[0].strip()
 
 
 def person_ask_refusal(person, text, where):

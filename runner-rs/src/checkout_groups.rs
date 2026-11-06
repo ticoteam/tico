@@ -349,6 +349,7 @@ fn supervisor_acl(supervisor: u32) -> Vec<u8> {
     out
 }
 
+#[cfg(target_os = "linux")]
 const ACL_NAME: &std::ffi::CStr = c"system.posix_acl_access";
 
 #[cfg(target_os = "linux")]

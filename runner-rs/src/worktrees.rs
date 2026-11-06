@@ -2786,7 +2786,12 @@ where
                 moved?;
             }
         } else if count(&path, env, &unpushed).await? > 0 {
-            if crate::util::truthy(row.get("prs_finished")) || current.is_empty() {
+            // Its task is closed or its pull requests are finished: the branch is not pushed to again, so the commits
+            // go to the snapshot branch.
+            if crate::util::truthy(row.get("prs_finished"))
+                || crate::util::truthy(row.get("task_closed"))
+                || current.is_empty()
+            {
                 git(
                     &path,
                     env,
@@ -3124,7 +3129,15 @@ impl Worktrees {
             let Some(guards) = host.try_locks(&bot, &format!("task:{task}")) else {
                 continue;
             };
-            if !host.idle(&bot, &task) || (kind == "remove" && host.task_busy(&task)) {
+            // A removal waits only for turns on its own task (a subtask's runs in its session root's lane, which
+            // task_busy counts too). Another turn of the bot may run beside it; the checkout and lane locks above
+            // still keep a turn out of this tree.
+            let busy = if kind == "remove" {
+                host.task_busy(&task)
+            } else {
+                !host.idle(&bot, &task)
+            };
+            if busy {
                 continue;
             }
             if explicit_retry {
@@ -3341,6 +3354,7 @@ impl Worktrees {
         let vault = host.vault(&bot);
         let client = self.client.clone();
         let (h, l, b, t) = (host.clone(), link.clone(), bot.clone(), task.clone());
+        let remove = kind == "remove";
         let still_closed = move || {
             let (client, h, l, b, t) = (client.clone(), h.clone(), l.clone(), b.clone(), t.clone());
             async move {
@@ -3354,7 +3368,7 @@ impl Worktrees {
                     return false;
                 };
                 let fd = detail(&fresh);
-                h.idle(&b, &t)
+                (remove || h.idle(&b, &t))
                     && !h.task_busy(&t)
                     && (closed(&fresh)
                         || (released && crate::util::truthy(fd.get("release_requested"))))
@@ -3503,6 +3517,206 @@ mod tests {
         (url, server)
     }
 
+    /// A closed task's tree on this computer, in a workspace folder, and the server row that describes it.
+    fn closed_tree_row(folder: &Path) -> (PathBuf, Arc<Mutex<Value>>) {
+        std::fs::create_dir_all(folder.join("tasks/task/product")).unwrap();
+        let root = folder.canonicalize().unwrap();
+        let row = Arc::new(Mutex::new(json!({
+            "id": "link", "task_id": "task", "path": "tasks/task/product", "repo": "", "branch": "task",
+            "owner": "bot:ops", "task_status": "closed", "bot_state": "active", "state": "present",
+            "detail_json": "{}"
+        })));
+        (root, row)
+    }
+
+    #[tokio::test]
+    async fn a_closed_trees_removal_is_not_held_by_another_turn_of_its_bot() {
+        use crate::sessions::{Lanes, LiveTurn};
+        let folder = temp_folder("remove-other-turn");
+        let (root, row) = closed_tree_row(&folder.0);
+        let (url, server) = serve_rows(row.clone()).await;
+        let manager = Arc::new(Worktrees::new(
+            &root,
+            Client::new(&url, "fixture", 5, 0).unwrap(),
+        ));
+        let lanes = Arc::new(Lanes::new(Arc::new(repositories::Repositories::new(
+            &root,
+            &root,
+            Client::new(&url, "fixture", 5, 0).unwrap(),
+        ))));
+        // The bot's main-lane turn (a chat) and its turn on another task run while task "task" is closed.
+        lanes.attempts.lock().unwrap().insert(
+            "main".into(),
+            LiveTurn::of(&json!({"bot": "bot:ops", "lane": "main"})),
+        );
+        lanes.attempts.lock().unwrap().insert(
+            "other".into(),
+            LiveTurn::of(&json!({"bot": "bot:ops", "lane": "task:other", "task": {"id": "other"}})),
+        );
+        manager
+            .clone()
+            .sync(
+                lanes.clone(),
+                vec![json!({"link_id": "link", "action": "remove"})],
+            )
+            .await;
+        server.abort();
+        // The removal ran: it reached the repository check, which refuses a tree it cannot identify.
+        assert!(
+            manager
+                .inner
+                .lock()
+                .unwrap()
+                .errors
+                .get("link")
+                .is_some_and(|e| e.contains("Repository not identified")),
+            "a removal waits only for turns on its own task"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_on_the_removed_task_or_on_a_subtask_of_it_holds_its_removal() {
+        use crate::sessions::{Lanes, LiveTurn};
+        let folder = temp_folder("remove-task-turn");
+        let (root, row) = closed_tree_row(&folder.0);
+        let (url, server) = serve_rows(row.clone()).await;
+        let manager = Arc::new(Worktrees::new(
+            &root,
+            Client::new(&url, "fixture", 5, 0).unwrap(),
+        ));
+        let lanes = Arc::new(Lanes::new(Arc::new(repositories::Repositories::new(
+            &root,
+            &root,
+            Client::new(&url, "fixture", 5, 0).unwrap(),
+        ))));
+        // A subtask's turn runs in its session root's lane, so it is the root task's turn too.
+        lanes.attempts.lock().unwrap().insert(
+            "sub".into(),
+            LiveTurn::of(&json!({"bot": "bot:ops", "lane": "task:task", "task": {"id": "sub", "session_task_id": "task"}})),
+        );
+        manager
+            .clone()
+            .sync(
+                lanes.clone(),
+                vec![json!({"link_id": "link", "action": "remove"})],
+            )
+            .await;
+        assert!(
+            !manager.inner.lock().unwrap().errors.contains_key("link"),
+            "a subtask's turn holds the removal"
+        );
+        // The task's own turn, on its own lane, holds it too.
+        lanes.attempts.lock().unwrap().clear();
+        lanes.attempts.lock().unwrap().insert(
+            "own".into(),
+            LiveTurn::of(&json!({"bot": "bot:ops", "lane": "task:task", "task": {"id": "task"}})),
+        );
+        manager
+            .clone()
+            .sync(
+                lanes.clone(),
+                vec![json!({"link_id": "link", "action": "remove"})],
+            )
+            .await;
+        server.abort();
+        assert!(
+            !manager.inner.lock().unwrap().errors.contains_key("link"),
+            "the task's own turn holds the removal"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_tree_with_an_open_pull_request_saves_its_unpushed_commits_to_wip() {
+        let folder = temp_folder("closed-open-pr");
+        let (workspace, remote, clone) = (
+            folder.0.join("workspace"),
+            folder.0.join("remote.git"),
+            folder.0.join("clone"),
+        );
+        let (base, path) = (
+            workspace.join("repos/org__product"),
+            workspace.join("tasks/12345678/org__product"),
+        );
+        std::fs::create_dir_all(workspace.join("repos")).unwrap();
+        std::fs::create_dir_all(workspace.join("tasks/12345678")).unwrap();
+        sh(
+            &folder.0,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "--initial-branch=main",
+                remote.to_str().unwrap(),
+            ],
+        );
+        sh(
+            &folder.0,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(clone.join("file"), "base\n").unwrap();
+        sh(&clone, &["add", "-A"]);
+        sh(&clone, &["commit", "-qm", "Base"]);
+        sh(&clone, &["push", "-q", "origin", "main"]);
+        sh(
+            &folder.0,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                base.to_str().unwrap(),
+            ],
+        );
+        sh(
+            &base,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "tico/12345678-build",
+                path.to_str().unwrap(),
+                "origin/main",
+            ],
+        );
+        // The task's pull request is open on its pushed branch; one more commit was never pushed.
+        std::fs::write(path.join("file"), "pushed\n").unwrap();
+        sh(&path, &["commit", "-qam", "Pushed"]);
+        sh(&path, &["push", "-q", "origin", "tico/12345678-build"]);
+        let pushed = sh(&path, &["rev-parse", "HEAD"]);
+        std::fs::write(path.join("file"), "unpushed\n").unwrap();
+        sh(&path, &["commit", "-qam", "Unpushed"]);
+        let unpushed = sh(&path, &["rev-parse", "HEAD"]);
+        let mut row = json!({
+            "id": "link1", "link_id": "link1", "task_id": "12345678abcdef", "path": "tasks/12345678/org__product",
+            "repo": "org/product", "branch": "tico/12345678-build", "default_branch": "main", "state": "present",
+            "task_closed": true, "prs_finished": false
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let state = act(&workspace, &mut row, "remove", &test_env(), &[], || async {
+            true
+        })
+        .await
+        .unwrap();
+        assert_eq!(state, "removed");
+        let wip = wip_branch(&Value::Object(row.clone()));
+        assert_eq!(
+            sh(&remote, &["rev-parse", &format!("refs/heads/{wip}")]).trim(),
+            unpushed.trim()
+        );
+        assert_eq!(
+            sh(&remote, &["rev-parse", "refs/heads/tico/12345678-build"]).trim(),
+            pushed.trim(),
+            "the open pull request's branch gets no new commit"
+        );
+    }
+
     #[tokio::test]
     async fn a_fresh_inspection_error_wins_over_the_remembered_action_error() {
         struct IdleHost;
@@ -3574,13 +3788,16 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         struct RetryHost {
-            idle: AtomicBool,
+            busy: AtomicBool,
             locks_available: AtomicBool,
             attempts: AtomicUsize,
         }
         impl Host for RetryHost {
             fn idle(&self, _: &str, _: &str) -> bool {
-                self.idle.load(Ordering::SeqCst)
+                true
+            }
+            fn task_busy(&self, _: &str) -> bool {
+                self.busy.load(Ordering::SeqCst)
             }
             fn try_locks(&self, _: &str, _: &str) -> Option<Box<dyn Send>> {
                 self.locks_available
@@ -3616,7 +3833,7 @@ mod tests {
             Client::new(&url, "fixture", 5, 0).unwrap(),
         ));
         let host = Arc::new(RetryHost {
-            idle: AtomicBool::new(true),
+            busy: AtomicBool::new(false),
             locks_available: AtomicBool::new(true),
             attempts: AtomicUsize::new(0),
         });
@@ -3677,7 +3894,7 @@ mod tests {
             "a retry still waits for the checkout locks"
         );
         host.locks_available.store(true, Ordering::SeqCst);
-        host.idle.store(false, Ordering::SeqCst);
+        host.busy.store(true, Ordering::SeqCst);
         manager
             .clone()
             .sync(host.clone(), vec![next_action.clone()])
@@ -3685,9 +3902,9 @@ mod tests {
         assert_eq!(
             host.attempts.load(Ordering::SeqCst),
             1,
-            "a retry still waits for the bot to be idle"
+            "a retry still waits for its task to have no turn"
         );
-        host.idle.store(true, Ordering::SeqCst);
+        host.busy.store(false, Ordering::SeqCst);
         manager
             .clone()
             .sync(host.clone(), vec![next_action.clone()])

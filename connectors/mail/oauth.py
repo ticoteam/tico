@@ -295,12 +295,13 @@ def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None, mai
                       "redirect_uri": redirect_uri, "grant_type": "authorization_code", "code_verifier": verifier},
                      opener)
     except urllib.error.HTTPError as e:
-        error = _google_error(e)
-        kind = reason_of(error)
-        if kind in ("admin_policy", "app_unavailable", "app_config"):
-            raise refused(kind, mailbox, error)
-        raise SignInFailed("code_rejected", f"Google refused the authorization code: {error}",
-                           "Codes work once and expire in minutes: start the sign-in again.")
+        with e:
+            error = _google_error(e)
+            kind = reason_of(error)
+            if kind in ("admin_policy", "app_unavailable", "app_config"):
+                raise refused(kind, mailbox, error)
+            raise SignInFailed("code_rejected", f"Google refused the authorization code: {error}",
+                               "Codes work once and expire in minutes: start the sign-in again.")
     except (OSError, ValueError) as e:
         raise SignInFailed("network", f"could not reach Google to finish the sign-in: {type(e).__name__}",
                            "Check this computer's network, then start the sign-in again.")

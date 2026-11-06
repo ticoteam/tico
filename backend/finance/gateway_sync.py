@@ -71,11 +71,12 @@ def call(method: str, base: str, path: str, key: str, body: str | None = None,
             raw = cast(bytes, response.read())
             status = int(getattr(response, "status", 200) or 200)
     except urllib.error.HTTPError as exc:
-        try:
-            raw = exc.read()
-        except OSError:
-            raw = b""
-        return exc.code, _parse(raw)
+        with exc:
+            try:
+                raw = exc.read()
+            except OSError:
+                raw = b""
+            return exc.code, _parse(raw)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None, {}
     return status, _parse(raw)

@@ -438,6 +438,9 @@ def fetch(base, opener=None, timeout=TIMEOUT):
         if len(body) > MAX_BYTES:
             return None
         return validate(json.loads(body))
+    except urllib.error.HTTPError as error:
+        with error:
+            return None
     except (ValueError, urllib.error.URLError, OSError, TimeoutError):
         return None
 

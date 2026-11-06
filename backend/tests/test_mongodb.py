@@ -155,11 +155,15 @@ def mongo():
         port = subprocess.run([docker, "port", name, "27017/tcp"], capture_output=True, text=True).stdout.splitlines()[0].split(":")[-1].strip()
         admin = None
         for _ in range(90):
+            candidate = None
             try:
-                admin = pymongo.MongoClient(f"mongodb://root:admin-pw@127.0.0.1:{port}/?authSource=admin", serverSelectionTimeoutMS=1500)
-                admin.admin.command("ping")
+                candidate = pymongo.MongoClient(f"mongodb://root:admin-pw@127.0.0.1:{port}/?authSource=admin", serverSelectionTimeoutMS=1500)
+                candidate.admin.command("ping")
+                admin = candidate
                 break
             except pymongo.errors.PyMongoError:
+                if candidate is not None:
+                    candidate.close()     # a client that did not answer is closed here, not left to the garbage collector
                 time.sleep(1)
         else:
             pytest.skip("mongo did not come up")

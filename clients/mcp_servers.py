@@ -219,7 +219,8 @@ def reachability(url, transport, headers, timeout=REACH_TIMEOUT_S, opener=None):
         with open_url(request, timeout=timeout) as response:
             status = response.status
     except urllib.error.HTTPError as exc:
-        status = exc.code
+        with exc:
+            status = exc.code
     except (urllib.error.URLError, OSError, ValueError):
         return "unreachable"
     if status in (401, 403):

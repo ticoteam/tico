@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 import time
+import weakref
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
@@ -1061,6 +1062,16 @@ class WriterGate:
                 self.queue[0].set()
 
 
+def _close_idle(conns):
+    """Closes a store's idle read connections once the store is freed (weakref.finalize in Store.__init__). An open
+    sqlite connection that the garbage collector frees warns, so the store closes its own first."""
+    while conns:
+        try:
+            conns.pop().close()
+        except sqlite3.Error:
+            pass
+
+
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
@@ -1077,6 +1088,7 @@ class Store:
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
+        weakref.finalize(self, _close_idle, self.pool)
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
@@ -2164,7 +2176,9 @@ class Store:
         with self.pool_lock:
             if identity != self.pool_file:
                 # A restored or replaced database file: connections to the old one are not reused.
-                stale, self.pool, self.pool_file = self.pool, [], identity
+                stale = list(self.pool)
+                self.pool.clear()           # in place: the finalizer registered in __init__ holds this list
+                self.pool_file = identity
                 from .provenance_clock import Cache
                 self.provenance_cache = Cache()
                 self.roster_rows = {}

@@ -279,11 +279,12 @@ class Box:
             with opener.open(req, timeout=timeout) as r:
                 return r.status, dict(r.headers), r.read(1 << 20)
         except urllib.error.HTTPError as e:
-            try:
-                data = e.read(1 << 16)
-            except OSError:
-                data = b""
-            return e.code, dict(e.headers or {}), data
+            with e:
+                try:
+                    data = e.read(1 << 16)
+                except OSError:
+                    data = b""
+                return e.code, dict(e.headers or {}), data
         except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
             return 0, {}, str(getattr(e, "reason", e)).encode()
 

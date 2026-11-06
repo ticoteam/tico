@@ -141,40 +141,41 @@ class Client:
                         return data
                     return json.load(response)
             except urllib.error.HTTPError as exc:
-                if binary and exc.code == 302:
-                    target = exc.headers.get("Location", "")
-                    parsed = urllib.parse.urlsplit(target)
-                    signed = urllib.parse.parse_qs(parsed.query)
-                    digest = exc.headers.get("X-Content-SHA256", "")
-                    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or not {"Signature", "Expires", "Key-Pair-Id"} <= signed.keys() or not re.fullmatch(r"[0-9a-f]{64}", digest):
-                        raise APIError("file_integrity", "Tico returned an invalid file redirect")
-                    # No bearer token, processing credential or delegation follows the redirect.
-                    download = urllib.request.Request(target, headers={"User-Agent": "Tico-Client/" + CLIENT_VERSION})
-                    with self.opener.open(download, timeout=self.timeout) as response:
-                        data = response.read(20_000_001)
-                        if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != digest:
-                            raise APIError("file_integrity", "Tico file response failed its size or integrity check")
-                        return data
-                try:
-                    payload = json.load(exc)
-                except ValueError:
-                    payload = {}
-                if not isinstance(payload, dict):
-                    payload = {}
-                error = payload.get("error", {})
-                if isinstance(error, str):
-                    # A flat refusal (CONTRACT §1 task caps): `error` is the code, `message` the words, the rest is extra.
-                    error = {"code": error, "detail": payload.get("message") or "",
-                             **{k: v for k, v in payload.items() if k not in ("error", "message")}}
-                if not isinstance(error, dict):
-                    error = {}
-                # Cloudflare answers 502 then 530 (Error 1033, tunnel down) with a problem-detail
-                # body and no `error` key while a deploy activates; keep its title so the log says why.
-                detail = error.get("detail") or (f"HTTP {exc.code}" + (": " + str(payload["title"])[:200]
-                                                                        if payload.get("title") else ""))
-                retryable = exc.code == 429 or 500 <= exc.code < 600
-                failure = APIError(error.get("code", "http_error"), detail, exc.code, retryable, key,
-                                   {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")})
+                with exc:
+                    if binary and exc.code == 302:
+                        target = exc.headers.get("Location", "")
+                        parsed = urllib.parse.urlsplit(target)
+                        signed = urllib.parse.parse_qs(parsed.query)
+                        digest = exc.headers.get("X-Content-SHA256", "")
+                        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or not {"Signature", "Expires", "Key-Pair-Id"} <= signed.keys() or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                            raise APIError("file_integrity", "Tico returned an invalid file redirect")
+                        # No bearer token, processing credential or delegation follows the redirect.
+                        download = urllib.request.Request(target, headers={"User-Agent": "Tico-Client/" + CLIENT_VERSION})
+                        with self.opener.open(download, timeout=self.timeout) as response:
+                            data = response.read(20_000_001)
+                            if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != digest:
+                                raise APIError("file_integrity", "Tico file response failed its size or integrity check")
+                            return data
+                    try:
+                        payload = json.load(exc)
+                    except ValueError:
+                        payload = {}
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    error = payload.get("error", {})
+                    if isinstance(error, str):
+                        # A flat refusal (CONTRACT §1 task caps): `error` is the code, `message` the words, the rest is extra.
+                        error = {"code": error, "detail": payload.get("message") or "",
+                                 **{k: v for k, v in payload.items() if k not in ("error", "message")}}
+                    if not isinstance(error, dict):
+                        error = {}
+                    # Cloudflare answers 502 then 530 (Error 1033, tunnel down) with a problem-detail
+                    # body and no `error` key while a deploy activates; keep its title so the log says why.
+                    detail = error.get("detail") or (f"HTTP {exc.code}" + (": " + str(payload["title"])[:200]
+                                                                            if payload.get("title") else ""))
+                    retryable = exc.code == 429 or 500 <= exc.code < 600
+                    failure = APIError(error.get("code", "http_error"), detail, exc.code, retryable, key,
+                                       {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")})
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 failure = APIError("unavailable", "Tico could not confirm this request; retry with the same operation ID",
                                    retryable=True, operation_id=key)

@@ -37,7 +37,7 @@ const goalEnded = g => !!g && (g.status === 'met' || g.status === 'stopped');
 // the conversation, has the final word (chatGoalRoom).
 function chatGoalGuess(slug) {
   const bot = botRow(slug);
-  if (!bot || slug === assistantBot() || !isKeeper(slug) || bot.agent || !bot.machine) return false;
+  if (!bot || slug === assistantBot() || bot.agent || !bot.machine) return false;
   const runtime = String(bot.resolved_runtime || bot.runtime || '');
   if (typeof bot.readiness?.goals === 'boolean') return bot.readiness.goals;
   let report = null;

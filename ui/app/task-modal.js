@@ -474,9 +474,7 @@ async function taskSave(d, id, body, then, field) {
     errs.delete(field);
     if (data.task && String(d.liveTask?.id) === id) d.liveTask = data.task;
     if (here() && then !== false && data.task) void taskModalShow(data.task, d);       // the server's answer, at once
-    if (BOT) {
-      if (isKeeper(BOT.slug)) void loadBotTasksV2(BOT.slug);
-    }
+    if (BOT) void loadBotTasksV2(BOT.slug);
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
     // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one). Not for a

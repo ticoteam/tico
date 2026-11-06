@@ -1269,6 +1269,7 @@ def test_a_claude_turn_gets_only_hub_declared_and_project_mcp_servers(api, compu
     assert {"acme-docs", "hub"} <= set(servers)
 
 
+@pytest.mark.parametrize("harness", ["claude"])  # a watcher runs without a model: one harness is the whole path
 def test_a_declared_watcher_runs_without_a_model_and_its_event_opens_a_task(api, computer):
     repo = Path(computer.config).parent.parent / "projects" / "bot-ops"
     (repo / "software").mkdir()

@@ -49,10 +49,11 @@ class Live:
             with urllib.request.urlopen(req, timeout=60) as response:
                 return response.status, json.load(response)
         except urllib.error.HTTPError as exc:
-            try:
-                return exc.code, json.load(exc)
-            except ValueError:
-                return exc.code, {}
+            with exc:
+                try:
+                    return exc.code, json.load(exc)
+                except ValueError:
+                    return exc.code, {}
 
 
 def busy(server, token):

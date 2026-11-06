@@ -153,7 +153,8 @@ def request_json(method, url, *, headers=None, body=None, form=None, timeout=TIM
         with (opener or urllib.request.build_opener(_NoRedirect())).open(request, timeout=timeout) as response:
             payload = response.read(MAX_RESPONSE + 1)
     except urllib.error.HTTPError as exc:
-        raise ProviderError(*status_code(exc.code, tool), status=exc.code) from None
+        with exc:
+            raise ProviderError(*status_code(exc.code, tool), status=exc.code) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise ProviderError("unreachable", tool + " could not be reached") from None
     if len(payload) > MAX_RESPONSE:

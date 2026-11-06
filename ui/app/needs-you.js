@@ -32,7 +32,7 @@ async function needsMoreShow() {
   renderTree();
   if (OVERVIEW_PAGE) overviewNeedsDraw();
   if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-  if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+  if (BOT) botNeedsChanged(BOT.slug);
 }
 const NEEDS_IO = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
   if (entries.some(e => e.isIntersecting)) void needsMoreShow();

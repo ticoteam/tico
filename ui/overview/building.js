@@ -723,8 +723,6 @@ function animate(now) {
   // Shadows follow anything that moves: storeys in flight, and the people on the storey in view.
   if (moving || inside || camTween) renderer.shadowMap.needsUpdate = true;
   composer ? composer.render(dt) : renderer.render(scene, camera); frames++;
-  // Expose actual render progress only to the synthetic browser check; production has no per-frame DOM writes.
-  if (window.__TICO_OVERVIEW_TEST_PROBE__) Object.assign(window.__TICO_OVERVIEW_TEST_PROBE__, {frame: frames, time: t, links: links.map(l => [l.from, l.to, l.kind])});
   if (frames === 2) { $('#loading').classList.add('gone'); loadingTimer = setTimeout(() => $('#loading').hidden = true, 250); document.body.dataset.sceneReady = 'true'; }
   frameId = requestAnimationFrame(animate);
 }
