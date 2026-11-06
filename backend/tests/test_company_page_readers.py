@@ -184,8 +184,8 @@ def test_no_route_of_the_app_answers_on_the_reader_host(site, transparency):
     for method, path in routes:
         if path in answered or path == "/assets/x":
             continue
-        answer = client.request(method, path, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "k"},
-                                cookies={"__Host-tico_session": "x", "tico_session": "x"})
+        answer = client.request(method, path, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "k",
+                                                       "Cookie": "__Host-tico_session=x; tico_session=x"})
         assert plain_404(answer), (method, path, answer.status_code)
 
 
