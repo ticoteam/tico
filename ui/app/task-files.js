@@ -582,7 +582,7 @@ function askHTML(ask, answers, target, asker, taskId, files = [], canAnswer = tr
     ${body}${list}${!mine && !ro && answered ? '<button type="button" class="linkish ask-again" data-ask-again>Answer</button>' : ''}${form}</div>`;
 }
 async function askSubmit(el, dismiss = false) {
-  const status = $('.ask-status', el), dialog = el.closest('dialog'), opening = dialog?.taskOpening;
+  const status = $('.ask-status', el), dialog = el.closest('dialog:not(.tf-view)'), opening = dialog?.taskOpening;
   const answers = {};
   for (const q of el.querySelectorAll('.ask-q')) {
     const picked = [...q.querySelectorAll('.ask-opt[aria-pressed="true"]')].map(b => b.dataset.label);

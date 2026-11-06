@@ -343,6 +343,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-modal .tdesc a[href="/api/v2/files/doc"]').click();
     await page.locator('#task-modal .tf-tile[data-tf-file="doc"][aria-expanded="true"]').waitFor();
     await page.getByText(/Script one.*Approve the storyboard/s).waitFor();
+    await page.keyboard.press('Escape');
+    await page.locator('#task-modal .tf-view').waitFor({state: 'hidden'});
     await page.locator('#task-modal').getByRole('textbox', {name: 'Message'}).fill('Add the promo line.');
     await page.locator('#task-modal').getByRole('button', {name: 'Send', exact: true}).click();
     await page.locator('#task-modal .task-comments .tcomment', {hasText: 'Add the promo line.'}).waitFor();
