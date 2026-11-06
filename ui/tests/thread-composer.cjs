@@ -1,6 +1,6 @@
 // A bot's Home and DM keep the bot chat's composer (ui/app/thread-view.js, ui/app/chat-goal.js): one line (Attach, the
-// words, the ways caret, Send) in one frame, with no question-card outline around it, on a phone and a computer, dark
-// and light. Send shows the person's kept way (Steer, Queue, Defer; pill.js) and every message names it; the caret, a
+// words, the ways caret, Send) in one frame, with no question-card outline around it, on a phone (dark) and a computer
+// (light). Send shows the person's kept way (Steer, Queue, Defer; pill.js) and every message names it; the caret, a
 // right-click or a long press opens the ways, and a pick sticks across a reload. Set as goal is in that menu, for one
 // goal: a Goal chip, then Send sets the text as the thread's goal through the goal route
 // (POST /api/v2/conversations/<thread>/goal, never a message); the pinned goal shows in its bar with Edit, Pause and
@@ -123,7 +123,8 @@ const layout = page => page.locator('#bot-thread .thv-composer').evaluate(host =
 });
 
 async function looks(browser) {
-  for (const [width, theme] of [[390, 'dark'], [390, 'light'], [1280, 'dark'], [1280, 'light']]) {
+  // One run per width: nothing here reads a colour, so dark and light drew the same boxes (the theme only changes the screenshots).
+  for (const [width, theme] of [[390, 'dark'], [1280, 'light']]) {
     const api = await open(browser, {width, theme}), {page} = api;
     await page.locator('#bot-thread .p-way:not([hidden])').waitFor();
     const l = await layout(page), name = `${width}-${theme}`;

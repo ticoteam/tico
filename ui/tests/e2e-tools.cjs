@@ -6,7 +6,7 @@
 // The hub's answers: who sees which tool (Omar only the one he holds, and only his own row on it; Priya none), and no
 // key value in any answer. The page: the old Library › Connections address lands on Tools; the list, its Needs you
 // and Mail filters; Close CRM's levels, keys, check squares and recent calls; its Activity tab and Refused filter;
-// Ledger export's Move to proxy; the mailbox's page. Phone then desktop; TICO_UI_SHOTS=<dir> saves each in dark and light.
+// Ledger export's Move to proxy; the mailbox's page. Phone only; TICO_UI_SHOTS=<dir> saves each in dark and light.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -144,4 +144,4 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   assertClean(page, `${where}: mailbox`);
   await shots(page, `mailbox-${where}`);
   await page.context().close();
-}, [...SEEDS, 'tools']);
+}, [...SEEDS, 'tools'], {only: 'phone'});   // the hub's answers do not depend on the width; the pages have one markup, and a phone is where sideways scroll shows

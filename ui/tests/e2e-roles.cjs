@@ -8,7 +8,8 @@
 // under her). Task reads follow the org chart, not co-ownership (docs/tasks.md "Managers acting on tasks").
 // Expected: Dana sees all three (she is above the bots and a party to P1); Omar sees T1 and P1; Priya sees T1 and P2
 // (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (a reader). A private
-// task a teammate may not read is refused by the hub, and the page does not open it. Runs on a phone and a desktop.
+// task a teammate may not read is refused by the hub, and the page does not open it. Runs on a desktop only: the list and the sheet are the same at both widths
+// and e2e-core opens the sheet on both.
 const assert = require('node:assert/strict');
 const {journey, open, go, must, call, assertClean, expectFailure, t, SEEDS} = require('./support/e2e.cjs');
 
@@ -68,4 +69,4 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
       assertClean(page, `${where}: ${who} ${key}`);
     }
   }
-}, [...SEEDS, 'priya-leads']);
+}, [...SEEDS, 'priya-leads'], {only: 'desktop'});   // who sees what is the hub's rule; the task sheet opens at both widths in e2e-core

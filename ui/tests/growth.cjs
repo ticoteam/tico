@@ -382,4 +382,4 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
 
   assert.deepEqual(removed, [], `${tag}: nothing calls a removed route`);
   noErrors('every page');
-});
+}, {only: 'desktop'});   // dashboard.js and the Growth cards have no phone branch; the bottom-bar route is checked by redesign-e2e-pages

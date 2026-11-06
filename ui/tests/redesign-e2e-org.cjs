@@ -1,4 +1,4 @@
-// Journey 7 on a real hub (redesign TESTING.md §L3): Strategy › Org on a phone (then a desktop). Dana, the top of the
+// Journey 7 on a real hub (redesign TESTING.md §L3): Strategy › Org on a phone. Dana, the top of the
 // org, taps Builder (Claude) and moves it from Engineering to Release: the hub's groups have it there at once. Omar
 // leads Engineering only, so his Move to… offers Engineering's groups and not Release, and a Release teammate's sheet
 // has no Move to…. No approval is filed: org changes beyond that are the Strategy Bot's to suggest in words.
@@ -63,4 +63,4 @@ run('redesign-e2e-org', ['org', 'toured', 'groups'], async ({hub, browser, phone
   await omar.context().close();
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-});
+}, {only: 'phone'});   // the desktop chart and Move sheet are checked by strategy-org.cjs (computer and phone)
