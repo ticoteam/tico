@@ -6737,11 +6737,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                          f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
                          "or set --due for when to look again"]
     # A bot that needs a person on its own task asks them in one question task they own, with no options
-    # (_ask_in_subtask): the task stays the bot's, blocked on it, and is never itself a card in their Needs you. An open
-    # question task to them from the owner on the task (`hub task question`) already asks, so nothing more is filed.
+    # (_ask_in_subtask): the task stays the bot's, blocked on it, and is never itself a card in their Needs you. With no
+    # note, an open question task to them from the owner on the task (`hub task question`) already asks: nothing is filed.
     asked_in = None
-    if waiting_on and not _owner_asked(conn, row, waiting_on):
-        said = str(note if note is not None else row.get("note") or "").strip()
+    said = str(note if note is not None else row.get("note") or "").strip() if waiting_on else ""
+    if waiting_on and (said or not _owner_asked(conn, row, waiting_on)):
         if said.startswith(BLOCKED_ON.format(name=person_name(conn, waiting_on), ask="")):
             said = said.split(": ", 1)[1]          # the note this rule wrote, sent back as it was
         require_person_ask(conn, actor, waiting_on, said, "waiting")

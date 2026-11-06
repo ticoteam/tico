@@ -458,9 +458,12 @@ class Rule5Tasks(HubCase):
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
-        QT.ask_plain(self.conn, COO, ANA, "Which image?", parent=row)
+        # A bot not on the task cannot ask under it (no subtask), so it is not told: only its parties are.
+        with self.assertRaises(H.Refused):
+            QT.ask_plain(self.conn, COO, ANA, "Which image?", parent=row)
         H.task_update(self.conn, ANA, row["id"], status="done", note="Use B.")
-        for bot in (CMO, SEO, COO):
+        self.assertFalse(self.finished(row, COO))
+        for bot in (CMO, SEO):
             told = self.finished(row, bot)
             self.assertEqual(len(told), 1, bot)
             self.assertIn("Use B.", told[0]["body"])
@@ -472,7 +475,7 @@ class Rule5Tasks(HubCase):
         self.assertIn("Use B.", on_parent["body"])
         quiet = {m["recipient_id"]: bool(m["refs"].get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
                  if m["body"].startswith("Ana Rivera marked this done:")}
-        self.assertEqual(quiet, {CMO: True, SEO: False, COO: False}, "tasks-only bots hear it quietly")
+        self.assertEqual(quiet, {CMO: True, SEO: False}, "tasks-only bots hear it quietly")
         # A private task tells only its parties: the parent's owner cannot read it.
         secret = H.task_create(self.conn, ANA, "Review the settlement", "Read it.", SEO, parent_id=parent["id"], private=True)
         H.task_update(self.conn, ANA, secret["id"], status="done", note="Signed.")

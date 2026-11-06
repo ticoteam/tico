@@ -236,6 +236,7 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     # A new question after the answer was passed on is back in her Needs you, and may be merged again.
     with api.app.state.store.transaction() as c:
         more = QT.ask_plain(c, "bot:ops", OWNER, "And which price goes on it?", parent=H.task(c, asked))["id"]
+        H.task_update(c, "bot:ops", asked, status="waiting", waiting_on=OWNER, note="")
         later = H.task_update(c, "bot:coo", waiting, status="waiting", waiting_on=OWNER,
                               note="Which day do we launch? I'll book the venue after.")["asked_in"]["id"]
     assert later != card

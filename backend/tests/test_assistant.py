@@ -504,7 +504,9 @@ def needs_you_queue(api):
         merge = H.approval_request(c, "bot:ops", "merge", {"repo": "acme/site", "pr": 12}, mine)["id"]
         spend = H.approval_request(c, "bot:ops", "spend", {"amount": 500, "account": "card", "what": "Ads"}, mine)["id"]
         hers = H.approval_request(c, "bot:ops", "publish", {"url": "https://acme.example/ana", "content_sha256": "f" * 64})["id"]
-        ask = QT.ask_alone(c, "bot:ops", "human:ben", "Launch on Oct 1 or Oct 8?")["id"]
+        # A private standalone card is one his Assistant cannot read, so his question hangs off a shared task.
+        launch = H.task_create(c, "human:ben", "Plan the launch", "Pick the day.", "bot:ops")
+        ask = QT.ask_plain(c, "bot:ops", "human:ben", "Launch on Oct 1 or Oct 8?", parent=launch)["id"]
         her_ask = QT.ask_alone(c, "bot:ops", "human:ana", "Which logo?")["id"]
     return {"old": old, "merge": merge, "spend": spend, "hers": hers, "ask": ask, "her_ask": her_ask}
 

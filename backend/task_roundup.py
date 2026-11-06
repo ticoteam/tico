@@ -31,7 +31,7 @@ the later of the bot's last turn on it and the last time it was listed. That is 
 a change of the task itself (status, owner, step, due, title, body or acceptance; a task's creation row is not
 news, but a step or status set later on a task that had none is); a comment edited or deleted; a blocker taken off it; a
 blocker that finished (taken off by Tico: "a blocker is done", or kept on a roadmap item); or a subtask that finished, by
-someone other than the bot. A status change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank,
+someone other than the bot. A question task Tico sent back unanswered is not news there: its own line names it. A status change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank,
 checkpoints, its wake notices) never counts.
 
 A task is quiet when nothing has changed on it for a day, and nothing holds it: no
@@ -681,6 +681,11 @@ def _readable(c, actor, rows):
     return [row for row in rows if H.task_private_readable(c, actor, row)]
 
 
+# A question task Tico closed unanswered (still_needed sent it back) is not news on the task it was asked from: the
+# "no answer in two business days" line already names it. Args: Tico.
+_NOT_SENT_BACK = "NOT (t.questions IS NOT NULL AND t.answer IS NULL AND h.actor_id=?)"
+
+
 def _news(c, row, actor, base):
     """(count, latest time, what the latest was) of what others did on the task since `base`, or None."""
     tid, conv = row["id"], row["conversation_id"]
@@ -694,22 +699,25 @@ def _news(c, row, actor, base):
     gone = _readable(c, actor, H._rows(c.execute(
         "SELECT h.created_at, h.actor_id, t.id, t.owner_id, t.requester_id, t.private FROM history_events h "
         "JOIN tasks t ON t.id=h.old WHERE h.subject_type='task' AND h.subject_id=? AND h.kind='blocked_by' "
-        "AND h.new IS NULL AND h.created_at>? AND h.actor_id IS NOT NULL AND h.actor_id<>? ORDER BY h.created_at DESC",
-        (tid, base, actor))))
+        f"AND h.new IS NULL AND h.created_at>? AND h.actor_id IS NOT NULL AND h.actor_id<>? AND {_NOT_SENT_BACK} "
+        "ORDER BY h.created_at DESC",
+        (tid, base, actor, H.KEEPER))))
     # A blocker that finished and whose relation is still there (a roadmap item keeps its finished Dev tickets). A related
     # task the bot cannot read is neither counted nor described: its finish is not news on this list.
     retired = _readable(c, actor, H._rows(c.execute(
         "SELECT t.id, t.owner_id, t.requester_id, t.private, t.status, h.created_at AS at FROM task_relations r "
         "JOIN tasks t ON t.id=r.from_task JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id "
         f"AND h.kind='status' AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
-        f"WHERE r.to_task=? AND r.kind='blocks' AND t.status NOT IN ({_marks()}) ORDER BY h.created_at DESC",
-        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES))))
+        f"WHERE r.to_task=? AND r.kind='blocks' AND t.status NOT IN ({_marks()}) AND {_NOT_SENT_BACK} "
+        "ORDER BY h.created_at DESC",
+        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES, H.KEEPER))))
     kids = _readable(c, actor, H._rows(c.execute(
         "SELECT t.id, t.owner_id, t.requester_id, t.private, t.status, h.created_at AS at FROM task_relations r "
         "JOIN tasks t ON t.id=r.from_task JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id "
         f"AND h.kind='status' AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
-        f"WHERE r.to_task=? AND r.kind='parent' AND t.status NOT IN ({_marks()}) ORDER BY h.created_at DESC",
-        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES))))
+        f"WHERE r.to_task=? AND r.kind='parent' AND t.status NOT IN ({_marks()}) AND {_NOT_SENT_BACK} "
+        "ORDER BY h.created_at DESC",
+        (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES, H.KEEPER))))
     count = (msgs or 0) + hist + len(gone) + len(retired) + len(kids)
     if not count:
         return None
