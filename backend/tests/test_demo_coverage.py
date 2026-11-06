@@ -140,8 +140,13 @@ def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
     linked = {row['task_id'] for meeting in meetings for row in
               api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']}
     needs = api.get('/api/v2/needs-you?limit=200').json()['items']
-    assert any(it['id'] in linked and (it.get('ask') or {}).get('recipient_id') == 'human:ana'
-               and 'answer' in it.get('actions', []) for it in needs)
+
+    def filed_under_meeting(item):
+        detail = api.get(f"/api/v2/tasks/{item['id']}").json()['task']
+        return any(parent['id'] in linked for parent in detail['relations'].get('parent', []))
+
+    # The follow-up is a question task Ana owns, filed under the meeting's task; its card is answered by an update.
+    assert any('update' in it.get('actions', []) and filed_under_meeting(it) for it in needs)
 
 
 def test_demo_task_has_an_editor_for_the_live_task_page(api):

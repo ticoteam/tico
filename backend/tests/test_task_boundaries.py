@@ -17,6 +17,9 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     for kind in ('say', 'notice'):
         derived.append(post(api, 'messages', {'to': 'ops', 'kind': kind, 'text': 'Restricted derived message',
             'conversation_id': target['conversation_id'], 'refs': {'task': target['id']}})['id'])
+    # The open ask is a question task under the target, private to the bot and Ana: Ben cannot read it.
+    post(api, 'task-questions', {'on': 'ana', 'question': 'Which packet is final?', 'parent': target['id'],
+                                 'private': True}, token=bot_token(api, 'ops'))
     with api.app.state.store.transaction() as c:      # each task has its own room, so the cross-room reply is set here
         for mid in derived:
             c.execute('UPDATE messages SET in_reply_to=? WHERE id=?', (first['id'], mid))

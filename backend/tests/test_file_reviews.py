@@ -97,7 +97,7 @@ def test_closing_a_spend_question_by_its_pick_records_the_approval(api):
                spend={"label": "teaser a", "amount": "12.50", "what": "Render the final cut"})
     task = made["task"]
     closed = post(api, f"tasks/{task['id']}", {"version": task["version"], "close": True, "note": "teaser a"})
-    assert closed["task"]["status"] == "done"
+    assert closed["status"] == "done"
     assert approved(api, bot, file=a["id"])["approved"] and not approved(api, bot, file=b["id"])["approved"]
     with api.app.state.store.read() as c:
         spend = c.execute("SELECT kind, decision FROM approvals WHERE kind='spend'").fetchall()
