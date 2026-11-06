@@ -136,8 +136,8 @@ action items), **Docs**,
 and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the Strategy Bot and the Task Manager are built in and cannot be archived or deleted (`409 system_bot`); the assistant
-and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) on every page
-(also its own page, `#/assistant`, and the first tab on their own page): it looks things up at once, does low-risk things as that human, and
+and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
+(`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
 Assistant too: it hands strategy and goal work to the Strategy Bot, research to the Librarian and bot work to BotOps. There is no shared
 Tico chat page and no Tico Live; humans can also act across Tico through their own external agent over Tico's
@@ -411,21 +411,26 @@ that is still spent sees one run, not one per bot. While that run is out, Try no
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session, given the thread's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant DM) and
-reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model.
+reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model. A named fallback on the same
+login as the spent one is skipped (it would hit the same limit), and, while **Fall back when a plan runs out** is on in **Settings → Models**, the turn goes to the company's other providers as
+described below.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses
-a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
-the cloud cooldown applies.
+a stored `GEMINI_API_KEY` Credential granted to the bot. **None** in a bot's fallback picker (History shows *None (fail)*) means no named hop: the bot still takes
+the company's automatic hop below when that is on and one is ready.
 
-A bot with no fallback of its own still gets one on a usage limit (a spend cap such as "monthly spend
-limit" counts): the runner runs that turn once on the first of the company's other providers that is
-signed in on the same computer, with that provider's default model (`fallback_models` in
-`GET /api/v2/config`), and reports `fallback` with `primary_limited`. A provider signed in only by a key in
-the environment is skipped (a turn carries only its own runtime's keys; Codex turns its key into a login).
+A bot with no fallback of its own, or whose named fallback is another model on the same login (that fallback is skipped
+once the login is spent), still gets one on a usage limit, while **Fall back when a plan runs out** is on in **Settings → Models** (a spend cap such as "monthly spend limit" counts): the runner
+runs that turn once on the first of the company's other providers that is signed in on the same computer, either by its
+own sign-in or by a company subscription given to that computer ([Computers](computers.md)), with the company's default
+model when it is on that tool and is not a Tico Gateway model (a Gateway model runs only through Tico's own provider,
+`fallback_models` in `GET /api/v2/config`), or else that provider's recommended model, and reports `fallback` with
+`primary_limited`. A
+provider signed in only by a key in the environment is skipped (a turn carries only its own runtime's keys; Codex turns
+its key into a login).
 A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
 30 minutes when the provider gives none, and the next provider in the list takes the turn (a subscription profile
 that shares the computer's own logins counts as that login; a bot's own key is never shared with another bot). When the fallback itself
-hits its limit, the same turn moves on to the next signed-in provider instead of ending. With no ready provider
-the run is limited as above. A limit is named by the login that returned it: the bot's status, its run log and
+hits its limit, the same turn moves on to the next signed-in provider instead of ending. Under the two choices that include the Gateway (`subscriptions-gateway` and `gateway`), while automatic fallback is on (**Fall back when a plan runs out** in **Settings → Models**), a bot with no fallback of its own (**None** is no fallback), whose own model is not a Tico model, gets a Tico model last, after every signed-in provider, on a computer that runs bots as their own user or is a Tico cloud machine ([AI Gateway](ai-gateway.md)); a computer that is neither leaves that hop out. A bot that names a fallback, even one on the same login, gets no company Tico hop. With no ready provider and no such hop, the run is limited as above. A limit is named by the login that returned it: the bot's status, its run log and
 Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
 or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
 API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's

@@ -488,6 +488,9 @@ STABLE = [
     ("/api/v2/assistant/read-back", "post", "Assistant", "readBackAssistantApprovals",
      "The Assistant only: post the list of approvals it is about to approve for you in your chat, with an optional note "
      "of its own words above it; only the listed ones may then be approved on your yes", None),
+    ("/api/v2/assistant/morning", "post", "Assistant", "sendAssistantMorning",
+     "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the "
+     "Assistant (no card). Once a company day per person: a second is 409 already_sent_today", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
     ("/api/v2/strategy-bot", "get", "Goals", "getStrategyBot",
      "The Strategy Bot's name, whether its regular checks run, how much it does (its level, "

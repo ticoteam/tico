@@ -1752,6 +1752,66 @@
         ]
       }
     },
+    "/api/v2/assistant/morning": {
+      "post": {
+        "summary": "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today",
+        "operationId": "sendAssistantMorning",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantMorning"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/assistant/proposals": {
       "get": {
         "summary": "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner",
@@ -47656,6 +47716,30 @@
           "text"
         ],
         "title": "AssistantMessage"
+      },
+      "AssistantMorning": {
+        "properties": {
+          "for": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "For"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Body"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "for",
+          "body"
+        ],
+        "title": "AssistantMorning",
+        "description": "The Assistant's one morning message to a person, in their own Assistant chat (backend/assistant.py morning)."
       },
       "AssistantPage": {
         "properties": {

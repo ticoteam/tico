@@ -336,7 +336,7 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
                                                      "ORDER BY position, id")],
                          [name for _, name, _ in MT.STEPS])
         self.assertEqual(tuple(conn.execute("SELECT name, status FROM task_steps WHERE id='idea-scaling'").fetchone()),
-                         ("Scaling", "doing"))
+                         ("Working", "doing"))
 
 
 class RegistrySync(HubCase):

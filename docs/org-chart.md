@@ -8,7 +8,7 @@ and bots, with the groups inside it below them. A group's name opens its team pa
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
-Librarian, the Strategy Bot) stay out of the chart and the Goals tree. Ask opens the Assistant from any page, and the Assistant hands BotOps what needs it;
+Librarian, the Strategy Bot) stay out of the chart and the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
 the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
 
 Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.

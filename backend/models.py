@@ -2735,6 +2735,12 @@ class AssistantAction(Contract):
     for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
 
 
+class AssistantMorning(Contract):
+    """The Assistant's one morning message to a person, in their own Assistant chat (backend/assistant.py morning)."""
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] = Field(alias="for")
+    body: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
 class InboxOnly(Contract):
     enabled: bool
 

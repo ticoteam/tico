@@ -110,7 +110,8 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     seed(api)
     shipped = marketing(api, "Google ads test", "google-search", step="idea-doing")
     marketing(api, "Referral scaling", "google-search", step="idea-scaling")
-    marketing(api, "Flyers at the market", "referrals")
+    flyers = marketing(api, "Flyers at the market", "referrals")
+    building = marketing(api, "Referral reward copy", "referrals", step="idea-building")
     marketing(api, "Old banner", "google-search", step="idea-paused")
     marketing(api, "Inbox test", "google-search", step="idea-doing", owner="inbox", private=True)
     cards = {p["card"]["template"]: p["card"]["data"] for p in growth(api)["pins"] if p["card"]["template"] != "growth_number"}
@@ -131,8 +132,8 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
             if p["card"]["template"] == "growth_funnel"}["growth_funnel"]
     assert (sept["north_star"]["value"], sept["north_star"]["prev"]) == (30, None)
     assert sept["stages"][0]["value"] is None and sept["stages"][1]["conv"] is None
-    # Channels: each live channel's own row, the open tests (Scaling then Testing; paused and private ones left out),
-    # Unknown last.
+    # Channels: each live channel's own row, its open tests (Working, Live, In development, On deck; paused ones left
+    # out), Unknown last.
     rows = {r["slug"]: r for r in cards["growth_channels"]["rows"]}
     google, referrals = rows["google-search"], rows["referrals"]
     assert [r["slug"] for r in cards["growth_channels"]["rows"]] == ["google-search", "referrals", "unknown"]
@@ -143,19 +144,24 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     assert [t["stage"] for t in google["tasks"]] == ["scaling", "testing", "testing"]
     assert google["tasks"][0]["title"] == "Referral scaling"
     assert {t["title"] for t in google["tasks"]} == {"Referral scaling", "Google ads test", "Inbox test"}
-    assert referrals["tasks"] == [{"id": referrals["tasks"][0]["id"], "title": "Flyers at the market", "stage": "idea"}]
+    assert [(t["id"], t["title"], t["stage"]) for t in referrals["tasks"]] == [
+        (building, "Referral reward copy", "building"), (flyers, "Flyers at the market", "idea")]
     assert rows["unknown"]["new_customers"] == 18 and rows["unknown"]["tasks"] == []
     # Retention: September then October, the newest last; a month with no 90 or 180 days is null.
     retention = cards["growth_retention"]
     assert retention["columns"] == ["30 days", "90 days", "180 days"]
     assert [r["month"] for r in retention["rows"]] == ["2026-09", "2026-10"]
     assert retention["rows"][0]["kept"] == [75, None, None] and retention["rows"][1]["kept"] == [81, 64, 52]
-    # The board: Testing, Scaling, Idea; each lane's count is all of its tests the reader may see, and its newest one.
+    # The board: Live, Working, In development, On deck; each lane's count is all of its tests the reader may see, and
+    # its newest one.
     lanes = {lane["stage"]: lane for lane in cards["growth_board"]["lanes"]}
-    assert [lane["label"] for lane in cards["growth_board"]["lanes"]] == ["Testing", "Scaling", "Idea"]
-    assert lanes["testing"]["count"] == 2 and lanes["scaling"]["count"] == 1 and lanes["idea"]["count"] == 1
+    assert [lane["label"] for lane in cards["growth_board"]["lanes"]] == [
+        "Live", "Working", "In development", "On deck"]
+    counts = {stage: lane["count"] for stage, lane in lanes.items()}
+    assert counts == {"testing": 2, "scaling": 1, "building": 1, "idea": 1}
     assert shipped in {c["id"] for c in lanes["testing"]["cards"]}
     assert lanes["scaling"]["cards"][0]["channel"] == "Google Search"
+    assert lanes["building"]["cards"][0]["id"] == building and lanes["building"]["cards"][0]["channel"] == "Referrals"
     # The private test is Ana's alone: Cara sees one test in Testing, not two.
     cara = {p["card"]["template"]: p["card"]["data"] for p in growth(api, token="cara-test")["pins"]
             if p["card"]["template"] == "growth_board"}

@@ -787,13 +787,13 @@ def test_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_re
     monkeypatch.setattr(H, "_wake", spy)
     with api.app.state.store.transaction() as c:
         tid = marketing_idea(c)
-        H.task_update(c, "bot:cmo", tid, step="Testing", note="Started.")
-        H.task_update(c, "bot:cmo", tid, step="Won", note="Result: CPA 31")
+        H.task_update(c, "bot:cmo", tid, step="Live", note="Started.")
+        H.task_update(c, "bot:cmo", tid, step="Succeeded", note="Result: CPA 31")
         task = H.task(c, tid)
         last = c.execute("SELECT kind AS field, old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
                          "ORDER BY rowid DESC LIMIT 1", (tid,)).fetchone()
         second = marketing_idea(c)
-        H.task_close(c, "bot:cmo", second, note="Lost on cost.", step="Lost")
+        H.task_close(c, "bot:cmo", second, note="Lost on cost.", step="Failed")
         closed_by_close = H.task(c, second)
     assert (task["status"], task["step_id"], task["closed_by_id"]) == ("closed", "idea-won", "bot:cmo")
     assert task["note"] == "Result: CPA 31"
