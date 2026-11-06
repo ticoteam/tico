@@ -5414,6 +5414,7 @@ SCHEMAS.update(
                             "grants": items({"type": "object", "additionalProperties": True}),
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
                             "may_grant": "b",
+                            "budgets": "i",
                         }
                     )
                 ),

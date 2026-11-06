@@ -55751,9 +55751,13 @@
                 },
                 "may_grant": {
                   "type": "boolean"
+                },
+                "budgets": {
+                  "type": "integer"
                 }
               },
               "required": [
+                "budgets",
                 "default",
                 "default_team",
                 "grants",
