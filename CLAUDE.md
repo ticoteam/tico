@@ -46,8 +46,9 @@ Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs 
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author merges when checks are
-green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from two
-windows a day (14:30 and 22:00 UTC, docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
+green and the PR is reviewed. A red release candidate caused by your merge is your top priority. Releases ship from
+release windows (weekdays 07:30, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
+docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
 major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.
 
 ## Hit every surface

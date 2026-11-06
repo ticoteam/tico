@@ -52,11 +52,11 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 
 ## Release windows
 
-Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github/workflows/train.yml` and
-`scripts/release_train.py`. No one tags by hand.
+Tico's own releases (ticoteam/tico) ship from release windows (three on weekdays, two at weekends), run by
+`.github/workflows/train.yml` and `scripts/release_train.py`. No one tags by hand.
 
-- **When.** A window opens at 14:30 and 22:00 UTC: 07:30 and 15:00 in Los Angeles in summer, an hour earlier in
-  winter. It stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
+- **When.** Windows open at 07:30, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
+  A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
 - **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
   past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
@@ -86,8 +86,9 @@ Tico's own releases (ticoteam/tico) ship from two windows a day, run by `.github
   validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
 
-Triggers: the two window schedules, every push to main, every finished Release validation run, a manual run, and a
-backstop schedule every 20 minutes (at :05, :25 and :45, never a window's minute) that takes a step in an open window
+Triggers: the window schedules (one UTC cron per window start under either offset), every push to main, every
+finished Release validation run, a manual run, and a backstop schedule every 20 minutes
+(at :05, :25 and :45, never a window's minute) that takes a step in an open window
 if an event was missed (it never opens a window or promotes). A small read-only job decides first, so a push with
 nothing to do ends in seconds. Every job that acts (the window job and the hotfix) shares one concurrency group, so two
 never start a build or a release at once. One race remains: GitHub keeps one waiting job per group, so a hotfix queued

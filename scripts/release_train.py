@@ -26,8 +26,8 @@ A release is published as not latest and marked latest (the GitHub release and t
 canary runs it healthy, so new installs, update checks and desktop apps never get a release the canary has not run. The
 image tags move with `docker buildx imagetools` (the workflow logs in to ghcr.io first).
 
-A window opens at 14:30 and 22:00 UTC (07:30 and 15:00 in Los Angeles during daylight time, an hour earlier in winter)
-and stays open until a vX.Y.Z release is published after it. Nothing is stored: every run works the state out from
+Windows open at 07:30, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends. A window stays
+open until a vX.Y.Z release is published after it. Nothing is stored: every run works the state out from
 GitHub. Installs are read and updated only through the routes an update key reaches (GET and POST
 /api/v2/system/update, POST /api/v2/system/update/check; backend/service_keys.py), never /healthz, which a proxy may not
 route. The HTTP helper is the Release Manager's (templates/catalog/release-notes/software/rollout.py). Standard library
@@ -48,13 +48,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
-# Window starts in UTC, the same times as train.yml's crons. GitHub's schedule fires late, sometimes by many minutes;
-# that only delays the promotion, because a push or a finished run inside the window acts on its own.
-WINDOWS = ((14, 30), (22, 0))
-CRONS = ["30 14 * * *", "0 22 * * *"]
+LOS_ANGELES = ZoneInfo("America/Los_Angeles")
+# Window starts in Los Angeles wall-clock time, on weekdays (Monday to Friday) and at weekends.
+WEEKDAY_WINDOWS = ((7, 30), (14, 0), (20, 30))
+WEEKEND_WINDOWS = ((7, 30), (15, 0))
+# GitHub's crons are UTC only: every UTC time a window can start at, under PDT or PST (train.yml lists the same ones).
+CRONS = ["30 3 * * *", "30 4 * * *", "30 14 * * *", "30 15 * * *", "0 21 * * *", "0 22 * * *", "0 23 * * *"]
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
 # does, and never opens one, so it never promotes. Minutes 5, 25 and 45: never a window's minute (00 or 30).
 BACKSTOP_CRON = "5-59/20 * * * *"
@@ -140,23 +143,52 @@ def parse_time(text):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def window_start(now):
-    """The latest window start at or before now (UTC)."""
-    now = now.astimezone(timezone.utc)
-    starts = [
-        datetime(day.year, day.month, day.day, hour, minute, tzinfo=timezone.utc)
-        for day in (now - timedelta(days=1), now)
-        for hour, minute in WINDOWS
+def cron_time(cron):
+    """(hour, minute), in UTC, of a cron such as "30 14 * * *"."""
+    minute, hour = cron.split()[:2]
+    return int(hour), int(minute)
+
+
+def window_starts_on(day):
+    """The window starts on a Los Angeles calendar date, as UTC datetimes: the day type comes from that date."""
+    windows = WEEKDAY_WINDOWS if day.weekday() < 5 else WEEKEND_WINDOWS
+    return [
+        datetime(day.year, day.month, day.day, hour, minute, tzinfo=LOS_ANGELES).astimezone(timezone.utc)
+        for hour, minute in windows
     ]
-    return max(start for start in starts if start <= now)
+
+
+def window_start(now):
+    """The latest window start at or before now (UTC), by the Los Angeles date. Yesterday's first window is always at
+    or before now, so there is always one."""
+    now = now.astimezone(timezone.utc)
+    today = now.astimezone(LOS_ANGELES).date()
+    return max(start for day in (today - timedelta(days=1), today) for start in window_starts_on(day) if start <= now)
 
 
 def next_window(now):
-    return min(start for start in (window_start(now + timedelta(hours=hours)) for hours in range(1, 25)) if start > now)
+    """The first window start after now (UTC). It is never more than a day away."""
+    now = now.astimezone(timezone.utc)
+    today = now.astimezone(LOS_ANGELES).date()
+    return min(start for day in (today, today + timedelta(days=1)) for start in window_starts_on(day) if start > now)
+
+
+def window_cron_opens(cron, now):
+    """Whether a window cron that fired at now opens a window: its own UTC time must be the latest window start at or
+    before now. So a late cron still opens the window that is current, however late, and a superseded window opens
+    nothing. The off-season twin of a cron (15:30 UTC is 08:30 PDT) is never a window start, so it opens nothing and
+    does what a push does."""
+    now = now.astimezone(timezone.utc) + SKEW
+    hour, minute = cron_time(cron)
+    fired = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if fired > now:
+        fired -= timedelta(days=1)
+    return window_start(now) == fired
 
 
 def hhmm(when):
-    return when.astimezone(timezone.utc).strftime("%H:%M UTC")
+    """A window time as the Los Angeles clock shows it, such as 07:30 PST."""
+    return when.astimezone(LOS_ANGELES).strftime("%H:%M %Z")
 
 
 def reason_ok(reason):
@@ -680,8 +712,12 @@ def cmd_guard(gh, env, now):
     """Read-only, outside the release concurrency group: decides whether the release job runs at all, so a push that
     finds nothing to do never enters the `release` environment or queues behind (or displaces) a hotfix."""
     event = env.get("GITHUB_EVENT_NAME", "")
-    # Only a window cron (or a manual run) opens a window; the backstop, or a cron this does not know, acts like a push.
-    opening = event == "workflow_dispatch" or (event == "schedule" and env.get("SCHEDULE", "") in CRONS)
+    schedule = env.get("SCHEDULE", "")
+    # Only a window cron that started a real window (or a manual run) opens one. The backstop, an off-season twin of a
+    # cron, and a cron this does not know, act like a push.
+    opening = event == "workflow_dispatch" or (
+        event == "schedule" and schedule in CRONS and window_cron_opens(schedule, now)
+    )
     go = False
     if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
         note("Release windows are off (repository variable RELEASE_TRAINS is not `on`)")
@@ -702,7 +738,7 @@ def cmd_guard(gh, env, now):
             note("Window step: %s" % plan["why"])
             # The guard cannot read the canary (no environment), so only the backstop checks a lagging latest: at most
             # every 20 minutes, the window job retries it when the canary runs that release healthy.
-            if not go and event == "schedule":
+            if not go and event == "schedule" and schedule == BACKSTOP_CRON:
                 lagging = lagging_latest(gh)
                 if lagging:
                     go = True

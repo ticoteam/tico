@@ -1,15 +1,24 @@
 """Release windows: when a window is open, which candidate ships, when stable may take the canary's release, and that
 a failure reaches the release-train issue (scripts/release_train.py)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from scripts import release_train as rt
 
+PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+def pt(*when):
+    """A Los Angeles wall-clock time as UTC: pt(2026, 11, 6, 20, 30) is 04:30 UTC on the 7th (PST)."""
+    return datetime(*when, tzinfo=PACIFIC).astimezone(timezone.utc)
+
+
 A, B, C, D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
-NOW = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)  # the 14:30 UTC window is the latest start
-OPENED = datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)  # Thursday 10:00 PST: 07:30 is the latest start
+OPENED = pt(2026, 11, 5, 7, 30)
 
 
 def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1):
@@ -191,23 +200,193 @@ def test_validation_title_round_trips_for_release_yml():
     assert rt.parse_title("Release window opens") is None
 
 
+UTC = timezone.utc
+
+
 @pytest.mark.parametrize(
-    "now, start",
+    "now, start, following",
     [
-        (datetime(2026, 11, 5, 14, 29, tzinfo=timezone.utc), datetime(2026, 11, 4, 22, 0, tzinfo=timezone.utc)),
-        (datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc), datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)),
-        (datetime(2026, 11, 5, 21, 59, tzinfo=timezone.utc), datetime(2026, 11, 5, 14, 30, tzinfo=timezone.utc)),
-        (datetime(2026, 11, 6, 3, 0, tzinfo=timezone.utc), datetime(2026, 11, 5, 22, 0, tzinfo=timezone.utc)),
-        (datetime(2027, 1, 1, 1, 0, tzinfo=timezone.utc), datetime(2026, 12, 31, 22, 0, tzinfo=timezone.utc)),
+        pytest.param(
+            datetime(2026, 7, 10, 4, 0, tzinfo=UTC),
+            pt(2026, 7, 9, 20, 30),
+            pt(2026, 7, 10, 7, 30),
+            id="thu-2030-pdt-seen-0400-utc-next-day",
+        ),
+        pytest.param(
+            datetime(2026, 11, 6, 4, 40, tzinfo=UTC),
+            pt(2026, 11, 5, 20, 30),
+            pt(2026, 11, 6, 7, 30),
+            id="thu-2030-pst-seen-0440-utc-next-day",
+        ),
+        pytest.param(
+            pt(2026, 11, 6, 20, 31),
+            pt(2026, 11, 6, 20, 30),
+            pt(2026, 11, 7, 7, 30),
+            id="fri-2031-the-2030-window-is-the-latest",
+        ),
+        pytest.param(
+            pt(2026, 11, 6, 21, 0), pt(2026, 11, 6, 20, 30), pt(2026, 11, 7, 7, 30), id="fri-2100-next-is-sat-0730"
+        ),
+        pytest.param(
+            pt(2026, 11, 7, 0, 30),
+            pt(2026, 11, 6, 20, 30),
+            pt(2026, 11, 7, 7, 30),
+            id="sat-0030-across-midnight-keeps-fri-2030",
+        ),
+        pytest.param(
+            pt(2026, 7, 11, 7, 31), pt(2026, 7, 11, 7, 30), pt(2026, 7, 11, 15, 0), id="sat-0731-pdt-opened-0730"
+        ),
+        pytest.param(
+            pt(2026, 11, 7, 7, 31), pt(2026, 11, 7, 7, 30), pt(2026, 11, 7, 15, 0), id="sat-0731-pst-opened-0730"
+        ),
+        pytest.param(
+            pt(2026, 7, 11, 14, 5),
+            pt(2026, 7, 11, 7, 30),
+            pt(2026, 7, 11, 15, 0),
+            id="sat-1405-no-1400-window-at-weekends",
+        ),
+        pytest.param(
+            pt(2026, 7, 11, 15, 5), pt(2026, 7, 11, 15, 0), pt(2026, 7, 12, 7, 30), id="sat-1505-opens-the-1500-window"
+        ),
+        pytest.param(
+            pt(2026, 7, 11, 20, 31),
+            pt(2026, 7, 11, 15, 0),
+            pt(2026, 7, 12, 7, 30),
+            id="sat-2031-no-2030-window-at-weekends",
+        ),
+        pytest.param(
+            pt(2026, 11, 9, 7, 0), pt(2026, 11, 8, 15, 0), pt(2026, 11, 9, 7, 30), id="mon-0700-after-sunday-1500"
+        ),
     ],
 )
-def test_window_start_is_the_latest_utc_open(now, start):
-    assert rt.window_start(now) == start
+def test_window_start_and_next_window_follow_los_angeles_time(now, start, following):
+    assert rt.window_start(now) == start, "latest window start"
+    assert rt.next_window(now) == following, "next window start"
     assert rt.window_start(now) <= now < rt.next_window(now)
 
 
-def test_crons_are_the_window_starts():
-    assert sorted(tuple(int(part) for part in cron.split()[1::-1]) for cron in rt.CRONS) == sorted(rt.WINDOWS)
+def test_a_dst_change_day_uses_the_offset_of_each_window():
+    # Sunday 8 March 2026 springs forward at 02:00 PST (10:00 UTC): 07:30 and 15:00 are daylight time after that.
+    assert rt.window_start(datetime(2026, 3, 8, 14, 31, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 30, tzinfo=UTC), (
+        "spring forward: 07:30 PDT is 14:30 UTC"
+    )
+    assert rt.window_start(datetime(2026, 3, 8, 14, 29, tzinfo=UTC)) == datetime(2026, 3, 7, 23, 0, tzinfo=UTC), (
+        "spring forward: before 07:30 PDT, Saturday's 15:00 PST window is the latest start"
+    )
+    assert rt.next_window(datetime(2026, 3, 8, 14, 29, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 30, tzinfo=UTC), (
+        "spring forward: the next window is 07:30 PDT"
+    )
+    assert rt.window_start(datetime(2026, 3, 8, 22, 1, tzinfo=UTC)) == datetime(2026, 3, 8, 22, 0, tzinfo=UTC), (
+        "spring forward: 15:00 PDT is 22:00 UTC"
+    )
+    # Sunday 1 November 2026 falls back at 02:00 PDT (09:00 UTC): 07:30 and 15:00 are standard time after that.
+    assert rt.window_start(datetime(2026, 11, 1, 15, 31, tzinfo=UTC)) == datetime(2026, 11, 1, 15, 30, tzinfo=UTC), (
+        "fall back: 07:30 PST is 15:30 UTC"
+    )
+    assert rt.window_start(datetime(2026, 11, 1, 15, 29, tzinfo=UTC)) == datetime(2026, 10, 31, 22, 0, tzinfo=UTC), (
+        "fall back: before 07:30 PST, Saturday's 15:00 PDT window is the latest start"
+    )
+    assert rt.window_start(datetime(2026, 11, 1, 23, 1, tzinfo=UTC)) == datetime(2026, 11, 1, 23, 0, tzinfo=UTC), (
+        "fall back: 15:00 PST is 23:00 UTC"
+    )
+
+
+@pytest.mark.parametrize(
+    "cron, now, opens, why",
+    [
+        pytest.param(
+            "30 14 * * *",
+            pt(2026, 7, 7, 7, 45),
+            True,
+            "07:30 PDT on a Tuesday, fifteen minutes late",
+            id="in-season-pdt",
+        ),
+        pytest.param(
+            "30 15 * * *",
+            pt(2026, 7, 7, 8, 45),
+            False,
+            "its off-season twin: 08:30 PDT is no window",
+            id="off-season-twin-pdt",
+        ),
+        pytest.param(
+            "30 15 * * *", pt(2026, 11, 5, 7, 45), True, "07:30 PST on a Thursday, in season", id="in-season-pst"
+        ),
+        pytest.param(
+            "30 14 * * *",
+            pt(2026, 11, 5, 6, 45),
+            False,
+            "its off-season twin: 06:30 PST is no window",
+            id="off-season-twin-pst",
+        ),
+        pytest.param(
+            "0 21 * * *",
+            pt(2026, 7, 9, 14, 5),
+            True,
+            "14:00 PDT on a Thursday is a weekday window",
+            id="thu-1400-opens",
+        ),
+        pytest.param(
+            "0 21 * * *",
+            pt(2026, 7, 11, 14, 5),
+            False,
+            "14:00 PDT on a Saturday is no window",
+            id="sat-1400-does-not-open",
+        ),
+        pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT on a Saturday opens", id="sat-1500-opens"),
+        pytest.param("30 3 * * *", pt(2026, 7, 10, 20, 35), True, "Friday 20:30 PDT is a window", id="fri-2030-opens"),
+        pytest.param(
+            "30 3 * * *", pt(2026, 7, 11, 20, 35), False, "Saturday 20:30 PDT is no window", id="sat-2030-does-not-open"
+        ),
+        pytest.param(
+            "30 14 * * *",
+            pt(2026, 7, 9, 8, 50),
+            True,
+            "80 minutes late: still the current window",
+            id="late-80-minutes",
+        ),
+        pytest.param(
+            "30 14 * * *", pt(2026, 7, 9, 9, 5), True, "95 minutes late: still the current window", id="late-95-minutes"
+        ),
+        pytest.param(
+            "30 14 * * *",
+            pt(2026, 7, 9, 10, 30),
+            True,
+            "3 hours late: still the current window",
+            id="late-3-hours-opens",
+        ),
+        pytest.param(
+            "30 14 * * *",
+            pt(2026, 7, 9, 14, 5),
+            False,
+            "superseded: the 14:00 PDT window has started since",
+            id="superseded-does-not-open",
+        ),
+        pytest.param(
+            "30 15 * * *",
+            pt(2026, 7, 7, 11, 30),
+            False,
+            "3 hours late, but 08:30 PDT is no window",
+            id="late-3-hours-twin-does-not-open",
+        ),
+    ],
+)
+def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens, why):
+    assert rt.window_cron_opens(cron, now) is opens, why
+
+
+def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
+    assert rt.WEEKDAY_WINDOWS == ((7, 30), (14, 0), (20, 30)) and rt.WEEKEND_WINDOWS == ((7, 30), (15, 0))
+    starts, day = set(), date(2026, 1, 1)
+    while day < date(2028, 1, 1):  # two years: both offsets, weekdays and weekends
+        starts |= {(start.hour, start.minute) for start in rt.window_starts_on(day)}
+        day += timedelta(days=1)
+    crons = [rt.cron_time(cron) for cron in rt.CRONS]
+    assert len(crons) == len(set(crons)), "a window cron is listed twice"
+    assert set(crons) == starts, "CRONS are not exactly the UTC times a window starts at"
+    assert {minute for _, minute in crons} <= {0, 30}, "a window cron is not on a window's minute (00 or 30)"
+    assert rt.BACKSTOP_CRON == "5-59/20 * * * *" and not {5, 25, 45} & {minute for _, minute in crons}, (
+        "the backstop shares a minute with a window cron"
+    )
 
 
 # ---- what an open window does ----
@@ -220,8 +399,8 @@ def plan(gh, now=NOW, finished=None, manual=False):
 def test_window_closes_once_a_release_is_published_after_it_opened():
     gh = FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))
     assert plan(gh)["action"] == "none" and "window closed" in plan(gh)["why"]
-    # The next window opens at 22:00 UTC and ships.
-    assert plan(gh, now=datetime(2026, 11, 5, 22, 5, tzinfo=timezone.utc))["action"] == "ship"
+    # The 14:00 window opens and ships.
+    assert plan(gh, now=pt(2026, 11, 5, 14, 5))["action"] == "ship"
 
 
 def release_run(status="completed", conclusion="failure", at=NOW - timedelta(minutes=40), id=70):
@@ -239,7 +418,7 @@ def test_an_unpublished_tag_waits_for_its_release_run_then_runs_it_once_more_the
     gh.release_runs = [release_run(status="in_progress", conclusion=None)]
     assert plan(gh)["action"] == "none" and "running" in plan(gh)["why"]
     gh.release_runs = [release_run(at=NOW - timedelta(minutes=10))]
-    assert plan(gh)["action"] == "none" and "runs again at 18:20 UTC" in plan(gh)["why"]
+    assert plan(gh)["action"] == "none" and "runs again at 10:20 PST" in plan(gh)["why"]
     gh.release_runs = [release_run()]
     again = plan(gh)
     assert (again["action"], again["sha"], again["version"], again["republish"]) == ("ship", B, "v0.5.201", True)
@@ -296,7 +475,7 @@ def test_a_red_head_waits_for_a_push_and_a_red_older_commit_validates_the_head()
     assert plan(FakeGitHub([run(C, conclusion="failure")]))["action"] == "wait"
     assert plan(FakeGitHub([run(B, conclusion="failure")]))["action"] == "dispatch"
     # A window still red at the next open carries on, without validating the same head again.
-    later = datetime(2026, 11, 6, 14, 35, tzinfo=timezone.utc)
+    later = pt(2026, 11, 5, 14, 5)
     assert plan(FakeGitHub([run(C, conclusion="failure", at=OPENED)]), now=later)["action"] == "wait"
 
 
@@ -312,20 +491,34 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
 # ---- the guard ----
 
 
-def guard(gh, env, tmp_path, monkeypatch):
+def guard(gh, env, tmp_path, monkeypatch, now=NOW):
     out = tmp_path / "out"
     out.write_text("")
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
-    rt.cmd_guard(gh, env, NOW)
+    rt.cmd_guard(gh, env, now)
     return dict(line.split("=", 1) for line in out.read_text().split())
 
 
 def test_guard_runs_the_window_job_only_when_it_has_work(tmp_path, monkeypatch):
     on = {"RELEASE_TRAINS": "on"}
-    assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.CRONS[0]), tmp_path, monkeypatch) == {
-        "go": "true",
-        "open": "true",
-    }
+    # The 07:30 PST cron, fifteen minutes late: it opens the window (promotion, then a ship or a validation).
+    assert guard(
+        FakeGitHub(),
+        dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE="30 15 * * *"),
+        tmp_path,
+        monkeypatch,
+        now=pt(2026, 11, 5, 7, 45),
+    ) == {"go": "true", "open": "true"}
+    # The off-season twin ("30 14" is 06:30 PST) does exactly what a push does at the same moment, and opens nothing.
+    twin = guard(
+        FakeGitHub(),
+        dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE="30 14 * * *"),
+        tmp_path,
+        monkeypatch,
+        now=pt(2026, 11, 5, 7, 40),
+    )
+    push = guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch, now=pt(2026, 11, 5, 7, 40))
+    assert twin == push == {"go": "true", "open": "false"}, "an off-season twin cron should act like a push"
     # The backstop takes a step in an open window like a push, never opens one (no promotion), and idles otherwise.
     backstop = dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
     assert guard(FakeGitHub(), backstop, tmp_path, monkeypatch) == {"go": "true", "open": "false"}
@@ -659,13 +852,16 @@ def lagging():
 def test_a_missed_latest_is_caught_up_once_the_canary_runs_it_healthy(installs, tmp_path, monkeypatch):
     gh = lagging()
     assert rt.lagging_latest(gh) == "v0.5.201"
-    # The guard cannot read the canary: the backstop runs the job, a push with nothing else to do does not.
+    # The guard cannot read the canary: only the backstop runs the job for it; a push, or an off-season twin with
+    # nothing else to do, does not.
     on = {"RELEASE_TRAINS": "on"}
     assert (
         guard(gh, dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), tmp_path, monkeypatch)["go"]
         == "true"
     )
     assert guard(gh, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
+    twin = dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE="30 14 * * *")
+    assert guard(gh, twin, tmp_path, monkeypatch)["go"] == "false"
     # The canary still runs the older release (rolled back): it stays not latest, quietly.
     assert rt.cmd_window(gh, ENV, False, NOW) == 0 and gh.latest == [] and gh.created == []
     installs["canary"].update(running="0.5.201", state="healthy")
