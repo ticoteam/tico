@@ -17,6 +17,10 @@ from pathlib import Path
 
 import pytest
 
+# run_on_terminal forks with pty.fork() while pytest-xdist's threads run. The child only execs bash, so the stdlib's
+# forkpty warning about locks held by other threads does not apply to these tests.
+pytestmark = pytest.mark.filterwarnings('ignore:This process .* is multi-threaded, use of forkpty:DeprecationWarning')
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'scripts/google-setup.sh'
 CODE = 'code123'
