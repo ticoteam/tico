@@ -757,10 +757,24 @@ _STATUS_AT = ("COALESCE((SELECT e.new FROM history_events e WHERE e.subject_type
               "AND e.kind='status' AND e.created_at<? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1), "
               "(SELECT COALESCE(e.old, e.new) FROM history_events e WHERE e.subject_type='task' "
               "AND e.subject_id=tasks.id AND e.kind='status' ORDER BY e.created_at, e.rowid LIMIT 1), tasks.status)")
-# A snooze open then: set by then (created_at is when it was set), not yet released then, and its date not yet come.
-# hubdb.needs_you reads only the snoozes open now; a replay reads each hold by its own times (task_holds).
-_SNOOZED_AT = ("NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
-               "AND sh.created_at<? AND (sh.released_at IS NULL OR sh.released_at>?) AND sh.until_at>?)")
+# A snooze open then, read from the task's snooze history (history_events, kind 'snoozed_until': the date it was set to,
+# None when it ended). The last such change before the time gives the date it had then; it is open while that date is
+# still ahead. task_holds keeps one open row, so a snooze set again moves that row's set time: the history keeps the
+# first set. With no change before the time, the first change's old date is what it had then. With no history at all,
+# the open hold row says (a snooze from before the history, as task_holds' backfill carried it).
+# hubdb.needs_you reads only the snoozes open now. The time is bound four times here (the last change before it, the
+# history's existence, the legacy hold's set and release), and once more in `_SNOOZED_AT`'s comparison with the date.
+_SNOOZE_AT = ("(CASE WHEN EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+              "AND e.kind='snoozed_until' AND e.created_at<?) "
+              "THEN (SELECT e.new FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+              "AND e.kind='snoozed_until' AND e.created_at<? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1) "
+              "WHEN EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+              "AND e.kind='snoozed_until') "
+              "THEN (SELECT e.old FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+              "AND e.kind='snoozed_until' ORDER BY e.created_at, e.rowid LIMIT 1) "
+              "ELSE (SELECT sh.until_at FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+              "AND sh.created_at<? AND (sh.released_at IS NULL OR sh.released_at>?)) END)")
+_SNOOZED_AT = f"COALESCE(({_SNOOZE_AT})>?, 0)=0"
 # Open then, as the live plate counts it (hubdb.needs_you: ACTIVE_STATUSES, snoozed left out, not done or closed).
 _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
               "AND " + _SNOOZED_AT + " AND " + _STATUS_AT
@@ -770,14 +784,16 @@ _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AN
 # The parts the replay's load reads of a task joined as `t`: its status then, and a snooze open then (task_holds).
 _STATUS_T = _STATUS_AT.replace("tasks.", "t.")
 _SNOOZED_T = _SNOOZED_AT.replace("tasks.", "t.")
+# How many times `_SNOOZED_AT` binds a time: four in `_SNOOZE_AT`, and its comparison with the date.
+_SNOOZE_BINDS = 5
 _WAIT_THEN = ("(SELECT e.new FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
               "AND e.kind='waiting_on' AND e.created_at<? ORDER BY e.created_at DESC LIMIT 1)")
 
 
 def _active_args(person, at):
     """The parameters of `_ACTIVE_AT` for `person` at `at`, in its order: the owner, then `at` for each time it reads
-    (created, done, closed, a snooze's set, release and date, and the status then), then the active statuses."""
-    return (person, at, at, at, at, at, at, at, *H.ACTIVE_STATUSES)
+    (created, done, closed, the snooze's five, and the status then), then the active statuses."""
+    return (person, *(at,) * (3 + _SNOOZE_BINDS + 1), *H.ACTIVE_STATUSES)
 
 
 # The owner then is the old owner of the task's first owner change (its history, hubdb `_task_event`), and today's owner
@@ -862,7 +878,7 @@ def load_at(c, person, at, leave_out=""):
         "SELECT t.id FROM tasks t WHERE t.id IN (SELECT subject_id FROM history_events WHERE subject_type='task' "
         "AND kind='waiting_on' AND new=?) AND t.created_at<? AND (t.done_at IS NULL OR t.done_at>?) "
         f"AND (t.closed_at IS NULL OR t.closed_at>?) AND {_SNOOZED_T} AND {_WAIT_THEN}=? AND {_STATUS_T}='waiting'",
-        (person, at, at, at, at, at, at, at, person, at))}
+        (person, *(at,) * (3 + _SNOOZE_BINDS + 1), person, at))}
     asks = c.execute(
         f"SELECT m.id AS mid, {H.MESSAGE_TASK_SQL} AS tid FROM messages m "
         "JOIN conversations cv ON cv.id=m.conversation_id "
@@ -875,7 +891,7 @@ def load_at(c, person, at, leave_out=""):
         "(a.id=m.answered_by_id OR (a.in_reply_to=m.id AND a.kind='answer')) AND a.created_at<? "
         "AND (a.deleted_at IS NULL OR a.deleted_at>=?)) "
         f"AND ({H.MESSAGE_TASK_SQL} IS NULL OR t.id IS NOT NULL)",
-        (at, at, at, at, at, at, at, *H.ACTIVE_STATUSES, person, at, at, at, at, at, at)).fetchall()
+        (*(at,) * (3 + _SNOOZE_BINDS + 1), *H.ACTIVE_STATUSES, person, *(at,) * 6)).fetchall()
     on_tasks = {r["tid"] for r in asks if r["tid"]}
     loose = {r["mid"] for r in asks if not r["tid"]}
     ids = (owned | waiting | on_tasks | loose) - {leave_out}

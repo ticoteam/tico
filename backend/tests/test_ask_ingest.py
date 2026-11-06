@@ -1694,6 +1694,42 @@ def test_a_snooze_set_after_the_replay_time_does_not_count_as_open_then(ben_off)
         assert A.load_at(c, "human:ben", stamp(10)) == 4       # snoozed by ten
 
 
+def test_a_snooze_set_again_counts_from_the_first_set_time(ben_off, monkeypatch):
+    """A snooze set again keeps one open hold (task_holds.put moves its set time), so the replay reads the task's
+    snooze history: snoozed from the first set, not only from the set that moved it."""
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        monkeypatch.setattr(H, "now", lambda: stamp(8))
+        H.TS.snooze(c, "human:ben", tid, stamp(12))
+        monkeypatch.setattr(H, "now", lambda: stamp(9))
+        H.TS.snooze(c, "human:ben", tid, stamp(13))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 4    # snoozed by the first set, before the second
+        assert A.load_at(c, "human:ben", stamp(9, 30)) == 4    # and by the second, which moved the date
+        assert A.load_at(c, "human:ben", stamp(13, 30)) == 5   # the second date has come
+
+
+def test_a_snooze_set_again_then_released_is_open_from_the_first_set(ben_off, monkeypatch):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        tid = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        monkeypatch.setattr(H, "now", lambda: stamp(8))
+        H.TS.snooze(c, "human:ben", tid, stamp(12))
+        monkeypatch.setattr(H, "now", lambda: stamp(9))
+        H.TS.snooze(c, "human:ben", tid, stamp(12, 30))
+        monkeypatch.setattr(H, "now", lambda: stamp(11))
+        H.TS.unsnooze(c, "human:ben", tid)
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 30)) == 4    # open then, from the first set
+        assert A.load_at(c, "human:ben", stamp(10)) == 4       # still open at ten
+        assert A.load_at(c, "human:ben", stamp(11, 30)) == 5   # ended at eleven
+
+
 def wait_on_ben(api):
     """A bot's task waiting on Ben from quarter to nine, set up as the declined-wait test above does."""
     with api.app.state.store.transaction() as c:
@@ -1724,6 +1760,21 @@ def test_a_snooze_set_after_the_replay_time_does_not_hide_the_wait_then(ben_off)
     with api.app.state.store.read() as c:
         assert A.load_at(c, "human:ben", stamp(9, 15)) == 1    # the wait stood, not yet snoozed at quarter past nine
         assert A.load_at(c, "human:ben", stamp(10)) == 0       # snoozed by ten
+
+
+def test_a_wait_snoozed_twice_is_hidden_from_the_first_set(ben_off, monkeypatch):
+    api, token = ben_off
+    tid = wait_on_ben(api)
+    with api.app.state.store.transaction() as c:
+        monkeypatch.setattr(H, "now", lambda: stamp(9))
+        H.TS.snooze(c, "bot:ops", tid, stamp(12))
+        monkeypatch.setattr(H, "now", lambda: stamp(9, 30))
+        H.TS.snooze(c, "bot:ops", tid, stamp(13))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(8, 50)) == 1    # the wait stood, not yet snoozed
+        assert A.load_at(c, "human:ben", stamp(9, 15)) == 0    # snoozed by the first set, before the second moved it
+        assert A.load_at(c, "human:ben", stamp(9, 45)) == 0
+        assert A.load_at(c, "human:ben", stamp(13, 30)) == 1   # the second date has come: the wait stands again
 
 
 def test_a_question_answered_before_the_replay_time_is_not_counted(ben_off):
