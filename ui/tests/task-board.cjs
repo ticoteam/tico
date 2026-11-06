@@ -399,6 +399,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-bar').isHidden(), true);
     await page.locator('#task-scope').click();
     await page.locator('#task-filter-pop [data-task-type="general"]').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'board', null, {timeout: t(5000)});    // a type opens in the layout last used
+    await page.locator('#task-layout [data-layout="list"]').click();
     await page.waitForFunction(() => TASKS_ST.view === 'list');
     const mobile = await page.evaluate(() => {
       const head = document.querySelector('.tl-head');
