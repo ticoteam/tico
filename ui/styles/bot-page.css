@@ -52,10 +52,13 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 .bot-stop.soft{background:var(--surface2);color:var(--muted);font-weight:500}
 .bot-alert-resume{margin-left:8px;padding:1px 10px;font-size:var(--t-sm)}
 .bot-quarantine-text{margin:0 0 8px;padding:6px 10px;border-left:3px solid var(--line);background:var(--surface2);font-family:var(--mono);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
-.bot-goal{order:2;flex:0 1000000 auto;min-width:0;display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
+/* the goal is a bubble beside the name, not a full-width line; its whole text shows on hover (title) */
+#bot-tool-strip{display:none}               /* the repo and tool icons leave the top line; the Tools card under More lists them */
+.bot-goal{order:2;flex:0 1000000 auto;min-width:0;max-width:min(360px,100%);display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
 .bot-goal[data-status=none]{display:block;flex:0 1000000 auto}
-.bot-goal-main{display:flex;align-items:center;gap:7px;min-width:0;color:inherit}
-a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title{color:var(--ink)}
+@media (min-width:1100px){.bot-goal{margin-right:auto}}   /* the top line's actions stay at the right edge */
+.bot-goal-main{display:flex;align-items:center;gap:7px;min-width:0;max-width:100%;padding:3px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:inherit}
+a.bot-goal-main:hover{text-decoration:none;background:var(--hover)}a.bot-goal-main:hover .bot-goal-title{color:var(--ink)}
 .bot-goal-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:600}
 .bot-goal-set{flex:none;color:var(--link-quiet)}.bot-goal-set:hover{color:var(--ink)}
 .bot-goal-row{padding:8px 0;border-top:1px solid var(--line)}.bot-goal-row:first-child{border-top:0;padding-top:0}
@@ -190,7 +193,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-ident .av{width:28px!important;height:28px!important;font-size:var(--t-sm)!important}
   .bot-ident h1{font-size:var(--t-lg)}
   .bot-top .bot-switch{display:flex;order:2;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
-  .bot-top>.bot-goal{order:3;flex:1 1 100%}
+  .bot-top>.bot-goal{order:3;flex:0 1000000 auto}
   .bot-goal-set{padding:3px 10px;font-size:var(--t-sm)}
   body.mobile-composer-focus #main.bot-chat-layout .bot-top{display:none}
 }
@@ -219,6 +222,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
    ui/app/bot-page.js). On a phone: the Goals card, then what moved off the top line (alert, Learnings, branches),
    then the cards grouped (setup and tools, what it does, what it did, its docs), each a compact block; tables
    become one line a row. */
+#pane-more>.bot-more-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}   /* Learnings and branches, on every width */
 .bot-more-top:empty,.more-cut{display:none!important}
 .more-all{display:block;margin:6px 0 0;padding:2px 0;border:0;background:none;font:inherit;font-size:var(--t-sm);color:var(--muted);cursor:pointer}
 .more-all:hover{color:var(--ink)}

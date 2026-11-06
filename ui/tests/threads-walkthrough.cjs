@@ -340,11 +340,11 @@ async function messageAct(page, text, label, phone) {
       await step(page, 'bot Home', phone, name, async () => {
         await shell(page, `#/bot/${BOT}/home`, '#bot-work')();
         // A phone names them in the top line; a desktop switches above the talk.
-        await page.locator(phone ? '#btabs [data-bt="home"]' : '.bot-talk-switch [data-talk="home"]').waitFor({timeout: WAIT});
+        await page.locator(phone ? '#btabs [data-bt="home"]' : '#bot-incognito[aria-pressed="false"]').waitFor({timeout: WAIT});
         await snap(page, 'bot-home', phone);
       });
       await step(page, 'bot DM', phone, name, async () => {
-        await page.locator(phone ? '#btabs [data-bt="dm"]' : '.bot-talk-switch [data-talk="dm"]').click();
+        await page.locator(phone ? '#btabs [data-bt="dm"]' : '#bot-incognito').click();
         await sleep(800);
         await snap(page, 'bot-dm', phone);
       });

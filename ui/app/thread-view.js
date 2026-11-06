@@ -36,7 +36,7 @@ function thvDraftSave(view) {
 
 // `opts`: {id} a thread, {home: actor} that teammate's Home, or {dm: actor} the viewer's DM with them (made on the
 // first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line, and
-// {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
+// {header: 'compact'} keeps only its actions (call, Members, the thread menu; {menu: false} leaves the menu out), drawn into `actsHost` when given (a bar
 // the page owns). {compactEmpty: true} draws a Home with no messages as its composer alone, never a blank timeline, and
 // hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message. {goals: slug}
 // (a bot's Home or DM) brings back the old chat's bar (pill.js): the ways to send (Set as goal among them) and the
@@ -275,7 +275,7 @@ function thvActsHTML(view) {
     : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
   return `${callHeadHTML(view)}
       ${people}
-      <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
+      ${view.opts.menu === false ? '' : `<button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
 const thvPinnable = t => !!t?.me && 'pinned' in t.me && threadOnRail(t);

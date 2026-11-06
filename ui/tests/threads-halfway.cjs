@@ -283,11 +283,9 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops/dm');
     await page.locator('#bot-thread .th-status-working').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').getAttribute('placeholder'), 'Message Ops', 'the name alone, never its slug');
-    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
-    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').getAttribute('aria-label'), 'Thread settings');
+    await page.locator('#bot-top #bot-top-acts').waitFor();
+    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').count(), 0, 'a bot thread has no settings menu');
     assert.equal(await page.locator('#bot-more-btn .nav-icon').count(), 0, 'Info is not a second ⋮ beside the ⋯');
-    const [top, menu] = [await box(page.locator('#bot-top')), await box(page.locator('#bot-top-acts [data-thv-menu]'))];
-    assert.ok(menu.y >= top.y && menu.y + menu.height <= top.y + top.height + 0.5, 'the menu sits in the top line');
     assert.equal(await page.locator('#pane-chat .bot-talk-bar .thv-menu-btn').count(), 0, 'no box of its own under the tabs');
     await themed(page, 'bot-dm-working');
     // /new: the fresh DM starts with nothing of the old one, its status rows and Stop included.

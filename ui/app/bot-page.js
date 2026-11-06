@@ -207,7 +207,7 @@ function botGoalRender(slug, g, count) {
     return;
   }
   el.dataset.status = 'set';
-  el.innerHTML = `<a class="bot-goal-main" href="${GOALS}/${encodeURIComponent(g.id)}" data-goal-open="${esc(g.id)}"${count > 1 ? ` title="${count - 1} more under More"` : ''}>
+  el.innerHTML = `<a class="bot-goal-main" href="${GOALS}/${encodeURIComponent(g.id)}" data-goal-open="${esc(g.id)}" title="${esc(g.title)}${count > 1 ? ` (${count - 1} more under More)` : ''}">
       <span class="bot-goal-title">${esc(g.title)}</span></a>`;
   const a = el.querySelector('[data-goal-open]');
   a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalOpen); };
@@ -388,8 +388,7 @@ async function pageBot(slug, tab) {
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
-    ${limited || talkTabs.length < 2 ? '' : `<div class="bot-talk-bar"><div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
-      `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div></div>`}
+    ${limited || talkTabs.length < 2 ? '' : `<div class="bot-talk-bar"><button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span>Incognito</span></button></div>`}
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>
@@ -507,11 +506,11 @@ async function pageBot(slug, tab) {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
     location.hash = b.dataset.bt === work[0] ? base : `${base}/${b.dataset.bt}`;
   };
-  // Wide, the top tabs give way to Home and DM beside Tasks; this switch picks which one the left side shows.
-  const talk = $('#pane-chat .bot-talk-switch');
-  if (talk) talk.onclick = ev => {
-    const b = ev.target.closest('[data-talk]'); if (!b) return;
-    location.hash = b.dataset.talk === work[0] ? base : `${base}/${b.dataset.talk}`;
+  // Wide, the top tabs give way to Home and DM beside Tasks; the incognito toggle on the left flips between them.
+  const incognito = $('#pane-chat #bot-incognito');
+  if (incognito) incognito.onclick = () => {
+    const next = incognito.getAttribute('aria-pressed') === 'true' ? 'home' : 'dm';
+    location.hash = next === work[0] ? base : `${base}/${next}`;
   };
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
@@ -601,7 +600,8 @@ function placeBotHead() {
   const [alert, learn, screen, ...rest] = ['#bot-alert', '#bot-learn', '#bot-screen', '#bot-branches'].map(q => $(q));
   if (screen) screen.hidden = BOT_PHONE.matches; // The Info summary already has the screen link on a phone.
   if (BOT_PHONE.matches) { host.append(...[alert, learn, screen, ...rest].filter(Boolean)); return; }
-  for (const el of [learn, screen]) if (el?.parentElement === host) $('#bot-tool-strip').before(el);
+  if (learn) host.append(learn);   // Learnings sit under More on a wide screen too, out of the top line
+  if (screen?.parentElement === host) $('#bot-tool-strip').before(screen);
   for (const el of [...rest, alert]) if (el?.parentElement === host) top.querySelector('.botid').append(el);
 }
 // The lists in More cut to their three newest rows on every width: [host, rows, keep the newest last]. Each
@@ -676,7 +676,8 @@ function showBotTab(tab) {
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();
-  $('#pane-chat').querySelectorAll('[data-talk]').forEach(b => { const on = b.dataset.talk === BOT.thread?.kind; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
+  const incognitoOn = $('#pane-chat #bot-incognito');
+  if (incognitoOn) incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm'));
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
     once('tasks', loadBotTasksV2);
@@ -711,7 +712,7 @@ function botThreadShow(kind) {
   const actor = 'bot:' + BOT.slug;
   // The thread's actions (call, Members, menu) sit in the page's top line beside the tabs, never a row of their own.
   // Both keep the bot chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
-  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug};
+  const acts = {header: 'compact', actsHost: $('#bot-top-acts'), goals: BOT.slug, menu: false};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
 }
