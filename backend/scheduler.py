@@ -610,7 +610,9 @@ class Scheduler:
             ctx = heartbeat.Context(self, at)
             heartbeat.beat(ctx)
         at = ctx.at
-        fired, failures, holds, started, locked = [], ctx.failures, ctx.holds, ctx.started, ctx.locked
+        # tick_ms is this tick's own time; the beat records its own (heartbeat_beats.total_ms).
+        started = time.monotonic()
+        fired, failures, holds, locked = [], ctx.failures, ctx.holds, ctx.locked
         # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
         from . import thread_bot_status
 

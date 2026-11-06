@@ -762,13 +762,15 @@ class HeartbeatStepRow(TypedDict):
 
 class HeartbeatBeatRow(TypedDict):
     """One `heartbeat_beats` row (SELECT *): a beat where a step did something or failed; `steps` is those steps' lines
-    as JSON ({key, text, ms, error})."""
+    as JSON ({key, text, ms, error}); a beat repeating only its failures folds into it (`repeat_count`)."""
     id: str
     started_at: str
     total_ms: int
     did_count: int
     failed_count: int
     steps: str
+    repeat_count: int
+    last_repeated_at: str | None
     created_at: str
 
 

@@ -1250,12 +1250,20 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
     every = job.every
     if job.key == "directory_sync" and c is not None:
         every = (directory_minutes(c) or 0) * 60
+    if job.key == "heartbeat" and c is not None:
+        every = heartbeat_seconds(c)
     if not every:
         return None
     if not last:
         return None
     started = H.parse_ts(last["started_at"])
     return max(started + timedelta(seconds=every), now)
+
+
+def heartbeat_seconds(c):
+    """The Heartbeat's saved interval in seconds (Automations > Heartbeat)."""
+    from . import heartbeat
+    return heartbeat.interval_of(c)
 
 
 def directory_minutes(c):
@@ -1357,6 +1365,8 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
                 else f"Every {minutes} minutes"
             )
             when = "directory" if minutes is None else "schedule"
+        if job.key == "heartbeat":
+            schedule = f"Every {heartbeat_seconds(c)} s"
         timed = cfg if ctl and ctl.presets else None
         following = next_at(job, row, now, settings, c, timed) if job.records else None
         when_words = phrase(when, schedule)

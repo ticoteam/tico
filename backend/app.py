@@ -378,7 +378,7 @@ def create_app(settings=None):
                 releases.notice()
                 # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
                 update_feeds.tick(store)
-            rested = None
+            rest = heartbeat.Rest()
             while not stop.is_set():
                 # The Heartbeat (backend/heartbeat.py): GitHub sync, personal alerts, the tick's due-time and recovery
                 # steps, repository waits and call sweeps, in that order, each on its own (one failing never stops
@@ -388,9 +388,9 @@ def create_app(settings=None):
                     await asyncio.to_thread(heartbeat.beat, ctx)
                 except Exception as exc:
                     telemetry.capture("heartbeat", exc)
-                # The rest of the pass, at most every 10 s however short the beat (heartbeat.REST_FLOOR).
-                if rested is None or time.monotonic() - rested >= heartbeat.REST_FLOOR:
-                    rested = time.monotonic()
+                # The rest of the pass, at most every 10 s however short the beat (heartbeat.REST_FLOOR). A skipped
+                # pass's beat failures ride on the next one, so they still reach the scheduler's health row.
+                if rest.due(ctx):
                     try:
                         await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
                         await asyncio.to_thread(recorded, "release_check", release_check)

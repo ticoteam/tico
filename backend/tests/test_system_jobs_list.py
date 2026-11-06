@@ -273,8 +273,10 @@ HEARTBEAT_STEPS = ("stall_marks", "run_housekeeping", "ship_deployed", "task_loo
 
 
 def step_rows(api):
+    """The Heartbeat's step rows as the screen shows them: stored, with the counts memory holds until its next write."""
+    from backend import heartbeat as HB
     with db(api).read() as c:
-        return {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
+        return HB.merged_steps(c, db(api))
 
 
 

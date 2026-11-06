@@ -6,7 +6,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    Payloads: backend/heartbeat.py (GET/PUT /api/v2/heartbeat); a step's switch is PUT /api/v2/system-routines/{key}.
    Anyone signed in reads it; `can_change` (an owner or an admin) decides whether the controls work. No push: while the
-   screen is open it reads the first page again once a minute. */
+   screen is open and the page visible it reads the first page again once a minute, and once on coming back. */
 'use strict';
 
 const AU_HEART = 'heartbeat';
@@ -16,8 +16,9 @@ const AU_HEART_POLL_MS = 60000;
 const AU_HEART_PAGE = 20;
 const auHeartOk = h => !!h && Array.isArray(h.steps) && Number.isFinite(Number(h.interval_s));
 const auHeartStep = key => (AU?.heart?.steps || []).find(s => s.key === key);
-// The newest beat on the first page failed when it is the last beat.
-const auHeartLastFailed = h => !!(h.beats || [])[0]?.failed && h.beats[0].started_at === h.last_beat_at;
+// The last beat failed when a loaded beat that failed is it (a folded repeat's last time counts); a quiet beat is not logged.
+const auHeartLastFailed = h => (h.beats || []).some(b => Number(b.failed) > 0
+  && [b.started_at, b.last_repeated_at].includes(h.last_beat_at));
 
 // The list row: a read-only built-in of kind system, Tico's own, always on.
 function auHeartRow(h) {
@@ -45,7 +46,14 @@ function auHeartAdopt(state, h) {
   }
   if (state.list) state.list = auHeartList(state.list, h);
   if (state.id !== AU_HEART) { auDrawList(); return; }
-  auDrawHead(); auDrawPane();
+  auHeartDrawHead(); auDrawPane();
+}
+// The header is not drawn again while its interval select is focused (or open): only its meta line changes.
+function auHeartDrawHead() {
+  const sel = document.activeElement?.closest?.('[data-hb-interval]');
+  const meta = sel && document.querySelector('[data-hb-meta]');
+  if (meta && AU.heart) meta.textContent = auHeartMeta(AU.heart);
+  else auDrawHead();
 }
 async function auHeartLoad(state) {
   const gen = state.hbGen;
@@ -57,19 +65,27 @@ async function auHeartLoad(state) {
   } catch (e) { if (AU === state && state.hbGen === gen) state.heartError = [403, 404].includes(e.status) ? 'The Heartbeat needs a newer hub' : e.message; }
   if (AU === state && state.id === AU_HEART && !state.heart) auDrawPane();
 }
-// The safety poll: once a minute while the screen is open; leaving it (or the page) ends it.
+// The safety poll: once a minute while the screen is open and the page visible; leaving it (or the page) ends it.
 function auHeartPoll(state) {
   clearTimeout(state.hbPoll);
   state.hbPoll = null;
   if (AU !== state || state.id !== AU_HEART) return;
   state.hbPoll = setTimeout(async () => {
     if (AU !== state || state.id !== AU_HEART) return;
-    await auHeartLoad(state);
+    if (!document.hidden) await auHeartLoad(state);
     auHeartPoll(state);
   }, AU_HEART_POLL_MS);
 }
+// Back on the page: one read straight away, then the minute starts over.
+document.addEventListener('visibilitychange', () => {
+  const state = AU;
+  if (document.hidden || !state || state.id !== AU_HEART) return;
+  void auHeartLoad(state).then(() => auHeartPoll(state));
+});
 
 // -------------------------------------------------------------------------------------------- drawing
+const auHeartMeta = h => [h.last_beat_at ? 'Last beat ' + auRunTime(h.last_beat_at) : 'No beat yet',
+  `${Number(h.beats_24h || 0).toLocaleString()} in 24 h`].join(' · ');
 const auHeartMs = ms => ms == null ? '' : Number(ms) < 1000 ? `${Number(ms)} ms` : `${(Number(ms) / 1000).toFixed(1)} s`;
 
 function auHeartHead(hd) {
@@ -78,8 +94,7 @@ function auHeartHead(hd) {
   const off = !h.can_change || AU.hbBusy, cur = Number(h.interval_s);
   const opts = [...new Set([...AU_HEART_INTERVALS, cur])].sort((x, y) => x - y)
     .map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${v} s</option>`).join('');
-  const meta = [h.last_beat_at ? 'Last beat ' + auRunTime(h.last_beat_at) : 'No beat yet',
-    `${Number(h.beats_24h || 0).toLocaleString()} in 24 h`].join(' · ');
+  const meta = auHeartMeta(h);
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU_HEART, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Steps' : 'Log'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">Heartbeat</h2>
     <span class="mt-set hb-every"><label class="mt-lb" for="hb-interval">Every</label>
@@ -117,7 +132,8 @@ function auHeartStepHTML(s) {
   const on = s.on !== false, off = !s.can_change || AU.hbBusy;
   const last = s.last_run_at ? `<span title="${esc(fmt(s.last_run_at))}">${esc(auRunTime(s.last_run_at))}</span>` : 'Not run yet';
   const result = s.last_result ? ' · ' + esc(s.last_result) : '';
-  const error = s.last_error ? `<div class="hb-err" data-hb-error>${esc(s.last_error)}${s.last_error_at
+  // The last error is red only while the latest run failed; after a good run it stays, muted, with its time.
+  const error = s.last_error ? `<div class="${s.failing ? 'hb-err' : 'hb-err-old muted'}" data-hb-error>${esc(s.last_error)}${s.last_error_at
     ? ` <span class="muted" title="${esc(fmt(s.last_error_at))}">· ${esc(auRunTime(s.last_error_at))}</span>` : ''}</div>` : '';
   const did = Number(s.did_24h || 0), failed = Number(s.failed_24h || 0);
   return `<li class="mt-step${on ? '' : ' off'}" data-hb-step="${esc(s.key)}">
@@ -145,13 +161,15 @@ function auHeartLogHTML() {
   if (!r.rows.length) return '<p class="muted au-pad">No beat has done anything yet</p>';
   const name = x => x.name || auHeartStep(x.key)?.name || auCap(String(x.key || '').replace(/_/g, ' '));
   const outcome = b => (b.steps || []).map(x => x.error ? `${name(x)} failed` : `${name(x)}: ${x.text || 'Done'}`).join(' · ');
+  // The same failure beat after beat is one row: how many times, and the last.
+  const repeats = b => Number(b.repeats) > 1 ? ` <span class="muted" data-hb-repeats title="${esc(fmt(b.last_repeated_at))}">×${esc(String(b.repeats))}, last ${esc(auRunTime(b.last_repeated_at))}</span>` : '';
   return `<table class="au-runs mt-runs hb-log"><thead><tr><th>Time</th><th><span class="au-vh">Result</span></th><th>Outcome</th><th class="au-n">Time taken</th></tr></thead><tbody>
     ${r.rows.map(b => {
       const open = r.open.has(b.id), bad = Number(b.failed) > 0;
       return `<tr class="au-rr${open ? ' open' : ''}" role="button" tabindex="0" aria-expanded="${open}" data-hb-beat="${esc(b.id)}">
         <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span><span title="${esc(fmt(b.started_at))}">${esc(auRunTime(b.started_at))}</span></td>
         <td><span class="au-dot ${bad ? 'fail' : 'ok'}" role="img" aria-label="${bad ? 'Failed' : 'Done'}"></span></td>
-        <td class="au-ro">${esc(outcome(b))}</td>
+        <td class="au-ro">${esc(outcome(b))}${repeats(b)}</td>
         <td class="au-n muted">${esc(auHeartMs(b.total_ms))}</td></tr>`
         + (open ? `<tr class="au-rx"><td colspan="4">${(b.steps || []).map(x => `<div class="au-sl" data-hb-line="${esc(x.key)}">
             <span class="au-tag${x.error ? ' mt-bad' : ' acc'}">${x.error ? 'failed' : 'did'}</span>

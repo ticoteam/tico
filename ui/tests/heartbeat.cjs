@@ -3,7 +3,9 @@
 // with its runs and counts; its screen shows the interval, the last beat and the day's count, and each step grouped by
 // kind (Due times, Recovery, Outside polls) with its cadence, last result, day counts, time and last error, and Ask
 // go-ahead's switch. The interval saves one PUT; the switch saves its job. Log lists the beats that did something, newest
-// first, a page and More, and a tap opens each step's line. A member reads it with every control off; a phone fits.
+// first, a page and More, a folded failure with its count, and a tap opens each step's line. The minute poll skips a
+// hidden page and reads once on coming back; a poll leaves a focused interval select alone. A member reads it with every
+// control off; a phone fits.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -69,6 +71,10 @@ async function themed(page, name) {
       assert.match(await step('stall_checks').locator('[data-hb-every]').innerText(), /^Every minute$/);
       assert.equal(await step('due_reminders').locator('[data-hb-error]').count(), 0);
       assert.match(await step('queue_check').locator('[data-hb-error]').innerText(), /Failed: unexpected error \(RuntimeError\)/);
+      // Red only while the latest run failed; an old error stays, muted, with its time.
+      assert.equal(await step('queue_check').locator('[data-hb-error]').getAttribute('class'), 'hb-err');
+      assert.match(await step('github_sync').locator('[data-hb-error]').getAttribute('class'), /\bhb-err-old\b.*\bmuted\b/);
+      assert.match(await step('github_sync').locator('[data-hb-error]').innerText(), /Failed: GitHub did not answer · \S/);
       assert.match(await step('queue_check').locator('[data-hb-failed]').innerText(), /^6 failed$/);
       // Only Ask go-ahead has a switch.
       assert.equal(await page.locator('.mt-step [data-hb-on]').count(), 1);
@@ -107,6 +113,9 @@ async function themed(page, name) {
       assert.match(await page.locator('tr.au-rx [data-hb-line="queue_check"]').innerText(), /failed[\s\S]*Queue check · Failed: unexpected error/i);
       assert.equal(await page.locator('tr.au-rx [data-hb-line="queue_check"] .au-tag.mt-bad').count(), 1);
       assert.match(await page.locator('tr.au-rx [data-hb-line="due_reminders"]').innerText(), /did[\s\S]*Due reminders · 1 reminder sent[\s\S]*3 ms/i);
+      // The same failure beat after beat is one row with its count and last time.
+      assert.match(await page.locator('tr.au-rr[data-hb-beat="hbt_094"]').innerText(), /Queue check failed ×3, last \S/);
+      assert.equal(await page.locator('tr.au-rr[data-hb-beat="hbt_093"] [data-hb-repeats]').count(), 0);
       await themed(page, 'heartbeat-log-desktop');
       await page.locator('[data-hb-more]').click();
       await until(async () => await page.locator('tr.au-rr').count() === 30, 'the next page');
@@ -121,6 +130,42 @@ async function themed(page, name) {
       assert.equal(await page.locator('tr.au-rr').count(), 31);
       assert.equal(await page.locator('tr.au-rr.open[data-hb-beat="hbt_099"]').count(), 1);
       assert.equal(await page.evaluate(() => !!AU.hbPoll), true, 'polls while open');
+
+      // A hidden page skips the minute's read; coming back reads once.
+      const addBeat = id => db.heart.beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+        steps: [{key: 'due_reminders', name: 'Due reminders', text: '3 reminders sent', ms: 4, error: null}]});
+      addBeat('hbt_102');
+      await page.evaluate(async () => {
+        Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
+        const real = window.setTimeout;
+        let tick = null;
+        window.setTimeout = fn => { tick = fn; return 0; };
+        auHeartPoll(AU);
+        window.setTimeout = real;
+        await tick();
+      });
+      assert.equal(await page.locator('tr.au-rr').first().getAttribute('data-hb-beat'), 'hbt_101', 'no read while hidden');
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', {configurable: true, get: () => false});
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await until(async () => await page.locator('tr.au-rr').first().getAttribute('data-hb-beat') === 'hbt_102', 'the read on coming back');
+
+      // A poll while the interval select is focused leaves it alone and moves only the meta line.
+      await page.getByRole('tab', {name: 'Steps'}).click();
+      await page.waitForSelector('.mt-step[data-hb-step]');
+      db.heart.beats_24h = 9000;
+      const kept = await page.evaluate(async () => {
+        const sel = document.querySelector('[data-hb-interval]');
+        sel.dataset.mark = '1';
+        sel.focus();
+        await auHeartLoad(AU);
+        return document.querySelector('[data-hb-interval]').dataset.mark;
+      });
+      assert.equal(kept, '1');
+      assert.match(await page.locator('[data-hb-meta]').innerText(), /9,000 in 24 h$/);
+      await page.evaluate(async () => { document.activeElement.blur(); await auHeartLoad(AU); });
+      assert.equal(await page.locator('[data-hb-interval]').getAttribute('data-mark'), null, 'drawn again once it is left');
 
       // Back on the list, the row has the saved interval and the poll stops.
       await page.locator('.au-crumb .au-up').click();

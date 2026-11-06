@@ -3868,9 +3868,10 @@ def install_views(app, store, auth, mutate, task_view):
         # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
-            health = c.execute("SELECT * FROM service_health WHERE service='scheduler'").fetchone()
-            tick = health["last_succeeded_at"] if health else None
-            age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
+            # The loop is alive by its last beat or pass, whichever is fresher, within one interval and a minute
+            # (backend/heartbeat.py `liveness`): a 60 s beat does not read as stopped between beats.
+            from . import heartbeat
+            tick, age, alive = heartbeat.liveness(c)
             active, queued = [], []
             # Canceled and uncertain jobs are not "up next": uncertain work already
             # surfaces as a health issue, canceled work is history.
@@ -3909,20 +3910,12 @@ def install_views(app, store, auth, mutate, task_view):
                     "title": title if len(title) <= 80 else title[:79].rstrip() + "\u2026",
                 }
                 (queued if row["state"] == "queued" else active).append(item)
-            return {
-                "cloud": True,
-                "last_tick": tick,
-                "active": active,
-                "queued": queued,
-                "recent_runs": [],
-                "keeper_alive": age is not None and age < 60,
-                "dispatcher_alive": False,
-                "tick_age_s": age,
-                "server_time": H.now(),
-                "health_issues": operation_issues(c, who, auth),
-                # A Tico Cloud company's access, for the banner and Pay to continue (backend/cloud_access.py).
-                "cloud_access": cloud_access.view(cloud_access.current(store)),
-            }
+            return {"cloud": True, "last_tick": tick, "active": active, "queued": queued,
+                    "recent_runs": [], "keeper_alive": alive,
+                    "dispatcher_alive": False, "tick_age_s": age, "server_time": H.now(),
+                    "health_issues": operation_issues(c, who, auth),
+                    # A Tico Cloud company's access, for the banner and Pay to continue (backend/cloud_access.py).
+                    "cloud_access": cloud_access.view(cloud_access.current(store))}
 
     @app.get("/api/runs")
     def runs(request: Request):

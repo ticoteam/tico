@@ -1,6 +1,8 @@
 """The Heartbeat (backend/heartbeat.py, docs/heartbeat.md): one short beat runs, in order, the steps that must happen
-within seconds; each step is timed and on its own, a beat is stored small (step rows, a beat row only when something
-happened, quiet beats counted), its interval is a setting read each pass, and GET/PUT /api/v2/heartbeat show and set it.
+within seconds; each step is timed and on its own, a beat is stored small (the beat's state row; a beat row only when
+something happened, a repeated failure folded into it; step rows only with a write that happens anyway, a changed result
+or every 5 minutes, their counts held in memory till then), its interval is a setting read each pass, the loop reads as
+alive within one interval and a minute, and GET/PUT /api/v2/heartbeat show and set it.
 Ana owns the team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
 import dataclasses
 import json
@@ -94,7 +96,11 @@ def test_each_step_runs_at_most_as_often_as_it_did(api, fake):
     ran.clear()
     beat(api, scheduler, AT + timedelta(hours=1, seconds=5))
     assert {"approval_expiry", "thread_digest", "thread_bot_digest", "ask_deadlines"} <= set(ran)
-    # The digests are timed from their last recorded start, so a restarted server keeps the hour.
+    # The digests are timed from their last recorded start, so a restarted server keeps the hour: their rows (and Ask
+    # go-ahead's) are written on every run, not left in memory for the next flush.
+    for key in ("thread_digest", "thread_bot_digest", "ask_deadlines"):
+        (row,) = rows(api, "SELECT last_run_at FROM heartbeat_steps WHERE key=?", key)
+        assert row["last_run_at"] == HB.S.stamp(AT + timedelta(hours=1, seconds=5)), key
     ran.clear()
     beat(api, scheduler_of(api), AT + timedelta(hours=1, minutes=30))
     assert "thread_digest" not in ran and "thread_bot_digest" not in ran
@@ -149,6 +155,8 @@ def test_one_failing_step_is_recorded_and_the_rest_still_run(api, fake):
 
 
 def test_a_quiet_beat_is_counted_not_stored(api, fake):
+    _, answers = fake
+    store = api.app.state.store
     scheduler = scheduler_of(api)
     for n in range(3):
         beat(api, scheduler, AT + timedelta(seconds=10 * n))
@@ -156,11 +164,24 @@ def test_a_quiet_beat_is_counted_not_stored(api, fake):
     (state,) = rows(api, "SELECT * FROM heartbeat_states")
     assert state["beats_count"] == 3 and state["quiet_beats_count"] == 3
     assert state["quiet_since_at"] == HB.S.stamp(AT) and state["last_beat_at"] == HB.S.stamp(AT + timedelta(seconds=20))
-    (step,) = rows(api, "SELECT * FROM heartbeat_steps WHERE key='run_housekeeping'")
+    stored = lambda key: rows(api, "SELECT * FROM heartbeat_steps WHERE key=?", key)[0]  # noqa: E731
+    assert stored("run_housekeeping")["runs_count"] == 1, "only the first beat wrote the step rows"
+    with store.read() as c:
+        step = HB.merged_steps(c, store)["run_housekeeping"]
     assert step["runs_count"] == 3 and step["did_count"] == 0 and step["last_result"] == "Nothing due"
-    assert step["last_did_at"] is None
+    assert step["last_did_at"] is None and step["last_run_at"] == HB.S.stamp(AT + timedelta(seconds=20))
+    assert next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "run_housekeeping")["runs_24h"] == 3
     (run,) = rows(api, "SELECT * FROM system_runs WHERE job='heartbeat'")
     assert run["ok"] and run["result"] == "All quiet", "quiet repeats fold into one row"
+    # A changed result is written at once; otherwise the counts go down every 5 minutes.
+    answers["run_housekeeping"] = ("Nothing to clean", True)
+    beat(api, scheduler, AT + timedelta(seconds=30))
+    assert stored("run_housekeeping")["runs_count"] == 4 and stored("run_housekeeping")["last_result"] == "Nothing to clean"
+    beat(api, scheduler, AT + timedelta(seconds=40))
+    assert stored("turn_fixer")["runs_count"] == 4, "flushed with the changed result's write"
+    assert stored("run_housekeeping")["runs_count"] == 4
+    beat(api, scheduler, AT + timedelta(minutes=5, seconds=30))
+    assert stored("run_housekeeping")["runs_count"] == 6 and stored("turn_fixer")["runs_count"] == 6
 
 
 def test_a_working_beat_stores_one_row_with_only_the_steps_that_did_something(api, fake):
@@ -298,9 +319,113 @@ def test_a_steps_switch_is_honoured_and_shows_on_its_row(api, fake):
 
 def test_a_late_outcome_lands_on_its_step_row(api):
     store = api.app.state.store
-    HB.record_late(store, "personal_alerts", "Nothing to send", True)
+    HB.record_late(store, "personal_alerts", "Nothing to send", True, ms=3)
     assert rows(api, "SELECT * FROM heartbeat_steps") == [], "a quiet late outcome writes nothing"
+    shown = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "personal_alerts")
+    assert shown["last_result"] == "Nothing to send" and shown["last_run_at"] and shown["last_ms"] == 3, "noted in memory"
     HB.record_late(store, "personal_alerts", "2 alerts tried", False, ms=4)
     (step,) = rows(api, "SELECT * FROM heartbeat_steps")
     assert step["last_did"] == "2 alerts tried" and step["runs_count"] == 0, "its beat counted the run"
     assert len(rows(api, "SELECT * FROM heartbeat_beats")) == 1
+
+
+def test_personal_alerts_busy_says_nothing(api, fake, monkeypatch):
+    """The beat only starts the pass; while the last one still runs (the worker lock is busy) it has no words, so the
+    step's last result stays what the last pass said, never "Nothing to send"."""
+    monkeypatch.setattr(api.app.state.personal_alerts, "tick", lambda: False)
+    steps = [dataclasses.replace(s, run=HB.personal_alerts) if s.key == "personal_alerts" else s for s in HB.STEPS]
+    monkeypatch.setattr(HB, "STEPS", steps)
+    monkeypatch.setattr(HB, "BY_KEY", {step.key: step for step in steps})
+    beat(api, scheduler_of(api), AT)
+    shown = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "personal_alerts")
+    assert shown["last_result"] is None and shown["runs_24h"] == 1
+
+
+def test_call_sweeps_has_the_poll_floor():
+    assert HB.BY_KEY["call_sweeps"].every == HB.POLL_FLOOR and HB.BY_KEY["call_sweeps"].floor == HB.POLL_FLOOR
+
+
+def test_a_repeated_failure_folds_into_the_newest_beat_row(api, fake):
+    _, answers = fake
+    scheduler = scheduler_of(api)
+    answers["ship_deployed"] = HB.Failed("Failed: the loop check could not finish")
+    for n in range(3):
+        beat(api, scheduler, AT + timedelta(seconds=10 * n))
+    (row,) = rows(api, "SELECT * FROM heartbeat_beats")
+    assert row["repeat_count"] == 3 and row["started_at"] == HB.S.stamp(AT)
+    assert row["last_repeated_at"] == HB.S.stamp(AT + timedelta(seconds=20))
+    (shown,) = get(api, "heartbeat")["beats"]
+    assert shown["repeats"] == 3 and shown["last_repeated_at"] == row["last_repeated_at"]
+    step = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "ship_deployed")
+    assert step["failed_24h"] == 3 and step["failing"] is True
+    # A different error, or a beat that also did something, is a row of its own.
+    answers["ship_deployed"] = HB.Failed("Failed: the merge list could not be read")
+    beat(api, scheduler, AT + timedelta(seconds=30))
+    answers["due_reminders"] = ("1 reminder sent", False)
+    beat(api, scheduler, AT + timedelta(seconds=40))
+    assert len(rows(api, "SELECT * FROM heartbeat_beats")) == 3
+    # Once the step runs clean, its last error stays but is no longer failing.
+    answers["ship_deployed"] = ("Nothing due", True)
+    beat(api, scheduler, AT + timedelta(seconds=50))
+    step = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "ship_deployed")
+    assert step["last_error"] and step["failing"] is False
+
+
+def test_the_loop_is_alive_within_one_interval_and_a_minute(api):
+    store = api.app.state.store
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    with store.transaction() as c:
+        c.execute("DELETE FROM service_health WHERE service='scheduler'")
+        HB.save_interval(c, "human:ana", 60)
+        HB._state_write(c, now - timedelta(seconds=70), False)
+    with store.read() as c:
+        assert HB.liveness(c, now) == (HB.S.stamp(now - timedelta(seconds=70)), 70.0, True), "a 60 s beat, 70 s ago"
+    with store.transaction() as c:
+        HB._state_write(c, now - timedelta(seconds=200), False)
+    with store.read() as c:
+        assert HB.liveness(c, now)[2] is False, "200 s ago"
+    # The fresher of the beat and the scheduler's pass counts; at 10 s the threshold is the minute floor plus 10.
+    with store.transaction() as c:
+        c.execute("INSERT INTO service_health(service,last_succeeded_at) VALUES('scheduler',?)",
+                  (HB.S.stamp(now - timedelta(seconds=5)),))
+        HB.save_interval(c, "human:ana", 10)
+    with store.read() as c:
+        assert HB.liveness(c, now)[1:] == (5.0, True)
+        assert HB.liveness(c, now + timedelta(seconds=66))[2] is False
+
+
+def test_the_rest_of_the_pass_carries_a_skipped_passs_failures():
+    clock = [0.0]
+    rest = HB.Rest(floor=10, clock=lambda: clock[0])
+
+    class Ctx:
+        def __init__(self, *failures):
+            self.failures = list(failures)
+    assert rest.due(Ctx()) is True
+    clock[0] = 5
+    assert rest.due(Ctx({"ship_deployed": "RuntimeError"})) is False
+    clock[0] = 10
+    ctx = Ctx({"due_reminders": "ValueError"})
+    assert rest.due(ctx) is True
+    assert ctx.failures == [{"ship_deployed": "RuntimeError"}, {"due_reminders": "ValueError"}]
+    clock[0] = 12
+    assert rest.due(Ctx()) is False and rest.carried == []
+
+
+def test_tick_ms_is_the_ticks_own_time(api):
+    scheduler = scheduler_of(api)
+    ctx = HB.Context(scheduler, AT)
+    ctx.started -= 120                          # a beat that took two minutes
+    scheduler.tick(AT, ctx)
+    (row,) = rows(api, "SELECT detail FROM service_health WHERE service='scheduler'")
+    assert json.loads(row["detail"])["tick_ms"] < 120_000
+
+
+def test_the_heartbeat_jobs_schedule_follows_the_interval(api):
+    put(api, "heartbeat", {"interval_s": 30}, token="ben-test")
+    job = next(j for j in get(api, "system-routines")["jobs"] if j["key"] == "heartbeat")
+    assert job["schedule"] == "Every 30 s"
+    now = datetime.now(timezone.utc)
+    with api.app.state.store.read() as c:
+        following = SR.next_at(SR.BY_KEY["heartbeat"], {"started_at": HB.S.stamp(now)}, now - timedelta(minutes=1), c=c)
+    assert following == now + timedelta(seconds=30)

@@ -229,17 +229,19 @@ def restore_check(store, s3, cloudwatch, bucket):
 
 
 def health(store, cloudwatch):
+    from . import heartbeat
     with store.read() as c:
         rows = {r["service"]: dict(r) for r in c.execute("SELECT * FROM service_health")}
-    age_metrics = {
-        "scheduler": "SchedulerAgeSeconds",
-        "backup": "BackupAgeSeconds",
-        "restore-check": "RestoreCheckAgeSeconds",
-    }
+        # The loop's age is its last beat or pass, whichever is fresher (backend/heartbeat.py `liveness`).
+        _, loop_age, _ = heartbeat.liveness(c)
+    age_metrics = {"scheduler": "SchedulerAgeSeconds", "backup": "BackupAgeSeconds",
+                   "restore-check": "RestoreCheckAgeSeconds"}
     for service, name in age_metrics.items():
         row = rows.get(service, {})
         last = H.parse_ts(row.get("last_succeeded_at"))
         age = max(0, (H.parse_ts(H.now()) - last).total_seconds()) if last else 1_000_000
+        if service == "scheduler":
+            age = 1_000_000 if loop_age is None else loop_age
         metric(cloudwatch, name, age, "Seconds")
     free = shutil.disk_usage(store.settings.db_path.parent).free
     metric(cloudwatch, "DataDiskFreeBytes", free, "Bytes")

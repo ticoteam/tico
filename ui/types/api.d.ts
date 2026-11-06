@@ -2921,6 +2921,8 @@ export type HeartbeatBeat = {
   did: number;
   failed: number;
   id: string;
+  last_repeated_at: string | null;
+  repeats: number;
   started_at: string;
   steps: Array<{
   error?: string | null;
@@ -2938,6 +2940,7 @@ export type HeartbeatStep = {
   every: string;
   every_s: number | null;
   failed_24h: number;
+  failing: boolean;
   key: string;
   kind: "due" | "recovery" | "poll";
   kind_name: string;
@@ -5420,6 +5423,13 @@ export type Suggestion = {
   phone?: string;
   summary?: string;
   title: string;
+};
+
+export type SystemRoutineSaved = {
+  job: HeartbeatStep | {
+  key: string;
+  name: string;
+};
 };
 
 export type SystemRoutineUpdate = {
@@ -11249,7 +11259,7 @@ export type SaveSystemRoutineParams = {
   key: string;
 };
 export type SaveSystemRoutineBody = SystemRoutineUpdate;
-export type SaveSystemRoutineResponse = SystemRoutineUpdate;
+export type SaveSystemRoutineResponse = SystemRoutineSaved;
 
 /** GET /api/v2/context/search */
 export type SearchDocsParams = {

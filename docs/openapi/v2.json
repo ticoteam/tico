@@ -38105,7 +38105,7 @@
     },
     "/api/v2/system-routines/{key}": {
       "put": {
-        "summary": "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time",
+        "summary": "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step with its own switch) its HeartbeatStep row",
         "operationId": "saveSystemRoutine",
         "parameters": [
           {
@@ -38134,7 +38134,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SystemRoutineUpdate"
+                  "$ref": "#/components/schemas/SystemRoutineSaved"
                 }
               }
             }
@@ -62519,6 +62519,15 @@
           "failed": {
             "type": "integer"
           },
+          "repeats": {
+            "type": "integer"
+          },
+          "last_repeated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "steps": {
             "type": "array",
             "items": {
@@ -62558,6 +62567,8 @@
           "did",
           "failed",
           "id",
+          "last_repeated_at",
+          "repeats",
           "started_at",
           "steps",
           "total_ms"
@@ -62643,6 +62654,9 @@
               "null"
             ]
           },
+          "failing": {
+            "type": "boolean"
+          },
           "runs_24h": {
             "type": "integer"
           },
@@ -62659,6 +62673,7 @@
           "every",
           "every_s",
           "failed_24h",
+          "failing",
           "key",
           "kind",
           "kind_name",
@@ -75566,6 +75581,39 @@
           "title"
         ],
         "title": "Suggestion"
+      },
+      "SystemRoutineSaved": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeartbeatStep"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key",
+                  "name"
+                ],
+                "additionalProperties": true
+              }
+            ],
+            "description": "The saved routine's row: a HeartbeatStep for ask_deadlines, else its GET /system-routines row"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "additionalProperties": true
       },
       "SystemRoutineUpdate": {
         "properties": {

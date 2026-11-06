@@ -556,6 +556,7 @@ button.au-chip:hover{background:var(--surface2)}
 .hb-main{cursor:default}
 .hb-every-p{display:none;font-size:var(--t-sm)}
 .hb-err{font-size:var(--t-sm);color:var(--fail);overflow-wrap:anywhere}
+.hb-err-old{font-size:var(--t-sm);overflow-wrap:anywhere}
 .hb-cells{flex:none;display:flex;gap:10px;font-size:var(--t-sm)}
 .hb-cells .au-n{min-width:52px}
 .hb-bad{color:var(--fail)}

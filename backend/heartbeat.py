@@ -9,13 +9,16 @@ Each step is a block that ran in the server's 10-second loop (backend/app.py `sc
 and order. A step's `run(ctx)` returns (words, quiet); raising is its failure, kept to that step: the others still run,
 and the failure goes where it went before (the pass's `failures`, `telemetry.capture`).
 
-What a beat did is stored small (migration 20261106094503_heartbeat): one `heartbeat_steps` row per step, written in the
-beat's one transaction; a `heartbeat_beats` row only for a beat where a step did something or failed; quiet beats
-counted on `heartbeat_states`. The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
+What a beat did is stored small (migration 20261106094503_heartbeat): each beat writes the one `heartbeat_states` row
+(also the server's liveness, `liveness`); a `heartbeat_beats` row only for a beat where a step did something or failed
+(repeated failures fold); a step's `heartbeat_steps` row only when it did something, failed, changed its result or is
+timed from its last run, else every 5 minutes, its counts kept in memory between (`_Memory`). The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
 quiet repeats folded. Its screen is ui/app/automations-heartbeat.js (GET/PUT /api/v2/heartbeat)."""
 import json
 import logging
+import threading
 import time
+import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +37,10 @@ WINDOW = timedelta(hours=12)                # the day counts: this window and th
 KEEP = timedelta(days=7)                    # working beats kept this long...
 KEEP_BEATS = 5000                           # ...and at most this many
 PRUNE_EVERY = timedelta(hours=1)
+FLUSH_EVERY = timedelta(minutes=5)          # quiet steps' counts and last runs, kept in memory between writes
+ALIVE_MIN = 60                              # seconds: the server counts as running while it beat this recently...
+ALIVE_SLACK = 60                            # ...or within one interval and this much more, whichever is longer
+CARRY_MAX = 50                              # failures of skipped rest passes carried to the next one, at most
 PAGE = 20
 KINDS = (("due", "Due times"), ("recovery", "Recovery"), ("poll", "Outside polls"))
 KIND_WORDS = dict(KINDS)
@@ -126,9 +133,10 @@ def github_sync(ctx):
 
 
 def personal_alerts(ctx):
-    # The pass runs on its own thread and records its outcome there (backend/personal_alerts.py `run`).
-    started = ctx.app.state.personal_alerts.tick()
-    return (None if started else "Nothing to send"), True
+    # The pass runs on its own thread and records its outcome there (backend/personal_alerts.py `run`). Not started
+    # (the last pass still runs, or a demo): no words, so the step's last result stays what the last pass said.
+    ctx.app.state.personal_alerts.tick()
+    return None, True
 
 
 def repository_waits(ctx):
@@ -194,7 +202,8 @@ STEPS = [
          failure="stall_checks", capture="scheduler"),
     Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
     Step("repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True),
-    Step("call_sweeps", "Calls and live meetings", "recovery", None, call_sweeps, loop=True),
+    # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
+    Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}
@@ -324,92 +333,257 @@ STEP_COLUMNS = ("key", "last_run_at", "last_ms", "last_result", "last_did_at", "
                 "window_started_at", *STEP_COUNTS, *("previous_" + f for f in STEP_COUNTS), "created_at", "updated_at")
 
 
-def _step_write(c, old, r, at, counted=True):
+class _Memory:
+    """One store's step numbers not written yet. A quiet beat writes only `heartbeat_states`; each step that ran is
+    noted here (its run counted, its last run, time and result) and written with the next write that happens anyway
+    (a step did something or failed, its result changed, a timed step ran) or after FLUSH_EVERY. The API runs in the
+    same process and shows these over the stored rows (`merged_steps`)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pending = {}           # key -> {"runs_count", "did_count", "failed_count": n, "set": {column: value}}
+        self.stored = None          # key -> last_result as written; read once
+        self.flushed = None         # when the noted numbers were last written
+
+
+_MEMORIES = weakref.WeakKeyDictionary()
+_MEMORIES_LOCK = threading.Lock()
+
+
+def _memory(store):
+    with _MEMORIES_LOCK:
+        mem = _MEMORIES.get(store)
+        if mem is None:
+            mem = _MEMORIES[store] = _Memory()
+        return mem
+
+
+def _note(mem, r, at, counted=True):
+    """Note one step's outcome in memory (the caller holds mem.lock). An uncounted outcome (one that lands after its
+    beat, which counted the run) still moves the last run time and its time taken to when it finished."""
     now = S.stamp(at)
-    row = dict(old) if old else {"key": r.key, "created_at": now, **{f: 0 for f in STEP_COUNTS},
+    p = mem.pending.setdefault(r.key, {**{f: 0 for f in STEP_COUNTS}, "set": {}})
+    s = p["set"]
+    if counted:
+        p["runs_count"] += 1
+    s["last_run_at"], s["last_ms"] = now, r.ms
+    if r.error is not None or r.words is not None:
+        s["last_result"] = r.error or r.words
+    if r.did:
+        s["last_did_at"], s["last_did"] = now, r.words
+        p["did_count"] += 1
+    if r.error:
+        s["last_error_at"], s["last_error"] = now, r.error
+        p["failed_count"] += 1
+
+
+def _merged(old, p, at, key):
+    """A step's row with what memory noted since it was written laid over it, its day windows moved on to `at`."""
+    row = dict(old) if old else {"key": key, "created_at": S.stamp(at), **{f: 0 for f in STEP_COUNTS},
                                  **{"previous_" + f: 0 for f in STEP_COUNTS}}
     _roll(row, at, STEP_COUNTS)
-    if counted:
-        row["runs_count"] += 1
-        row["last_run_at"], row["last_ms"] = now, r.ms
-    if r.error is not None or r.words is not None:
-        row["last_result"] = r.error or r.words
-    if r.did:
-        row["last_did_at"], row["last_did"] = now, r.words
-        row["did_count"] += 1
-    if r.error:
-        row["last_error_at"], row["last_error"] = now, r.error
-        row["failed_count"] += 1
-    row["updated_at"] = now
-    values = [row.get(col) for col in STEP_COLUMNS]
-    c.execute(f"INSERT INTO heartbeat_steps({','.join(STEP_COLUMNS)}) VALUES({','.join('?' * len(STEP_COLUMNS))}) "
-              "ON CONFLICT(key) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in STEP_COLUMNS[1:]
-                                                           if col != "created_at"), values)
+    if p:
+        for f in STEP_COUNTS:
+            row[f] = int(row.get(f) or 0) + p[f]
+        row.update(p["set"])
+    return row
+
+
+def _write_steps(c, taken, at):
+    marks = ",".join("?" * len(taken))
+    old = {r["key"]: dict(r) for r in c.execute(f"SELECT * FROM heartbeat_steps WHERE key IN ({marks})", tuple(taken))}
+    for key, p in taken.items():
+        row = _merged(old.get(key), p, at, key)
+        row["updated_at"] = S.stamp(at)
+        c.execute(f"INSERT INTO heartbeat_steps({','.join(STEP_COLUMNS)}) VALUES({','.join('?' * len(STEP_COLUMNS))}) "
+                  "ON CONFLICT(key) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in STEP_COLUMNS[1:]
+                                                               if col != "created_at"),
+                  [row.get(col) for col in STEP_COLUMNS])
+
+
+def _give_back(mem, taken):
+    """A write that failed: what it took goes back into memory, under anything noted since (the caller holds mem.lock)."""
+    for key, p in taken.items():
+        cur = mem.pending.get(key)
+        if cur is None:
+            mem.pending[key] = p
+            continue
+        for f in STEP_COUNTS:
+            cur[f] += p[f]
+        for col, value in p["set"].items():
+            cur["set"].setdefault(col, value)
+
+
+def merged_steps(c, store, at=None):
+    """Every stored step row with what memory noted since laid over it ({key: row}), as the screen shows them."""
+    at = at or datetime.now(timezone.utc)
+    rows = {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
+    mem = _memory(store)
+    with mem.lock:
+        pending = {k: {**p, "set": dict(p["set"])} for k, p in mem.pending.items()}
+    return {key: _merged(rows.get(key), pending.get(key), at, key) for key in {*rows, *pending}}
+
+
+def _timed(key):
+    """A step timed from its last recorded run (the digests, Ask go-ahead): its row is written each run, hourly at most,
+    so a restart keeps its hour (system_routines.last_started reads heartbeat_steps.last_run_at)."""
+    step = BY_KEY.get(key)
+    return bool(step and (step.lasting or step.control))
+
+
+def _signature(lines):
+    return sorted((line.get("key"), line.get("error")) for line in lines)
 
 
 def _beat_row(c, at, lines, total_ms):
+    """A working beat's row. A beat where only steps failed, with the same steps and errors as the newest row, folds
+    into that row (its repeat count and last time) so one broken step does not push the useful beats out."""
     steps = [{"key": r.key, "text": r.words if r.did else None, "ms": r.ms, "error": r.error} for r in lines]
+    if steps and all(r.error for r in lines):
+        last = c.execute("SELECT id, steps, did_count FROM heartbeat_beats ORDER BY started_at DESC, id DESC LIMIT 1").fetchone()
+        try:
+            same = bool(last) and not last["did_count"] and _signature(json.loads(last["steps"] or "[]")) == _signature(steps)
+        except ValueError:
+            same = False
+        if same:
+            c.execute("UPDATE heartbeat_beats SET repeat_count=repeat_count+1, last_repeated_at=? WHERE id=?",
+                      (S.stamp(at), last["id"]))
+            return
     c.execute("INSERT INTO heartbeat_beats(id,started_at,total_ms,did_count,failed_count,steps,created_at) "
               "VALUES(?,?,?,?,?,?,?)", (H.new_id(), S.stamp(at), total_ms, sum(r.did for r in lines),
                                         sum(r.error is not None for r in lines), json.dumps(steps), H.now()))
 
 
-def record(store, at, ran, total_ms):
-    """Store one beat in one transaction: each step that ran on its row, the beat's row when a step did something or
-    failed (else only counted), and once an hour the beats past KEEP or KEEP_BEATS pruned."""
+def _state_write(c, at, working):
     now = S.stamp(at)
-    working = [r for r in ran if r.did or r.error]
-    with store.transaction() as c:
-        rows = {row["key"]: dict(row) for row in c.execute("SELECT * FROM heartbeat_steps")}
+    state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
+    state = dict(state) if state else {"id": 1, "beats_count": 0, "previous_beats_count": 0, "quiet_beats_count": 0,
+                                       "created_at": now}
+    _roll(state, at, ("beats_count",))
+    state["beats_count"] += 1
+    state["last_beat_at"] = now
+    if working:
+        state["quiet_since_at"] = None
+    else:
+        state["quiet_beats_count"] += 1
+        state["quiet_since_at"] = state.get("quiet_since_at") or now
+    pruned = H.parse_ts(state.get("last_pruned_at"))
+    if pruned is None or at - pruned >= PRUNE_EVERY:
+        prune(c, at)
+        state["last_pruned_at"] = now
+    state["updated_at"] = now
+    cols = ("id", "last_beat_at", "window_started_at", "beats_count", "previous_beats_count", "quiet_beats_count",
+            "quiet_since_at", "last_pruned_at", "created_at", "updated_at")
+    c.execute(f"INSERT INTO heartbeat_states({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
+              "ON CONFLICT(id) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in cols[1:] if col != "created_at"),
+              [state.get(col) for col in cols])
+
+
+def _commit(store, at, urgent, lines=(), total_ms=0, beat=False):
+    """One write transaction: the noted step numbers when something is written anyway (`urgent`, a working beat's row),
+    a result changed or FLUSH_EVERY passed; the beat's row; and for a beat, `heartbeat_states`."""
+    mem, taken = _memory(store), {}
+    try:
+        with store.transaction() as c:
+            with mem.lock:
+                if mem.stored is None:
+                    mem.stored = {k: v for k, v in c.execute("SELECT key, last_result FROM heartbeat_steps")}
+                changed = any("last_result" in p["set"] and p["set"]["last_result"] != mem.stored.get(k)
+                              for k, p in mem.pending.items())
+                if urgent or lines or changed or mem.flushed is None or abs(at - mem.flushed) >= FLUSH_EVERY:
+                    taken, mem.pending = mem.pending, {}
+            if taken:
+                _write_steps(c, taken, at)
+            if lines:
+                _beat_row(c, at, lines, total_ms)
+            if beat:
+                _state_write(c, at, bool(lines))
+    except BaseException:
+        with mem.lock:
+            _give_back(mem, taken)
+        raise
+    if taken:
+        with mem.lock:
+            mem.flushed = at
+            mem.stored.update({k: p["set"]["last_result"] for k, p in taken.items() if "last_result" in p["set"]})
+
+
+def record(store, at, ran, total_ms):
+    """Store one beat in one small transaction: `heartbeat_states` always; the beat's row when a step did something or
+    failed (else only counted); each step's row only with a write that happens anyway, a changed result or every
+    FLUSH_EVERY (`_Memory`); and once an hour the beats past KEEP or KEEP_BEATS pruned."""
+    mem = _memory(store)
+    with mem.lock:
         for r in ran:
-            _step_write(c, rows.get(r.key), r, at)
-        if working:
-            _beat_row(c, at, working, total_ms)
-        state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
-        state = dict(state) if state else {"id": 1, "beats_count": 0, "previous_beats_count": 0, "quiet_beats_count": 0,
-                                           "created_at": now}
-        _roll(state, at, ("beats_count",))
-        state["beats_count"] += 1
-        state["last_beat_at"] = now
-        if working:
-            state["quiet_since_at"] = None
-        else:
-            state["quiet_beats_count"] += 1
-            state["quiet_since_at"] = state.get("quiet_since_at") or now
-        pruned = H.parse_ts(state.get("last_pruned_at"))
-        if pruned is None or at - pruned >= PRUNE_EVERY:
-            prune(c, at)
-            state["last_pruned_at"] = now
-        state["updated_at"] = now
-        cols = ("id", "last_beat_at", "window_started_at", "beats_count", "previous_beats_count", "quiet_beats_count",
-                "quiet_since_at", "last_pruned_at", "created_at", "updated_at")
-        c.execute(f"INSERT INTO heartbeat_states({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
-                  "ON CONFLICT(id) DO UPDATE SET " + ",".join(f"{col}=excluded.{col}" for col in cols[1:] if col != "created_at"),
-                  [state.get(col) for col in cols])
+            _note(mem, r, at)
+    working = [r for r in ran if r.did or r.error]
+    _commit(store, at, any(_timed(r.key) for r in ran), working, total_ms, beat=True)
 
 
 def prune(c, at):
-    c.execute("DELETE FROM heartbeat_beats WHERE started_at<?", (S.stamp(at - KEEP),))
+    c.execute("DELETE FROM heartbeat_beats WHERE coalesce(last_repeated_at, started_at)<?", (S.stamp(at - KEEP),))
     c.execute("DELETE FROM heartbeat_beats WHERE id IN (SELECT id FROM heartbeat_beats ORDER BY started_at DESC, id DESC "
               "LIMIT -1 OFFSET ?)", (KEEP_BEATS,))
 
 
 def record_late(store, key, words, quiet, error=None, ms=0, counted=False):
-    """A step's outcome that lands after its beat (Personal alerts' own thread) or outside one (Run now): its row, and
-    a beat row of its own when it did something or failed. A quiet outcome writes nothing unless `counted` (a run that
-    times the step's next one). Never raises."""
-    r = Ran(key, ms, words, bool(quiet), error)
+    """A step's outcome that lands after its beat (Personal alerts' own thread) or outside one (Run now). A quiet
+    outcome is noted in memory (its last result, written with the next write) unless `counted` (a run that times the
+    step's next one); one that did something or failed is written at once, with a beat row of its own. Never raises."""
+    r, at = Ran(key, ms, words, bool(quiet), error), datetime.now(timezone.utc)
+    mem = _memory(store)
+    with mem.lock:
+        _note(mem, r, at, counted=counted)
     if not (r.did or r.error or counted):
         return
-    at = datetime.now(timezone.utc)
     try:
-        with store.transaction() as c:
-            old = c.execute("SELECT * FROM heartbeat_steps WHERE key=?", (key,)).fetchone()
-            _step_write(c, dict(old) if old else None, r, at, counted=counted)
-            if r.did or r.error:
-                _beat_row(c, at, [r], ms)
+        _commit(store, at, True, [r] if r.did or r.error else (), ms)
     except Exception as exc:  # noqa: BLE001 - recording never fails the work
         LOG.warning("Could not record the %s step: %s", key, type(exc).__name__)
+
+
+# ----------------------------------------------------------------------------- liveness
+def liveness(c, now=None):
+    """(last stamp, age in seconds, alive) of the server's loop: the fresher of the scheduler's pass
+    (service_health 'scheduler', written by the rest of the pass, at most every 10 s) and the last beat
+    (heartbeat_states, every beat). Alive while that is under max(ALIVE_MIN, interval + ALIVE_SLACK) seconds old, so a
+    long interval does not read as stopped between beats."""
+    now = now or datetime.now(timezone.utc)
+    stamps = []
+    row = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='scheduler'").fetchone()
+    if row and row[0]:
+        stamps.append(row[0])
+    if H._has_table(c, "heartbeat_states"):
+        beat_row = c.execute("SELECT last_beat_at FROM heartbeat_states WHERE id=1").fetchone()
+        if beat_row and beat_row[0]:
+            stamps.append(beat_row[0])
+    parsed = [(H.parse_ts(s), s) for s in stamps if H.parse_ts(s)]
+    if not parsed:
+        return None, None, False
+    last, stamp = max(parsed)
+    age = max(0.0, (now - last).total_seconds())
+    try:
+        seconds = interval_of(c)
+    except Exception:  # noqa: BLE001 - an old database without the setting beats at the default
+        seconds = INTERVAL_DEFAULT
+    return stamp, age, age < max(ALIVE_MIN, seconds + ALIVE_SLACK)
+
+
+class Rest:
+    """When the rest of the server's pass runs (at most every REST_FLOOR seconds, however short the beat), and the
+    failures of the beats whose pass it skipped, carried into the next one so they still reach service_health."""
+
+    def __init__(self, floor=REST_FLOOR, clock=time.monotonic):
+        self.floor, self.clock, self.at, self.carried = floor, clock, None, []
+
+    def due(self, ctx):
+        if self.at is not None and self.clock() - self.at < self.floor:
+            self.carried = (self.carried + list(ctx.failures))[-CARRY_MAX:]
+            return False
+        self.at = self.clock()
+        ctx.failures[:0] = self.carried
+        self.carried = []
+        return True
 
 
 def run_now(store, auth, key):
@@ -467,7 +641,8 @@ def _beat_view(row):
     for line in steps:
         line["name"] = BY_KEY[line["key"]].name if line.get("key") in BY_KEY else line.get("key")
     return {"id": row["id"], "started_at": row["started_at"], "total_ms": row["total_ms"], "did": row["did_count"],
-            "failed": row["failed_count"], "steps": steps}
+            "failed": row["failed_count"], "steps": steps, "repeats": int(row["repeat_count"] or 1),
+            "last_repeated_at": row["last_repeated_at"]}
 
 
 def beats(c, limit=PAGE, before=None):
@@ -495,6 +670,8 @@ def _step_view(step, row, cfg, at, auth, who):
             "last_run_at": row.get("last_run_at"), "last_ms": row.get("last_ms"), "last_result": row.get("last_result"),
             "last_did_at": row.get("last_did_at"), "last_did": row.get("last_did"),
             "last_error": row.get("last_error"), "last_error_at": row.get("last_error_at"),
+            # Its latest run failed: the error is current, not one from before a run that went well.
+            "failing": bool(row.get("last_error")) and (row.get("last_error_at") or "") >= (row.get("last_run_at") or ""),
             "runs_24h": _day(row, at, "runs_count"), "did_24h": _day(row, at, "did_count"),
             "failed_24h": _day(row, at, "failed_count")}
 
@@ -507,11 +684,12 @@ def step_row(c, key, auth, who):
     return _step_view(step, dict(row) if row else {}, cfg, datetime.now(timezone.utc), auth, who)
 
 
-def listing(c, auth, who, limit=PAGE, before=None):
+def listing(c, auth, who, limit=PAGE, before=None, store=None):
     """What GET /api/v2/heartbeat returns: the interval, the last beat and the day's count, each step in order with its
-    kind, cadence, switch and numbers, and a page of the beats that did something."""
+    kind, cadence, switch and numbers (with `store`, what this process noted since the rows were written laid over
+    them), and a page of the beats that did something."""
     at = datetime.now(timezone.utc)
-    rows = {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
+    rows = merged_steps(c, store, at) if store is not None else {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
     state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
     state = dict(state) if state else {}
     cfgs = SR.config(c)
@@ -553,7 +731,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return listing(c, auth, who, limit, before)
+            return listing(c, auth, who, limit, before, store=store)
 
     @app.put("/api/v2/heartbeat")
     def heartbeat_save(request: Request, body: M.HeartbeatUpdate):
@@ -565,4 +743,4 @@ def install(app, store, auth, mutate):
             save_interval(c, who.actor, body.interval_s)
         mutate(request, body, work)
         with store.read() as c:
-            return listing(c, auth, who)
+            return listing(c, auth, who, store=store)

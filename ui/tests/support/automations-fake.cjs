@@ -132,7 +132,8 @@ function maintRuns(now = Date.now()) {
 }
 
 // The Heartbeat (`heartbeat: true`): backend/heartbeat.py's listing with one step of each kind and Ask go-ahead's switch,
-// Queue check's last error, and 30 beats that did something, one every 2 minutes, newest first: every fifth one failed.
+// Queue check failing now and GitHub sync's old error, and 30 beats that did something, one every 2 minutes, newest first:
+// every fifth one failed, and the seventh is a failure folded three times.
 const HEART_STEPS = [['due_reminders', 'Due reminders', 'due', 'Every beat'], ['ask_deadlines', 'Ask go-ahead', 'due', 'Hourly'],
   ['stall_checks', 'Stall checks', 'recovery', 'Every minute'], ['queue_check', 'Queue check', 'recovery', 'Every beat'],
   ['github_sync', 'GitHub sync', 'poll', 'Every 10 s']];
@@ -141,17 +142,19 @@ function heartSteps(now = Date.now()) {
     every_s: null, every, switch: key === 'ask_deadlines', on: true, can_change: false, last_run_at: new Date(now - 4000).toISOString(),
     last_ms: key === 'github_sync' ? 1240 : 3, last_result: key === 'due_reminders' ? '1 reminder sent' : 'Nothing due',
     last_did_at: key === 'due_reminders' ? new Date(now - 4000).toISOString() : null, last_did: key === 'due_reminders' ? '1 reminder sent' : null,
-    last_error: key === 'queue_check' ? 'Failed: unexpected error (RuntimeError)' : null,
-    last_error_at: key === 'queue_check' ? new Date(now - 600000).toISOString() : null, runs_24h: 8640,
+    last_error: {queue_check: 'Failed: unexpected error (RuntimeError)', github_sync: 'Failed: GitHub did not answer'}[key] || null,
+    last_error_at: {queue_check: new Date(now - 4000).toISOString(), github_sync: new Date(now - 600000).toISOString()}[key] || null,
+    failing: key === 'queue_check', runs_24h: 8640,
     did_24h: key === 'due_reminders' ? 24 : 0, failed_24h: key === 'queue_check' ? 6 : 0}));
 }
 function heartBeats(now = Date.now()) {
   return Array.from({length: 30}, (_, i) => {
-    const failed = i % 5 === 1;
-    const steps = [{key: 'due_reminders', name: 'Due reminders', text: '1 reminder sent', ms: 3, error: null}];
+    const failed = i % 5 === 1, folded = i === 6;
+    const steps = folded ? [] : [{key: 'due_reminders', name: 'Due reminders', text: '1 reminder sent', ms: 3, error: null}];
     if (failed) steps.push({key: 'queue_check', name: 'Queue check', text: null, ms: 2, error: 'Failed: unexpected error (RuntimeError)'});
     return {id: 'hbt_' + String(100 - i).padStart(3, '0'), started_at: new Date(now - (i * 2 + 1) * 60000).toISOString(), total_ms: 7,
-      did: 1, failed: failed ? 1 : 0, steps};
+      did: folded ? 0 : 1, failed: failed ? 1 : 0, steps, repeats: folded ? 3 : 1,
+      last_repeated_at: folded ? new Date(now - i * 2 * 60000).toISOString() : null};
   });
 }
 
