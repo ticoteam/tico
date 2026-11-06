@@ -203,6 +203,10 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     own = post(api, "credentials", {"name": "Acme internal", "env": "ACME_TOKEN", "secret": SECRET_R})["id"]
     post(api, "credentials", {"name": "Bank", "kind": "password", "secret": "synthetic-password"})
     post(api, "credentials", {"name": "OpenAI", "env": "OPENAI_API_KEY", "secret": SECRET_R + "-model"})
+    # Model keys a bot is granted (pi through OpenRouter, Gemini, Grok): the CLI calls the vendor with them directly,
+    # so they are never a tool's and never go through the proxy.
+    for env in ("OPENROUTER_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"):
+        post(api, "credentials", {"name": env, "env": env, "secret": SECRET_R + "-" + env.lower()})
     second = post(api, "credentials", {"name": "Close backup", "env": "CLOSE_API_KEY", "secret": SECRET_RW + "-2"})["id"]
     with api.app.state.store.read() as c:
         keys = {r["id"]: r["tool_id"] for r in c.execute("SELECT id, tool_id FROM credentials")}
@@ -210,7 +214,7 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     assert keys[close] == tid and tools[tid]["delivery"] == "proxy"
     assert keys[second] not in (None, tid) and tools[keys[second]]["delivery"] == "proxy"   # Close already had its key
     assert tools[keys[own]]["delivery"] == "computer" and tools[keys[own]]["service"] == ""
-    assert len(tools) == 3                                    # the password and the model key are no tool's
+    assert len(tools) == 3                                    # the password and the model keys are no tool's
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
     assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"

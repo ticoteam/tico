@@ -2,7 +2,7 @@
 on the Tools page under a tool and its grants become that tool's "Who can use it".
 
 A tool-type key is an `api_key` or `token` credential with a stored value. Not tools: model keys (their variable is a
-providers.MODEL_KEY_NAMES name; they belong to the model setup), computer keys and their shared model logins (a
+providers.RUNTIME_KEY_NAMES name; they belong to the model setup), computer keys and their shared model logins (a
 computer_keys row, a grant to the computers, or a `computers:` source), Finance's bank logins (`finance` source), a
 bot's own `HUB_` keys back into Tico, passwords and files. Subscriptions and gateway keys live in their own tables and are untouched.
 

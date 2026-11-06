@@ -110,13 +110,14 @@ def match(env="", name="", service=""):
 
 def is_tool_key(kind, env, name, source, stored, on_computers):
     """Whether a stored credential is a tool's key: an `api_key` or `token` with a value. Not a tool's: a model key (its
-    variable, or a name with none set, is a providers.MODEL_KEY_NAMES name; it belongs to the model setup), a computer's
+    variable, or a name with none set, is a providers.RUNTIME_KEY_NAMES name: a runtime's CLI reads it directly, so it
+    belongs to the model setup and never goes through the proxy), a computer's
     key or shared model login (`on_computers`: a computer_keys row or a grant to the computers; or a `computers:`
     source), Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, passwords and files."""
-    from backend.providers import MODEL_KEY_NAMES
+    from backend.providers import RUNTIME_KEY_NAMES
     env, source = env or "", source or ""
     return (kind in ("api_key", "token") and bool(stored) and not on_computers
-            and (env or str(name or "").strip()) not in MODEL_KEY_NAMES and not env.startswith("HUB_")
+            and (env or str(name or "").strip()) not in RUNTIME_KEY_NAMES and not env.startswith("HUB_")
             and not source.startswith("computers:") and source != "finance")
 
 

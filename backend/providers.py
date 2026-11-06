@@ -68,6 +68,9 @@ MODEL_KEYS = {row["runtime"]: tuple(row["capabilities"]["api_key_env"]) for row 
 # The runtime that serves every provider with no CLI of its own (pi, through OpenRouter).
 CATCH_ALL_RUNTIME = next(row["runtime"] for row in PROVIDERS if row.get("catch_all"))
 MODEL_KEY_NAMES = frozenset(name for names in MODEL_KEYS.values() for name in names)
+# Every variable any runtime's CLI reads a model key from, whether computers sign in with it or a bot is granted it
+# (Gemini, pi through OpenRouter, Grok). A key under one of these names is a model key, never a tool's.
+RUNTIME_KEY_NAMES = frozenset(name for row in manifests.load().values() for name in row["capabilities"].get("api_key_env") or ())
 # One provider speaks for a runtime when a bot names only the runtime: the catch-all row for a
 # shared runtime, else the only one.
 PROVIDER_BY_RUNTIME = {}
