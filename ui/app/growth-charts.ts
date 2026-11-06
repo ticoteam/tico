@@ -15,17 +15,17 @@ function grShort(v: number | string): string {
   if (a < 1e4) return n.toLocaleString('en-US', {maximumFractionDigits: a < 10 ? 1 : 0});
   return a < 1e6 ? `${+(n / 1e3).toFixed(a < 1e5 ? 1 : 0)}K` : `${+(n / 1e6).toFixed(1)}M`;
 }
+// A run of consecutive known points: never empty, so its first point is always there.
+type GrRun = [GrPoint, ...GrPoint[]];
 // The line through known values as runs of consecutive points, each [x, y] from `at(i, v)`; a null ends a run.
-function grRuns(values: readonly GrValue[], at: (i: number, v: number | string) => GrPoint): GrPoint[][] {
-  const runs: GrPoint[][] = [];
-  let run: GrPoint[] | null = null;
+function grRuns(values: readonly GrValue[], at: (i: number, v: number | string) => GrPoint): GrRun[] {
+  const runs: GrRun[] = [];
+  let run: GrRun | null = null;
   values.forEach((v, i) => {
     if (v == null) { run = null; return; }
-    if (!run) {
-      run = [];
-      runs.push(run);
-    }
-    run.push(at(i, v));
+    const point = at(i, v);
+    if (run) run.push(point);
+    else { run = [point]; runs.push(run); }
   });
   return runs;
 }
