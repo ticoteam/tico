@@ -521,7 +521,10 @@
     "PLW1510": 15
   },
   "clients/hubcli.py": {
-    "BLE001": 3
+    "BLE001": 2
+  },
+  "clients/hubcli_dryrun.py": {
+    "BLE001": 1
   },
   "clients/hubtools.py": {
     "BLE001": 1
