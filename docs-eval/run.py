@@ -180,8 +180,9 @@ class Tico:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:300]
-            raise SystemExit(f"{method} {path} answered {exc.code}: {detail}") from None
+            with exc:
+                detail = exc.read().decode(errors="replace")[:300]
+                raise SystemExit(f"{method} {path} answered {exc.code}: {detail}") from None
 
 
 def load_fixture(tico, ids=None):

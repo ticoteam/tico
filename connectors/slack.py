@@ -155,7 +155,8 @@ def _request(url, data, headers, timeout):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, dict(r.headers), r.read()
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers or {}), e.read()
+        with e:
+            return e.code, dict(e.headers or {}), e.read()
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -172,7 +173,8 @@ def _download(url, headers, timeout, limit):
         with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as r:
             return r.status, dict(r.headers), r.read(limit + 1)
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers or {}), b""
+        with e:
+            return e.code, dict(e.headers or {}), b""
 
 
 def token_or_die():

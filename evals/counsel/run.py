@@ -164,7 +164,8 @@ def live(docs, url, token, only, wait=3600):
             with urllib.request.urlopen(req, timeout=120) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}") from None
+            with exc:
+                raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}") from None
 
     def run_ended(task_id):
         """(ended, status, runs, finished): ended once the task is finished and every run on it has finished."""

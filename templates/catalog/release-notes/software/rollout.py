@@ -110,10 +110,11 @@ def call(install, method, path, body=None, key=True):
         with urllib.request.urlopen(request, timeout=30) as r:
             return r.status, json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as exc:
-        try:
-            return exc.code, json.loads(exc.read() or b"{}")
-        except ValueError:
-            return exc.code, {}
+        with exc:
+            try:
+                return exc.code, json.loads(exc.read() or b"{}")
+            except ValueError:
+                return exc.code, {}
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return 0, {"error": type(exc).__name__}
 

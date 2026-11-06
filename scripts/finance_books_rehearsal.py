@@ -103,11 +103,12 @@ def http(method: str, url: str, body: object = None, token: str = "", key: str =
             raw = reply.read()
             return reply.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
-        raw = e.read().decode(errors="replace")
-        try:
-            return e.code, json.loads(raw)
-        except ValueError:
-            return e.code, raw[:400]
+        with e:
+            raw = e.read().decode(errors="replace")
+            try:
+                return e.code, json.loads(raw)
+            except ValueError:
+                return e.code, raw[:400]
 
 
 def wait_until(predicate: Callable[[], bool], seconds: float, every: float = 0.5) -> bool:

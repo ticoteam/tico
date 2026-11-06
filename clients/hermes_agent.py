@@ -97,14 +97,15 @@ def _open(url, token, method, path, body=None, timeout=15, headers=None):
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as exc:
-        code = detail = ""
-        try:
-            error = json.loads(exc.read().decode()).get("error", {})
-            code, detail = str(error.get("code", "")), str(error.get("detail", ""))
-        except (ValueError, AttributeError):
-            pass
-        raise Failure(f"{method} {path}: HTTP {exc.code}" + (f": {detail}" if detail else ""),
-                      status=exc.code, code=code, detail=detail)
+        with exc:
+            code = detail = ""
+            try:
+                error = json.loads(exc.read().decode()).get("error", {})
+                code, detail = str(error.get("code", "")), str(error.get("detail", ""))
+            except (ValueError, AttributeError):
+                pass
+            raise Failure(f"{method} {path}: HTTP {exc.code}" + (f": {detail}" if detail else ""),
+                          status=exc.code, code=code, detail=detail)
     except urllib.error.URLError as exc:
         raise Failure(f"{method} {path}: {exc.reason}")
     except OSError as exc:

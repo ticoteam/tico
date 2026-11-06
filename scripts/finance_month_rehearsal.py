@@ -91,7 +91,8 @@ class Api:
             with urllib.request.urlopen(req, timeout=60) as answer:
                 status, raw = answer.status, answer.read()
         except urllib.error.HTTPError as e:
-            status, raw = e.code, e.read()
+            with e:
+                status, raw = e.code, e.read()
         try:
             parsed: object = json.loads(raw or b"null")
         except ValueError:
@@ -135,11 +136,12 @@ class Fake:
             with urllib.request.urlopen(req, timeout=30) as answer:
                 return answer.status, json.loads(answer.read() or b"null")
         except urllib.error.HTTPError as e:
-            raw = e.read()
-            try:
-                return e.code, json.loads(raw or b"null")
-            except ValueError:
-                return e.code, raw.decode("utf-8", "replace")
+            with e:
+                raw = e.read()
+                try:
+                    return e.code, json.loads(raw or b"null")
+                except ValueError:
+                    return e.code, raw.decode("utf-8", "replace")
 
     def mercury(self, path: str) -> object:
         """A Mercury-shaped read through the fake's API (the same paths Tico reads)."""
@@ -168,8 +170,9 @@ class Stack:
             try:
                 urllib.request.urlopen(url, timeout=2)
                 return True
-            except urllib.error.HTTPError:
-                return True
+            except urllib.error.HTTPError as error:
+                with error:
+                    return True
             except OSError:
                 time.sleep(0.5)
         return False
@@ -418,7 +421,8 @@ def api_post_raw(ctx: Context, path: str, body: bytes, headers: dict) -> tuple[i
         with urllib.request.urlopen(req, timeout=30) as answer:
             return answer.status, answer.read()
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
+        with e:
+            return e.code, e.read()
 
 
 def deliver_mercury(ctx: Context, txn: dict, event_id: str) -> tuple[int, bytes]:

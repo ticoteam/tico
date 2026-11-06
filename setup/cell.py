@@ -282,7 +282,8 @@ class System:
                 r.read(1 << 20)
                 return r.status == 200
         except urllib.error.HTTPError as e:
-            return False if e.code == 404 else None
+            with e:
+                return False if e.code == 404 else None
         except OSError:
             return None
 

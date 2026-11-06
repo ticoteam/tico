@@ -497,21 +497,22 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                     payload = read_json(response)
                 break
             except urllib.error.HTTPError as exc:
-                status = exc.code
-                try:
-                    detail = json.load(exc)
-                except ValueError:
-                    detail = {}
-                if status in (401, 403):
-                    raise JudgeError("auth", f"TypeSafe refused the key ({status})", status)
-                if status == 422:
-                    raise JudgeError("invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422)
-                if status in (429, 529) or status >= 500:
-                    if attempt < retries:
-                        sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
-                        continue
-                    raise JudgeError("unavailable", f"TypeSafe answered {status}", status, retryable=True)
-                raise JudgeError("http", f"TypeSafe answered {status}", status)
+                with exc:
+                    status = exc.code
+                    try:
+                        detail = json.load(exc)
+                    except ValueError:
+                        detail = {}
+                    if status in (401, 403):
+                        raise JudgeError("auth", f"TypeSafe refused the key ({status})", status)
+                    if status == 422:
+                        raise JudgeError("invalid", str(detail.get("detail") or detail or "TypeSafe refused the request"), 422)
+                    if status in (429, 529) or status >= 500:
+                        if attempt < retries:
+                            sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+                            continue
+                        raise JudgeError("unavailable", f"TypeSafe answered {status}", status, retryable=True)
+                    raise JudgeError("http", f"TypeSafe answered {status}", status)
             except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
                 if attempt < retries:
                     sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
@@ -560,16 +561,17 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
-            status = exc.code
-            if 300 <= status < 400:                     # not the Gateway's own answer: its key went no further
-                raise JudgeError("http", f"the Tico AI Gateway answered with a redirect ({status})", status)
-            if status in (401, 403):                    # unknown or revoked key
-                raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
-            if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
-                raise JudgeError("unavailable", f"the Tico AI Gateway answered {status}", status, retryable=True)
-            # A 422 too: the request passed `validate` here, so the Gateway disagreeing is its problem, not the
-            # caller's, and the next provider is asked.
-            raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
+            with exc:
+                status = exc.code
+                if 300 <= status < 400:                     # not the Gateway's own answer: its key went no further
+                    raise JudgeError("http", f"the Tico AI Gateway answered with a redirect ({status})", status)
+                if status in (401, 403):                    # unknown or revoked key
+                    raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
+                if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
+                    raise JudgeError("unavailable", f"the Tico AI Gateway answered {status}", status, retryable=True)
+                # A 422 too: the request passed `validate` here, so the Gateway disagreeing is its problem, not the
+                # caller's, and the next provider is asked.
+                raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
                              retryable=True)
@@ -705,9 +707,10 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
                     timeout=seconds) as response:
                 payload = read_json(response)
         except urllib.error.HTTPError as exc:
-            raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
-                             f"{provider} answered {exc.code}", exc.code,
-                             retryable=exc.code in (429, 529) or exc.code >= 500)
+            with exc:
+                raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
+                                 f"{provider} answered {exc.code}", exc.code,
+                                 retryable=exc.code in (429, 529) or exc.code >= 500)
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         # An answer came back, so it was paid for, even when it cannot be used.
@@ -767,7 +770,8 @@ def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
             with opener(request, timeout=timeout) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
-            raise JudgeError("unavailable", f"the Tico AI Gateway answered {exc.code}", exc.code, retryable=True)
+            with exc:
+                raise JudgeError("unavailable", f"the Tico AI Gateway answered {exc.code}", exc.code, retryable=True)
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError, KeyError,
                 IndexError, TypeError) as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}", retryable=True)
@@ -794,7 +798,8 @@ def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
             with opener(llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS), timeout=timeout) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
-            raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code, retryable=True)
+            with exc:
+                raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code, retryable=True)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         usage = _usage(payload)
