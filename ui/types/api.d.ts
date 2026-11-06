@@ -52,14 +52,17 @@ export type Answer = {
 
 export type ApiTool = {
   access: Array<{
+  fixed?: boolean;
   initials: string;
-  kind: "bot" | "person";
+  kind: "bot" | "person" | "finance";
   last_used_at: string | null;
   level: "read" | "read_write";
   name: string;
   subject: string;
 }>;
+  audience?: AccessAudience | null;
   can_manage: boolean;
+  can_set_audience: boolean;
   checks: Array<{
   checked_at: string;
   detail: string;
@@ -74,20 +77,20 @@ export type ApiTool = {
   name: string;
   preview: string;
 }>;
+  private: boolean;
   recent: Array<Record<string, unknown>>;
+  seen_by?: Array<{
+  id: string;
+  kind: "person" | "group" | "bot" | "finance";
+  name: string;
+  subject: string;
+  why: "Owner" | "Listed" | "Can use it";
+}>;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";
 };
-  tool: {
-  auth_scheme: string;
-  base_url: string;
-  check_path: string;
-  delivery: "proxy" | "computer";
-  id: string;
-  name: string;
-  service: string;
-};
+  tool: ApiToolSettings;
 };
 
 export type ApiToolActivity = {
@@ -99,6 +102,17 @@ export type ApiToolActivity = {
   kind: "call" | "use";
   result: "sent" | "refused" | "failed" | "use";
 }>;
+};
+
+export type ApiToolSettings = {
+  auth_scheme: string;
+  base_url: string;
+  check_path: string;
+  delivery: "proxy" | "computer";
+  id: string;
+  name: string;
+  private: boolean;
+  service: string;
 };
 
 export type ApprovalCreate = {
@@ -6221,6 +6235,7 @@ export type ToolIndexRow = {
   kind: "api" | "mailbox" | "number" | "address" | "slack" | "github" | "meetings" | "listening" | "webhook" | "declared" | "website";
   name: string;
   needs_you: boolean;
+  private?: boolean;
   status: {
   text: string;
   tone: "ok" | "wait" | "fail" | "run" | "idle";
@@ -6645,6 +6660,16 @@ export type WebhookWakeUrl = {
 export type WebhookWakeUrlSet = {
   secret: string | null;
   url: string | null;
+};
+
+export type backend__api_tools__ToolUpdate = {
+  audience?: AccessAudience | null;
+  auth_scheme?: string | null;
+  base_url?: string | null;
+  check_path?: string | null;
+  delivery?: string | null;
+  name?: string | null;
+  service?: string | null;
 };
 
 export type backend__company_page__api_editions__Correction = {
@@ -11814,6 +11839,14 @@ export type UnsnoozeTaskParams = {
 };
 export type UnsnoozeTaskBody = Empty;
 export type UnsnoozeTaskResponse = TaskResult;
+
+/** PATCH /api/v2/api-tools/{tool_id} */
+export type UpdateApiToolParams = {
+  "Idempotency-Key": string;
+  tool_id: string;
+};
+export type UpdateApiToolBody = backend__api_tools__ToolUpdate;
+export type UpdateApiToolResponse = ApiToolSettings;
 
 /** PATCH /api/v2/audiences/{audience_id} */
 export type UpdateAudienceParams = {

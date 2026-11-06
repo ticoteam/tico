@@ -22,6 +22,11 @@
 .tt-tile .nav-icon{font-size:18px;width:18px;height:18px}
 .tt-tile.lg{width:44px;height:44px;border-radius:10px}
 .tt-tile.lg .nav-icon{font-size:24px;width:24px;height:24px}
+.tt-tile.sm{width:22px;height:22px;border-radius:6px}
+.tt-tile.sm .nav-icon{font-size:14px;width:14px;height:14px}
+.tt-private{margin-left:6px;vertical-align:middle;font-size:var(--t-xs, .75rem);font-weight:500}
+.tt-see-choice{gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tt-see-table th{text-align:left;font-weight:500;color:var(--muted);font-size:var(--t-sm);padding:4px}
 .tt-nm{min-width:0;display:flex;flex-direction:column;overflow-wrap:anywhere}
 .tt-nm strong{font-weight:600}
 .tt-nm .muted{font-size:var(--t-sm)}
@@ -133,6 +138,8 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tt-who-table td.tt-who-name{flex:1 1 100%}
   .tt-who-table td:last-child{width:auto;margin-left:auto}
   .tt-who-table .theme-seg{flex-wrap:wrap}
+  .tt-see-table thead{display:none}
+  .tt-see-table td.tt-who-name{flex:1 1 auto}
   .tt-key{grid-template-columns:auto minmax(0,1fr)}
   .tt-key .pill{grid-column:2;justify-self:start}
   .tt-squares{max-width:none;gap:2px}
