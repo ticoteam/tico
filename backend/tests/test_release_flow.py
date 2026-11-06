@@ -338,7 +338,12 @@ def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
     _published(api)
     assert _step_of(api, carried) == "Post Release QA"
     with api.app.state.store.read() as c:
-        notes = [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=?", (carried["id"],))]
+        notes = [
+            r[0]
+            for r in c.execute(
+                "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (carried["id"],)
+            )
+        ]
     assert any("Shipped in v1.2.3" in (n or "") for n in notes)
     # a second delivery for the same tag changes nothing; a ticket moved on by hand is left where it is
     _published(api)
