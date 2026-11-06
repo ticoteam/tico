@@ -526,6 +526,11 @@ async function followReach(viewport, shot, theme) {
     assert.equal(got[0][0], 'Head of Engineering'); assert.match(got[1][0], /ben/i);
     const box = await pop.boundingBox();
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width && box.y >= 0, 'the list fits');
+    const covered = await pop.evaluate(m => {
+      const r = m.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + 10), cs = getComputedStyle(m);
+      return m.contains(e) ? '' : JSON.stringify({r: [r.left, r.top, r.width, r.height], hidden: m.hidden, vis: cs.visibility, op: cs.opacity, z: cs.zIndex, pos: cs.position, at: e?.outerHTML?.slice(0, 160)});
+    });
+    assert.equal(covered, '', 'the list is on top');
     if (shot) await page.screenshot({path: shot});
     await page.keyboard.press('Escape');
     // Send: the comment, then the follow; Follow goes once you follow.
