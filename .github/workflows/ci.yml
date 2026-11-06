@@ -104,7 +104,7 @@ jobs:
           # stamp (#1905: its build.rs does not read TICO_VERSION, and the runner has no --release) skips the check.
           if grep -q TICO_VERSION runner-rs/build.rs; then
             want="${TICO_VERSION#v}"
-            got="$(runner-rs/target/$TARGET/release/tico-runner --release)"
+            got="$("runner-rs/target/$TARGET/release/tico-runner" --release)"
             [ "$got" = "$want" ] || { echo "::error::tico-runner --release says '$got', release is '$want'"; exit 1; }
           else
             echo "::notice::runner-rs/build.rs predates the release stamp; tico-runner --release not checked"

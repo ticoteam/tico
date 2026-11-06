@@ -154,7 +154,8 @@ jobs:
 
   static:
     # Every PR: pinned ruff against its baseline (no new findings or suppressions), pyright on the boundary modules,
-    # migration names, the UI's generated API types and the runner wire contract. Seconds each; tools are pinned.
+    # migration names, the UI's generated API types, the runner wire contract, shell scripts (shellcheck) and workflows
+    # (actionlint). Seconds each; tools are pinned.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
@@ -194,6 +195,10 @@ jobs:
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      - name: Shell scripts (shellcheck, pinned)
+        run: bash scripts/shell_lint.sh
+      - name: Workflows (actionlint, pinned)
+        run: bash scripts/pinned_tool.sh actionlint
 
   rust-lint:
     # rustfmt and clippy -D warnings (scripts/rust_checks.sh), when a crate it checks changed. Always reported, so it
