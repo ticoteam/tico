@@ -1,0 +1,8 @@
+{
+  "clients/hubcli.py": {
+    "max_lines": 1291
+  },
+  "clients/hubcli.py::parser": {
+    "max_lines": 19
+  }
+}

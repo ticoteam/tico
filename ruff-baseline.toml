@@ -173,6 +173,7 @@
 "clients/harness_manifests.py" = ["B904"]
 "clients/hermes_agent.py" = ["B904", "BLE001", "PLW1510"]
 "clients/hubcli.py" = ["BLE001"]
+"clients/hubcli_dryrun.py" = ["BLE001"]
 "clients/hubtools.py" = ["BLE001"]
 "clients/judge.py" = ["B018", "B904", "B905", "BLE001"]
 "clients/preflight.py" = ["PLW1510"]

@@ -301,7 +301,9 @@ def carry_moves(old_ignores, new_ignores, ref):
 
 def check_growth(ref):
     """Fail when the baseline grew against `ref`. A rule that `ref` does not select yet may bring its own baseline;
-    every other suppression, and every count, may only stay the same or go down."""
+    every other suppression, and every count, may only stay the same or go down. The exception is a pure move: when a
+    rule's total baselined count does not grow, its findings may move between files (suppressions and counts per file
+    may change), so a split that carries a finding into a new module passes."""
     old_baseline = git_show(ref, BASELINE_NAME)
     if old_baseline is None:
         print(f"lint: {ref} has no {BASELINE_NAME} yet; growth check skipped", flush=True)
@@ -321,19 +323,45 @@ def check_growth(ref):
     problems = []
     for code in sorted(old_select - new_select):
         problems.append(f"rule removed from ruff.toml select: {code}")
+    # A pure move: the rule's total baselined count did not grow, so findings moved between files (a function moved to
+    # a new module carries its finding with it). Per-file counts and suppressions may then change; the total may not.
+    totals_new = collections.Counter()
+    for (_, code), n in new_counts.items():
+        totals_new[code] += n
+    if old_counts is not None:
+        old_counts = renamed(collections.Counter(old_counts), moves)
+    totals_old = collections.Counter()
+    for (_, code), n in (old_counts or {}).items():
+        totals_old[code] += n
+
+    def pure_move(code):
+        return old_counts is not None and totals_new[code] <= totals_old[code]
+
+    moved = set()
     for path, code in sorted(new_ignores - old_ignores):
         if not introduced(code):
-            problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")
+            if pure_move(code):
+                moved.add(code)
+            else:
+                problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")
     if old_counts is None:
         print(f"lint: {ref} has no {COUNTS_NAME} yet; count growth check skipped", flush=True)
     else:
-        old_counts = renamed(collections.Counter(old_counts), moves)
         for path, code in sorted(new_counts):
-            if not introduced(code) and new_counts[(path, code)] > old_counts[(path, code)]:
+            if introduced(code) or new_counts[(path, code)] <= old_counts[(path, code)]:
+                continue
+            if pure_move(code):
+                moved.add(code)
+            else:
                 problems.append(
                     f"count grew: {path} {code} {old_counts[(path, code)]} -> {new_counts[(path, code)]} "
                     "(fix the findings; a baseline may only shrink)"
                 )
+    for code in sorted(moved):
+        print(
+            f"lint: {code} findings moved between files; total {totals_old[code]} -> {totals_new[code]} (allowed)",
+            flush=True,
+        )
     added = sorted(rule for rule in new_select if not selects(rule, old_select))
     if added:
         starting = sum(n for (_, code), n in new_counts.items() if any(code.startswith(r) for r in added))
