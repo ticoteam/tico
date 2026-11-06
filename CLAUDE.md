@@ -63,7 +63,7 @@ Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no C
 review once the tests they touched pass with `scripts/remote.py`, then merges with `gh pr merge <N> --merge` once it is
 reviewed (`--squash` and `--auto` also enqueue): main's merge queue runs the full selected checks on the merged result before it lands.
 PR checks on each push are lint only. A red release candidate caused by your merge is your top priority. Releases ship from
-release windows (weekdays 07:30, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
+release windows (weekdays 07:30, 11:00, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
 docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
 major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.
 

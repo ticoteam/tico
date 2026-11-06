@@ -240,6 +240,9 @@ UTC = timezone.utc
             pt(2026, 11, 7, 7, 31), pt(2026, 11, 7, 7, 30), pt(2026, 11, 7, 15, 0), id="sat-0731-pst-opened-0730"
         ),
         pytest.param(
+            pt(2026, 11, 5, 11, 5), pt(2026, 11, 5, 11, 0), pt(2026, 11, 5, 14, 0), id="thu-1105-pst-opened-1100"
+        ),
+        pytest.param(
             pt(2026, 7, 11, 14, 5),
             pt(2026, 7, 11, 7, 30),
             pt(2026, 7, 11, 15, 0),
@@ -332,6 +335,41 @@ def test_a_dst_change_day_uses_the_offset_of_each_window():
             "14:00 PDT on a Saturday is no window",
             id="sat-1400-does-not-open",
         ),
+        pytest.param(
+            "0 18 * * *",
+            pt(2026, 10, 14, 11, 5),
+            True,
+            "11:00 PDT on a Wednesday is a weekday window",
+            id="wed-1100-pdt-opens",
+        ),
+        pytest.param(
+            "0 19 * * *",
+            pt(2026, 11, 11, 11, 5),
+            True,
+            "11:00 PST on a Wednesday is a weekday window",
+            id="wed-1100-pst-opens",
+        ),
+        pytest.param(
+            "0 18 * * *",
+            pt(2026, 10, 17, 11, 5),
+            False,
+            "11:00 PDT on a Saturday is no window",
+            id="sat-1100-does-not-open",
+        ),
+        pytest.param(
+            "0 19 * * *",
+            pt(2026, 10, 14, 12, 5),
+            False,
+            "its off-season twin: 12:05 PDT is no window",
+            id="off-season-twin-1100-pdt",
+        ),
+        pytest.param(
+            "0 18 * * *",
+            pt(2026, 11, 11, 10, 5),
+            False,
+            "its off-season twin: 10:05 PST is no window",
+            id="off-season-twin-1100-pst",
+        ),
         pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT on a Saturday opens", id="sat-1500-opens"),
         pytest.param("30 3 * * *", pt(2026, 7, 10, 20, 35), True, "Friday 20:30 PDT is a window", id="fri-2030-opens"),
         pytest.param(
@@ -375,7 +413,7 @@ def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens,
 
 
 def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
-    assert rt.WEEKDAY_WINDOWS == ((7, 30), (14, 0), (20, 30)) and rt.WEEKEND_WINDOWS == ((7, 30), (15, 0))
+    assert rt.WEEKDAY_WINDOWS == ((7, 30), (11, 0), (14, 0), (20, 30)) and rt.WEEKEND_WINDOWS == ((7, 30), (15, 0))
     starts, day = set(), date(2026, 1, 1)
     while day < date(2028, 1, 1):  # two years: both offsets, weekdays and weekends
         starts |= {(start.hour, start.minute) for start in rt.window_starts_on(day)}
