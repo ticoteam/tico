@@ -3788,13 +3788,16 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         struct RetryHost {
-            idle: AtomicBool,
+            busy: AtomicBool,
             locks_available: AtomicBool,
             attempts: AtomicUsize,
         }
         impl Host for RetryHost {
             fn idle(&self, _: &str, _: &str) -> bool {
-                self.idle.load(Ordering::SeqCst)
+                true
+            }
+            fn task_busy(&self, _: &str) -> bool {
+                self.busy.load(Ordering::SeqCst)
             }
             fn try_locks(&self, _: &str, _: &str) -> Option<Box<dyn Send>> {
                 self.locks_available
@@ -3830,7 +3833,7 @@ mod tests {
             Client::new(&url, "fixture", 5, 0).unwrap(),
         ));
         let host = Arc::new(RetryHost {
-            idle: AtomicBool::new(true),
+            busy: AtomicBool::new(false),
             locks_available: AtomicBool::new(true),
             attempts: AtomicUsize::new(0),
         });
@@ -3891,7 +3894,7 @@ mod tests {
             "a retry still waits for the checkout locks"
         );
         host.locks_available.store(true, Ordering::SeqCst);
-        host.idle.store(false, Ordering::SeqCst);
+        host.busy.store(true, Ordering::SeqCst);
         manager
             .clone()
             .sync(host.clone(), vec![next_action.clone()])
@@ -3899,9 +3902,9 @@ mod tests {
         assert_eq!(
             host.attempts.load(Ordering::SeqCst),
             1,
-            "a retry still waits for the bot to be idle"
+            "a retry still waits for its task to have no turn"
         );
-        host.idle.store(true, Ordering::SeqCst);
+        host.busy.store(false, Ordering::SeqCst);
         manager
             .clone()
             .sync(host.clone(), vec![next_action.clone()])
