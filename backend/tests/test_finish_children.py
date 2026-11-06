@@ -12,6 +12,8 @@ ANA, BEN, CMO, SEO = "human:ana", "human:ben", "bot:cmo", "bot:seo"
 
 def hub(path):
     c = H.connect(path)
+    # Store.initialize adds tasks.version (cloud step 1); a bare connect has no store, and a blocked task's bump needs it.
+    H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cmo", "seo")},
                     {"people": [{"id": "ana", "email": "ana@acme.example"}, {"id": "ben", "email": "ben@acme.example"}]})
     return c

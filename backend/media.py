@@ -584,6 +584,10 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
             raise Problem("validation", f"{body.on} is not a person on the team", 422)
         parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
+        if parent and parent["status"] not in H.ACTIVE_STATUSES:
+            # A question under a finished task is refused with the next move the asker may make, as a run or a lint is.
+            raise Problem("validation", f"task {parent['id']} is {parent['status']}; "
+                          f"{H.task_reopen_hint(c, who.actor, parent)}", 422)
         # Checked before the fold too: an open question kept from before onboarding is not a way to ask again.
         from . import lifecycle
         lifecycle.refuse_send(c, who, None, what="task questions")
