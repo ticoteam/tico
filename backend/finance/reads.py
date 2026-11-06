@@ -1097,8 +1097,8 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
             at: str | None = None, on: str | None = None) -> Row:
     """Every budget the viewer sees, with where it stands today, or in the period holding the day `on` (past or
     future): the amount of the version in effect then, and that period's spend and holds. Spend is read live
-    (budgeting's module docstring): in open months the ad platforms' daily spend stands in for their card charges, and
-    each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
+    (budgeting's module docstring): in each month a healthy import covers, an ad budget's platform's daily spend
+    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
     s = _open(c, viewer, at)
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)

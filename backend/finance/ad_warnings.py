@@ -1,10 +1,10 @@
 """Ad budget warnings for the spending bot. After each ad spend import pass (ad_import.pass_once, every 15 minutes and
-after every import), each active budget whose spend the platforms feed (budgeting's live read) and whose teammate is a
-bot is checked against three levels: its warn level (80% by default), its amount, and a month-end pace over its amount.
-A level reached for the first time in the period (budgeting.event_key: a new amount arms it again) gives that bot one
-Finance line at the start of its next turn: a keeper note. Never a person and never the bot's manager; a budget with no
-bot gets none. Warn only: nothing is paused, blocked or refused, and the budget's own at-limit action is untouched (the
-books-based crossings still run as before, but their owner notice is skipped for these budgets, jobs.drain)."""
+after every import), each active ad budget (budgeting.budget_platform: its vendor is an ad platform) whose teammate is a
+bot is checked, as its live read stands, against three levels: its warn level (80% by default), its amount, and a
+month-end pace over its amount. A level reached for the first time in the period (budgeting.event_key: a new amount
+arms it again) gives that bot one Finance line at the start of its next turn: a keeper note. Never a person and never
+the bot's manager; an ad budget with no bot gets none, and no ad budget gives its owner a notice (jobs.drain). Warn
+only: an ad budget never pauses, blocks or refuses anything (budgeting.warn_only)."""
 import sqlite3
 from dataclasses import dataclass
 
@@ -29,12 +29,11 @@ class Sent:
 
 
 def bot_of(ctx: Ctx, b: B.Budget) -> str:
-    """The bot a budget's ad warnings go to ("" when they go to nobody): its teammate, when that is a bot on the org
-    chart and the platforms' spend counts in the budget this period."""
+    """The bot an ad budget's warnings go to ("" when they go to nobody): its teammate, when that is a bot on the org
+    chart."""
     if not b.active or not b.teammate.startswith("bot:") or b.teammate not in ctx.org.bots:
         return ""
-    start, end = budgeting.period_window(ctx, b.id)
-    return b.teammate if budgeting.live_ads(ctx, b, start, end).covered else ""
+    return b.teammate if budgeting.budget_platform(ctx, b) else ""
 
 
 def _money(cents: int, currency: str) -> str:
@@ -89,8 +88,6 @@ def words(b: B.Budget, st: B.State, levels: tuple[str, ...], platform: str, curr
 
 def check(ctx: Ctx) -> list[Sent]:
     """Give each ad budget's bot its new warning levels, once per level per period. What was sent."""
-    if not budgeting.ad_imports(ctx):
-        return []
     today = dates.day(ctx.today)
     sent: list[Sent] = []
     for b in sorted(ctx.budgets().values(), key=lambda x: x.id):
@@ -108,10 +105,7 @@ def check(ctx: Ctx) -> list[Sent]:
                     SA.warn_once(ctx.c, b.id, key, level, slug, ctx.at))
         if not new:
             continue
-        platforms = [budgeting.budget_platform(ctx, b)] if b.vendor else \
-            sorted(budgeting.live_ads(ctx, b, st.period_start, st.period_end).platforms)
-        label = " + ".join(SA.LABEL[p] for p in platforms if p)
-        text = words(b, st, new, label, ctx.book.base_currency)
+        text = words(b, st, new, SA.LABEL[budgeting.budget_platform(ctx, b)], ctx.book.base_currency)
         tico.bot_note(ctx.c, bot, text)
         sent.append(Sent(b.id, bot, new, text))
     return sent

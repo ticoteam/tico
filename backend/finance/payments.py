@@ -795,8 +795,10 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         chain = B.chain(ctx.budgets(), str(hold["budget_id"]))
         for b in chain:
             # Remaining decides (reserves included, §4.4): its own hold is already in `held`, so it is counted once.
+            if b.at_limit == "warn" or budgeting.budget_platform(ctx, b):
+                continue                             # a warn budget, an ad budget among them, never stops a payment
             s = budgeting.state(ctx, b.id, at)
-            if s.amount is None or s.remaining is None or s.remaining >= 0 or b.at_limit == "warn":
+            if s.amount is None or s.remaining is None or s.remaining >= 0:
                 continue
             if b.at_limit == "decline":
                 why = f"it no longer fits the {b.name} budget"

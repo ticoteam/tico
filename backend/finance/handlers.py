@@ -803,6 +803,16 @@ def _budget_fields(p: V.Payload, base: B.Budget) -> B.Budget:
                    rollover=V.choice(p, "rollover", B.ROLLOVER, base.rollover))
 
 
+def _ad_warns(ctx: Ctx, p: V.Payload, b: B.Budget) -> B.Budget:
+    """An ad platform's budget only warns (budgeting.warn_only): asking for another at-limit is refused, and leaving it
+    out sets warn."""
+    if b.at_limit == "warn" or not budgeting.budget_platform(ctx, b):
+        return b
+    if "at_limit" in p:
+        raise invalid("an ad platform budget only warns: set at_limit to warn")
+    return replace(b, at_limit="warn")
+
+
 def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("name", "period", "account_id", "catch_all", "team", "teammate", "vendor", "parent_id", "owner",
                "warn_pct", "at_limit", "rollover", "amount", "effective_from", "raise_check"))
@@ -813,6 +823,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         vendor=SAP.vendor_resolved(ctx.c, ctx.book.id, L.vendor_text(p, "vendor")),
         parent_id=V.opt_text(p, "parent_id", 80) or "", owner=who,
         created_at=ctx.at))
+    new = _ad_warns(ctx, p, new)
     B.check(new, ctx.budgets(), ctx.accounts, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
     _need_budget_view(ctx, who, new)
     amount = V.opt_amount(p)
@@ -863,7 +874,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                "raise_check"))
     old = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, old)
-    new = replace(_budget_fields(p, old), active=V.flag(p, "active", old.active))
+    new = _ad_warns(ctx, p, replace(_budget_fields(p, old), active=V.flag(p, "active", old.active)))
     if new.active:
         B.check(new, ctx.budgets(), ctx.accounts, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
     elif any(b.parent_id == old.id and b.active for b in ctx.budgets().values()):

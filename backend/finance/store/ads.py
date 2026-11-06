@@ -4,6 +4,7 @@ for), the platforms' daily spend per campaign, and the budget warnings bots were
 The tables come from migration 20261106071500_finance_ad_spend; `ready` tells a database without them (an old test
 copy), and every read answers empty there."""
 import json
+import re
 import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -16,6 +17,18 @@ PLATFORMS = ("google_ads", "meta_ads")
 SERVICE = {"google_ads": "google-ads", "meta_ads": "meta-ads"}
 PLATFORM_OF = {v: k for k, v in SERVICE.items()}
 LABEL = {"google_ads": "Google Ads", "meta_ads": "Meta Ads"}
+# The vendor contact each platform's spend books under (ad_import makes it): a line or hold filed under it is the
+# platform's, whatever its descriptor says.
+VENDOR = {"google_ads": "Google Ads", "meta_ads": "Meta"}
+_CONTACT = {name.casefold(): p for p, name in VENDOR.items()}
+# A card or bank descriptor that is a platform's ad charge. Tight on purpose: GOOGLE *ADS, GOOGLE ADS and GOOGLE*ADS but
+# not GOOGLE ADSENSE (nothing but digits or punctuation may follow ADS); FACEBK *, FB.ME/ADS, FACEBOOK ADS and META ADS
+# but not Meta's other charges (Workplace, Quest, Verified, Blueprint) or a bare FACEBOOK or META PLATFORMS.
+DESCRIPTORS = {
+    "google_ads": re.compile(r"\bgoogle\s*\*?\s*ads(?![a-z])", re.IGNORECASE),
+    "meta_ads": re.compile(r"\bfacebk\s*\*|\bfb\.me/ads(?![a-z])|\bfacebook\s*ads(?![a-z])|\bmeta\s*ads(?![a-z])",
+                           re.IGNORECASE),
+}
 
 
 @dataclass(frozen=True)
@@ -98,10 +111,12 @@ def save_import(c: sqlite3.Connection, imp: AdImport, at: str) -> None:
 
 
 def finish(c: sqlite3.Connection, import_id: str, status: str, error: str, at: str, *, imported: bool) -> None:
-    """Record a run's result. `imported`: the spend came in, so the next run takes the last 30 days only."""
-    c.execute("UPDATE fin_ad_imports SET status=?, last_error=?, run_requested_at=NULL, updated_at=?, "
+    """Record a run's result (`at`: when its pass started). `imported`: the spend came in, so the next run takes the
+    last 30 days only. A run asked for after the pass started stays asked for, so another pass runs it."""
+    c.execute("UPDATE fin_ad_imports SET status=?, last_error=?, updated_at=?, "
+              "run_requested_at=CASE WHEN run_requested_at>? THEN run_requested_at ELSE NULL END, "
               "last_import_at=CASE WHEN ? THEN ? ELSE last_import_at END WHERE id=?",
-              (status, error[:500], at, int(imported), at, import_id))
+              (status, error[:500], at, at, int(imported), at, import_id))
 
 
 def request_run(c: sqlite3.Connection, import_id: str, at: str) -> None:
@@ -246,22 +261,62 @@ def warned(c: sqlite3.Connection, budget_id: str, period_key: str) -> set[str]:
 
 
 # ------------------------------------------------------------------------------------------------ what budgets read
-def rollup_vendors(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[str]:
-    """Every vendor key a posted line carries in [start, end]: the keys a live budget read sorts into platform vendors
-    (budgeting.ad_platform) and the rest."""
-    return [str(r[0]) for r in c.execute("SELECT DISTINCT vendor FROM fin_rollups WHERE book_id=? AND day>=? AND day<=? "
-                                         "AND vendor<>''", (book_id, start, end))]
+def descriptor_platform(text: str) -> str:
+    """The platform a descriptor is an ad charge of ("" when none)."""
+    return next((p for p, rx in DESCRIPTORS.items() if rx.search(text or "")), "")
 
 
-def card_holds(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str) -> list[tuple[int, str]]:
-    """(amount, merchant) of each card authorization hold in the window still counting on these budgets (held, or
-    settled with no entry yet: what store/budgets.held counts), for a live read to take the ad platforms' out."""
+def vendor_platform(c: sqlite3.Connection, book_id: str, key: str) -> str:
+    """The ad platform a vendor key is ("" when none). A contact is one when it is the contact the import made
+    ("Google Ads", "Meta") or its name or an alias is a platform descriptor; a posted name is one when its key or the
+    label it was posted under is."""
+    if not key:
+        return ""
+    row = c.execute("SELECT name FROM fin_contacts WHERE id=?", (key,)).fetchone()
+    if row is not None:
+        name = str(row[0] or "")
+        if name.strip().casefold() in _CONTACT:
+            return _CONTACT[name.strip().casefold()]
+        aliases = [str(r[0]) for r in c.execute("SELECT name_key FROM fin_vendor_aliases WHERE contact_id=?", (key,))]
+        return next((p for t in (name, *aliases) if (p := descriptor_platform(t))), "")
+    label = c.execute("SELECT label FROM fin_vendor_labels WHERE book_id=? AND name_key=?", (book_id, key)).fetchone()
+    return descriptor_platform(key) or (descriptor_platform(str(label[0] or "")) if label is not None else "")
+
+
+@dataclass(frozen=True)
+class HeldFor:
+    """A hold still counting in a window (held, or settled with no entry yet: what store/budgets.held counts) and the
+    vendor it is for: a card hold's merchant (`text`), a payment's recipient (its contact and name), a bill's or an
+    order's vendor contact. A hold of another source names none."""
+    amount: int
+    source: str
+    contact_id: str
+    text: str
+
+
+def holds_for(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str) -> list[HeldFor]:
     if not budget_ids:
         return []
     marks = ",".join("?" * len(budget_ids))
     rows = c.execute(
-        "SELECT CASE WHEN h.status='held' THEN h.amount ELSE COALESCE(h.settled_amount, 0) END, "
-        "COALESCE(f.counterparty, '') FROM fin_holds h LEFT JOIN fin_feed_txns f ON f.id=h.source_id "
-        f"WHERE h.budget_id IN ({marks}) AND h.source='card' AND h.held_on>=? AND h.held_on<=? "
-        "AND (h.status='held' OR (h.status='settled' AND h.entry_id IS NULL))", (*budget_ids, start, end))
-    return [(int(r[0]), str(r[1])) for r in rows]
+        "SELECT CASE WHEN status='held' THEN amount ELSE COALESCE(settled_amount, 0) END AS counted, source, source_id "
+        f"FROM fin_holds WHERE budget_id IN ({marks}) AND held_on>=? AND held_on<=? "
+        "AND (status='held' OR (status='settled' AND entry_id IS NULL)) ORDER BY id", (*budget_ids, start, end))
+    out: list[HeldFor] = []
+    for r in rows.fetchall():
+        source, sid = str(r[1]), str(r[2] or "")
+        contact = text = ""
+        if source == "card":
+            found = c.execute("SELECT counterparty FROM fin_feed_txns WHERE id=?", (sid,)).fetchone()
+            text = str(found[0] or "") if found is not None else ""
+        elif source == "payment":
+            found = c.execute("SELECT r.contact_id, r.name FROM fin_payments p JOIN fin_recipients r "
+                              "ON r.id=p.recipient_id WHERE p.id=?", (sid,)).fetchone()
+            if found is not None:
+                contact, text = str(found[0] or ""), str(found[1] or "")
+        elif source in ("bill", "purchase_order"):
+            table = "fin_bills" if source == "bill" else "fin_purchase_orders"
+            found = c.execute(f"SELECT vendor_id FROM {table} WHERE id=?", (sid.partition(":")[0],)).fetchone()
+            contact = str(found[0] or "") if found is not None else ""
+        out.append(HeldFor(int(r[0]), source, contact, text))
+    return out

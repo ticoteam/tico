@@ -6,8 +6,8 @@ import sqlite3
 from collections.abc import Mapping
 from typing import cast
 
-from . import ad_warnings, handlers
-from .budgeting import LIMIT_EVENT, WARN_EVENT, event_period, state, subtree
+from . import handlers
+from .budgeting import LIMIT_EVENT, WARN_EVENT, budget_platform, event_period, state, subtree
 from .context import is_set_up, load
 from .core import budgets as B
 from .core import dates
@@ -53,8 +53,8 @@ def _words(b: B.Budget, name: str, bots: bool, images: bool = False) -> str:
 
 def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) -> int:
     """Hand waiting `finance.*` events to rules (`judge_event`) and automations, ids only, so whoever acts reads the
-    budget through their own view; and tell a budget's owner at warn and at cutoff (not an ad budget's: its bot is
-    told, ad_warnings.py). How many were drained."""
+    budget through their own view; and tell a budget's owner at warn and at cutoff (not an ad budget's: only its
+    bot is told, ad_warnings.py). How many were drained."""
     rows = SU.undrained(c, most)
     if not rows:
         return 0
@@ -72,10 +72,11 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
         else:
             data = {**cast(dict[str, object], json.loads(str(row["payload"] or "{}"))), "event_id": eid}
         tico.emit(c, name, subject, data)
-        if ctx is not None and b is not None and name == LIMIT_EVENT and b.at_limit == "decline":
+        ad = ctx is not None and b is not None and bool(budget_platform(ctx, b))
+        # An ad budget only warns, and only its bot (ad_warnings.py): it freezes no card and tells no owner.
+        if ctx is not None and b is not None and name == LIMIT_EVENT and b.at_limit == "decline" and not ad:
             _freeze_cards(c, b.id, eid, ctx.at)
-        # An ad budget's warnings go to its bot alone (ad_warnings.py): its owner gets no notice of its own.
-        if ctx is not None and b is not None and name in (WARN_EVENT, LIMIT_EVENT) and not ad_warnings.bot_of(ctx, b):
+        if ctx is not None and b is not None and name in (WARN_EVENT, LIMIT_EVENT) and not ad:
             owner = b.owner if b.owner.startswith("human:") and handlers.sees_budget(ctx, b.owner, b) else ctx.org.owner
             if owner:
                 c.execute("SAVEPOINT fin_notice")
