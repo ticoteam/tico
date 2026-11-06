@@ -1,6 +1,7 @@
 """Tico file hosting 1/2 (Dev 315): a company's files in Tico's bucket, handed over by Tico HQ, served from its
 ticofiles.com address. Spec tests 1, 4 and 7, and the app halves of 5 and 6 (Product roadmap "Tico file hosting
 through Gateway"). Fake S3 and a fake HQ only: no network."""
+
 import base64
 import hashlib
 import hmac
@@ -27,28 +28,47 @@ TOKEN = "tico-hosting-session-token-01"
 KEY, KEY2 = "AKIATICOHOSTING0001", "AKIATICOHOSTING0002"
 SIGNING = "0123456789abcdef0123456789abcdef0123456789abcdef"
 ADDRESS = "acme-files.ticofiles.com"
-OFF = {"state": "off", "writes": False, "reason": None, "access": "none", "address": None, "bucket": None,
-       "region": None, "prefix": None, "credentials": None, "signing": None, "keep_until": None}
+OFF = {
+    "state": "off",
+    "writes": False,
+    "reason": None,
+    "access": "none",
+    "address": None,
+    "bucket": None,
+    "region": None,
+    "prefix": None,
+    "credentials": None,
+    "signing": None,
+    "keep_until": None,
+}
 
 
 def png():
     """A 1x1 picture."""
+
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + chunk(b"IEND", b""))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
 
 
 class Bucket(S3):
     """Tico's bucket: keeps each object's type and disposition as S3 does, and answers them on HEAD. A file's bytes
     leave it only through the edge (`Edge`): a direct read is refused, as reads there would go unmetered."""
+
     def __init__(self):
         super().__init__()
         self.meta, self.metadata = {}, {}
 
     def get_object(self, **kw):
         from backend.company_storage import CHECK
-        if self.objects.get(kw['Key']) != CHECK:      # the write check reads back its few bytes itself
+
+        if self.objects.get(kw['Key']) != CHECK:  # the write check reads back its few bytes itself
             raise ClientError({'Error': {'Code': 'AccessDenied', 'Message': 'read it through the edge'}}, 'GetObject')
         return super().get_object(**kw)
 
@@ -63,8 +83,12 @@ class Bucket(S3):
     def head_object(self, **kw):
         found = super().head_object(**kw)
         kind, how = self.meta.get(kw['Key'], (None, None))
-        return {**found, **({'ContentType': kind} if kind else {}), **({'ContentDisposition': how} if how else {}),
-                'Metadata': dict(self.metadata.get(kw['Key'], {}))}
+        return {
+            **found,
+            **({'ContentType': kind} if kind else {}),
+            **({'ContentDisposition': how} if how else {}),
+            'Metadata': dict(self.metadata.get(kw['Key'], {})),
+        }
 
 
 class NoWrite(S3):
@@ -74,6 +98,7 @@ class NoWrite(S3):
 
 class HQ:
     """Tico HQ's file-hosting endpoints: GET /files answers `self.answer`; POST /files/total is recorded."""
+
     def __init__(self):
         self.answer, self.status, self.asked = dict(OFF), 200, []
 
@@ -82,6 +107,7 @@ class HQ:
         self.asked.append((request.get_method(), request.full_url, request.get_header("Authorization"), body))
         if self.status != 200:
             import urllib.error
+
             raise urllib.error.HTTPError(request.full_url, self.status, "no", {}, io.BytesIO(b'{"error":"not_found"}'))
         out = json.dumps(self.answer if request.get_method() == "GET" else body).encode()
 
@@ -93,22 +119,28 @@ class HQ:
 
             def __exit__(self, *exc):
                 return False
+
         return Answer(out)
 
 
 class Edge:
     """Tico's edge for the company's address (DevOps R6): checks the link and serves the company's folder, counting
     each byte it delivers by address, as Dev 316's meter does from the edge's logs."""
+
     def __init__(self, bucket):
         self.bucket, self.delivered, self.paths = bucket, {}, []
 
     def __call__(self, request, timeout):
         import urllib.error
+
         link = urllib.parse.urlsplit(request.full_url)
         query = dict(urllib.parse.parse_qsl(link.query))
         mac = hmac.new(SIGNING.encode(), f"{link.netloc}\n{link.path}\n{query['e']}".encode(), hashlib.sha256).digest()
-        if (link.netloc != ADDRESS or query['s'] != base64.urlsafe_b64encode(mac).rstrip(b'=').decode()
-                or int(query['e']) < time.time()):
+        if (
+            link.netloc != ADDRESS
+            or query['s'] != base64.urlsafe_b64encode(mac).rstrip(b'=').decode()
+            or int(query['e']) < time.time()
+        ):
             raise urllib.error.HTTPError(request.full_url, 403, "refused", {}, io.BytesIO(b''))
         options = {'Key': 'c/acme' + link.path}
         if request.get_header('Range'):
@@ -132,15 +164,30 @@ def stamp(minutes):
 
 def on(state="on", key=KEY, token=TOKEN, expires=60, **extra):
     """HQ's answer (tico-services gateway/files.py) for the app's state `state`."""
-    hq, writes, reason, access = {"on": ("on", True, None, "read_write"),
-                                  "credits_out": ("on", False, "out_of_credit", "read_only"),
-                                  "stopped": ("stopped", False, "stopped", "read_only")}[state]
-    return {"state": hq, "writes": writes, "reason": reason, "access": access, "address": ADDRESS,
-            "bucket": "tico-files-us", "region": "us-east-1", "prefix": "c/acme/",
-            "credentials": {"access_key_id": key, "secret_access_key": SECRET, "session_token": token,
-                            "expires": stamp(expires)},
-            "signing": {"key_id": "k1", "secret": SIGNING}, "keep_until": stamp(30 * 24 * 60) if hq == "stopped" else None,
-            **extra}
+    hq, writes, reason, access = {
+        "on": ("on", True, None, "read_write"),
+        "credits_out": ("on", False, "out_of_credit", "read_only"),
+        "stopped": ("stopped", False, "stopped", "read_only"),
+    }[state]
+    return {
+        "state": hq,
+        "writes": writes,
+        "reason": reason,
+        "access": access,
+        "address": ADDRESS,
+        "bucket": "tico-files-us",
+        "region": "us-east-1",
+        "prefix": "c/acme/",
+        "credentials": {
+            "access_key_id": key,
+            "secret_access_key": SECRET,
+            "session_token": token,
+            "expires": stamp(expires),
+        },
+        "signing": {"key_id": "k1", "secret": SIGNING},
+        "keep_until": stamp(30 * 24 * 60) if hq == "stopped" else None,
+        **extra,
+    }
 
 
 @pytest.fixture
@@ -159,6 +206,7 @@ def tico(api, monkeypatch):
             assert options['aws_secret_access_key'] == SECRET and options['aws_session_token'].startswith(TOKEN)
             signed.append(options['aws_session_token'])
         return made[options['aws_access_key_id']]
+
     monkeypatch.setattr(boto3, 'client', client)
     monkeypatch.setenv('TICO_GATEWAY_KEY', 'gk_test_0123456789abcdef')
     monkeypatch.setenv('TICO_GATEWAY_URL', 'https://gateway.example')
@@ -173,6 +221,7 @@ def tico(api, monkeypatch):
         if answer is not None:
             hq.answer = answer
         return tico_storage.sync(app.state.store, app.state.vault, app.state.blobs, opener=hq, report=report)
+
     return made, hq, sync
 
 
@@ -188,9 +237,15 @@ def test_turning_it_on_stores_new_files_in_tico_storage_and_existing_files_still
     before = attach(api, tid, 'before.txt', b'on the server disk before')
     assert sync(report=True) == {"state": "off", "label": "Tico file hosting"}, 'not bought: nothing changes'
     assert not api.app.state.blobs.bucket
-    assert hq.asked == [("GET", "https://gateway.example/files", "Bearer gk_test_0123456789abcdef", None),
-                        ("POST", "https://gateway.example/files/total", "Bearer gk_test_0123456789abcdef",
-                         {"total_bytes": len(b'on the server disk before')})], 'HQ gets the total for its estimate'
+    assert hq.asked == [
+        ("GET", "https://gateway.example/files", "Bearer gk_test_0123456789abcdef", None),
+        (
+            "POST",
+            "https://gateway.example/files/total",
+            "Bearer gk_test_0123456789abcdef",
+            {"total_bytes": len(b'on the server disk before')},
+        ),
+    ], 'HQ gets the total for its estimate'
 
     view = sync(on())
     assert view['state'] == 'on' and view['address'] == ADDRESS and view['location'] == 'tico-files-us/c/acme'
@@ -210,18 +265,22 @@ def test_turning_it_on_stores_new_files_in_tico_storage_and_existing_files_still
     assert page.status_code == 200 and page.json()['tico']['state'] == 'on'
     with api.app.state.store.read() as c:
         sealed = c.execute('SELECT secret FROM tico_storage').fetchone()['secret']
-        assert sealed.startswith('sealed:v1:') and SECRET not in sealed and TOKEN not in sealed and SIGNING not in sealed
+        assert (
+            sealed.startswith('sealed:v1:') and SECRET not in sealed and TOKEN not in sealed and SIGNING not in sealed
+        )
         logged = json.dumps([dict(r) for r in c.execute('SELECT * FROM events')])
     for secret in (SECRET, TOKEN, SIGNING):
         assert secret not in page.text + logged
 
     from backend import health
+
     with api.app.state.store.read() as c:
         assert health.storage_view(c, settings)['bucket'] == 'tico-files-us', 'Health names where files go now'
 
     # A restart reads it back from the vault.
     from backend.blobs import Blobs
     from backend import company_storage
+
     again = Blobs(settings)
     company_storage.startup(api.app.state.store, api.app.state.vault, again)
     assert again.bucket == 'tico-files-us' and again.s3_key('0' * 64).startswith('c/acme/blobs/')
@@ -253,6 +312,7 @@ def test_new_keys_for_the_same_place_are_swapped_in_and_asked_for_before_they_en
     with tico_storage._lock:
         tico_storage._due[id(store)] = time.monotonic() - 1
     import backend.tico_storage as T
+
     asked = len(hq.asked)
     original = T.ask
     T.ask = lambda key, base, opener=None: original(key, base, hq)
@@ -271,12 +331,19 @@ def test_new_keys_for_the_same_place_are_swapped_in_and_asked_for_before_they_en
 
 def test_hqs_answer_is_checked_before_anything_changes(api, tico):
     made, hq, sync = tico
-    for bad, field in ((on(prefix=''), 'prefix'), (on(address='evil.example'), 'address'),
-                       ({**on(), "state": "maybe"}, 'state'), (on(bucket='Not A Bucket'), 'bucket'),
-                       (on(expires=-1), 'credentials'), (on(writes=False), 'writes'), (on(access='none'), 'access'),
-                       (on(signing={"key_id": "k1", "secret": "short"}), 'signing'),
-                       # Neither may be left out: Tico's bucket would then be read directly, past the meter.
-                       (on(signing=None), 'signing'), (on(address=None), 'address')):
+    for bad, field in (
+        (on(prefix=''), 'prefix'),
+        (on(address='evil.example'), 'address'),
+        ({**on(), "state": "maybe"}, 'state'),
+        (on(bucket='Not A Bucket'), 'bucket'),
+        (on(expires=-1), 'credentials'),
+        (on(writes=False), 'writes'),
+        (on(access='none'), 'access'),
+        (on(signing={"key_id": "k1", "secret": "short"}), 'signing'),
+        # Neither may be left out: Tico's bucket would then be read directly, past the meter.
+        (on(signing=None), 'signing'),
+        (on(address=None), 'address'),
+    ):
         view = sync(bad)
         assert not api.app.state.blobs.bucket, field
         assert field in view.get('error', field), field
@@ -300,15 +367,19 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     # The media worker (backend/file_metadata.py) reads each new picture once, through the company's address, on its
     # own poll: it is stopped here and its work run below, so that read lands before any count, not inside one.
     from backend.file_metadata import PENDING
+
     worker = api.app.state.file_metadata
     worker.stop.set()
     worker.wake.set()
     picture, tid = png(), task(api)
     early = attach(api, tid, 'early.png', picture + b'early')
     sync(on())
-    task_id = post(api, "tasks", {"owner": "ops", "title": "Private chart", "body": "x", "private": True}, "ben-test")["id"]
-    made_file = api.post(f"/api/v2/tasks/{task_id}/files", files={'file': ('chart.png', picture)},
-                         headers=headers("ben-test"))
+    task_id = post(api, "tasks", {"owner": "ops", "title": "Private chart", "body": "x", "private": True}, "ben-test")[
+        "id"
+    ]
+    made_file = api.post(
+        f"/api/v2/tasks/{task_id}/files", files={'file': ('chart.png', picture)}, headers=headers("ben-test")
+    )
     assert made_file.status_code == 200, made_file.text
     fid = made_file.json()["file"]["id"]
     digest = hashlib.sha256(picture).hexdigest()
@@ -327,6 +398,7 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
             assert ADDRESS not in refused.text and 'tico-files-us' not in refused.text
 
     from backend import visuals as V
+
     forged = V.mint(V.key_for(api.app, api.app.state.store.settings), "human:cara", fid, 1)
     refused = api.get("/visuals/" + forged, follow_redirects=False)
     assert refused.status_code == 404 and 'location' not in refused.headers, 'nor its visual link'
@@ -342,8 +414,9 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     assert sent.headers['cache-control'] == 'private, no-store'
     assert 'tico-files-us' not in sent.headers['location'] and 'amazonaws' not in sent.headers['location']
     delivered = hq.edge.delivered.get(ADDRESS, 0)
-    part = api.get(f"/api/v2/files/{fid}", headers={**headers("ben-test"), 'Range': 'bytes=0-7'},
-                   follow_redirects=False)
+    part = api.get(
+        f"/api/v2/files/{fid}", headers={**headers("ben-test"), 'Range': 'bytes=0-7'}, follow_redirects=False
+    )
     assert part.status_code == 206 and part.content == picture[:8], "a Range read streams from here"
     assert part.headers['content-range'] == f"bytes 0-7/{len(picture)}"
     assert hq.edge.delivered[ADDRESS] == delivered + 8, "read through the company's address"
@@ -357,8 +430,9 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     assert streamed.status_code == 200 and streamed.content == b'plain words'
     part = api.get(f'/api/v2/files/{text}', headers={**headers('ana-test'), 'Range': 'bytes=6-'})
     assert part.status_code == 206 and part.content == b'words'
-    assert hq.edge.delivered[ADDRESS] == delivered + len(b'plain words') + len(b'words'), \
+    assert hq.edge.delivered[ADDRESS] == delivered + len(b'plain words') + len(b'words'), (
         "streamed from here, read through the company's address, where it is counted"
+    )
     key = f'c/acme/blobs/{digest[:2]}/{digest}'
     made[KEY].meta[key] = ('text/html', 'inline')
     api.app.state.blobs._edge_seen.clear()
@@ -383,15 +457,22 @@ def test_move_existing_files_copies_every_file_and_version_and_matches_the_estim
     estimate = shown.json()['estimate']
     size = len(b'version one') + len(b'version two, longer') + len(b'another file')
     assert (estimate['files'], estimate['bytes'], estimate['to']) == (3, size, 'tico-files-us/c/acme')
-    assert api.post('/api/v2/system/storage/move', json={'expect_bytes': size}, headers=headers('ben-test')).status_code == 403
+    assert (
+        api.post('/api/v2/system/storage/move', json={'expect_bytes': size}, headers=headers('ben-test')).status_code
+        == 403
+    )
     changed = api.post('/api/v2/system/storage/move', json={'expect_bytes': size - 1}, headers=headers())
     assert changed.status_code == 409 and 'estimate' in changed.text
     # Another start that gets in after the running check is refused the same way, not with a server error.
     listed = tico_storage.pending
+
     def raced(c, *args):
-        c.execute("INSERT INTO storage_moves(id,target,state,started_at,started_by,estimate_files,estimate_bytes) "
-                  "VALUES('other','x','running','2026-10-23T00:00:00Z','owner',0,0)")
+        c.execute(
+            "INSERT INTO storage_moves(id,target,state,started_at,started_by,estimate_files,estimate_bytes) "
+            "VALUES('other','x','running','2026-10-23T00:00:00Z','owner',0,0)"
+        )
         return listed(c, *args)
+
     tico_storage.pending = raced
     try:
         raced_start = api.post('/api/v2/system/storage/move', json={'expect_bytes': size}, headers=headers())
@@ -449,7 +530,7 @@ def test_a_move_records_a_copy_only_in_the_place_it_was_written_and_read_back(ap
     missing there. New keys for the same place change nothing: the move carries on."""
     made, hq, sync = tico
     tid = task(api)
-    files = [b'first file!', b'second file']          # copied in digest order; the same size, so either is first
+    files = [b'first file!', b'second file']  # copied in digest order; the same size, so either is first
     for n, data in enumerate(files):
         attach(api, tid, f'{n}.txt', data)
     sync(on())
@@ -463,6 +544,7 @@ def test_a_move_records_a_copy_only_in_the_place_it_was_written_and_read_back(ap
         reading[n].set()
         assert go[n].wait(60)
         return original(*args)
+
     blobs._open_elsewhere = held
     try:
         size = api.get('/api/v2/system/storage/move', headers=headers()).json()['estimate']['bytes']
@@ -473,8 +555,15 @@ def test_a_move_records_a_copy_only_in_the_place_it_was_written_and_read_back(ap
         go[0].set()
         assert reading[1].wait(60), 'new keys for the same place: the move goes on to the next file'
         # Another place that can take files at once (a company bucket whose keys were just checked) takes over.
-        blobs.configure({"bucket": "acme-own", "prefix": "", "region": "us-west-2",
-                         "keys": ("AKIAEXAMPLEGOOD0001", "example-secret")}, checked=True)
+        blobs.configure(
+            {
+                "bucket": "acme-own",
+                "prefix": "",
+                "region": "us-west-2",
+                "keys": ("AKIAEXAMPLEGOOD0001", "example-secret"),
+            },
+            checked=True,
+        )
         go[1].set()
         thread = next(t for t in threading.enumerate() if t.name == 'tico-storage-move')
         thread.join(60)
@@ -491,6 +580,7 @@ def test_a_move_records_a_copy_only_in_the_place_it_was_written_and_read_back(ap
 
     # Back to Tico storage: the second file is still to move. A switch before its copy starts stops it the same way.
     from backend import company_storage
+
     company_storage.apply(store, api.app.state.vault, blobs, copy=False, checked=True)
     estimate = api.get('/api/v2/system/storage/move', headers=headers()).json()['estimate']
     assert estimate['files'] == 1, 'the second file is still to move'
@@ -499,6 +589,7 @@ def test_a_move_records_a_copy_only_in_the_place_it_was_written_and_read_back(ap
     def switched(*args):
         sync(on(state='stopped'))
         return move_now(*args)
+
     tico_storage._move = switched
     try:
         tico_storage.start_move(store, blobs, Owner(), estimate['bytes'], wait=True)
@@ -552,9 +643,14 @@ def test_stopping_offers_the_export_and_new_files_go_back_to_own_storage(api, ti
 def test_the_owners_export_leaves_out_files_private_to_someone_else(api, tico):
     made, hq, sync = tico
     sync(on())
-    secret_task = post(api, "tasks", {"owner": "cara", "title": "Cara's", "body": "x", "private": True}, "cara-test")["id"]
-    r = api.post(f"/api/v2/tasks/{secret_task}/files", json={"name": "mine.txt", "text": "cara only"},
-                 headers=headers("cara-test"))
+    secret_task = post(api, "tasks", {"owner": "cara", "title": "Cara's", "body": "x", "private": True}, "cara-test")[
+        "id"
+    ]
+    r = api.post(
+        f"/api/v2/tasks/{secret_task}/files",
+        json={"name": "mine.txt", "text": "cara only"},
+        headers=headers("cara-test"),
+    )
     assert r.status_code == 200, r.text
     export = api.get('/api/v2/system/storage/export', headers=headers())
     assert export.status_code == 200
@@ -578,12 +674,17 @@ def test_credits_out_existing_files_open_and_uploads_follow_the_rule(api, tico):
 
     # With the company's own bucket refusing writes, the upload is refused with a plain reason.
     from backend import company_storage
+
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created_at,created_by) "
-                  "VALUES('own','acme-files','','us-west-2','AKIAEXAMPLENOWR0001',?,1,'2026-10-23T00:00:00Z','human:ben')",
-                  (api.app.state.vault.cipher.seal(c, 'company_storage:own', 'example-secret'),))
+        c.execute(
+            "INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created_at,created_by) "
+            "VALUES('own','acme-files','','us-west-2','AKIAEXAMPLENOWR0001',?,1,'2026-10-23T00:00:00Z','human:ben')",
+            (api.app.state.vault.cipher.seal(c, 'company_storage:own', 'example-secret'),),
+        )
     company_storage.apply(api.app.state.store, api.app.state.vault, api.app.state.blobs, copy=False, checked=True)
-    refused = api.post(f'/api/v2/tasks/{tid}/files', files={'file': ('late.txt', b'no room')}, headers=headers('ana-test'))
+    refused = api.post(
+        f'/api/v2/tasks/{tid}/files', files={'file': ('late.txt', b'no room')}, headers=headers('ana-test')
+    )
     assert refused.status_code == 503, refused.text
     assert refused.json()['error']['code'] == 'storage_paused'
     assert 'Gateway credits have run out' in refused.text and 'AccessDenied' in refused.text
@@ -594,4 +695,3 @@ def test_credits_out_existing_files_open_and_uploads_follow_the_rule(api, tico):
     sync(on())
     attach(api, tid, 'again.txt', b'tico again')
     assert b'tico again' in made[KEY].objects.values()
-

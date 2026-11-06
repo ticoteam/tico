@@ -487,7 +487,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-chart', 1]);
     await noSideways('task');
 
-    // ---- pinned pages are widgets (ui/app/pages.js pageCard): the page's top at the size's fixed height with nothing
+    // ---- pinned pages are widgets (ui/app/pages.js pageCard): the page at its own height up to the size, with nothing
     // scrolling inside, its frame told it is in a card at that size (the reporter sets data-tico-view from the
     // fragment), a fade only when the page runs on, and an expand icon that opens the full view
     await page.evaluate(() => $('#task-modal')?.close());
@@ -508,7 +508,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       return [Math.round(b.getBoundingClientRect().height), Math.round(c.querySelector('iframe').getBoundingClientRect().height), b.classList.contains('pg-cut'),
         getComputedStyle(b, '::after').content !== 'none'];
     }));
-    assert.deepEqual(drawn, [[180, 180, true, true], [180, 180, false, false]], `${label}: a fixed-height card fades only when the page is cut`);
+    assert.deepEqual(drawn, [[180, 180, true, true], [120, 120, false, false]], `${label}: a card is as tall as its page up to its size, faded only when cut`);
     const expand = page.locator('#widgets .pg-card').nth(2).locator('a.pg-expand');
     assert.equal(await expand.getAttribute('aria-label'), 'Open full screen');
     assert.equal(await page.locator('#widgets .pg-card').nth(2).locator('a.pg-tap').count(), 1, `${label}: the whole card stays a tap target`);

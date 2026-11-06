@@ -15,6 +15,7 @@ that name went different ways or `api_kept` keeps it. scripts/cleanup/renames.ya
 itself (its base, its waves); they say nothing about the goldens.
 The map is read from the file given to `--rename-map`, or from TICO_E2E_RENAME_MAP when a test runs on its own.
 """
+
 import os
 from pathlib import Path
 
@@ -22,8 +23,17 @@ import yaml
 
 ENV = "TICO_E2E_RENAME_MAP"
 SECTIONS = ("fields", "columns", "tables")
-CODEMOD_SECTIONS = {"base", "applied_waves", "values", "waves", "collisions", "api_fields", "api_kept", "golden_fields",
-                    "golden_added"}
+CODEMOD_SECTIONS = {
+    "base",
+    "applied_waves",
+    "values",
+    "waves",
+    "collisions",
+    "api_fields",
+    "api_kept",
+    "golden_fields",
+    "golden_added",
+}
 EMPTY = {**{section: {} for section in SECTIONS}, "golden_fields": {}, "golden_added": {}}
 
 
@@ -37,8 +47,11 @@ def load(path):
         for old, new in out[section].items():
             if not isinstance(new, str) or not new or old == new:
                 raise ValueError(f"{path}: {section}.{old} must map to a different non-empty name")
-    out["fields"] = {**_column_fields(out["columns"], data.get("api_kept") or ()), **(data.get("api_fields") or {}),
-                     **out["fields"]}
+    out["fields"] = {
+        **_column_fields(out["columns"], data.get("api_kept") or ()),
+        **(data.get("api_fields") or {}),
+        **out["fields"],
+    }
     out["golden_fields"] = data.get("golden_fields") or {}
     out["golden_added"] = data.get("golden_added") or {}
     return out
@@ -89,7 +102,7 @@ def _new_key(key, node, parent, fields):
     if f"{parent}.{key}" in fields:
         return fields[f"{parent}.{key}"]
     for old, new in fields.items():
-        if old.startswith(key + "!") and old[len(key) + 1:] not in node:
+        if old.startswith(key + "!") and old[len(key) + 1 :] not in node:
             return new
     return fields.get(key, key)
 

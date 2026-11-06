@@ -239,10 +239,10 @@ async function shot(page, name) {
       assert.equal(await page.locator('#dash-grid .grc-ret-t tbody tr').count(), 2);
       // Opened at that address, the page reads that month.
       await page.evaluate(() => { location.hash = '#/overview'; });
-      // Both pages use #dash-grid: wait for Overview before accepting any pins from it.
-      await page.getByRole('heading', {name: 'Overview', exact: true}).waitFor();
+      // Both pages use #dash-grid: wait for Company before accepting any pins from it.
+      await page.getByRole('heading', {name: 'Company', exact: true}).waitFor();
       await page.locator('#dash-grid .dash-pin').first().waitFor();
-      assert.deepEqual(await headings(page), ['Company activation'], 'Overview draws its own cards');
+      assert.deepEqual(await headings(page), ['Company activation'], 'Company draws its own cards');
       assert.equal(await page.locator('#dash-grid .dash-big strong').innerText(), '210');
       await page.evaluate(() => { location.hash = '#/growth?m=2026-09'; });
       await page.waitForFunction(() => document.querySelector('[data-gr-month]')?.value === '2026-09');

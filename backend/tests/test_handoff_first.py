@@ -1,4 +1,5 @@
 """A builder hand-off from Tico is the first of the bot's queued jobs a claim gives out (backend/verdict_moves.py)."""
+
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
 from backend import verdict_moves as V
@@ -7,8 +8,11 @@ from backend import bot_settings as BS
 
 def claimed_refs(api, attempt):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
-                        "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (attempt["id"],)).fetchone()
+        row = c.execute(
+            "SELECT m.refs FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            "JOIN messages m ON m.id=j.message_id WHERE a.id=?",
+            (attempt["id"],),
+        ).fetchone()
     return H._json(row[0], {})
 
 
@@ -34,9 +38,15 @@ def test_a_hand_off_always_wakes_and_is_never_held_for_a_batch(api):
         BS.update(c, 'ops', {'wake_preset': 'token_saver'})
         task = H.task_create(c, "bot:coo", "Fix the import", "Fix it.", "bot:ops", lint=False)
         c.execute("DELETE FROM jobs")
-        H._wake(c, H.task(c, task["id"]), "bot:ops", "Checks finished: failed.",
-                {"wake": "pr_checks_done", "pr_head": "a" * 40, "pr_result": "fail", V.HANDOFF: "failed_check"})
-        job = c.execute("SELECT j.state,j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                        "WHERE j.bot_id='ops'").fetchone()
+        H._wake(
+            c,
+            H.task(c, task["id"]),
+            "bot:ops",
+            "Checks finished: failed.",
+            {"wake": "pr_checks_done", "pr_head": "a" * 40, "pr_result": "fail", V.HANDOFF: "failed_check"},
+        )
+        job = c.execute(
+            "SELECT j.state,j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops'"
+        ).fetchone()
     assert job is not None and (job["state"], job["held"]) == ("queued", 0)
     assert H._json(job["refs"], {})["rule"] == "builder_handoff"

@@ -39,8 +39,15 @@ def test_one_permitted_provider_attempt_even_after_an_uncertain_delivery(tmp_pat
     gmail.send_raw.return_value = {"id": "provider-message"}
     ctx = SimpleNamespace(conn=conn, mailbox="support@acme.example", gmail=gmail)
     broker = mock.Mock()
-    broker.post.return_value = {"send": {"raw": raw, "thread_id": "", "actor": "bot:support",
-                                       "recipients": ["customer@vendor.example"], "subject": "Update"}}
+    broker.post.return_value = {
+        "send": {
+            "raw": raw,
+            "thread_id": "",
+            "actor": "bot:support",
+            "recipients": ["customer@vendor.example"],
+            "subject": "Update",
+        }
+    }
     action = {"id": "queue-id", "mailbox": ctx.mailbox, "action": "dispatch_send", "raw": "untrusted"}
     with mock.patch("connectors.mail.oauth.broker", return_value=broker):
         first = actions.perform(ctx, action)
@@ -56,6 +63,7 @@ def test_one_permitted_provider_attempt_even_after_an_uncertain_delivery(tmp_pat
 
 def test_concurrent_draft_edit_cannot_change_the_frozen_provider_send(tmp_path):
     from connectors.mail.tests.fake import FakeGmailService
+
     conn = db.connect(tmp_path / "mail.db")
     service = FakeGmailService([])
     provider = gm.Gmail(service, "support@acme.example", sleep=lambda delay: None)
@@ -64,10 +72,20 @@ def test_concurrent_draft_edit_cannot_change_the_frozen_provider_send(tmp_path):
     draft = provider.create_draft(frozen)
     provider.update_draft(draft["id"], changed)
     broker = mock.Mock()
-    broker.post.return_value = {"send": {"raw": frozen, "draft_id": draft["id"], "actor": "bot:ops",
-        "recipients": ["customer@vendor.example"], "subject": "Approved"}}
+    broker.post.return_value = {
+        "send": {
+            "raw": frozen,
+            "draft_id": draft["id"],
+            "actor": "bot:ops",
+            "recipients": ["customer@vendor.example"],
+            "subject": "Approved",
+        }
+    }
     ctx = SimpleNamespace(conn=conn, mailbox=provider.mailbox, gmail=provider)
-    with mock.patch("connectors.mail.oauth.broker", return_value=broker), mock.patch.object(provider, "update_draft") as update:
+    with (
+        mock.patch("connectors.mail.oauth.broker", return_value=broker),
+        mock.patch.object(provider, "update_draft") as update,
+    ):
         answer = actions.perform(ctx, {"id": "race", "action": "dispatch_send", "lease_id": "lease"})
     assert answer["status"] == "sent"
     update.assert_not_called()

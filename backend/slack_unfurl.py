@@ -21,7 +21,7 @@ import urllib.parse
 
 DESCRIPTION_CHARS = 280
 TITLE_CHARS = 150
-MAX_LINKS = 5                   # previews answered per message; Slack sends a handful at most
+MAX_LINKS = 5  # previews answered per message; Slack sends a handful at most
 TASK_ID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 PATH_RE = re.compile(r"^/(?:open/)?(task|ticket)/([^/]+)(?:/[^/]*)?/?$")
 FRAGMENT_RE = re.compile(r"^/tasks?/(" + TASK_ID + r")(?:[/?].*)?$")
@@ -84,6 +84,7 @@ def links(event, allowed):
 def find(c, ref):
     """The task row a ref names, or None. Permission is the caller's to check."""
     from . import hubdb as H
+
     if ref[0] == "number":
         row = c.execute("SELECT id FROM tasks WHERE number=?", (ref[1],)).fetchone()
         return H.task(c, row[0]) if row else None
@@ -96,8 +97,8 @@ def escape(text):
 
 def excerpt(body, limit=DESCRIPTION_CHARS):
     """The start of a description as one short paragraph: markdown marks and runs of space folded."""
-    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", str(body or ""))                 # images
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)                         # links keep their words
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", str(body or ""))  # images
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # links keep their words
     text = re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|>\s?|\d+[.)]\s+)", "", text)
     text = re.sub(r"[*_`~]{1,3}", "", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -124,11 +125,12 @@ def preview(c, settings, url, row, button=True):
     """One `chat.unfurl` entry: a title linked to the pasted URL, the description's start, one
     line of facts, and the open button (or, with `button` off, the same link as text)."""
     from .names import lookup
+
     owner = row.get("owner_id")
     names = lookup(c, {owner} if owner else set())
     title = (f"#{row['number']} " if row.get("number") else "") + str(row.get("title") or "Untitled task")
     if len(title) > TITLE_CHARS:
-        title = title[:TITLE_CHARS - 1].rstrip() + "…"
+        title = title[: TITLE_CHARS - 1].rstrip() + "…"
     text = f"*<{escape(url)}|{escape(title)}>*"
     about = excerpt(row.get("body"))
     if about:
@@ -140,12 +142,25 @@ def preview(c, settings, url, row, button=True):
         facts.append("Due " + str(row["due_at"])[:10])
     label = str(getattr(settings, "slack_open_label", "") or "").strip() or "Open in Tico"
     target = open_url(settings, row["id"])
-    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text}},
-              {"type": "context", "elements": [{"type": "mrkdwn", "text": escape(" · ".join(facts))}]}]
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": escape(" · ".join(facts))}]},
+    ]
     if button:
-        blocks.append({"type": "actions", "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": label[:75]}, "url": target,
-             "action_id": "open_task", "style": "primary"}]})
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": label[:75]},
+                        "url": target,
+                        "action_id": "open_task",
+                        "style": "primary",
+                    }
+                ],
+            }
+        )
     else:
         blocks[1]["elements"].append({"type": "mrkdwn", "text": f"<{escape(target)}|{escape(label)}>"})
     return {"blocks": blocks}

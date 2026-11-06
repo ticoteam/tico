@@ -1,9 +1,9 @@
 /* ui/app/inboxes-texts.js — the inboxes Tico hosts itself (backend/inbound.py): Tico addresses (email Tico receives at
-   its own domain, apart from Google email) and Texts in (US numbers that receive SMS only), in Settings > Inboxes.
-   Kinds 'tico' and 'number': their rows, one inbox's page (#/settings/inboxes/<kind>/<id>: who reads it, its message
-   automations, its recent messages with Reveal code, Check connection and Stop using in Tico) and a phone request's
-   page while TICO prices and approves it. Add inbox makes a Tico address, or asks for a number (an admin). In
-   Inboxes > Settings: the company connection (Email) and phone requests (Texts). Bodies are external text, never HTML.
+   its own domain, apart from Google email) and Texts in (US numbers that receive SMS only), under Tools.
+   Kinds 'tico' and 'number': one inbox's page (#/tools/number/<id>: who reads it, its message automations, its recent
+   messages with Reveal code, Check connection and Stop using in Tico) and a phone request's page while TICO prices and
+   approves it. Tools' Add tool makes a Tico address, or asks for a number (an admin). On Tools › Settings: the company
+   connection (Email) and phone requests (Texts). Bodies are external text, never HTML.
    Registry: ui/app/inboxes.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -26,17 +26,11 @@ async function inAll(path, key) {
 const inInboxes = ctx => ctx.once('inbound', () => inAll('/v2/inbound/inboxes', 'inboxes'));
 const inRequests = ctx => ctx.once('phone-requests', () => (ctx.admin ? inAll('/v2/inbound/phone-requests', 'phone_requests')
   : Promise.resolve({phone_requests: []})));
-// The newest message of each inbox, from one read of the newest 50.
-const inLatest = ctx => ctx.once('inbound-latest', () => get('/v2/inbound/messages?limit=50', {fresh: true}).then(d => {
-  const out = {};
-  for (const m of d.messages || []) out[m.inbox_id] = Math.max(out[m.inbox_id] || 0, m.received_at * 1000);
-  return out;
-}, () => ({})));
 function inReaders(i) {
   const groups = S.orgGroups || [], here = i.audience === 'team' ? i.group_id : '';
   return here ? groups.find(g => g.id === here)?.name || here : 'Everyone';
 }
-// Active is Connected everywhere in Inboxes; a sync the server reports failing needs attention.
+// Active is Connected on every inbox page; a sync the server reports failing needs attention.
 function inStatus(i, d) {
   if (!d.configured) return ['attention', 'Not connected'];
   if (i.state === 'active') return d.error ? ['attention', 'Sync failed'] : ['ok', i.cancel_pending ? 'Renewal off' : 'Connected'];
@@ -57,34 +51,14 @@ function inRequestStatus(r) {
       : r.state === 'requested' ? 'Awaiting quote' : r.state.charAt(0).toUpperCase() + r.state.slice(1)};
 }
 
-// A released address stays listed as Not in use: its page keeps the messages it received.
-async function inRows(ctx, kind) {
-  const [d, latest] = await Promise.all([inInboxes(ctx), inLatest(ctx)]);
-  const rows = d.inboxes.filter(i => i.kind === kind).map(i => {
-    const [status, statusText] = inStatus(i, d);
-    return {id: i.inbox_id, name: i.name || i.address, sub: i.name ? i.address : '', status, statusText,
-      latest: latest[i.inbox_id] || null, usedBy: {people: 1, bots: 0, names: [inReaders(i)]}, search: i.used_for || ''};
-  });
-  if (kind === 'sms') {
-    const r = await inRequests(ctx).catch(() => ({phone_requests: []}));
-    for (const p of r.phone_requests.filter(p => IN_LIVE.includes(p.state))) {
-      rows.push({id: p.request_id, name: p.name, sub: 'Phone request', status: 'pending', statusText: inRequestStatus(p).text,
-        latest: null, usedBy: {people: 0, bots: 0, names: []}});
-    }
-  }
-  return rows;
-}
-
-inboxesKind('tico', {group: 'email', label: 'Tico address', order: 20,
-  rows: ctx => inRows(ctx, 'email'),
+inboxesKind('tico', {label: 'Tico address', order: 20,
   detail: (host, id, ctx) => inDetail(host, id, ctx),
   add: {label: 'Tico address', admin: false, open: ctx => inCreateDialog(ctx)}});
-inboxesKind('number', {group: 'texts', label: 'Texts in', order: 30,
-  rows: ctx => inRows(ctx, 'sms'),
+inboxesKind('number', {label: 'Phone number', order: 30,
   detail: (host, id, ctx) => inDetail(host, id, ctx),
   add: {label: 'Phone number', admin: true, open: ctx => inPhoneDialog(ctx)}});
 
-// ---------------------------------------------------------------------------------------------------------- Add inbox
+// ---------------------------------------------------------------------------------------------------------- Add tool
 function inCreateDialog(ctx) {
   const dialog = whDialog('New Tico address', '<label>Inbox name<input name="name" maxlength="80" required placeholder="Account logins"></label>',
     '<button class="primary" type="submit">Create email inbox</button>');
@@ -467,12 +441,3 @@ inboxesSetting('texts-numbers', {section: 'texts', order: 10,
   }});
 
 // ---------------------------------------------------------------------------------------------------------- First run
-inboxesStep('phone', {order: 20, title: 'Phone number', optional: true,
-  done: async ctx => {
-    const [d, r] = await Promise.all([inInboxes(ctx), inRequests(ctx).catch(() => ({phone_requests: []}))]);
-    return d.inboxes.some(i => i.kind === 'sms') || r.phone_requests.some(p => IN_LIVE.includes(p.state));
-  },
-  render: (host, ctx, done) => {
-    host.innerHTML = done ? '<p class="muted">Requested.</p>' : '<p><button type="button" class="ghost" data-in-phone-open>Request a number</button></p>';
-    host.onclick = event => { if (event.target.closest('[data-in-phone-open]')) inPhoneDialog(ctx); };
-  }});

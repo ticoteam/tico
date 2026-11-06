@@ -4,6 +4,7 @@ The upgrade test builds a database the way v0.5 leaves one (user_version 71, no 
 every bot reference naming bots(slug)), fills it, runs the real migrations, and checks that nothing was lost or
 rewritten.
 """
+
 import importlib
 import re
 import sqlite3
@@ -34,7 +35,7 @@ OLD_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
-  cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
+  cwd TEXT, host TEXT DEFAULT 'keeper', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 
 # runners as store.SCHEMA made it before migration 0062 split off its heartbeat state
@@ -46,11 +47,30 @@ OLD_RUNNERS_DDL = """CREATE TABLE IF NOT EXISTS runners(
  awake_since TEXT, checkout TEXT, restart_requested_at TEXT, readiness_at TEXT);"""
 
 # The 14 foreign keys into bots: 11 in store.SCHEMA, bot_tool_requests, bot_files and chat_goals.
-CHILD_TABLES = ("bot_config", "bot_control", "bot_transitions", "settings_changes", "bot_session_epochs",
-                "bot_sessions", "agents", "assignments", "jobs", "mail_agent_instructions",
-                "bot_agent_instructions", "bot_tool_requests", "bot_files", "chat_goals")
-KEEPER_SYSTEM_ACTORS = ("system:company", "system:deploy", "system:finance", "system:gateway", "system:hosting",
-                        "system:storage")
+CHILD_TABLES = (
+    "bot_config",
+    "bot_control",
+    "bot_transitions",
+    "settings_changes",
+    "bot_session_epochs",
+    "bot_sessions",
+    "agents",
+    "assignments",
+    "jobs",
+    "mail_agent_instructions",
+    "bot_agent_instructions",
+    "bot_tool_requests",
+    "bot_files",
+    "chat_goals",
+)
+KEEPER_SYSTEM_ACTORS = (
+    "system:company",
+    "system:deploy",
+    "system:finance",
+    "system:gateway",
+    "system:hosting",
+    "system:storage",
+)
 
 
 def _open(path):
@@ -69,8 +89,10 @@ def _old_shape_database(path):
     # v0.5 had no migration files: hubdb.migrate, which now runs them after its numbered steps, leaves them out here.
     # Its start did make the threads schema (now migration 0047's, unrecorded here so the real start still runs it),
     # which threads.migrate, at the end of hubdb.migrate, reads.
-    with unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]), \
-            unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: THREADS_SCHEMA.up(conn)):
+    with (
+        unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]),
+        unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: THREADS_SCHEMA.up(conn)),
+    ):
         conn = H.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.execute(OLD_RUNNERS_DDL)
@@ -124,11 +146,16 @@ def _shape(conn, table, dropped=()):
     definition after the header (the name in the CREATE statement changes with the rebuild)."""
     columns = [tuple(row) for row in conn.execute(f'PRAGMA table_info("{table}")') if row[1] not in dropped]
     indexes = sorted((row[1], row[3]) for row in conn.execute(f'PRAGMA index_list("{table}")'))
-    objects = sorted(row[0] for row in conn.execute(
-        "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
-        (table,)) if not row[0].startswith("CREATE TRIGGER status_values_"))      # migration 0002's own triggers
+    objects = sorted(
+        row[0]
+        for row in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL",
+            (table,),
+        )
+        if not row[0].startswith("CREATE TRIGGER status_values_")
+    )  # migration 0002's own triggers
     (create,) = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-    body = create[create.index("("):]
+    body = create[create.index("(") :]
     return columns, indexes, objects, body
 
 
@@ -149,8 +176,10 @@ class _Case(unittest.TestCase):
     def make_bot(self, slug, bot_id=None):
         """A bot made the way the app makes one: its id from H.new_bot_id unless given."""
         bot_id = bot_id or H.new_bot_id(slug)
-        self.conn.execute("INSERT INTO bots (id, slug, display_name, state, created_at) VALUES (?, ?, ?, 'active', ?)",
-                          (bot_id, slug, slug.title(), H.now()))
+        self.conn.execute(
+            "INSERT INTO bots (id, slug, display_name, state, created_at) VALUES (?, ?, ?, 'active', ?)",
+            (bot_id, slug, slug.title(), H.now()),
+        )
         return bot_id
 
 
@@ -163,8 +192,10 @@ class Upgrade(unittest.TestCase):
         self.addCleanup(self.conn.close)
         self.conn.execute("INSERT INTO humans (id, name, email) VALUES ('ana', 'Ana', 'ana@acme.example')")
         for slug in ("coo", "cmo", "ops-lead"):
-            self.conn.execute("INSERT INTO bots (slug, display_name, state, created_at) VALUES (?, ?, 'active', ?)",
-                              (slug, slug.upper(), H.now()))
+            self.conn.execute(
+                "INSERT INTO bots (slug, display_name, state, created_at) VALUES (?, ?, 'active', ?)",
+                (slug, slug.upper(), H.now()),
+            )
         for table in CHILD_TABLES:
             _insert_child_row(self.conn, table, "ops-lead")
 
@@ -173,12 +204,14 @@ class Upgrade(unittest.TestCase):
         self.assertEqual(sorted(BOT_IDS._slug_references(self.conn)), sorted(CHILD_TABLES))
         before_rows = {table: _rows(self.conn, table, MOVED_OUT.get(table, ())) for table in CHILD_TABLES}
         before_shape = {table: _shape(self.conn, table, MOVED_OUT.get(table, ())) for table in CHILD_TABLES}
-        before_violations = {table: len(self.conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall())
-                             for table in CHILD_TABLES}
+        before_violations = {
+            table: len(self.conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall()) for table in CHILD_TABLES
+        }
         bots_before = [tuple(r) for r in self.conn.execute("SELECT slug, display_name, state FROM bots ORDER BY slug")]
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-        self.assertFalse(self.conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone())
+        self.assertFalse(
+            self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone()
+        )
 
         self.conn.close()
         conn = _open(self.path)
@@ -202,17 +235,25 @@ class Upgrade(unittest.TestCase):
                 self.assertEqual(columns, old_columns)
                 self.assertEqual(indexes, old_indexes)
                 self.assertEqual(objects, old_objects)
-                if not dropped:     # a rebuilt definition loses the dropped column's text; its columns are checked above
+                if not dropped:  # a rebuilt definition loses the dropped column's text; its columns are checked above
                     # migration 0002 runs first and adds its status CHECKs; the rest of the definition is the same
-                    self.assertEqual(_without_status_checks(body),
-                                     _without_status_checks(old_body.replace("REFERENCES bots(slug)", "REFERENCES bots(id)")))
+                    self.assertEqual(
+                        _without_status_checks(body),
+                        _without_status_checks(old_body.replace("REFERENCES bots(slug)", "REFERENCES bots(id)")),
+                    )
                 # no foreign key still names bots(slug)
-                self.assertFalse([r for r in conn.execute(f'PRAGMA foreign_key_list("{table}")')
-                                  if r[2] == "bots" and (r[4] or "").lower() == "slug"])
+                self.assertFalse(
+                    [
+                        r
+                        for r in conn.execute(f'PRAGMA foreign_key_list("{table}")')
+                        if r[2] == "bots" and (r[4] or "").lower() == "slug"
+                    ]
+                )
                 # the same foreign key violations as before (the fixture has no runners or messages, so some exist
                 # already; the upgrade must not add any)
-                self.assertEqual(len(conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall()),
-                                 before_violations[table])
+                self.assertEqual(
+                    len(conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall()), before_violations[table]
+                )
 
     def test_upgrade_fills_principals_for_humans_bots_and_system_actors(self):
         self.conn.close()
@@ -268,8 +309,10 @@ class UpgradeBoot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "hub.db"
             conn = _old_shape_database(path)
-            conn.execute("INSERT INTO bots (slug, display_name, state, created_at) VALUES ('ops-lead', 'Ops', 'paused', ?)",
-                         (H.now(),))
+            conn.execute(
+                "INSERT INTO bots (slug, display_name, state, created_at) VALUES ('ops-lead', 'Ops', 'paused', ?)",
+                (H.now(),),
+            )
             conn.commit()
             conn.close()
             registry = Path(__file__).parent / "fixtures" / "registry"
@@ -279,11 +322,15 @@ class UpgradeBoot(unittest.TestCase):
                 versions = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
                 self.assertIn("0012_bot_ids", versions)
                 self.assertIn(f"legacy_user_version_{len(H.MIGRATIONS)}", versions)
-                (bots_sql,) = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='bots'").fetchone()
+                (bots_sql,) = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='bots'"
+                ).fetchone()
                 self.assertIn("id TEXT PRIMARY KEY NOT NULL", bots_sql)
                 self.assertIn("CONSTRAINT status_values_state CHECK", bots_sql)
-                self.assertEqual(conn.execute("SELECT id, slug, state FROM bots WHERE slug='ops-lead'").fetchone(),
-                                 ("ops-lead", "ops-lead", "paused"))
+                self.assertEqual(
+                    conn.execute("SELECT id, slug, state FROM bots WHERE slug='ops-lead'").fetchone(),
+                    ("ops-lead", "ops-lead", "paused"),
+                )
                 self.assertEqual(sorted(BOT_IDS._slug_references(conn)), [])
                 self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
                 with self.assertRaises(sqlite3.IntegrityError):
@@ -306,8 +353,11 @@ class Schema(_Case):
         self.assertEqual(self.conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
         for table in CHILD_TABLES:
             with self.subTest(table=table):
-                targets = {(r[2], (r[4] or "").lower()) for r in self.conn.execute(f'PRAGMA foreign_key_list("{table}")')
-                           if r[2] == "bots"}
+                targets = {
+                    (r[2], (r[4] or "").lower())
+                    for r in self.conn.execute(f'PRAGMA foreign_key_list("{table}")')
+                    if r[2] == "bots"
+                }
                 self.assertEqual(targets, {("bots", "id")})
 
     def test_principals_table_rejects_an_unknown_kind(self):
@@ -331,14 +381,14 @@ class Ids(_Case):
 
     def test_a_uuidv7_carries_its_creation_time_in_milliseconds(self):
         with unittest.mock.patch.object(H, "datetime") as clock:
-            clock.now.return_value.timestamp.return_value = 2_000_000_000.25      # seconds since the Unix epoch
+            clock.now.return_value.timestamp.return_value = 2_000_000_000.25  # seconds since the Unix epoch
             early = H.uuid7()
             clock.now.return_value.timestamp.return_value = 2_000_000_001.5
             later = H.uuid7()
         self.assertEqual(uuid.UUID(early).version, 7)
         self.assertEqual(early.replace("-", "")[:12], format(2_000_000_000_250, "012x"))
         self.assertEqual(later.replace("-", "")[:12], format(2_000_000_001_500, "012x"))
-        self.assertLess(early, later)                                  # ids sort by creation time
+        self.assertLess(early, later)  # ids sort by creation time
 
     def test_a_prefixed_slug_or_id_resolves_to_the_same_actor(self):
         bot_id = self.make_bot("ops-lead")
@@ -364,12 +414,12 @@ class Ids(_Case):
     def test_a_slug_cannot_name_another_bots_id_and_an_id_cannot_name_another_bots_slug(self):
         bot_id = self.make_bot("ops-lead")
         with self.assertRaises(sqlite3.IntegrityError):
-            self.make_bot(bot_id)                     # the new slug is the other bot's id
+            self.make_bot(bot_id)  # the new slug is the other bot's id
         with self.assertRaises(sqlite3.IntegrityError):
-            self.make_bot("fresh-slug", bot_id="ops-lead")   # the new id is the other bot's slug
+            self.make_bot("fresh-slug", bot_id="ops-lead")  # the new id is the other bot's slug
         other = self.make_bot("analyst")
         with self.assertRaises(sqlite3.IntegrityError):
-            H.rename_bot(self.conn, other, bot_id)    # a rename cannot take another bot's id as its slug
+            H.rename_bot(self.conn, other, bot_id)  # a rename cannot take another bot's id as its slug
 
     def test_rename_changes_only_the_slug(self):
         bot_id = self.make_bot("ops-lead")
@@ -383,12 +433,13 @@ class Ids(_Case):
     def test_rename_then_a_new_bot_takes_the_old_slug_and_the_history_stays_with_the_right_bot(self):
         old_id = self.make_bot("ops-lead")
         old_actor = H.bot_actor(old_id)
-        task = H.task_create(self.conn, ANA, "Ship the packet", "Keep this with the bot that owned it.", old_actor,
-                             lint=False)
+        task = H.task_create(
+            self.conn, ANA, "Ship the packet", "Keep this with the bot that owned it.", old_actor, lint=False
+        )
         H.event(self.conn, ANA, "test.note", old_actor, {"note": "before the rename"})
 
         H.rename_bot(self.conn, old_id, "ops-renamed")
-        new_id = self.make_bot("ops-lead")            # the old slug, now free
+        new_id = self.make_bot("ops-lead")  # the old slug, now free
         self.assertNotEqual(new_id, old_id)
 
         self.assertEqual(H.resolve_bot(self.conn, "ops-lead")["id"], new_id)
@@ -409,9 +460,9 @@ class Ids(_Case):
         self.conn.execute("DELETE FROM bot_settings WHERE bot_id=?", (bot_id,))
         self.conn.execute("DELETE FROM bots WHERE id=?", (bot_id,))
         gone = principal(H.bot_actor(bot_id))
-        self.assertIsNotNone(gone)                    # the row is kept
+        self.assertIsNotNone(gone)  # the row is kept
         self.assertIsNotNone(gone["deleted_at"])
-        self.make_bot("ops-lead", bot_id=bot_id)      # the same id again: the principal is live again
+        self.make_bot("ops-lead", bot_id=bot_id)  # the same id again: the principal is live again
         self.assertIsNone(principal(H.bot_actor(bot_id))["deleted_at"])
 
         self.conn.execute("INSERT INTO humans (id, name, email) VALUES ('ben', 'Ben', 'ben@acme.example')")
@@ -430,8 +481,9 @@ class BotIdMigrationRoundTrip(unittest.TestCase):
             first.close()
             second = _open(path)
             try:
-                self.assertEqual(second.execute("SELECT group_concat(sql) FROM sqlite_master").fetchone()[0],
-                                 schema_once)
+                self.assertEqual(
+                    second.execute("SELECT group_concat(sql) FROM sqlite_master").fetchone()[0], schema_once
+                )
                 self.assertEqual(second.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
             finally:
                 second.close()

@@ -1,4 +1,5 @@
 """CLI feature negotiation and bounded multipart uploads."""
+
 import io
 from pathlib import Path
 import urllib.error
@@ -50,6 +51,7 @@ def test_mcp_server_does_not_read_local_paths():
     class Server:
         def post(self, *args, **kw):
             pytest.fail('server path must be refused first')
+
     with pytest.raises(ValueError, match='Computer'):
         hubtools.task_attach(Server(), {'id': 'task', 'name': 'draft.txt', 'path': '/private/server-file'})
 
@@ -57,19 +59,25 @@ def test_mcp_server_does_not_read_local_paths():
 def test_multipart_retry_replays_same_parts_and_key(tmp_path, monkeypatch):
     path = tmp_path / 'draft.txt'
     path.write_bytes(b'draft')
+
     class Response(io.BytesIO):
         headers = {}
+
     class Opener:
         calls = []
+
         def open(self, request, timeout=None):
             self.calls.append((request, b''.join(request.data)))
             if len(self.calls) == 1:
                 raise urllib.error.HTTPError(request.full_url, 503, 'Down', {}, io.BytesIO(b'{}'))
             return Response(b'{"file": "done"}')
+
     monkeypatch.setattr('clients.tico.time.sleep', lambda _: None)
     client = Client('https://api.example.com', 'private-token', retries=1)
     client.opener = Opener()
-    assert client.post_multipart('tasks/task/files', {'file': path}, {'name': 'draft.txt'}, key='same') == {'file': 'done'}
+    assert client.post_multipart('tasks/task/files', {'file': path}, {'name': 'draft.txt'}, key='same') == {
+        'file': 'done'
+    }
     first, second = client.opener.calls
     assert first[1] == second[1]
     assert first[0].get_header('Idempotency-key') == second[0].get_header('Idempotency-key') == 'same'
@@ -79,6 +87,7 @@ def test_multipart_retry_replays_same_parts_and_key(tmp_path, monkeypatch):
 @pytest.mark.parametrize('bad', ['symlink', 'credential'])
 def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     from clients import bot_files as BF
+
     root = tmp_path / 'checkout'
     root.mkdir()
     safe = root / 'safe.txt'
@@ -111,8 +120,20 @@ def test_cli_attach_combines_streaming_poster_note_and_choices(monkeypatch, tmp_
     client.get.return_value = {'actor': 'human:ana'}
     client.features.return_value = {'task_files_multipart': True}
     monkeypatch.setattr(remotecli, 'Client', lambda *args, **kw: client)
-    args = hubcli.parser().parse_args(['task', 'attach', 'task', str(path), '--poster', str(poster),
-                                      '--note', 'Revised', '--choices', 'Approve,Request changes'])
+    args = hubcli.parser().parse_args(
+        [
+            'task',
+            'attach',
+            'task',
+            str(path),
+            '--poster',
+            str(poster),
+            '--note',
+            'Revised',
+            '--choices',
+            'Approve,Request changes',
+        ]
+    )
     remotecli.run(args)
     call = client.post_multipart.call_args
     assert call.args[:2] == ('tasks/task/files', {'file': path, 'poster': poster})

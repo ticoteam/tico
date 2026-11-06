@@ -39,7 +39,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    **Read and write** and save. GitHub asks the organization to accept the change: open the installation
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
 2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   **All repos in use** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
@@ -60,7 +60,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
 1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Workflows** to
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   **All repos in use** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
@@ -205,7 +205,7 @@ existing repository grants keep their normal behavior.
 
 ## Bot repository access
 
-Tick the team's repositories in Settings → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
+Tick the team's repositories in Settings → General → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
 
 ## Creating bot repositories
 
@@ -249,9 +249,9 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**.
-Enter one repository name, review the connected organization, exact name, and private/empty settings, then
-select **Create private empty repository**. The API also exposes this flow to the Hub CLI, for the Owner and
+An Owner can create an exact product repository without the `bot-` prefix from **Settings → General → Repositories**
+→ **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
+name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
     hub repo product-create tico-recorder
@@ -325,12 +325,12 @@ agent gets `403` on both, even for the Owner. The rules are in [Permissions](per
 - **Names.** The same single-name rule as the Owner's, and a bot is also refused a `bot-` or `emp-` name, or a
   name a bot's repository already uses (`403`).
 - **After it is created**, in the same step that saves the receipt (so a retry with the same key replays it and
-  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Own repo
-  only** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
-  **All ticked repos** with read access moves to **Chosen repos**, read on every repository it reached and write on
+  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Their own
+  repo** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
+  **All repos in use** with read access moves to **Chosen repos**, read on every repository it reached and write on
   this one, so a repository ticked later reaches it only once chosen), and the Owner gets a notice: *Head of Engineering created private repo tico-services (acme/tico-services). Head of
-  Engineering has write access to it.* The notice also names any bot set to **All ticked repos**, which reaches
-  it too, and says when the bot moved from All ticked repos to Chosen repos. The reply's `bot_access` is `write`,
+  Engineering has write access to it.* The notice also names any bot set to **All repos in use**, which reaches
+  it too, and says when the bot moved from All repos in use to Chosen repos. The reply's `bot_access` is `write`,
   or `none` if the grant could not be made (the repository exists; an Owner or admin grants it in Settings). The
   event `github.product_repo_created` records the bot, `bot_access`, `moved_to_chosen` and whether the Owner was told.
 
@@ -497,4 +497,4 @@ running release's recorded commit, never latest main or the newest tag. Only ver
 ancestry marks a PR Shipped; errors, missing commits and diverged histories leave it Merged. Failed checks
 retry after at least five minutes. Results are cached in memory for up to 512 immutable pairs and checked
 again after a restart; the shipped event records the verified pair. It creates no push history.
-Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.
+Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → General → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.

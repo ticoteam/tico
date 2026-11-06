@@ -33,5 +33,5 @@ A person decides approvals. The Assistant approves only on the person's plain ye
 person turned off "My assistant can decide approvals for me". Declining needs neither.
 
 ## Close the pile, then stop the source
-Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
+The queue's size is the total of `hub needs-you show --by kind`: questions, approvals and held messages count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
 automation, add a rule, or give BotOps a task when it is a bot's own code. Report counts before and after.

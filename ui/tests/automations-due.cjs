@@ -108,7 +108,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.ok(groups.includes('due') && groups.indexOf('due') === groups.length - 1 - (groups.includes('system') ? 1 : 0),
     `${tag}: Due date after the other kinds, before system jobs (${groups})`);
   // The Due date chip narrows the list to it.
-  if (phone) await page.locator('[data-filters]').click();
+  if (phone) { await page.locator('[data-filters]').click(); await page.locator('[data-fsec="trig"]').click(); }
   await page.locator('[data-ftrig="due"]').click();
   assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row)), [made.id]);
   await page.locator('[data-ftrig="due"]').click();

@@ -43,10 +43,21 @@ def read(api, path, token="ana-test", **params):
 
 
 def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_copy(
-        api, live, workspace_key, assistant_token):
+    api, live, workspace_key, assistant_token
+):
     for token, mailbox in (("ana-test", BOX), (assistant_token, BOX), (assistant_token, SHARED)):
-        page = read(api, "messages", token, mailbox=mailbox, q="from:sender OR is:unread",
-                    label="INBOX", since="100", until="200", has_attachment="true", limit=999)
+        page = read(
+            api,
+            "messages",
+            token,
+            mailbox=mailbox,
+            q="from:sender OR is:unread",
+            label="INBOX",
+            since="100",
+            until="200",
+            has_attachment="true",
+            limit=999,
+        )
         assert page["messages"][0]["mailbox"] == mailbox and "body" not in page["messages"][0]
         assert page["next_cursor"] == NEXT
         nxt = read(api, "messages", token, mailbox=mailbox, cursor=NEXT)
@@ -54,8 +65,11 @@ def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_c
     query = live["calls"][0][1]
     assert query["q"] == ['(from:sender OR is:unread) label:"INBOX" after:100 before:200 has:attachment']
     assert query["maxResults"] == ["50"]
-    assert workspace_key and all(jwt.decode(call["assertion"], options={"verify_signature": False})["scope"] ==
-                                 google_workspace.READ_ONLY_SCOPES["gmail"][0] for call in workspace_key)
+    assert workspace_key and all(
+        jwt.decode(call["assertion"], options={"verify_signature": False})["scope"]
+        == google_workspace.READ_ONLY_SCOPES["gmail"][0]
+        for call in workspace_key
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM mail_fts").fetchone()[0] == 0
@@ -140,21 +154,38 @@ def organize(api, token="ana-test", expected=200, **body):
 
 
 @pytest.mark.parametrize("token_kind", ["person", "assistant"])
-def test_organizing_explicit_ids_is_live_and_audits_only_action_facts(api, live, workspace_key, assistant_token, token_kind):
+def test_organizing_explicit_ids_is_live_and_audits_only_action_facts(
+    api, live, workspace_key, assistant_token, token_kind
+):
     token = "ana-test" if token_kind == "person" else assistant_token
     result = organize(api, token, mailbox=SHARED, action="archive", ids=["m1", "m2", "m1"])
-    assert result == {"mailbox": SHARED, "action": "archive", "count": 2, "ids": ["m1", "m2"],
-                      "undo": {"action": "unarchive", "ids": ["m1", "m2"]}}
+    assert result == {
+        "mailbox": SHARED,
+        "action": "archive",
+        "count": 2,
+        "ids": ["m1", "m2"],
+        "undo": {"action": "unarchive", "ids": ["m1", "m2"]},
+    }
     assert len(live["calls"]) == 1 and live["writes"][0][1] == {
-        "ids": ["m1", "m2"], "addLabelIds": [], "removeLabelIds": ["INBOX"]}
-    assert jwt.decode(workspace_key[-1]["assertion"], options={"verify_signature": False})["scope"] == (
-        google_workspace.WORKSPACE_SCOPES["gmail"][0])
+        "ids": ["m1", "m2"],
+        "addLabelIds": [],
+        "removeLabelIds": ["INBOX"],
+    }
+    assert (
+        jwt.decode(workspace_key[-1]["assertion"], options={"verify_signature": False})["scope"]
+        == (google_workspace.WORKSPACE_SCOPES["gmail"][0])
+    )
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT actor,detail FROM events WHERE action='mail.organize'").fetchall()
         assert len(rows) == 1 and rows[0]["actor"] == "human:ana"
         detail = json.loads(rows[0]["detail"])
         assert {k: detail[k] for k in ("mailbox", "action", "label", "count", "ids")} == {
-            "mailbox": SHARED, "action": "archive", "label": None, "count": 2, "ids": ["m1", "m2"]}
+            "mailbox": SHARED,
+            "action": "archive",
+            "label": None,
+            "count": 2,
+            "ids": ["m1", "m2"],
+        }
         if token_kind == "assistant":
             assert detail["via"] == "assistant"
         assert not {"subject", "body", "snippet", "query"} & detail.keys()
@@ -176,11 +207,17 @@ def test_query_resolves_ids_with_default_and_explicit_caps_before_modifying(api,
     assert len(live["writes"][-1][1]["ids"]) == 500
 
 
-@pytest.mark.parametrize("selection", [{"ids": ["m1"], "query": "in:inbox"}, {}, {"ids": []},
-                                      {"ids": ["m"] * 501}, {"query": " "}, {"query": "in:inbox", "limit": 501}])
-def test_invalid_selections_never_reach_gmail(api, live, selection):
-    organize(api, expected=422, mailbox=BOX, action="archive", **selection)
-    assert not live["calls"]
+def test_invalid_selections_never_reach_gmail(api, live):
+    for selection in [
+        {"ids": ["m1"], "query": "in:inbox"},
+        {},
+        {"ids": []},
+        {"ids": ["m"] * 501},
+        {"query": " "},
+        {"query": "in:inbox", "limit": 501},
+    ]:
+        organize(api, expected=422, mailbox=BOX, action="archive", **selection)
+        assert not live["calls"], str(selection)[:60]
 
 
 def test_read_only_level_and_company_switch_are_rechecked_before_each_write(api, live, assistant_token):
@@ -192,8 +229,11 @@ def test_read_only_level_and_company_switch_are_rechecked_before_each_write(api,
     with api.app.state.store.transaction() as c:
         mailbox_access.grant(c, "human:ana", row["id"], "person", "cara", "read_write")
     organize(api, "cara-test", mailbox=SHARED, action="archive", ids=["m1"])
-    changed = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": True,
-                                                       "change_calendar": True}, headers=headers())
+    changed = api.put(
+        "/api/v2/google/permissions",
+        json={"organize_mail": False, "send_mail": True, "change_calendar": True},
+        headers=headers(),
+    )
     assert changed.status_code == 200, changed.text
     before = len(live["calls"])
     for token in ("cara-test", assistant_token):
@@ -265,8 +305,11 @@ def test_query_retries_keep_the_original_ids_and_recheck_access(api, live):
     second = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
     assert second.status_code == 200 and second.json()["ids"] == first.json()["ids"] == ["m2"]
     assert len([path for path, _, _ in live["calls"] if path.endswith("/messages")]) == 1
-    changed = api.put("/api/v2/google/permissions", json={"organize_mail": False, "send_mail": True,
-                                                       "change_calendar": True}, headers=headers())
+    changed = api.put(
+        "/api/v2/google/permissions",
+        json={"organize_mail": False, "send_mail": True, "change_calendar": True},
+        headers=headers(),
+    )
     assert changed.status_code == 200, changed.text
     refused = api.post("/api/v2/mail/messages/organize", json=body, headers=auth_headers)
     assert refused.status_code == 403 and len(live["writes"]) == 1

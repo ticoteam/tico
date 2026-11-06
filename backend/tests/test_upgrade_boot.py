@@ -2,6 +2,7 @@
 environment_identity) must not read a renamed column before the cleanup migrations have run.
 
 The old database is a fresh one with every rename reversed and the rename migrations marked not applied."""
+
 import os
 import re
 import sqlite3
@@ -24,8 +25,10 @@ def pre_rename_db(path):
     with closing(sqlite3.connect(path, isolation_level=None)) as conn:
         assert not schema_renames.pending(conn)
         conn.execute("PRAGMA legacy_alter_table=OFF")
-        have = {t: {r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')}
-                for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        have = {
+            t: {r[1] for r in conn.execute(f'PRAGMA table_info("{t}")')}
+            for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
         for table, old, new, _wave in reversed(COLUMNS):
             if new in have.get(table, ()):
                 conn.execute(f'ALTER TABLE "{table}" RENAME COLUMN "{new}" TO "{old}"')
@@ -63,7 +66,7 @@ def old_db(tmp_path_factory):
 
 def test_create_app_on_a_pre_rename_database(tmp_path, old_db):
     db = copy_db(old_db, tmp_path / "hub.sqlite")
-    create_app(Settings(db_path=db))        # the installs open store transactions before the lifespan's initialize
+    create_app(Settings(db_path=db))  # the installs open store transactions before the lifespan's initialize
     assert "refs" in columns(db, "messages")
     assert "value" in columns(db, "registry_metadata")
 
@@ -73,8 +76,14 @@ def environment_identity(tmp_path, db, **extra):
     for name in ("TICO_ENVIRONMENT_ID", "TICO_TEAM_NAME", "TICO_COMPANY_NAME"):
         if name not in extra:
             env.pop(name, None)
-    result = subprocess.run([sys.executable, "-c", "from backend.boot import environment_identity; print(environment_identity())"],
-                            env=env, capture_output=True, text=True, cwd=ROOT, timeout=120)
+    result = subprocess.run(
+        [sys.executable, "-c", "from backend.boot import environment_identity; print(environment_identity())"],
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        timeout=120,
+    )
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"[a-z0-9-]+", result.stdout.strip()), result.stdout
     return result.stdout.strip()
@@ -95,7 +104,7 @@ def test_entrypoint_environment_identity_opens_a_renamed_database_as_before(tmp_
         conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         conn.commit()
     first = environment_identity(tmp_path, db)
-    assert environment_identity(tmp_path / "again", db) == first        # the id is kept
+    assert environment_identity(tmp_path / "again", db) == first  # the id is kept
     assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("hub")) == ["hub.sqlite"]
 
 

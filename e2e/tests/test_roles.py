@@ -7,6 +7,7 @@ reads only the conversations its attempt was handed).
 Each cell of the matrix is one request through the v2 API as that viewer. The expected answers are written here from the
 rules, not read back from the code under test.
 """
+
 import pytest
 
 from backend.store import H
@@ -42,16 +43,21 @@ def rooms(api):  # noqa: F811
     ids = scenario.populate(client)
     # Ana's DM to the ops bot is her personal room with it: one active room per human and bot (docs/conversation.md).
     assert conversation_of(client, ids["direct_message"]) == ids["conversation"]
-    named = {"ana_ops": ids["conversation"]}                      # Ana's personal chat with ops (and her DM to it)
-    with client.app.state.store.read() as c:                      # the thread of the task the ops bot owns
-        named["open_task_thread"] = c.execute("SELECT id FROM conversations WHERE task_id=? AND kind='task'",
-                                              (ids["open_task"],)).fetchone()[0]
+    named = {"ana_ops": ids["conversation"]}  # Ana's personal chat with ops (and her DM to it)
+    with client.app.state.store.read() as c:  # the thread of the task the ops bot owns
+        named["open_task_thread"] = c.execute(
+            "SELECT id FROM conversations WHERE task_id=? AND kind='task'", (ids["open_task"],)
+        ).fetchone()[0]
     cara = scenario.Api(client).call("post", "chat/ops", token=MEMBER, json={"text": "Cara's question."})
-    named["cara_ops"] = cara["conversation"]["id"]                # Cara's personal chat with ops
+    named["cara_ops"] = cara["conversation"]["id"]  # Cara's personal chat with ops
     ben = scenario.Api(client).call("post", "chat/cpo", token=SHARED_MEMBER, json={"text": "Group plan."})
-    named["cpo_shared"] = ben["conversation"]["id"]               # the shared CPO room (Ben is its primary human)
-    direct = scenario.Api(client).call("post", "conversations", token=SHARED_MEMBER,
-                                       json={"participants": ["human:cara"], "kind": "chat", "subject": "Budget"})
+    named["cpo_shared"] = ben["conversation"]["id"]  # the shared CPO room (Ben is its primary human)
+    direct = scenario.Api(client).call(
+        "post",
+        "conversations",
+        token=SHARED_MEMBER,
+        json={"participants": ["human:cara"], "kind": "chat", "subject": "Budget"},
+    )
     named["ben_cara_direct"] = direct["id"]
     return named
 
@@ -62,12 +68,12 @@ def test_each_viewer_reads_exactly_the_rooms_its_role_allows(api, rooms):  # noq
     bot = attempt["token"]
     try:
         expected = {  # room -> {viewer: may read}
-            "ana_ops":          {"owner": True,  "member": False, "shared_member": False, "bot": True},
-            "cara_ops":         {"owner": False, "member": True,  "shared_member": False, "bot": False},
+            "ana_ops": {"owner": True, "member": False, "shared_member": False, "bot": True},
+            "cara_ops": {"owner": False, "member": True, "shared_member": False, "bot": False},
             # The task is public (no private flag), so its thread reads like the task does for everyone.
-            "open_task_thread": {"owner": True,  "member": True,  "shared_member": True,  "bot": True},
-            "cpo_shared":       {"owner": True,  "member": False, "shared_member": True,  "bot": False},
-            "ben_cara_direct":  {"owner": False, "member": True,  "shared_member": True,  "bot": False},
+            "open_task_thread": {"owner": True, "member": True, "shared_member": True, "bot": True},
+            "cpo_shared": {"owner": True, "member": False, "shared_member": True, "bot": False},
+            "ben_cara_direct": {"owner": False, "member": True, "shared_member": True, "bot": False},
         }
         tokens = {"owner": OWNER, "member": MEMBER, "shared_member": SHARED_MEMBER, "bot": bot}
         for name, who in expected.items():

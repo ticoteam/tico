@@ -33,15 +33,16 @@ def columns(conn, table):
 
 
 def schema(conn):
-    return sorted(tuple(r) for r in conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master "
-                                                 "WHERE sql IS NOT NULL"))
+    return sorted(
+        tuple(r) for r in conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL")
+    )
 
 
 def restore(path):
     conn = sqlite3.connect(path)
     conn.executescript(FIXTURE.read_text())
     conn.close()
-    conn = sqlite3.connect(path)        # the dump writes the FTS tables' schema rows; a new connection reads them
+    conn = sqlite3.connect(path)  # the dump writes the FTS tables' schema rows; a new connection reads them
     conn.executescript(f"""
         INSERT INTO bots(id, slug, display_name, state, created) VALUES('ops', 'ops', 'Ops', 'active', '{NOW}');
         INSERT INTO humans(id, name, email, teams_json) VALUES('ana', 'Ana', 'ana@acme.example', '["ops"]');
@@ -61,11 +62,12 @@ def restore(path):
         VALUES('att-1', 'job-1', 'ops', 'runner-1', 1, 'hash', 'completed', '{NOW}', '{NOW}', '{NOW}', '{NOW}',
                '{{"ok":true}}');
     """)
-    before = {"indexes": {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")},
-              "triggers": {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")},
-              "views": {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='view'")},
-              "columns": {t: columns(conn, t) for (t,) in conn.execute(
-                  "SELECT name FROM sqlite_master WHERE type='table'")}}
+    before = {
+        "indexes": {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")},
+        "triggers": {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")},
+        "views": {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='view'")},
+        "columns": {t: columns(conn, t) for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")},
+    }
     conn.close()
     return before
 
@@ -73,10 +75,15 @@ def restore(path):
 # Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, kpis_goal by
 # backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes, and idempotency_by_created
 # by backend/migrations/0050_idempotency_one_table.py (the answers' partial index replaces it).
-DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal",
-                   "idempotency_by_created",
-                   # learning_runs drops its night UNIQUE in 20261105010100_learn_beta: Learn can run more than once a day.
-                   "sqlite_autoindex_learning_runs_2"}
+DROPPED_INDEXES = {
+    "invariants_lease",
+    "invariants_open_approvals",
+    "tasks_private_parties",
+    "kpis_goal",
+    "idempotency_by_created",
+    # learning_runs drops its night UNIQUE in 20261105010100_learn_beta: Learn can run more than once a day.
+    "sqlite_autoindex_learning_runs_2",
+}
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
 # Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
@@ -84,14 +91,45 @@ DROPPED_TRIGGERS = {"queue_bot_message"}
 # 0054_budget_nodes.py (its rows are budget nodes), 0072_turns_into_attempts.py (its rows are attempts), and the
 # federation tables 0058_drop_federation.sql drops with
 # their indexes.
-RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations",
-           "turns", "turn_usage_segments", "usage_limits", "usage_pools",
-           "federation_deferrals", "federation_outbox_items", "federation_receipts", "federation_messages",
-           "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
-           "federation_peerings", "federation_keys", "federation_states",
-           # 0064_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
-           "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
+RETIRED = {
+    "growth_ideas",
+    "growth_idea_channels",
+    "growth_segments",
+    "growth_channel_segments",
+    "growth_idea_segments",
+    "gtm_versions",
+    "gtm_drafts",
+    "invite_sends",
+    "github_product_repo_operations",
+    "github_review_operations",
+    "turns",
+    "turn_usage_segments",
+    "usage_limits",
+    "usage_pools",
+    "federation_deferrals",
+    "federation_outbox_items",
+    "federation_receipts",
+    "federation_messages",
+    "federation_items",
+    "federation_members",
+    "federation_threads",
+    "federation_directory_entries",
+    "federation_peerings",
+    "federation_keys",
+    "federation_states",
+    # 0064_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
+    "task_events",
+    "goal_events",
+    "market_events",
+    "company_events",
+    "strategy_events",
+    # 20261105222012_one_send_policy folds bot_mail_settings into the one sending policy and drops the rule-miss log.
+    "bot_mail_settings",
+    "org_rule_misses",
+    # 20261106084204_retire_memory_tidy drops the retired pilot's cards and their Keeps.
+    "memory_tidy_cards",
+    "memory_tidy_keeps",
+}
 # Moved from runners to runner_states by backend/migrations/0062_runner_states.py after the renames named them.
 RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0062_runner_states").STATE}
 # Moved out of its table by migration 0070 (backend/migrations/0070_bot_settings.py) into the table named here: the
@@ -103,6 +141,9 @@ _HOLDS = importlib.import_module("backend.migrations.0075_task_holds")
 DROPPED = {("tasks", column) for column in _HOLDS.COLUMNS}
 DROPPED_INDEXES |= set(_HOLDS.OLD_INDEXES)
 DROPPED_TRIGGERS |= set(_HOLDS.OLD_TRIGGERS)
+# Dropped by backend/migrations/20261106112609_derived_waiting.py with tasks.waiting_on: who a task waits on is derived.
+DROPPED.add(("tasks", "waiting_on"))
+DROPPED_INDEXES.add("tasks_waiting_on")
 
 
 @pytest.fixture(scope="module")
@@ -166,14 +207,19 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
         # The tables 0035_growth_rethink retires take their indexes with them; later migrations drop DROPPED_INDEXES
         # and DROPPED_TRIGGERS.
-        kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
-                if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
-                and name not in DROPPED_INDEXES | DROPPED_TRIGGERS}
+        kept = {
+            name
+            for name in before[kind + "es" if kind == "index" else kind + "s"]
+            if not any(table in name for table in RETIRED)
+            and not name.startswith("growth_idea")
+            and name not in DROPPED_INDEXES | DROPPED_TRIGGERS
+        }
         assert kept <= now, kind
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.
-    current = set().union(*(columns(conn, t) for (t,) in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'")))
+    current = set().union(
+        *(columns(conn, t) for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+    )
     gone = {old for _t, old, _n, _w in COLUMNS} - current
     left = []
     for name, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL"):
@@ -189,14 +235,20 @@ def test_a_message_to_a_bot_still_queues_a_job(upgraded):
     refs = new("messages", "refs_json")
     created = new("messages", "created")
     assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
-    conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
-                 "VALUES('msg-2', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'please ship', '{}', ?)", (NOW,))
+    conn.execute(
+        f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
+        "VALUES('msg-2', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'please ship', '{}', ?)",
+        (NOW,),
+    )
     enqueue_stored(conn, "msg-2")
     job = conn.execute("SELECT * FROM jobs WHERE message_id='msg-2'").fetchone()
     assert job and job["bot_id"] == "ops" and job["state"] == "queued" and job[new("jobs", "created")] == NOW
     # A quiet message (read through the renamed refs column) queues nothing.
-    conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
-                 "VALUES('msg-3', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'fyi', '{\"quiet\":1}', ?)", (NOW,))
+    conn.execute(
+        f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
+        "VALUES('msg-3', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'fyi', '{\"quiet\":1}', ?)",
+        (NOW,),
+    )
     enqueue_stored(conn, "msg-3")
     assert not conn.execute("SELECT 1 FROM jobs WHERE message_id='msg-3'").fetchone()
     conn.rollback()
@@ -204,8 +256,10 @@ def test_a_message_to_a_bot_still_queues_a_job(upgraded):
 
 def test_the_external_sections_search_index_still_matches_its_table(upgraded):
     _store, conn, _before = upgraded
-    conn.execute("INSERT INTO external_sections(id, version_id, position, title, path, heading, body, start_line, "
-                 "end_line) VALUES(901, 'v1', 0, 'Runbook', 'docs/runbook.md', 'Deploys', 'zebracorn rollout', 1, 9)")
+    conn.execute(
+        "INSERT INTO external_sections(id, version_id, position, title, path, heading, body, start_line, "
+        "end_line) VALUES(901, 'v1', 0, 'Runbook', 'docs/runbook.md', 'Deploys', 'zebracorn rollout', 1, 9)"
+    )
     hits = conn.execute("SELECT rowid FROM external_sections_fts WHERE external_sections_fts MATCH 'zebracorn'")
     assert [r[0] for r in hits] == [901]
     conn.execute("INSERT INTO external_sections_fts(external_sections_fts) VALUES('integrity-check')")
@@ -221,8 +275,12 @@ def test_an_upgraded_database_has_the_shape_of_a_new_one(upgraded, tmp_path):
 
     def shape(c):
         tables = {t: columns(c, t) for (t,) in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        others = {(kind, name): re.sub(r"\s+", " ", sql).replace('"', "") for kind, name, sql in c.execute(
-            "SELECT type, name, sql FROM sqlite_master WHERE type!='table' AND sql IS NOT NULL")}
+        others = {
+            (kind, name): re.sub(r"\s+", " ", sql).replace('"', "")
+            for kind, name, sql in c.execute(
+                "SELECT type, name, sql FROM sqlite_master WHERE type!='table' AND sql IS NOT NULL"
+            )
+        }
         return tables, others
 
     new_conn = sqlite3.connect(fresh)
@@ -253,11 +311,11 @@ def test_a_database_with_both_names_is_refused(tmp_path):
 def test_apply_runs_in_the_callers_transaction_and_skips_tables_it_lacks(tmp_path):
     table, old, renamed, _wave = next(c for c in COLUMNS if c[0] == "tasks")
     conn = sqlite3.connect(tmp_path / "part.sqlite", isolation_level=None)
-    conn.execute(f'CREATE TABLE tasks("id" TEXT, "{old}" TEXT)')     # one table of the old schema, nothing else
+    conn.execute(f'CREATE TABLE tasks("id" TEXT, "{old}" TEXT)')  # one table of the old schema, nothing else
     conn.execute("BEGIN")
     assert schema_renames.apply(conn) == 1 and conn.in_transaction
     assert renamed in columns(conn, "tasks")
-    conn.execute("ROLLBACK")                                          # the caller decides: nothing was committed
+    conn.execute("ROLLBACK")  # the caller decides: nothing was committed
     assert columns(conn, "tasks") == {"id", old}
     assert schema_renames.apply_now(conn) == 1 and not conn.in_transaction
     assert columns(conn, "tasks") == {"id", renamed} and schema_renames.apply_now(conn) == 0

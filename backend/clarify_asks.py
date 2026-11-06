@@ -11,9 +11,11 @@ from .store import H, Problem
 
 ACTION = "ask.clarify"
 # The experiment's winner (A, 16/16), verbatim: the measured wording, not a paraphrase.
-CLARIFY_PROMPT = ("Is this request still relevant? If not, say so in one sentence and stop. If yes, restate what "
-                  "you need from the person in two plain sentences: what they must decide or do first, then what "
-                  "happens after. No IDs, hashes, file names, or tool names.")
+CLARIFY_PROMPT = (
+    "Is this request still relevant? If not, say so in one sentence and stop. If yes, restate what "
+    "you need from the person in two plain sentences: what they must decide or do first, then what "
+    "happens after. No IDs, hashes, file names, or tool names."
+)
 
 
 def _clip(text, n=200):
@@ -41,8 +43,7 @@ def clarify(conn, actor, ask_id):
     asker = asked["sender_id"]
     if not H.is_bot(asker):
         raise Problem("kind", "Only a bot's question can be clarified", 422)
-    if not conn.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}",
-                        (ask_id,)).fetchone():
+    if not conn.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}", (ask_id,)).fetchone():
         raise Problem("answered", "This question was already answered", 409)
     if not H.ask_older(asked):
         raise Problem("not_stale", "This question is still fresh; answer it, or wait until it goes stale", 422)
@@ -58,7 +59,9 @@ def clarify(conn, actor, ask_id):
         # As with a comment meant for the bot: it wakes on the task, whose clock restarts, but what the person
         # owes it does not change: the wait stays theirs until they answer.
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
-        conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                     (task["id"], asker, actor, msg["id"], H.shift(H.now(), hours=24)))
+        conn.execute(
+            "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+            (task["id"], asker, actor, msg["id"], H.shift(H.now(), hours=24)),
+        )
     H.event(conn, actor, ACTION, ask_id, {"to": actor, "bot": asker, **({"task": task["id"]} if task else {})})
     return {"bot": asker, "task": task["id"] if task else None, "message": msg["id"]}

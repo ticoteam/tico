@@ -30,15 +30,18 @@ def ana_viewer(api):
 
 def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_copies(api):
     from backend import thread_attention as TA
+
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
     ask = say(api, tid, "Which lease?", kind="ask", to_actor="human:ana")
     paused = members_thread(api, title="Paused")
     with api.app.state.store.transaction() as c:
         now = H.now()
-        c.execute("INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
-                  "state,created_at,updated_at) VALUES(?,?,?,?,?,'queue','mention','bot','capped',?,?)",
-                  (H.new_id(), H.new_id(), "bot:finance", paused, paused, now, now))
+        c.execute(
+            "INSERT INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
+            "state,created_at,updated_at) VALUES(?,?,?,?,?,'queue','mention','bot','capped',?,?)",
+            (H.new_id(), H.new_id(), "bot:finance", paused, paused, now, now),
+        )
     seen = []
     with api.app.state.store.read_transaction() as c:
         c.set_trace_callback(seen.append)
@@ -63,6 +66,7 @@ def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_co
 
 def test_attention_rechecks_after_a_write_and_for_another_identity_in_the_same_snapshot(api):
     from backend import thread_attention as TA
+
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
     with api.app.state.store.transaction() as c:
@@ -91,7 +95,7 @@ def test_a_question_is_listed_until_the_person_answers_in_the_thread(api):
 
 
 def test_a_mention_from_outside_the_audience_reaches_no_one(api):
-    tid = members_thread(api, members=())          # cara alone: a mention of ana does not add her
+    tid = members_thread(api, members=())  # cara alone: a mention of ana does not add her
     say(api, tid, "@ana see this.")
     assert all(i["conversation_id"] != tid for i in needs(api))
 
@@ -110,16 +114,18 @@ def hold(api, reviewer="human:ana", author="bot:finance", operation="reply", sta
     """A held write as org_rule_check stores it (its verdict and payload are not read by the list)."""
     with api.app.state.store.transaction() as c:
         hid = H.new_id()
-        c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
-                  "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (hid, operation, "{}", author, "[]", "[]", "{}", "nonce", state, reviewer, None, H.now()))
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (hid, operation, "{}", author, "[]", "[]", "{}", "nonce", state, reviewer, None, H.now()),
+        )
     return hid
 
 
 def test_a_held_message_is_listed_to_its_reviewer_until_it_is_released(api):
     hid = hold(api)
     assert [i["id"] for i in needs(api, "thread_held")] == [hid]
-    assert needs(api, "thread_held", token="cara-test") == []        # the reviewer alone reads a hold
+    assert needs(api, "thread_held", token="cara-test") == []  # the reviewer alone reads a hold
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rule_holds SET state='sent' WHERE id=?", (hid,))
     assert needs(api, "thread_held") == []
@@ -130,8 +136,8 @@ def test_a_held_post_is_listed_to_the_person_its_bot_reports_to_until_they_withd
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='finance'")
     hid = hold(api, reviewer="human:ana", author="bot:finance")
     assert [i["id"] for i in needs(api, "thread_held", token="ben-test")] == [hid]
-    assert needs(api, "thread_held", token="cara-test") == []             # a peer does not see it
-    assert [i["id"] for i in needs(api, "thread_held")] == [hid]          # the reviewer does
+    assert needs(api, "thread_held", token="cara-test") == []  # a peer does not see it
+    assert [i["id"] for i in needs(api, "thread_held")] == [hid]  # the reviewer does
     post(api, f"rule-holds/{hid}/keep", {}, token="ben-test")
     assert needs(api, "thread_held", token="ben-test") == []
 
@@ -222,15 +228,17 @@ def test_a_thread_change_marks_the_persons_needs_list_to_be_read_again(api):
 
 
 def test_a_paused_thread_is_listed_to_its_manager_only(api):
-    as_member(api, "ben@acme.example")          # the fixture makes Ben an admin, and an admin manages every thread
+    as_member(api, "ben@acme.example")  # the fixture makes Ben an admin, and an admin manages every thread
     tid = members_thread(api, members=("human:ana", "human:ben"))
     with api.app.state.store.transaction() as c:
         now = H.now()
-        c.execute("INSERT INTO message_deliveries(id, message_id, recipient, thread_id, root_id, mode, reason, cause, "
-                  "state, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                  (H.new_id(), H.new_id(), "bot:finance", tid, tid, "queue", "mention", "bot", "capped", now, now))
+        c.execute(
+            "INSERT INTO message_deliveries(id, message_id, recipient, thread_id, root_id, mode, reason, cause, "
+            "state, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (H.new_id(), H.new_id(), "bot:finance", tid, tid, "queue", "mention", "bot", "capped", now, now),
+        )
     assert [i["conversation_id"] for i in needs(api, "thread_capped", token="cara-test")] == [tid]
-    assert needs(api, "thread_capped", token="ben-test") == []     # reads the thread, does not manage it
+    assert needs(api, "thread_capped", token="ben-test") == []  # reads the thread, does not manage it
 
 
 def test_a_bot_post_in_a_group_dm_is_listed_as_unread_for_its_people(api):
@@ -290,7 +298,7 @@ def test_a_bot_dms_count_takes_its_sub_threads(api):
     with api.app.state.store.transaction() as c:
         threads.mark_all_read(c, ana_viewer(api), dm)
         sub = threads.create(c, "bot:finance", parent_message_id=parent["id"])["id"]
-    say(api, sub, "Ana, one more line.", actor="bot:finance", to_actor="human:ana")      # addressed to her: unread
+    say(api, sub, "Ana, one more line.", actor="bot:finance", to_actor="human:ana")  # addressed to her: unread
     assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
 
 
@@ -301,15 +309,21 @@ def test_the_thread_items_take_the_same_statements_however_many_threads_name_the
 
     def mention_in(n):
         for k in range(n):
-            say(api, members_thread(api, members=("human:ana", "human:ben"), title=f"Plan {k}"), f"Can you check {k}?",
-                to_actor="human:ana")
+            say(
+                api,
+                members_thread(api, members=("human:ana", "human:ben"), title=f"Plan {k}"),
+                f"Can you check {k}?",
+                to_actor="human:ana",
+            )
 
     mention_in(2)
     few_body, few = counted(api, monkeypatch, "/api/v2/needs-you")
     mention_in(20)
     many_body, many = counted(api, monkeypatch, "/api/v2/needs-you")
-    assert len([i for i in many_body["items"] if i["kind"] == "thread_mention"]) == \
-        len([i for i in few_body["items"] if i["kind"] == "thread_mention"]) + 20
+    assert (
+        len([i for i in many_body["items"] if i["kind"] == "thread_mention"])
+        == len([i for i in few_body["items"] if i["kind"] == "thread_mention"]) + 20
+    )
     assert many - few <= 2, (few, many)
     _, sidebar_few = counted(api, monkeypatch, "/api/v2/threads?limit=50")
     mention_in(10)

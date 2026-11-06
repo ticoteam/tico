@@ -42,7 +42,13 @@ impl Capture {
         let path = dir.join(format!("{aid}.ndjson"));
         use std::os::unix::fs::OpenOptionsExt;
         // Customer text, even scrubbed: readable by the runner alone.
-        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
         Ok(Arc::new(Capture {
             path,
             file: Mutex::new(Some(file)),
@@ -83,7 +89,9 @@ impl Capture {
         }
         // Scrubbed as written and again inside each string once parsed, where JSON escaping can hide a value.
         let raw = crate::redact::scrub_log(line);
-        let frame = serde_json::from_str::<Value>(&raw).map(|v| scrub_strings(&v)).unwrap_or(Value::String(raw));
+        let frame = serde_json::from_str::<Value>(&raw)
+            .map(|v| scrub_strings(&v))
+            .unwrap_or(Value::String(raw));
         self.record(json!({"dir": dir, "ms": self.ms(), "frame": frame}));
     }
 
@@ -99,7 +107,8 @@ impl Capture {
             self.dropped.fetch_add(size, Ordering::Relaxed);
             self.truncated.store(true, Ordering::Relaxed);
             let mark = json!({"dir": "skipped", "ms": self.ms(), "bytes": size}).to_string() + "\n";
-            if at + (mark.len() as u64) <= LIMIT + MARKS && file.write_all(mark.as_bytes()).is_ok() {
+            if at + (mark.len() as u64) <= LIMIT + MARKS && file.write_all(mark.as_bytes()).is_ok()
+            {
                 self.written.fetch_add(mark.len() as u64, Ordering::Relaxed);
             }
             return;
@@ -140,16 +149,27 @@ fn scrub_strings(v: &Value) -> Value {
     match v {
         Value::String(s) => Value::String(crate::redact::scrub_log(s)),
         Value::Array(items) => Value::Array(items.iter().map(scrub_strings).collect()),
-        Value::Object(map) => Value::Object(map.iter().map(|(k, i)| (k.clone(), scrub_strings(i))).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, i)| (k.clone(), scrub_strings(i)))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
 
 fn sweep(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let now = SystemTime::now();
     for e in entries.flatten() {
-        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > KEEP);
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > KEEP);
         if old {
             let _ = std::fs::remove_file(e.path());
         }
@@ -162,7 +182,8 @@ mod tests {
     use crate::redact::{register, release, Redactor};
 
     fn dir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tico-capture-{}", uuid::Uuid::new_v4().simple()));
+        let d =
+            std::env::temp_dir().join(format!("tico-capture-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -171,7 +192,13 @@ mod tests {
     fn frames_are_kept_both_ways_with_secrets_masked_in_every_form() {
         let d = dir();
         let aid = format!("cap-{}", uuid::Uuid::new_v4().simple());
-        register(&aid, Arc::new(Redactor::new(&["granted-secret-0123".into(), "quo\"ted-secret-456".into()])));
+        register(
+            &aid,
+            Arc::new(Redactor::new(&[
+                "granted-secret-0123".into(),
+                "quo\"ted-secret-456".into(),
+            ])),
+        );
         let c = Capture::open(&d, &aid).unwrap();
         c.attach("claude");
         c.sent(r#"{"type":"user","message":{"content":"use granted-secret-0123"}}"#);
@@ -181,13 +208,30 @@ mod tests {
         let out = c.finish().unwrap();
         release(&aid);
         let frames = out["frames"].as_str().unwrap();
-        assert!(!frames.contains("granted-secret-0123") && !frames.contains("ted-secret-456"), "{frames}");
-        let rows: Vec<Value> = frames.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(rows.iter().map(|r| r["dir"].as_str().unwrap()).collect::<Vec<_>>(), ["start", "out", "in", "in"]);
+        assert!(
+            !frames.contains("granted-secret-0123") && !frames.contains("ted-secret-456"),
+            "{frames}"
+        );
+        let rows: Vec<Value> = frames
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["dir"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["start", "out", "in", "in"]
+        );
         assert_eq!(rows[1]["frame"]["type"], "user", "a JSON frame stays JSON");
         assert_eq!(rows[3]["frame"], "not json ••••");
-        assert_eq!((out["provider"].as_str(), out["truncated"].as_bool()), (Some("claude"), Some(false)));
-        assert!(!d.join("captures").join(format!("{aid}.ndjson")).exists(), "the local file is gone once handed in");
+        assert_eq!(
+            (out["provider"].as_str(), out["truncated"].as_bool()),
+            (Some("claude"), Some(false))
+        );
+        assert!(
+            !d.join("captures").join(format!("{aid}.ndjson")).exists(),
+            "the local file is gone once handed in"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -196,7 +240,10 @@ mod tests {
         let d = dir();
         let c = Capture::open(&d, "cap-limit").unwrap();
         c.attach("codex");
-        let big = format!(r#"{{"method":"item/delta","params":{{"text":"{}"}}}}"#, "x".repeat(400_000));
+        let big = format!(
+            r#"{{"method":"item/delta","params":{{"text":"{}"}}}}"#,
+            "x".repeat(400_000)
+        );
         for _ in 0..20 {
             c.received(&big);
         }
@@ -204,8 +251,19 @@ mod tests {
         let out = c.finish().unwrap();
         let frames = out["frames"].as_str().unwrap();
         assert!(frames.len() as u64 <= LIMIT + MARKS, "{}", frames.len());
-        assert!(frames.lines().filter(|l| l.contains(r#""dir":"skipped""#)).count() >= 8);
-        assert!(frames.trim_end().ends_with(r#"{"method":"turn/completed"}}"#), "the ending is kept");
+        assert!(
+            frames
+                .lines()
+                .filter(|l| l.contains(r#""dir":"skipped""#))
+                .count()
+                >= 8
+        );
+        assert!(
+            frames
+                .trim_end()
+                .ends_with(r#"{"method":"turn/completed"}}"#),
+            "the ending is kept"
+        );
         assert!(out["truncated"].as_bool().unwrap() && out["dropped_bytes"].as_u64().unwrap() > 0);
         let _ = std::fs::remove_dir_all(&d);
     }

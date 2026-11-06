@@ -1,4 +1,5 @@
 """Tico Meet's media tokens never grant a camera, and the server's calls to LiveKit act only on the call's own room."""
+
 import asyncio
 import base64
 import hashlib
@@ -16,8 +17,12 @@ import pytest
 
 from backend import call_media as media
 
-CONFIG = media.MeetConfig(url="wss://meet.acme.example", internal_url="http://livekit:7880", api_key="APIacme",
-                          api_secret="acme-secret-0123456789abcdef0123456789abcdef")
+CONFIG = media.MeetConfig(
+    url="wss://meet.acme.example",
+    internal_url="http://livekit:7880",
+    api_key="APIacme",
+    api_secret="acme-secret-0123456789abcdef0123456789abcdef",
+)
 
 
 def _unb64(text):
@@ -34,8 +39,12 @@ def decode(token, secret=CONFIG.api_secret):
 
 
 def test_config_needs_all_four_values_and_drops_a_trailing_slash():
-    env = {"TICO_MEET_URL": "wss://meet.acme.example/", "TICO_MEET_INTERNAL_URL": "http://livekit:7880/",
-           "TICO_MEET_API_KEY": "APIacme", "TICO_MEET_API_SECRET": "secret"}
+    env = {
+        "TICO_MEET_URL": "wss://meet.acme.example/",
+        "TICO_MEET_INTERNAL_URL": "http://livekit:7880/",
+        "TICO_MEET_API_KEY": "APIacme",
+        "TICO_MEET_API_SECRET": "secret",
+    }
     config = media.config_from_env(env)
     assert (config.url, config.internal_url) == ("wss://meet.acme.example", "http://livekit:7880")
     assert media.config_from_env({**env, "TICO_MEET_API_SECRET": ""}) is None
@@ -205,8 +214,10 @@ class FakeLiveKit:
     def hear(self, loop, recorder, speaker, frames, *, kind=KIND_AUDIO, source=SOURCE_MICROPHONE):
         """Publish a track from `speaker` that the recorder `recorder` subscribes to, on the media loop."""
         room = [joined for joined in self.joins if joined.identity == recorder][-1]
-        track = SimpleNamespace(kind=kind, frames=[
-            SimpleNamespace(data=memoryview(frame), samples_per_channel=len(frame) // 2) for frame in frames])
+        track = SimpleNamespace(
+            kind=kind,
+            frames=[SimpleNamespace(data=memoryview(frame), samples_per_channel=len(frame) // 2) for frame in frames],
+        )
         publication, participant = SimpleNamespace(source=source), SimpleNamespace(identity=speaker)
         asyncio.run_coroutine_threadsafe(room.emit("track_subscribed", track, publication, participant), loop).result(5)
 
@@ -263,8 +274,11 @@ def fake_rtc(monkeypatch):
     rtc.RoomOptions = lambda **options: SimpleNamespace(**options)
     rtc.AudioStream = FakeAudioStream
     rtc.TrackKind = SimpleNamespace(KIND_AUDIO=KIND_AUDIO, KIND_VIDEO=KIND_VIDEO)
-    rtc.TrackSource = SimpleNamespace(SOURCE_MICROPHONE=SOURCE_MICROPHONE, SOURCE_CAMERA=SOURCE_CAMERA,
-                                      SOURCE_SCREENSHARE_AUDIO=SOURCE_SCREENSHARE_AUDIO)
+    rtc.TrackSource = SimpleNamespace(
+        SOURCE_MICROPHONE=SOURCE_MICROPHONE,
+        SOURCE_CAMERA=SOURCE_CAMERA,
+        SOURCE_SCREENSHARE_AUDIO=SOURCE_SCREENSHARE_AUDIO,
+    )
     package = types.ModuleType("livekit")
     package.rtc = rtc
     monkeypatch.setitem(sys.modules, "livekit", package)
@@ -275,15 +289,16 @@ def fake_rtc(monkeypatch):
 def test_the_recorder_joins_hidden_and_hears_microphones_but_never_camera(fake_rtc):
     live = media.LiveKitMedia(CONFIG)
     heard = []
-    live.start_recorder("call1", "tico-call-call1",
-                        lambda identity, pcm, start_ms: heard.append((identity, pcm, start_ms)))
+    live.start_recorder(
+        "call1", "tico-call-call1", lambda identity, pcm, start_ms: heard.append((identity, pcm, start_ms))
+    )
     try:
         recorder = fake_rtc.joins[-1]
         assert fake_rtc.rooms["tico-call-call1"] == {media.RECORDER_PREFIX + "call1"}
         claims = decode(recorder.token)["video"]
         assert claims["hidden"] is True and claims["canPublish"] is False and claims["canSubscribe"] is True
         assert recorder.options.auto_subscribe is True
-        frame = b"\x01\x00" * 800                                 # 50 ms at 16 kHz
+        frame = b"\x01\x00" * 800  # 50 ms at 16 kHz
         fake_rtc.hear(live.loop, recorder.identity, "human:ana", [frame], kind=KIND_VIDEO, source=SOURCE_CAMERA)
         fake_rtc.hear(live.loop, recorder.identity, "human:ana", [frame, frame])
         wait_until(lambda: len(heard) == 2)

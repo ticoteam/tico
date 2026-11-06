@@ -11,7 +11,8 @@ use crate::util::text_of;
 
 /// The credential helper `gitcred::apply` sets when no token could be had (git_credentials.is_failed_helper).
 fn failed_helper(value: &str) -> bool {
-    value == crate::gitcred::FAILED_HELPER || (value.starts_with("!f() { echo ") && value.ends_with(" >&2; echo quit=true; }; f"))
+    value == crate::gitcred::FAILED_HELPER
+        || (value.starts_with("!f() { echo ") && value.ends_with(" >&2; echo quit=true; }; f"))
 }
 
 impl Runner {
@@ -44,9 +45,19 @@ impl Runner {
                 token
             });
             let socket = self.socket.as_ref().map(|s| s.path.clone());
-            crate::gitcred::apply(&mut env, &self.client, &self.tokens, &bot, socket.as_deref(), &self.state.directory).await;
+            crate::gitcred::apply(
+                &mut env,
+                &self.client,
+                &self.tokens,
+                &bot,
+                socket.as_deref(),
+                &self.state.directory,
+            )
+            .await;
             // Never fall back to another login when scoped access failed.
-            let failed = env.iter().any(|(k, v)| k.starts_with("GIT_CONFIG_VALUE_") && failed_helper(v));
+            let failed = env
+                .iter()
+                .any(|(k, v)| k.starts_with("GIT_CONFIG_VALUE_") && failed_helper(v));
             if !failed && self.push_checkout_as(&path, &env, false).await {
                 pushed.insert(path);
             }
@@ -62,7 +73,11 @@ mod tests {
     #[test]
     fn a_failed_helper_is_known_with_or_without_its_reason() {
         assert!(super::failed_helper(crate::gitcred::FAILED_HELPER));
-        assert!(super::failed_helper("!f() { echo 'no app' >&2; echo quit=true; }; f"));
-        assert!(!super::failed_helper("!f() { exec tico-runner git-credential; }; f"));
+        assert!(super::failed_helper(
+            "!f() { echo 'no app' >&2; echo quit=true; }; f"
+        ));
+        assert!(!super::failed_helper(
+            "!f() { exec tico-runner git-credential; }; f"
+        ));
     }
 }

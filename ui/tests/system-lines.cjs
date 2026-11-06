@@ -28,12 +28,14 @@ const messages = () => [
   msg('r1', 7, 'keeper', 'Ana Lima asked the Assistant for this, in their words:\n\n> Add Ben to the launch channel', 30,
     {refs: {task: 't-r1', comment: true, quiet: true, carried: true}}),
   msg('s1', 8, 'keeper', 'Updated to v0.5.160.', 25, {kind: 'notice'}),
+  msg('n1', 8.5, 'keeper', 'New task from keeper: Health: Watchers. ' + 'Two watchers stopped reporting and one restarted twice in the last hour. '.repeat(3), 24,
+    {kind: 'notice', refs: {source: 'check-health'}}),
   msg('f1', 9, 'keeper', 'checked back on Book the launch venue', 20, {kind: 'notice', refs: {source: 'follow-up-timer'}}),
   msg('au1', 10, 'keeper', 'filed Weekly numbers', 15, {kind: 'notice', refs: {source: 'automation:au-1'},
     source: {kind: 'automation', name: 'Weekly digest', link: '#/automations/au-1'}}),
   msg('b2', 11, 'bot:ops', 'Anything else?', 10, {recipient_id: 'human:ana'}),
 ];
-const KEEPER = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'f1', 'au1'];
+const KEEPER = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
 
 async function open(browser, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
@@ -105,9 +107,17 @@ let browser = null;
     assert.match(await line(page, 'f1').getAttribute('title'), /^Follow-up timer · /, 'the hover says what ran and when');
     assert.equal(await line(page, 'au1').locator('a.src-name').getAttribute('href'), '#/automations/au-1');
     assert.equal(await line(page, 'au1').locator('a.src-name').innerText(), 'Weekly digest');
+    // A task the server filed reads "New task:", never "from keeper"; a long line stays one line, cut with an ellipsis.
+    assert.match(await line(page, 'n1').innerText(), /^Health check\s+New task: Health: Watchers\./);
+    const tall = await page.locator('.thv-list .src-line').evaluateAll(els => els.filter(el => el.getBoundingClientRect().height > 30).map(el => el.textContent.slice(0, 40)));
+    assert.deepEqual(tall, [], 'every gray line is one line');
+    assert.match(await line(page, 'n1').getAttribute('title'), /\n\nNew task: Health: Watchers\./, 'the hover has the whole of a long line');
+    // The group's row lines up with the lines around it.
+    const pad = el => el.evaluate(e => getComputedStyle(e).paddingLeft);
+    assert.equal(await pad(group.locator('> summary')), await pad(line(page, 'k4')));
     // Nothing the keeper wrote says "Assistant" but the relay.
     const lineText = await page.locator('.thv-list .src-line').allInnerTexts();
-    assert.ok(lineText.every(t => !/Assistant/.test(t)), 'no gray line names the Assistant: ' + lineText.join(' | '));
+    assert.ok(lineText.every(t => !/Assistant|keeper/.test(t)), 'no gray line names the Assistant: ' + lineText.join(' | '));
     const whos = await page.locator('.thv-list .th-who').allInnerTexts();
     assert.deepEqual(whos.filter(w => /Assistant/.test(w)), ["Ana's Assistant"], 'only the relay names the Assistant');
     // A normal message after gray lines starts its own group: it keeps its header.

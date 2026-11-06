@@ -52,8 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
     };
     const open = async target => {
       await target.goto('http://tico-ui.test/#/settings');
-      await target.locator('#settings-more > summary').click();
-      await target.locator('[data-settings-tab=health]').click();
+      await target.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
       await target.locator('#hl-page [data-hl-findings]').waitFor();
     };
 

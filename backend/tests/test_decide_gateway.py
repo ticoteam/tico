@@ -18,9 +18,9 @@ import yaml
 from backend import judge as B
 from backend import slack_gateway as G
 from backend.config import Settings
-from backend.tests.test_api import api, get, headers, post   # noqa: F401
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_judge import QUESTIONS
-from backend.tests.test_slack_gateway import DM, Clock, FakeSlack, envelope, hub, rows   # noqa: F401
+from backend.tests.test_slack_gateway import DM, Clock, FakeSlack, envelope, hub, rows  # noqa: F401
 from clients import judge as J
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,8 +35,11 @@ def answer_all(questions):
     for qid, q in questions.items():
         if q["type"] == "choice":
             names = list(q["criteria"])
-            out[qid] = {"choice": names[-1], "confidence": 0.8,
-                        "probabilities": {n: (0.8 if n == names[-1] else 0.2 / (len(names) - 1)) for n in names}}
+            out[qid] = {
+                "choice": names[-1],
+                "confidence": 0.8,
+                "probabilities": {n: (0.8 if n == names[-1] else 0.2 / (len(names) - 1)) for n in names},
+            }
         elif q["type"] == "score":
             out[qid] = {"score": 0.0, "confidence": 0.9, "probabilities": {"0": 0.9, "1": 0.1}}
         else:
@@ -61,8 +64,17 @@ class Internet:
         self.requests.append((url, dict(request.header_items()), body, timeout))
         how = self.fail.get(url)
         if isinstance(how, int):
-            raise urllib.error.HTTPError(url, how, "no", {}, io.BytesIO(json.dumps(
-                {"error": "cap_reached" if how == 429 else "revoked_key", "detail": "echo: " + SECRET}).encode()))
+            raise urllib.error.HTTPError(
+                url,
+                how,
+                "no",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {"error": "cap_reached" if how == 429 else "revoked_key", "detail": "echo: " + SECRET}
+                    ).encode()
+                ),
+            )
         if isinstance(how, BaseException):
             if isinstance(how, TimeoutError) and self.clock:
                 self.clock.now += timeout
@@ -71,23 +83,40 @@ class Internet:
             return io.BytesIO(b"<html>bad gateway " + SECRET.encode() + b"</html>")
         if url == GATEWAY_URL:
             questions = body["questions"]
-            payload = {"model": body["model"], "answers": {} if how == "shape" else answer_all(questions),
-                       "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.000012}, "ms": 140,
-                       "label": body.get("label")}
+            payload = {
+                "model": body["model"],
+                "answers": {} if how == "shape" else answer_all(questions),
+                "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.000012},
+                "ms": 140,
+                "label": body.get("label"),
+            }
         elif url == J.URL:
-            payload = {"model": "jev-1.14", "answers": {} if how == "shape" else answer_all(body["questions"]),
-                       "usage": {"input_tokens": 120, "output_tokens": 0}}
+            payload = {
+                "model": "jev-1.14",
+                "answers": {} if how == "shape" else answer_all(body["questions"]),
+                "usage": {"input_tokens": 120, "output_tokens": 0},
+            }
         else:
             questions = json.loads(body["messages"][0]["content"])["questions"]
-            reply = {qid: ({"noul": 0.2} if q["type"] == "noul" else
-                           {"probabilities": ({n: 1 for n in q["criteria"]} if q["type"] == "choice"
-                                              else [1] * len(q["criteria"]))})
-                     for qid, q in questions.items()}
-            payload = {"content": [{"text": "not JSON" if how == "shape" else json.dumps(reply)}],
-                       "usage": {"input_tokens": 300, "output_tokens": 40}}
+            reply = {
+                qid: (
+                    {"noul": 0.2}
+                    if q["type"] == "noul"
+                    else {
+                        "probabilities": (
+                            {n: 1 for n in q["criteria"]} if q["type"] == "choice" else [1] * len(q["criteria"])
+                        )
+                    }
+                )
+                for qid, q in questions.items()
+            }
+            payload = {
+                "content": [{"text": "not JSON" if how == "shape" else json.dumps(reply)}],
+                "usage": {"input_tokens": 300, "output_tokens": 40},
+            }
         if isinstance(how, tuple) and how[0] == "usage":
             payload["usage"] = how[1]
-        if isinstance(how, tuple) and how[0] == "extra":         # text riding along an otherwise valid answer
+        if isinstance(how, tuple) and how[0] == "extra":  # text riding along an otherwise valid answer
             payload["answers"]["leak"] = {"choice": how[1], "note": how[1]}
             for answer in payload["answers"].values():
                 answer["note"] = how[1]
@@ -122,7 +151,7 @@ class Trickle(io.BytesIO):
 @pytest.fixture
 def net(monkeypatch):
     internet = Internet()
-    monkeypatch.setattr("clients.judge.urlopen", internet)       # what every decision transport opens with
+    monkeypatch.setattr("clients.judge.urlopen", internet)  # what every decision transport opens with
     monkeypatch.setattr("clients.judge.gateway_open", internet)  # the Gateway's own (no redirect, no loopback proxy)
     return internet
 
@@ -138,19 +167,28 @@ def wire(api, monkeypatch, gateway_key="gw-synthetic", own_key="", team_llm=True
 
 def audits(api):
     with api.app.state.store.read() as c:
-        return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid")]
+        return [
+            json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid")
+        ]
 
 
 def spends(api):
     with api.app.state.store.read() as c:
-        return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail FROM events WHERE action='judge.spend' ORDER BY rowid")]
+        return [
+            json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='judge.spend' ORDER BY rowid")
+        ]
 
 
 def ask(api):
-    return api.post("/api/v2/decisions", headers=headers(), json={
-        "state": {"subject": "Invoice 4471", "snippet": SECRET}, "questions": QUESTIONS, "label": "mail-triage@1"})
+    return api.post(
+        "/api/v2/decisions",
+        headers=headers(),
+        json={
+            "state": {"subject": "Invoice 4471", "snippet": SECRET},
+            "questions": QUESTIONS,
+            "label": "mail-triage@1",
+        },
+    )
 
 
 # ----------------------------------------------------------------------------- 1. the Gateway answers
@@ -161,11 +199,15 @@ def test_with_a_gateway_key_a_decision_goes_to_the_gateway_as_tico_decide_and_th
     r = ask(api)
     assert r.status_code == 200, r.text
     assert r.json()["model"] == "tico-decide-1.0" and r.json()["answers"]["bucket"]["choice"] == "reply"
-    (url, sent_headers, body, timeout), = net.requests            # one call, to the Gateway, and nothing else
+    ((url, sent_headers, body, timeout),) = net.requests  # one call, to the Gateway, and nothing else
     assert url == GATEWAY_URL and sent_headers["Authorization"] == "Bearer gw-synthetic" and timeout == 8
-    assert body == {"state": {"subject": "Invoice 4471", "snippet": SECRET}, "model": "tico-decide-1.0",
-                    "questions": QUESTIONS, "label": "mail-triage@1"}
-    detail, = audits(api)
+    assert body == {
+        "state": {"subject": "Invoice 4471", "snippet": SECRET},
+        "model": "tico-decide-1.0",
+        "questions": QUESTIONS,
+        "label": "mail-triage@1",
+    }
+    (detail,) = audits(api)
     assert detail["provider"] == "Tico AI Gateway" and detail["model"] == "tico-decide-1.0"
     assert "fallback" not in detail and SECRET not in json.dumps(detail)
     # The Gateway's own price is what the team's monthly cap counts.
@@ -185,8 +227,15 @@ def test_a_tico_model_is_counted_at_tico_decides_price_not_the_unknown_model_cei
 
 
 # ----------------------------------------------------------------------------- 2. falling back, in order
-FAILURES = {"timeout": TimeoutError(), "down": 503, "revoked": 401, "gateway cap": 429, "refused": 422,
-            "garbled": "garbled", "bad shape": "shape"}
+FAILURES = {
+    "timeout": TimeoutError(),
+    "down": 503,
+    "revoked": 401,
+    "gateway cap": 429,
+    "refused": 422,
+    "garbled": "garbled",
+    "bad shape": "shape",
+}
 
 
 @pytest.mark.parametrize("how", list(FAILURES))
@@ -221,8 +270,13 @@ def test_when_the_gateway_fails_the_own_key_answers_then_the_team_llm_then_decid
 @pytest.mark.parametrize("only", ["gateway key, 401", "own TypeSafe key, 403"])
 def test_a_revoked_key_with_no_provider_after_it_is_decide_off_and_the_caller_carries_on(api, monkeypatch, net, only):
     gateway_only = only.startswith("gateway")
-    wire(api, monkeypatch, gateway_key="gw-synthetic" if gateway_only else "",
-         own_key="" if gateway_only else "ts-synthetic", team_llm=False)
+    wire(
+        api,
+        monkeypatch,
+        gateway_key="gw-synthetic" if gateway_only else "",
+        own_key="" if gateway_only else "ts-synthetic",
+        team_llm=False,
+    )
     net.fail[GATEWAY_URL if gateway_only else J.URL] = 401 if gateway_only else 403
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable", r.text
@@ -254,6 +308,7 @@ def no_own_key_settings(monkeypatch, tmp_path):
         if str(self) == "/etc/tico/typesafe-api-key":
             raise FileNotFoundError(str(self))
         return real(self, *args, **kwargs)
+
     monkeypatch.setattr(Path, "read_text", read_text)
     settings = Settings.from_env()
     assert settings.gateway_key == "gw-synthetic" and settings.typesafe_api_key == ""
@@ -261,14 +316,18 @@ def no_own_key_settings(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("team_llm", [True, False])
-def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(api, monkeypatch, net, tmp_path,
-                                                                                team_llm):
+def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(
+    api, monkeypatch, net, tmp_path, team_llm
+):
     """The Gateway's cap is the team's one Jev budget: at 429 cap_reached the team's LLM answers or Decide is off,
     and no call goes to TypeSafe on another key, on the decisions route or on Slack routing."""
     env = no_own_key_settings(monkeypatch, tmp_path)
     settings = api.app.state.store.settings
-    settings.gateway_key, settings.gateway_url, settings.typesafe_api_key = \
-        env.gateway_key, env.gateway_url, env.typesafe_api_key
+    settings.gateway_key, settings.gateway_url, settings.typesafe_api_key = (
+        env.gateway_key,
+        env.gateway_url,
+        env.typesafe_api_key,
+    )
     api.app.state.judge = B.primary_engine(settings)
     backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
@@ -285,11 +344,15 @@ def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(ap
 
 
 @pytest.mark.parametrize("team_llm", [True, False])
-def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesafe_directly(hub, monkeypatch, net,
-                                                                                            tmp_path, team_llm):
+def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesafe_directly(
+    hub, monkeypatch, net, tmp_path, team_llm
+):
     env = no_own_key_settings(monkeypatch, tmp_path)
-    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = \
-        env.gateway_key, env.gateway_url, env.typesafe_api_key
+    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = (
+        env.gateway_key,
+        env.gateway_url,
+        env.typesafe_api_key,
+    )
     backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
     net.fail[GATEWAY_URL] = 429
@@ -297,7 +360,9 @@ def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesa
     gw.verify_app()
     assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
     gw.tick()
-    assert len(net.calls(GATEWAY_URL)) == 1 and net.calls(J.URL) == [], "a capped Gateway never falls through to TypeSafe"
+    assert len(net.calls(GATEWAY_URL)) == 1 and net.calls(J.URL) == [], (
+        "a capped Gateway never falls through to TypeSafe"
+    )
     if team_llm:
         detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
         assert detail["provider"] == "Anthropic" and len(net.calls(ANTHROPIC)) == 1
@@ -305,8 +370,11 @@ def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesa
 
 def test_a_request_the_contract_refuses_is_refused_before_any_provider_is_asked(api, monkeypatch, net):
     wire(api, monkeypatch, own_key="ts-synthetic")
-    r = api.post("/api/v2/decisions", headers=headers(), json={"state": {}, "questions": {
-        "x": {"type": "choice", "instructions": "Pick", "criteria": {"only": None}}}})
+    r = api.post(
+        "/api/v2/decisions",
+        headers=headers(),
+        json={"state": {}, "questions": {"x": {"type": "choice", "instructions": "Pick", "criteria": {"only": None}}}},
+    )
     assert r.status_code == 422 and net.requests == []
 
 
@@ -351,7 +419,9 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable" and B._RESERVED[0] == 0
     assert [(row["model"], row.get("unusable")) for row in spends(api)[2:]] == [
-        ("tico-decide-1.0", True), ("claude-sonnet-5-5", True)]
+        ("tico-decide-1.0", True),
+        ("claude-sonnet-5-5", True),
+    ]
     assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6)
     store.settings.decisions_monthly_usd = round(sum(row["cost_usd"] for row in spends(api)), 6)
     asked = len(net.requests)
@@ -359,16 +429,20 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     assert r.status_code == 429 and r.json()["error"]["code"] == "spend_cap" and len(net.requests) == asked
 
 
-@pytest.mark.parametrize("usage", [{"input_tokens": float("nan"), "cost_usd": float("inf")},
-                                   {"input_tokens": -5, "cost_usd": -1}, {}, "lots"], ids=["nan-inf", "negative", "none", "text"])
+@pytest.mark.parametrize(
+    "usage",
+    [{"input_tokens": float("nan"), "cost_usd": float("inf")}, {"input_tokens": -5, "cost_usd": -1}, {}, "lots"],
+    ids=["nan-inf", "negative", "none", "text"],
+)
 def test_a_usage_that_cannot_be_read_is_counted_at_the_calls_most_not_as_nothing(api, monkeypatch, net, usage):
     wire(api, monkeypatch)
     net.fail[GATEWAY_URL] = ("usage", usage)
     r = ask(api)
     assert r.status_code == 200 and r.json()["model"] == "tico-decide-1.0"
-    most = B.reservation(api.app.state.store.settings, [J.GATEWAY_MODEL],
-                         {"subject": "Invoice 4471", "snippet": SECRET}, QUESTIONS)
-    row, = spends(api)
+    most = B.reservation(
+        api.app.state.store.settings, [J.GATEWAY_MODEL], {"subject": "Invoice 4471", "snippet": SECRET}, QUESTIONS
+    )
+    (row,) = spends(api)
     assert row["cost_usd"] == most > 0 and row["usage"] == "unknown" and B._RESERVED[0] == 0
     assert r.json()["usage"] == audits(api)[-1]["usage"] == {}, "a bad number is dropped where the answer comes in"
 
@@ -392,15 +466,19 @@ def test_the_slack_gateway_counts_an_unusable_answer_with_the_one_after_it(hub, 
     for name in J.LLM_KEYS.values():
         monkeypatch.delenv(name, raising=False)
     hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = "gw-synthetic", GATEWAY_URL, ""
-    monkeypatch.setattr(B, "fallback_engine",
-                        lambda *args, **kwargs: J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5"))
+    monkeypatch.setattr(
+        B, "fallback_engine", lambda *args, **kwargs: J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5")
+    )
     net.fail[GATEWAY_URL] = "shape"
     gw = G.Gateway(hub, FakeSlack(), clock=Clock())
     gw.verify_app()
     assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
     gw.tick()
     spent = [json.loads(r["detail"]) for r in rows(hub, "SELECT detail FROM events WHERE action='judge.spend'")]
-    assert [(row["model"], row.get("unusable")) for row in spent] == [("tico-decide-1.0", True), ("claude-sonnet-5-5", None)]
+    assert [(row["model"], row.get("unusable")) for row in spent] == [
+        ("tico-decide-1.0", True),
+        ("claude-sonnet-5-5", None),
+    ]
     detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
     assert detail["provider"] == "Anthropic" and detail["cost_usd"] == round(sum(row["cost_usd"] for row in spent), 6)
 
@@ -438,8 +516,9 @@ MARKER = "upstream-echo-of-the-mail"
 
 
 @pytest.mark.parametrize("provider", ["gateway", "own key"])
-def test_only_the_contracts_answer_fields_reach_the_caller_never_extra_text_from_a_provider(api, monkeypatch, net,
-                                                                                             provider):
+def test_only_the_contracts_answer_fields_reach_the_caller_never_extra_text_from_a_provider(
+    api, monkeypatch, net, provider
+):
     wire(api, monkeypatch, own_key="ts-synthetic")
     if provider == "own key":
         net.fail[GATEWAY_URL] = 503
@@ -456,10 +535,16 @@ def test_only_the_contracts_answer_fields_reach_the_caller_never_extra_text_from
 def test_a_score_answer_keeps_its_levels_probabilities_and_the_questions_own_legend():
     questions = {"urgency": {"type": "score", "instructions": "How urgent?", "criteria": ["low", "high"]}}
     for given in ({"0": 0.9, "1": 0.1, "2": 0.5, "x": MARKER}, [0.9, 0.1]):
-        got = J.check_answers({"urgency": {"score": 0.1, "confidence": 0.9, "probabilities": given, "why": MARKER},
-                               "other": {"noul": 0.5}}, questions)
-        assert got == {"urgency": {"score": 0.1, "confidence": 0.9, "probabilities": {0: 0.9, 1: 0.1},
-                                   "legend": ["low", "high"]}}
+        got = J.check_answers(
+            {
+                "urgency": {"score": 0.1, "confidence": 0.9, "probabilities": given, "why": MARKER},
+                "other": {"noul": 0.5},
+            },
+            questions,
+        )
+        assert got == {
+            "urgency": {"score": 0.1, "confidence": 0.9, "probabilities": {0: 0.9, 1: 0.1}, "legend": ["low", "high"]}
+        }
 
 
 def test_an_answer_that_trickles_in_is_cut_off_at_its_deadline_and_the_next_provider_answers(api, monkeypatch, net):
@@ -467,7 +552,7 @@ def test_an_answer_that_trickles_in_is_cut_off_at_its_deadline_and_the_next_prov
     monkeypatch.setattr(J, "clock", clock)
     net.clock = clock
     wire(api, monkeypatch, own_key="ts-synthetic")
-    net.fail[GATEWAY_URL] = ("trickle", 2)                     # a byte every 2 s: each wait is under the 8 s timeout
+    net.fail[GATEWAY_URL] = ("trickle", 2)  # a byte every 2 s: each wait is under the 8 s timeout
     start = clock.now
     r = ask(api)
     assert r.status_code == 200 and r.json()["model"] == "jev-1.14", "the Gateway's slow answer is not waited for"
@@ -492,22 +577,29 @@ def self_signed(tmp_path):
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.x509.oid import NameOID
+
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
     now = datetime.datetime.now(datetime.timezone.utc)
-    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
-            .serial_number(1).not_valid_before(now - datetime.timedelta(days=1))
-            .not_valid_after(now + datetime.timedelta(days=1))
-            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
-            .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
-            .add_extension(x509.KeyUsage(True, False, False, False, False, True, False, False, False), True)
-            .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False)
-            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), False)
-            .sign(key, hashes.SHA256()))
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+        .add_extension(x509.KeyUsage(True, False, False, False, False, True, False, False, False), True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), False)
+        .sign(key, hashes.SHA256())
+    )
     (tmp_path / "cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    (tmp_path / "key.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM,
-                                                         serialization.PrivateFormat.PKCS8,
-                                                         serialization.NoEncryption()))
+    (tmp_path / "key.pem").write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
     return tmp_path / "cert.pem", tmp_path / "key.pem"
 
 
@@ -527,13 +619,14 @@ class Dribble(socketserver.BaseRequestHandler):
                 time.sleep(0.1)
                 conn.sendall(b"a")
         except (OSError, ssl.SSLError):
-            pass                                    # the client shut the connection: what the test wants
+            pass  # the client shut the connection: what the test wants
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("scheme", ["http", "https"])
-def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_provider_answers(monkeypatch, tmp_path,
-                                                                                               scheme):
+def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_provider_answers(
+    monkeypatch, tmp_path, scheme
+):
     server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Dribble)
     server.daemon_threads, server.tls = True, None
     if scheme == "https":
@@ -548,6 +641,7 @@ def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_pr
 
     def answers(state, questions, label=None):
         return {"answers": answer_all(questions), "model": "next-provider"}
+
     try:
         monkeypatch.setattr(B, "CHAIN_SECONDS", 2.5)
         start = time.monotonic()
@@ -558,7 +652,8 @@ def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_pr
         start = time.monotonic()
         with pytest.raises(J.JudgeError) as caught:
             B.ordered([J.gateway("gw-synthetic", url, timeout=1.2), J.gateway("gw-synthetic", url)])(
-                {"team": "Acme"}, QUESTIONS)
+                {"team": "Acme"}, QUESTIONS
+            )
         assert caught.value.code == "unavailable" and time.monotonic() - start < B.CHAIN_SECONDS + 1
     finally:
         server.shutdown()
@@ -567,6 +662,7 @@ def test_a_peer_that_dribbles_its_headers_is_cut_at_the_deadline_and_the_next_pr
 
 def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes(monkeypatch):
     from clients import remotecli
+
     waits = []
 
     class Stop(Exception):
@@ -575,27 +671,35 @@ def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes
     def client(url, token, timeout=15, retries=3):
         waits.append(timeout)
         raise Stop()
+
     monkeypatch.setenv("HUB_API_URL", "https://hub.example")
     monkeypatch.setattr(remotecli, "Client", client)
     with pytest.raises(Stop):
         remotecli.run(type("Args", (), {"cmd": "decision", "fn": "decision ask"})())
     assert waits == [45]
-    assert J.HUB_WAIT > B.SLOW_CHAIN_SECONDS > B.CHAIN_SECONDS      # `J.from_env` through the Hub, Decisions at any level
+    assert J.HUB_WAIT > B.SLOW_CHAIN_SECONDS > B.CHAIN_SECONDS  # `J.from_env` through the Hub, Decisions at any level
     assert B.SLOW_CHAIN_SECONDS + 1 < min(waits)
     # The MCP tools' client keeps its ordinary deadline but waits past the chain on the routes that run one.
     from clients import tico
     from clients.tico import Client, SLOW_WAIT
+
     opened = []
 
     class Opener:
         def open(self, request, timeout):
             opened.append((request.full_url.rsplit("/api/v2/", 1)[1], timeout))
             return io.BytesIO(b"{}")
+
     monkeypatch.setattr(tico.urllib.request, "build_opener", lambda *args: Opener())
     hub = Client("https://hub.example", "lease", timeout=30)
     for path in ("decisions", "gateway/search", "gateway/fetch", "tasks"):
         hub.request("POST", "/api/v2/" + path, {})
-    assert opened == [("decisions", SLOW_WAIT), ("gateway/search", SLOW_WAIT), ("gateway/fetch", SLOW_WAIT), ("tasks", 30)]
+    assert opened == [
+        ("decisions", SLOW_WAIT),
+        ("gateway/search", SLOW_WAIT),
+        ("gateway/fetch", SLOW_WAIT),
+        ("tasks", 30),
+    ]
     assert SLOW_WAIT > B.SLOW_CHAIN_SECONDS and "timeout=30)" in (ROOT / "clients" / "hubmcp.py").read_text()
 
 
@@ -607,14 +711,21 @@ def test_with_no_gateway_key_and_no_other_provider_decide_is_off_and_callers_car
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unconfigured"
     with api.app.state.store.read() as c:
-        assert B.server_engine(api.app.state.store, c, api.app.state.judge) is None   # listening, triage: Decide off
+        assert B.server_engine(api.app.state.store, c, api.app.state.judge) is None  # listening, triage: Decide off
     assert net.requests == []
 
 
 # ----------------------------------------------------------------------------- 5. config: no TypeSafe key by default
 def test_the_server_reads_the_gateway_key_and_url_and_no_typesafe_key_by_default(monkeypatch, tmp_path):
-    for name in ("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN",
-                 "TICO_GATEWAY_URL", "TICO_HQ_URL", "TICO_REHEARSAL"):
+    for name in (
+        "TYPESAFE_API_KEY",
+        "TICO_TYPESAFE_SECRET_ARN",
+        "TICO_GATEWAY_KEY",
+        "TICO_GATEWAY_SECRET_ARN",
+        "TICO_GATEWAY_URL",
+        "TICO_HQ_URL",
+        "TICO_REHEARSAL",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
     read = []
@@ -648,17 +759,27 @@ def test_no_default_setup_or_example_config_holds_a_typesafe_key():
     for name in ("server", "slack"):
         env = services[name]["environment"]
         assert {"TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "TICO_GATEWAY_URL"} <= set(env)
-        assert all(env[key] is None for key in ("TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "TICO_GATEWAY_URL",
-                                                "TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN")), \
-            "keys pass through the operator's own environment; none is set in the file"
+        assert all(
+            env[key] is None
+            for key in (
+                "TICO_GATEWAY_KEY",
+                "TICO_GATEWAY_SECRET_ARN",
+                "TICO_GATEWAY_URL",
+                "TYPESAFE_API_KEY",
+                "TICO_TYPESAFE_SECRET_ARN",
+            )
+        ), "keys pass through the operator's own environment; none is set in the file"
 
 
 # ----------------------------------------------------------------------------- the Slack gateway routes the same way
 def test_slack_routing_asks_the_gateway_first_and_audits_it(hub, monkeypatch, net):
     for name in J.LLM_KEYS.values():
         monkeypatch.delenv(name, raising=False)
-    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = \
-        "gw-synthetic", GATEWAY_URL, "ts-synthetic"
+    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = (
+        "gw-synthetic",
+        GATEWAY_URL,
+        "ts-synthetic",
+    )
     gw = G.Gateway(hub, FakeSlack(), clock=Clock())
     gw.verify_app()
     assert [step.provider for step in gw.judge.steps] == ["Tico AI Gateway", "TypeSafe"]
@@ -680,6 +801,7 @@ class _Recorder:
 
     def __init__(self, reply):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
         calls = self.calls = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -690,6 +812,7 @@ class _Recorder:
                 self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 calls.append((self.path, self.headers.get("Authorization", "")))
                 reply(self)
+
             do_GET = do_POST = do_CONNECT = _any
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -719,13 +842,20 @@ def test_decide_sends_the_gateway_key_only_where_it_is_set_never_through_a_redir
     redirect, a plain-http loopback Gateway is reached without the environment's proxy, and a URL that is neither
     https nor this computer gets nothing (the next provider answers)."""
     other = _Recorder(_answers)
-    moved = _Recorder(lambda h: (h.send_response(302), h.send_header("Location", other.url + "/v1/decisions"),
-                                 h.send_header("Content-Length", "0"), h.end_headers()))
+    moved = _Recorder(
+        lambda h: (
+            h.send_response(302),
+            h.send_header("Location", other.url + "/v1/decisions"),
+            h.send_header("Content-Length", "0"),
+            h.end_headers(),
+        )
+    )
     gateway = _Recorder(_answers)
     proxy = _Recorder(lambda h: _json(h, 502, {}))
     try:
-        request = lambda url: urllib.request.Request(url, data=b"{}", method="POST",
-                                                     headers={"Authorization": "Bearer gw-synthetic"})
+        request = lambda url: urllib.request.Request(
+            url, data=b"{}", method="POST", headers={"Authorization": "Bearer gw-synthetic"}
+        )
         # Control: urllib's default opener follows the redirect and hands the key to the other server.
         with J.urlopen(request(moved.url + "/v1/decisions"), timeout=5) as response:
             response.read()
@@ -758,9 +888,14 @@ def test_decide_sends_the_gateway_key_only_where_it_is_set_never_through_a_redir
 
         def answers(state, questions, label=None):
             return {"answers": answer_all(questions), "model": "next-provider"}
-        for url in ("http://localhost.acme.example/v1/decisions", "http://127.0.0.1.acme.example/v1/decisions",
-                    "http://hq.example/v1/decisions", "https://user@hq.example/v1/decisions",
-                    "https://hq.example/v1/decisions?x=1"):
+
+        for url in (
+            "http://localhost.acme.example/v1/decisions",
+            "http://127.0.0.1.acme.example/v1/decisions",
+            "http://hq.example/v1/decisions",
+            "https://user@hq.example/v1/decisions",
+            "https://hq.example/v1/decisions?x=1",
+        ):
             result = B.ordered([J.gateway("gw-synthetic", url, opener=spy), answers])({"team": "Acme"}, QUESTIONS)
             assert result["model"] == "next-provider" and result["fallback"] == "unconfigured", url
         assert seen == []

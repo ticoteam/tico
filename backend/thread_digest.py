@@ -14,6 +14,7 @@ unread stays unread until it is on again. The mail is the install's Tico account
 it mails only an address on this install's people list and holds each person to one digest an hour. A run with
 nothing new sends nothing and writes nothing.
 """
+
 import logging
 import re
 import unicodedata
@@ -22,31 +23,40 @@ from . import hubdb as H
 from . import threads
 
 LOG = logging.getLogger("tico.thread_digest")
-MAX_THREADS = 20          # the issuer takes at most 20 threads in one email; the rest wait for the next run
-TITLE_CHARS = 200         # the issuer's limit on a title
-MAX_UNREAD = 999          # the issuer's limit on a count
-WINDOW = 1000             # the newest unread messages of a thread that one run reads; a bigger backlog counts as this
+MAX_THREADS = 20  # the issuer takes at most 20 threads in one email; the rest wait for the next run
+TITLE_CHARS = 200  # the issuer's limit on a title
+MAX_UNREAD = 999  # the issuer's limit on a count
+WINDOW = 1000  # the newest unread messages of a thread that one run reads; a bigger backlog counts as this
 FALLBACK_TITLE = "Untitled thread"
 THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 # A thread this person follows on digest that has a message past their read mark and past the last digest.
-_BEHIND = ("f.actor=? AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
-           "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0))")
+_BEHIND = (
+    "f.actor=? AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
+    "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0))"
+)
 
 
 def candidates(c):
     """The people with a thread to list: a followed thread on digest that is behind for them."""
-    return [r[0] for r in c.execute(
-        "SELECT DISTINCT f.actor FROM thread_followers f JOIN conversations conv ON conv.id=f.thread_id "
-        "LEFT JOIN thread_digests td ON td.thread_id=f.thread_id AND td.actor=f.actor "
-        "WHERE f.actor LIKE 'human:%' AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
-        "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0)) ORDER BY f.actor").fetchall()]
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT f.actor FROM thread_followers f JOIN conversations conv ON conv.id=f.thread_id "
+            "LEFT JOIN thread_digests td ON td.thread_id=f.thread_id AND td.actor=f.actor "
+            "WHERE f.actor LIKE 'human:%' AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
+            "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0)) ORDER BY f.actor"
+        ).fetchall()
+    ]
 
 
 def title_of(subject):
     """A thread's title on one line, as the issuer reads it: whitespace runs collapse to a space and control characters
     go, so the length the issuer checks is the length sent here."""
-    kept = "".join(" " if ch.isspace() else ch for ch in str(subject or "")
-                   if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cs"))
+    kept = "".join(
+        " " if ch.isspace() else ch
+        for ch in str(subject or "")
+        if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cs")
+    )
     text = " ".join(kept.split())[:TITLE_CHARS].strip()
     return text or FALLBACK_TITLE
 
@@ -58,8 +68,9 @@ def _plan(c, actor):
     from . import people as P
     from . import views
     from .auth import standing
+
     pid = H.actor_id(actor)
-    if standing(c, pid):                              # left, or signed in off: no digest
+    if standing(c, pid):  # left, or signed in off: no digest
         return None
     person = P.person(pid, views.roster(c))
     if not person or person.get("email_digest") is False:
@@ -73,31 +84,46 @@ def _plan(c, actor):
         "SELECT f.thread_id, f.last_read_seq, COALESCE(td.emailed_seq, 0) AS emailed, conv.subject, conv.root_id "
         "FROM thread_followers f JOIN conversations conv ON conv.id=f.thread_id "
         "LEFT JOIN thread_digests td ON td.thread_id=f.thread_id AND td.actor=f.actor "
-        f"WHERE {_BEHIND} ORDER BY conv.last_message_at DESC, f.thread_id", (actor,)).fetchall()
+        f"WHERE {_BEHIND} ORDER BY conv.last_message_at DESC, f.thread_id",
+        (actor,),
+    ).fetchall()
     for row in behind:
         if not THREAD_ID.fullmatch(row["thread_id"] or ""):
             continue
-        window = c.execute(f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND "
-                           f"{threads.unread_message_sql()} ORDER BY m.seq DESC LIMIT ?",
-                           (row["thread_id"], row["last_read_seq"], actor, actor, WINDOW)).fetchall()
+        window = c.execute(
+            f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND "
+            f"{threads.unread_message_sql()} ORDER BY m.seq DESC LIMIT ?",
+            (row["thread_id"], row["last_read_seq"], actor, actor, WINDOW),
+        ).fetchall()
         readable = [m for m in window if threads.readable(c, viewer, dict(m))]
         if not any(m["seq"] > row["emailed"] for m in readable):
             continue
-        listed.append({"thread_id": row["thread_id"], "title": title_of(row["subject"]),
-                       "unread": min(len(readable), MAX_UNREAD), "covers": window[0]["seq"]})
+        listed.append(
+            {
+                "thread_id": row["thread_id"],
+                "title": title_of(row["subject"]),
+                "unread": min(len(readable), MAX_UNREAD),
+                "covers": window[0]["seq"],
+            }
+        )
     listed = listed[:MAX_THREADS]
-    return {"actor": actor, "email": email,
-            "items": [{"title": t["title"], "unread": t["unread"], "path": "/#/thread/" + t["thread_id"]}
-                      for t in listed],
-            "marks": [(t["thread_id"], t["covers"]) for t in listed],
-            "unread": sum(t["unread"] for t in listed)}
+    return {
+        "actor": actor,
+        "email": email,
+        "items": [{"title": t["title"], "unread": t["unread"], "path": "/#/thread/" + t["thread_id"]} for t in listed],
+        "marks": [(t["thread_id"], t["covers"]) for t in listed],
+        "unread": sum(t["unread"] for t in listed),
+    }
 
 
 def _mark_sent(c, actor, marks):
     now = H.now()
-    c.executemany("INSERT INTO thread_digests(thread_id, actor, emailed_seq, emailed_at) VALUES(?,?,?,?) "
-                  "ON CONFLICT(thread_id, actor) DO UPDATE SET emailed_seq=MAX(emailed_seq, excluded.emailed_seq), "
-                  "emailed_at=excluded.emailed_at", [(thread_id, actor, seq, now) for thread_id, seq in marks])
+    c.executemany(
+        "INSERT INTO thread_digests(thread_id, actor, emailed_seq, emailed_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(thread_id, actor) DO UPDATE SET emailed_seq=MAX(emailed_seq, excluded.emailed_seq), "
+        "emailed_at=excluded.emailed_at",
+        [(thread_id, actor, seq, now) for thread_id, seq in marks],
+    )
 
 
 def _send_one(store, send, actor):

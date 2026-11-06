@@ -52,16 +52,32 @@ class RefusingGateway:
 
             def do_GET(self):
                 if self.edge():
-                    self.answer(200, {"status": "active", "month": "2026-10", "cap_usd": 50.0, "spent_usd": 1.0,
-                                      "used": 0.02, "warning": False, "cap_reached": False})
+                    self.answer(
+                        200,
+                        {
+                            "status": "active",
+                            "month": "2026-10",
+                            "cap_usd": 50.0,
+                            "spent_usd": 1.0,
+                            "used": 0.02,
+                            "warning": False,
+                            "cap_reached": False,
+                        },
+                    )
 
             def do_POST(self):
                 asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 if not self.edge():
                     return
                 if self.path.endswith("/decisions"):
-                    self.answer(200, {"model": "tico-decide-1.0", "answers": answer_all(asked["questions"]),
-                                      "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001}})
+                    self.answer(
+                        200,
+                        {
+                            "model": "tico-decide-1.0",
+                            "answers": answer_all(asked["questions"]),
+                            "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001},
+                        },
+                    )
                 else:
                     self.answer(200, {"choices": [{"message": {"role": "assistant", "content": '{"ok": true}'}}]})
 
@@ -140,8 +156,17 @@ def test_without_tico_s_user_agent_the_edge_refuses_the_call_and_decide_falls_th
     assert refused.value.status == 403 and fake.seen == [("POST", "/v1/gateway/decisions", "Python-urllib/3.12")]
 
 
-@pytest.mark.parametrize("version, sent", [("0.3.65", "0.3.65"), ("v1.2.3-rc.1", "1.2.3-rc.1"), ("", "dev"),
-                                           ("dev", "dev"), ("1.0\r\nX-Injected: 1", "dev"), ("x" * 65, "dev")])
+@pytest.mark.parametrize(
+    "version, sent",
+    [
+        ("0.3.65", "0.3.65"),
+        ("v1.2.3-rc.1", "1.2.3-rc.1"),
+        ("", "dev"),
+        ("dev", "dev"),
+        ("1.0\r\nX-Injected: 1", "dev"),
+        ("x" * 65, "dev"),
+    ],
+)
 def test_the_user_agent_names_the_app_version_and_never_carries_a_bad_header_value(version, sent, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", version)
     assert G.user_agent() == "Tico-Client/" + sent

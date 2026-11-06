@@ -50,7 +50,7 @@ Below, to "call" a tool means either way.
    `hub_task_update` (`{"id":"<task id>","status":"done","note":"<the result>"}`): `status: done` with a
    short result note, or `status: waiting` with the reason
    (who or what you are waiting for). Waiting on a person to act: set `waiting_on` to their id and
-   write the note as your ask to them, so it reaches their Needs you: one or two plain sentences saying
+   write the note as your question to them; it files them a question task under yours, in their Needs you: one or two plain sentences saying
    what you need and what happens after, with no ids, hashes, file paths or tool names (Tico refuses
    anything else), for example "Approve the video tool trial for Thursday? If yes, I'll send the invite." A task you cannot touch this run stays as it is; do not
    churn statuses. The requester closes a task you finished.

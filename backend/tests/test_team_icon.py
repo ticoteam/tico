@@ -32,6 +32,7 @@ def test_icon_owner_rights_public_png_cache_and_replacement(api):
 
 def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
     from PIL.PngImagePlugin import PngInfo
+
     source = io.BytesIO()
     metadata = PngInfo()
     metadata.add_text("private", "acme internal")
@@ -42,4 +43,7 @@ def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
     with Image.open(io.BytesIO(response.content)) as result:
         assert result.size == (300, 300) and not result.info
         assert result.getpixel((0, 0))[3] == 0
-    assert api.get("/api/v2/team/icon", headers={"If-None-Match": '"other", W/' + response.headers["etag"]}).status_code == 304
+    assert (
+        api.get("/api/v2/team/icon", headers={"If-None-Match": '"other", W/' + response.headers["etag"]}).status_code
+        == 304
+    )

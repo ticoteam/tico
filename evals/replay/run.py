@@ -17,6 +17,7 @@ Cases that are not signed by a person (`reviewed_by`) or still hold a secret-loo
 server that holds the cases' original tasks (the live team). A case whose bot never runs is reported as could not run.
 Exit code 0 only when every case ran and none regressed.
 """
+
 import argparse
 import importlib.util
 import json
@@ -52,8 +53,18 @@ def prompt_of(server, token, bot):
 def prepare(server, token, me, case):
     """The case's opening state, owned by the caller so nothing runs until it is handed over."""
     task = case["task"]
-    made = ok(server, "POST", "tasks", {"title": task["title"], "body": task.get("body") or task["title"], "owner": me,
-                                        "acceptance_criteria": task.get("acceptance_criteria") or []}, token)
+    made = ok(
+        server,
+        "POST",
+        "tasks",
+        {
+            "title": task["title"],
+            "body": task.get("body") or task["title"],
+            "owner": me,
+            "acceptance_criteria": task.get("acceptance_criteria") or [],
+        },
+        token,
+    )
     tid = made["task"]["id"]
     for f in case.get("files") or []:
         ok(server, "POST", f"tasks/{tid}/files", {"name": f["name"], "text": f.get("text") or "(empty)"}, token)
@@ -78,8 +89,10 @@ def outcome(server, token, tid, bot):
 
 def choose(ask, text):
     """A structured question answered with the case's words: the option whose label they match, else as Other."""
-    answers = {q["id"]: [o["label"] for o in q.get("options") or [] if o["label"].casefold() == text.strip().casefold()][:1]
-               for q in ask.get("questions") or []}
+    answers = {
+        q["id"]: [o["label"] for o in q.get("options") or [] if o["label"].casefold() == text.strip().casefold()][:1]
+        for q in ask.get("questions") or []
+    }
     return {"answers": answers, **({"other": text} if not all(answers.values()) else {})}
 
 
@@ -91,7 +104,8 @@ def answer(server, token, me, tid, now, text):
     if mine:
         q = mine[0]
         if q["ask"]:
-            ok(server, "POST", f"tasks/{q['task']}/answers", {"target": {"comment": q["id"]}, **choose(q["ask"], text)}, token)
+            target = q["ask"].get("target") or {"comment": q["id"]}
+            ok(server, "POST", f"tasks/{q['task']}/answers", {"target": target, **choose(q["ask"], text)}, token)
         else:
             ok(server, "POST", f"messages/{q['id']}/answer", {"text": text}, token)
         return True
@@ -138,8 +152,11 @@ def inside_repo(path):
 def source_team(server, token, cases):
     """True when the server holds a case's original task: that is the live team the cases came from, not a scratch
     team, and replaying there would hand real tasks to its live bots."""
-    return any(server.request("GET", f"tasks/{(c.get('source') or {}).get('task')}", token=token)[0] == 200
-               for c in cases if (c.get("source") or {}).get("task"))
+    return any(
+        server.request("GET", f"tasks/{(c.get('source') or {}).get('task')}", token=token)[0] == 200
+        for c in cases
+        if (c.get("source") or {}).get("task")
+    )
 
 
 def main(argv=None):
@@ -178,15 +195,26 @@ def main(argv=None):
         try:
             prompts.setdefault(case["bot"], prompt_of(server, args.token, case["bot"]))
             tid, now = run_one(server, args.token, me, case, quiet=args.quiet, timeout=args.timeout)
-        except (RuntimeError, OSError) as exc:     # OSError: a dropped connection or a read timeout
+        except (RuntimeError, OSError) as exc:  # OSError: a dropped connection or a read timeout
             rows.append({"id": case["id"], "verdict": "error", "why": [str(exc)], "before": before})
             print(f"{case['id']:30} ERROR {exc}")
             continue
         after = replay.measure(case, now)
         verdict, why = replay.compare(before, after)
         same_prompt = prompts[case["bot"]] == (case.get("prompt") or {}).get("sha256")
-        rows.append({"id": case["id"], "task": tid, "verdict": verdict, "why": why, "before": before, "after": after,
-                     "prompt": prompts[case["bot"]], "same_prompt": same_prompt, "transcript": now["transcript"]})
+        rows.append(
+            {
+                "id": case["id"],
+                "task": tid,
+                "verdict": verdict,
+                "why": why,
+                "before": before,
+                "after": after,
+                "prompt": prompts[case["bot"]],
+                "same_prompt": same_prompt,
+                "transcript": now["transcript"],
+            }
+        )
         print(f"{case['id']:30} {verdict.upper():10} {'; '.join(why)}")
     note = "Prompts: " + ", ".join(f"{bot} {digest[:12]}" for bot, digest in sorted(prompts.items()))
     text = replay.report(rows, "Behaviour replay" + (f": {args.candidate}" if args.candidate else ""), note)

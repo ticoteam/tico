@@ -21,8 +21,10 @@ def test_old_and_deleted_words_leave_retries_sql_events_and_bot_context(api):
     assert retry.json()["comment"]["body"] == "Replacement words"
     deleted = post(api, f"{path}/{mid}/delete", {})
     assert deleted["comment"]["body"] == "" and deleted["comments"] == []
-    for route, body, request_headers in ((path, {"text": "Withdrawn original words"}, original_headers),
-                                         (f"{path}/{mid}", {"text": "Replacement words"}, edited_headers)):
+    for route, body, request_headers in (
+        (path, {"text": "Withdrawn original words"}, original_headers),
+        (f"{path}/{mid}", {"text": "Replacement words"}, edited_headers),
+    ):
         retry = api.post("/api/v2/" + route, json=body, headers=request_headers)
         assert retry.status_code == 200, retry.text
         assert "Withdrawn original words" not in retry.text and "Replacement words" not in retry.text
@@ -52,9 +54,11 @@ def test_current_task_read_is_required_even_when_replaying_an_authorized_edit(ap
     assert edited.status_code == 200, edited.text
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
-    for route, body, request_headers in ((path, {"text": "My replacement words"}, same_headers),
-                                         (path, {"text": "Another edit"}, headers("ben-test")),
-                                         (path + "/delete", {}, headers("ben-test"))):
+    for route, body, request_headers in (
+        (path, {"text": "My replacement words"}, same_headers),
+        (path, {"text": "Another edit"}, headers("ben-test")),
+        (path + "/delete", {}, headers("ben-test")),
+    ):
         refused = api.post("/api/v2/" + route, json=body, headers=request_headers)
         assert refused.status_code in (403, 404), refused.text
         assert "My replacement words" not in refused.text
@@ -72,8 +76,11 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         elif handoff == "job":
             c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (said["id"],))
         elif handoff == "slack":
-            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
-                      "VALUES(?,'Dexample','','ops',?,'ready',?,?)", (said["id"], said["body"], H.now(), H.now()))
+            c.execute(
+                "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
+                "VALUES(?,'Dexample','','ops',?,'ready',?,?)",
+                (said["id"], said["body"], H.now(), H.now()),
+            )
         elif handoff == "context":
             H.turn_start(c, "bot:ops", "ops")
         else:
