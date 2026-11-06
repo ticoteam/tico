@@ -24,7 +24,7 @@ def bundle(text=SKILL, *extra):
 
 
 def proposal(api, files=None, token="ana-test", name="triage", expected=201, **body):
-    r = api.post("/api/v2/skills/proposals", json={"name": name, "files": files or bundle(), **body}, headers=headers(token))
+    r = api.post("/api/v2/skills/proposals", json={"name": name, "files": files or bundle(SKILL.replace("name: triage", "name: " + name)), **body}, headers=headers(token))
     assert r.status_code == expected, r.text
     return r.json()["proposal"] if expected == 201 else r.json()
 
@@ -223,7 +223,7 @@ def test_a_proposal_is_withdrawn_only_by_its_proposer(api):
 
 def test_events_name_the_skill_and_never_hold_its_text(api):
     publish(api)
-    pid = proposal(api, bundle(NEWER), name="billing")["id"]
+    pid = proposal(api, bundle(NEWER.replace("name: triage", "name: billing")), name="billing")["id"]
     decide(api, pid, "decline", {"reason": "Not yet"})
     with api.app.state.store.read() as c:
         rows = [dict(r) for r in c.execute("SELECT action, detail FROM events WHERE action LIKE 'skill.%'").fetchall()]
@@ -264,8 +264,8 @@ def test_an_install_is_taken_off_by_someone_with_the_rights_to_add_it(api):
         restrict(c, bot_id(api, "ops"), see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
     made = api.post("/api/v2/skills/triage/installs", json={"target_type": "Bot", "target_id": "ops", "version_policy": "latest"},
                     headers=headers("ana-test")).json()
-    assert api.delete(f"/api/v2/skills/installs/{made['id']}", json={}, headers=headers("cara-test")).status_code == 403
-    assert api.delete(f"/api/v2/skills/installs/{made['id']}", json={}, headers=headers("ana-test")).status_code == 200
+    assert api.delete(f"/api/v2/skills/installs/{made['id']}", headers=headers("cara-test")).status_code == 403
+    assert api.delete(f"/api/v2/skills/installs/{made['id']}", headers=headers("ana-test")).status_code == 200
     assert get(api, "skills/triage", "ana-test")["installs"] == []
 
 
