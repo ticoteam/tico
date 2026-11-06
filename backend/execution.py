@@ -5116,9 +5116,11 @@ class Execution:
             posting = not already and not same
             if source["kind"] in ("say", "ask", "steer") or task:
                 target = source["sender_id"]
-                # A bot is answered only when it asked, except where the thread's wake rule chose to start this run
-                # for its message (a carrier): the loop guard, not this rule, bounds bots answering bots there.
-                replyable = not str(target).startswith("bot:") or source["kind"] == "ask" or carried
+                # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
+                # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
+                # not this rule, bounds bots answering bots there. The reply itself asks nothing back.
+                replyable = (not str(target).startswith("bot:") or source["kind"] == "ask" or carried
+                             or bool(H._json(source.get("refs"), {}).get("needs_action")))
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into

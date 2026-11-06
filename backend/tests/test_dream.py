@@ -6,6 +6,7 @@ import json
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import question_tasks as QT
+from backend import task_relations as TR
 from backend.tests import test_ask_ingest as ingest
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.test_ask_ingest import gate, plate   # noqa: F401  (the ask ingest fixture)
@@ -72,7 +73,7 @@ def test_a_dreams_question_skips_ask_ingest_and_reaches_the_person(gate):
     with api.app.state.store.read() as c:
         row = H.task(c, tid)
         assert H.unanswered_ask(c, row)["recipient_id"] == "human:ben"
-        assert QT.waiting_on(c, row) == "human:ben"
+        assert H.unanswered_ask(c, row)["id"] in TR.blocker_ids(c, tid)       # the dream is blocked on his card
     # Any other task's question from the same bot is still judged.
     with api.app.state.store.transaction() as c:
         other = H.task_create(c, "human:ben", "Plan the November launch", "Dates.", "bot:ops", lint=False)

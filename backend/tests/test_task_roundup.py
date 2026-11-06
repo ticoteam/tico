@@ -1361,7 +1361,9 @@ def test_an_unanswered_question_goes_back_to_the_bot_that_asked_as_one_roundup_l
         before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         assert still_needed.sweep(c, H.shift(DAY, hours=3)) == {"bot:finance": [question["id"]]}
         # The card closing tells its bot quietly (a notice, no run): nothing is queued for it.
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='finance' AND state<>'completed'").fetchone()
+        woken = c.execute("SELECT j.state, m.body FROM jobs j JOIN messages m ON m.id=j.message_id "
+                          "WHERE j.bot_id='finance' AND j.state IN ('queued','leased','running')").fetchall()
+        assert not woken, [tuple(r) for r in woken]
         loud = [(r[0][:80], r[1]) for r in c.execute(
             "SELECT body, refs FROM messages WHERE recipient_id='bot:finance' AND rowid>?", (before,))
                 if not H._json(r[1], {}).get("quiet")]
