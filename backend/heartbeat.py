@@ -549,22 +549,19 @@ def liveness(c, now=None):
     (heartbeat_states, every beat). Alive while that is under max(ALIVE_MIN, interval + ALIVE_SLACK) seconds old, so a
     long interval does not read as stopped between beats."""
     now = now or datetime.now(timezone.utc)
-    stamps = []
-    row = c.execute("SELECT last_succeeded_at FROM service_health WHERE service='scheduler'").fetchone()
-    if row and row[0]:
-        stamps.append(row[0])
-    if H._has_table(c, "heartbeat_states"):
-        beat_row = c.execute("SELECT last_beat_at FROM heartbeat_states WHERE id=1").fetchone()
-        if beat_row and beat_row[0]:
-            stamps.append(beat_row[0])
-    parsed = [(H.parse_ts(s), s) for s in stamps if H.parse_ts(s)]
+    # One statement whatever is there, so a status page reads a fixed number of them (test_status_reads.py).
+    tick, beat, saved = c.execute(
+        "SELECT (SELECT last_succeeded_at FROM service_health WHERE service='scheduler'),"
+        " (SELECT last_beat_at FROM heartbeat_states WHERE id=1),"
+        " (SELECT value FROM registry_metadata WHERE key=?)", (INTERVAL_KEY,)).fetchone()
+    parsed = [(H.parse_ts(s), s) for s in (tick, beat) if s and H.parse_ts(s)]
     if not parsed:
         return None, None, False
     last, stamp = max(parsed)
     age = max(0.0, (now - last).total_seconds())
     try:
-        seconds = interval_of(c)
-    except Exception:  # noqa: BLE001 - an old database without the setting beats at the default
+        seconds = clamp(saved) if saved is not None else INTERVAL_DEFAULT
+    except Exception:  # noqa: BLE001 - an unreadable setting beats at the default
         seconds = INTERVAL_DEFAULT
     return stamp, age, age < max(ALIVE_MIN, seconds + ALIVE_SLACK)
 
