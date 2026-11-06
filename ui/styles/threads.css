@@ -47,7 +47,7 @@
 a.th-who:hover{text-decoration:underline}
 .th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:.02em;line-height:1.3}
 .th-head time,.th-edited{color:var(--muted);font-size:var(--t-xs)}
-.th-body,.th-body.md{overflow-wrap:anywhere;max-width:38em}   /* about 75 characters a line */
+.th-body,.th-body.md{overflow-wrap:anywhere;max-width:34em}   /* about 70 characters a line */
 @media (max-width:760px){.th-who{padding-block:10px;margin-block:-10px}.pill-thread .p-text{box-sizing:border-box;min-height:44px;padding-block:11px;line-height:22px}.th-body,.th-body.md{font-size:16px}.pill-thread .p-icon{min-width:44px;height:44px;padding:0 12px}}   /* messages are reading text on a phone */
 .th-body.md>:first-child{margin-top:0}.th-body.md>:last-child{margin-bottom:0}
 .th-main>.run-did{margin:2px 0 4px}
