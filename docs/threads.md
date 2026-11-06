@@ -131,11 +131,13 @@ reopen Catch up. What you type stays in the box as you move between cards; closi
 seconds. **Mute** also sets the thread's follow level to muted. To bring the card back where it was, click **Undo**, or
 press Ctrl+Z (Cmd+Z on a Mac) when you are not typing.
 
-**Later** sends nothing, so the thread stays unread, and the card returns the next time you open Catch up. On the last
-card left, **Later** does nothing. **Mark read** and **Mute** take effect at the first of these:
+**Later** sends nothing, so the thread stays unread. The card goes to the back of the list and comes back in the same
+visit once the cards not yet put off are done; it is also there the next time you open Catch up. On the last card left,
+**Later** does nothing. **Mark read** and **Mute** take effect at the first of these:
 
 - 5 seconds after the click,
-- choosing **Later**, **Mute** or **Mark read** on another card,
+- choosing **Mark read**, **Mute** or **Later** on the card that comes next (**Later** does nothing when that card is the
+  only one left),
 - closing Catch up, or
 - leaving the page.
 
