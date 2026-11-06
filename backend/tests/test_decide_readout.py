@@ -243,3 +243,23 @@ def test_a_tico_decide_answer_from_the_gateway_counts_as_jev_and_the_team_llm_af
     sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
     assert (sets["support-triage"]["jev"], sets["support-triage"]["fallback"]) == (2, 1)
     assert (sets["learnings-route"]["jev"], sets["learnings-route"]["fallback"]) == (2, 1)
+
+
+def test_a_decide_medium_or_high_answer_is_counted_under_its_own_tier_and_never_as_jev(api):
+    audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "tico-decide-high-1.0", 0.02, {}),
+                                               "provider": "Tico AI Gateway"})
+    audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "tico-decide-medium", 0.01, {}),
+                                               "provider": "Tico AI Gateway"})
+    audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "tico-decide-1.0", 0.001, {}),
+                                               "provider": "Tico AI Gateway"})
+    audit(api, "judge.call", "learnings-route@1", {"label": "learnings-route@1", "calls": 4,
+                                                   "models": {"tico-decide-high-1.0": 2, "tico-decide-1.0": 1,
+                                                              "gpt-6.1-sol": 1}})
+    out = get(api, "decisions/readout")
+    sets = {row["set"]: row for row in out["sets"]}
+    skill = sets["support-triage"]
+    assert (skill["calls"], skill["jev"], skill["fallback"], skill["tiers"]) == (3, 1, 0, {
+        "Decide High": 1, "Decide Medium": 1})
+    assert (sets["learnings-route"]["jev"], sets["learnings-route"]["fallback"], sets["learnings-route"]["tiers"]) == (
+        1, 1, {"Decide High": 2})
+    assert "Decide High 1, Decide Medium 1" in out["text"] and "Decide High 2" in out["text"]
