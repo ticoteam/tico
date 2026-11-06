@@ -54,5 +54,5 @@ The same four are hub tools (`hub_market_watch_add`, `hub_market_watch_list`, `h
 | `POST /api/v2/market/watches/{id}/stop` | Stop it. Owner or Librarian |
 | `POST /api/v2/market/watches/check` | Read now; returns 202. Owner or Librarian |
 
-The daily run appears in **Settings > Routines** as Page monitors ([System routines](system-routines.md)). It does not
+The daily run appears in **Settings → System → What Tico runs on its own** as Page monitors ([System routines](system-routines.md)). It does not
 run on a test or rehearsal server.
