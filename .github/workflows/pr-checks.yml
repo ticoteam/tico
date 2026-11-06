@@ -206,6 +206,10 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
+      - name: UI routes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
       - name: Shell scripts (shellcheck, pinned)

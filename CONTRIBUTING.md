@@ -55,6 +55,10 @@ The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash 
 `bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
 `ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
 `python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
+walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
+only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
+`python3 scripts/check_ui_routes.py --write`.
 
 ## Profiling API test setup
 
