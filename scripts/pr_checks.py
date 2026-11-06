@@ -349,15 +349,17 @@ class DependencyMap:
     @staticmethod
     def run_time(node):
         """Whether a path expression starts from a folder pytest makes at run time: `tmp_path / "backend/tests/x.py"`,
-        `Path(tmp_path, "scripts")`, `tmp_path.joinpath("ui")`. The literal parts after it name no file the checkout
-        has, so the code reads none of them."""
+        `Path(tmp_path, "scripts")`, `tmp_path.joinpath("ui")`. The literal parts after it name a file the test writes,
+        not one the checkout has, so the code reads none of them. A call that is only given tmp_path (run_script(tmp_path,
+        "scripts/x.py")) is not one: its strings still name what it runs."""
         while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             node = node.left
         if isinstance(node, ast.Name):
             return node.id in RUN_TIME_FOLDERS
         if isinstance(node, ast.Call):
-            heads = ([node.func.value] if isinstance(node.func, ast.Attribute) else []) + node.args[:1]
-            return any(DependencyMap.run_time(head) for head in heads)
+            if dotted_name(node.func).rsplit(".", 1)[-1] in ("Path", "PurePath", "PosixPath"):
+                return bool(node.args) and DependencyMap.run_time(node.args[0])
+            return isinstance(node.func, ast.Attribute) and DependencyMap.run_time(node.func.value)
         return False
 
     def path(self, token, runs, reads, bare_word=False, module=True):
@@ -466,10 +468,14 @@ class DependencyMap:
             id(b[0].value) for b in bodies if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant)
         }
         nested = {id(n.left) for n in nodes if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
-        # Every node inside a path or call built under a run-time folder: its strings name files the test writes.
-        built_at_run_time = {
-            id(part) for n in nodes if isinstance(n, (ast.BinOp, ast.Call)) and self.run_time(n) for part in ast.walk(n)
-        }
+        # The literal parts of a path built under a run-time folder: `tmp_path / "a" / "b"` and the literal arguments of
+        # `Path(tmp_path, "a")` or `tmp_path.joinpath("a")`. They name files the test writes; no other string is skipped.
+        built_at_run_time = set()
+        for n in nodes:
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) and self.run_time(n):
+                built_at_run_time |= {id(part) for part in self.chain(n)}
+            elif isinstance(n, ast.Call) and self.run_time(n):
+                built_at_run_time |= {id(a) for a in n.args if isinstance(a, ast.Constant)}
         scope = {}
         # Module-level names that hold a path found from __file__: ROOT = Path(__file__).parents[2]; DOCS = ROOT / "docs".
         # A name whose path joins a literal ("docs") names that folder, which its definition reads.

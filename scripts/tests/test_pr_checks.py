@@ -497,7 +497,14 @@ def test_a_join_under_tmp_path_is_not_a_read_of_the_checkout_file_it_names(tmp_p
         "ROOT = Path(__file__).parents[2]\n"
         "def test_x(): (ROOT / 'backend/tests/test_task.py').read_text()\n",
     )
+    # A helper that is only given tmp_path still names what it runs: the string is no join under the folder.
+    source(
+        tmp_path,
+        "backend/tests/test_calls.py",
+        "def run_script(root, name): pass\ndef test_x(tmp_path):\n    run_script(tmp_path, 'backend/tests/test_task.py')\n",
+    )
     assert checks.selection(["backend/tests/test_task.py"], root=tmp_path, core=[])["python"] == [
+        "backend/tests/test_calls.py",
         "backend/tests/test_reads.py",
         "backend/tests/test_task.py",
     ]
