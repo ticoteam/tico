@@ -138,7 +138,7 @@ async function start(browser, hash, {width = 1440, ready, admin = true} = {}) {
         assert.equal(await page.locator('.sk-tabs a.cur').getAttribute('data-sk-tab'), 'directory', `${tag}: Directory is current`);
         if (tag === 'desktop') {
           await page.locator('#side a[data-nav="skills"].cur').waitFor({state: 'attached'});
-          const rail = await page.$$eval('#rd-lib a.nav-link', els => els.map(a => a.textContent.trim()));
+          const rail = await page.$$eval('#rd-lib a.nav-link', els => els.map(a => [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()));
           assert.deepEqual(rail.slice(0, 3), ['Docs', 'Files', 'Skills'], `${tag}: Skills sits after Files`);
         }
         assert.equal(await sideways(page), false, `${tag}: Directory has no sideways scroll`);

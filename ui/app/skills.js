@@ -62,6 +62,12 @@ function skillsDialog(title, body, actions, {cancel = 'Close'} = {}) {
     <p class="err" data-sk-dialog-error hidden></p>
     <div class="onb-actions"><button type="submit" class="ghost" value="cancel" data-sk-cancel>${esc(cancel)}</button><span class="spacer"></span>${actions}</div></div></form>`;
   dialog.addEventListener('close', () => dialog.remove());
+  // Enter in a field presses the dialog's own button, not Close (the form's first submit button).
+  dialog.addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter' || !ev.target.matches('input')) return;
+    ev.preventDefault();
+    dialog.querySelector('.onb-actions .primary')?.click();
+  });
   document.body.appendChild(dialog); dialog.showModal();
   return dialog;
 }
