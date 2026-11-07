@@ -135,7 +135,7 @@
 
 /* A phone: one stage at a time under a row of stage chips; the rail is a bar above the bottom navigation that opens the
    same panel as a sheet. */
-.pchips { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.pchips { display: flex; gap: 8px; overflow-x: auto; padding: 6px 0; scrollbar-width: none; scroll-snap-type: x proximity; }
 .pchips::-webkit-scrollbar { display: none; }
 .pchip { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 12px; border-radius: 16px;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; scroll-snap-align: start; }

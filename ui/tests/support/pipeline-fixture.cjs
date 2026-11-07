@@ -16,7 +16,7 @@ const type = {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manag
 function task(id, title, stepId, requirements) {
   const step = steps.find(s => s.id === stepId);
   return {id, title, body: '', owner_id: 'bot:b2', requester_id: 'human:ana', status: 'doing', lane: 'company', version: 1,
-    labels: [], links: [], parts: {total: 0, done: 0}, rank: 1, created_at: stamp, updated_at: stamp,
+    labels: [], links: [], parts: {total: 0, done: 0}, rank: 1, created_at: stamp, updated_at: stamp, step_since: '2026-11-04T12:00:00Z',
     type_id: 'dev-tickets', type: {id: 'dev-tickets', name: 'Dev tickets'}, step_id: stepId, step: {...step, type_id: 'dev-tickets'},
     ...(requirements ? {requirements} : {})};
 }
@@ -52,8 +52,9 @@ function queue() {
 }
 
 // Installs the fake server on a page. `state` collects what the tests check: posts, refusals and queue reads.
-async function install(page, {refuseApprove = false} = {}) {
-  const state = {posts: [], queueReads: 0, refuseApprove};
+async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}]} = {}) {
+  const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0};
+  const shown = manager ? {...type, manager: 'product-manager'} : type;
   const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -66,7 +67,36 @@ async function install(page, {refuseApprove = false} = {}) {
     if (p === '/api/employees') return json([]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}]});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/task-types') return json({types: [type]});
+    if (p === '/api/v2/task-types') return json({types: [shown]});
+    if (p === '/api/v2/pipelines/dev-tickets/manager') {
+      state.managerReads++;
+      const run = (id, at, status, error) => ({id, started_at: at, finished_at: at, status, error});
+      return json({pipeline_id: 'dev-tickets', manager: 'product-manager', every_minutes: 60, missed_runs: 0, last_run: run('r1', '2026-11-07T12:10:00Z', 'ok', null),
+        over_limit: late,
+        log: [run('r1', '2026-11-07T12:10:00Z', 'ok', null), run('r2', '2026-11-07T11:10:00Z', 'failed', 'The model was unreachable'),
+          {id: 'a1', task_id: 'D52', action: 'ask', target_actor: ME, note: 'Screenshots are waiting on you.', created_at: '2026-11-07T12:10:00Z'}]});
+    }
+    const pref = p.match(/^\/api\/v2\/preferences\/([a-z0-9_.-]+)$/);
+    if (pref) {
+      if (req.method() === 'POST') { state.prefs[pref[1]] = (req.postDataJSON() || {}).value; return json({ok: true}); }
+      return json(pref[1] in state.prefs ? {value: state.prefs[pref[1]]} : {});
+    }
+    const reqs = p.match(/^\/api\/v2\/tasks\/([^/]+)\/requirements$/);
+    if (reqs && req.method() === 'GET') return json({requirements: [{id: 'r-shots', name: 'Screenshots', kind: 'attachment', stage_id: 'build', stage: 'Build',
+      state: 'waiting', why: null, reviewed_by: 'person', reviewer_id: ME, version: 1, decision: null, attachment: null}]});
+    const atts = p.match(/^\/api\/v2\/tasks\/([^/]+)\/requirements\/([^/]+)\/attachments$/);
+    if (atts) {
+      if (req.method() === 'POST') { const body = req.postDataJSON() || {}; state.attachments.push(body); state.posts.push({path: 'attach', body});
+        return json({attachment: {id: 'att-' + state.attachments.length, source: body.source, url: body.url || null, file_id: body.file_id || null, by: ME, at: stamp, work_version: 1}}); }
+      return json({attachments: state.attachments.map((a, i) => ({id: 'att-' + (i + 1), source: a.source, url: a.url || null, file_id: a.file_id || null, by: ME, at: stamp, work_version: 1}))});
+    }
+    const mv = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
+    if (mv && req.method() === 'POST') {
+      const body = req.postDataJSON() || {};
+      state.moves.push(body);
+      if (state.refuseMove && !body.override_requirements) return json({error: {code: 'requirement', detail: 'Screenshots is not met'}}, 422);
+      return json({task: {...tasks().find(t => t.id === mv[1]), ...(body.step ? {step_id: body.step, step: {...steps.find(x => x.id === body.step), type_id: 'dev-tickets'}} : {}), version: 2}});
+    }
     if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: tasks(), next_offset: null});
     const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
     if (one && req.method() === 'GET') {
