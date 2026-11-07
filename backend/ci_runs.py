@@ -1,3 +1,4 @@
+# pyright: strict
 """CI build time (Chris, Nov 7): how many VM-minutes of remote test runs a dev ticket's builder may start, and what the
 repository's workflow runs cost the company, in Finance.
 
@@ -17,23 +18,35 @@ Its spend is what posted to 6150 today plus the holds placed on it (source "ci")
 
 import math
 import re
-from datetime import timedelta
-from typing import Any
+import sqlite3
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 from pydantic import Field
 
-from . import task_caps
+from . import hubdb, task_caps
 from .finance import budgeting
 from .finance.context import is_set_up, load
 from .finance.core import budgets as B
 from .finance.core import dates
+from .finance.core.ledger import Book
 from .finance.core.org import SYSTEM
 from .finance.posting import post_entry
 from .finance.store import budgets as SB
 from .finance.store import ledger as SL
 from .models import Contract
-from .store import H, Problem
+from .store import Problem
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+    from .auth import Auth
+    from .config import Settings
+    from .github_app import GitHubApp
+    from .store import Store
 
 CPU_BASE = 4  # the vCPUs the rate is quoted for
 CPUS = (4, 8, 16)  # the runner sizes remote.py offers
@@ -54,7 +67,7 @@ WORKFLOW_KINDS = {
     "hotfix.yml": "release",
 }
 # The rate and cap the Rules page quotes: install() sets them from the running settings (backend/config.py).
-ACTIVE = {"minutes": 120, "rate": 0.0016}
+ACTIVE: dict[str, Any] = {"minutes": 120, "rate": 0.0016}
 # The CHART rows' subtypes (backend/finance/setup.py): found by subtype, since an older book may have another account on
 # the seeded code (a card liability on 2100).
 CI_SUBTYPE, ACCRUED_SUBTYPE = "ci", "accrued"
@@ -71,6 +84,40 @@ class Permit(Contract):
 
 class Extension(Contract):
     task_id: str = Field(min_length=1, max_length=200)
+
+
+# hubdb and task_caps are untyped modules: H is typed Any (as backend/stranded_resume.py does), and these wrappers name the
+# signatures used here. Each looks the function up at call time, so a test that patches H.now (the factory sim's clock)
+# still applies.
+H: Any = hubdb
+
+
+def _now() -> str:
+    return cast(Callable[[], str], H.now)()
+
+
+def _parse_ts(ts: str) -> datetime | None:
+    return cast(Callable[[str], datetime | None], H.parse_ts)(ts)
+
+
+def _shift(ts: str, **kw: int) -> str:
+    return cast(Callable[..., str], H.shift)(ts, **kw)
+
+
+def _actor_id(actor: str) -> str:
+    return cast(Callable[[str], str], H.actor_id)(actor)
+
+
+def _is_bot(actor: str) -> bool:
+    return cast(Callable[[str], bool], H.is_bot)(actor)
+
+
+def _task(c: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
+    return cast(Callable[[sqlite3.Connection, str], dict[str, Any] | None], H.task)(c, task_id)
+
+
+def _above(c: sqlite3.Connection, who: str) -> list[str]:
+    return cast(Callable[[sqlite3.Connection, str], list[str]], task_caps.above)(c, who)
 
 
 # ---------------------------------------------------------------------------------------------------- pricing
@@ -97,10 +144,8 @@ def price(jobs: list[dict[str, Any]], rate: float) -> tuple[int, int]:
     """(job-minutes, cents) of a finished run's jobs. Each job bills whole minutes, as GitHub does."""
     minutes, cents = 0, 0
     for job in jobs:
-        if not job.get("started_at") or not job.get("completed_at"):
-            continue
-        start, end = H.parse_ts(job["started_at"]), H.parse_ts(job["completed_at"])
-        if end <= start:
+        start, end = _parse_ts(job.get("started_at") or ""), _parse_ts(job.get("completed_at") or "")
+        if start is None or end is None or end <= start:
             continue
         spent = math.ceil((end - start).total_seconds() / 60)
         cpus, hosted = _runner(job.get("labels") or [])
@@ -121,12 +166,12 @@ def extension_minutes(minutes_per_ticket: int) -> int:
     return math.ceil(minutes_per_ticket * EXTENSION_PERCENT / 100)
 
 
-def ticket_cap(c, task_id: str, minutes_per_ticket: int) -> int:
+def ticket_cap(c: sqlite3.Connection, task_id: str, minutes_per_ticket: int) -> int:
     row = c.execute("SELECT minutes FROM ci_run_extensions WHERE task_id=?", (task_id,)).fetchone()
     return minutes_per_ticket + (int(row["minutes"]) if row else 0)
 
 
-def ticket_used(c, task_id: str) -> int:
+def ticket_used(c: sqlite3.Connection, task_id: str) -> int:
     """The VM-minutes a ticket's builder runs count: a run that has finished its real minutes, one still out its
     requested minutes. Refused runs count nothing."""
     row = c.execute(
@@ -138,7 +183,7 @@ def ticket_used(c, task_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------------- the daily share
-def _budget(c, book):
+def _budget(c: sqlite3.Connection, book: Book) -> B.Budget | None:
     account = next((a.id for a in SL.accounts(c, book.id).values() if a.subtype == CI_SUBTYPE), None)
     if account is None:
         return None
@@ -148,36 +193,36 @@ def _budget(c, book):
     )
 
 
-def day_share(c, at: str):
+def day_share(c: sqlite3.Connection, at: str) -> tuple[B.Budget | None, int | None]:
     """(budget, today's share in cents or None). None when Finance is not set up, the CI budget is missing or off, or no
     amount is set: then no daily gate applies."""
     if not is_set_up(c):
         return None, None
     book = SL.book(c)
     budget = _budget(c, book) if book is not None else None
-    if budget is None or not budget.active:
+    if budget is None or not budget.active or book is None:
         return budget, None
     versions = SB.versions(c, [budget.id]).get(budget.id, [])
     day = dates.day(at[:10])
     return budget, B.in_window(budget, versions, (day, day), book.fiscal_year_start)
 
 
-def day_spent(c, book, budget, at: str) -> int:
+def day_spent(c: sqlite3.Connection, book: Book, budget: B.Budget, at: str) -> int:
     """Today's CI spend in cents: posted to the account today, and holds on it that have not posted yet."""
     day = at[:10]
     return SL.rollup_sum(c, book.id, day, day, [budget.account_id]) + SB.held(c, [budget.id], day, day)
 
 
-def digest_line(c, at: str | None = None) -> str | None:
+def digest_line(c: sqlite3.Connection, at: str | None = None) -> str | None:
     """The one line of CI build time in a manager's update request (updates.request_text), for today: what CI has cost
     or reserved against today's share, and the builder runs refused today. None when there is nothing to say."""
-    at = at or H.now()
+    at = at or _now()
     book = SL.book(c) if is_set_up(c) else None
     budget = _budget(c, book) if book is not None else None
     refused = c.execute(
         "SELECT COUNT(*) AS n FROM ci_runs WHERE status = 'refused' AND created_at LIKE ?", (at[:10] + "%",)
     ).fetchone()["n"]
-    spent = day_spent(c, book, budget, at) if budget is not None else 0
+    spent = day_spent(c, book, budget, at) if book is not None and budget is not None else 0
     if not spent and not refused:
         return None
     _, share = day_share(c, at)
@@ -190,7 +235,18 @@ def digest_line(c, at: str | None = None) -> str | None:
 
 
 # ---------------------------------------------------------------------------------------------------- the permit
-def _refusal(c, who: str, task, remote_id: str, cpus: int, minutes: int, reserve: int, why: str, at: str, cap: int):
+def _refusal(
+    c: sqlite3.Connection,
+    who: str,
+    task: dict[str, Any],
+    remote_id: str,
+    cpus: int,
+    minutes: int,
+    reserve: int,
+    why: str,
+    at: str,
+    cap: int,
+) -> dict[str, Any]:
     # The manager hears once per cap: the first ticket refusal since the ticket's last extension (or ever).
     ticket = why.startswith("ticket ")
     first = (
@@ -210,27 +266,27 @@ def _refusal(c, who: str, task, remote_id: str, cpus: int, minutes: int, reserve
     return {"allowed": False, "message": f"Remote run refused: {why}.", "cap": cap}
 
 
-def _granted_at(c, task_id: str) -> str:
+def _granted_at(c: sqlite3.Connection, task_id: str) -> str:
     row = c.execute("SELECT created_at FROM ci_run_extensions WHERE task_id=?", (task_id,)).fetchone()
     return row["created_at"] if row else ""
 
 
-def _nudge(c, task, who: str, cap: int, at: str) -> None:
+def _nudge(c: sqlite3.Connection, task: dict[str, Any], who: str, cap: int, at: str) -> None:
     """The ticket's manager gets one ticket to act on: the builder used its minutes, and one extension is its to grant.
     As the stalled-task nudge does (backend/stranded_resume.py), only a bot manager is woken; a person reads it in the
     ticket."""
-    managers = task_caps.above(c, who)
-    if not managers or not H.is_bot(managers[0]):
+    managers = _above(c, who)
+    if not managers or not _is_bot(managers[0]):
         return
     told = managers[0]
-    slug = H.actor_id(who)
+    slug = _actor_id(who)
     label = f"Ticket {task['number']}" if task["number"] else task["title"]
     body = (
         f"{task['title']}\n\n{slug} has used its {cap} VM-minutes of remote test runs on this ticket, so its next run is "
         f"refused. You may grant one extension of {extension_minutes(ACTIVE['minutes'])} more (POST /api/v2/ci/extensions "
         "with the task id), or close or reassign the ticket."
     )
-    made = H.task_create(
+    made = cast(Callable[..., dict[str, Any]], H.task_create)(
         c,
         H.KEEPER,
         f"{label}: remote test runs reached {cap} VM-minutes"[:150],
@@ -239,11 +295,13 @@ def _nudge(c, task, who: str, cap: int, at: str) -> None:
         deduplicate=False,
         lint=False,
     )
-    refs = {"wake": "nudge", "task": task["id"], "needs_action": True}
-    H._wake(c, H.task(c, made["id"]), told, body, refs, trigger="stall_check")
+    refs: dict[str, Any] = {"wake": "nudge", "task": task["id"], "needs_action": True}
+    cast(Callable[..., object], H._wake)(c, _task(c, made["id"]), told, body, refs, trigger="stall_check")
 
 
-def permit(c, who: str, body: Permit, rate: float, minutes_per_ticket: int, at: str) -> dict[str, Any]:
+def permit(
+    c: sqlite3.Connection, who: str, body: Permit, rate: float, minutes_per_ticket: int, at: str
+) -> dict[str, Any]:
     """Whether a builder's remote run may start. `allowed` with the ticket's cap, or a refusal with one line of why. The
     run is recorded either way; an allowed run holds its estimate on the CI budget until its jobs post."""
     if not REMOTE_ID.fullmatch(body.remote_id):
@@ -252,7 +310,7 @@ def permit(c, who: str, body: Permit, rate: float, minutes_per_ticket: int, at: 
         raise Problem("validation", f"cpus is one of {', '.join(map(str, CPUS))}", 422)
     if not 1 <= body.minutes <= MINUTES_MAX:
         raise Problem("validation", f"minutes is 1 to {MINUTES_MAX}", 422)
-    task = H.task(c, body.task_id)
+    task = _task(c, body.task_id)
     if task is None:
         raise Problem("not_found", "No such ticket for this run", 404)
     seen = c.execute("SELECT status, reason FROM ci_runs WHERE remote_id=?", (body.remote_id,)).fetchone()
@@ -280,7 +338,7 @@ def permit(c, who: str, body: Permit, rate: float, minutes_per_ticket: int, at: 
             currency=book.base_currency,
             source="ci",
             source_id="run:" + body.remote_id,
-            expires_at=H.shift(at, hours=RESERVE_HOURS),
+            expires_at=_shift(at, hours=RESERVE_HOURS),
             at=at,
             past_reserves=True,
         )
@@ -296,16 +354,16 @@ def permit(c, who: str, body: Permit, rate: float, minutes_per_ticket: int, at: 
     return {"allowed": True, "message": "", "cap": cap, "used": used + body.minutes}
 
 
-def extend(c, who: str, task_id: str, minutes_per_ticket: int, at: str) -> dict[str, Any]:
+def extend(c: sqlite3.Connection, who: str, task_id: str, minutes_per_ticket: int, at: str) -> dict[str, Any]:
     """One extension of the ticket's minutes, granted by a manager above the builder that ran the ticket."""
-    task = H.task(c, task_id)
+    task = _task(c, task_id)
     if task is None:
         raise Problem("not_found", "No such ticket", 404)
     last = c.execute(
         "SELECT bot FROM ci_runs WHERE task_id=? AND kind='builder' ORDER BY id DESC LIMIT 1", (task_id,)
     ).fetchone()
-    builder = last["bot"] if last else "bot:" + H.actor_id(task["owner_id"])
-    if who not in task_caps.above(c, builder):
+    builder: str = last["bot"] if last else "bot:" + _actor_id(task["owner_id"])
+    if who not in _above(c, builder):
         raise Problem("forbidden", "Only a manager above the ticket's builder can grant its extension", 403)
     if c.execute("SELECT 1 FROM ci_run_extensions WHERE task_id=?", (task_id,)).fetchone():
         raise Problem("conflict", "This ticket already has its extension", 409)
@@ -318,32 +376,38 @@ def extend(c, who: str, task_id: str, minutes_per_ticket: int, at: str) -> dict[
 
 
 # ---------------------------------------------------------------------------------------------------- the sweep
-def _list_runs(github_app, repo: str, since: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+def _github_get(github_app: "GitHubApp", path: str, headers: dict[str, str], params: dict[str, Any]) -> tuple[int, Any]:
+    """The status and JSON body of one GET to the GitHub API, through the app's own client."""
+    r = cast(Any, github_app)._call("GET", path, headers=headers, params=params)
+    return int(r.status_code), r.json()
+
+
+def _list_runs(github_app: "GitHubApp", repo: str, since: str, headers: dict[str, str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for page in range(1, PAGES + 1):
-        r = github_app._call(
-            "GET",
+        status, body = _github_get(
+            github_app,
             f"/repos/{repo}/actions/runs",
-            headers=headers,
-            params={"created": ">=" + since, "per_page": 100, "page": page},
+            headers,
+            {"created": ">=" + since, "per_page": 100, "page": page},
         )
-        if r.status_code != 200:
-            raise RuntimeError(f"GitHub would not list the workflow runs ({r.status_code})")
-        got = r.json().get("workflow_runs") or []
+        if status != 200:
+            raise RuntimeError(f"GitHub would not list the workflow runs ({status})")
+        got: list[dict[str, Any]] = body.get("workflow_runs") or []
         rows.extend(got)
         if len(got) < 100:
             break
     return rows
 
 
-def _jobs(github_app, repo: str, run_id: int, headers: dict[str, str]) -> list[dict[str, Any]]:
-    r = github_app._call("GET", f"/repos/{repo}/actions/runs/{run_id}/jobs", headers=headers, params={"per_page": 100})
-    if r.status_code != 200:
-        raise RuntimeError(f"GitHub would not list the jobs of run {run_id} ({r.status_code})")
-    return r.json().get("jobs") or []
+def _jobs(github_app: "GitHubApp", repo: str, run_id: int, headers: dict[str, str]) -> list[dict[str, Any]]:
+    status, body = _github_get(github_app, f"/repos/{repo}/actions/runs/{run_id}/jobs", headers, {"per_page": 100})
+    if status != 200:
+        raise RuntimeError(f"GitHub would not list the jobs of run {run_id} ({status})")
+    return body.get("jobs") or []
 
 
-def _record(c, run: dict[str, Any], jobs: list[dict[str, Any]], rate: float, at: str) -> None:
+def _record(c: sqlite3.Connection, run: dict[str, Any], jobs: list[dict[str, Any]], rate: float, at: str) -> None:
     gh_id = str(run["id"])
     kind = kind_of(run)
     found = REMOTE_TITLE.search(str(run.get("display_title") or ""))
@@ -371,7 +435,7 @@ def _record(c, run: dict[str, Any], jobs: list[dict[str, Any]], rate: float, at:
         budgeting.release(load(c, at), hold["id"])  # a run that cost nothing frees its estimate now
 
 
-def _post(c, row, book, at: str) -> str:
+def _post(c: sqlite3.Connection, row: sqlite3.Row, book: Book, at: str) -> str:
     """Post one run's cost to CI (6150) against Accrued expenses (2100), absorbing its permit's hold. Returns the entry id
     or ""."""
     accounts = {a.subtype: a.id for a in SL.accounts(c, book.id).values() if a.subtype in (CI_SUBTYPE, ACCRUED_SUBTYPE)}
@@ -403,7 +467,7 @@ def _post(c, row, book, at: str) -> str:
     return entry_id
 
 
-def post_unposted(c, at: str) -> int:
+def post_unposted(c: sqlite3.Connection, at: str) -> int:
     """Post every priced run that has no entry yet (a run priced before Finance was set up posts once it is)."""
     book = SL.book(c) if is_set_up(c) else None
     if book is None:
@@ -419,23 +483,28 @@ def post_unposted(c, at: str) -> int:
     return posted
 
 
-def sweep_fetch(github_app, repo: str, at: str, known: set[str]) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+def sweep_fetch(
+    github_app: "GitHubApp | None", repo: str, at: str, known: set[str]
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     """The finished runs of the repository in the window that are not priced yet, with their jobs. Outside any write."""
-    if not repo or github_app is None:
+    stamp_at = _parse_ts(at)
+    if not repo or github_app is None or stamp_at is None:
         return []
-    since = (H.parse_ts(at) - timedelta(hours=SWEEP_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    token, _ = github_app.mint([repo], {"actions": "read"})
+    since = (stamp_at - timedelta(hours=SWEEP_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    token = cast(str, cast(Any, github_app).mint([repo], {"actions": "read"})[0])
     headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"}
     runs = _list_runs(github_app, repo, since, headers)
     todo = [run for run in runs if run.get("status") == "completed" and str(run.get("id")) not in known]
     return [(run, _jobs(github_app, repo, run["id"], headers)) for run in todo]
 
 
-def sweep_known(c) -> set[str]:
+def sweep_known(c: sqlite3.Connection) -> set[str]:
     return {str(r["github_run_id"]) for r in c.execute("SELECT github_run_id FROM ci_runs WHERE seen_at != ''")}
 
 
-def sweep_record(c, fetched, rate: float, at: str) -> dict[str, int]:
+def sweep_record(
+    c: sqlite3.Connection, fetched: list[tuple[dict[str, Any], list[dict[str, Any]]]], rate: float, at: str
+) -> dict[str, int]:
     """Record the fetched runs, then post what is priced and unposted. Runs in the caller's transaction."""
     for run, jobs in fetched:
         _record(c, run, jobs, rate, at)
@@ -443,30 +512,38 @@ def sweep_record(c, fetched, rate: float, at: str) -> dict[str, int]:
     return {"recorded": len(fetched), "posted": posted}
 
 
-def sweep(store, github_app, repo: str, rate: float, at: str) -> tuple[str, bool]:
+def _read(store: "Store") -> AbstractContextManager[sqlite3.Connection]:
+    return cast(AbstractContextManager[sqlite3.Connection], store.read())
+
+
+def _write(store: "Store") -> AbstractContextManager[sqlite3.Connection]:
+    return cast(AbstractContextManager[sqlite3.Connection], store.transaction())
+
+
+def sweep(store: "Store", github_app: "GitHubApp | None", repo: str, rate: float, at: str) -> tuple[str, bool]:
     """One heartbeat pass: list and price the repository's recent runs (outside the write lock), then record and post in
     one short transaction. Returns (words, quiet) for the heartbeat."""
     if not repo or github_app is None:
         return "No repository to sweep", True
-    with store.read() as c:
+    with _read(store) as c:
         known = sweep_known(c)
     fetched = sweep_fetch(github_app, repo, at, known)
     if not fetched:
-        with store.transaction() as c:
+        with _write(store) as c:
             posted = post_unposted(c, at)
         return ("Nothing new" if not posted else f"{posted} posted"), not posted
-    with store.transaction() as c:
+    with _write(store) as c:
         done = sweep_record(c, fetched, rate, at)
     return f"{done['recorded']} recorded, {done['posted']} posted", False
 
 
 # ---------------------------------------------------------------------------------------------------- Rules
-def sentences(c) -> list[dict[str, Any]]:
+def sentences(c: sqlite3.Connection) -> list[dict[str, Any]]:
     """The CI caps as Rules sentences (org_rules.settings_for): the ticket's minutes with their dollars, and today's share
     of the CI budget, or that there is no daily limit."""
     minutes, rate = ACTIVE["minutes"], ACTIVE["rate"]
     cap_cents = cents_for(minutes, CPU_BASE, rate)
-    out = [
+    out: list[dict[str, Any]] = [
         {
             "text": f"Remote test runs: up to {minutes} VM-minutes (${cap_cents / 100:,.2f}) per ticket, "
             f"plus one extension of {extension_minutes(minutes)} a manager may grant",
@@ -474,7 +551,7 @@ def sentences(c) -> list[dict[str, Any]]:
             "edit": None,
         }
     ]
-    _, share = day_share(c, H.now())
+    _, share = day_share(c, _now())
     if share is None:
         text = "No daily CI limit set"
     else:
@@ -484,33 +561,36 @@ def sentences(c) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------------------------------- the routes
-def install(app, store, auth, mutate):
-    ACTIVE["minutes"] = store.settings.ci_minutes_per_ticket
-    ACTIVE["rate"] = store.settings.ci_rate_per_job_minute
+def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[..., Any]") -> None:
+    def current_settings() -> "Settings":
+        return store.settings
+
+    ACTIVE["minutes"] = current_settings().ci_minutes_per_ticket
+    ACTIVE["rate"] = current_settings().ci_rate_per_job_minute
 
     @app.post("/api/v2/ci/permits")
-    def ci_permit(request: Request, body: Permit):
+    def ci_permit(request: Request, body: Permit) -> Any:
         """A builder's remote run asks to start (scripts/remote.py). Refused with one line when its ticket has used its
         minutes or today's CI share has no room; the answer is `allowed` either way."""
         who = request.state.identity
-        auth.domain(who)
+        cast(Any, auth).domain(who)
         if who.role != "bot":
             raise Problem("forbidden", "Only a builder's own run asks for a permit", 403)
+        settings = current_settings()
 
-        settings = store.settings
-
-        def work(c):
-            return permit(c, who.actor, body, settings.ci_rate_per_job_minute, settings.ci_minutes_per_ticket, H.now())
+        def work(c: sqlite3.Connection) -> dict[str, Any]:
+            return permit(c, who.actor, body, settings.ci_rate_per_job_minute, settings.ci_minutes_per_ticket, _now())
 
         return mutate(request, body, work)
 
     @app.post("/api/v2/ci/extensions")
-    def ci_extension(request: Request, body: Extension):
+    def ci_extension(request: Request, body: Extension) -> Any:
         """A manager above a ticket's builder grants the ticket one extension of its CI minutes."""
         who = request.state.identity
-        auth.domain(who)
+        cast(Any, auth).domain(who)
+        settings = current_settings()
 
-        def work(c):
-            return extend(c, who.actor, body.task_id, store.settings.ci_minutes_per_ticket, H.now())
+        def work(c: sqlite3.Connection) -> dict[str, Any]:
+            return extend(c, who.actor, body.task_id, settings.ci_minutes_per_ticket, _now())
 
         return mutate(request, body, work)

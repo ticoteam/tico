@@ -33,7 +33,7 @@ def _bank(c, at=AT):
     bank fee new)."""
     book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
     cards_gl = str(
-        act(c, OWNER, "account_create", {"code": "2100", "name": "Credit cards", "type": "liability"}).result[
+        act(c, OWNER, "account_create", {"code": "2101", "name": "Credit cards", "type": "liability"}).result[
             "account_id"
         ]
     )
@@ -137,7 +137,7 @@ def test_balance_sheet_and_sources_are_the_owners_unless_granted(books):
         sheet = FR.balance_sheet(c, OWNER, at=AT)
         bank = next(r for r in sheet["assets"] if r["code"] == "1000")
         assert bank["balance"] == -2_000 and bank["sources"][0]["provider_balance"] == 90_000
-        cards = next(r for r in sheet["liabilities"] if r["code"] == "2100")
+        cards = next(r for r in sheet["liabilities"] if r["code"] == "2101")
         assert cards["balance"] == 4_600 and cards["entry_sources"] == ["card"]
         t = sheet["totals"]
         assert t["asset"] == t["liability"] + t["equity"] and not sheet["scoped"]
@@ -148,7 +148,7 @@ def test_balance_sheet_and_sources_are_the_owners_unless_granted(books):
                 FR.sources(c, who, at=AT)
         act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "bs_lines", "account_ids": [ids["cards_gl"]]})
         part = FR.balance_sheet(c, "human:cara", at=AT)
-        assert [r["code"] for r in part["liabilities"]] == ["2100"] and part["assets"] == [] and part["equity"] == []
+        assert [r["code"] for r in part["liabilities"]] == ["2101"] and part["assets"] == [] and part["equity"] == []
         assert part["scoped"]
         groups = {g["group"]: g for g in FR.sources(c, OWNER, at=AT)["groups"]}
         assert groups["banks"]["count"] == 1 and groups["cards"]["count"] == 1

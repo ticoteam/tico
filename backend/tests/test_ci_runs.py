@@ -250,5 +250,5 @@ def test_a_fresh_book_has_accrued_expenses_on_2100_and_ci_on_6150_and_an_older_c
     with books.read() as c:
         assert c.execute("SELECT subtype FROM fin_accounts WHERE code='2100'").fetchone()[0] == "accrued"
         assert c.execute("SELECT subtype FROM fin_accounts WHERE code='6150'").fetchone()[0] == "ci"
-    assert FS._free_code("2100", {"2100": None, "2101": None}) == "2102"
-    assert FS._free_code("6150", {"6150": None}) == "6151"
+    assert FS._free_code("2100", {"2100", "2101"}) == "2102"
+    assert FS._free_code("6150", {"6150"}) == "6151"

@@ -3,6 +3,7 @@ and the three default budgets, none with an amount until a person sets one (the 
 backend/usage_limits.py). Safe to run again: it fills in what is missing and changes nothing a person set."""
 
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from .context import APPROVER_KEY, OWNER_KEY, now
@@ -42,9 +43,9 @@ CI, ACCRUED = "6150", "2100"
 ADDED_SUBTYPES = ("accrued", "ci")  # the accounts CI adds to every book (the rows above)
 
 
-def _free_code(base: str, accounts: dict) -> str:
+def _free_code(base: str, taken: Collection[str]) -> str:
     code = int(base)
-    while str(code) in accounts:
+    while str(code) in taken:
         code += 1
     return str(code)
 
