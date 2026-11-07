@@ -9,6 +9,7 @@ The scenario runs without the hourly sweep of Head of Engineering: a team's boar
 sweep, so the sweep must not be what rescues the work here."""
 
 from dataclasses import replace
+from datetime import timedelta
 
 from evals.factory.board import dev_board
 from evals.factory.scenarios import STUCK_HOURS, Scenario, standard, tickets
@@ -48,12 +49,15 @@ def trace_of(run, task_id, start, end):
 
 
 def stranded_resumed(run):
-    """Every ticket a builder's turn left in progress gets an event within the late hours of that turn."""
+    """Every ticket a builder's turn left in progress gets an event within the late hours of that turn. A turn that ended
+    less than the late hours before the run ended is not judged: the run ended before they came."""
     stranded, late = 0, []
     for bot in run.t.builders:
         for when, task_id in bot.left:
-            stranded += 1
             first = later_event(run, task_id, when)
+            if first is None and run.w.now() - when < timedelta(hours=STUCK_HOURS):
+                continue
+            stranded += 1
             if first is None or (first - when).total_seconds() / 3600 > STUCK_HOURS:
                 end = first or run.w.now()
                 late.append(
