@@ -1,4 +1,4 @@
-// The open Tasks list never drifts for long (ui/app/refresh.js, tasks-page.js, pull-refresh.js). After one full read
+// The open Tasks list never drifts for long (ui/app/refresh.js, tasks-page.js, pull-refresh.ts). After one full read
 // the page takes only what the change log names (a delta read from its cursor, live events), so a change it never
 // names stayed out until a reload, and an installed phone app has no reload button. The fixture's delta read misses
 // every change and its full read answers 304 to any tag the page holds, as the server does when the change log has

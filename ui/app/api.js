@@ -29,7 +29,7 @@ const apiError = (j, r) => {
 /** @param {FailureBody} j @param {Response} r @returns {ApiFailure} */
 const apiFailure = (j, r) => Object.assign(new Error(apiError(j, r)), {body: j, status: r.status});
 // Signed out, by any sign-in (session.js): the built-in login page, or the banner. A locked Tico Cloud company's 402
-// `locked` shows Pay to continue at once (cloud-access.js).
+// `locked` shows Pay to continue at once (cloud-access.ts).
 /** @param {Response} r @param {FailureBody} j */
 const signInRedirect = (r, j) => {
   const error = /** @type {any} */ (j?.error);

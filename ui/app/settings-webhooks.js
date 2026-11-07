@@ -25,7 +25,7 @@ let WH_OPEN_GATEWAY = false;
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
 const WH = {tab: 'incoming', trigger: '', hook: '', shown: null, hookShown: null, wakeSecret: ''};
 let WH_RUN = 0, WH_HOOKS = null;
-let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when a part opens
+/** @type {any} bridged: .ts files read it through webhookTriggers() (settings-webhooks-state.ts); typed when this file converts */ let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when a part opens
 // The event catalog (backend/event_catalog.py): the endpoint picker reads it.
 let EVENT_TYPES = [], EVENT_TYPES_P = null;
 function eventTypesLoad() {

@@ -1,4 +1,4 @@
-// Tico support on cloud machines (ui/app/cloud-machines.js, GET/PUT /api/v2/cloud-machines/support), fixtures only:
+// Tico support on cloud machines (ui/app/cloud-machines.ts, GET/PUT /api/v2/cloud-machines/support), fixtures only:
 //  - Settings > People: on Tico Cloud the owner's team rules carry the switch, as HQ reads it; a change PUTs it, and a
 //    failed or uncertain change re-reads HQ with the reason under the switch;
 //  - an admin sees the switch read-only; off Tico Cloud (`available` false) there is no switch;

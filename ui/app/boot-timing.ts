@@ -22,43 +22,60 @@ const BOOT_SERVER_MAX = 16;
 // No time is longer than this (ten minutes, as the desktop app takes them): a page left open in the background longer
 // leaves out what came after.
 const BOOT_MS_MAX = 600000;
-const bootMs = n => Number.isFinite(n) && n >= 0 && n <= BOOT_MS_MAX ? Math.round(n) : null;
+const bootMs = (n: number): number | null => Number.isFinite(n) && n >= 0 && n <= BOOT_MS_MAX ? Math.round(n) : null;
 let BOOT_REPORTED = false, BOOT_ROUTE = '';
+// One read's entry in the report: its path, its time, and the server's own times for it (Server-Timing app and auth).
+interface BootServerRead { path: string; ms: number | null; app: number | null; auth: number | null; }
+// What bootTimingReport builds: window.ticoBootTiming, and the desktop app's `bootTiming` message.
+interface BootTimingReport {
+  route: string;
+  settled: boolean;
+  marks: Record<string, number>;
+  html: number | null;
+  bundle: { bytes: number; ms: number } | null;
+  server: BootServerRead[];
+}
+// The timeline types its entries by name only. A 'navigation' entry is the page's own navigation timing; a 'resource'
+// entry is one request's timing, with the bytes it moved and the server's times.
+const isNavigationEntry = (entry: PerformanceEntry): entry is PerformanceNavigationTiming => 'responseEnd' in entry;
+const isResourceEntry = (entry: PerformanceEntry): entry is PerformanceResourceTiming => 'transferSize' in entry;
 
-function bootMark(name) {
+function bootMark(name: string): void {
   try { if (!performance.getEntriesByName('tico:' + name, 'mark').length) performance.mark('tico:' + name); }
   catch { /* no User Timing */ }
 }
-function bootMarkAt(name) {
+function bootMarkAt(name: string): number | null {
   try { const m = performance.getEntriesByName('tico:' + name, 'mark')[0]; return m ? Math.round(m.startTime) : null; }
   catch { return null; }
 }
 // The page, not what is on it: `#/bot/ops/dm` is `#/bot`, so the log never names a bot, a task or a person.
-const bootRouteName = hash => { const m = /^#\/([a-z][a-z0-9-]{0,31})/.exec(String(hash || '')); return m ? '#/' + m[1] : ''; };
+const bootRouteName = (hash: string): string => { const m = /^#\/([a-z][a-z0-9-]{0,31})/.exec(String(hash || '')); return m ? '#/' + m[1] : ''; };
 // An API path without its query: `/api/`, then `v2/` if there, the resource's name, and `:id` for every part after it,
 // whatever it is. `/api/v2/messaging/bots/ops` is `/api/v2/messaging/:id/:id`, so the log names no bot, task or person
 // (the desktop app refuses any other shape, app/src/bridge.rs boot_path_ok).
-function bootPath(url) {
-  let path; try { path = new URL(url, location.href).pathname; } catch { return ''; }
+function bootPath(url: string): string {
+  let path: string; try { path = new URL(url, location.href).pathname; } catch { return ''; }
   if (!path.startsWith('/api/')) return '';
   const parts = path.split('/').slice(2).filter(Boolean), head = parts[0] === 'v2' ? ['v2'] : [];
   const rest = parts.slice(head.length);
   if (!rest.length) return '';
-  const name = /^[a-z][a-z-]{0,23}$/.test(rest[0]) ? rest[0] : ':id';
+  // rest is not empty (above), so its first part is there; the `??` is for the type only.
+  const first = rest[0] ?? '';
+  const name = /^[a-z][a-z-]{0,23}$/.test(first) ? first : ':id';
   return ['/api', ...head, name, ...rest.slice(1, 7).map(() => ':id')].join('/');
 }
-const bootServerMs = (entry, name) => {
+const bootServerMs = (entry: PerformanceResourceTiming, name: string): number | null => {
   const t = (entry.serverTiming || []).find(s => s.name === name);
   return t ? bootMs(t.duration) : null;
 };
-function bootTimingReport(settled) {
-  const marks = {};
+function bootTimingReport(settled: boolean): BootTimingReport {
+  const marks: Record<string, number> = {};
   for (const name of BOOT_MARKS) { const at = bootMs(bootMarkAt(name) ?? NaN); if (at !== null) marks[name] = at; }
-  let html = null, bundle = null, server = [];
+  let html: number | null = null, bundle: BootTimingReport['bundle'] = null, server: BootServerRead[] = [];
   try {
     const nav = performance.getEntriesByType('navigation')[0];
-    if (nav) html = bootMs(nav.responseEnd);
-    const resources = performance.getEntriesByType('resource');
+    if (nav && isNavigationEntry(nav)) html = bootMs(nav.responseEnd);
+    const resources = performance.getEntriesByType('resource').filter(isResourceEntry);
     // The script's parts (backend/ui_bundle.py): their bytes added up, and from the first one asked to the last one in.
     const js = resources.filter(r => /^\/tico\/ui\/app\.bundle(?:\.\d+)?\.js$/.test(new URL(r.name, location.href).pathname));
     const took = js.length ? bootMs(Math.max(...js.map(r => r.responseEnd)) - Math.min(...js.map(r => r.startTime))) : null;
@@ -69,10 +86,11 @@ function bootTimingReport(settled) {
   } catch { /* no Resource Timing */ }
   return {route: bootRouteName(BOOT_ROUTE), settled, marks, html, bundle, server};
 }
-function bootTimingSend(settled) {
+function bootTimingSend(settled: boolean): void {
   if (BOOT_REPORTED) return;
   BOOT_REPORTED = true;
-  const report = window.ticoBootTiming = bootTimingReport(settled);
+  const report = bootTimingReport(settled);
+  window.ticoBootTiming = report;
   // Only a shell that lists it hears it (app/src/bridge.rs BRIDGE_SCRIPT), as for every other message.
   if (!nativeHas('bootTiming')) return;
   try { Promise.resolve(nativeHandler('bootTiming')?.postMessage(report)).catch(() => {}); } catch { /* shell gone */ }
@@ -82,7 +100,7 @@ function bootTimingSend(settled) {
 // A page's own loading rows (skelRows, ui/app/core.js, and the updates feed's blocks). Other aria-busy marks are parts
 // that load by themselves after the page (a file's preview, a send button, a Decide card), and never hold the paint.
 const BOOT_SKELETONS = '.skel, .skel-block';
-function bootPaintWatch() {
+function bootPaintWatch(): void {
   BOOT_ROUTE = S.route;
   const started = Date.now();
   const check = () => {

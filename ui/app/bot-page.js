@@ -33,6 +33,7 @@ const botTabs = slug => {
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
+/** @type {any} bridged: .ts files read it through botPageView() (ui/app/bot-page-view.ts); typed when this file converts */
 let BOT = null;
 function botStopped() {
   BOT?.settingsCleanup?.();

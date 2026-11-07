@@ -1,5 +1,5 @@
 /* Service logos for the tool icons and Tools list on a bot's page (ui/bot-tools.js) and the agent tiles in Connect an
-   agent (ui/connect-agent.js).
+   agent (ui/connect-agent.ts).
    The paths are from Simple Icons (https://simpleicons.org, CC0 1.0 Universal; see NOTICE). The marks
    themselves belong to their owners and appear only to say which service or agent is meant. Each is one
    path on a 24x24 canvas, filled with currentColor so it follows the theme. A service without a

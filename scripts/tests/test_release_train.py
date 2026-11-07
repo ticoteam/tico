@@ -58,6 +58,7 @@ class FakeGitHub:
         self.latest_ = "v0.5.200"  # GitHub's latest release before this run
         self.on_dispatch = None
         self.numbers = iter(range(100, 100000))
+        self.failed = {}  # per run id: the tests its failed jobs name (None: a failure nobody can name)
 
     def _sha(self, ref):
         return self.tags_.get(ref) or (self.head_ if ref == "main" else ref)
@@ -81,6 +82,9 @@ class FakeGitHub:
 
     def validation_runs(self):
         return list(self.runs)
+
+    def failed_tokens(self, run_id):
+        return self.failed.get(run_id)
 
     def recent_runs(self, workflow):
         return (list(self.runs) if workflow == "ci.yml" else []) + self.others[workflow]
@@ -578,18 +582,22 @@ def test_the_first_green_candidate_of_the_window_ships():
     assert plan(FakeGitHub([run(B, at=OPENED - timedelta(hours=2))]))["action"] == "dispatch"
 
 
+HELD = "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to validate again"
+
+
 @pytest.mark.parametrize(
-    "runs",
+    "runs, action, mode",
     [
-        [run(D)],  # not on main
-        [run(C, "v0.5.201", "v0.5.199")],  # validated as an upgrade from another release
-        [run(C, "v0.5.202", "v0.5.201")],  # another version
-        [run(B, conclusion="cancelled")],  # an older commit cancelled: main's head is validated
+        ([run(D)], "wait", None),  # not on main: no anchor, but its full run is the day's one
+        ([run(C, "v0.5.201", "v0.5.199")], "dispatch", "incremental"),  # an upgrade from another release: an anchor
+        ([run(C, "v0.5.202", "v0.5.201")], "dispatch", "incremental"),  # another version: an anchor
+        ([run(B, conclusion="cancelled")], "wait", None),  # cancelled: no anchor, and the day's full run holds
     ],
     ids=["off-main", "other-previous", "other-version", "older-cancelled"],
 )
-def test_only_a_green_run_of_this_version_on_main_counts(runs):
-    assert plan(FakeGitHub(runs))["action"] == "dispatch"
+def test_only_a_green_run_of_main_anchors_a_candidate_and_any_full_run_holds_the_day(runs, action, mode):
+    picked = plan(FakeGitHub(runs))
+    assert (picked["action"], picked.get("mode")) == (action, mode)
 
 
 def test_one_validation_at_a_time():
@@ -610,9 +618,13 @@ def test_a_red_or_cancelled_head_waits_for_a_push_is_reported_and_a_manual_run_v
     assert forced["action"] == "dispatch" and rt.problems(forced) == []
 
 
-def test_a_red_head_waits_for_a_push_and_a_red_older_commit_validates_the_head():
+def test_a_red_head_waits_for_a_push_and_a_red_older_commit_holds_the_day_until_a_person_runs_it():
     assert plan(FakeGitHub([run(C, conclusion="failure")]))["action"] == "wait"
-    assert plan(FakeGitHub([run(B, conclusion="failure")]))["action"] == "dispatch"
+    # An older commit's red run naming no failure is no anchor, so its full run holds the day; a manual run validates.
+    older = plan(FakeGitHub([run(B, conclusion="failure")]))
+    assert (older["action"], older["held"]) == ("wait", HELD % ("https://github.example/run/1", "failure"))
+    forced = plan(FakeGitHub([run(B, conclusion="failure")]), manual=True)
+    assert (forced["action"], forced["mode"]) == ("dispatch", "full")
     # A window still red at the next open carries on, without validating the same head again.
     later = pt(2026, 11, 5, 14, 5)
     assert plan(FakeGitHub([run(C, conclusion="failure", at=OPENED)]), now=later)["action"] == "wait"
@@ -625,6 +637,233 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
     assert plan(FakeGitHub(), finished=stale)["red"] is None
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="cancelled"))["red"]["conclusion"] == "cancelled"
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="success"))["red"] is None
+
+
+class FakeCheckout:
+    """The checkout's answers: the tokens a range selects (None when its diff cannot be read) and the plan it makes."""
+
+    def __init__(self, since=None, plan=None):
+        self.since_, self.plan_text = since, plan
+        self.calls = []
+        self.previous_changed = None  # the flag the last plan was asked for
+
+    def tokens_since(self, base, head):
+        self.calls.append(("tokens_since", base, head))
+        return self.since_
+
+    def plan(self, base, head, carried, previous_changed=False):
+        self.calls.append(("plan", base, head, set(carried)))
+        self.previous_changed = previous_changed
+        return self.plan_text
+
+
+PLAN_TEXT = '{"jobs":[{"name":"python-1","part":"python","files":["backend/tests/test_b.py"]}]}'
+
+
+def red_then_anchor(anchor_at=OPENED - timedelta(hours=1), red_at=NOW - timedelta(hours=1)):
+    """main is A <- B <- C <- D and D is the head. B was green before the window opened (the anchor); C went red after
+    it. Newest first, as GitHub lists them."""
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=red_at), run(B, id=2, at=anchor_at)], head=D)
+    gh.order = [A, B, C, D]
+    return gh
+
+
+def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed():
+    # C went red naming its failure, so C is the anchor: the window reruns from it, carrying what failed. No full run.
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert picked["increment"] == PLAN_TEXT
+    assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % C[:12] in picked["why"]
+    assert ("tokens_since", C, D) in checkout.calls and ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
+
+
+def test_a_red_validation_waits_and_says_so_while_no_commit_selects_what_failed():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"ui/tests/threads.cjs"}, plan=PLAN_TEXT))
+    assert picked["action"] == "wait" and "the window waits" in picked["why"]
+    assert "backend/tests/test_b.py" in picked["why"] and gh.dispatched == []
+
+
+def test_a_red_naming_no_failure_reruns_from_the_green_anchor_without_a_second_full():
+    # C's log names nothing, so C is no anchor; B (green, within the day) is. Its next candidate is incremental on B:
+    # a full run is never planned while an anchor is under a day old.
+    gh = red_then_anchor()
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert ("plan", B, D, set()) in checkout.calls
+
+
+def test_a_stale_anchor_runs_the_full_validation_once_a_day():
+    # The green anchor and the red validation after it are both over a day old: no anchor is left, so one full run.
+    gh = red_then_anchor(anchor_at=NOW - timedelta(hours=26), red_at=NOW - timedelta(hours=25))
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "no full validation in the last 24 hours" in picked["why"]
+
+
+def test_an_incremental_plan_too_big_to_dispatch_waits_rather_than_running_a_second_full_validation():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=None))
+    assert picked["action"] == "wait" and gh.dispatched == []
+    assert "too big" in picked["why"] and "no second full validation" in picked["why"]
+
+
+def test_without_a_checkout_the_validation_is_incremental_on_the_anchor_so_the_guard_dispatches_it():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert picked["increment"] is None
+
+
+def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_incremental_from_it():
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
+
+
+def test_a_cancelled_full_is_no_anchor_and_holds_the_day_so_the_window_waits_for_a_person():
+    gh = FakeGitHub([run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since=None, plan=PLAN_TEXT))
+    assert (picked["action"], picked["held"]) == ("wait", HELD % ("https://github.example/run/3", "cancelled"))
+    assert gh.dispatched == [] and rt.problems(picked) == [picked["held"]]
+
+
+def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_again():
+    # (c): an unnamed red full is no anchor either, so it waits for a person; a manual run still dispatches in full.
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["held"]) == ("wait", HELD % ("https://github.example/run/3", "failure"))
+    assert gh.dispatched == []
+    forced = rt.plan_step(gh, NOW, manual=True, checkout=checkout)
+    assert (forced["action"], forced["mode"], forced["anchor"]) == ("dispatch", "full", None)
+
+
+@pytest.mark.parametrize(
+    "runs, anchor, failed",
+    [
+        ([run(B, id=2, at=OPENED - timedelta(hours=1))], B, {}),
+        (
+            [
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
+            ],
+            B,
+            {},
+        ),
+        (
+            [
+                run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
+            ],
+            B,
+            {},
+        ),
+        (
+            [
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
+            ],
+            C,
+            {3: {"backend/tests/test_b.py"}},
+        ),
+    ],
+    ids=["green", "red-unnamed", "cancelled", "red-named"],
+)
+def test_a_second_full_is_never_planned_while_an_anchor_under_a_day_old_exists(runs, anchor, failed):
+    gh = FakeGitHub(runs, head=D)
+    gh.order = [A, B, C, D]
+    gh.failed = failed
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", anchor)
+
+
+def test_an_incremental_validation_names_its_anchor_and_plan_and_a_full_one_names_neither():
+    gh = FakeGitHub()
+    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0)
+    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0, anchor=B, increment=PLAN_TEXT)
+    assert gh.dispatched[0][2] == {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"}
+    assert gh.dispatched[1][2] == {
+        "candidate_sha": C,
+        "previous_release": "v0.5.200",
+        "version": "v0.5.201",
+        "anchor": B,
+        "plan": PLAN_TEXT,
+    }
+    assert any("(incremental on %s)" % B in line for line in rt.LOG)
+
+
+def test_an_incremental_title_keeps_the_prefix_release_yml_finds_and_names_its_anchor():
+    text = rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+    assert text == "Validate %s as v0.5.201 from v0.5.200 (incremental on %s)" % (C, B)
+    assert text.startswith("Validate %s as v0.5.201 from " % C)
+    assert rt.parse_title(text) == (C, "v0.5.201", "v0.5.200")
+    assert rt.parse_anchor(text) == B
+    assert rt.parse_anchor(rt.title(C, "v0.5.201", "v0.5.200")) is None
+
+
+def test_validation_records_say_which_runs_are_incremental_and_only_full_green_ones_anchor():
+    full = rt.validation_record(run(B, id=2))
+    incremental = rt.validation_record(dict(run(C, id=3), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)))
+    assert (full["incremental"], full["sha"], full["id"]) == (False, B, 2)
+    assert (incremental["incremental"], incremental["sha"], incremental["id"]) == (True, C, 3)
+    assert full["previous"] == incremental["previous"] == "v0.5.200"
+
+
+def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_waited_for():
+    # main is A <- B <- C <- D (the head). B is this release's red validation naming its failure, the newest full one
+    # within the day, so it is the anchor. C is an earlier release's green incremental run after B: it supersedes B's
+    # red, so nothing is carried and nothing waits.
+    earlier = dict(
+        run(C, version="v0.5.200", previous="v0.5.199", id=3, at=OPENED - timedelta(minutes=30)),
+        display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=A),
+    )
+    gh = FakeGitHub(
+        [
+            earlier,
+            run(B, id=2, conclusion="failure", at=OPENED - timedelta(hours=2)),
+            run(A, id=1, at=OPENED - timedelta(hours=3)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    gh.failed = {2: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert checkout.calls == [("plan", B, D, set())]  # nothing carried, and no commit was read against the red run
+    assert "carries" not in picked["why"] and "the window waits" not in picked["why"]
+
+
+def test_an_anchor_of_an_earlier_release_runs_the_product_part_when_the_previous_release_moved():
+    # The newest tag is v0.5.200; the anchor validated v0.5.200 from v0.5.199, a green full run two hours ago.
+    gh = FakeGitHub([run(B, version="v0.5.200", previous="v0.5.199", id=2, at=NOW - timedelta(hours=2))])
+    checkout = FakeCheckout(plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert checkout.previous_changed is True
+    assert "the product part runs: the previous release is v0.5.200, the anchor's was v0.5.199" in picked["why"]
+    # The same previous release (this window's own full run before it opened): the product part is not forced.
+    same = FakeCheckout(plan=PLAN_TEXT)
+    assert (
+        rt.plan_step(FakeGitHub([run(B, id=2, at=OPENED - timedelta(hours=1))]), NOW, checkout=same)["mode"]
+        == "incremental"
+    )
+    assert same.previous_changed is False
 
 
 # ---- the guard ----
@@ -1136,7 +1375,7 @@ def test_window_validates_main_and_waits_until_the_run_is_listed(installs):
     assert rt.plan_step(gh, NOW)["action"] == "wait"
 
 
-def test_a_red_candidate_goes_on_the_issue_and_main_is_validated(installs):
+def test_a_red_candidate_goes_on_the_issue_and_holds_main_until_a_person_validates_it(installs):
     gh = publishes(FakeGitHub([run(B, conclusion="failure")]))
     env = dict(
         ENV,
@@ -1148,6 +1387,11 @@ def test_a_red_candidate_goes_on_the_issue_and_main_is_validated(installs):
     )
     assert rt.cmd_window(gh, env, False, NOW) == 1
     assert len(gh.created) == 1 and "run/red" in gh.created[0]["body"]
+    # Its full validation named no failure, so it holds the day: main's head is not validated automatically.
+    assert HELD % ("https://github.example/run/1", "failure") in gh.created[0]["body"]
+    assert gh.dispatched == [] and gh.tagged == []
+    # A person runs Release train by hand: main's head is validated.
+    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="workflow_dispatch"), False, NOW) == 0
     assert [d[0] for d in gh.dispatched] == ["ci.yml"] and gh.tagged == []
 
 

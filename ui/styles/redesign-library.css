@@ -44,7 +44,7 @@
 .lc pre{overflow-x:auto;max-width:100%}
 #tool-facts:empty{display:none}
 .lc-pane .card>.int-meta:first-child{margin-top:0}
-/* the vault's dialogs (ui/app/vault.js) */
+/* the vault's dialogs (ui/app/vault.ts) */
 #credential-dialog::backdrop{background:rgba(0,0,0,.6)}
 #credential-dialog>header{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:12px;padding:12px 14px 12px 18px;background:var(--surface);border-bottom:1px solid var(--line)}
 #credential-dialog>header h2{flex:1;min-width:0;margin:0;font-size:var(--t-md);overflow-wrap:anywhere}

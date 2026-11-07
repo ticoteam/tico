@@ -256,7 +256,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         with store.read() as c:
             return {"tokens": personal_tokens.listing_all(c, auth, request.state.identity)}
 
-    # "Connect an agent" (ui/connect-agent.js): the MCP address a person's own agent (Grok, Muse,
+    # "Connect an agent" (ui/connect-agent.ts): the MCP address a person's own agent (Grok, Muse,
     # Claude, ...) is given beside a personal token. It is the runner hostname, where a bearer is let
     # through. When that is the one hostname and Cloudflare Access guards it, Access answers an
     # outside agent with its login page unless /api/v2/mcp is bypassed, so the dialog says so

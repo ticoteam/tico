@@ -1,4 +1,4 @@
-/* Tools (ui/app/tools.js, tools-api.js) and the inbox pages it hosts (ui/app/inboxes*.js). Colours are theme tokens
+/* Tools (ui/app/tools.ts, tools-api.js) and the inbox pages it hosts (ui/app/inboxes*.js). Colours are theme tokens
    only, so light and dark follow the theme. At phone width (760px) every table becomes stacked rows and nothing
    scrolls sideways. */
 

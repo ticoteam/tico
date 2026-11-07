@@ -2437,6 +2437,12 @@ class Store:
         # in its own write, so a restart part way goes on where it stopped.
         redesign_migration.cutover(self)
 
+    def close(self):
+        """Closes the store's idle read connections now, as the finalizer does once the store is freed. A connection
+        still in use is closed when _give receives it, since the finalizer is no longer alive."""
+        with self.pool_lock:
+            self._pool_finalizer()
+
     @contextmanager
     def read(self):
         c = self._take()
