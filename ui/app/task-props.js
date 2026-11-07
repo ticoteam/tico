@@ -322,7 +322,7 @@ function taskPropLoops(t, key, rows) {
 function taskPropsBind(d, task, change) {
   const box = $('[data-task-props]', d); if (!box) return;
   taskPropsMsgPaint(d);
-  void segTagsLoad().then(() => taskSegmentPaint(d, task));
+  void segsListLoad().then(() => taskSegmentPaint(d, task));
   const save = (key, body) => {
     d.focusProp = key;
     const done = change(body);
@@ -375,7 +375,7 @@ function taskPropsBind(d, task, change) {
         void save('step', body);
       }});
     } else if (key === 'segment') {
-      await segTagsLoad();   // the menu's segments: a task opened from elsewhere has none until they are read
+      await segsListLoad();   // the menu's segments: a task opened from elsewhere has none until they are read
       const items = [{value: '', text: 'None', html: '<span>None</span>', checked: !task.segment_id},
         ...segTagRows().map(row => ({value: row.id, text: row.name, html: `${segDot(row)}<span>${esc(row.name)}</span>`, checked: row.id === task.segment_id}))];
       propMenu(d, b, /** @type {any} */ ({label: 'Segment', items, onPick: it => { if (it.value !== (task.segment_id || '')) void save('segment', {segment_id: it.value}); }}));

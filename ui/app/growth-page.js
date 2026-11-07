@@ -148,7 +148,7 @@ function pageGrowth() {
   const load = ++GR_LOAD, m = new URLSearchParams(query || '').get('m') || '';
   GR = {load, sub, month: GR_MONTH_RE.test(m) ? m : '', data: null};
   if (sub !== 'sources') {
-    void segTagsLoad().then(() => { if (DASH?.place === 'growth') grSegPaint(DASH.root, DASH.segment || ''); });   // the name once read
+    void segsListLoad().then(() => { if (DASH?.place === 'growth') grSegPaint(DASH.root, DASH.segment || ''); });   // the name once read
     void pageDashboard('growth', {month: GR.month, segment: segQuery()}); return;
   }
   const main = $('#main');

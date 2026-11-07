@@ -464,7 +464,7 @@ function pageGoals() {
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   goalsHeadActions(state);
   // The Segment filter names its segment, and the choices are there, once the list is read (a direct visit has none yet).
-  void segTagsLoad().then(() => { if (GOALS_ST === state) goalsHeadActions(state); });
+  void segsListLoad().then(() => { if (GOALS_ST === state) goalsHeadActions(state); });
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
   const search = $('#goal-search');
   search.oninput = () => { state.q = search.value; goalsRender(state); };

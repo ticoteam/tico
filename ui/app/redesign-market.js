@@ -185,6 +185,7 @@ async function mountMarketPage(shell) {
     soft('/v2/market/briefings/latest'), soft('/v2/market/spend?dimension=offering'), soft('/v2/market/spend?dimension=buyer'),
     soft('/v2/market/value-chain'), soft('/v2/market/entities?type=company&status=active&limit=50'),
     soft('/v2/listening/stats?' + new URLSearchParams({since: since.toISOString().slice(0, 19)})),
+    segsListLoad(),   // the "All segments" link shows only when there are segments
   ]);
   if (marketBlank(count.total ?? (count.entities || []).length, library.documents).blank) return await mountBlank(shell);
   const briefing = latest?.briefing || null, answers = briefing?.answers || {};
@@ -198,7 +199,7 @@ async function mountMarketPage(shell) {
   const tracked = companies?.total ?? (companies?.entities || []).length;
   shell.innerHTML = rdqPageHtml({
     top: `<header class="mkt-top"><h2>Market</h2>${name ? `<span class="mkt-name">${esc(name)}</span>` : ''}
-      <span class="spacer"></span><a class="ghost" href="${MARKET_ROUTE}">All segments</a><a class="ghost" href="${MARKET_MAP}">Open map</a></header>`,
+      <span class="spacer"></span>${segTagRows().length ? `<a class="ghost" href="${MARKET_ROUTE}">All segments</a>` : ''}<a class="ghost" href="${MARKET_MAP}">Open map</a></header>`,
     tiles: rdqTilesHtml(offering, revenue),
     questions: rdqQuestionsHtml({
       answers,

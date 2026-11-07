@@ -357,7 +357,7 @@ function rrGroupBlock(by, g, ctx, depth) {
   return `<section class="rdo-g" data-rr-team="group:${esc(g.id)}"><button type="button" class="rdo-tab" data-rr-party="group:${esc(g.id)}" title="${esc(g.name)}"><span class="rdo-tn">${esc(g.name)}</span></button>
     <div class="rdo-gb">${kids.map(k => `<div class="rdo-gi${k.kind === 'group' ? ' is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</div>`).join('')}</div></section>`;
 }
-const rrChartHtml = () => rdoChartHtml(rdoTree(rrLead), {seen: new Set(), group: rrGroupBlock});
+const rrChartHtml = () => rdoChartHtml(rdoTree(rrLead), {seen: new Set(), group: rrGroupBlock, segments: false});
 // A card's ref (rdoCard: person:<id> or bot:<id>) as a party.
 const rrOfRef = ref => ref.startsWith('person:') ? 'human:' + ref.slice(7) : ref;
 // A box in the chart's own (unscaled) pixels.

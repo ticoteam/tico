@@ -5511,6 +5511,7 @@ SCHEMAS.update(
                             "may_grant": "b",
                             "budgets": "i",
                             "segments_led": items({"type": "string"}),
+                            "segments_dedicated": items({"type": "string"}),
                         }
                     )
                 ),

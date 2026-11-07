@@ -17,11 +17,11 @@ const FIN_PNL = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: ''
   who: 'both', unattributed: false, seg: '', sel: null, budgetCol: -1, last: null};
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
-// Whether the segment P&L is open to this viewer (the By segment view, the Segment filter): probed once per visit with
-// the pnl_by read; a 403 (neither the whole P&L nor a segment's lead) hides both. Kept per viewing-as. `ids` are the
-// segments a lead's columns name (the whole P&L's viewers have every segment, so none is kept).
-const FIN_SEG = {as: /** @type {string | null} */ (null), ok: /** @type {boolean | undefined} */ (undefined), probed: false,
-  ids: /** @type {string[]} */ ([])};
+// Whether the segment P&L is open to this viewer (the By segment view, the Segment filter): probed with the pnl_by read;
+// a 403 (neither the whole P&L nor a segment's lead) hides both. Kept per viewing-as. `ids` are the segments a lead's
+// columns name (the whole P&L's viewers have every segment, so none is kept). `pending` is the read in flight.
+const FIN_SEGP = {as: /** @type {string | null} */ (null), ok: /** @type {boolean | undefined} */ (undefined),
+  pending: /** @type {Promise<void> | null} */ (null), tried: /** @type {number | null} */ (null), ids: /** @type {string[]} */ ([])};
 
 // ----------------------------------------------------------------- periods
 // The window a period opens on: a few periods back and a few ahead of today.
@@ -62,8 +62,8 @@ function finPnlPage() {
   const caps = finCaps(), p = FIN_PNL;
   const asked = FIN.q.get('view');
   // The first answer to the segment probe is waited for, so the page reads the P&L once, with the views it can show.
-  const probe = finSegProbe();
-  const segOk = FIN_SEG.ok !== false, bySeg = FIN_SEG.ok === true;
+  const probe = finSegmentProbe();
+  const segOk = FIN_SEGP.ok !== false, bySeg = FIN_SEGP.ok === true;
   // The address names the segment (the picks and the column links write it): a segment the probe refused is dropped.
   p.seg = segOk ? segQuery() : '';
   if (!segOk && segQuery()) segQuerySet('');
@@ -72,7 +72,7 @@ function finPnlPage() {
     : p.seg && segOk ? 'company'
     : segOk && (asked === 'segments' || !caps?.company) ? 'segments'
     : caps?.company ? 'company' : 'expenses';
-  if (probe && FIN_SEG.ok === undefined) {
+  if (probe && FIN_SEGP.ok === undefined) {
     const load = FIN?.load;
     $('#fin-body').innerHTML = `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`;
     void probe.then(() => { if (FIN && FIN.load === load && FIN.tab === 'pnl') finPnlPage(); });
@@ -86,7 +86,7 @@ function finPnlPage() {
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
   const page = FIN.pnl;
   // The Segment filter names its segment once the list is read (a direct visit has none yet).
-  void segTagsLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.pnl === page) old.outerHTML = segFilterButton(p.seg); });
+  void segsListLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.pnl === page) old.outerHTML = segFilterButton(p.seg); });
   // Expenses is for those who see the company's expense lines, not a lead who sees only their segments.
   const views = [...(caps?.company ? [['company', 'Company']] : []), ...(bySeg ? [['segments', 'By segment']] : []),
     ...(caps?.company || caps?.sees || view === 'expenses' ? [['expenses', 'Expenses']] : [])];
@@ -126,7 +126,7 @@ function finPnlPage() {
   void finPnlLoad();
 }
 // The Segment filter's choices: every segment and Unallocated for the whole P&L's viewers; a lead's own segments only.
-const finSegOpts = () => finCaps()?.company ? {unallocated: true} : {ids: FIN_SEG.ids};
+const finSegmentOpts = () => finCaps()?.company ? {unallocated: true} : {ids: FIN_SEGP.ids};
 function finPnlClick(ev) {
   const p = FIN_PNL, t = ev.target;
   const seg = t.closest('[data-fin-seg] button');
@@ -143,9 +143,9 @@ function finPnlClick(ev) {
   const filter = t.closest('[data-fin-filter]');
   if (filter) { finPop(filter, $('#fin-tree')); return; }
   const segBtn = t.closest('[data-seg-filter]');
-  if (segBtn) { segFilterOpen(segBtn, p.seg, id => { segQuerySet(id); p.sel = null; p.budgetCol = -1; finPnlPage(); }, finSegOpts()); return; }
+  if (segBtn) { segFilterOpen(segBtn, p.seg, id => { segQuerySet(id); p.sel = null; p.budgetCol = -1; finPnlPage(); }, finSegmentOpts()); return; }
   const segCol = t.closest('[data-fin-segcol]');
-  if (segCol) { finSegDrill(segCol.dataset.finSegcol); return; }
+  if (segCol) { finSegmentDrill(segCol.dataset.finSegcol); return; }
   const clear = t.closest('[data-fin-clear]');
   if (clear) { finPickSet(clear.dataset.finClear, false); p.sel = null; finFiltersDraw(); void finPnlLoad(); return; }
   if (t.closest('[data-fin-export]')) { finPnlExport(); return; }
@@ -159,25 +159,30 @@ function finPnlClick(ev) {
 const finSegSet = btn => btn.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
 // A segment's column opens the P&L filtered to it (the lines that count toward it), at an address that says so (the
 // Segment filter and a link to it read the same segment).
-function finSegDrill(key) {
+function finSegmentDrill(key) {
   const p = FIN_PNL, href = finHref('/pnl', {segment: key});
   p.sel = null; p.budgetCol = -1;
   if (location.hash === href) finPnlPage(); else location.hash = href;
 }
-// Probes the segment P&L once per visit (a new answer per viewing-as): a 200 opens the By segment view and the Segment
-// filter and names a lead's segments, a 403 hides them. Resolves with the probe's read, or null when there is none to
-// wait for; a failure other than a 403 is not asked again on each redraw.
-function finSegProbe() {
-  const key = FIN_VIEW_AS || '';
-  if (FIN_SEG.as !== key) { FIN_SEG.as = key; FIN_SEG.ok = undefined; FIN_SEG.probed = false; FIN_SEG.ids = []; }
-  if (FIN_SEG.probed) return null;
-  FIN_SEG.probed = true;
+// Probes the segment P&L (a new answer per viewing-as): a 200 opens the By segment view and the Segment filter and names
+// a lead's segments, a 403 hides them. Returns the read while it is in flight (a caller waits on it), else null: once
+// answered, or once tried on this visit (FIN.load), so a failure other than a 403 is retried on the next visit, not on
+// each redraw.
+function finSegmentProbe() {
+  const key = FIN_VIEW_AS || '', visit = FIN?.load ?? 0;
+  if (FIN_SEGP.as !== key) { FIN_SEGP.as = key; FIN_SEGP.ok = undefined; FIN_SEGP.pending = null; FIN_SEGP.tried = null; FIN_SEGP.ids = []; }
+  if (FIN_SEGP.ok !== undefined) return null;
+  if (FIN_SEGP.pending) return FIN_SEGP.pending;
+  if (FIN_SEGP.tried === visit) return null;
+  FIN_SEGP.tried = visit;
   const [a, z] = finMonthBounds(finToday().slice(0, 7));
-  return get(`/v2/finance/reports/pnl_by?by=segment&start=${a}&end=${z}&basis=${FIN_PNL.basis}${finAs()}`, {fresh: true})
+  FIN_SEGP.pending = get(`/v2/finance/reports/pnl_by?by=segment&start=${a}&end=${z}&basis=${FIN_PNL.basis}${finAs()}`, {fresh: true})
     .then(data => {
-      FIN_SEG.ok = true;
-      FIN_SEG.ids = (data?.columns || []).map(c => c.key).filter(k => k !== 'total' && k !== 'unallocated');
-    }, e => { if (e?.status === 403) FIN_SEG.ok = false; });
+      FIN_SEGP.ok = true;
+      FIN_SEGP.ids = (data?.columns || []).map(c => c.key).filter(k => k !== 'total' && k !== 'unallocated');
+    }, e => { if (e?.status === 403) FIN_SEGP.ok = false; })
+    .finally(() => { FIN_SEGP.pending = null; });
+  return FIN_SEGP.pending;
 }
 // A popover under its button; a click outside or Escape closes it.
 function finPop(btn, pop) {
@@ -218,13 +223,13 @@ async function finPnlLoad() {
   state.busy = false;
   $('#fin-pl').removeAttribute('aria-busy');
   // Not open to this viewer: the By segment view goes, and the page falls back to the P&L.
-  if (pnl.status === 'rejected' && bySeg && pnl.reason?.status === 403) { FIN_SEG.ok = false; location.hash = finHref('/pnl', {}); return; }
+  if (pnl.status === 'rejected' && bySeg && pnl.reason?.status === 403) { FIN_SEGP.ok = false; location.hash = finHref('/pnl', {}); return; }
   if (pnl.status === 'rejected') { state.data = null; $('#fin-pl').innerHTML = finFail(pnl.reason); finRail(''); return; }
   state.data = p.last = pnl.value;
   state.snap = snap; state.compare = compare;
   state.budgets = budgets.status === 'fulfilled' ? budgets.value?.budgets || [] : [];
   state.budgetsRead = budgets.status === 'fulfilled' ? budgets.value : null;
-  if (bySeg) { FIN_SEG.ok = true; state.model = {sections: [], lines: []}; finPnlDraw(); return; }
+  if (bySeg) { FIN_SEGP.ok = true; state.model = {sections: [], lines: []}; finPnlDraw(); return; }
   state.model = finPnlModel(state.data);
   const cols = state.data.columns || [];
   if (!(p.budgetCol >= 0 && p.budgetCol < cols.length)) {
@@ -280,7 +285,7 @@ const finSide = (rows, f) => rows.length ? finSum(rows, f) : 0;
 const finLess = (a, b) => a == null || b == null ? null : a - b;
 function finPnlDraw() {
   const state = FIN.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
-  if (state.view === 'segments') { finSegDraw(box, state); return; }
+  if (state.view === 'segments') { finSegmentDraw(box, state); return; }
   const data = state.data, cols = data.columns || [], p = FIN_PNL, bi = p.budgetCol, caps = finCaps();
   const {sections} = state.model;
   if (!sections.length) { box.innerHTML = finNote(state.view !== 'expenses' ? 'No lines yet.' : finFilterAny(state.snap || p) ? 'No expenses in this filter.' : 'No expenses.'); return; }
@@ -367,9 +372,9 @@ function finPnlDraw() {
   box.scrollLeft = left;   // a redraw stays where it was scrolled
 }
 // The By segment view (reports/pnl_by?by=segment): a column per segment, then Unallocated and Total, and the revenue,
-// costs and contribution rows. A segment's column opens the company P&L filtered to it (finSegDrill).
+// costs and contribution rows. A segment's column opens the company P&L filtered to it (finSegmentDrill).
 const finExclNote = data => data?.excluded ? finNote('A pay run is left out of this view.') : '';
-function finSegDraw(box, state) {
+function finSegmentDraw(box, state) {
   const data = state.data, cols = data.columns || [], rows = data.rows || [], caps = finCaps(), left = box.scrollLeft;
   if (!cols.length) { box.innerHTML = finNote('No segments yet.'); return; }
   // A column opens its P&L: the whole P&L's viewers on every column but Total; a lead on their own segments.
@@ -653,7 +658,7 @@ function finLinePage(accountId) {
     + finSplit(`<div class="fin-scroll" id="fin-line">${skelRows(6, {dot: false})}</div>`, '', 'Selected row');
   const body = $('#fin-body');
   // A segment's name waits for the list (a direct visit has none yet), so the chip never shows its id.
-  if (seg) void segTagsLoad().then(() => { const chip = $('[data-fin-line-seg]'); if (chip && FIN.line?.id === accountId) chip.textContent = segTagName(seg); });
+  if (seg) void segsListLoad().then(() => { const chip = $('[data-fin-line-seg]'); if (chip && FIN.line?.id === accountId) chip.textContent = segTagName(seg); });
   body.querySelector('[data-fin-month]').onchange = ev => { if (ev.target.value) { L.month = ev.target.value; L.sel = ''; void finLineLoad(); } };
   body.querySelector('[data-fin-by]').onchange = ev => { L.by = ev.target.value; L.sel = ''; finLineDraw(); finLineRail(); };
   body.onclick = ev => {

@@ -1086,6 +1086,9 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
                 "budgets": own.get(m, 0),
                 # The segments this teammate leads: a lead sees their own P&L column, so the page offers the segment view.
                 "segments_led": sorted(ctx.segment_leads(m)),
+                # The segments this teammate is dedicated to: reads_budget (handlers.py) lets them read those segments'
+                # budgets, read only, so Finance shows them a Budgets tab for these segments.
+                "segments_dedicated": sorted(ctx.dedicated(m)),
             }
         )
     teams = [

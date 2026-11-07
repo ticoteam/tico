@@ -47,7 +47,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.equal(await first.locator('.seg-face').count(), 2, tag + ': the faces, two of three shown');
       assert.equal(await first.locator('.seg-face .av').count(), 2, tag + ': each face draws the app avatar');
       assert.equal(await first.locator('.seg-face .av[data-av="cmo"]').count(), 1, tag + ': the bot face is the bot avatar');
-      assert.equal(await first.locator('.seg-more').innerText(), '+1', tag + ': the rest as a count');
+      assert.equal(await first.locator('.seg-faces-more').innerText(), '+1', tag + ': the rest as a count');
       assert.equal(await first.locator('.seg-main').getAttribute('href'), segPath(CHECKS), tag + ': a row opens the segment');
       assert.equal(await page.locator('#strat-segs [data-seg-add]').innerText(), '+ Segment');
       assert.equal(await page.locator('#strat-segs [data-seg-suggest]').innerText(), 'Ask Assistant to suggest');
@@ -56,7 +56,10 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.ok(addBox.x + addBox.width <= sugBox.x + 1, tag + ': + Segment sits left of Ask Assistant to suggest');
       assert.ok(Math.abs(sugBox.x + sugBox.width - (headBox.x + headBox.width)) <= 2, tag + ': the pair sits at the right edge of the card head');
       assert.equal(await page.locator('#strat-segs .strat-card-head .strat-add').count(), 2, tag + ': the card head\'s two buttons share one style');
-      assert.equal(await page.locator('#strat-segs [data-seg-up]').first().isDisabled(), true, tag + ': the first row cannot move up');
+      // Move up and down sit in the ⋯ menu (a shared popover), not in the row.
+      await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
+      assert.equal(await page.locator('.seg-menu [data-seg-up]').isDisabled(), true, tag + ': the first row cannot move up');
+      await page.keyboard.press('Escape');
       assert.equal(await page.locator('#strat-where').count(), 0, tag + ': Where we play is gone');
       assert.equal(await page.locator('.strat-card-head', {hasText: 'Where we play'}).count(), 0, tag + ': no Where we play heading');
       assert.ok(await page.evaluate(() => document.querySelector('#strat-top').getBoundingClientRect().bottom <= document.querySelector('#strat-segs').getBoundingClientRect().top + 1), tag + ': after the summary');
@@ -90,7 +93,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.deepEqual(lastWrite(writes, '/api/v2/segments/' + CHECKS).body, {name: 'Release gates', who: 'Platform teams that ship several times a day'}, tag + ': the edit body');
       // Move the first row down: the whole order goes.
       await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
-      await page.locator('#strat-segs .seg-row').first().locator('[data-seg-down]').click();
+      await page.locator('.seg-menu [data-seg-down]').click();
       // The list is read again after the order is saved: wait for its first row, not for a name that was already there.
       await page.waitForFunction(() => document.querySelector('#strat-segs .seg-main b')?.textContent.trim() === 'Deploy pipelines');
       assert.deepEqual(lastWrite(writes, '/api/v2/segments/order').body, {ids: [DEPLOY, CHECKS, 'segment/mid-size-firms']}, tag + ': the order body');
@@ -145,7 +148,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
         refusals: {'POST /api/v2/segments/order': {status: 409, detail: 'The order changed elsewhere'}}});
       await page.locator('#strat-segs .seg-row').first().waitFor();
       await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
-      await page.locator('#strat-segs .seg-row').first().locator('[data-seg-down]').click();
+      await page.locator('.seg-menu [data-seg-down]').click();
       await page.locator('.toast', {hasText: 'The order changed elsewhere'}).waitFor();
       assert.deepEqual(await texts(page, '#strat-segs .seg-main b'), ['Release checks', 'Deploy pipelines'], tag + ': the order stays');
       assert.deepEqual(errors, [], tag + ': no page errors');
@@ -258,7 +261,9 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       await page.locator('#seg-market .mkt-q').first().waitFor();
       assert.deepEqual(await qIds(page, '#seg-market'), FIVE, tag + ': its five questions');
       assert.equal(await page.locator('.seg-money').count(), 0, tag + ': the money card is gone');
-      assert.equal(await page.locator('#seg-market .mkt-name').innerText(), 'Release checks', tag + ': the market is the segment\'s');
+      // The section is titled Market; the segment's name is the page's own heading, so the market does not repeat it.
+      assert.equal(await page.locator('#seg-market .mkt-top h2').innerText(), 'Market', tag + ': the market is titled Market');
+      assert.equal(await page.locator('#seg-market .mkt-name').count(), 0, tag + ': the segment\'s name is not repeated in the market');
       assert.equal(await page.locator('#seg-sizes').isHidden(), true, tag + ': the sizes start folded');
       await page.locator('#seg-market [data-seg-sizes]').click();
       await page.locator('#seg-sizes').waitFor();
@@ -296,6 +301,29 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // A report's Budget link is for their dedicated segment, with no P&L (their P&L probe is a 403); a lead's P&L link is
+    // for the segment they lead, and a segment they do not lead has none.
+    {
+      const tag = 'segment: report';
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(CHECKS), finance: 'report'});
+      await page.locator('.seg-head h2').waitFor();
+      assert.deepEqual(await attrs(page, '.seg-links a', 'segLink'), ['goals', 'growth', 'budget'], tag + ': Budget, no P&L');
+      assert.equal(await page.locator('[data-seg-link="budget"]').getAttribute('href'), '#/finance/budgets?segment=segment%2Fchecks', tag + ': Budgets for the segment');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    {
+      const tag = 'segment: lead';
+      const led = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(CHECKS), finance: 'lead'});
+      await led.page.locator('.seg-head h2').waitFor();
+      assert.deepEqual(await attrs(led.page, '.seg-links a', 'segLink'), ['goals', 'growth', 'pnl'], tag + ': P&L of the segment they lead, no Budget');
+      assert.deepEqual(led.errors, [], tag + ': no page errors');
+      await led.page.close();
+      const other = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(DEPLOY), finance: 'lead'});
+      await other.page.locator('.seg-head h2').waitFor();
+      assert.deepEqual(await attrs(other.page, '.seg-links a', 'segLink'), ['goals', 'growth'], tag + ': no P&L for a segment they do not lead');
+      await other.page.close();
+    }
     // A phone: the segment page and the list, no sideways scroll.
     {
       const tag = 'phone segment';
@@ -321,16 +349,15 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       const tag = 'compare';
       const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market'});
       await page.locator('.seg-cmp tbody tr').first().waitFor();
-      assert.deepEqual(await attrs(page, '.seg-cmp th', 'col'), ['segment', 'money', 'yearly', 'growth', 'share', 'team'], tag + ': the columns');
+      assert.deepEqual(await attrs(page, '.seg-cmp th', 'col'), ['segment', 'yearly', 'growth', 'share', 'team'], tag + ': the columns (no Money)');
       assert.equal(await page.locator('.seg-cmp th[data-col="team"]').evaluate(el => el.textContent.trim()), 'Team', tag + ': the last column is the team');
       assert.equal(await page.locator('#seg-cmp-h').count(), 0, tag + ': no heading over the table');
       assert.deepEqual(await texts(page, '.seg-cmp tbody .seg-name'), ['Release checks', 'Deploy pipelines'], tag + ': the rows');
       const row = page.locator('.seg-cmp tbody tr').first();
       assert.equal(await row.locator('.seg-dot.c-blue').count(), 1, tag + ': the dot is the shared blue');
-      assert.match(await row.locator('td').nth(1).innerText(), /\$700/, tag + ': money');
-      assert.match(await row.locator('td').nth(2).innerText(), /\$700/, tag + ': yearly spend');
-      assert.match(await row.locator('td').nth(3).innerText(), /22%/, tag + ': growth');
-      assert.match(await row.locator('td').nth(4).innerText(), /4\.2%/, tag + ': our share');
+      assert.match(await row.locator('td').nth(1).innerText(), /\$700/, tag + ': yearly spend');
+      assert.match(await row.locator('td').nth(2).innerText(), /22%/, tag + ': growth');
+      assert.match(await row.locator('td').nth(3).innerText(), /4\.2%/, tag + ': our share');
       assert.equal(await row.locator('.seg-face').count(), 2, tag + ': faces joined from the list');
       assert.deepEqual(await texts(page, '.seg-chip'), ['All segments', 'Release checks', 'Deploy pipelines'], tag + ': the chips');
       assert.deepEqual(await texts(page, '.seg-chip.cur'), ['All segments'], tag + ': All is current');

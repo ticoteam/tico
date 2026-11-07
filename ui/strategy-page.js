@@ -146,7 +146,7 @@ function strategyDiffers(data) {
 const stratDate = d => {
   if (!d) return '';
   const at = new Date(/^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T00:00' : d);
-  if (isNaN(at)) return String(d);
+  if (Number.isNaN(at.getTime())) return String(d);
   return at.toLocaleDateString(undefined, {day: 'numeric', month: 'short', ...(at.getFullYear() !== new Date().getFullYear() ? {year: 'numeric'} : {})});
 };
 // The name of a KPI: the KPI list, or the KPIs the bet's goals carry, or else its id.
@@ -557,7 +557,7 @@ function strategyBind() {
     });
   }
   strategyBindBets(state, body, view);
-  strategyBindMarket(state, body);
+  strategyBindMarket(body);
 
   // The sections, one at a time: Save, or Cmd/Ctrl+Enter; Escape leaves it as it was.
   for (const sec of body.querySelectorAll('[data-section]')) {
@@ -718,7 +718,7 @@ async function strategyReorder(state, order) {
 
 // ---------------------------------------------------------------- the market cards' writes
 // Each change draws at once and then saves; a refused one reads its card again.
-function strategyBindMarket(state, body) {
+function strategyBindMarket(body) {
   const again = key => strategyMarketRead(key, STRAT_LOAD, true);
   const failed = (key, error) => { toast(error?.message || 'Could not save', true); void again(key); };
   const rivals = body.querySelector('#strat-rivals');

@@ -56838,6 +56838,12 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "segments_dedicated": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               },
               "required": [
@@ -56850,6 +56856,7 @@
                 "may_grant",
                 "reports_to",
                 "rights",
+                "segments_dedicated",
                 "segments_led",
                 "team",
                 "teammate"
