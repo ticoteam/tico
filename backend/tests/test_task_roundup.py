@@ -2210,8 +2210,8 @@ def test_a_team_lead_with_sweeps_off_hears_the_backlog_of_the_type_it_manages(ap
 
 def test_a_sweeps_off_bot_named_for_a_backlog_it_does_not_manage_gets_no_backlog_line(api):
     with api.app.state.store.transaction() as c:
-        BS.write(c, "ops", {"profile": "reviewer"})
+        BS.write(c, "ops", {"profile": "lead"})  # sweeps off, and it takes ordinary tasks (a reviewer takes none)
         typ = backlog_board(c, {"over": 3, "per": "owner", "notify": ["owner"], "every_hours": 4})
         backlog_tickets(c, typ, "bot:ops", 4)
         task_roundup.run(c, DAY)
-        assert not any("Backlog:" in body for body in lists(c, "ops")), "a reviewer is not the type's manager"
+        assert not any("Backlog:" in body for body in lists(c, "ops")), "a lead is not the type's manager"
