@@ -292,7 +292,7 @@ def test_build_lists_high_risk_then_user_facing_then_backend_then_internal():
         "## Internal",
         "- #14 Tidy docs (@carol)",
     ]
-    assert text.startswith("Changes since v0.5.200: 5 merged pull requests.\n")
+    assert text.startswith("Changes since v0.5.200: 2 user-facing, 1 high risk, 1 backend, 1 internal\n")
     assert "#16" not in text and "#17" not in text, "open, and merged outside the range"
 
 
@@ -308,13 +308,12 @@ def test_a_block_shows_spec_demo_risk_checks_review_and_what_it_touches():
     assert "- Touches: backend" in block
 
 
-def test_a_block_says_when_its_spec_demo_steps_or_risk_are_missing():
+def test_a_block_with_nothing_given_is_one_line_and_says_so():
     text = notes.build(scenario(), "v0.5.200", "v0.5.201")
     block = text[text.index("### #13") : text.index("## Internal")]
-    assert "- Spec: none linked" in block
-    assert "- Demo steps: none written" in block
-    assert "- Risk: not stated" in block
-    assert "- Checks: none recorded" in block
+    assert "No spec, demo steps or risk given." in block
+    assert not any(word in block for word in ("- Spec:", "- Demo steps:", "- Risk:")), "no placeholder lines"
+    assert "- Checks: none recorded" in block, "nothing ran, so the checks line says so"
     assert "- Review:" not in block, "a line only when there are reviews or receipts"
 
 
@@ -343,8 +342,8 @@ def test_a_range_with_no_merged_pull_request_says_so():
     api = FakeApi({"compare/v0.5.200...v0.5.201": {"commits": []}})
     text = notes.build(api, "v0.5.200", "v0.5.201")
     assert (
-        text
-        == "Changes since v0.5.200: 0 merged pull requests.\n\nNo merged pull request names a commit in this range.\n"
+        text == "Changes since v0.5.200: 0 user-facing, 0 high risk, 0 backend, 0 internal\n\n"
+        "No merged pull request names a commit in this range.\n"
     )
 
 
@@ -364,7 +363,23 @@ def test_notes_are_read_only():
 def test_a_block_is_built_from_its_fields_without_placeholders_for_evidence():
     lines = notes.block(pull(number=3, title="Plain"))
     assert lines[0] == "### #3 Plain"
-    assert "- Spec: none linked" in lines and "- Risk: not stated" in lines
+    assert notes.NOTHING_GIVEN in lines
     assert not any("Review" in line or "Recording" in line for line in lines)
     assert notes.risk_line(pull(risk="high", risk_text="rewrites rows")) == "- Risk: high — rewrites rows"
-    assert notes.field("Demo steps", "1. Open\n2. Add", "none written") == ["- Demo steps:", "  1. Open", "  2. Add"]
+    assert notes.field("Demo steps", "1. Open\n2. Add") == ["- Demo steps:", "  1. Open", "  2. Add"]
+
+
+def test_a_block_gives_only_the_fields_it_has_and_says_risk_not_stated_when_only_risk_is_missing():
+    lines = notes.block(pull(number=3, sections={"spec": "https://spec.example/3"}))
+    assert "- Spec: https://spec.example/3" in lines and "- Risk: not stated" in lines
+    assert not any(line.startswith(("- Demo steps", "No spec")) for line in lines)
+    lines = notes.block(pull(number=4, risk="low", risk_text="copy only"))
+    assert "- Risk: low — copy only" in lines
+    assert not any(line.startswith(("- Spec", "- Demo steps", "No spec")) for line in lines)
+
+
+def test_checks_print_only_when_one_failed_or_none_ran():
+    assert not any(line.startswith("- Checks") for line in notes.block(pull(checks="51 passed, 0 failed")))
+    failed = notes.block(pull(checks="1 passed, 1 failed", failed=("e2e",)))
+    assert "- Checks: 1 passed, 1 failed (failed: e2e)" in failed
+    assert "- Checks: none recorded" in notes.block(pull(checks=notes.NONE_RECORDED))

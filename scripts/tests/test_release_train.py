@@ -187,16 +187,21 @@ def approval_of(gh, version):
     return next(issue for issue in gh.issue_list if issue["title"] == rt.approval_title(version))
 
 
-def approval_for(gh, version, *, approved_by=None, held=False, comment_by=None):
-    """An open approval record for version: approved by a login's `approved` label, held, or with a `/approve` comment."""
+def approval_for(gh, version, *, approved_by=None, held=False, comment_by=None, account_type="User"):
+    """An open approval record for version: approved by a login's `approved` label, held, or with a `/approve` comment.
+    The approving account is a person (type User) unless account_type says otherwise."""
     labels = [rt.APPROVAL_LABEL] + ([rt.APPROVED] if approved_by else []) + ([rt.HOLD] if held else [])
     issue = gh.add_issue(rt.approval_title(version), labels=labels, body="notes for %s" % version)
     if approved_by:
         gh.events[issue["number"]] = [
-            {"event": "labeled", "label": {"name": rt.APPROVED}, "actor": {"login": approved_by}}
+            {
+                "event": "labeled",
+                "label": {"name": rt.APPROVED},
+                "actor": {"login": approved_by, "type": account_type},
+            }
         ]
     if comment_by:
-        gh.user_comments[issue["number"]] = [{"body": "/approve", "user": {"login": comment_by}}]
+        gh.user_comments[issue["number"]] = [{"body": "/approve", "user": {"login": comment_by, "type": account_type}}]
     return issue
 
 
@@ -903,6 +908,32 @@ def test_promote_updates_stable_to_the_approved_canary_release_and_closes_its_ap
 def test_a_comment_approve_by_someone_with_write_access_counts(installs):
     gh = FakeGitHub()
     approval_for(gh, "v0.5.200", comment_by="chris")
+    rt.promote(gh, ENV)
+    assert installs["updated"] == [("stable", "0.5.200")]
+
+
+@pytest.mark.parametrize(
+    "login, account_type",
+    [("release-app", "Bot"), ("helper[bot]", "User")],
+    ids=["bot-typed-account", "bot-login"],
+)
+@pytest.mark.parametrize("how", ["label", "comment"])
+def test_a_bot_or_app_with_write_access_never_approves(installs, login, account_type, how):
+    gh = FakeGitHub()
+    gh.writers.add(login)  # write access does not make an account a person
+    if how == "label":
+        approval_for(gh, "v0.5.200", approved_by=login, account_type=account_type)
+    else:
+        approval_for(gh, "v0.5.200", comment_by=login, account_type=account_type)
+    rt.promote(gh, ENV)
+    assert installs["updated"] == [] and any("not approved yet" in line for line in rt.LOG)
+
+
+def test_a_bots_newer_approve_comment_does_not_hide_a_persons_earlier_one(installs):
+    gh = FakeGitHub()
+    gh.writers.add("release-app")
+    record = approval_for(gh, "v0.5.200", comment_by="chris")
+    gh.user_comments[record["number"]].append({"body": "/approve", "user": {"login": "release-app", "type": "Bot"}})
     rt.promote(gh, ENV)
     assert installs["updated"] == [("stable", "0.5.200")]
 

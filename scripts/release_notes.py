@@ -9,8 +9,9 @@ only; release_train loads this file by path, because the Actions checkout is spa
 
 A pull request is in the notes when a commit in the range names it (a merge commit's subject, or a squash commit's
 "(#N)") and that commit is the pull request's merge commit. Order: high risk, then user-facing (ui/, clients/, app/),
-then backend, then internal, which prints one line each. Every other block shows the Spec link, the demo steps, the
-risk, the checks on the pull request's head commit, the reviews and receipts, and the areas its files touch.
+then backend, then internal, which prints one line each. A block gives the Spec, the demo steps and the risk when they
+are given (one line when none are), the checks only when one failed or none ran, the reviews and receipts, and the
+areas its files touch.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ RISK = re.compile(r"^(high|medium|low)\b(?:\s+risk\b)?[\s:,.;—–-]*(.*)$", re
 RISK_LABELS = {"risk:high": "high", "high-risk": "high", "risk:medium": "medium", "risk:low": "low"}
 RECEIPT = re.compile(r"^\s*[-*]?\s*\**(verdict|receipt)\**\s*:\s*(.+)$", re.IGNORECASE)
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
+NONE_RECORDED = "none recorded"  # checks_of's answer for a head commit with no check runs
+NOTHING_GIVEN = "No spec, demo steps or risk given."
 AREAS = (
     ("ui/", "ui"),
     ("clients/", "clients"),
@@ -133,7 +136,7 @@ def risk_of(sections: dict[str, str], labels: list[str]) -> tuple[str, str]:
 def checks_of(runs: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
     """(a summary such as "51 passed, 0 failed", the names of the failed checks) for the runs on a head commit."""
     if not runs:
-        return "none recorded", ()
+        return NONE_RECORDED, ()
     passed, pending = 0, 0
     failed: list[str] = []
     for run in runs:
@@ -232,9 +235,7 @@ def pulls_between(api: Api, base: str, head: str) -> tuple[list[Pull], bool]:
     return pulls, len(commits) >= PAGE * COMMIT_PAGES
 
 
-def field(name: str, text: str, empty: str) -> list[str]:
-    if not text:
-        return ["- %s: %s" % (name, empty)]
+def field(name: str, text: str) -> list[str]:
     parts = [part for part in text.splitlines() if part.strip()]
     if len(parts) == 1:
         return ["- %s: %s" % (name, parts[0].strip())]
@@ -254,13 +255,21 @@ def block(pull: Pull) -> list[str]:
         "%s · @%s · merged %s" % (pull.url, pull.author, pull.merged_at[:10]),
         "",
     ]
-    lines += field("Spec", pull.sections.get("spec", ""), "none linked")
-    lines += field("Demo steps", pull.sections.get("demo steps", ""), "none written")
-    lines.append(risk_line(pull))
-    checks = "- Checks: %s" % pull.checks
-    if pull.failed:
-        checks += " (failed: %s)" % ", ".join(pull.failed)
-    lines.append(checks)
+    spec = pull.sections.get("spec", "")
+    demo = pull.sections.get("demo steps", "")
+    if not (spec or demo or pull.risk):
+        lines.append(NOTHING_GIVEN)
+    else:
+        if spec:
+            lines += field("Spec", spec)
+        if demo:
+            lines += field("Demo steps", demo)
+        lines.append(risk_line(pull))
+    if pull.failed or pull.checks == NONE_RECORDED:
+        checks = "- Checks: %s" % pull.checks
+        if pull.failed:
+            checks += " (failed: %s)" % ", ".join(pull.failed)
+        lines.append(checks)
     if pull.reviews:
         lines.append("- Review: " + "; ".join(pull.reviews))
     lines.append("- Touches: " + (", ".join(pull.areas) or "tests only"))
@@ -272,8 +281,12 @@ def block(pull: Pull) -> list[str]:
 def build(api: Api, base: str, head: str) -> str:
     """The notes for head, the changes since base, as Markdown."""
     pulls, truncated = pulls_between(api, base, head)
-    count = len(pulls)
-    lines = ["Changes since %s: %d merged pull request%s." % (base, count, "" if count == 1 else "s"), ""]
+    count = {key: sum(1 for pull in pulls if group_of(pull) == key) for key, _ in GROUPS}
+    lines = [
+        "Changes since %s: %d user-facing, %d high risk, %d backend, %d internal"
+        % (base, count["user"], count["high"], count["backend"], count["internal"]),
+        "",
+    ]
     if truncated:
         lines += ["The range has more commits than these notes read; the list stops at the last one read.", ""]
     if not pulls:

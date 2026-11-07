@@ -156,7 +156,7 @@ Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's note
 A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
 GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
-(TIDY) takes a canary release only after someone with write access approves its release notes, on that release's
+(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
 `release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
 The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
 [docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in

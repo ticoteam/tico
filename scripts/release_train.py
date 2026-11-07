@@ -25,8 +25,8 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     GITHUB_ACTOR                           hotfix only: who overrode a hold
 
 Approval: each candidate that reaches the canary gets an open issue, "Release vX.Y.Z: awaiting approval" (label
-release-approval), whose body is its release notes. Someone with write access approves it by adding the `approved` label
-or commenting `/approve`; the `hold` label keeps it from stable. Promotion takes the canary's release to stable at a
+release-approval), whose body is its release notes. A person with write access approves it by adding the `approved` label
+or commenting `/approve` (a bot or app never counts); the `hold` label keeps it from stable. Promotion takes the canary's release to stable at a
 window's open and at the backstop, only when it is approved, not held and healthy, and then closes its issue. A newer
 release on the canary closes the older issues, with a link to the new one.
 
@@ -95,7 +95,7 @@ WRITE_LEVELS = ("admin", "maintain", "write")  # the repository roles that may a
 APPROVAL_TITLE = re.compile(r"^Release (v\d+\.\d+\.\d+): awaiting approval$")
 APPROVE_FOOTER = (
     "---\n"
-    "Approve: anyone with write access adds the `approved` label or comments `/approve`. Hold: add the `hold` label.\n"
+    "Approve: a person with write access adds the `approved` label or comments `/approve`. Hold: add the `hold` label.\n"
     "Stable (TIDY) takes an approved release at the next window or backstop run (every 20 minutes), unless it is held or a"
     " health check fails."
 )
@@ -885,26 +885,32 @@ def open_approvals(gh):
     return sorted(found, key=lambda item: parse_version(item[0]) or (0, 0, 0))
 
 
+def approver_of(gh, account):
+    """The login of an account that may approve: a person (a GitHub user, not a bot or an app) with write access.
+    "" for anything else, so a bot or app with write access cannot approve a release."""
+    login = str(account.get("login") or "")
+    if account.get("type") != "User" or not login or login.endswith("[bot]"):
+        return ""
+    return login if gh.permission(login) else ""
+
+
 def approval_state(gh, issue):
-    """(who approved, held). The approver is the login with write access that added the `approved` label, or that
-    commented `/approve` (the newest such comment); "" when nobody with write access did. `held` is the hold label."""
+    """(who approved, held). The approver is the approver_of the account that added the `approved` label, or of the
+    account that commented `/approve` (the newest such comment that counts); "" when neither did. `held` is the hold label."""
     names = {str(label.get("name") or "") for label in issue.get("labels") or []}
     number = issue["number"]
     approver = ""
     if APPROVED in names:
         for event in reversed(gh.pages("issues/%d/events?per_page=100" % number)):
             if event.get("event") == "labeled" and (event.get("label") or {}).get("name") == APPROVED:
-                actor = str((event.get("actor") or {}).get("login") or "")
-                if actor and gh.permission(actor):
-                    approver = actor
+                approver = approver_of(gh, event.get("actor") or {})
                 break
     if not approver:
         for comment in reversed(gh.pages("issues/%d/comments?per_page=100" % number)):
             lines = str(comment.get("body") or "").strip().splitlines()
             if lines and lines[0].strip().lower() == "/approve":
-                who = str((comment.get("user") or {}).get("login") or "")
-                if who and gh.permission(who):
-                    approver = who
+                approver = approver_of(gh, comment.get("user") or {})
+                if approver:
                     break
     return approver, HOLD in names
 

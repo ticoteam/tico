@@ -112,13 +112,14 @@ contains, so the approver reads the notes.
 - **The issue.** Each candidate the canary takes gets an open issue, `Release vX.Y.Z: awaiting approval`, labelled
   `release-approval`. Its body is the release notes, built by `scripts/release_notes.py`: every pull request merged
   since the release stable runs. High-risk pull requests come first, then user-facing ones (`ui/`, `clients/`, `app/`),
-  then backend ones (`backend/`, `runner-rs/`, `recorder/`, `templates/`), then the internal ones, one line each. Every
-  other block gives the pull request's Spec, its demo steps (written for the Acme Lights demo company), its risk, its
-  checks on the head commit, its reviews and receipts, and the areas it touches. What a pull request leaves out shows
-  as "none linked", "none written" or "not stated".
-- **Approving.** Anyone with write access approves it by adding the `approved` label or commenting `/approve`. The
-  repository's permission for that login is checked, so a label or comment from anyone else does not count. The `hold`
-  label keeps one release off stable.
+  then backend ones (`backend/`, `runner-rs/`, `recorder/`, `templates/`), then the internal ones, one line each. The
+  first line counts the blocks by group. A block gives the pull request's Spec, its demo steps (written for the Acme
+  Lights demo company) and its risk when it has them, and says so in one line when it has none of the three. It also
+  gives its reviews and receipts, and the areas it touches. Its checks show only when one failed or none ran.
+- **Approving.** A person with write access approves it by adding the `approved` label or commenting `/approve`. The
+  repository's permission for that login is checked, and the account must be a person: a bot or a GitHub App does not
+  count, even with write access, and neither does anyone without write access. The `hold` label keeps one release off
+  stable.
 - **Promotion.** At each window open, and at the backstop, stable takes the canary's release once it is approved, not
   held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it healthy. Stable's
   update closes the issue, and the issue says who approved it.
