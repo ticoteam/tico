@@ -176,9 +176,18 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 
 
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
-    """Who owns a spawned ticket: the target pipeline's manager when it is on the roster. A pipeline with no manager, or
-    a manager name the roster does not know, leaves the filer as owner: tasks always have one, and a refusal would file
-    nothing at all."""
+    """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
+    that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the target pipeline's manager when it is
+    on the roster; else the filer, since a ticket always has an owner."""
+    from . import pipeline_engine, step_flow
+
+    first = pipeline_engine.first_stage(conn, pipeline_id)
+    if first is not None:
+        step = _one(conn, "SELECT id, type_id, position, flow FROM task_steps WHERE id = ?", (first["id"],))
+        rule = step_flow.of(step).get("assign") if step else None
+        picked = _pool_bot(conn, step, rule) if step and rule else None
+        if picked:
+            return f"bot:{picked}"
     found = _rows(conn, "SELECT manager FROM task_types WHERE id = ?", (pipeline_id,))
     slug = str(found[0]["manager"] or "") if found else ""
     if not slug:
@@ -187,34 +196,116 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     return candidate if H.resolve_actor(conn, candidate) else filer
 
 
-def _carry_attachments(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str) -> None:
-    """The source's attached links (its spec page among them) become links of the spawned ticket. A link the rules refuse
-    is skipped; the spawn stands."""
-    found = _rows(
+def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row) -> str | None:
+    """The bot the allocator would give a new ticket at this step: the pool bot with the fewest tickets in hand (ties: the
+    fewest open tickets, then the slug) among those that are active, onboarded and have a free slot. None when none does."""
+    from . import task_allocator
+
+    allocator: Any = task_allocator
+    free: list[tuple[int, int, str]] = []
+    for slug in rule["pool"]:
+        if not allocator._available(conn, slug):  # pyright: ignore[reportPrivateUsage]
+            continue
+        in_hand = int(allocator.in_hand(conn, slug, step["type_id"], step))
+        if in_hand >= int(rule["slots"]):
+            continue
+        free.append((in_hand, int(allocator._open(conn, slug)), slug))  # pyright: ignore[reportPrivateUsage]
+    return min(free)[2] if free else None
+
+
+def _one(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> Row | None:
+    found = _rows(conn, sql, args)
+    return found[0] if found else None
+
+
+def _evidence(conn: sqlite3.Connection, source_id: str, stage_id: str) -> list[Row]:
+    """The source's attachments that can travel as links, the spec first: a requirement attachment on a requirement whose
+    name contains "spec", else the newest attachment of the stage the card leaves; then its other link attachments, newest
+    first; then its ordinary links (url and doc), oldest first. Each is a row with `url` and `title`. Files and blobs have
+    no link to carry and are listed separately by _uncarried."""
+    attached = _rows(
         conn,
-        "SELECT url FROM requirement_attachments WHERE task_id = ? AND removed_at IS NULL AND url IS NOT NULL "
-        "GROUP BY url ORDER BY MIN(created_at), MIN(rowid) LIMIT ?",
-        (source_id, MAX_CARRIED),
+        "SELECT a.url AS url, '' AS title, r.name AS requirement, r.pipeline_stage_id AS stage "
+        "FROM requirement_attachments a JOIN stage_requirements r ON r.id = a.stage_requirement_id "
+        "WHERE a.task_id = ? AND a.removed_at IS NULL AND a.source = 'link' AND a.url IS NOT NULL "
+        "ORDER BY a.created_at DESC, a.rowid DESC",
+        (source_id,),
     )
-    for record in found:
+    ordinary = _rows(
+        conn,
+        "SELECT url, title, '' AS requirement, NULL AS stage FROM task_links "
+        "WHERE task_id = ? AND kind IN ('url', 'doc') ORDER BY created_at, id",
+        (source_id,),
+    )
+    return [*attached, *ordinary]
+
+
+def _spec_first(rows: list[Row], leaving_stage: str | None) -> list[Row]:
+    """`rows` with the spec in front: the first requirement attachment named like a spec, else the newest one on the
+    leaving stage. The rest keep their order."""
+    spec = next((r for r in rows if "spec" in str(r["requirement"]).lower()), None)
+    if spec is None and leaving_stage:
+        spec = next((r for r in rows if r["stage"] == leaving_stage), None)
+    if spec is None:
+        return rows
+    return [spec, *(r for r in rows if r is not spec)]
+
+
+def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, leaving_stage: str | None) -> None:
+    """The source's links become links of the spawned ticket through the link API (H.task_link), spec first, at most
+    MAX_CARRIED. A link the child's owner cannot read is not carried; a file or blob has no link API for a ticket and is
+    not carried either. Each skip is logged on the source."""
+    source = H.task(conn, source_id)
+    child = H.task(conn, child_id)
+    if source is None or child is None:
+        return
+    owner = str(child["owner_id"])
+    if not H.task_private_readable(conn, owner, source):
+        H._task_event(  # pyright: ignore[reportPrivateUsage]
+            conn,
+            source_id,
+            H.KEEPER,
+            "spawn_links_skipped",
+            None,
+            child_id,
+            "The new ticket's owner cannot read this one",
+        )
+        return
+    carried: list[str] = []
+    for row in _spec_first(_evidence(conn, source_id, leaving_stage), leaving_stage):
+        url = str(row["url"] or "").strip()
+        if not url or url in carried:
+            continue
+        if len(carried) >= MAX_CARRIED:
+            break
         conn.execute("SAVEPOINT pipeline_spawn_link")
         try:
-            H.task_link(conn, filer, child_id, str(record["url"]))
-        except H.Refused:
+            H.task_link(conn, filer, child_id, url, str(row["title"] or "") or None)
+        except H.Refused as exc:
             conn.execute("ROLLBACK TO pipeline_spawn_link")
-        conn.execute("RELEASE pipeline_spawn_link")
+            H._task_event(  # pyright: ignore[reportPrivateUsage]
+                conn, source_id, H.KEEPER, "spawn_link_not_carried", None, child_id, str(exc.detail or exc)[:500]
+            )
+        finally:
+            conn.execute("RELEASE pipeline_spawn_link")
+        carried.append(url)
 
 
 def spawn(
     conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False, note: str | None = None
 ) -> str | None:
-    """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the
-    target pipeline's first stage, titled as the source, with a line pointing back at it and the source's links carried
-    over. It is filed as the source's owner (so the owner is the requester). Once per (link, source ticket): while a
-    handoff for that pair is live (not returned), nothing is filed again. A returned (undone) handoff allows a new one.
-    `again=True` is a deliberate second spawn (Validate's "Not validated"), which skips that check and is recorded as its
-    own handoff; `note` leads its body as "Follow-up: <note>". A refusal by the rules is logged on the source, and the
-    source moves on alone. Returns the new ticket's id, or None when nothing was filed."""
+    """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the target
+    pipeline's first stage, titled as the source, with a line pointing back at it, owned as the target's first stage
+    assigns it (_owner_for) and requested by the source's owner. The source's links are carried over (_carry). Once per
+    (link, source ticket): while a handoff for that pair is live (not returned), nothing is filed again. A returned (undone)
+    handoff allows a new one. `again=True` is a deliberate second spawn (Validate's "Not validated"), which skips that check
+    and is recorded as its own handoff; `note` leads its body as "Follow-up: <note>".
+
+    A ticket the rules refuse to file raises Problem 409 `spawn_refused` with the reason, so the move that made the spawn
+    rolls back with it: a card never advances past a stage whose linked work was not filed. Returns the new ticket's id,
+    or None when nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
+    from .store import Problem
+
     if link["mode"] != "spawn":
         return None
     if not again:
@@ -252,11 +343,10 @@ def spawn(
     except H.Refused as exc:
         conn.execute("ROLLBACK TO pipeline_spawn")
         conn.execute("RELEASE pipeline_spawn")
-        H._task_event(conn, source_id, H.KEEPER, "spawn_not_filed", None, target, str(exc.detail or exc)[:500])  # pyright: ignore[reportPrivateUsage]
-        return None
+        raise Problem("spawn_refused", f"The linked ticket could not be filed: {exc.detail or exc}", 409) from exc
     conn.execute("RELEASE pipeline_spawn")
     child_id = str(child["id"])
-    _carry_attachments(conn, filer, source_id, child_id)
+    _carry(conn, filer, source_id, child_id, str(link["from_pipeline_stage_id"]))
     record_handoff(conn, str(link["id"]), source_id, child_id)
     return child_id
 
