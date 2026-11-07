@@ -11,7 +11,7 @@ in two layers.
   it, in the owner's chat; nobody else's Assistant sees it.
 
 Teaching happens in chat: the bot saves one short line with `hub assistant learn` (POST /api/v2/assistant/learned) and
-says so. The person edits and deletes entries on "What it has learned" (ui/app/learned.js). Nothing is cached: each turn
+says so. The person edits and deletes entries on "What it has learned" (ui/app/learned.ts). Nothing is cached: each turn
 in a person's chat is handed both layers as they are when it starts (`for_turn`, backend/execution.py), so an entry
 deleted now is gone from the next turn. A deleted entry is deleted, not kept: its audit event names it by id only, as do
 the others, so no entry's words are in the audit log.

@@ -1,4 +1,4 @@
-// Overview › Graph (ui/app/overview-graph.js): the team chart top down with each teammate's rules or goals.
+// Overview › Graph (ui/app/overview-graph.ts): the team chart top down with each teammate's rules or goals.
 //  - the Graph tab beside Campus at #/overview/graph; built-in bots stay off; groups are labelled boxes;
 //  - Rules | Goals in the address (?view=goals), kept on reload;
 //  - Rules: counts on bots and people, Stop / Ask first marked; a tap opens the panel (Follows, With, Team), a rule
@@ -74,10 +74,10 @@ async function open(browser, {viewport = {width: 1280, height: 820}, theme = 'da
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/tico/ui/')) {
       const name = p.slice('/tico/ui/'.length), file = uiFile(name);
-      if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+      if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
     }
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(data.bots);
     if (p === '/api/humans') return json({people: data.people, teams: {}, org_groups: data.groups});

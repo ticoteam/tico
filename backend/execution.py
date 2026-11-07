@@ -7836,7 +7836,7 @@ class Execution:
                 # A safe second computer loss waits for the source, not a person's effects decision.
                 continue
             calls, acted = facts['calls'], facts['acted']
-            # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
+            # `stopped` is what the review card leads with (ui/app/settings.ts executionReview), by the same rule the
             # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if facts['fallback_unknown']:
                 stopped = 'unknown'
@@ -7882,7 +7882,7 @@ class Execution:
                 )
             elif facts['restart'] and facts['starts'] <= 1:
                 # Safe to resume, but the run did reach tools that can change things: the card must
-                # never say it only read (ui/app/settings.js renders each bucket's own words).
+                # never say it only read (ui/app/settings.ts renders each bucket's own words).
                 stopped = 'restarted'
                 reason = (
                     f"{restart_cause(facts)}; no consumed approval or named irreversible outside "

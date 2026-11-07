@@ -53,10 +53,20 @@ def _row_key(r: Any) -> str:
     return str(r["vendor_key"] or "") or merchant_key(str(r["counterparty"] or ""))
 
 
-def feed_vendors(c: Any, book_id: str, rows: Sequence[Any], sees_kind: Callable[[str], bool]) -> dict[str, Row]:
+def feed_vendors(
+    c: Any,
+    book_id: str,
+    rows: Sequence[Any],
+    sees_kind: Callable[[str], bool],
+    *,
+    lines_shown: Callable[[Any], bool] | None = None,
+) -> dict[str, Row]:
     """Each feed row's vendor, by row id: `id` is the contact its vendor key resolves to, else the key; `name` is that
     contact's name when `sees_kind` says the viewer sees a contact of that kind (else ""), or the row's own counterparty
-    text when no contact has the key. Rows are read as the store returns them (vendor_key, counterparty, id)."""
+    text when no contact has the key. Rows are read as the store returns them (vendor_key, counterparty, id).
+
+    `lines_shown` (visible.py's rule) says a row's lines show to the viewer: its vendor's name shows then too, and a row
+    whose vendor the viewer may not name shows no counterparty text (its label comes from its lines instead)."""
     keys = {str(r["id"]): _row_key(r) for r in rows}
     resolved: dict[str, str] = {}
     for key in keys.values():
@@ -71,10 +81,13 @@ def feed_vendors(c: Any, book_id: str, rows: Sequence[Any], sees_kind: Callable[
             continue
         vendor = resolved[key]
         contact = contacts.get(vendor)
+        seen = lines_shown(r) if lines_shown is not None else False
         if contact is not None:
-            name = str(contact["name"]) if sees_kind(str(contact["kind"])) else ""
-        else:
+            name = str(contact["name"]) if sees_kind(str(contact["kind"])) or seen else ""
+        elif lines_shown is None or seen or sees_kind("vendor"):
             name = str(r["counterparty"] or "").strip()
+        else:
+            name = ""
         out[str(r["id"])] = {"id": vendor, "name": name}
     return out
 

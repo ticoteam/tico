@@ -1,6 +1,6 @@
 """Every in-app link that names a Settings tab names one that exists. A link to #/settings carries the tab it means
-(data-gs-tab in the UI, a fix's "tab" from the server); ui/getting-started.js switches to it, and settingsShow
-(ui/app/settings.js) quietly falls back to Computers for a name it does not know, so a wrong name opens the wrong tab."""
+(data-gs-tab in the UI, a fix's "tab" from the server); ui/getting-started.ts switches to it, and settingsShow
+(ui/app/settings.ts) quietly falls back to Computers for a name it does not know, so a wrong name opens the wrong tab."""
 
 import ast
 import re
@@ -30,9 +30,9 @@ ALIASES = {
 
 
 def settings_tabs():
-    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.js").read_text()))
+    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.ts").read_text()))
     assert {"devices", "bots"} <= tabs
-    assert 'id="settings-health"' in (ROOT / "ui/app/settings.js").read_text()
+    assert 'id="settings-health"' in (ROOT / "ui/app/settings.ts").read_text()
     return tabs | ALIASES
 
 
@@ -43,7 +43,7 @@ def ui_links():
         if "/tests/" in rel or "/vendor/" in rel or "node_modules" in rel or "/assets/" in rel:
             continue
         # The whole value, so a name the tabs can't have (a hyphen, a capital, empty) fails rather than goes unseen.
-        # A value built at run time (health.js draws the server's fix.tab) is checked on the server side below.
+        # A value built at run time (health.ts draws the server's fix.tab) is checked on the server side below.
         for tab in re.findall(r'data-gs-tab="([^"]*)"', path.read_text()):
             if "${" not in tab:
                 yield rel, tab
@@ -81,10 +81,10 @@ def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
     # The links people hit most: chat's waiting line, the heartbeat banner, first run.
     assert {
-        ("ui/app/chat.js", "models"),
-        ("ui/app/chat.js", "devices"),
-        ("ui/app/heartbeat.js", "health"),
-        ("ui/first-run.js", "models"),
+        ("ui/app/chat.ts", "models"),
+        ("ui/app/chat.ts", "devices"),
+        ("ui/app/heartbeat.ts", "health"),
+        ("ui/first-run.ts", "models"),
     } <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
 

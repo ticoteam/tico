@@ -1,4 +1,4 @@
-/* Library › Tools (ui/app/redesign-library.js), in Automations' language: a computer shows list | page; a phone
+/* Library › Tools (ui/app/redesign-library.ts), in Automations' language: a computer shows list | page; a phone
    shows one screen at a time (#lc-root[data-screen]: list, detail). Only the redesign's code adds these classes. */
 #main.lc-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .lc{display:flex;flex-direction:column;height:100%;min-height:0}
