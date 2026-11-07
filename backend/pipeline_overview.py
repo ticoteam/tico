@@ -230,7 +230,7 @@ def _handoffs(c: "sqlite3.Connection", seen: str, since: str) -> dict[str, list[
         f"SELECT h.pipeline_link_id AS lid, h.created_at AS at, coalesce({start}, t.created_at) AS entered "
         "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
         "LEFT JOIN tasks t ON t.id=h.source_task_id "
-        f"WHERE h.created_at>=? AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))",
+        f"WHERE h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))",
         [since],
     ):
         a, b = H.parse_ts(r["entered"]), H.parse_ts(r["at"])
@@ -264,8 +264,8 @@ def _inputs(c: "sqlite3.Connection", firsts: dict[str, str], seen: str, since: s
     handed = ""
     if _columns(c, "pipeline_handoffs"):
         handed = (
-            "AND id NOT IN (SELECT target_task_id FROM pipeline_handoffs "
-            "UNION SELECT source_task_id FROM pipeline_handoffs)"
+            "AND id NOT IN (SELECT target_task_id FROM pipeline_handoffs WHERE returned_at IS NULL "
+            "UNION SELECT source_task_id FROM pipeline_handoffs WHERE returned_at IS NULL)"
         )
     guest = "guest" if "guest" in _columns(c, "tasks") else "NULL"
     tasks = _rows(

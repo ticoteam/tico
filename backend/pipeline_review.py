@@ -858,6 +858,7 @@ def _advance(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row) -
         "to_type": to_type,
         "to_step": to_step,
     }
+    handoff: str | None = None
     c.execute("SAVEPOINT pipeline_advance")
     try:
         _hub().task_update(
@@ -871,13 +872,15 @@ def _advance(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row) -
         )
         link = pipeline_links.link_for_stage(c, requirement["pipeline_stage_id"])
         if link is not None and link["mode"] == "move" and link["to_pipeline_id"] == to_type:
-            # The same record the engine writes for a move through a link, so the flow map counts this handoff.
-            pipeline_links.record_handoff(c, str(link["id"]), task["id"], task["id"])
+            # The same record the engine writes for a move through a link, so the flow map counts this handoff. Undo
+            # keeps its id to mark it returned.
+            handoff = pipeline_links.record_handoff(c, str(link["id"]), task["id"], task["id"])
     except _hub().Refused:
         c.execute("ROLLBACK TO pipeline_advance")
         c.execute("RELEASE pipeline_advance")
         return None
     c.execute("RELEASE pipeline_advance")
+    moved["handoff"] = handoff
     return moved
 
 
@@ -963,6 +966,12 @@ def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
                 step=moved["from_step"],
                 note=f"Approval undone by {_hub().actor_name(c, actor)}",
             )
+            if moved.get("handoff"):
+                # An undone approval's handoff stops counting in the flow map (pipeline_overview reads returned_at).
+                c.execute(
+                    "UPDATE pipeline_handoffs SET returned_at=? WHERE id=? AND returned_at IS NULL",
+                    (now, moved["handoff"]),
+                )
         c.execute("UPDATE stage_decisions SET undone_at=?, undone_by=? WHERE id=?", (now, actor, decision_id))
     return {"decision_id": decision_id, "undone": True, "moved_back": moved is not None}
 
