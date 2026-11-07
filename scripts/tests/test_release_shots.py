@@ -126,6 +126,12 @@ def test_a_dark_theme_file_turns_the_dark_pictures_on(repo: Path) -> None:
     assert picked(repo, {'ui/styles/tokens.css': 'tokens\n'}).dark
 
 
+def test_every_page_can_be_limited_to_named_pages() -> None:
+    assert sorted(shots.every_page_selection(('market', 'bot-chat')).pages) == ['bot-chat', 'market']
+    with pytest.raises(RuntimeError, match='no-such-page'):
+        shots.every_page_selection(('no-such-page',))
+
+
 def test_every_page_names_real_files_and_every_ui_file_is_named() -> None:
     listing = json.loads(
         subprocess.run(

@@ -510,9 +510,15 @@ def upload_evidence(files: Sequence[Path], version: str, repo_dir: Path = ROOT, 
     raise RuntimeError(f'the {EVIDENCE_BRANCH} push was refused {UPLOAD_ATTEMPTS} times: {refused}')
 
 
-def every_page_selection() -> Selection:
-    """Every page in both themes, whatever changed: the same-ref check, which must come out unchanged everywhere."""
+def every_page_selection(only: Sequence[str] = ()) -> Selection:
+    """Every page in both themes, whatever changed: the same-ref check, which must come out unchanged everywhere.
+    With only, just those pages, so a fix can be re-checked on the pages it touched and on a control or two."""
     pages = [match.group(1) for match in PAGE_NAME.finditer((ROOT / HARNESS).read_text())]
+    unknown = [page for page in only if page not in pages]
+    if unknown:
+        raise RuntimeError(f'--pages: {", ".join(unknown)} is not a page in {HARNESS}')
+    if only:
+        pages = [page for page in pages if page in only]
     return Selection(pages=pages, every=True, dark=True, reason='every page: the same-ref check', unshown=[])
 
 
@@ -526,6 +532,7 @@ def run(
     upload: bool,
     repo: str,
     every_page: bool = False,
+    only: Sequence[str] = (),
 ) -> int:
     if not VERSION_NAME.fullmatch(version):
         raise RuntimeError(f'the version {version!r} is not a folder name')
@@ -538,7 +545,7 @@ def run(
     with tempfile.TemporaryDirectory(prefix='release-shots-') as tmp:
         work = Path(tmp)
         with worktree(base_sha, work / 'base') as base_tree, worktree(head_sha, work / 'head') as head_tree:
-            selection = every_page_selection() if every_page else select_pages(base_sha, head_sha)
+            selection = every_page_selection(only) if every_page else select_pages(base_sha, head_sha)
             shots, problems = shoot(base_sha, base_tree, head_tree, selection, widths, python, work, out)
             manifest = Manifest(
                 version=version,
@@ -594,6 +601,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help='shoot every page in both themes, whatever changed (the same-ref check: base and head equal)',
     )
     parser.add_argument(
+        '--pages',
+        default='',
+        help='with --every-page: only these comma-separated pages, e.g. bot-chat,market',
+    )
+    parser.add_argument(
         '--repo',
         default=os.environ.get('GITHUB_REPOSITORY', DEFAULT_REPO),
         help='the repository the evidence URLs point at',
@@ -610,6 +622,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bool(args.upload),
             str(args.repo),
             every_page=bool(args.every_page),
+            only=split_widths(str(args.pages)),
         )
     except (RuntimeError, OSError) as error:
         print(f'release shots: {error}', file=sys.stderr)
