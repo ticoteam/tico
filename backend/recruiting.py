@@ -16,6 +16,7 @@ menu's Post a job, which creates the seat first:
      reporting line, under the same rules as any bot the person adds (backend/settings_admin.py `create_bot`). Its
      repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
      BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
+
 import json
 import re
 import socket
@@ -32,37 +33,73 @@ from . import models as M
 from . import releases
 from . import recruit_rank as R
 from .store import Problem
+from . import bot_settings as BS
 
 CANDIDATES = 8
-CHART = "chart"                         # `description_by` for a chart model's text
-DRAFT_OWNS = 5                          # bullets under "What you'll do"
-REWRITE_SECONDS = 5                     # the whole rewrite: key, request and answer
-REWRITE_BYTES = 64 * 1024               # the most of the model's answer read
-REWRITE_CHUNK = 8 * 1024                # read in pieces, so the deadline is checked as the answer arrives
-_REWRITES = threading.BoundedSemaphore(2)   # rewrites at once; a third keeps the composed text instead of queueing
+CHART = "chart"  # `description_by` for a chart model's text
+DRAFT_OWNS = 5  # bullets under "What you'll do"
+REWRITE_SECONDS = 5  # the whole rewrite: key, request and answer
+REWRITE_BYTES = 64 * 1024  # the most of the model's answer read
+REWRITE_CHUNK = 8 * 1024  # read in pieces, so the deadline is checked as the answer arrives
+_REWRITES = threading.BoundedSemaphore(2)  # rewrites at once; a third keeps the composed text instead of queueing
 REWRITE_MODEL = "gemini-3.7-flash"
-# With no Gemini key (a hosted install), the Tico AI Gateway's General · Low tier at version 1.0 (Claude Haiku 5.5, the
-# cheapest general chat tier; backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
-GATEWAY_REWRITE_MODEL = "tico-general-low-1.0"
+# With no Gemini key (a hosted install), the Tico AI Gateway's Low tier at version 1.0 (Claude Haiku 5.5;
+# backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
+GATEWAY_REWRITE_MODEL = "tico-low-1.0"
 # Gateway models reason before they answer, and the reasoning counts against the cap: 400 left a rewrite (the longer
 # prompt) with no answer at all. The least reasoning, and room for it plus a 150-word answer.
 GATEWAY_MAX_TOKENS = 2000
 GATEWAY_EFFORT = "low"
 # The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
 # set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
-TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email", "calendar": "Calendar",
-               "meetings": "Meetings", "github": "GitHub", "crm": "CRM", "chat": "Chat"}
+TOOL_LABELS = {
+    "hub": "Tico tasks",
+    "docs": "Docs",
+    "web": "Web",
+    "mail": "Email",
+    "calendar": "Calendar",
+    "meetings": "Meetings",
+    "github": "GitHub",
+    "crm": "CRM",
+    "chat": "Chat",
+}
 BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
 # Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
-RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior", "chief", "director", "specialist",
-                                    "associate", "officer", "staff", "principal") for stem, _ in R._words(word)) | {
-    "vp", "svp", "evp", "sr", "jr", "ii", "iii", "iv"}      # short ranks and levels: "VP, Product Marketing", "Designer II"
+RANKS = frozenset(
+    stem
+    for word in (
+        "lead",
+        "head",
+        "manager",
+        "senior",
+        "junior",
+        "chief",
+        "director",
+        "specialist",
+        "associate",
+        "officer",
+        "staff",
+        "principal",
+    )
+    for stem, _ in R._words(word)
+) | {
+    "vp",
+    "svp",
+    "evp",
+    "sr",
+    "jr",
+    "ii",
+    "iii",
+    "iv",
+}  # short ranks and levels: "VP, Product Marketing", "Designer II"
 # Words naming a kind of job, not its work, as written: "Rust engineer" and "QA Engineer" share no work, and neither do
 # "Data analyst" and "Pricing Analyst". "Engineering" is a field of work and stays.
-ROLE_WORDS = frozenset("""engineer engineers developer developers analyst analysts coordinator coordinators administrator
+ROLE_WORDS = frozenset(
+    """engineer engineers developer developers analyst analysts coordinator coordinators administrator
 administrators agent agents assistant assistants rep reps representative representatives generalist generalists
 consultant consultants writer writers designer designers producer producers accountant accountants scientist
-scientists programmer programmers""".split())
+scientists programmer programmers""".split()
+)
 
 
 # The only small words a job's name holds that say nothing: "Head of People" keeps "People", which the recommender's
@@ -84,9 +121,17 @@ HEAD_WORDS = frozenset("head chief director vp".split())
 # A job named in full and by its letters is one job, in a title and in a template's name alike: "Human Resources
 # Generalist" is the HR Generalist, "SRE" the Site Reliability Engineer. The letters go in front of the words, which
 # stay ("Site Reliability Manager" still says "reliability").
-SHORT = ((r"human resources?", "hr"), (r"financial planning", "fp"), (r"public relations", "pr"),
-         (r"quality assurance", "qa"), (r"user experience", "ux"), (r"information technology", "it"),
-         (r"search engine optimi[sz]ation", "seo"), (r"site reliability", "sre"), (r"sales development", "sdr"))
+SHORT = (
+    (r"human resources?", "hr"),
+    (r"financial planning", "fp"),
+    (r"public relations", "pr"),
+    (r"quality assurance", "qa"),
+    (r"user experience", "ux"),
+    (r"information technology", "it"),
+    (r"search engine optimi[sz]ation", "seo"),
+    (r"site reliability", "sre"),
+    (r"sales development", "sdr"),
+)
 
 
 LETTERS = frozenset(short for _, short in SHORT)
@@ -95,26 +140,44 @@ LETTERS = frozenset(short for _, short in SHORT)
 # A job's other names, said as the catalog says the job: "CMO" is the Chief Marketing Officer, "SDET" the QA Engineer,
 # "PPC Specialist" the Paid Media Manager, "Content Writer" the Content Marketer's work, "Communications" PR's. Applied
 # before SHORT, to a title and a template's name alike.
-ALIASES = tuple((re.compile(pattern), short) for pattern, short in (
-    (r"\bcmo\b", "chief marketing officer"), (r"\bcto\b", "chief technology officer"),
-    (r"\bcfo\b", "chief finance officer"), (r"\bcoo\b", "chief operations officer"),
-    (r"\bcro\b", "chief revenue officer"), (r"\bpmm\b", "product marketing manager"),
-    (r"\bsoftware (?:development )?engineer in test\b|\bsdets?\b", "qa engineer"),
-    (r"\bsoftware development\b", "software"),
-    (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"), (r"\bappsec\b", "application security"),
-    (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
-    (r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b", "paid media"),
-    (r"\bmarketers?\b", "marketing"),
-    (r"\b(?:content|copy|blog)\s*writers?\b|\bcopywriters?\b", "content writing"),
-    (r"\bcommunications?\b", "pr \\g<0>"), (r"\b(?<!code )(?:online )?reviews?\b", "reputation \\g<0>"),
-    (r"\bmachine learning\b", "ml"), (r"\bdata scien(?:ce|tists?)\b", "\\g<0> analytics"), (r"\baccounts? payable\b", "payable"),
-    (r"\baccounts? receivable\b", "receivable"), (r"\bops\b", "operations"),
-    (r"\b(?:lifecycle|retention|crm) marketing\b", "email marketing \\g<0>"),
-    (r"\bfield marketing\b", "event \\g<0>"), (r"\bmarketing analy(?:st|tics)\b", "marketing operations \\g<0>"),
-    (r"\b(?:build|ci(?:/cd)?|continuous (?:integration|delivery|deployment)|platform|infrastructure|cloud)\b(?= engineer)",
-     "devops \\g<0>"),
-    (r"\bcode review(?:ers?|\s+engineers?)\b", "senior software engineer"),
-    (r"\b(?:documentation|docs) (?:engineer|writer|specialist)s?\b", "technical writer")))
+ALIASES = tuple(
+    (re.compile(pattern), short)
+    for pattern, short in (
+        (r"\bcmo\b", "chief marketing officer"),
+        (r"\bcto\b", "chief technology officer"),
+        (r"\bcfo\b", "chief finance officer"),
+        (r"\bcoo\b", "chief operations officer"),
+        (r"\bcro\b", "chief revenue officer"),
+        (r"\bpmm\b", "product marketing manager"),
+        (r"\bsoftware (?:development )?engineer in test\b|\bsdets?\b", "qa engineer"),
+        (r"\bsoftware development\b", "software"),
+        (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"),
+        (r"\bappsec\b", "application security"),
+        (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
+        (
+            r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b",
+            "paid media",
+        ),
+        (r"\bmarketers?\b", "marketing"),
+        (r"\b(?:content|copy|blog)\s*writers?\b|\bcopywriters?\b", "content writing"),
+        (r"\bcommunications?\b", "pr \\g<0>"),
+        (r"\b(?<!code )(?:online )?reviews?\b", "reputation \\g<0>"),
+        (r"\bmachine learning\b", "ml"),
+        (r"\bdata scien(?:ce|tists?)\b", "\\g<0> analytics"),
+        (r"\baccounts? payable\b", "payable"),
+        (r"\baccounts? receivable\b", "receivable"),
+        (r"\bops\b", "operations"),
+        (r"\b(?:lifecycle|retention|crm) marketing\b", "email marketing \\g<0>"),
+        (r"\bfield marketing\b", "event \\g<0>"),
+        (r"\bmarketing analy(?:st|tics)\b", "marketing operations \\g<0>"),
+        (
+            r"\b(?:build|ci(?:/cd)?|continuous (?:integration|delivery|deployment)|platform|infrastructure|cloud)\b(?= engineer)",
+            "devops \\g<0>",
+        ),
+        (r"\bcode review(?:ers?|\s+engineers?)\b", "senior software engineer"),
+        (r"\b(?:documentation|docs) (?:engineer|writer|specialist)s?\b", "technical writer"),
+    )
+)
 
 
 def _expand(text):
@@ -128,28 +191,47 @@ def _expand(text):
 # Words of a field so wide that sharing one names no job: "Influencer Marketing Manager" is not the Head of Marketing,
 # nor "Software Engineer in Test" the Software Architect. A title made only of these must be a template's whole work
 # ("Product Marketing Manager", "Software Engineer", "Engineering Manager").
-GENERIC = frozenset(_name_stem(word) for word in "marketing product software engineering technology tech digital".split())
+GENERIC = frozenset(
+    _name_stem(word) for word in "marketing product software engineering technology tech digital".split()
+)
 
 # Words that pin a title to a department: "Partner Marketing Manager" is Marketing's, never the HR Business Partner.
-PINS = {"marketing": "marketing", "engineering": "engineering", "sales": "sales", "legal": "legal",
-        "finance": "finance", "product": "product", "hr": "hr"}
+PINS = {
+    "marketing": "marketing",
+    "engineering": "engineering",
+    "sales": "sales",
+    "legal": "legal",
+    "finance": "finance",
+    "product": "product",
+    "hr": "hr",
+}
 
 # The department a title's words point to when no template is the job, the last such word winning: "Rust engineer"
 # and "Growth Engineer" are Engineering's, "Product Designer" Product's. Applicants from it come first.
-DEPARTMENT_WORDS = {word: department for department, words in {
-    "engineering": "engineer engineering developer software programmer architect devops sre qa technology ml backend "
-                   "frontend fullstack ios android mobile code platform infrastructure tech",
-    "marketing": "marketing brand seo content social pr growth campaign campaigns influencer affiliate lifecycle demand",
-    "product": "product designer ux data", "sales": "sales sdr", "finance": "finance accountant bookkeeping",
-    "legal": "legal counsel paralegal", "hr": "hr people recruiter recruiting", "support": "support",
-    "operations": "operations ops"}.items() for word in words.split()}
-
+DEPARTMENT_WORDS = {
+    word: department
+    for department, words in {
+        "engineering": "engineer engineering developer software programmer architect devops sre qa technology ml backend "
+        "frontend fullstack ios android mobile code platform infrastructure tech",
+        "marketing": "marketing brand seo content social pr growth campaign campaigns influencer affiliate lifecycle demand",
+        "product": "product designer ux data",
+        "sales": "sales sdr",
+        "finance": "finance accountant bookkeeping",
+        "legal": "legal counsel paralegal",
+        "hr": "hr people recruiter recruiting",
+        "support": "support",
+        "operations": "operations ops",
+    }.items()
+    for word in words.split()
+}
 
 
 # How a job is held, not what it is: a qualifier made only of these words names no work.
-HELD = re.compile(r"(?:(?:contract(?:or)?|to|hire|remote|hybrid|on[\s-]?site|in[\s-]office|temporary|temp|part|full|"
-                  r"time|freelance|interim|fractional|permanent|intern(?:ship)?|us|usa|eu|uk|emea|apac|amer|americas|"
-                  r"latam|anz|global|worldwide|nyc|sf|\d+)[\s/-]*)+")
+HELD = re.compile(
+    r"(?:(?:contract(?:or)?|to|hire|remote|hybrid|on[\s-]?site|in[\s-]office|temporary|temp|part|full|"
+    r"time|freelance|interim|fractional|permanent|intern(?:ship)?|us|usa|eu|uk|emea|apac|amer|americas|"
+    r"latam|anz|global|worldwide|nyc|sf|\d+)[\s/-]*)+"
+)
 
 
 def _name_words(text):
@@ -164,17 +246,25 @@ def _name_words(text):
     text = " ".join(work + [parts[0]])
     for full, short in SHORT:
         text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
-    text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
-    text = re.sub(r"\bcustomer service\b", "support customer service", text)     # the Support Agent's work
-    text = re.sub(r"\bemployee relations?\b", lambda found: f"hr {found.group(0)}", text)    # HR's, not investors'
+    text = re.sub(r"\baccounting\b", "bookkeeping", text)  # the books, not a client account ("Account Manager")
+    text = re.sub(r"\bcustomer service\b", "support customer service", text)  # the Support Agent's work
+    text = re.sub(r"\bemployee relations?\b", lambda found: f"hr {found.group(0)}", text)  # HR's, not investors'
     words = re.findall(r"[a-z0-9]+", text)
     return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
 
 # The words a department head's title may use for the department's field beyond its id ("Head of Human Resources").
-FIELDS = {"hr": "hr human resources people", "support": "support customer service",
-          "operations": "operations ops", "product": "product", "legal": "legal", "finance": "finance",
-          "marketing": "marketing growth", "sales": "sales revenue", "engineering": "engineering technology"}
+FIELDS = {
+    "hr": "hr human resources people",
+    "support": "support customer service",
+    "operations": "operations ops",
+    "product": "product",
+    "legal": "legal",
+    "finance": "finance",
+    "marketing": "marketing growth",
+    "sales": "sales revenue",
+    "engineering": "engineering technology",
+}
 
 
 def _kind(title):
@@ -184,8 +274,9 @@ def _kind(title):
     if not words or words[-1] not in ROLE_WORDS:
         return ""
     # A rep is a representative, and a developer the same kind of job as an engineer (the catalog names engineers).
-    return {"rep": "representative", "reps": "representative", "developer": "engineer",
-            "developers": "engineer"}.get(words[-1]) or _name_stem(words[-1])
+    return {"rep": "representative", "reps": "representative", "developer": "engineer", "developers": "engineer"}.get(
+        words[-1]
+    ) or _name_stem(words[-1])
 
 
 # Kinds of job that write code: a cloud coding agent is an applicant for one in Engineering.
@@ -193,8 +284,10 @@ CODING_KINDS = frozenset({R._stem("engineer"), R._stem("programmer")})
 
 
 # Kinds of job that are one job: a Support Representative is the Support Agent.
-SAME_KIND = {stem: {_name_stem("agent"), _name_stem("representative")} for stem in (_name_stem("agent"),
-                                                                                    _name_stem("representative"))}
+SAME_KIND = {
+    stem: {_name_stem("agent"), _name_stem("representative")}
+    for stem in (_name_stem("agent"), _name_stem("representative"))
+}
 
 
 def _work(title):
@@ -218,8 +311,10 @@ def _may_edit(auth, c, who, row):
 def view(auth, c, who, row):
     seat = lifecycle._seat(row)
     by = str(row["description_by"] or "")
-    seat.update(description_by="person" if by.startswith("human:") or by == lifecycle.EARLIER else "chart",
-                can_edit=_may_edit(auth, c, who, row))
+    seat.update(
+        description_by="person" if by.startswith("human:") or by == lifecycle.EARLIER else "chart",
+        can_edit=_may_edit(auth, c, who, row),
+    )
     if str(row["reports_to"] or "").startswith(lifecycle.SEAT_PREFIX):
         seat["reports_now"] = _reports_now(auth, c, who, row)
     return seat
@@ -228,10 +323,13 @@ def view(auth, c, who, row):
 def _reports_now(auth, c, who, row):
     """Who a bot hired into this seat reports to until its manager seat is hired (`lifecycle.bot_parent`), and that
     seat's title: the Hire page says both in one line. The name is "" when the caller may not see that person or bot."""
-    manager = c.execute("SELECT title FROM seats WHERE id=? AND closed_at IS NULL",
-                        (row["reports_to"][len(lifecycle.SEAT_PREFIX):],)).fetchone()
-    return {"name": boss_name(auth, c, who, lifecycle.bot_parent(c, row["reports_to"])),
-            "until": manager["title"] if manager else ""}
+    manager = c.execute(
+        "SELECT title FROM seats WHERE id=? AND closed_at IS NULL", (row["reports_to"][len(lifecycle.SEAT_PREFIX) :],)
+    ).fetchone()
+    return {
+        "name": boss_name(auth, c, who, lifecycle.bot_parent(c, row["reports_to"])),
+        "until": manager["title"] if manager else "",
+    }
 
 
 def show(auth, c, who, seat_id):
@@ -257,13 +355,22 @@ def _title(title):
     words = {word for _, word in named}
     work = _work(title)
     pins = {PINS[word] for word in words if word in PINS}
-    kinds = [word for stem, word in named if stem not in RANKS]    # "Engineer II", "Engineers": the engineer
-    kind_department = (DEPARTMENT_WORDS.get(kinds[-1]) or DEPARTMENT_WORDS.get(kinds[-1].removesuffix("s"), "")) if kinds else ""
+    kinds = [word for stem, word in named if stem not in RANKS]  # "Engineer II", "Engineers": the engineer
+    kind_department = (
+        (DEPARTMENT_WORDS.get(kinds[-1]) or DEPARTMENT_WORDS.get(kinds[-1].removesuffix("s"), "")) if kinds else ""
+    )
     if pins and kind_department:
-        pins.add(kind_department)           # "Product Security Engineer" is an engineer: Engineering's cards may be it
-    return {"words": R._words(title), "work": work, "specific": work - GENERIC, "stems": {s for s, _ in named} - RANKS,
-            "heads": bool(words & HEAD_WORDS), "kind": _kind(title), "pins": pins,
-            "departments": {DEPARTMENT_WORDS[word] for word in words if word in DEPARTMENT_WORDS}}
+        pins.add(kind_department)  # "Product Security Engineer" is an engineer: Engineering's cards may be it
+    return {
+        "words": R._words(title),
+        "work": work,
+        "specific": work - GENERIC,
+        "stems": {s for s, _ in named} - RANKS,
+        "heads": bool(words & HEAD_WORDS),
+        "kind": _kind(title),
+        "pins": pins,
+        "departments": {DEPARTMENT_WORDS[word] for word in words if word in DEPARTMENT_WORDS},
+    }
 
 
 def _ranked(card):
@@ -279,13 +386,15 @@ def _fit(card, t):
         return 0
     name = {stem for stem, _ in _name_words(card["name"])}
     kind = t["kind"]
-    ranked_here = _ranked(card) and name & t["specific"] and (not t["departments"] or card["department"] in t["departments"])
+    ranked_here = (
+        _ranked(card) and name & t["specific"] and (not t["departments"] or card["department"] in t["departments"])
+    )
     if kind and not SAME_KIND.get(kind, {kind}) & name and not ranked_here:
         # A designer is not the UX Writer, an engineer not a specialist; a job of one kind may be a template named by
         # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
         # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
         # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
-        # "Brand Designer" may be Marketing's Brand Manager).
+        # "Brand Designer" may be Marketing's Brand Owner).
         return 0
     if t["heads"] and card.get("lead"):
         # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,
@@ -296,9 +405,9 @@ def _fit(card, t):
             name |= field
     if t["specific"]:
         if not name & t["specific"]:
-            return 0                        # "Influencer Marketing Manager" shares only "Marketing" with Marketing's cards
+            return 0  # "Influencer Marketing Manager" shares only "Marketing" with Marketing's cards
     elif not (t["heads"] and card.get("lead")) and _work(card["name"]) != t["work"]:
-        return 0                            # "Digital Marketing Manager" is no template's whole work
+        return 0  # "Digital Marketing Manager" is no template's whole work
     # A job's letters are a whole name ("PR" is Public Relations), so they outweigh one of its words ("Relations").
     return sum(2 if stem in LETTERS else 1 for stem in name & t["work"])
 
@@ -336,13 +445,20 @@ def _ranked_fits(cards, title, team=""):
         # Analyst.
         plain = not t["kind"] and not _kind(card["name"])
         # A head's card is all of a head's title when the title is all its field ("Head of HR" is the Head of People).
-        exact = _work(card["name"]) == t["work"] or (t["heads"] and bool(card.get("lead")) and t["work"] <= {
-            stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))})
+        exact = _work(card["name"]) == t["work"] or (
+            t["heads"]
+            and bool(card.get("lead"))
+            and t["work"] <= {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
+        )
         # A head's card for a head's title, and for another only when no other card is as good ("Marketing manager" is
         # the Head of Marketing's work, "Engineering Manager" the Engineering Manager's).
         role = (2 if t["heads"] else 0) if card.get("lead") else 1
-        key = ((same_kind, exact, shared, plain, role, len(name & t["stems"]), score),
-               card["department"] == group, -len(card["name"]), card["template"])
+        key = (
+            (same_kind, exact, shared, plain, role, len(name & t["stems"]), score),
+            card["department"] == group,
+            -len(card["name"]),
+            card["template"],
+        )
         out.append((key, card))
     out.sort(key=lambda item: item[0], reverse=True)
     return out
@@ -357,8 +473,11 @@ def _department_hint(title):
 # What a card's bullet says for the bot's own files and limits, not for the person reading the job: "(knowledge/labels.md)",
 # ", in knowledge/company.md" and "within the requested work and Tools" go.
 _FILE = r"(?:knowledge|reports|docs|_[\w-]+)/[\w./-]*|[\w./-]*\.(?:md|json|ya?ml|csv)\b"
-_PLAIN = re.compile(rf"\s*\((?:[^()]*?(?:{_FILE})[^()]*?)\)|,?\s+in\s+(?:{_FILE})\s*$"
-                    r"|,?\s*(?:prepared\s+)?(?:to apply\s+)?within the requested work(?:\s+and\s+tools)?", re.I)
+_PLAIN = re.compile(
+    rf"\s*\((?:[^()]*?(?:{_FILE})[^()]*?)\)|,?\s+in\s+(?:{_FILE})\s*$"
+    r"|,?\s*(?:prepared\s+)?(?:to apply\s+)?within the requested work(?:\s+and\s+tools)?",
+    re.I,
+)
 
 
 def _plain(item, limit=160):
@@ -376,7 +495,7 @@ def compose(card):
     tools = list(dict.fromkeys(_tool(row["tool"]) for row in raw["prerequisites"]))
     if tools:
         lines += ["", "Works in: " + ", ".join(tools)]
-    return "\n".join(lines).strip()[:lifecycle.DESCRIPTION_MAX]
+    return "\n".join(lines).strip()[: lifecycle.DESCRIPTION_MAX]
 
 
 def boss_name(auth, c, who, reports_to):
@@ -394,7 +513,7 @@ def boss_name(auth, c, who, reports_to):
     if reports.startswith("human:"):
         return (H.human(c, reports[6:]) or {}).get("name") or ""
     if reports.startswith(lifecycle.SEAT_PREFIX):
-        row = c.execute("SELECT title FROM seats WHERE id=?", (reports[len(lifecycle.SEAT_PREFIX):],)).fetchone()
+        row = c.execute("SELECT title FROM seats WHERE id=?", (reports[len(lifecycle.SEAT_PREFIX) :],)).fetchone()
         return row["title"] if row else ""
     if not auth.bot_accesses(c, who, [reports]).get(reports, {}).get("see"):
         return ""
@@ -413,17 +532,25 @@ def _rewrite_prompt(text, title, boss):
     role = f"the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
     # The catalog's own voice: a template's summary has no subject ("Reviews every open pull request..."), so the
     # opening line never says "I", "You" or "AI teammate", nor repeats the title the page already shows.
-    rules = ("Start the opening line with a verb and no subject, like \"Owns the Rust services that...\"; never write "
-             "\"I\", \"you\", \"we\" or \"AI teammate\" and never repeat the job title. Plain words, under 150 words, no "
-             "other headings, and never name a template, a model or a vendor. Answer with the text only.")
+    rules = (
+        "Start the opening line with a verb and no subject, like \"Owns the Rust services that...\"; never write "
+        "\"I\", \"you\", \"we\" or \"AI teammate\" and never repeat the job title. Plain words, under 150 words, no "
+        "other headings, and never name a template, a model or a vendor. Answer with the text only."
+    )
     if text:
-        return (f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
-                "with three to five short bullets starting with \"- \", then one \"Works in:\" line. " + rules
-                + "\n\n" + text)
+        return (
+            f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
+            "with three to five short bullets starting with \"- \", then one \"Works in:\" line. "
+            + rules
+            + "\n\n"
+            + text
+        )
     # No template is this job: written from the title alone, in the same shape less the tools, which nobody named.
-    return (f"Write a job description for an AI teammate in {role}. Its shape: one opening line saying what it "
-            "owns, then \"What you'll do\" with three to five short bullets starting with \"- \", each a concrete "
-            "piece of work it delivers. " + rules)
+    return (
+        f"Write a job description for an AI teammate in {role}. Its shape: one opening line saying what it "
+        "owns, then \"What you'll do\" with three to five short bullets starting with \"- \", each a concrete "
+        "piece of work it delivers. " + rules
+    )
 
 
 def _answer(request, opener, deadline):
@@ -448,7 +575,7 @@ def _answer(request, opener, deadline):
                 if left <= 0:
                     raise TimeoutError("the answer came too slowly")
                 if getattr(response, "isclosed", lambda: False)():
-                    break                   # the whole body has arrived and http.client closed its reader
+                    break  # the whole body has arrived and http.client closed its reader
                 if sock is not None and sock.fileno() != -1:
                     sock.settimeout(left)
                 want = min(REWRITE_CHUNK, REWRITE_BYTES + 1 - len(raw))
@@ -467,9 +594,12 @@ def _gateway_answer(base, key, body, deadline):
     """The Tico AI Gateway's answer to one chat request (`<base>/chat/completions`, OpenAI chat shape, not streamed), as
     the parsed JSON. Sent with Tico's user agent and never through a redirect (clients/gateway.py `_send`), and read
     under the same deadline as Gemini's answer. Its own function, so a test can answer without the network."""
-    request = Request(base + "/chat/completions", data=json.dumps(body).encode(), method="POST",
-                      headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
-                               "Accept": "application/json"})
+    request = Request(
+        base + "/chat/completions",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json", "Accept": "application/json"},
+    )
     return json.loads(_answer(request, G._send, deadline))
 
 
@@ -480,6 +610,7 @@ def _rewrite_call(text, title, boss, deadline, gateway=None):
     time bound, so a draft that needs no model never reads the vault). No request starts once the deadline has passed, and each
     socket wait is at most the time left. It raises when there is neither key, the call fails or time is up."""
     from clients.docs_qa import NoKey, key
+
     try:
         secret = key()
     except Exception:  # noqa: BLE001 - no Gemini key (NoKey) or it could not be read: the Gateway may still answer
@@ -490,16 +621,24 @@ def _rewrite_call(text, title, boss, deadline, gateway=None):
     prompt = _rewrite_prompt(text, title, boss)
     if secret:
         body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-        request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
-                          data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+        request = Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "x-goog-api-key": secret},
+        )
         parts = json.loads(_answer(request, urlopen, deadline))["candidates"][0]["content"]["parts"]
         return "".join(part.get("text", "") for part in parts).strip()
     target = gateway() if callable(gateway) else gateway
     if time.monotonic() >= deadline:
         raise TimeoutError("the gateway key came too late")
     if target and target[0]:
-        body = {"model": GATEWAY_REWRITE_MODEL, "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": GATEWAY_MAX_TOKENS, "reasoning_effort": GATEWAY_EFFORT, "stream": False}
+        body = {
+            "model": GATEWAY_REWRITE_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": GATEWAY_MAX_TOKENS,
+            "reasoning_effort": GATEWAY_EFFORT,
+            "stream": False,
+        }
         answer = _gateway_answer(G.safe_base(target[1]), target[0], body, deadline)
         return str(answer["choices"][0]["message"]["content"] or "").strip()
     raise NoKey("no Gemini key and no Tico AI Gateway key")
@@ -517,7 +656,7 @@ def _cut(sock):
     try:
         sock.shutdown(socket.SHUT_RDWR)
     except OSError:
-        pass                                # already closed
+        pass  # already closed
 
 
 def _rewrite(text, title, boss, gateway=None):
@@ -563,9 +702,12 @@ def _voice(text, title):
     found = _PERSON.match(text)
     verb = found.group(1).lower() if found else ""
     if verb and verb not in _NOT_VERBS:
-        verb = _IRREGULAR.get(verb) or (verb[:-1] + "ies" if re.search(r"[^aeiou]y$", verb) else
-                                        verb + ("es" if verb.endswith(("s", "sh", "ch", "x", "o")) else "s"))
-        text = verb.capitalize() + text[found.end():]
+        verb = _IRREGULAR.get(verb) or (
+            verb[:-1] + "ies"
+            if re.search(r"[^aeiou]y$", verb)
+            else verb + ("es" if verb.endswith(("s", "sh", "ch", "x", "o")) else "s")
+        )
+        text = verb.capitalize() + text[found.end() :]
     return text[:1].upper() + text[1:]
 
 
@@ -577,21 +719,24 @@ def draft(onboarding, title, team="", boss="", redraft=False, gateway=None):
     (`source` "model"), else "" (`source` "none"). The model is Gemini when the server has a key, else the Tico AI
     Gateway with `gateway` (the company's (key, base URL), or None)."""
     _, cards = _recruitable(onboarding)
-    card = _best_card(cards, str(title or "")[:lifecycle.TITLE_MAX], team)
+    card = _best_card(cards, str(title or "")[: lifecycle.TITLE_MAX], team)
     offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
     if not card:
         # Another job's description is no draft ("Rust engineer" is not the QA Engineer): the model writes one from the
         # title, under the same bound, or the box stays empty for the person's own words.
-        written = "" if offline else _voice(_rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway),
-                                            str(title).strip())
+        written = (
+            ""
+            if offline
+            else _voice(_rewrite("", str(title).strip()[: lifecycle.TITLE_MAX], boss, gateway), str(title).strip())
+        )
         if len(written) >= 40:
-            return {"description": written[:lifecycle.DESCRIPTION_MAX], "source": "model"}
+            return {"description": written[: lifecycle.DESCRIPTION_MAX], "source": "model"}
         return {"description": "", "source": "none"}
     text = compose(card)
     if redraft and not offline:
-        rewritten = _voice(_rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway), str(title).strip())
+        rewritten = _voice(_rewrite(text, str(title).strip()[: lifecycle.TITLE_MAX], boss, gateway), str(title).strip())
         if len(rewritten) >= 40:
-            return {"description": rewritten[:lifecycle.DESCRIPTION_MAX], "source": "model"}
+            return {"description": rewritten[: lifecycle.DESCRIPTION_MAX], "source": "model"}
     return {"description": text, "source": "catalog"}
 
 
@@ -601,6 +746,7 @@ def _recruitable(onboarding):
     with each card's model, effort and whether it is a starter from the card itself."""
     from .recruit import catalog
     from .onboarding import read_cards
+
     full = {card["template"]: card for card in read_cards(onboarding.settings)}
     value = catalog(onboarding.settings)
     out = []
@@ -614,9 +760,13 @@ def _recruitable(onboarding):
 def _models(c, onboarding):
     """The models one may choose instead: current models of the company's enabled providers."""
     from . import providers
+
     enabled = providers.load(c, onboarding.settings)["enabled"]
-    return [{"id": m["id"], "name": m.get("label") or m["id"], "provider": m.get("provider") or ""}
-            for m in onboarding.models.values() if m.get("provider") in enabled and not m.get("deprecated")]
+    return [
+        {"id": m["id"], "name": m.get("label") or m["id"], "provider": m.get("provider") or ""}
+        for m in onboarding.models.values()
+        if m.get("provider") in enabled and not m.get("deprecated")
+    ]
 
 
 def _suggested(c, onboarding, raw):
@@ -661,7 +811,9 @@ def candidates(auth, onboarding, c, who, seat_id):
     department = best["department"] if best else _department_hint(row["title"])
     # The title's words of work, not of rank or its kind ("Developer" in "Go Developer" is no fit to the Developer
     # Advocate).
-    title = [(stem, word) for stem, word in R._words(_expand(row["title"])) if stem not in RANKS and word not in ROLE_WORDS]
+    title = [
+        (stem, word) for stem, word in R._words(_expand(row["title"])) if stem not in RANKS and word not in ROLE_WORDS
+    ]
     words = title + [("", "")] + R._words(R._text(row["description"], 4000))
     common = R._common(cards)
     scored = []
@@ -681,29 +833,64 @@ def candidates(auth, onboarding, c, who, seat_id):
         near = bool({stem for stem, _ in _name_words(card["name"])} & t["specific"])
         same_kind = bool(t["kind"]) and _kind(card["name"]) == t["kind"]
         work = _work(card["name"])
-        scored.append((("strong", "good", "").index(match), card is not best, not here, misplaced, not near, not same_kind, -score,
-                       (not work <= GENERIC, len(work)), {"default": 0, "common": 1}.get(card["suggest"], 2),
-                       card["name"].lower(), card, match))
+        scored.append(
+            (
+                ("strong", "good", "").index(match),
+                card is not best,
+                not here,
+                misplaced,
+                not near,
+                not same_kind,
+                -score,
+                (not work <= GENERIC, len(work)),
+                {"default": 0, "common": 1}.get(card["suggest"], 2),
+                card["name"].lower(),
+                card,
+                match,
+            )
+        )
     scored.sort(key=lambda item: item[:10])
     out = []
     for *_, card, match in scored[:CANDIDATES]:
         raw = card["raw"]
-        out.append({"template": card["template"], "name": card["name"], "icon": card["icon"],
-                    "department": departments.get(card["department"], ""), "department_id": card["department"],
-                    "line": R._first_sentence(card["summary"], 90), "summary": R._text(raw["summary"], 1000),
-                    "tags": card["tags"][:6], "owns": [_plain(item, 400) for item in raw["owns"][:6] if _plain(item, 400)], "never": raw["never"][:6],
-                    "onboarding": [item["ask"] for item in raw["onboarding"] if item["ask"]][:6],
-                    "prerequisites": _needs(raw), "match": match, "source": "template", "starter": bool(raw["starter"]),
-                    **_suggested(c, onboarding, raw)})
+        out.append(
+            {
+                "template": card["template"],
+                "name": card["name"],
+                "icon": card["icon"],
+                "department": departments.get(card["department"], ""),
+                "department_id": card["department"],
+                "line": R._first_sentence(card["summary"], 90),
+                "summary": R._text(raw["summary"], 1000),
+                "tags": card["tags"][:6],
+                "owns": [_plain(item, 400) for item in raw["owns"][:6] if _plain(item, 400)],
+                "never": raw["never"][:6],
+                "onboarding": [item["ask"] for item in raw["onboarding"] if item["ask"]][:6],
+                "prerequisites": _needs(raw),
+                "match": match,
+                "source": "template",
+                "starter": bool(raw["starter"]),
+                **_suggested(c, onboarding, raw),
+            }
+        )
     # A job writing code in Engineering has the cloud coding agents Tico connects as applicants too: after the templates
     # that are the job, and first when none is ("Rust engineer": no template writes Rust, Claude Code and Codex do).
     agents_at = sum(1 for item in out if item["match"] == "strong")
     agents = []
     if department == "engineering" and t["kind"] in CODING_KINDS:
         from .team_build import _cloud_agents
-        agents = [{**agent, "match": "good" if agents_at else "strong"} for agent in _cloud_agents() if agent["supported"]]
-    return {"seat": view(auth, c, who, row), "candidates": out, "agents": agents, "agents_at": agents_at,
-            "department": department, "models": _models(c, onboarding)}
+
+        agents = [
+            {**agent, "match": "good" if agents_at else "strong"} for agent in _cloud_agents() if agent["supported"]
+        ]
+    return {
+        "seat": view(auth, c, who, row),
+        "candidates": out,
+        "agents": agents,
+        "agents_at": agents_at,
+        "department": department,
+        "models": _models(c, onboarding),
+    }
 
 
 # ------------------------------------------------------------------ 3. the pick
@@ -711,8 +898,9 @@ def _may_hire(auth, c, who, row):
     """Whoever may change the seat picks for it: the owner, or a person it reports up to, in person or on a request
     they confirmed. A bot never picks, and BotOps acting for someone does so only on their confirmed request."""
     if who.role not in ("owner", "human") or (who.via and not who.confirmed):
-        raise Problem("forbidden", "Only a person picks a candidate for a seat: the owner, or someone the seat reports "
-                      "up to", 403)
+        raise Problem(
+            "forbidden", "Only a person picks a candidate for a seat: the owner, or someone the seat reports up to", 403
+        )
     lifecycle._may_place(auth, c, who, row["reports_to"])
 
 
@@ -726,7 +914,7 @@ def top_card(auth, onboarding, c, who, row):
     # A coding seat with no Strong or Good template ("Engineer") still builds from Engineering's first: the agent writes
     # the code, the template only gives the bot its repository.
     fits = ranked and (ranked[0]["match"] or (found["agents"] and ranked[0]["department_id"] == found["department"]))
-    template = ranked[0]["template"] if fits else ""   # a template that does not fit is not one
+    template = ranked[0]["template"] if fits else ""  # a template that does not fit is not one
     return next((card["raw"] for card in cards if card["template"] == template), None)
 
 
@@ -734,10 +922,13 @@ def brief(c, onboarding, card, row):
     """The reviewed instructions a seat's bot starts with: the template rendered for this company, then the seat's job
     description. Returns the company's record, the rendered template, the description and the instructions."""
     from .onboarding import display_names, load, render
+
     record = load(c)
     rendered = render(card, display_names(onboarding.settings, record), row["title"])
     description = str(row["description"] or "").strip()
-    instructions = rendered["instructions"].rstrip() + ("\n\n## Job description\n" + description + "\n" if description else "")
+    instructions = rendered["instructions"].rstrip() + (
+        "\n\n## Job description\n" + description + "\n" if description else ""
+    )
     return record, rendered, description, instructions
 
 
@@ -747,16 +938,19 @@ def _follow_filled(c, who, seat_id, bot, now):
     A move that would close a circle (this seat's manager was moved under the bot hired into it while it was open) is
     skipped, and that bot stays where it was placed. `_set_parent` revalidates Finance's org."""
     from .settings_admin import SettingsAdmin, _set_parent
-    for seat in c.execute("SELECT filled_by FROM seats WHERE reports_to=? AND closed_at IS NOT NULL AND filled_by<>''",
-                          ("seat:" + seat_id,)).fetchall():
-        found = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
+
+    for seat in c.execute(
+        "SELECT filled_by FROM seats WHERE reports_to=? AND closed_at IS NOT NULL AND filled_by<>''",
+        ("seat:" + seat_id,),
+    ).fetchall():
+        found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
         if not found:
             continue
-        placed = (json.loads(found["config"] or "{}") or {}).get("placed_under")
+        placed = BS.read(c, seat["filled_by"]).get("placed_under")
         if placed is None or (found["reports_to"] or "") != placed:
             continue
         try:
-            SettingsAdmin._parent(c, seat["filled_by"], bot)     # the bot hierarchy's own check: no circle, bot exists
+            SettingsAdmin._parent(c, seat["filled_by"], bot)  # the bot hierarchy's own check: no circle, bot exists
         except Problem as err:
             if err.code == "hierarchy":
                 continue
@@ -769,42 +963,58 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     computer builds it from this definition (`materialize`), any other template's BotOps does on its "Set up" task. A hire
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
+
     if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (slug,))
+        BS.update(c, slug, {"session": "task"})
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
         from .finance import actions as FA
-        FA.revalidate_org(c)                 # the seat's team is part of the org chart Finance's grants follow (spec 7.5)
+
+        FA.revalidate_org(c)  # the seat's team is part of the org chart Finance's grants follow (spec 7.5)
     declared = onboarding._declared(c, slug)
     # The line the bot was created on (its hire or add placed it there): a bot hired under this seat while it was open
     # follows the bot that fills it only while it still reports there (_follow_filled).
     placed = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()["reports_to"] or ""
-    declared.update(template=card["template"], instructions=instructions, template_version=releases.version(),
-                    recruited_from=row["id"], placed_under=placed)
+    declared.update(
+        template=card["template"],
+        instructions=instructions,
+        template_version=releases.version(),
+        recruited_from=row["id"],
+        placed_under=placed,
+    )
     onboarding._write_config(c, slug, declared)
     # Onboarding from the start: it learns, takes no work, and a person above it marks it complete (lifecycle.py).
     c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
     message_bots.link(c, who.actor, slug, who.actor)
     now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
-              (now, who.actor, slug, now, who.actor, row["id"]))
+    c.execute(
+        "UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
+        (now, who.actor, slug, now, who.actor, row["id"]),
+    )
     # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
-    c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
-              (slug, now, who.actor, "seat:" + row["id"]))
+    c.execute(
+        "UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+        (slug, now, who.actor, "seat:" + row["id"]),
+    )
     _follow_filled(c, who, row["id"], slug, now)
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})
     if card["starter"]:
         onboarding._make_starter(c, who, slug, card["template"])
         return None
-    choice = {"template": card["template"], "display_name": name, "instructions": instructions,
-              "description": description}
+    choice = {
+        "template": card["template"],
+        "display_name": name,
+        "instructions": instructions,
+        "description": description,
+    }
     return onboarding._setup_task(c, who, slug, choice, rendered, answers)
 
 
 def hire(auth, onboarding, c, who, seat_id, body):
     """Fill the seat with the picked candidate: the bot in Onboarding, in the seat's place, and only then its repo."""
     from .onboarding import BOTOPS
+
     row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
     if row and row["filled_by"]:
         filled = H.bot(c, row["filled_by"]) or {}
@@ -829,8 +1039,11 @@ def hire(auth, onboarding, c, who, seat_id, body):
     stand_in = not model
     if stand_in:
         # No provider yet: a stand-in satisfies the definition, then the bot follows the company default (as setup does).
-        model, effort = next((m["id"], m.get("default_effort") or "") for m in onboarding.models.values()
-                             if m.get("provider") and not m.get("deprecated"))
+        model, effort = next(
+            (m["id"], m.get("default_effort") or "")
+            for m in onboarding.models.values()
+            if m.get("provider") and not m.get("deprecated")
+        )
     record, rendered, description, instructions = brief(c, onboarding, card, row)
     name = (body.name or row["title"]).strip()[:100] or row["title"][:100]
     slug = onboarding.admin.pick_slug(c, name)
@@ -839,19 +1052,54 @@ def hire(auth, onboarding, c, who, seat_id, body):
     under = lifecycle.bot_parent(c, row["reports_to"])
     # The bot first, under the rules for any bot this person adds: who may create one, under whom, on which model and
     # computer.
-    created = onboarding.admin.create_bot(c, who, M.BotDefinitionCreate(
-        slug=slug, display_name=name, description=description[:2000], status="planned",
-        repo="bot-" + slug, thread_mode="personal", reports_to=under or None,
-        shared=bool(card.get("shared")), template=card["template"], model=model, effort=effort,
-        owners=[H.actor_id(who.actor)], runner_id=body.runner_id or None))
+    created = onboarding.admin.create_bot(
+        c,
+        who,
+        M.BotDefinitionCreate(
+            slug=slug,
+            display_name=name,
+            description=description[:2000],
+            status="planned",
+            repo="bot-" + slug,
+            thread_mode="personal",
+            reports_to=under or None,
+            shared=bool(card.get("shared")),
+            template=card["template"],
+            model=model,
+            effort=effort,
+            owners=[H.actor_id(who.actor)],
+            runner_id=body.runner_id or None,
+        ),
+    )
     bot_id = H.resolve_bot(c, slug)["id"]
     if stand_in:
         onboarding._follow_default(c, bot_id)
         model = ""
-    setup_task = onboard(c, who, onboarding, row, card, bot_id, name=name, description=description,
-                         instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
+    setup_task = onboard(
+        c,
+        who,
+        onboarding,
+        row,
+        card,
+        bot_id,
+        name=name,
+        description=description,
+        instructions=instructions,
+        rendered=rendered,
+        answers=record["answers"],
+        model=model,
+    )
     # The line the bot was created on, which may be the default manager create_bot gives a member rather than `under`.
     reports_to = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (bot_id,)).fetchone()["reports_to"] or None
-    return {"bot": bot_id, "slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": reports_to,
-            "template": card["template"], "model": model, "setup_task_id": setup_task,
-            "note": (created or {}).get("note") if isinstance(created, dict) else None}
+    return {
+        "bot": bot_id,
+        "slug": slug,
+        "name": name,
+        "seat": seat_id,
+        "stage": lifecycle.ONBOARDING,
+        "reports_to": reports_to,
+        "template": card["template"],
+        "model": model,
+        "setup_task_id": setup_task,
+        "note": (created or {}).get("note") if isinstance(created, dict) else None,
+    }

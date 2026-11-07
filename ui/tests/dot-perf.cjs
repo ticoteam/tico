@@ -6,7 +6,7 @@
 // - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
 //   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
 //   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
-// - Opening and closing Ask, by the row, ⌘J, Escape and a peek, with a peek showing, and from a page with no heading to
+// - Opening and closing Ask, by the row, ⌘J and Escape, and from a page with no heading to
 //   one with a heading (the page it sees goes and comes back), flights included: no `hidden` attribute changes anywhere
 //   and no child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once
 //   and reused.
@@ -95,7 +95,7 @@ const round = v => Math.round(v * 10) / 10;
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(4500);                       // the page settles: first draws, fonts, support's read, the peek's first look
+    await page.waitForTimeout(4500);                       // the page settles: first draws, fonts, support's read
 
     // ---- Idle, Ask closed.
     // Count the scheduler's swaps in the window: each may cost a few style recalcs (4 at most), nothing else may.
@@ -195,19 +195,8 @@ const round = v => Math.round(v * 10) / 10;
       await page.keyboard.press('Control+j'); await page.locator('#ask-panel .p-text:focus').waitFor(); await settle();
       await page.keyboard.press('Control+j'); await shut();
     }
-    // With a peek showing (a question just came in): tapping the peek opens Ask, as does the row; the peek goes by a
-    // class. And the page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
-    const peekShows = id => page.evaluate(id => {
-      document.activeElement?.blur();
-      (S.v2 ||= {}).needs = [{kind: 'ask', id, created_at: new Date().toISOString(),
-        ask: {id, sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Ship it?', created_at: new Date().toISOString(), refs: {}}}];
-      askPeek();
-    }, id).then(() => page.locator('#ask-peek .ask-peek-go').waitFor());
+    // The page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
     const heading = text => page.evaluate(text => { const h = document.querySelector('#main h1, #main h2'); h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);
-    await peekShows('q1');
-    await page.locator('#ask-peek .ask-peek-go').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
-    await page.keyboard.press('Escape'); await shut();
-    await peekShows('q2');
     await heading('');
     await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
     assert.equal(await page.locator('#ask-panel [data-ask-sees]').isVisible(), false, 'no heading, no page named');

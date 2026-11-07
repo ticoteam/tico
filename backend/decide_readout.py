@@ -1,5 +1,5 @@
-"""The weekly Decide readout: per question set, the window's calls, cost, model (Jev or the fallback) and answer
-spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `hub decision readout`).
+"""The weekly Decide readout: per question set, the window's calls, cost, model (Jev, Decide Medium or High, or the
+fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `hub decision readout`).
 
 Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the `judge.spend` rows
 (`backend/judge.py` `metered` writes one after every paid call, so a batch or a nightly run counts each call it paid
@@ -16,23 +16,27 @@ meetings ask) is counted under "(other questions)".
 """
 
 import json
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
-from .judge import spent_this_month
+from .judge import spent_this_month, budget_cap
 
 OTHER_LABELS = "(other labels)"
 OTHER_QUESTIONS = "(other questions)"
 OPEN_ITEM = "(an open item)"
 BANDS = ("under 0.3", "0.3 to 0.7", "0.7 and over")
 MAX_DAYS = 31
-RUN = {"learnings-route": "run"}     # backend/learnings.py audits a night's run as one `learnings-route@run` row
+RUN = {"learnings-route": "run"}  # backend/learnings.py audits a night's run as one `learnings-route@run` row
+# The Gateway's language-model levels (Decide Medium and High), as the id sent: the row's own id or its alias.
+TIER = re.compile(r"^tico-decide-(medium|high)(?:-1\.0)?$")
 
 
 def _inline_sets():
     """The sets the code asks without a questions/ file: {set id: {question id: fixed options or None}}."""
     from clients.hubtools import CLASSIFY_OPTIONS
+
     return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "live-meeting-route": {}}
 
 
@@ -50,9 +54,14 @@ def known_sets(registry_dir=None):
             data = J.load_set(entry["id"], registry_dir=registry_dir)
         except J.JudgeError:
             continue
-        out[data["id"]] = {qid: (q.get("type"), tuple(q["criteria"]) if q.get("type") == "choice"
-                                 and isinstance(q.get("criteria"), dict) else None)
-                           for qid, q in data["questions"].items() if isinstance(q, dict)}
+        out[data["id"]] = {
+            qid: (
+                q.get("type"),
+                tuple(q["criteria"]) if q.get("type") == "choice" and isinstance(q.get("criteria"), dict) else None,
+            )
+            for qid, q in data["questions"].items()
+            if isinstance(q, dict)
+        }
         versions[data["id"]] = {str(n) for n in range(1, data["version"] + 1)}
     for name, marker in RUN.items():
         versions.setdefault(name, set()).add(marker)
@@ -76,7 +85,7 @@ def band(p):
 
 def spread_key(qid, answer, questions):
     """(question shown, value shown) for one audited answer, or None when it cannot be read."""
-    if isinstance(answer, (int, float)) and not isinstance(answer, bool):     # live meetings keep {slug: p}
+    if isinstance(answer, (int, float)) and not isinstance(answer, bool):  # live meetings keep {slug: p}
         kind, value = "noul", float(answer)
     elif isinstance(answer, dict):
         kind, value = answer.get("type"), answer.get("value")
@@ -97,23 +106,50 @@ def spread_key(qid, answer, questions):
     return None
 
 
+def _tier(model):
+    """The label of a Decide Medium or High model id (a language model at the Gateway), else None."""
+    match = TIER.match(str(model or "").lower())
+    return f"Decide {match.group(1).capitalize()}" if match else None
+
+
 def _on_jev(model):
-    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev."""
-    return str(model or "").lower().startswith("jev") or model in J.GATEWAY_MODELS
+    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev (Decide Low;
+    a call recorded under an id from before this lineup counts as the id it is now). Decide Medium and High are not
+    Jev, whatever the Gateway's list of models says."""
+    from .gateway_tiers import new_id
+
+    model = new_id(model)
+    return str(model or "").lower().startswith("jev") or (model in J.GATEWAY_MODELS and _tier(model) is None)
 
 
 def _calls(detail):
-    """(answered on Jev, answered on another model, {error code: failed calls}) for one `judge.call` row."""
-    if isinstance(detail.get("models"), dict):                  # one nightly learnings run: its calls added up
+    """(answered on Jev, answered on another model, {error code: failed calls}, {Decide tier: calls}) for one `judge.call`
+    row. A tier's calls are neither Jev's nor the fallback's: they are counted under their own tier."""
+    if isinstance(detail.get("models"), dict):  # one nightly learnings run: its calls added up
         models = {str(m): int(n) for m, n in detail["models"].items() if isinstance(n, int) and not isinstance(n, bool)}
         jev = sum(n for m, n in models.items() if _on_jev(m))
-        failed = {str(code): int(n) for code, n in (detail.get("failed") or {}).items()
-                  if isinstance(n, int) and not isinstance(n, bool) and n > 0} if isinstance(detail.get("failed"), dict) else {}
-        return jev, sum(models.values()) - jev, failed
+        tiers = Counter()
+        for m, n in models.items():
+            if _tier(m):
+                tiers[_tier(m)] += n
+        failed = (
+            {
+                str(code): int(n)
+                for code, n in (detail.get("failed") or {}).items()
+                if isinstance(n, int) and not isinstance(n, bool) and n > 0
+            }
+            if isinstance(detail.get("failed"), dict)
+            else {}
+        )
+        return jev, sum(models.values()) - jev - sum(tiers.values()), failed, dict(tiers)
     calls = detail.get("calls") if isinstance(detail.get("calls"), int) and detail.get("calls") > 0 else 1
     if detail.get("error"):
-        return 0, 0, {str(detail["error"]): calls}
-    return (calls, 0, {}) if _on_jev(detail.get("model")) else (0, calls, {})
+        return 0, 0, {str(detail["error"]): calls}, {}
+    if _on_jev(detail.get("model")):
+        return calls, 0, {}, {}
+    if _tier(detail.get("model")):
+        return 0, 0, {}, {_tier(detail.get("model")): calls}
+    return 0, calls, {}, {}
 
 
 def _answers(detail):
@@ -125,8 +161,17 @@ def _answers(detail):
 
 
 def _empty():
-    return {"calls": 0, "jev": 0, "fallback": 0, "failed": Counter(), "cost_usd": 0.0, "ceiling_priced": 0,
-            "versions": set(), "answers": {}}
+    return {
+        "calls": 0,
+        "jev": 0,
+        "fallback": 0,
+        "tiers": Counter(),
+        "failed": Counter(),
+        "cost_usd": 0.0,
+        "ceiling_priced": 0,
+        "versions": set(),
+        "answers": {},
+    }
 
 
 def readout(c, settings, days=7, at=None):
@@ -134,11 +179,14 @@ def readout(c, settings, days=7, at=None):
     days = max(1, min(MAX_DAYS, int(days)))
     end = at or datetime.now(timezone.utc)
     start = end - timedelta(days=days)
-    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"     # noqa: E731 hubdb.now()'s format
+    stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"  # hubdb.now()'s format
     sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
-    rows = c.execute("SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
-                     "AND action IN ('judge.call','judge.spend')", (stamp(start), stamp(end))).fetchall()
+    rows = c.execute(
+        "SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
+        "AND action IN ('judge.call','judge.spend')",
+        (stamp(start), stamp(end)),
+    ).fetchall()
     for action, target, raw in rows:
         try:
             detail = json.loads(raw or "{}")
@@ -157,11 +205,12 @@ def readout(c, settings, days=7, at=None):
         version = version_of(label, name, versions)
         if version:
             row["versions"].add(version)
-        jev, other, failed = _calls(detail)
+        jev, other, failed, tiers = _calls(detail)
         row["jev"] += jev
         row["fallback"] += other
+        row["tiers"].update(tiers)
         row["failed"].update(failed)
-        row["calls"] += jev + other + sum(failed.values())
+        row["calls"] += jev + other + sum(tiers.values()) + sum(failed.values())
         if name == OTHER_LABELS:
             continue
         for answers in _answers(detail):
@@ -172,36 +221,71 @@ def readout(c, settings, days=7, at=None):
     out = []
     for name in sorted(by, key=lambda n: (n == OTHER_LABELS, n)):
         row = by[name]
-        out.append({"set": name, "versions": sorted(row["versions"]), "calls": row["calls"], "jev": row["jev"],
-                    "fallback": row["fallback"], "failed": dict(sorted(row["failed"].items())),
-                    "jev_share": round(row["jev"] / row["calls"], 4) if row["calls"] else None,
-                    "cost_usd": round(row["cost_usd"], 6), "ceiling_priced": row["ceiling_priced"],
-                    "answers": {q: dict(sorted(v.items())) for q, v in sorted(row["answers"].items())}})
-    # Ask ingest's own outcomes (backend/ask_ingest.py): through, merged, FYI, hands needed, sent back, failed open,
+        out.append(
+            {
+                "set": name,
+                "versions": sorted(row["versions"]),
+                "calls": row["calls"],
+                "jev": row["jev"],
+                "fallback": row["fallback"],
+                "tiers": dict(sorted(row["tiers"].items())),
+                "failed": dict(sorted(row["failed"].items())),
+                "jev_share": round(row["jev"] / row["calls"], 4) if row["calls"] else None,
+                "cost_usd": round(row["cost_usd"], 6),
+                "ceiling_priced": row["ceiling_priced"],
+                "answers": {q: dict(sorted(v.items())) for q, v in sorted(row["answers"].items())},
+            }
+        )
+    # Ask ingest's own outcomes (backend/ask_ingest.py): through, merged, refused (SENT_BACK or FYI), failed open,
     # and how many a person let through. Counts only; the items are the person's to read.
     # Each of the set's judge calls is reconciled to its item row, or a named reason, or counted as unexplained.
     from .ask_ingest import QUESTION_SET, outcome_counts, reconcile
+
     gate = outcome_counts(c, stamp(start), stamp(end))
     recon = reconcile(c, stamp(start), stamp(end))
-    if gate["outcomes"] or gate["rehearsal"] or recon["calls"] or recon["no_call"]:
+    if gate["outcomes"] or recon["calls"] or recon["no_call"]:
         row = next((r for r in out if r["set"] == QUESTION_SET), None)
         if row is None:
-            row = {"set": QUESTION_SET, "versions": [], "calls": 0, "jev": 0, "fallback": 0, "failed": {},
-                   "jev_share": None, "cost_usd": 0.0, "ceiling_priced": 0, "answers": {}}
+            row = {
+                "set": QUESTION_SET,
+                "versions": [],
+                "calls": 0,
+                "jev": 0,
+                "fallback": 0,
+                "tiers": {},
+                "failed": {},
+                "jev_share": None,
+                "cost_usd": 0.0,
+                "ceiling_priced": 0,
+                "answers": {},
+            }
             out.append(row)
         row["gate"] = gate
         row["reconcile"] = recon
     calls = sum(r["calls"] for r in out)
     jev = sum(r["jev"] for r in out)
-    cap = float(settings.decisions_monthly_usd or 0)
+    cap = budget_cap(c, settings)
     spent = spent_this_month(c, stamp(end))
-    data = {"from": stamp(start), "to": stamp(end), "days": days, "sets": out,
-            "total": {"calls": calls, "jev": jev, "fallback": sum(r["fallback"] for r in out),
-                      "failed": sum(sum(r["failed"].values()) for r in out),
-                      "jev_share": round(jev / calls, 4) if calls else None,
-                      "cost_usd": round(sum(r["cost_usd"] for r in out), 6)},
-            "month": {"month": stamp(end)[:7], "spent_usd": round(spent, 6), "cap_usd": cap,
-                      "share": round(spent / cap, 4) if cap > 0 else None}}
+    data = {
+        "from": stamp(start),
+        "to": stamp(end),
+        "days": days,
+        "sets": out,
+        "total": {
+            "calls": calls,
+            "jev": jev,
+            "fallback": sum(r["fallback"] for r in out),
+            "failed": sum(sum(r["failed"].values()) for r in out),
+            "jev_share": round(jev / calls, 4) if calls else None,
+            "cost_usd": round(sum(r["cost_usd"] for r in out), 6),
+        },
+        "month": {
+            "month": stamp(end)[:7],
+            "spent_usd": round(spent, 6),
+            "cap_usd": cap,
+            "share": round(spent / cap, 4) if cap > 0 else None,
+        },
+    }
     data["text"] = text(data)
     return data
 
@@ -222,9 +306,12 @@ def text(data):
         lines.append("No Decide calls in this window.")
     for row in data["sets"]:
         failed = ", ".join(f"{code} {n}" for code, n in row["failed"].items())
-        head = (f"{row['set']}{' v' + '/'.join(row['versions']) if row['versions'] else ''}: {row['calls']} calls, "
-                f"{_usd(row['cost_usd'])}; Jev {row['jev']} ({_pct(row['jev_share'])}), fallback {row['fallback']}"
-                + (f", failed {failed}" if failed else ""))
+        tiers = "".join(f", {name} {n}" for name, n in row["tiers"].items())
+        head = (
+            f"{row['set']}{' v' + '/'.join(row['versions']) if row['versions'] else ''}: {row['calls']} calls, "
+            f"{_usd(row['cost_usd'])}; Jev {row['jev']} ({_pct(row['jev_share'])}){tiers}, "
+            f"fallback {row['fallback']}" + (f", failed {failed}" if failed else "")
+        )
         if row["ceiling_priced"]:
             head += f"; {row['ceiling_priced']} counted at the ceiling price (no known price)"
         lines.append(head)
@@ -235,19 +322,24 @@ def text(data):
         if row.get("gate"):
             gate = row["gate"]
             if gate["outcomes"]:
-                lines.append("  outcomes: " + ", ".join(f"{k} {n}" for k, n in gate["outcomes"].items())
-                             + f"; let through {gate['let_through']}")
-            if gate["rehearsal"]:
-                lines.append("  rehearsal, would have: " + ", ".join(f"{k} {n}" for k, n in gate["rehearsal"].items()))
+                lines.append(
+                    "  outcomes: "
+                    + ", ".join(f"{k} {n}" for k, n in gate["outcomes"].items())
+                    + f"; let through {gate['let_through']}"
+                )
         if row.get("reconcile"):
             rec = row["reconcile"]
             named = "".join(f", {k} {n}" for k, n in rec["reasons"].items())
-            lines.append(f"  calls reconciled: {rec['calls']} = {rec['landed']} with an item row{named}; "
-                         f"unexplained {rec['unexplained']}; rows with no call {rec['no_call']}")
+            lines.append(
+                f"  calls reconciled: {rec['calls']} = {rec['landed']} with an item row{named}; "
+                f"unexplained {rec['unexplained']}; rows with no call {rec['no_call']}"
+            )
     if total["calls"]:
-        lines.append(f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Jev answered "
-                     f"{_pct(total['jev_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}")
+        lines.append(
+            f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Jev answered "
+            f"{_pct(total['jev_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}"
+        )
     month = data["month"]
-    cap = (f"of the {_usd(month['cap_usd'])} cap ({_pct(month['share'])})" if month["cap_usd"] > 0 else "(no cap set)")
+    cap = f"of the {_usd(month['cap_usd'])} cap ({_pct(month['share'])})" if month["cap_usd"] > 0 else "(no cap set)"
     lines.append(f"This month ({month['month']}): {_usd(month['spent_usd'])} {cap}")
     return "\n".join(lines)

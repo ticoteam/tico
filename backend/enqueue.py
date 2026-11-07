@@ -17,6 +17,7 @@ Every writer that inserts into `messages` calls `enqueue` right after its INSERT
 external_sync.import_messages (always quiet). Until migration 0052 this rule was the `queue_bot_message` trigger, and the
 trigger's SQL and this module agree row for row (tests/test_enqueue.py).
 """
+
 import json
 import math
 
@@ -27,10 +28,12 @@ LIVE_HISTORY = ("transcript", "decision", "tool")
 
 def external_bot_sql(recipient):
     """SQL true when the bot `recipient` (an SQL expression holding `bot:<id>`) is reached only through its inbox."""
-    return ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(" + recipient + ",5) AND "
-            "json_extract(config,'$.harness') IN (" + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") "
-            "AND NOT EXISTS (SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
-            "AND r.revoked_at IS NULL))")
+    return (
+        "EXISTS (SELECT 1 FROM bot_settings WHERE bot_id=substr(" + recipient + ",5) AND "
+        "harness IN (" + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") "
+        "AND NOT EXISTS (SELECT 1 FROM runners r WHERE r.id=json_extract(app_delivery,'$.computer') "
+        "AND r.revoked_at IS NULL))"
+    )
 
 
 def _refs(value):
@@ -62,18 +65,26 @@ def enqueue(conn, message):
     """Queue the job `message` (a just-inserted row as a dict: id, sender_id, recipient_id, refs, created_at) starts.
     Returns the job id, or None when it starts none."""
     from .hubdb import _has_table
+
     recipient = message.get("recipient_id")
     if not wanted(message.get("sender_id"), recipient, message.get("refs")) or not _has_table(conn, "jobs"):
         return None
     if conn.execute("SELECT " + external_bot_sql("?"), (recipient,)).fetchone()[0]:
         return None
-    conn.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)",
-                 (message["id"], message["id"], recipient[4:], message["created_at"]))
+    conn.execute(
+        "INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)",
+        (message["id"], message["id"], recipient[4:], message["created_at"]),
+    )
     return message["id"]
 
 
 def enqueue_stored(conn, message_id):
     """`enqueue` for a message already in `messages`, read back by id: for a writer that inserts rows in bulk."""
-    row = conn.execute("SELECT id,sender_id,recipient_id,refs,created_at FROM messages WHERE id=?",
-                       (message_id,)).fetchone()
-    return enqueue(conn, dict(zip(("id", "sender_id", "recipient_id", "refs", "created_at"), row, strict=True))) if row else None
+    row = conn.execute(
+        "SELECT id,sender_id,recipient_id,refs,created_at FROM messages WHERE id=?", (message_id,)
+    ).fetchone()
+    return (
+        enqueue(conn, dict(zip(("id", "sender_id", "recipient_id", "refs", "created_at"), row, strict=True)))
+        if row
+        else None
+    )

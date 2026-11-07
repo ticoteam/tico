@@ -9,6 +9,7 @@ renamed:
 
 clients/tests/test_bot_names.py fails when the file no longer matches the applied rename data and the CLI table.
 """
+
 import ast
 import json
 import runpy
@@ -24,9 +25,15 @@ RENAMES_DATA = ROOT / "backend" / "migrations" / "renames_data.py"
 
 # Task fields the API no longer sends: a bot reads `holds` instead (backend/task_holds.py public).
 API_FIELDS_REMOVED = {
-    "snoozed_until": "holds", "snoozed_by": "holds", "snoozed_note": "holds",
-    "blocked_since": "holds", "blocked_reason": "holds", "blocked_kind": "holds",
-    "blocked_from_step": "holds", "blocked_from_status": "holds", "blocked_gate": "holds",
+    "snoozed_until": "holds",
+    "snoozed_by": "holds",
+    "snoozed_note": "holds",
+    "blocked_since": "holds",
+    "blocked_reason": "holds",
+    "blocked_kind": "holds",
+    "blocked_from_step": "holds",
+    "blocked_from_status": "holds",
+    "blocked_gate": "holds",
 }
 # A command the CLI no longer has at all, and its replacement (the flags differ: `hub automation create --file`).
 COMMANDS_REMOVED = [{"old": ["routine"], "new": ["automation"]}]
@@ -104,6 +111,7 @@ def renamed_commands():
 
 def build():
     import yaml
+
     data = yaml.safe_load((HERE / "renames.yaml").read_text())
     rows = applied_rows(data)
     return {

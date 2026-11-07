@@ -55,8 +55,8 @@ function dreamPageShow(slug, dream) {
   if (!host) return;
   const q = dream?.state === 'asking' && dream.questions?.mine ? dream.questions : null;
   if (!q) { host.innerHTML = ''; host.dataset.ask = ''; return; }
-  if (host.dataset.ask === q.message_id) return;              // the same question: keep what was typed
-  host.dataset.ask = q.message_id;
+  if (host.dataset.ask === q.task_id) return;              // the same question: keep what was typed
+  host.dataset.ask = q.task_id;
   host.innerHTML = `<section class="dream-card-page" aria-label="Dream questions">
     <div class="dream-sky" aria-hidden="true"><i></i><i></i><i></i></div>
     <div class="dream-page-head"><span class="nav-icon" aria-hidden="true">auto_awesome</span>A few questions</div>
@@ -89,7 +89,7 @@ function dreamSplit(text) {
 let dreamForms = 0;                                       // each form's boxes get their own ids
 function dreamQuestionsHTML(q) {
   const cards = dreamSplit(q.text), key = `dream-a${++dreamForms}`;
-  return `<form class="dream-form" data-dream-ask="${esc(q.message_id)}">
+  return `<form class="dream-form" data-dream-ask="${esc(q.task_id)}">
     ${cards.map((c, i) => `<div class="dream-q" style="--i:${i}">
       ${c.intro ? `<div class="dream-intro">${md(c.intro)}</div>` : ''}
       <label class="dream-q-text" for="${key}-${i}">${c.n ? `<span class="dream-n">${esc(c.n)}</span>` : ''}<span class="md">${md(c.text)}</span></label>
@@ -100,7 +100,7 @@ function dreamQuestionsHTML(q) {
   </form>`;
 }
 
-// Send the answers as one reply to the question, numbered to match, as Needs you answers it: it wakes the bot.
+// Send the answers as one answer to the question task, numbered to match, as Needs you answers it: it wakes the bot.
 function dreamWire(root, q, sent) {
   const form = root.querySelector('.dream-form');
   if (!form) return;
@@ -121,7 +121,7 @@ function dreamWire(root, q, sent) {
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;
     try {
-      await post(`/v2/messages/${encodeURIComponent(q.message_id)}/answer`, {text});
+      await post(`/v2/tasks/${encodeURIComponent(q.task_id)}/answers`, {target: {task: q.task_id}, answers: {}, other: text});
       sent();
     } catch (e) { button.disabled = false; toast(e.message); }
   });
@@ -243,7 +243,7 @@ function learnOpen(slug, data, dream = null) {
     dreamPageShow(slug, latest);
     if (!latest) { dreamLeave(); return; }
     const ask = latest.state === 'asking' && latest.questions ? latest.questions : null;
-    if (before && before.state === latest.state && before.questions?.message_id === ask?.message_id) {
+    if (before && before.state === latest.state && before.questions?.task_id === ask?.task_id) {
       dreamDoing(latest);
       return;
     }

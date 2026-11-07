@@ -130,7 +130,21 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       assert.doesNotMatch(await game.innerText(), /<span|class=|Temp /, 'its flag is not shown as markup or the word Temp');
       assert.equal(await game.locator('.proj').count(), 1, 'its flag is shown');
     }
+    // Company is found by its old name, Overview.
+    await page.locator('#search-input').fill('overview');
+    const company = page.locator('#search-results li[data-href="#/home"]');
+    await company.waitFor();
+    assert.match(await company.innerText(), /Company/, 'search finds Company by "overview"');
     await page.evaluate(() => document.querySelector('#search-modal').close());
+    // A folded group's pages are still in search.
+    await page.locator('#side .rd-co-toggle').click();
+    assert.equal(await page.locator('#rd-co').isVisible(), false, 'Company folds');
+    await page.keyboard.press('Control+k');
+    await page.locator('#search-input').fill('strat');
+    await page.locator('#search-results li[data-href="#/strategy/market"]').waitFor();
+    await page.evaluate(() => document.querySelector('#search-modal').close());
+    await page.locator('#side .rd-co-toggle').click();
+    assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens again');
     assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'overview');
     await page.waitForFunction(() => window.__badges.length > 0);
     assert.equal(await page.evaluate(() => window.__badges[0]), '2', 'the badge opens on the unread count');
@@ -293,14 +307,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More']);
-    // Six items; Ask Tico (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Assistant', 'Tasks', 'Updates', 'More']);
+    // Six items; Assistant (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
     // side evenly.
     const nav = () => p.locator('#mobile-nav .mobile-nav-item:not([hidden])').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));
     const even = list => Math.max(...list.map(i => i.w)) - Math.min(...list.map(i => i.w)) < 1;
     const items = await nav();
     assert.equal(items.length, 6);
-    assert.ok(Math.abs(items[2].mid - 195) < 1, `Ask Tico in the middle: ${items[2].mid}`);
+    assert.ok(Math.abs(items[2].mid - 195) < 1, `Assistant in the middle: ${items[2].mid}`);
     assert.ok(even(items.slice(0, 2)) && even(items.slice(3)), 'each side spaced evenly');
     // The six fit a 360px phone: no label is cut and the bar does not scroll sideways.
     await p.setViewportSize({width: 360, height: 800});

@@ -152,19 +152,23 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.reload();
     await boardLoaded();
     assert.equal(await page.locator('#task-body .bcard').count(), 3, 'folded again, finished work leaves the board');
-    // Done and Closed are their own tabs, Closed right after Done; each lists only its status.
-    assert.deepEqual((await page.locator('#task-view [role=tab]').allTextContents()).slice(-2), ['Done', 'Closed']);
+    // Done and Closed are the archive's views, Closed right after Done; each lists only its status.
+    await page.locator('#task-archive').click();
+    assert.deepEqual((await page.locator('#task-finished [data-view]').evaluateAll(b => b.map(x => x.textContent))).slice(0, 2), ['Done', 'Closed']);
     for (const [view, title] of [['done', 'Finished campaign'], ['closed', 'Dropped campaign']]) {
-      await page.locator(`#task-view [data-view="${view}"]`).click();
+      await page.locator(`#task-finished [data-view="${view}"]`).click();
       await page.waitForFunction(title => [...document.querySelectorAll('#task-body .tl-title')].map(n => n.textContent).join('|') === title, title);
     }
-    await page.locator('#task-view [data-view="board"]').click();
+    await page.locator('#task-archive').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'board');
     await page.locator('#task-body .bcol').first().waitFor();
     assert.equal(await page.locator('#task-body').getByText('General task', {exact: true}).count(), 0);
     // The saved type appears in the header, and the address carries it.
-    assert.equal(await page.locator('#task-type-more').innerText(), 'Marketing');
-    assert.deepEqual(await page.locator('#task-type [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent])),
-      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets']]);
+    assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'Marketing');
+    await page.locator('#task-scope').click();
+    assert.deepEqual(await page.locator('#task-filter-pop [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent.replace('✓', '')])),
+      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets'], ['marketing', 'Marketing'], ['engineering', 'Engineering']]);
+    await page.keyboard.press('Escape');
     assert.equal(await page.locator('[data-chip="type"]').count(), 0);
     await page.waitForFunction(() => location.hash.includes('type=marketing'));
     // Column headings name their steps without circular status glyphs.
@@ -186,7 +190,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await step.waitFor();
     assert.match(await step.innerText(), /Copy review/);
     assert.match(await peek.locator('[data-prop="type"]').innerText(), /Marketing/);
-    assert.equal(await peek.locator('.pill').first().textContent(), 'Copy review');
+    assert.equal(await peek.locator('[data-prop-row="step"] .prop-txt').innerText(), 'Copy review');
+    assert.equal(await peek.locator('.tmodal-head .pill').count(), 0, 'the header carries no state pill');
     assert.equal(await peek.locator('[data-tag-key]').innerText(), 'release · Oct 2');
     assert.equal(await peek.locator('[data-prop="tags"]').count(), 1);
     await peek.locator('[data-prop="status"]').click();
@@ -224,8 +229,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.mouse.up();
       for (let i = 0; posted.length === sent && i < 200; i++) await page.waitForTimeout(t(10));
     };
-    // Blocked: the strip names the blocker and focuses the board on the two; X shows every card again.
-    assert.equal(await page.locator('#task-body [data-board-blocked="tbrief"]').innerText(), 'Blocked by Plan the launch');
+    // Blocked: one line names the blocker and focuses the board on the two; X shows every card again.
+    assert.equal(await page.locator('#task-body [data-board-blocked="tbrief"]').innerText(), 'Blocked: Plan the launch');
     await page.locator('#task-body [data-board-blocked="tbrief"]').click();
     assert.deepEqual((await page.locator('#task-body .bcard-title').allTextContents()).sort(), ['Brief the agency', 'Plan the launch']);
     await page.locator('#task-body [data-board-unfocus]').waitFor();
@@ -244,7 +249,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       'Waiting on Ops: Needs the launch plan reviewed first.');
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
-    // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold says its own why.
+    // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold's why is the tooltip.
     Object.assign(brief, {holds: [{kind: 'blocked', reason: 'Needs the launch plan reviewed first.', since: '2026-10-02T10:00:00Z', until: null, by: 'keeper', cause: 'dependency'}]});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => /· since/.test(document.querySelector('#task-body [data-board-blocked="tbrief"]')?.title || ''));
@@ -253,25 +258,26 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       /^Waiting on Ops: Needs the launch plan reviewed first\. · since .+\nBlocked by Plan the launch$/);
     Object.assign(brief.holds[0], {cause: 'gate', reason: 'Review 1 has no verdict yet'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
-    assert.match(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').first().innerText(), /^Review 1 has no verdict yet · since/);
+    await page.waitForFunction(() => /^Blocked \d+d: Plan the launch$/.test(document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText || ''));
+    assert.equal(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').count(), 1, 'one line, not a hold line above the blocker');
+    assert.match(await page.locator('#task-body [data-board-blocked="tbrief"]').getAttribute('title'), /^Review 1 has no verdict yet · since .+\nBlocked by Plan the launch$/);
     Object.assign(brief, {holds: []});
     // Only the first open blocker's owner is named: a person's task linked ahead of the bot's reads "Blocked by".
     const opsBlocker = brief.relations.blocks[0];
     brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner_id: 'human:ana', direction: 'in'}, opsBlocker]};
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Legal review');
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked: Legal review');
     // A task that waits on a person keeps their ask: on them directly, or through the ask card a bot's task files,
     // which the server serves as a blocker the person owns, linked after the bot's.
     for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker,
       {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner_id: 'human:ana', direction: 'in'}]}}]) {
       Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
       await page.evaluate(() => tasksLoad(TASKS_ST));
-      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
+      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked: Plan the launch');
     }
     Object.assign(brief, {status: 'review', note: '', waiting_on: null, relations: {blocks: [opsBlocker]}});
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked by Plan the launch');
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked: Plan the launch');
     await drag('tbrief', '#task-body [data-task-key="tplan"]', 0.1);
     await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'brief').version === 2);
     assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 1, step_rank: 0}}, 'above the top card: its rank less one');
@@ -331,7 +337,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     Object.assign(tasks.find(task => task.id === 'plan'), {status: 'review'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelectorAll('#task-body .bcard').length === 4 && document.querySelector('#task-bulk').hidden);
-    await page.locator('[data-task-type="general"]').click();
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-task-type="general"]').click();
     await page.waitForFunction(() => location.hash.includes('type=general'));
     assert.equal(await page.locator('#task-body .bcol').count(), 5, 'General has its own working columns and a finished strip');
     assert.equal(await page.locator('#task-body .bcard').count(), 2, 'General never includes Marketing tasks');
@@ -384,12 +391,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
       assert.equal(await page.locator('[data-col="dev-blocked"] [data-board-select]').isVisible(), true, 'select all in a column at every width');
       assert.equal(await page.locator('[data-col="dev-building"] [data-board-select]').count(), 0, 'an empty column has nothing to select');
-      assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').innerText(), /Waiting for a test machine <script>.*since/);
+      assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').innerText(), /^Blocked \d+d: Waiting for a test machine <script>$/);
+      assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').getAttribute('title'), /^Waiting for a test machine <script> · since /);
       assert.equal(await page.locator('[data-task-key="tdev-held"] script').count(), 0);
       await page.locator('[data-open-task="tdev-held"]').click();
       await page.locator('#task-peek .task-wait').waitFor();
       assert.match(await page.locator('#task-peek .task-wait').innerText(), /Waiting for a test machine <script>.*since/);
-      assert.equal(await page.locator('#task-peek .tstatus').innerText(), 'Blocked');
+      assert.equal(await page.locator('#task-peek [data-prop-row="status"] .prop-txt').innerText(), 'Blocked');
       await page.locator('#task-peek [data-modal-close]').click();
       // The phone peek closes its history entry asynchronously before the next board action.
       if (width === 375) await page.waitForFunction(() => !history.state?.taskPeek && !PEEK_BACK);

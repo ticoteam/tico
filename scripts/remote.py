@@ -6,11 +6,15 @@
 It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
 command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
 signed in with permission to dispatch workflows on the repository. scripts/heavy.sh calls it when TICO_HEAVY_REMOTE=1.
+At most TICO_REMOTE_MAX (4 by default; 0 means no cap) of the repository's remote runs go at once: a run past that waits
+up to 20 minutes for a slot, then exits without dispatching.
 """
+
 import argparse
 import json
 import os
 from pathlib import Path
+import random
 import shlex
 import subprocess
 import sys
@@ -21,13 +25,18 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
+CAP = 4  # remote runs of this repository at once; TICO_REMOTE_MAX overrides it
+WAIT_LIMIT = 20 * 60  # seconds a dispatch waits for a free slot
+CHECK_LIMIT = 2 * 60  # seconds the count may keep failing before a dispatch goes ahead without it
+BUSY = ('queued', 'in_progress', 'waiting', 'pending')
 
 
 def rate_limit_wait():
     """Seconds until GitHub's core API limit resets: at most 15 minutes, and 60 when the reset is unknown or past (a
     secondary limit has no reset time of its own)."""
-    reset = subprocess.run(['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True,
-                           text=True).stdout.strip()
+    reset = subprocess.run(
+        ['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True, text=True
+    ).stdout.strip()
     seconds = int(reset) - int(time.time()) if reset.isdigit() else 0
     return min(seconds, 900) if seconds > 0 else 60
 
@@ -94,8 +103,21 @@ def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
     time.sleep(5)  # the dispatched run takes a few seconds to reach the list
     while time.monotonic() < deadline:
-        runs = json.loads(gh('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
-                             '--json', 'databaseId,displayTitle,url', poll=True))
+        runs = json.loads(
+            gh(
+                'run',
+                'list',
+                '--workflow',
+                WORKFLOW,
+                '--event',
+                'workflow_dispatch',
+                '--limit',
+                '30',
+                '--json',
+                'databaseId,displayTitle,url',
+                poll=True,
+            )
+        )
         for run in runs:
             if run['displayTitle'] == title:
                 return run
@@ -115,30 +137,144 @@ def wait(run):
         time.sleep(30)
 
 
+def remote_cap():
+    """TICO_REMOTE_MAX, or CAP when it is unset; 0 means no cap."""
+    value = os.environ.get('TICO_REMOTE_MAX', '').strip()
+    if not value:
+        return CAP
+    if not value.isdigit():
+        raise SystemExit(f'remote: TICO_REMOTE_MAX must be a whole number (0 means no cap), not {value!r}')
+    return int(value)
+
+
+def busy_remote_runs():
+    """How many of the newest 100 runs of the workflow are queued, running, waiting or pending. One API call: GitHub
+    filters a run list by a single status, so the four states are counted from one list."""
+    result = subprocess.run(
+        ['gh', 'api', f'repos/{{owner}}/{{repo}}/actions/workflows/{WORKFLOW}/runs?per_page=100'],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(' '.join((result.stderr or 'gh api failed').split()))
+    try:
+        return sum(run['status'] in BUSY for run in json.loads(result.stdout)['workflow_runs'])
+    except (ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(f'unreadable run list ({error})') from None
+
+
+def wait_for_capacity(cap):
+    """Return True once fewer than `cap` remote runs are busy. While the count fails, retry with backoff; after two
+    minutes of failures, warn and return False, so the caller dispatches anyway and CI still works. A wait past 20
+    minutes exits without dispatching."""
+    if not cap:
+        return True
+    started = time.monotonic()
+    failing_since, retry = None, 5
+    while True:
+        try:
+            busy = busy_remote_runs()
+        except RuntimeError as error:
+            now = time.monotonic()
+            failing_since = now if failing_since is None else failing_since
+            left = CHECK_LIMIT - (now - failing_since)
+            if left <= 0:
+                print(
+                    f'remote: warning: could not count busy remote runs for 2 min ({error}); dispatching without the cap',
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return False
+            print(
+                f'remote: could not count busy remote runs ({error}); retrying in {min(retry, left):g} s',
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(min(retry, left))
+            retry = min(retry * 2, 60)
+            continue
+        failing_since, retry = None, 5
+        if busy < cap:
+            return True
+        waited = time.monotonic() - started
+        if waited >= WAIT_LIMIT:
+            raise SystemExit(
+                f'remote: {busy} remote runs still busy (cap {cap}) after 20 min; not dispatching. '
+                'Wait for them to finish, or raise TICO_REMOTE_MAX.'
+            )
+        print(f'waiting: {busy} remote run{"" if busy == 1 else "s"} busy (cap {cap})', file=sys.stderr, flush=True)
+        # Jittered, so agents that started together don't all poll and dispatch together.
+        time.sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
+
+
 def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     """Run `command` on a fresh VM against the pushed `ref` (HEAD) and wait for it: (exit code, the run's log folder).
     The code is None when the VM never ran the command to the end (setup failed, canceled, timed out, or the Spot
     VM was reclaimed). `echo` prints the command's last lines here, as `remote.py` itself does."""
+    cap = remote_cap()
     ref = git('rev-parse', ref or 'HEAD')
     if not git('branch', '-r', '--contains', ref):
         raise SystemExit(f'remote: {ref[:7]} is not pushed; push it first (the VM runs the pushed commit)')
     command = portable(command)
     run_id = uuid.uuid4().hex[:12]
     setup = setup or setup_for(command)
-    print(f'remote: {shlex.join(command)} at {ref[:7]} on {cpus} vCPUs ({setup} setup), id {run_id}',
-          file=sys.stderr, flush=True)
+    print(
+        f'remote: {shlex.join(command)} at {ref[:7]} on {cpus} vCPUs ({setup} setup), id {run_id}',
+        file=sys.stderr,
+        flush=True,
+    )
+    wait_for_capacity(cap)
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
-    gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
-       '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={cpus}',
-       '-f', f'minutes={minutes}')
+    gh(
+        'workflow',
+        'run',
+        WORKFLOW,
+        '--ref',
+        'main',
+        '-f',
+        f'id={run_id}',
+        '-f',
+        f'ref={ref}',
+        '-f',
+        f'command={shlex.join(command)}',
+        '-f',
+        f'setup={setup}',
+        '-f',
+        f'cpus={cpus}',
+        '-f',
+        f'minutes={minutes}',
+    )
     found = find_run(run_id, time.monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
     logs = ROOT / '.remote-runs' / run_id
     logs.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
-        fetched = subprocess.run(['gh', 'run', 'download', str(found['databaseId']), '-n', f'remote-run-{run_id}',
-                                  '-D', scratch], cwd=ROOT, capture_output=True, text=True).returncode == 0
+        fetched = (
+            subprocess.run(
+                [
+                    'bash',
+                    'scripts/ci/retry.sh',
+                    '--clear',
+                    scratch,
+                    '--permanent',
+                    'HTTP (404|410)|no (valid )?artifacts? (match|found)',
+                    '--',
+                    'gh',
+                    'run',
+                    'download',
+                    str(found['databaseId']),
+                    '-n',
+                    f'remote-run-{run_id}',
+                    '-D',
+                    scratch,
+                ],
+                cwd=ROOT,
+            ).returncode
+            == 0
+        )
         for name in ('command', 'output.log', 'exit-code'):
             if (Path(scratch) / name).is_file():
                 (logs / name).write_bytes((Path(scratch) / name).read_bytes())
@@ -156,8 +292,11 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    parser.add_argument('--setup', choices=('python', 'browser', 'rust', 'all'),
-                        help='what the VM installs first (default: guessed from the command)')
+    parser.add_argument(
+        '--setup',
+        choices=('python', 'browser', 'rust', 'all'),
+        help='what the VM installs first (default: guessed from the command)',
+    )
     parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
     # The whole default Python suite takes 25-28 minutes on 4 vCPUs; a 30-minute limit cut it off near the end.
     parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')

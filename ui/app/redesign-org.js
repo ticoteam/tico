@@ -1,7 +1,7 @@
 /* ui/app/redesign-org.js — Strategy › Org (redesign PLAN §6 wave 6): the org chart, top down, the same chart on a phone
    (pinch and pan) and a desktop. The owner on top; under them the teammates outside groups and every top-level group,
    a group a dashed outline with its name on a tab that folds it. Inside a group the lead comes first and teammates hang
-   under whoever they report to. Helpers (the Assistants and those behind them, message bots) are off the chart.
+   under whoever they report to. Built-ins and explicitly marked helpers are off the chart.
    Tapping a teammate opens a sheet: their home group, and Move to… for the owner (any group) and a lead (the
    groups it leads), which moves them at once (PATCH /api/v2/groups/{id}). Anyone else sees the group only; org changes
    beyond that are asked of the person's Assistant, in words (redesign CONTRACT §3).
@@ -17,6 +17,8 @@ const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.st
 // The groups with their leads: GET /v2/groups when it has answered (a list, or {groups} from an older hub), else the
 // roster's copy, which carries no leads.
 const rdoGroups = () => RDO?.groups || S.orgGroups || [];
+// Ready once the groups' answer is in; if it failed, the sheet falls back to the roster's groups as before.
+const rdoReady = () => !!S.me && (RDO?.groups != null || !!RDO?.groupsTried);
 const rdoGroup = id => rdoGroups().find(g => g.id === id) || (S.orgGroups || []).find(g => g.id === id) || null;
 const rdoGroupName = id => id ? rdoGroup(id)?.name || id : 'No group';
 const rdoRef = n => n.kind === 'person' ? 'person:' + n.id : 'bot:' + n.id;
@@ -126,6 +128,8 @@ function rdoDraw({refit = false} = {}) {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
   if (!cv || !pane) return;
   cv.innerHTML = rdoChartHtml();
+  // The roster has no leads: sheets need the viewer and the full groups before deciding who may move whom.
+  if (!rdoReady()) cv.querySelectorAll('[data-rdo-ref]').forEach(card => { card.disabled = true; });
   rdoFitHeight();
   if (RDO.zoom == null || (refit && !RDO.manual)) rdoFit();
   else rdoSize();
@@ -250,6 +254,7 @@ async function pageRdOrg() {
   // The groups with their leads.
   const groups = await get('/v2/groups').catch(() => null);
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
+  RDO.groupsTried = true;
   if (groups) RDO.groups = Array.isArray(groups) ? groups : groups.groups || [];
   rdoDraw({refit: true});
 }
@@ -353,6 +358,7 @@ function rdoGroupOptions(current, allowed) {
   return shown.map(([id, label]) => `<option value="${esc(id)}"${id === current ? ' selected' : ''}>${esc(label)}</option>`).join('');
 }
 function rdoSheet(ref) {
+  if (!rdoReady()) return;
   const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref), targets = rdoMoveTargets(from);
   const may = !targets || targets.length > 0;
   const id = ref.slice(ref.indexOf(':') + 1), href = ref.startsWith('person:') ? `#/person/${encodeURIComponent(id)}` : `#/bot/${encodeURIComponent(id)}`;

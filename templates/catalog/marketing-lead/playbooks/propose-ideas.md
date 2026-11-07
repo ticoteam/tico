@@ -1,8 +1,8 @@
 # Propose marketing ideas
 
-When: the setup task "Propose the first growth ideas", the weekly meeting when fewer than three ideas are at Idea, or the
-owner asks. Budget 45 minutes. The outcome is three to eight Marketing tasks at step Idea, each with a channel label and
-a source. Nothing is started here; the weekly meeting moves an idea to Testing.
+When: the setup task "Propose the first growth ideas", the weekly meeting when fewer than three ideas are On deck, or the
+owner asks. Budget 45 minutes. The outcome is three to eight Marketing tasks at step On deck, each with a channel label and
+a source. Nothing is started here; the weekly meeting moves an idea to In development.
 
 ---
 
@@ -15,12 +15,12 @@ a source. Nothing is started here; the weekly meeting moves an idea to Testing.
     hub growth channel list        the channels, their stage and owner
 
 Then the market: `hub market show <competitor>` for each competitor, and `hub listening runs --since <30 days ago>` for the
-recent matches. Then look at what was closed: `hub task list --type idea --step Lost` and
+recent matches. Then look at what was closed: `hub task list --type idea --step Failed` and
 `hub task list --type idea --step Inconclusive`, one list each.
 
 ## 2. Look at what did not work first
 
-A lost or inconclusive idea is the best source of a follow-up. A follow-up tests the same customer belief another way.
+A failed or inconclusive idea is the best source of a follow-up. A follow-up tests the same customer belief another way.
 It is not a retry of the same test.
 
 ## 3. Write each idea
@@ -49,4 +49,4 @@ File three to eight. More than eight is a list, not a proposal.
 
     hub task update <id> --status done --note "<count> ideas filed; top three: <titles>; refused: <what and why>"
 
-Ideas stay at Idea until the weekly meeting moves one to Testing.
+Ideas stay On deck until the weekly meeting moves one to In development.

@@ -8,6 +8,7 @@ the answer is read only as far as its first kilobyte. One send has a total budge
 connecting and reading: httpx's own timeout restarts on every byte, so a server that drips bytes would otherwise hold
 a worker past the point where a crashed send is handed to another.
 """
+
 import ipaddress
 import re
 import socket
@@ -65,7 +66,7 @@ def literal_address(host):
     except ValueError:
         if not re.fullmatch(r"[0-9a-fA-FxX.]+", host):
             return None
-        try:                                        # the short and whole-number spellings the system's resolver also takes
+        try:  # the short and whole-number spellings the system's resolver also takes
             address = ipaddress.IPv4Address(socket.inet_aton(host))
         except OSError:
             return None
@@ -90,7 +91,7 @@ def check(url, allow_http=False):
     """The parts of `url` when Tico may send to it, else Blocked. Needs no network."""
     try:
         parts = urlsplit(url)
-        parts.port                                  # raises on a bad port
+        parts.port  # raises on a bad port
     except ValueError as exc:
         raise Blocked("The address is not a valid URL") from exc
     if parts.scheme not in ("https", "http") or not parts.hostname:
@@ -112,8 +113,9 @@ def _within(seconds, call, *args):
     def run():
         try:
             box["value"] = call(*args)
-        except BaseException as exc:                # carried back to the caller
+        except BaseException as exc:  # carried back to the caller
             box["error"] = exc
+
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
     worker.join(max(seconds, 0.001))
@@ -153,8 +155,9 @@ def post(url, body, headers, *, allow_http=False, transport=None):
         timer.daemon = True
         timer.start()
         try:
-            with client.stream("POST", pinned, content=body, headers=sent,
-                               extensions={"sni_hostname": parts.hostname}) as response:
+            with client.stream(
+                "POST", pinned, content=body, headers=sent, extensions={"sni_hostname": parts.hostname}
+            ) as response:
                 head = b""
                 for chunk in response.iter_bytes():
                     head += chunk
@@ -162,8 +165,11 @@ def post(url, body, headers, *, allow_http=False, transport=None):
                         break
                 if time.monotonic() > ends:
                     raise Blocked(late)
-                return Answer(response.status_code, {k.lower(): v for k, v in response.headers.items()},
-                              head[:HEAD_BYTES].decode("utf-8", "replace"))
+                return Answer(
+                    response.status_code,
+                    {k.lower(): v for k, v in response.headers.items()},
+                    head[:HEAD_BYTES].decode("utf-8", "replace"),
+                )
         except Blocked:
             raise
         except Exception as exc:

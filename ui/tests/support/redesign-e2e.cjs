@@ -16,11 +16,6 @@ const launch = () => chromium.launch({headless: true,
 async function open(browser, hub, who, {phone = false, hash = '', time = null, timezone = ''} = {}) {
   const page = await pageAs(browser, hub, who, {phone, timezone});
   if (time) await page.clock.install({time});
-  // The simulated runner reports version "test", which the hub calls out of date: that card is the harness's, not
-  // the journey's, so it stays snoozed and the screenshots show the page.
-  await page.context().addInitScript(() => {
-    try { localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 864e5})); } catch {}
-  });
   await page.reload();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -55,15 +50,17 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 
 // Runs `pass({hub, browser, phone, tag})` on a phone, then on a desktop, each on a fresh hub with these seeds.
-async function journey(name, seeds, pass) {
+// `only: 'phone' | 'desktop'` runs one viewport: for a journey whose two viewports draw the same thing, or whose other
+// viewport another script covers (say which, where it is set).
+async function journey(name, seeds, pass, {only = null} = {}) {
   const browser = await launch();
   try {
-    for (const phone of [true, false]) {
+    for (const phone of only ? [only === 'phone'] : [true, false]) {
       const hub = await startHub({seeds});
       try {
         assert.deepEqual(hub.skipped, [], 'every seed ran');
@@ -73,6 +70,6 @@ async function journey(name, seeds, pass) {
   } finally { await browser.close(); }
   console.log(name + ': ok');
 }
-const run = (name, seeds, pass) => journey(name, seeds, pass).catch(e => { console.error(e); process.exit(1); });
+const run = (name, seeds, pass, options) => journey(name, seeds, pass, options).catch(e => { console.error(e); process.exit(1); });
 
 module.exports = {run, open, go, api, ok, automationNamed, sideways, shot, t};

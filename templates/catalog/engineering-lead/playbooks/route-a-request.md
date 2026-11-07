@@ -18,7 +18,7 @@ the request and the Tools allow.
 2. **Find the owner.**
    1. `knowledge/routing.md`: has a request like this been routed before? Follow that.
    2. `knowledge/areas.md`: which repository or area does it touch, and who owns it?
-   3. The team's lines: a pull request needing a look is `pr-reviewer` (Senior Software Engineer); a release, its
+   3. The team's lines: a Dev ticket to build is `builder` (Builder), or a numbered copy such as `builder-2`; a pull request needing a look is `pr-reviewer` (Senior Software Engineer); a release, its
       checklist or its notes is `release-notes` (Release Manager); an outage or an on-call handoff is
       `incident-scribe` (Site Reliability Engineer); an outdated README or API page is `docs-writer` (Technical
       Writer); an incoming bug or a test plan is `issue-triage` (QA Engineer); a vulnerable dependency or a leaked
@@ -32,7 +32,7 @@ the request and the Tools allow.
    per owner: a team choice, not a benchmark. Above it, say so in the proposal.
 4. **Write the proposal** on the task, under 120 words: **Route to** <owner>, **why** (the area and any earlier
    decision), **urgency** and the date it matters, **what they need** (links), and an **alternative** owner. Ask with
-   `hub task ask <id>` only if the owner or scope is unclear. Otherwise continue.
+   `hub task question "<question>" --on <person> --parent <id>` only if the owner or scope is unclear. Otherwise continue.
 5. **Carry out the requested work** only when the task asks for it and a Tool allows it:
    `hub task create --owner <slug> --title "<the ask>" --parent <id>` with the links. On a no or a change, write the
    correction into `knowledge/routing.md` as a present-tense rule, dated. Commit, then

@@ -19,12 +19,12 @@ def test_several_segments_are_us_or_next_and_each_click_moves_only_its_own(api):
     assert seen[first]["self"] and not seen[first]["next"] and not seen[second]["self"]
     post(api, "market/segments/target", {"id": second, "target": "ours"})
     seen = segments(api)
-    assert seen[first]["self"] and seen[second]["self"]                               # several Us
+    assert seen[first]["self"] and seen[second]["self"]  # several Us
     post(api, "market/segments/target", {"id": first, "target": "next"})
     post(api, "market/segments/target", {"id": sub, "target": "next"})
     seen = segments(api)
     assert (seen[first]["self"], seen[first]["next"]) == (False, True)
-    assert sorted(k for k, s in seen.items() if s["next"]) == sorted([first, sub])      # several Next
+    assert sorted(k for k, s in seen.items() if s["next"]) == sorted([first, sub])  # several Next
     assert [k for k, s in seen.items() if s["self"]] == [second]
     post(api, "market/segments/target", {"id": second, "target": "none"})
     assert not any(s["self"] for s in segments(api).values())
@@ -34,11 +34,12 @@ def test_several_segments_are_us_or_next_and_each_click_moves_only_its_own(api):
 
 def test_writes_straight_to_the_graph_move_us_and_next_and_only_people_mark_them(api):
     first, second, sub = defined(api)
-    post(api, "market/segments/target", {"id": second, "target": "ours"})              # makes company/self
+    post(api, "market/segments/target", {"id": second, "target": "ours"})  # makes company/self
     proof = [evidence(api)]
     # The market routes: an Us edge marks the segment Us, and ending it takes the mark off.
-    edge = post(api, "market/edges", {"src": "company/self", "rel": "operates_in", "dst": first,
-                                      "evidence_ids": proof})["edge"]
+    edge = post(
+        api, "market/edges", {"src": "company/self", "rel": "operates_in", "dst": first, "evidence_ids": proof}
+    )["edge"]
     assert segments(api)[first]["self"]
     yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
     post(api, f"market/edges/{edge['id']}", {"until": yesterday, "evidence_ids": proof})
@@ -85,7 +86,7 @@ def test_removing_a_segment_moves_its_sub_segments_up(api):
     seen = segments(api)
     assert first not in seen and seen[sub]["parent"] is None and second in seen
     post(api, "market/segments/remove", {"id": first}, expected=404)
-    back = post(api, "market/segments", {"name": "Screening"})["segment"]                 # added again, by name
+    back = post(api, "market/segments", {"name": "Screening"})["segment"]  # added again, by name
     assert back["id"] == first and segments(api)[first]["parent"] is None
     post(api, "market/segments/remove", {"id": second}, token="ben-test", expected=403)
 
@@ -97,7 +98,7 @@ def test_competitors_are_added_by_name_or_site_and_removed_and_added_again(api):
     assert northwind["name"] == "northwind.example" and northwind["url"] == "https://northwind.example"
     post(api, "market/competitors", {"name": "CleanCo"})
     again = post(api, "market/competitors", {"name": "https://www.northwind.example/pricing"})["competitor"]
-    assert again["id"] == northwind["id"]                                             # the same company, by its domain
+    assert again["id"] == northwind["id"]  # the same company, by its domain
     listed = get(api, "market/competitors", token="cara-test")["competitors"]
     assert [c["name"] for c in listed] == ["CleanCo", "northwind.example"]
     post(api, "market/competitors/remove", {"id": northwind["id"]})

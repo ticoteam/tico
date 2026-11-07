@@ -22,6 +22,8 @@ function taskDialogWire(d) {
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
+    taskLiveStop(d);
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -55,8 +57,7 @@ window.addEventListener('popstate', () => {
 // `d` is the full modal unless a caller passes the peek.
 async function taskModalOpen(key, d) {
   const state = TASKS_ST, from = S.route, load = ++TASK_MODAL_LOAD;
-  let it = (state?.tasks || []).map(taskItem).find(x => x.key === key)
-    || [...S.issues.map(issueItem)].find(x => x.key === key);
+  let it = (state?.tasks || []).map(taskItem).find(x => x.key === key);
   if (!it && /^t/.test(key)) {
     const detail = await v2Get(`/v2/tasks/${encodeURIComponent(key.slice(1))}`);
     if (S.route !== from || load !== TASK_MODAL_LOAD) return;
@@ -64,20 +65,9 @@ async function taskModalOpen(key, d) {
   }
   if (!it) return;
   if (it.kind === 'schedule') {
-    const d = taskModal();
+    const d = taskModal(); taskLiveStop(d);
     d.innerHTML = `<h2>${esc(it.title)}</h2><p>Scheduled for ${esc(fmt(it.schedule.next))}</p><button data-modal-close>Close</button>`;
     $('[data-modal-close]', d).onclick = () => d.close();
-    if (!d.open) d.showModal();
-    return;
-  }
-  if (it.kind === 'issue') {
-    taskChatStop();
-    const d = taskModal();
-    d.innerHTML = issueModalHTML(it.issue);
-    $('[data-modal-close]', d).onclick = () => d.close();
-    d.querySelectorAll('[data-modal-issue]').forEach(b => {
-      b.onclick = () => issueComposer($('.issue-compose', d), it.issue.number, b.dataset.modalIssue);
-    });
     if (!d.open) d.showModal();
     return;
   }
@@ -94,13 +84,15 @@ function taskModalRunsKeep(d, keep) {
 async function taskModalShow(task, d = taskModal(), opts = {}) {
   TASK_MODAL_LOAD++;
   if (!d) d = taskModal();
-  const peek = !!d.dataset.peek;
+  const peek = !!d.dataset.peek, sameTask = d.open && String(d.dataset.task) === String(task.id);
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
+    taskLiveStop(d);
+    d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
-  const opening = d.taskOpening;
+  const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
   // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
   // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
   // instead of "Loading the conversation…" and a fresh read every time something on the task is saved.
@@ -121,7 +113,6 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // never draw an older copy of the task over the newer one a save returned
   else if (d.liveTask && Number(task.version) < Number(d.liveTask.version)) task = d.liveTask;
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
-  const typing = d.contains(document.activeElement) && document.activeElement.matches('.task-chat textarea');
   if (peek && TASKS_ST && TASKS_ST.peek !== 't' + task.id && tasksById(TASKS_ST).has(String(task.id))) {
     taskPeekOpen(TASKS_ST, 't' + task.id, {via: 'link'}); return;   // a parent or subtask opened from the peek: the list follows it
   }
@@ -131,17 +122,19 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   if (onProp) d.focusProp = onProp;
   // The detail is asked for at once; the first draw waits only for the CLI's manifest (session copy commands need it
   // even when Tasks is the first page opened), read once.
-  const reading = Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
+  const reading = Promise.all([opts.detail || v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
   if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
   opening.pending = false;
   taskModalRunsKeep(d, kept);
+  taskLiveFocusKeep(d);
+  const keptForm = sameTask ? taskFormCapture(d) : {fields: [], folds: []};
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
-  adopt();
+  adopt(); taskFormAdopt(d, keptForm);
   taskModalBind(d, task);
-  taskPropFocus(d);
+  taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
   if (!d.open) {
     // The peek sits beside the list: opening it leaves the focus on the row, so ↑/↓ keep moving through the list.
     const was = document.activeElement;
@@ -157,11 +150,12 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     if (d.open && d.matches(':modal')) $(d.classList.contains('thread') ? '.tthread-title' : '.tmodal-title', d)?.focus({preventScroll: true});
   }
   if (!peek) document.body.classList.add('task-modal-open');
-  d.scrollTop = 0;
+  d.scrollTop = scroll;
   // the list knows the task; the detail adds its parts, its parent and the comments
   const [detail] = await reading;
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (!detail?.task) { d.close(); d.innerHTML = ''; TASK_DRAFTS.delete(String(task.id)); return; }
+  if (detail.task.open_asks) taskAsksRead(task.id);     // opening the task reads its questions to the viewer
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
@@ -176,17 +170,19 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     : a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
   askDraftCapture(d);
   taskModalRunsKeep(d, kept);
+  taskLiveFocusKeep(d);
+  const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
-  adopt();
+  adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
-  taskPropFocus(d); d.focusProp = '';
+  taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d); taskFormRestore(d, fullForm);
+  taskLiveEdited(d, detail); taskLiveStart(d); d.scrollTop = scroll;
   void taskRailLoad(d, full, detail);
   if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
-  if (typing) { const box = $('.task-chat textarea', d); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length); }
 }
 // A task's own thread: the full modal showing only its header and its conversation, so what is typed there is plainly
 // said in the task (POST /v2/tasks/{id}/comments), never in the bot's main chat. Back returns to the chat.
@@ -205,8 +201,10 @@ function taskPropFocus(d) {
 function taskModalBind(d, task, full = false) {
   fbSync();                     // the task's own 👍 / 👎 in the header, when a bot asked for it
   tfAdopt(d, task);
+  taskMeetingsAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
+  taskLiveBind(d, task);
   d.dataset.version = String(task.version ?? '');
   if (!d.liveTask || String(d.liveTask.id) !== String(task.id) || Number(task.version) >= Number(d.liveTask.version)) d.liveTask = task;
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
@@ -476,9 +474,7 @@ async function taskSave(d, id, body, then, field) {
     errs.delete(field);
     if (data.task && String(d.liveTask?.id) === id) d.liveTask = data.task;
     if (here() && then !== false && data.task) void taskModalShow(data.task, d);       // the server's answer, at once
-    if (BOT) {
-      if (isKeeper(BOT.slug)) void loadBotTasksV2(BOT.slug);
-    }
+    if (BOT) void loadBotTasksV2(BOT.slug);
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
     // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one). Not for a
@@ -528,13 +524,16 @@ function taskChatLive(state) {
   }, 200);
 }
 function taskChatCurrent(state) { return TASK_CHAT === state && state.dialog.open; }
-const commentAuthor = (a, via) => {
+const commentAuthor = (a, via, src = null) => {
   if (a === 'external:roadmap') return '<span class="who">Visitor</span>';
+  // The Assistant passing on a person's words reads as "Ana's Assistant"; the server itself is named by what made the row.
+  if (src?.kind === 'assistant_for') return `${avatar(assistantBot(), 16)}<span class="who">${esc(src.name)}</span>`;
+  if (src && SOURCE_LINES.has(src.kind)) return src.name ? `<span class="who">${esc(src.name)}</span>` : '';
   const pid = actorPerson(a);
   // The Assistant acted for this person (docs/assistant.md): "<name> (via Assistant)".
   const by = via === 'assistant' ? ' (via Assistant)' : '';
   if (pid) return `${personCircle(personDisplay(pid), 16)}<span class="who">${esc((pid === S.me?.id ? 'You' : personDisplay(pid)) + by)}</span>`;
-  if (a === 'keeper') return `<span class="who">${esc(assistantName())}</span>`;
+  if (a === 'keeper') return '';
   const slug = actorSlug(a);
   return `${slug ? avatar(slug, 16, stateOf(slug)) : ''}<span class="who">${esc(actorLabel(a))}</span>`;
 };
@@ -558,6 +557,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     if ((x.field === 'type' || x.field === 'step') && x.old == null
       && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
+    if (x.field === 'closed_with') return '';                       // its close's note already says so
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
     // A note saved with a status change or a comment is already shown there; a note on its own says what it is.
@@ -573,11 +573,17 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
     // A QA waiver is a person's decision, never a verdict: it keeps its own mark and its full reason.
     const waived = x.field === 'qa_waiver' ? ' <span class="verdict-chip waived" data-qa-waiver>QA waived</span>' : '';
-    return `<div class="tcomment sys tmark${waived ? ' qa-waiver' : ''}"><span class="tcomment-who">${commentAuthor(x.actor, x.via)}</span>${waived} <span class="muted">${esc(say)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(waived ? x.note : clipLine(x.note, 200))}` : ''}</span>
+    const src = rowSource(x, x.actor), who = commentAuthor(x.actor, x.via, src);
+    // A change the server made with no name to give it (a system line) reads as a sentence of its own.
+    const said = who ? say : say.charAt(0).toUpperCase() + say.slice(1);
+    return `<div class="tcomment sys tmark${waived ? ' qa-waiver' : ''}">${who ? `<span class="tcomment-who">${who}</span>` : ''}${waived} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(waived ? x.note : clipLine(x.note, 200))}` : ''}</span>
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
   if (m.refs?.reconnect && typeof m.refs.reconnect === 'object') return reconnectCardHTML(m);
+  // A task update, a built-in's, an automation's or a system line: one gray line, no sender row (rowSource).
+  if (!ask && isSourceLine(m)) return sourceLineHTML(m, {cls: 'tcomment tline'});
+  const src = rowSource(m);
   // a question's text is in its block; a body that only repeats it is left out
   const body = ask && ask.questions.some(q => String(q.question || '').trim() === String(m.body || '').trim()) ? '' : m.body || '';
   const kind = m.kind === 'ask' ? '<span class="pill needs">question</span>' : m.kind === 'answer' ? '<span class="pill">answer</span>' : '';
@@ -586,7 +592,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   const person = !!actorPerson(m.sender_id), me = m.sender_id === myActor();
   // A bot's comment takes a row of Copy, 👍 and 👎 under it, as in a chat (ui/app/feedback.js).
   const fb = m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
-  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
+  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via, src)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="bubble ${person ? 'you' : 'bot'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? `<div class="md">${safeMd(body)}</div>` : ''}
@@ -612,7 +618,7 @@ function reconnectCardHTML(m) {
   } else act = `<a class="button primary" href="#/settings/computers">${r.service === 'login' ? 'Sign in' : 'Open settings'}</a>`;
   return wrap(`<div class="rc-card" data-reconnect="${esc(r.key || '')}" data-status="${esc(status)}"><span class="rc-line">${esc(m.body || '')}</span>${act}</div>`);
 }
-// Reconnect Google: the person's own Connect, as Settings > Inbox starts it (ui/google-connect.js).
+// Reconnect Google: the person's own Connect, as Tools › Settings starts it (ui/google-connect.js).
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('[data-reconnect-google]');
   if (!button) return;
@@ -730,16 +736,6 @@ function taskDeliveryMode(state) {
   if (way === 'steer' && ways.includes('queue')) return 'queue';
   return 'defer:' + taskDeferDefault(state);
 }
-// What the chosen way does, said before sending.
-function taskDeliveryHint(state) {
-  const who = botDisplayName(state.data.comment_to.bot), mode = taskDeliveryMode(state), way = deliveryWay(mode);
-  const cd = state.data.comment_delivery;
-  if (way === 'queue') return `Queue: ${who} gets it after its current turn, or now.`;
-  if (way === 'goal') return `Set as goal: ${who} works toward this text in the task's session.`;
-  if (way === 'steer') return `Steer: into ${who}'s running turn now${cd.steers ? '' : ", or after it if it can't steer"}.`;
-  const f = deliveryFor(mode);
-  return `Defer: ${who} gets it with its next turn on this task${f === 'never' ? '' : `, at the latest in ${f}`}.`;
-}
 // Send's icon says the way the comment is sent; without a bot it is the plain arrow, with no caret.
 function taskDeliveryPaint(state) {
   const main = $('[data-task-main]', state.host), caret = $('[data-task-caret]', state.host);
@@ -765,10 +761,27 @@ function taskDeliveryMenu(state, open) {
 }
 function taskComposerToPaint(state) {
   const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
-  if (hint) hint.textContent = taskDeliverySplit(state) ? taskDeliveryHint(state)
-    : taskComposerTo(state.data?.comment_to, box?.value);
+  // No line for the way Send shows: Reaches N says it. This line only holds the no-bot notice.
+  if (hint) hint.textContent = taskDeliverySplit(state) ? '' : taskComposerTo(state.data?.comment_to, box?.value);
   taskDeliveryPaint(state);
+  taskFootPaint(state);
 }
+// Follow and "Reaches N" under the box (pill.js composeReach), for a task with a thread of its own (its `followers`
+// list; null for a task in a shared chat). Follow shows until you follow; a ticked Follow follows once the comment is in.
+const taskFollowersOf = state => {
+  const id = state.data?.task?.id;
+  return id != null && TASK_FOLLOWERS.has(String(id)) ? TASK_FOLLOWERS.get(String(id)) : state.data?.task?.followers;
+};
+const taskOwnThread = state => Array.isArray(taskFollowersOf(state)) ? state.data?.task?.conversation_id || '' : '';
+// The way the reach is asked for: the way Send shows, or the server's Steer where the comment names none.
+const taskReachMode = state => taskDeliverySplit(state) ? taskDeliveryMode(state) : '';
+function taskFootPaint(state) {
+  const foot = $('.p-foot', state.host);
+  if (!foot) return;
+  state.reach?.update();
+}
+// The Followers row changed (task-props.js): who the box reaches changes with it.
+function taskFootRepaint() { if (TASK_CHAT?.data && taskChatCurrent(TASK_CHAT)) taskFootPaint(TASK_CHAT); }
 async function taskRunStop(state, button) {
   button.disabled = true; button.title = 'Stopping…';
   try {
@@ -790,8 +803,10 @@ function taskCommentsRender(state, data, sent = '') {
       <div class="task-comments" role="log" aria-live="polite"></div>
       <form class="task-pill"><span class="muted" data-task-chat-to role="note"></span><div class="p-pill"><textarea class="p-text" rows="1" maxlength="4000" required aria-label="Message" placeholder="Message…"></textarea>
           <span class="task-send" data-task-send><button class="task-send-caret p-way" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send" data-task-caret hidden><span class="nav-icon" aria-hidden="true">expand_more</span></button><button class="p-send p-send-icon" type="submit" aria-label="Send" title="Send" data-task-main>${ICON_SEND}</button><div class="p-menu p-ways" role="menu" aria-label="Ways to send" data-task-menu hidden></div></span></div>
-          <span class="muted" data-task-chat-status role="status"></span></form>`;
+          ${composeFootHTML()}<span class="muted" data-task-chat-status role="status"></span></form>`;
     $('form', host).onsubmit = ev => { ev.preventDefault(); void taskCommentSend(state); };
+    state.reach = composeReach($('.p-foot', host), {thread: () => taskOwnThread(state), mode: () => taskReachMode(state),
+      text: () => $('textarea', host)?.value || ''});
     const caret = $('[data-task-caret]', host), menu = $('[data-task-menu]', host);
     caret.onclick = () => taskDeliveryMenu(state, menu.hidden);
     sendWayHold($('[data-task-main]', host), () => taskDeliveryMenu(state, true), () => taskDeliverySplit(state));
@@ -824,7 +839,10 @@ function taskCommentsRender(state, data, sent = '') {
       if (ev.metaKey || ev.ctrlKey || (!ev.shiftKey && !touchKeyboard())) { ev.preventDefault(); void taskCommentSend(state); }
     };
     const thread = $('.task-comments', host);
-    thread.addEventListener('toggle', ev => { if (ev.target.matches?.('details.run-steps')) void taskStepsOpen(ev.target); }, true);
+    thread.addEventListener('toggle', ev => {
+      if (ev.target.matches?.('details.run-steps')) void taskStepsOpen(ev.target);
+      sourceGroupToggle(state.openLines, ev.target);
+    }, true);
     thread.addEventListener('click', ev => {
       const stop = ev.target.closest('[data-task-stop]');
       if (stop && taskChatCurrent(state)) void taskRunStop(state, stop);
@@ -844,12 +862,17 @@ function taskCommentsRender(state, data, sent = '') {
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
-  const html = (lines.map((x, i, all) => commentLineHTML(x, i, all, files, state.id, can)).join('') || '<p class="muted">Nothing said yet.</p>') + wait;
+  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.js sourceRunsHTML).
+  const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
+  const isUpdate = x => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
+  state.openLines ||= new Set();
+  const html = (sourceRunsHTML(said, {isUpdate, open: run => run.some(x => state.openLines.has(x.message.id)),
+    line: x => commentLineHTML(x, 0, lines, files, state.id, can), draw: x => commentLineHTML(x, 0, lines, files, state.id, can)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
   if (!can) d.askDrafts?.clear();
   if (can && askBusy(thread)) return;     // never under someone answering
   if (html !== state.rendered) {
-    // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.js).
+    // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.ts).
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
     stick.update(() => { visualSwap(thread, html); askDraftRestore(thread, d); }, {fresh: !!state.rendered});
@@ -875,8 +898,9 @@ async function taskChatRead(state) {
     if ([403, 404].includes(e.status)) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
+      if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
+      else if (TASKS_ST) void tasksLoad(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
       return;
     }
     if (e.status === 400) {state.stopped = true; clearInterval(state.poll); state.liveOff?.();}
@@ -898,7 +922,7 @@ async function taskChatLoad(id, dialog, data = null) {
     if (document.hidden || !taskChatCurrent(state)) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});     // a new file or version, or an answer on one, without reopening
-  }, 8000);
+  }, 180000);
   if (state.poll) return;
   // A change to the task itself reaches taskChatLive from the page's task events (ui/app/refresh.js); its comments
   // are messages in its conversation.
@@ -970,23 +994,6 @@ async function taskCommentSend(state) {
   }
 }
 async function taskChatSend(state) { return taskCommentSend(state); }
-function issueModalHTML(i) {
-  const running = new Set((S.status?.active || []).map(a => a.issue));
-  const tag = boardTag(i, running);
-  return `<div class="tmodal-head">${avatar(i.owner_id, 22, stateOf(i.owner_id))}<span class="who">${empName(i.owner_id)}</span>
-      <span class="mono muted">#${esc(i.number)}</span>${statusPill(i)}${i.priority && i.priority !== 'p2' ? prioPill(i) : ''}
-      ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="Scheduled">⟳</span>' : ''}
-      <span class="spacer"></span><span class="muted tnum">${esc(ago(i.state === 'CLOSED' ? i.closedAt : i.updatedAt))}</span>
-      <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
-    <h2 class="tmodal-title">${esc(i.title)}</h2>
-    <div class="tmodal-body">${i.needs_human ? needsYouBlock([i])
-      : i.body ? `<div class="q">${esc(i.body)}</div>` : i.last_comment ? `<div class="q">${esc(i.last_comment)}</div>` : '<div class="muted">No details yet.</div>'}
-      <div class="issue-actions">
-        ${i.state === 'OPEN' ? `<button class="linkish" type="button" data-modal-issue="comment">Comment</button>
-          <button class="linkish danger" type="button" data-modal-issue="close">Close</button>` : '<span class="muted">Closed</span>'}
-        <a class="github" href="${esc(i.url)}" target="_blank" rel="noopener">GitHub ↗</a></div>
-      <div class="issue-compose" hidden></div></div>`;
-}
 // Where the peek's task sits in the list ("3 / 16"); j/k and ↑/↓ move.
 function taskPeekPos(id) {
   if (!TASKS_ST || typeof tasksVisibleKeys !== 'function') return '';
@@ -1006,17 +1013,21 @@ function taskDeferredHTML(t) {
 // A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
 // plain ask's place once it lands.
 function taskQcardWait(t) {
-  if (needsAll() || needsOneHeld(t.id)) return '';
-  void v2NeedsOne(t.id).then(() => {
+  // Before the first Needs you read lands, nothing is known past it: wait for it, then read the item alone if needed.
+  const landed = needsFirstIn();
+  if (landed && (needsAll() || needsOneHeld(t.id))) return '';
+  const read = landed ? v2NeedsOne(t.id)
+    : NEEDS_FIRST.then(() => qcardItem(t) || needsAll() || needsOneHeld(t.id) ? null : v2NeedsOne(t.id));
+  void read.then(() => {
     const el = qcardItem(t) && document.querySelector(`[data-qcard-wait="${CSS.escape(String(t.id))}"]`);
     if (el) el.outerHTML = qcardBoxHTML(t);
   });
   return ` data-qcard-wait="${esc(String(t.id))}"`;
 }
-// The task in full or in the peek. The header: its status, its age, Done and Close task for whoever may use them (the
-// two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window.
-// The owner and who asked are properties, so the header does not repeat them; who added it and when is the age's
-// tooltip. Then the title, the properties, the details, Code, Subtasks, Comments.
+// The task in full or in the peek. The header holds actions only, no state: the status, the wait and the blockers are
+// properties and Related below. Snoozed (a button that wakes it), the Screen icon, 👍 👎, the age, then Done and Close
+// for whoever may use them as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window.
+// Who added it and when is the age's tooltip. Then the title, the properties, the details, Code, Subtasks, Comments.
 function hubModalHTML(t, it, opts = {}) {
   const askToYou = taskAskToPerson(t);
   const finished = taskFinished(t);
@@ -1028,7 +1039,6 @@ function hubModalHTML(t, it, opts = {}) {
   const waitLabel = askToYou ? needsWho(t) : botWait || t.status === 'waiting' ? 'Waiting on' : '';
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');
-  const statusWord = taskStatusLabel(t);
   const mover = canMove();
   const links = (t.links || []).filter(l => !['pr', 'worktree', 'session'].includes(l.kind));   // Code is in the rail; Sessions below
   const pos = opts.peek ? taskPeekPos(t.id) : '';
@@ -1040,19 +1050,20 @@ function hubModalHTML(t, it, opts = {}) {
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-      <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${statusWord === 'Waiting' || finished ? '' : taskWaitTag(t)}${blockers.length && !finished
-      ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}${taskSnoozed(t)
+      <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(snooze.until))} by ${esc(actorLabel(snooze.by))}${snooze.reason ? ` · ${esc(snooze.reason)}` : ''}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}${chipNoteHTML(snooze.reason)}</button>` : ''}
       ${finished ? '' : taskScreenLinkHTML(t.owner_id)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
       ${fbButtonsHTML(fbTaskKey(t))}
       <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(it.updated_at)}`)}">${esc(ago(it.updated_at))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
-      ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close task</button>` : ''}
+      ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close</button>` : ''}
       <button class="ghost peek-btn" type="button" data-task-more aria-haspopup="menu" aria-label="More actions" title="More actions">${PROP_ICON.more}</button>
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
+    <div class="task-edit-meta muted"><span data-task-edited></span><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
+    <div class="muted" data-task-edit-current hidden></div>
     ${taskBuilderNotices(taskBuilderActors(t))}
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
@@ -1062,8 +1073,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
       ${taskDeferredHTML(t)}
-      ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`
-        : `<div class="tdesc md">${safeMd(original)}</div>`) : (waitText ? '' : '<p class="muted tdesc">No details.</p>')}
+      ${taskEditBodyHTML(t, original, waitText)}
       ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       <div class="tsecs">
@@ -1075,6 +1085,7 @@ function hubModalHTML(t, it, opts = {}) {
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}
+      <section class="tsec task-meetings" data-task-meetings aria-label="Meetings" hidden></section>
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
       </div>
       </div>

@@ -25,32 +25,40 @@ the team named in the schedule setting, else the one active bot built from the `
 With none found the feature is idle for that role and says so (`GET /api/v2/release-schedule`).
 
 A release carries the Dev tickets at the Pending Release step when it is published that have a pull request merged in
-its repository; the rest of the factory's steps stay a person's or bot's to move (docs/software-factory.md).
+its repository, and moves each to the step after Pending Release (Post Release QA), noting "Shipped in vX.Y.Z"; when
+nothing is left at Pending Release the schedule's open Release task closes. The rest of the factory's steps stay a
+person's or bot's to move (docs/software-factory.md).
 """
+
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 
 from .batch_work import isolated
 from .store import H, Problem
+from . import bot_settings as BS
 
 KEY = "release-schedule"
 FIRED = "release-schedule-fired"
 DEFAULT_TIMES = ["10:00"]
 MAX_TIMES = 2
-GRACE = timedelta(hours=3)          # a missed hour (server down) still releases within this long; later it is skipped
+GRACE = timedelta(hours=3)  # a missed hour (server down) still releases within this long; later it is skipped
 KEEP_FIRED = 10
-MAX_LISTED = 60                     # tickets named in a task body; the count in the title is the whole number
+MAX_LISTED = 60  # tickets named in a task body; the count in the title is the whole number
+PUBLIC_SUMMARY_MAX = 280  # characters of a private ticket's public summary a task body carries
 AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
-MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"     # starter templates (templates/catalog)
+MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"  # starter templates (templates/catalog)
 PENDING = "pending release"
 QA_CHILD = re.compile(r"^QA\b", re.I)
 EVENT = "release_published"
+log = logging.getLogger(__name__)
 
 
 def zone():
     from .updates import ZONE
+
     return ZONE
 
 
@@ -63,9 +71,12 @@ def load(c):
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
     times = [t for t in stored.get("times") or [] if isinstance(t, str) and AT.match(t)][:MAX_TIMES]
-    return {"on": stored["on"] if isinstance(stored.get("on"), bool) else True,
-            "times": sorted(dict.fromkeys(times)) or list(DEFAULT_TIMES),
-            "bot": str(stored.get("bot") or ""), "writer": str(stored.get("writer") or "")}
+    return {
+        "on": stored["on"] if isinstance(stored.get("on"), bool) else True,
+        "times": sorted(dict.fromkeys(times)) or list(DEFAULT_TIMES),
+        "bot": str(stored.get("bot") or ""),
+        "writer": str(stored.get("writer") or ""),
+    }
 
 
 def save(c, actor, changes):
@@ -87,21 +98,28 @@ def save(c, actor, changes):
             if slug and not (H.bot(c, slug) or {}).get("state") == "active":
                 raise Problem("invalid", f"No active bot {slug}", 422)
             after[field] = slug
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, json.dumps(after, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(after, sort_keys=True)),
+    )
     if after != before:
         H.event(c, actor, "release.schedule", "team", {"before": before, "after": after})
     return after
 
 
 def _with_template(c, template):
-    return [r[0] for r in c.execute(
-        "SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
-        "AND json_extract(bc.config,'$.template')=? ORDER BY b.slug", (template,))]
+    return [
+        r[0]
+        for r in c.execute(
+            f"SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} WHERE b.state='active' "
+            f"AND s.template=? ORDER BY b.slug",
+            (template,),
+        )
+    ]
 
 
 def _named(c, slug, template):
-    if slug:       # the setting may name the bot by id or slug; the bot is its id
+    if slug:  # the setting may name the bot by id or slug; the bot is its id
         found = H.resolve_bot(c, slug) or {}
         return found["id"] if found.get("state") == "active" else None
     found = _with_template(c, template)
@@ -121,13 +139,17 @@ def qa_owner(c, ticket):
     """Who runs a ticket's tests: the owner of its newest `QA:` subtask, else a bot on it in the `qa` role, else the
     team's one `issue-triage` bot. A bot slug or None."""
     from . import task_relations as TR
+
     kids = [H.task(c, i) for i in TR.child_ids(c, ticket["id"])]
-    for kid in sorted((k for k in kids if k and QA_CHILD.match(k["title"] or "")), key=lambda k: k["created_at"], reverse=True):
+    for kid in sorted(
+        (k for k in kids if k and QA_CHILD.match(k["title"] or "")), key=lambda k: k["created_at"], reverse=True
+    ):
         slug = H.actor_id(kid["owner_id"]) if H.is_bot(kid["owner_id"]) else None
         if slug and (H.bot(c, slug) or {}).get("state") == "active":
             return slug
-    for (actor,) in c.execute("SELECT actor FROM task_roles WHERE task_id=? AND lower(role)='qa' ORDER BY created_at",
-                              (ticket["id"],)):
+    for (actor,) in c.execute(
+        "SELECT actor FROM task_roles WHERE task_id=? AND lower(role)='qa' ORDER BY created_at", (ticket["id"],)
+    ):
         if H.is_bot(actor) and (H.bot(c, H.actor_id(actor)) or {}).get("state") == "active":
             return H.actor_id(actor)
     found = _with_template(c, QA)
@@ -140,64 +162,107 @@ def _qa_room(c, ticket, qa):
     if H.task_private_readable(c, H.bot_actor(qa), ticket):
         return ticket, _name(ticket)
     from . import task_relations as TR
-    mine = [k for k in (H.task(c, i) for i in TR.child_ids(c, ticket["id"]))
-            if k and QA_CHILD.match(k["title"] or "") and k["owner_id"] == H.bot_actor(qa)]
+
+    mine = [
+        k
+        for k in (H.task(c, i) for i in TR.child_ids(c, ticket["id"]))
+        if k and QA_CHILD.match(k["title"] or "") and k["owner_id"] == H.bot_actor(qa)
+    ]
     newest = max(mine, key=lambda k: k["created_at"], default=None)
     return (newest, str(newest["title"]).strip()) if newest else (None, None)
 
 
 # ----------------------------------------------------------------------------- what is waiting for a release
-def pending(c, reader=None):
+def pending(c):
     """The Dev tickets at the Pending Release step, oldest first: dicts of the task row plus `prs` (its pull request
-    links). A private ticket `reader` (an actor) may not read is left out."""
+    links). Every one is listed; a task body names each ticket as `_ticket_line` allows."""
     from .roadmap_flow import ENGINEERING
-    rows = [H.task(c, r[0]) for r in c.execute(
-        "SELECT t.id FROM tasks t JOIN task_steps s ON s.id=t.step_id JOIN task_types y ON y.id=t.type_id "
-        f"WHERE lower(s.name)=? AND (y.role=? OR y.name='Dev tickets') AND t.status IN "
-        f"({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY t.created_at, t.id",
-        (PENDING, ENGINEERING, *H.ACTIVE_STATUSES))]
-    return [{**r, "prs": [l for l in H.task_links(c, r["id"]) if l["kind"] == "pr"]} for r in rows
-            if r and (reader is None or H.task_private_readable(c, reader, r))]
+
+    rows = [
+        H.task(c, r[0])
+        for r in c.execute(
+            "SELECT t.id FROM tasks t JOIN task_steps s ON s.id=t.step_id JOIN task_types y ON y.id=t.type_id "
+            f"WHERE lower(s.name)=? AND (y.role=? OR y.name='Dev tickets') AND t.status IN "
+            f"({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY t.created_at, t.id",
+            (PENDING, ENGINEERING, *H.ACTIVE_STATUSES),
+        )
+    ]
+    return [{**r, "prs": [l for l in H.task_links(c, r["id"]) if l["kind"] == "pr"]} for r in rows if r]
 
 
-def _name(t):
-    return (f"#{t['number']} " if t.get("number") is not None else "") + str(t["title"]).strip()
+def _name(t, title=None):
+    title = str(t["title"]).strip() if title is None else title
+    return (f"#{t['number']} " if t.get("number") is not None else "") + title
 
 
-def _line(t):
+def _ticket_line(c, t):
+    """How a ticket is named in a team-visible task body, whoever reads it. A ticket that is not private is named as
+    usual. A private ticket is never named by its private title, owner or pull request: it shows its public title and
+    summary when it has a public title, and otherwise is only counted (None)."""
+    if not H.task_private(c, t):
+        return str(t["title"]).strip(), None, False
+    public = str(t.get("public_title") or "").strip()
+    if not public:
+        return None
+    summary = " ".join(str(t.get("public_summary") or "").split())[:PUBLIC_SUMMARY_MAX]
+    return public, summary or None, True
+
+
+def _line(t, name, private):
+    if private:
+        return f"- {name}"
     pr = next((p["url"] for p in t["prs"]), "")
-    return f"- {_name(t)} (owner {t['owner_id']}){' ' + pr if pr else ''}"
+    return f"- {name} (owner {t['owner_id']}){' ' + pr if pr else ''}"
 
 
 def _listing(c, tickets, more_where):
-    """The ticket lines a team-visible task or routine may carry: a private ticket is counted, never named (its title,
-    owner and pull request stay with its own audience)."""
-    open_ = [t for t in tickets if not H.task_private(c, t)]
-    shown = open_[:MAX_LISTED]
-    lines = [_line(t) for t in shown]
-    if len(open_) > len(shown):
-        lines.append(f"...and {len(open_) - len(shown)} more {more_where}.")
-    if len(tickets) > len(open_):
-        hidden = len(tickets) - len(open_)
-        lines.append(f"...and {hidden} private ticket{'s' if hidden != 1 else ''}, not named here.")
+    """The ticket lines a team-visible task or routine may carry (`_ticket_line`). A private ticket with no public title is
+    counted only, and the task says to leave it out and never to ask anyone for its name."""
+    named, hidden = [], 0
+    for t in tickets:
+        found = _ticket_line(c, t)
+        if found is None:
+            hidden += 1
+        else:
+            named.append((t, *found))
+    shown = named[:MAX_LISTED]
+    lines = []
+    for t, title, summary, private in shown:
+        lines.append(_line(t, title if private else _name(t, title), private))
+        if summary:
+            lines.append(f"  {summary}")
+    if len(named) > len(shown):
+        lines.append(f"...and {len(named) - len(shown)} more {more_where}.")
+    if hidden:
+        lines.append(
+            f"...and {hidden} private ticket{'s' if hidden != 1 else ''} with no public title. Leave private tickets "
+            "out of the docs and release notes; do not ask anyone for their names."
+        )
     return "\n".join(lines)
 
 
 def _task_body(c, tickets, why):
     if not tickets:
-        return (f"{why}\n\nNothing is at Pending Release now; the work may be merged pull requests that were never Dev "
-                "tickets. Cut a release for what is on main with your release playbook and docs/releasing.md.")
-    return (f"{why}\n\nAt Pending Release now:\n" + _listing(c, tickets, 'with `hub task list --step "Pending Release"`') +
-            "\n\nCut one release for them with your release playbook and docs/releasing.md. When it is published, "
-            "Tico wakes each ticket's QA owner and the Technical Writer by itself.")
+        return (
+            f"{why}\n\nNothing is at Pending Release now; the work may be merged pull requests that were never Dev "
+            "tickets. Cut a release for what is on main with your release playbook and docs/releasing.md."
+        )
+    return (
+        f"{why}\n\nAt Pending Release now:\n"
+        + _listing(c, tickets, 'with `hub task list --step "Pending Release"`')
+        + "\n\nCut one release for them with your release playbook and docs/releasing.md. When it is published, "
+        "Tico wakes each ticket's QA owner and the Technical Writer by itself."
+    )
 
 
 def _unfinished(c, owner):
     """The Release task `owner` has not finished, if any: a second is never filed beside it."""
-    row = c.execute("SELECT id FROM tasks WHERE owner_id=? AND title LIKE ? ESCAPE '\\' AND status IN (" +
-                    ",".join("?" * len(H.ACTIVE_STATUSES)) + ") ORDER BY created_at DESC LIMIT 1",
-                    (owner, TITLE.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
-                     *H.ACTIVE_STATUSES)).fetchone()
+    row = c.execute(
+        "SELECT id FROM tasks WHERE owner_id=? AND title LIKE ? ESCAPE '\\' AND status IN ("
+        + ",".join("?" * len(H.ACTIVE_STATUSES))
+        + ") ORDER BY created_at DESC LIMIT 1",
+        (owner, TITLE.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%", *H.ACTIVE_STATUSES),
+    ).fetchone()
     return H.task(c, row[0]) if row else None
 
 
@@ -210,22 +275,29 @@ def request(c, actor, *, source, note=""):
     if not manager:
         return {"sent": False, "reason": "no_release_manager", "task": None, "tickets": 0}
     owner = H.bot_actor(manager)
-    tickets = pending(c, owner)
+    tickets = pending(c)
     if not tickets and not (source == "release_now" and not H.is_bot(actor) and actor != H.KEEPER and note.strip()):
         return {"sent": False, "reason": "nothing_pending", "task": None, "tickets": 0}
     if actor == H.KEEPER:
         who = "The daily release time came."
     else:
         who = f"Asked by {H.actor_name(c, actor)}" + (f": {note}" if note else ".")
-    title = (f"{TITLE}{len(tickets)} ticket{'s' if len(tickets) != 1 else ''} at Pending Release" if tickets
-             else f"{TITLE}requested by {H.actor_name(c, actor)}")
+    title = (
+        f"{TITLE}{len(tickets)} ticket{'s' if len(tickets) != 1 else ''} at Pending Release"
+        if tickets
+        else f"{TITLE}requested by {H.actor_name(c, actor)}"
+    )
     body = _task_body(c, tickets, who)
     open_task = _unfinished(c, owner)
     if open_task:
         if source == "release_schedule":
             return {"sent": False, "reason": "already_open", "task": open_task["id"], "tickets": len(tickets)}
-        H._wake(c, open_task, owner, f"{title}\n{body}", refs={"wake": "release_now"}, trigger="schedule", source=source)
-        H.event(c, actor, "release.requested", open_task["id"], {"source": source, "tickets": len(tickets), "woke": True})
+        H._wake(
+            c, open_task, owner, f"{title}\n{body}", refs={"wake": "release_now"}, trigger="schedule", source=source
+        )
+        H.event(
+            c, actor, "release.requested", open_task["id"], {"source": source, "tickets": len(tickets), "woke": True}
+        )
         return {"sent": True, "reason": "already_open", "task": open_task["id"], "tickets": len(tickets)}
     task = H.task_create(c, actor, title, body, owner, deduplicate=False, trigger="schedule", trigger_source=source)
     H.event(c, actor, "release.requested", task["id"], {"source": source, "tickets": len(tickets)})
@@ -250,8 +322,9 @@ def occurrences(cfg, at):
         hour, minute = (int(x) for x in text.split(":"))
         point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if point > local:
-            point = (datetime.combine(local.date() - timedelta(days=1), point.timetz().replace(tzinfo=None))
-                     .replace(tzinfo=zone()))
+            point = datetime.combine(local.date() - timedelta(days=1), point.timetz().replace(tzinfo=None)).replace(
+                tzinfo=zone()
+            )
         if local - point <= GRACE:
             out[point.strftime("%Y-%m-%dT%H:%M")] = point
     return out
@@ -274,12 +347,19 @@ def tick(c, at):
         return None
     result = request(c, H.KEEPER, source="release_schedule")
     fired = _fired(c)
-    fired[key] = {"at": H.now(), "sent": result["sent"], "reason": result["reason"], "task": result["task"],
-                  "tickets": result["tickets"]}
+    fired[key] = {
+        "at": H.now(),
+        "sent": result["sent"],
+        "reason": result["reason"],
+        "task": result["task"],
+        "tickets": result["tickets"],
+    }
     for old in sorted(fired)[:-KEEP_FIRED]:
         fired.pop(old)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (FIRED, json.dumps(fired, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (FIRED, json.dumps(fired, sort_keys=True)),
+    )
     return result
 
 
@@ -293,7 +373,9 @@ def next_at(cfg, at):
         hour, minute = (int(x) for x in text.split(":"))
         point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if point <= local:
-            point = datetime.combine(local.date() + timedelta(days=1), point.timetz().replace(tzinfo=None)).replace(tzinfo=zone())
+            point = datetime.combine(local.date() + timedelta(days=1), point.timetz().replace(tzinfo=None)).replace(
+                tzinfo=zone()
+            )
         best = point if best is None or point < best else best
     return best
 
@@ -301,23 +383,85 @@ def next_at(cfg, at):
 # ----------------------------------------------------------------------------- after a release
 def carried(c, repo):
     """The Dev tickets a release in `repo` carries: at Pending Release with a pull request merged (or shipped) there."""
-    repo = str(repo or "").lower()
-    return [t for t in pending(c) if any(p.get("state") in ("merged", "shipped") and str(p.get("repo") or "").lower() == repo
-                                         for p in t["prs"])]
+    repo = norm_repo(repo)
+    return [
+        t
+        for t in pending(c)
+        if any(p.get("state") in ("merged", "shipped") and norm_repo(p.get("repo")) == repo for p in t["prs"])
+    ]
+
+
+def norm_repo(value):
+    """`owner/repo` in lower case: a github.com url, a `.git` end and stray slashes or spaces do not tell repositories apart."""
+    text = re.sub(r"^(?:https?://)?(?:www\.)?github\.com/", "", str(value or "").strip(), flags=re.I)
+    return re.sub(r"\.git$", "", text.strip("/"), flags=re.I).lower()
+
+
+def _move_on(c, ticket, tag):
+    """Move a ticket a release carried from Pending Release to the step after it (Post Release QA when the type has
+    it, else the next step), as Tico, through the normal move so the step's own rules run. A ticket that is no longer
+    at Pending Release is left alone. Returns the step's name, or None when nothing moved."""
+    from . import step_flow as F
+
+    row = H.task(c, ticket["id"])
+    if row is None:
+        return None
+    here = F.step(c, row.get("step_id"))
+    if not here or here["name"].strip().lower() != PENDING:
+        return None
+    after = next((s for s in F.steps(c, here["type_id"]) if s["position"] > here["position"]), None)
+    if not after:
+        return None
+    c.execute("SAVEPOINT release_move")
+    try:
+        H.task_update(c, H.KEEPER, row["id"], step=after["id"], note=f"Shipped in {tag}", strict=False)
+    except Exception:  # a release's follow-up is never lost to one ticket that will not move
+        c.execute("ROLLBACK TO release_move")
+        c.execute("RELEASE release_move")
+        log.exception("release %s could not move %s to %s", tag, row["id"], after["name"])
+        return None
+    c.execute("RELEASE release_move")
+    return after["name"]
+
+
+def _close_release_tasks(c, tag):
+    """Nothing is at Pending Release any more: close the Release task(s) the schedule filed for the Release Manager,
+    naming the version. A task the manager made itself is none of ours. Returns the closed ids."""
+    manager = release_manager(c)
+    if not manager or pending(c):
+        return []
+    owner = H.bot_actor(manager)
+    ids = [
+        r[0]
+        for r in c.execute(
+            "SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE 'Release: %' AND status IN ("
+            + ",".join("?" * len(H.ACTIVE_STATUSES))
+            + ")",
+            (owner, H.KEEPER, *H.ACTIVE_STATUSES),
+        )
+    ]
+    for tid in ids:
+        H.task_close(c, H.KEEPER, tid, note=f"{tag} is published; nothing is left at Pending Release.", strict=False)
+    return ids
 
 
 def _docs_task(c, writer, tag, tickets, url):
     """The Technical Writer's one task for release `tag`, unless it already has one (a replay files none)."""
     prefix = f"Docs for {tag}:"
     owner = H.bot_actor(writer)
-    if c.execute("SELECT 1 FROM tasks WHERE owner_id=? AND substr(title,1,?)=? LIMIT 1", (owner, len(prefix), prefix)).fetchone():
+    if c.execute(
+        "SELECT 1 FROM tasks WHERE owner_id=? AND substr(title,1,?)=? LIMIT 1", (owner, len(prefix), prefix)
+    ).fetchone():
         return None
     title = f"{prefix} {len(tickets)} ticket{'s' if len(tickets) != 1 else ''}"
-    body = (f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
-            "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
-            "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}"))
-    return H.task_create(c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag,
-                         wake_refs={"wake": EVENT})["id"]
+    body = (
+        f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
+        "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
+        "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
+    )
+    return H.task_create(
+        c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag, wake_refs={"wake": EVENT}
+    )["id"]
 
 
 def published(c, target, url="", release_repo=""):
@@ -329,7 +473,8 @@ def published(c, target, url="", release_repo=""):
     repo, _, tag = target.partition("@")
     # Asks for this release or an older one in its channel are stale now, in any connected repository.
     supersede(c, repo, tag)
-    if release_repo and repo.lower() != str(release_repo).lower():
+    if norm_repo(release_repo) and norm_repo(repo) != norm_repo(release_repo):
+        log.info("release %s skipped: it is not in this server's release repository %s", target, release_repo)
         return []
     if "-" in tag:
         return []
@@ -340,17 +485,46 @@ def published(c, target, url="", release_repo=""):
         qa = qa_owner(c, ticket) if "qa" in H.task_labels(ticket) else None
         room, named = _qa_room(c, ticket, qa) if qa else (None, None)
         facts = f"{named} is in {tag}" + (f" ({url})" if url else "")
-        if room and H._wake(c, room, H.bot_actor(qa), f"Released: {facts}. Run its check live tests now and watch the "
-                            "watch live items; report to the ticket.", trigger=EVENT,
-                            refs={"wake": EVENT, "release": tag, "role": "qa"}, source=target):
+        if room and H._wake(
+            c,
+            room,
+            H.bot_actor(qa),
+            f"Released: {facts}. Run its check live tests now and watch the watch live items; report to the ticket.",
+            trigger=EVENT,
+            refs={"wake": EVENT, "release": tag, "role": "qa"},
+            source=target,
+        ):
             sent.setdefault(ticket["id"], []).append(qa)
         if H.is_bot(ticket["owner_id"]) and ticket["owner_id"] != (H.bot_actor(qa) if qa else None):
-            H._wake(c, ticket, ticket["owner_id"], f"Shipped in {tag}.", quiet_bots=True, quiet=True, trigger=EVENT,
-                    refs={"wake": EVENT, "release": tag, "role": "note"}, source=target)
+            H._wake(
+                c,
+                ticket,
+                ticket["owner_id"],
+                f"Shipped in {tag}.",
+                quiet_bots=True,
+                quiet=True,
+                trigger=EVENT,
+                refs={"wake": EVENT, "release": tag, "role": "note"},
+                source=target,
+            )
     docs = _docs_task(c, writer, tag, tickets, url) if writer and tickets else None
-    H.event(c, H.KEEPER, "release.published", target, {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs})
-    H.hook(c, "release.published", target, lambda: {"release": tag, "url": url, "tickets": [t["id"] for t in tickets]},
-           H.KEEPER, revision=0)
+    moved = {t["id"]: name for t in tickets if (name := _move_on(c, t, tag))}
+    closed = _close_release_tasks(c, tag) if tickets else []
+    H.event(
+        c,
+        H.KEEPER,
+        "release.published",
+        target,
+        {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs, "moved": moved, "closed": closed},
+    )
+    H.hook(
+        c,
+        "release.published",
+        target,
+        lambda: {"release": tag, "url": url, "tickets": [t["id"] for t in tickets]},
+        H.KEEPER,
+        revision=0,
+    )
     return [t["id"] for t in tickets]
 
 
@@ -389,8 +563,15 @@ def _open_releases(c):
         version = str(payload.get("version") or page.group(2))
         parsed = version_key(version)
         if parsed:
-            out.append({"id": row["id"], "repo": page.group(1).lower(), "channel": parsed[0], "key": parsed[1],
-                        "version": version})
+            out.append(
+                {
+                    "id": row["id"],
+                    "repo": page.group(1).lower(),
+                    "channel": parsed[0],
+                    "key": parsed[1],
+                    "version": version,
+                }
+            )
     return out
 
 
@@ -413,8 +594,9 @@ def supersede(c, repo, tag):
     if not parsed:
         return []
     channel, key = parsed
-    stale = [a for a in _open_releases(c) if a["repo"] == str(repo).lower() and a["channel"] == channel
-             and a["key"] <= key]
+    stale = [
+        a for a in _open_releases(c) if a["repo"] == str(repo).lower() and a["channel"] == channel and a["key"] <= key
+    ]
     return _withdraw(c, stale, tag)
 
 
@@ -424,7 +606,7 @@ def superseded_by_shipped(c):
     asks = _open_releases(c)
     if not asks or not H._has_table(c, "milestones"):
         return []
-    newest = {}                                 # (repo, channel) -> (tag, key) of the newest release shipped
+    newest = {}  # (repo, channel) -> (tag, key) of the newest release shipped
     for row in H._rows(c.execute("SELECT target FROM milestones WHERE kind='release_published'")):
         repo, _, tag = str(row["target"]).partition("@")
         parsed = version_key(tag)
@@ -452,8 +634,12 @@ def may_release(c, who):
     slug = H.actor_id(who.actor)
     if slug == release_manager(c):
         return True
-    return any((H.resolve_bot(c, row[0]) or {}).get("id") == slug for row in c.execute(
-        "SELECT manager FROM task_types WHERE manager IS NOT NULL AND (role='engineering' OR name='Dev tickets')"))
+    return any(
+        (H.resolve_bot(c, row[0]) or {}).get("id") == slug
+        for row in c.execute(
+            "SELECT manager FROM task_types WHERE manager IS NOT NULL AND (role='engineering' OR name='Dev tickets')"
+        )
+    )
 
 
 def view(c, who, auth, now=None):
@@ -462,9 +648,17 @@ def view(c, who, auth, now=None):
     fired = _fired(c)
     last = fired[max(fired)] if fired else None
     nxt = next_at(cfg, now)
-    return {**cfg, "zone": str(zone()), "release_manager": release_manager(c, cfg), "technical_writer": technical_writer(c, cfg),
-            "next": nxt.isoformat() if nxt else None, "last": last, "pending": len(pending(c)),
-            "can_change": bool(auth.bot_admin(who)), "can_release": may_release(c, who)}
+    return {
+        **cfg,
+        "zone": str(zone()),
+        "release_manager": release_manager(c, cfg),
+        "technical_writer": technical_writer(c, cfg),
+        "next": nxt.isoformat() if nxt else None,
+        "last": last,
+        "pending": len(pending(c)),
+        "can_change": bool(auth.bot_admin(who)),
+        "can_release": may_release(c, who),
+    }
 
 
 def install(app, store, auth, mutate):
@@ -512,6 +706,9 @@ def install(app, store, auth, mutate):
 def request_now(c, actor, note):
     result = request(c, actor, source="release_now", note=note)
     if not result["sent"] and result["reason"] == "no_release_manager":
-        raise Problem("not_found", "No Release Manager: name one in the release schedule, or add the Release Manager "
-                                   "starter bot", 404)
+        raise Problem(
+            "not_found",
+            "No Release Manager: name one in the release schedule, or add the Release Manager starter bot",
+            404,
+        )
     return result

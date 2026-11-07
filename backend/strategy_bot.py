@@ -23,15 +23,18 @@ attached. It is named "Strategy Bot" unless the owner renames it (`name`); the n
 
 Only the owner changes the level, the regular checks and its name, on their own click (backend/goal_routes.py,
 backend/settings_admin.py); a bot never does, the Strategy Bot included."""
+
 import json
 from datetime import datetime, timezone
 
 from . import hubdb as H
 from . import people as P
+from . import bot_settings as BS
 
 
 def encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
 
 KEY = "strategy-bot"
 # The registry row and "Hide from my chart" under their old keys, which an older release reopened on the file after a
@@ -43,8 +46,10 @@ NAME = "Strategy Bot"
 # The names the bot had before, and "" when it had none: `migrate` renames these, and `name` treats them as no name.
 OLD_NAMES = ("Goal Manager", "CEO Bot")
 # The notes a withdrawn recovery carried before the rename: `migrate` rewrites them to the current note.
-OLD_WITHDRAWN = ("Withdrawn: the CEO Bot was set to Passive, where it suggests no task changes",
-                 "Withdrawn: the CEO Bot was set to level 1, where it suggests no task changes")
+OLD_WITHDRAWN = (
+    "Withdrawn: the CEO Bot was set to Passive, where it suggests no task changes",
+    "Withdrawn: the CEO Bot was set to level 1, where it suggests no task changes",
+)
 OLD_HIDE_PREF = "chart.hide_ceo_bot"
 
 
@@ -65,16 +70,23 @@ def name(c):
 
 def view(c):
     history = level_history(c)
-    return {"name": name(c), "regular_checks": checks(c),
-            "level": level(c), "level_chosen": _record(c).get("level") in LEVELS, "levels": levels(),
-            "level_changed_by": history[0]["by"] if history else "",
-            "level_changed_at": history[0]["at"] if history else "",
-            "level_history": history, "asked_today": asked_today_all(c),
-            "level3_offer": _offer(c)}
+    return {
+        "name": name(c),
+        "regular_checks": checks(c),
+        "level": level(c),
+        "level_chosen": _record(c).get("level") in LEVELS,
+        "levels": levels(),
+        "level_changed_by": history[0]["by"] if history else "",
+        "level_changed_at": history[0]["at"] if history else "",
+        "level_history": history,
+        "asked_today": asked_today_all(c),
+        "level3_offer": _offer(c),
+    }
 
 
 def _offer(c):
     from . import strategy_suggest
+
     return strategy_suggest.offer_view(c)
 
 
@@ -82,7 +94,7 @@ def _rename(c, actor, display_name):
     """The name in both places `SettingsAdmin.update_bot` keeps it, with a new revision so a form opened before
     cannot save the old name back over it."""
     c.execute("UPDATE bots SET display_name=? WHERE id=?", (display_name, SLUG))
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (SLUG,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (SLUG,)).fetchone()
     if not row:
         return
     try:
@@ -91,9 +103,11 @@ def _rename(c, actor, display_name):
         declared = None
     if isinstance(declared, dict):
         declared["display_name"] = display_name
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), SLUG))
-    c.execute("UPDATE bot_config SET revision=revision+1,definition_updated_at=?,definition_updated_by=? WHERE bot=?",
-              (H.now(), actor, SLUG))
+        BS.write(c, SLUG, declared)
+    c.execute(
+        "UPDATE bot_config SET revision=revision+1,definition_updated_at=?,definition_updated_by=? WHERE bot=?",
+        (H.now(), actor, SLUG),
+    )
 
 
 def migrate(c):
@@ -104,8 +118,9 @@ def migrate(c):
     reopened the file and wrote it since, so what it holds wins (each of its fields over the record; the later "Hide
     from my chart"), and a choice the owner made then is kept. Also run where the bot is built in later
     (backend/onboarding.py names it with `name`)."""
-    old, new = (c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
-                for key in (OLD_KEY, KEY))
+    old, new = (
+        c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone() for key in (OLD_KEY, KEY)
+    )
     if old and (not new or old[0] != new[0]):
         try:
             since = json.loads(old[0])
@@ -114,26 +129,35 @@ def migrate(c):
         if isinstance(since, dict):
             _save(c, {**_record(c), **since})
         else:
-            c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) SELECT ?, value "
-                      "FROM registry_metadata WHERE key=?", (KEY, OLD_KEY))
+            c.execute(
+                "INSERT OR IGNORE INTO registry_metadata(key,value) SELECT ?, value FROM registry_metadata WHERE key=?",
+                (KEY, OLD_KEY),
+            )
     elif new and not old:
         _save(c, _record(c))
-    c.execute("INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
-              "FROM preferences AS o WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
-              "WHERE p.actor=o.actor AND p.key=? AND p.updated_at>=o.updated_at) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-              (HIDE_PREF, OLD_HIDE_PREF, HIDE_PREF))
+    c.execute(
+        "INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
+        "FROM preferences AS o WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
+        "WHERE p.actor=o.actor AND p.key=? AND p.updated_at>=o.updated_at) "
+        "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (HIDE_PREF, OLD_HIDE_PREF, HIDE_PREF),
+    )
     # Then each old key reads as its new one, for an older release to read after a rollback.
-    c.execute("INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
-              "FROM preferences AS n WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
-              "WHERE p.actor=n.actor AND p.key=? AND p.updated_at>=n.updated_at) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-              (OLD_HIDE_PREF, HIDE_PREF, OLD_HIDE_PREF))
+    c.execute(
+        "INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
+        "FROM preferences AS n WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
+        "WHERE p.actor=n.actor AND p.key=? AND p.updated_at>=n.updated_at) "
+        "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (OLD_HIDE_PREF, HIDE_PREF, OLD_HIDE_PREF),
+    )
     from . import strategy_suggest
+
     # Decided by Tico, as `strategy_suggest.withdraw` records one now, so an older release after a rollback, which
     # knows only its own note, still passes it over in its streak.
-    c.execute("UPDATE goal_proposals SET decision_note=?, decided_by=? WHERE decision_note IN (?, ?)",
-              (strategy_suggest.WITHDRAWN, H.KEEPER, *OLD_WITHDRAWN))
+    c.execute(
+        "UPDATE goal_proposals SET decision_note=?, decided_by=? WHERE decision_note IN (?, ?)",
+        (strategy_suggest.WITHDRAWN, H.KEEPER, *OLD_WITHDRAWN),
+    )
     bot = H.bot(c, SLUG)
     if bot and (bot.get("display_name") or "").strip() in ("", *OLD_NAMES):
         _rename(c, H.KEEPER, NAME)
@@ -169,6 +193,7 @@ def set_checks(c, actor, value):
     H.event(c, actor, "strategy_bot.checks", SLUG, {"on": value})
     if value:
         from . import goals as G
+
         G.refresh(c)
 
 
@@ -200,8 +225,9 @@ def _review(c, actor, record, raised=False):
     own choice is never overruled. `review_settled` says it has had its one go at starting it at the current raise, so
     `reconcile` never starts it again."""
     from . import routines
+
     row = routines.row(c, REVIEW)
-    if (record.get("level") if record.get("level") in LEVELS else DEFAULT_LEVEL) < 2:     # the level being saved
+    if (record.get("level") if record.get("level") in LEVELS else DEFAULT_LEVEL) < 2:  # the level being saved
         armed = record.pop("review_armed", None)
         record.pop("review_settled", None)
         record.pop("review_raised", None)
@@ -212,7 +238,7 @@ def _review(c, actor, record, raised=False):
     if not row or row["deleted_at"]:
         if raised:
             record["review_raised"] = H.now()
-        return              # not there yet: `reconcile` starts it once it is
+        return  # not there yet: `reconcile` starts it once it is
     record["review_settled"] = True
     since = record.pop("review_raised", None)
     # Only the owner's raise from Passive overrides a person's earlier start or pause; the default never does, and a
@@ -226,8 +252,14 @@ def _review(c, actor, record, raised=False):
 def _review_touched(c, since):
     """Whether anyone but the server started or paused the Monday note after the server started it."""
     since = since if isinstance(since, str) else ""
-    return c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND created_at>=? "
-                     "AND detail LIKE '%\"enabled\"%' LIMIT 1", (REVIEW, H.KEEPER, since)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND created_at>=? "
+            "AND detail LIKE '%\"enabled\"%' LIMIT 1",
+            (REVIEW, H.KEEPER, since),
+        ).fetchone()
+        is not None
+    )
 
 
 def reconcile(c):
@@ -247,9 +279,22 @@ def reconcile(c):
 
 
 def _outside(slug, entry, assistant, helpers):
-    return slug in ("assistant", "botops", "librarian", H.COUNSEL, SLUG, "health-monitor", "task-manager", "bookkeeper") \
-        or slug == assistant \
+    return (
+        slug
+        in (
+            "assistant",
+            "botops",
+            "librarian",
+            H.COUNSEL,
+            SLUG,
+            "health-monitor",
+            "task-manager",
+            "bookkeeper",
+            H.BRAND_OWNER,
+        )
+        or slug == assistant
         or str((entry or {}).get("template") or "") in helpers
+    )
 
 
 # "Hide from my chart" on the Strategy Bot (its menu on the Team sidebar, Settings > Bots > Strategy Bot): one person's
@@ -286,6 +331,7 @@ def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
     if not owner or owner.get("hidden"):
         return entries
     from . import onboarding as O
+
     helpers, leads = O.helper_templates(settings), O.lead_templates(settings)
     inboxes = {p.get("inbox_bot") for p in (roster or {}).get("people") or [] if p.get("inbox_bot")}
     top = "p:" + owner["id"]
@@ -294,8 +340,9 @@ def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
         if slug in archived or slug in inboxes or _outside(slug, entry, settings.assistant_bot, helpers):
             continue
         entry = entry or {}
-        if (P._clean(entry.get("reports_to")) and str(entry.get("template") or "") not in leads) \
-                or P.org_parent("bot", slug, roster, entries, archived, True) != top:
+        if (P._clean(entry.get("reports_to")) and str(entry.get("template") or "") not in leads) or P.org_parent(
+            "bot", slug, roster, entries, archived, True
+        ) != top:
             continue
         out[slug] = {**entry, "reports_to": SLUG}
     out[SLUG] = {**(entries[SLUG] or {}), "reports_to": "human:" + owner["id"]}
@@ -319,8 +366,10 @@ def chart_groups(roster, entries, chart, groups, archived=(), hidden=False):
             chain = P.group_chain(P.team_of(slug, entries, roster), roster)
             if chain:
                 led.add(chain[-1])
-    return [{**g, "org_parent": "b:" + SLUG} if g["id"] in led and not g.get("parent") and g["id"] not in mine else g
-            for g in groups]
+    return [
+        {**g, "org_parent": "b:" + SLUG} if g["id"] in led and not g.get("parent") and g["id"] not in mine else g
+        for g in groups
+    ]
 
 
 # ----------------------------------------------------------------------------- how much it does
@@ -332,18 +381,24 @@ def chart_groups(roster, entries, chart, groups, archived=(), hidden=False):
 # (backend/strategy_acts.py). A level whose behaviour has not arrived yet says so in its sentence (`READY`, `NOT_YET`);
 # every level has arrived.
 LEVELS = {
-    1: ("Passive",
+    1: (
+        "Passive",
         "It keeps the regular checks running, KPI readings and the automatic goal colours, and otherwise acts only when "
-        "asked through your Assistant: it suggests KPIs, goals and Why lines and changes nothing until you accept."),
-    2: ("Suggests actions",
+        "asked through your Assistant: it suggests KPIs, goals and Why lines and changes nothing until you accept.",
+    ),
+    2: (
+        "Suggests actions",
         "It also asks a goal's owner what's happening when a KPI goes red or stale, proposes Why lines, sends you a "
         "Monday note, and suggests how your bots could recover a goal that falls behind, as items in Needs you that you "
-        "approve one by one; nothing changes without your yes."),
-    3: ("Acts on its own",
+        "approve one by one; nothing changes without your yes.",
+    ),
+    3: (
+        "Acts on its own",
         "It also decides on its own: it makes bot tasks, moves them up a bot's queue, gives them to another bot and "
         "closes them to recover a goal, each decision logged with an Undo. It never acts alone on a private task; "
         "what it can't do alone becomes an item in Needs you, and spending, publishing, people and changes to goals "
-        "or the vision stay yours."),
+        "or the vision stay yours.",
+    ),
 }
 READY = {1, 2, 3}
 NOT_YET = " Not yet: until this level arrives in a later release, it does what level 2 does."
@@ -358,8 +413,10 @@ def level(c):
 
 
 def levels():
-    return [{"level": n, "name": title, "sentence": text + ("" if n in READY else NOT_YET), "ready": n in READY}
-            for n, (title, text) in LEVELS.items()]
+    return [
+        {"level": n, "name": title, "sentence": text + ("" if n in READY else NOT_YET), "ready": n in READY}
+        for n, (title, text) in LEVELS.items()
+    ]
 
 
 def level_history(c):
@@ -371,11 +428,15 @@ def level_history(c):
 def named(c, value):
     """`view` with who changed the level named as the page shows them (`by_name`, `level_changed_by_name`)."""
     from . import names as N
+
     actors = {r["by"] for r in value["level_history"] if r.get("by")}
     known = N.lookup(c, actors) if actors else {}
     name_of = lambda actor: known.get(actor) or H.actor_id(actor or "")
-    return {**value, "level_changed_by_name": name_of(value["level_changed_by"]) if value["level_changed_by"] else "",
-            "level_history": [{**r, "by_name": name_of(r.get("by"))} for r in value["level_history"]]}
+    return {
+        **value,
+        "level_changed_by_name": name_of(value["level_changed_by"]) if value["level_changed_by"] else "",
+        "level_history": [{**r, "by_name": name_of(r.get("by"))} for r in value["level_history"]],
+    }
 
 
 def set_level(c, actor, value):
@@ -401,28 +462,33 @@ def set_level(c, actor, value):
     _save(c, record)
     if value < 2:
         from . import strategy_suggest
-        strategy_suggest.withdraw(c)                 # Passive suggests no task changes: what still waits is withdrawn
+
+        strategy_suggest.withdraw(c)  # Passive suggests no task changes: what still waits is withdrawn
     H.event(c, actor, "strategy_bot.level", SLUG, {"level": value, "was": was})
 
 
 def _save(c, record):
     for key in (KEY, OLD_KEY):
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) "
-                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, encode(record)))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, encode(record)),
+        )
 
 
 def mirror_hide(c, actor, value_json, updated):
     """Write a person's "Hide from my chart" under its old key too (OLD_KEY)."""
-    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-              "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-              (actor, OLD_HIDE_PREF, value_json, updated))
+    c.execute(
+        "INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
+        "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (actor, OLD_HIDE_PREF, value_json, updated),
+    )
 
 
 # ----------------------------------------------------------------------------- what it asked today
 # The Strategy Bot has no daily limit on a person's Needs you. The server counts the tasks it filed for that person
 # since midnight UTC, whoever filed them for it: its own `hub task create` and the asks backend/goal_asks.py files in
 # its name, and the items it merged several bots' asks into (backend/strategy_merge.py).
-NO_LIMIT = 10 ** 6          # no daily cap: the room never runs out
+NO_LIMIT = 10**6  # no daily cap: the room never runs out
 
 
 def day_start(at=None):
@@ -432,22 +498,31 @@ def day_start(at=None):
 
 
 def asked_today(c, person, at=None):
-    """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items."""
+    """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items. A
+    merged item is a task filed for them since step 6b; one filed before was the Strategy Bot's own."""
     since = day_start(at)
-    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester_id=? AND owner_id=? AND created_at>=?",
-                     ("bot:" + SLUG, person, since)).fetchone()[0] + c.execute(
-        "SELECT COUNT(DISTINCT merged_into) FROM "
-        "strategy_merges WHERE person=? AND created_at>=?", (person, since)).fetchone()[0]
+    return (
+        c.execute(
+            "SELECT COUNT(*) FROM tasks WHERE requester_id=? AND owner_id=? AND created_at>=?",
+            ("bot:" + SLUG, person, since),
+        ).fetchone()[0]
+        + c.execute(
+            "SELECT COUNT(DISTINCT m.merged_into) FROM strategy_merges m JOIN tasks t ON t.id=m.merged_into "
+            "WHERE m.person=? AND m.created_at>=? AND t.owner_id<>m.person",
+            (person, since),
+        ).fetchone()[0]
+    )
 
 
 def asked_today_all(c, at=None):
     """{person actor: tasks the Strategy Bot filed for them today}, for the people it filed any for."""
     since, out = day_start(at), {}
     for who, n in c.execute(
-            "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
-            "UNION ALL SELECT person, COUNT(DISTINCT merged_into) FROM strategy_merges "
-            "WHERE created_at>=? GROUP BY person",
-            ("bot:" + SLUG, since, since)):
+        "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
+        "UNION ALL SELECT m.person, COUNT(DISTINCT m.merged_into) FROM strategy_merges m JOIN tasks t "
+        "ON t.id=m.merged_into WHERE m.created_at>=? AND t.owner_id<>m.person GROUP BY m.person",
+        ("bot:" + SLUG, since, since),
+    ):
         out[who] = out.get(who, 0) + n
     return out
 

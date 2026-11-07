@@ -3,25 +3,46 @@ ones included unless asked, closed ones never; and a queued job that can never b
 
 import uuid
 
+import pytest
+
 from backend import health
 from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
 from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
+from backend.tests.hold_rows import set_holds
 
 
 def board(api):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Builds", [{"name": "On Deck", "status": "open"},
-                                                    {"name": "Review", "status": "review"},
-                                                    {"name": "Done", "status": "done"}], numbered=True)
+        typ = H.type_create(
+            c,
+            H.KEEPER,
+            "Builds",
+            [
+                {"name": "On Deck", "status": "open"},
+                {"name": "Review", "status": "review"},
+                {"name": "Done", "status": "done"},
+            ],
+            numbered=True,
+        )
     return typ["id"], {s["name"]: s["id"] for s in typ["steps"]}
 
 
 def ticket(api, typ, step, owner="ops", private=False):
     ask = uuid.uuid4().hex[:8]
-    return post(api, "tasks", {"owner": owner, "title": f"Build {ask}", "body": f"Build {ask}.", "type": typ, "step": step,
-                               "private": private})
+    return post(
+        api,
+        "tasks",
+        {
+            "owner": owner,
+            "title": f"Build {ask}",
+            "body": f"Build {ask}.",
+            "type": typ,
+            "step": step,
+            "private": private,
+        },
+    )
 
 
 def stats(api, token="ana-test", query=""):
@@ -39,19 +60,39 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     private = ticket(api, typ, steps["Review"], private=True)
     reviewed = ticket(api, typ, steps["Review"])
     done = ticket(api, typ, steps["Review"])
-    child = post(api, "tasks", {"owner": "cpo", "title": "Review it", "body": "Review it.",
-                                "relations": [{"task": reviewed["id"], "kind": "parent"}]})
+    child = post(
+        api,
+        "tasks",
+        {
+            "owner": "cpo",
+            "title": "Review it",
+            "body": "Review it.",
+            "relations": [{"task": reviewed["id"], "kind": "parent"}],
+        },
+    )
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=3), snoozed["id"]))
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='step'",
+            (H.shift(H.now(), hours=-30), old["id"]),
+        )
+        set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), days=3))
         c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
-                  (str(uuid.uuid4()), reviewed["id"], "pr", "https://github.com/acme/app/pull/7", "PR #7", "open",
-                   H.shift(H.now(), hours=-5)))
+        c.execute(
+            "INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
+            (
+                str(uuid.uuid4()),
+                reviewed["id"],
+                "pr",
+                "https://github.com/acme/app/pull/7",
+                "PR #7",
+                "open",
+                H.shift(H.now(), hours=-5),
+            ),
+        )
 
-    shown = stats(api)          # Ana requested every ticket, the private one included
+    shown = stats(api)  # Ana requested every ticket, the private one included
     assert shown["type"]["name"] == "Builds" and shown["total"] == 4 and shown["truncated"] is False
-    assert [s["name"] for s in shown["steps"]] == ["On Deck", "Review"]          # Done is finished, never counted
+    assert [s["name"] for s in shown["steps"]] == ["On Deck", "Review"]  # Done is finished, never counted
     deck, review = step(shown, "On Deck"), step(shown, "Review")
     assert deck["count"] == 2 and deck["snoozed"] == 1 and deck["oldest"] == old["number"]
     assert 29.9 <= deck["oldest_hours"] <= 30.1 and deck["median_hours"] < deck["oldest_hours"]
@@ -71,7 +112,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     # Filters: snoozed hidden, by owner, and a type named outright.
     assert step(stats(api, query="snoozed=hide"), "On Deck")["count"] == 1
     assert step(stats(api, query="owner=cpo"), "On Deck")["count"] == 1 and stats(api, query="owner=cpo")["total"] == 1
-    assert get(api, "pipeline")["type"]["name"] == "Engineering"         # the engineering board unless one is named
+    assert get(api, "pipeline")["type"]["name"] == "Engineering"  # the engineering board unless one is named
     assert get(api, "pipeline?snoozed=maybe", expected=422)["error"]["code"] == "snoozed"
     assert get(api, "pipeline?since=30d", expected=422)["error"]["code"] == "since"
 
@@ -85,19 +126,25 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         # The computer restarted mid-run: the run may have acted, so its task waits for a person's review.
-        c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
-                  (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
+        c.execute(
+            "UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
+            (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]),
+        )
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
     with api.app.state.store.read() as c:
         dead = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'")]
     assert len(dead) == 1
-    assert claim(api, r) is None                      # never handed out while the interrupted run waits
+    assert claim(api, r) is None  # never handed out while the interrupted run waits
 
     ops = stats(api)["queues"]["ops"]
     assert ops["dead"] == 1 and ops["dead_ids"] == dead and ops["queued"] == 0 and ops["uncertain"] == 1
     failures = stats(api)["failures"]
-    assert failures["total"] == 1 and failures["by_cause"]["restart"]["n"] == 1 and failures["by_bot"] == {"ops": {"restart": 1}}
+    assert (
+        failures["total"] == 1
+        and failures["by_cause"]["restart"]["n"] == 1
+        and failures["by_bot"] == {"ops": {"restart": 1}}
+    )
 
     # A person's own chat is never held by it: that one is queued.
     post(api, "chat/ops", {"text": "Separate question"})
@@ -120,11 +167,13 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
-                  (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
+        c.execute(
+            "UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
+            (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]),
+        )
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
-    post(api, "chat/ops", {"text": "Separate question"})     # the one job that can start
+    post(api, "chat/ops", {"text": "Separate question"})  # the one job that can start
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
     pipe = stats(api, query="bot=ops")["queues"]["ops"]
@@ -137,6 +186,49 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     assert rows and all((row["queued"], row["dead"]) == (pipe["queued"], pipe["dead"]) for row in rows)
 
 
+@pytest.mark.parametrize("scope", ["task", "chat"])
+def test_quarantine_held_work_has_its_own_pipeline_and_health_classification(api, scope):
+    from backend.tests.test_task_lanes import new_task, task_bot
+    from backend.tests.test_task_quarantine import refusals, started
+
+    board(api)
+    machine = task_bot(api, lanes=True)
+    if scope == "chat":
+        post(api, "chat/ops", {"text": "Check the export."})
+        attempt = started(api, machine)
+        target = new_task(api, "Check the export", owner="cpo")
+    else:
+        target = new_task(api, "Check the export")
+        attempt = started(api, machine)
+    refusals(api, attempt, target)
+    post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-2), attempt["job_id"]))
+    ops = stats(api)["queues"]["ops"]
+    assert (ops["quarantine_held"], ops["queued"], ops["dead"], ops["held"], ops["uncertain"]) == (1, 0, 0, 0, 0)
+    assert ops["dead_ids"] == [] and ops["oldest_queued_hours"] is None
+    with api.app.state.store.transaction() as c:
+        _, slow, stuck = health._waiting(c, {machine["runner_id"]})
+        rows = [row for row in slow + stuck if row["bot"] == "ops"]
+        assert rows and all(
+            (row["quarantine_held"], row["queued"], row["dead"], row["reason"]) == (1, 0, 0, "task_quarantine")
+            for row in rows
+        )
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-31), machine["runner_id"]),
+        )
+        [computer] = health.silent_computers(c)
+        assert (computer["quarantine_held"], computer["queued"], computer["dead"]) == (1, 0, 0)
+    new_task(api, "Check the archive")
+    ops = stats(api)["queues"]["ops"]
+    assert (ops["quarantine_held"], ops["queued"], ops["dead"]) == (1, 1, 0)
+    post(api, "bots/ops/quarantine/clear", {})
+    ops = stats(api)["queues"]["ops"]
+    assert (ops["quarantine_held"], ops["queued"], ops["dead"]) == (0, 2, 0)
+
+
 def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypatch):
     board(api)
     r = runner(api)
@@ -147,24 +239,34 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
         post(api, "tasks", {"owner": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
         attempt = claim(api, r)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))
+            c.execute(
+                "UPDATE attempts SET state='failed', finished_at=? WHERE id=?",
+                (H.shift(H.now(), hours=-age), attempt["id"]),
+            )
             c.execute("UPDATE jobs SET state='failed' WHERE id=?", (attempt["job_id"],))
         failed[name] = attempt["id"]
-    monkeypatch.setattr(pipeline_stats, "ATTEMPT_PAGE", 1)     # the newest page holds only the private run
+    monkeypatch.setattr(pipeline_stats, "ATTEMPT_PAGE", 1)  # the newest page holds only the private run
     hers = stats(api, "cara-test")["failures"]
     assert hers["total"] == 1 and hers["truncated"] is False and hers["complete_after"] is None
     assert stats(api)["failures"]["total"] == 2
 
-    monkeypatch.setattr(pipeline_stats, "ATTEMPT_CAP", 1)      # a stop at the cap says from when counts are whole
+    monkeypatch.setattr(pipeline_stats, "ATTEMPT_CAP", 1)  # a stop at the cap says from when counts are whole
     capped = stats(api)["failures"]
     assert capped["total"] == 1 and capped["truncated"] is True
     with api.app.state.store.read() as c:
-        assert capped["complete_after"] == c.execute("SELECT finished_at FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
+        assert (
+            capped["complete_after"]
+            == c.execute("SELECT finished_at FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
+        )
 
 
 def test_failure_causes():
     row = lambda state="failed", result="{}", reason=None, stop=None: {  # noqa: E731
-        "state": state, "result": result, "end_reason": reason, "stop_requested_at": stop}
+        "state": state,
+        "result": result,
+        "end_reason": reason,
+        "stop_requested_at": stop,
+    }
     assert cause_of(row(result='{"limit_source": {"runtime": "codex", "billing": true}}')) == "quota"
     assert cause_of(row(reason="Model error (429): You exceeded your current quota")) == "quota"
     assert cause_of(row(result='{"limit_source": {"runtime": "claude", "kind": "capacity"}}')) == "capacity"
@@ -179,6 +281,7 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     decision record, names who and when, and a later decision replaces it. No decision, no row."""
     from backend.tests.test_api import expire
     from backend.tests.test_run_view import DEV_563_NOTE, botops_decides, task_attempt
+
     typ, _ = board(api)
     machine = runner(api, "ana")
     assign(api, machine, "ops")
@@ -186,18 +289,28 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     _, attempt = task_attempt(api, machine, "Build the QA waiver")
     expire(api, attempt["id"])
     assert claim(api, machine) is None
-    assert stats(api)["queues"]["ops"]["decisions"] == []          # held, but nobody has decided yet
+    assert stats(api)["queues"]["ops"]["decisions"] == []  # held, but nobody has decided yet
 
     botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, H.now())
     [row] = stats(api)["queues"]["ops"]["decisions"]
-    assert (row["job"], row["run"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
-            row["note"]) == (attempt["job_id"], attempt["id"], True, "canceled", "dismiss", "bot:botops", "botops",
-                             DEV_563_NOTE)
+    assert (
+        row["job"],
+        row["run"],
+        row["current"],
+        row["state"],
+        row["decision"],
+        row["by"],
+        row["by_kind"],
+        row["note"],
+    ) == (attempt["job_id"], attempt["id"], True, "canceled", "dismiss", "bot:botops", "botops", DEV_563_NOTE)
     assert row["label"].startswith("Canceled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
 
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note='Run it again after all, please.' "
-                  "WHERE job_id=?", (attempt["job_id"],))
+        c.execute(
+            "UPDATE job_recovery SET decision='resume', actor='human:ana', note='Run it again after all, please.' "
+            "WHERE job_id=?",
+            (attempt["job_id"],),
+        )
     [row] = stats(api)["queues"]["ops"]["decisions"]
     assert (row["decision"], row["by"], row["by_kind"]) == ("resume", "human:ana", "person")
     assert ": resumed by " in row["label"] and row["label"].endswith(", Run it again after all, please.")
@@ -227,6 +340,7 @@ def test_a_decisions_note_is_left_out_for_a_reader_who_cannot_open_the_runs_conv
     decision, who and when, but never the decider's note, which may tell what the run was for."""
     from backend.tests.test_api import expire
     from backend.tests.test_run_view import DEV_563_NOTE, botops_decides
+
     board(api)
     machine = runner(api, "ana")
     assign(api, machine, "ops")

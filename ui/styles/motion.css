@@ -11,10 +11,10 @@
    the ones placed by script); a phone's menus are bottom sheets there and only fade (base.css). */
 @keyframes m-pop{from{opacity:0;scale:.96}}
 @media (min-width:761px){
-  :where(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,#account-status-pop,
-    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.meet-src-menu,.ask-menu,[popover]:popover-open){animation:m-pop var(--dur-fast) var(--ease)}
+  :where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,#account-status-pop,
+    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.ask-menu,[popover]:popover-open){animation:m-pop var(--dur-fast) var(--ease)}
   :where(#account-status-pop){transform-origin:bottom left}
-  :where(.dash-menu,.pg-menu-list,.meet-src-menu){transform-origin:top right}
+  :where(.dash-menu,.pg-menu-list){transform-origin:top right}
   :where(.vcard-menu-list){transform-origin:bottom right}
   :where(.ask-menu){transform-origin:top center}
 }
@@ -77,8 +77,8 @@
   transition:transform var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease),background-color var(--dur-fast) var(--ease)}
 
 @media (prefers-reduced-motion:reduce){
-  :is(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,#account-status-pop,
-    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.meet-src-menu,.ask-menu,[popover],dialog.gpanel,#task-peek,
+  :is(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,#account-status-pop,
+    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.ask-menu,[popover],dialog.gpanel,#task-peek,
     .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before{animation:none!important}
   :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile,.chev,.section-chev,.req-arrow,.tl-gchev svg,
     .tl-chev svg,.sub-chev,.au-chev,.rdo-cx){transition:none!important}

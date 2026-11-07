@@ -3,8 +3,8 @@
 The card says what broke in one line ("Sales Bot can't reach Google (ana@acme.example).") and carries the fix: the
 person's own Connect Google, the computer's sign-in pop-up, or a credential card. The task waits on the card, a
 recorded wait like a milestone's (hubdb.wait_detail, wake_rules.parked): it is in the fixer's Needs you under
-connect (hubdb.needs_you), and no stall wake, stranded sweep or news spends turns on it meanwhile. It does not set
-`waiting_on`: a bot naming a person there asks in a subtask instead, and this card is that ask. When the account
+connect (hubdb.needs_you), and no news spends turns on it meanwhile. It is no question task: a bot that names a
+person with --on asks them in one, and this card is the ask here. When the account
 works again the card says "Reconnected" and the task's owner gets ONE wake on that task, through the one wake path
 (H._wake, refs `reconnected`, an AWAITED kind in backend/wake_rules.py).
 
@@ -50,7 +50,7 @@ SCHEMA = (
 )
 WAKE_REF = "reconnected"
 CARD_REF = "reconnect"
-RECENT_S = 900          # a bot's task worked this recently is the one a connector failure stops
+RECENT_S = 900  # a bot's task worked this recently is the one a connector failure stops
 OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','canceled')"
 
 
@@ -61,6 +61,7 @@ def secret_key(bot, env):
 
 def _H():
     from . import hubdb
+
     return hubdb
 
 
@@ -79,19 +80,23 @@ def _live(alias="r"):
     org-chart reach are not SQL)."""
     H = _H()
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    return (f"{alias}.fixed_at IS NULL AND EXISTS(SELECT 1 FROM tasks t WHERE t.id={alias}.task_id "
-            f"AND t.owner_id={alias}.owner AND t.status IN ({marks})) AND NOT EXISTS(SELECT 1 FROM bots b "
-            f"WHERE b.id={alias}.bot AND b.state='archived')"), tuple(H.ACTIVE_STATUSES)
+    return (
+        f"{alias}.fixed_at IS NULL AND EXISTS(SELECT 1 FROM tasks t WHERE t.id={alias}.task_id "
+        f"AND t.owner_id={alias}.owner AND t.status IN ({marks})) AND NOT EXISTS(SELECT 1 FROM bots b "
+        f"WHERE b.id={alias}.bot AND b.state='archived')"
+    ), tuple(H.ACTIVE_STATUSES)
 
 
 def person_for(c, settings, bot, task=None):
     """Who fixes the bot's accounts: its operator, else the company owner, as an actor, or None. For a card on `task`,
     the first of them who can read it: the card is in its thread."""
     from . import usage_limits
+
     H, email = _H(), getattr(settings, "owner_email", "") or ""
     if not email and settings is None:
         # A hook from hubdb has no settings: the owner record the company keeps.
         from .access import load_owner
+
         email = load_owner(c, type("NoSettings", (), {"owner_email": ""})())["email"]
     people = [p for p in (usage_limits.recipients(c, bot, email), usage_limits.recipients(c, None, email)) if p]
     for actor in dict.fromkeys(H.human_actor(p["id"]) for p in people):
@@ -106,6 +111,7 @@ def _bot_name(c, bot):
 
 def runtime_name(runtime):
     from .bot_tools import HARNESS_NAMES
+
     return HARNESS_NAMES.get(runtime) or str(runtime or "").title() or "The AI model"
 
 
@@ -121,9 +127,16 @@ def line(c, bot, service, label, fix=None):
 
 def view(row):
     """The card as the thread draws it (message refs `reconnect`): status open, fixed, canceled or retired."""
-    return {"key": row["key"], "service": row["service"], "label": row["label"], "bot": row["bot"],
-            "person": row["person"], "fix": json.loads(row["fix"] or "{}"),
-            "status": (row.get("ended") or "fixed") if row.get("fixed_at") else "open", "fixed_at": row.get("fixed_at")}
+    return {
+        "key": row["key"],
+        "service": row["service"],
+        "label": row["label"],
+        "bot": row["bot"],
+        "person": row["person"],
+        "fix": json.loads(row["fix"] or "{}"),
+        "status": (row.get("ended") or "fixed") if row.get("fixed_at") else "open",
+        "fixed_at": row.get("fixed_at"),
+    }
 
 
 # ------------------------------------------------------------------------------------------------ writes
@@ -137,11 +150,18 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
     ensure(c)
     owner = owner or H.bot_actor(bot)
     row = H.task(c, task_id) if task_id else None
-    if (not row or row["owner_id"] != owner or not H.is_bot(owner) or row["status"] not in H.ACTIVE_STATUSES
-            or not person or not H.task_private_readable(c, person, row)):
+    if (
+        not row
+        or row["owner_id"] != owner
+        or not H.is_bot(owner)
+        or row["status"] not in H.ACTIVE_STATUSES
+        or not person
+        or not H.task_private_readable(c, person, row)
+    ):
         return None
-    found = c.execute("SELECT * FROM task_reconnects WHERE task_id=? AND key=? AND fixed_at IS NULL",
-                      (task_id, key)).fetchone()
+    found = c.execute(
+        "SELECT * FROM task_reconnects WHERE task_id=? AND key=? AND fixed_at IS NULL", (task_id, key)
+    ).fetchone()
     if found and found["owner"] == owner and not (message_id and found["message_id"] != message_id):
         return dict(found)
     # A new credential card for the same key (another person asked to save it) replaces the old card.
@@ -149,20 +169,45 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
         _retire(c, dict(found), refresh=False)
     # A closed card on the same key is history: this failure is a new card (an owed line about the old fix is moot).
     c.execute("DELETE FROM task_reconnects WHERE task_id=? AND key=?", (task_id, key))
-    record = {"task_id": task_id, "key": key, "bot": bot, "owner": owner, "service": service, "label": label,
-              "person": person, "fix": json.dumps(fix or {}), "message_id": message_id, "created_at": H.now(),
-              "fixed_at": None, "ended": None}
+    record = {
+        "task_id": task_id,
+        "key": key,
+        "bot": bot,
+        "owner": owner,
+        "service": service,
+        "label": label,
+        "person": person,
+        "fix": json.dumps(fix or {}),
+        "message_id": message_id,
+        "created_at": H.now(),
+        "fixed_at": None,
+        "ended": None,
+    }
     card = {CARD_REF: view(record)}
     if message_id:
-        c.execute("UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.reconnect',json(?)) WHERE id=?",
-                  (json.dumps(card[CARD_REF]), message_id))
+        c.execute(
+            "UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.reconnect',json(?)) WHERE id=?",
+            (json.dumps(card[CARD_REF]), message_id),
+        )
     else:
-        sent = H._write_message(c, owner, person, line(c, bot, service, label, fix),
-                                H.conversation(c, row["conversation_id"]), "say", {"task": task_id, **card}, None, None,
-                                delivered_at=H.now())
+        sent = H._write_message(
+            c,
+            owner,
+            person,
+            line(c, bot, service, label, fix),
+            H.conversation(c, row["conversation_id"]),
+            "say",
+            {"task": task_id, **card},
+            None,
+            None,
+            delivered_at=H.now(),
+        )
         record["message_id"] = sent["id"] if sent else None
-    c.execute("INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix,message_id,created_at) "
-              "VALUES(:task_id,:key,:bot,:owner,:service,:label,:person,:fix,:message_id,:created_at)", record)
+    c.execute(
+        "INSERT INTO task_reconnects(task_id,key,bot,owner,service,label,person,fix,message_id,created_at) "
+        "VALUES(:task_id,:key,:bot,:owner,:service,:label,:person,:fix,:message_id,:created_at)",
+        record,
+    )
     _wait(c, row, f"Reconnect {label} so {_bot_name(c, bot)} can go on.")
     if key.startswith("login:"):
         _fold_hold(c, bot)
@@ -177,6 +222,7 @@ def _fold_hold(c, bot):
     if not _H()._has_table(c, "run_backoff"):
         return
     from . import bot_stops, run_backoff
+
     state = run_backoff.get(c, bot)
     if state.get("held_at") and state.get("error_class") == run_backoff.SIGN_IN and state.get("task_id"):
         c.execute("UPDATE run_backoff SET task_id=NULL WHERE bot=?", (bot,))
@@ -188,6 +234,7 @@ def _unfold_hold(c, bot):
     if not _H()._has_table(c, "run_backoff") or bot_open(c, bot, "login:"):
         return
     from . import run_backoff
+
     state = run_backoff.get(c, bot)
     if state.get("held_at") and state.get("error_class") == run_backoff.SIGN_IN and not state.get("task_id"):
         run_backoff.raise_hold_item(c, None, bot)
@@ -201,6 +248,7 @@ def _wait(c, row, note):
         H._set_status(c, H.KEEPER, row, "waiting", note=note)
     else:
         from . import task_holds
+
         task_holds.refresh(c, row["id"])
     # The status event already carries the note; the card says it in the thread.
     c.execute("UPDATE tasks SET note=?,version=version+1,updated_at=? WHERE id=?", (note, H.now(), row["id"]))
@@ -224,16 +272,33 @@ def access_changed(c, task_id):
     if not row:
         return
     live, args = _live()
-    gone = [w for w in H._rows(c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created_at",
-                                         (task_id, *args))) if not _reads(c, w)]
+    gone = [
+        w
+        for w in H._rows(
+            c.execute(
+                f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created_at", (task_id, *args)
+            )
+        )
+        if not _reads(c, w)
+    ]
     for wait in gone:
         _retire(c, wait, refresh=False)
         person = person_for(c, None, wait["bot"], row) if wait["service"] == "login" else None
         if person:
-            open(c, task_id, wait["bot"], wait["key"], wait["service"], wait["label"], person,
-                 json.loads(wait["fix"] or "{}"), owner=wait["owner"])
+            open(
+                c,
+                task_id,
+                wait["bot"],
+                wait["key"],
+                wait["service"],
+                wait["label"],
+                person,
+                json.loads(wait["fix"] or "{}"),
+                owner=wait["owner"],
+            )
     if gone:
         from . import task_holds
+
         names = ", ".join(dict.fromkeys(task_holds.name(c, w["person"]) for w in gone))
         task_holds.refresh(c, task_id, f"{names} cannot see this task now")
 
@@ -242,12 +307,20 @@ def _close(c, wait, ended, at=None):
     """End an open card (fixed, canceled or retired) and say so on its message. A retired card owes no wake."""
     H = _H()
     at = at or H.now()
-    if c.execute("UPDATE task_reconnects SET fixed_at=?,ended=?,woke_at=? WHERE task_id=? AND key=? AND fixed_at IS NULL",
-                 (at, ended, at if ended == "retired" else None, wait["task_id"], wait["key"])).rowcount != 1:
+    if (
+        c.execute(
+            "UPDATE task_reconnects SET fixed_at=?,ended=?,woke_at=? WHERE task_id=? AND key=? AND fixed_at IS NULL",
+            (at, ended, at if ended == "retired" else None, wait["task_id"], wait["key"]),
+        ).rowcount
+        != 1
+    ):
         return False
     if wait.get("message_id"):
-        c.execute("UPDATE messages SET refs=json_set(refs,'$.reconnect.status',?,'$.reconnect.fixed_at',?) "
-                  "WHERE id=? AND json_extract(refs,'$.reconnect') IS NOT NULL", (ended, at, wait["message_id"]))
+        c.execute(
+            "UPDATE messages SET refs=json_set(refs,'$.reconnect.status',?,'$.reconnect.fixed_at',?) "
+            "WHERE id=? AND json_extract(refs,'$.reconnect') IS NOT NULL",
+            (ended, at, wait["message_id"]),
+        )
     return True
 
 
@@ -258,10 +331,13 @@ def _retire(c, wait, refresh=True, cleared=None):
         return
     request = json.loads(wait.get("fix") or "{}").get("request")
     if request and _H()._has_table(c, "credential_requests"):
-        c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=? AND status='pending'",
-                  (_H().now(), request))
+        c.execute(
+            "UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=? AND status='pending'",
+            (_H().now(), request),
+        )
     if refresh:
         from . import task_holds
+
         task_holds.refresh(c, wait["task_id"], cleared)
     if wait["key"].startswith("login:"):
         _unfold_hold(c, wait["bot"])
@@ -272,8 +348,15 @@ def _standing(c, wait):
     take the wake now: the card stays open for a later fix or the task's next move)."""
     H = _H()
     row = H.task(c, wait["task_id"])
-    if (not row or row["status"] not in H.ACTIVE_STATUSES or row["owner_id"] != wait["owner"]
-            or any((H.bot(c, slug) or {}).get("state") in (None, "archived") for slug in {wait["bot"], H.actor_id(row["owner_id"])})):
+    if (
+        not row
+        or row["status"] not in H.ACTIVE_STATUSES
+        or row["owner_id"] != wait["owner"]
+        or any(
+            (H.bot(c, slug) or {}).get("state") in (None, "archived")
+            for slug in {wait["bot"], H.actor_id(row["owner_id"])}
+        )
+    ):
         return "gone"
     if not H._actor_exists(c, row["owner_id"]) or not H.task_private_readable(c, row["owner_id"], row):
         return "unreachable"
@@ -287,8 +370,11 @@ def fixed(c, key, bot=None, why=""):
     if not _present(c):
         return []
     where, args = ("AND bot=?", (key, bot)) if bot else ("", (key,))
-    rows = H._rows(c.execute(f"SELECT * FROM task_reconnects WHERE key=? AND fixed_at IS NULL {where} "
-                             "ORDER BY created_at, task_id", args))
+    rows = H._rows(
+        c.execute(
+            f"SELECT * FROM task_reconnects WHERE key=? AND fixed_at IS NULL {where} ORDER BY created_at, task_id", args
+        )
+    )
     done, at = [], H.now()
     for wait in rows:
         standing = _standing(c, wait)
@@ -309,7 +395,10 @@ def _settle_requests(c, waits, at):
     for wait in waits:
         request = json.loads(wait["fix"] or "{}").get("request")
         if request:
-            c.execute("UPDATE credential_requests SET status='saved',updated_at=? WHERE id=? AND status='pending'", (at, request))
+            c.execute(
+                "UPDATE credential_requests SET status='saved',updated_at=? WHERE id=? AND status='pending'",
+                (at, request),
+            )
 
 
 def dropped(c, request_id):
@@ -317,8 +406,11 @@ def dropped(c, request_id):
     H = _H()
     if not request_id or not _present(c):
         return []
-    rows = H._rows(c.execute("SELECT * FROM task_reconnects WHERE fixed_at IS NULL AND json_extract(fix,'$.request')=?",
-                             (request_id,)))
+    rows = H._rows(
+        c.execute(
+            "SELECT * FROM task_reconnects WHERE fixed_at IS NULL AND json_extract(fix,'$.request')=?", (request_id,)
+        )
+    )
     closed = [w for w in rows if _close(c, w, "canceled")]
     return [w["task_id"] for w in closed if deliver(c, w["task_id"], why="canceled")]
 
@@ -326,6 +418,7 @@ def dropped(c, request_id):
 def _said(c, wait):
     if wait["ended"] == "canceled":
         from . import task_holds
+
         return f"{task_holds.name(c, wait['person'])} canceled the card for {wait['label']}: it was not saved."
     return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
 
@@ -334,11 +427,21 @@ def _claim_owed(c, task_id, owner):
     """The fixed or canceled cards on the task whose wake is still owed to `owner`, claimed for this one wake: a
     card opened for another owner is that owner's news, never the task's next owner's."""
     H = _H()
-    owed = H._rows(c.execute(f"SELECT * FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} ORDER BY fixed_at, key",
-                             (task_id, owner)))
+    owed = H._rows(
+        c.execute(
+            f"SELECT * FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} ORDER BY fixed_at, key",
+            (task_id, owner),
+        )
+    )
     at = H.now()
-    return [w for w in owed if c.execute(f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND key=? AND {OWED}",
-                                         (at, task_id, w["key"])).rowcount == 1]
+    return [
+        w
+        for w in owed
+        if c.execute(
+            f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND key=? AND {OWED}", (at, task_id, w["key"])
+        ).rowcount
+        == 1
+    ]
 
 
 def _unclaim(c, waits):
@@ -356,10 +459,12 @@ def deliver(c, task_id, why="", cleared=None):
         return False
     if row["status"] == "waiting" and H.waiting_for(c, row):
         from . import task_holds
+
         task_holds.refresh(c, task_id)
         return False
-    if not c.execute(f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1",
-                     (task_id, row["owner_id"])).fetchone():
+    if not c.execute(
+        f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1", (task_id, row["owner_id"])
+    ).fetchone():
         return False
     if not H._actor_exists(c, row["owner_id"]) or not H.task_private_readable(c, row["owner_id"], row):
         return False
@@ -371,7 +476,9 @@ def deliver(c, task_id, why="", cleared=None):
         # Back to the working step it held, without the generic assignment wake: the wake below tells it once.
         note = f"{cleared}; nothing left to wait on" if cleared else said
         step = H._one(c, "SELECT status FROM task_steps WHERE id=?", (row.get("step_id"),))
-        kept = row.get("step_id") if step and step["status"] in H.ACTIVE_STATUSES and step["status"] != "waiting" else None
+        kept = (
+            row.get("step_id") if step and step["status"] in H.ACTIVE_STATUSES and step["status"] != "waiting" else None
+        )
         H._set_status(c, H.KEEPER, row, "open", step=kept, note=note, skip_step_wake=(row["owner_id"],))
         c.execute("UPDATE tasks SET note=?,version=version+1 WHERE id=?", (note, row["id"]))
         row = H.task(c, row["id"])
@@ -380,8 +487,15 @@ def deliver(c, task_id, why="", cleared=None):
     H.event(c, H.KEEPER, "task.reconnected", row["id"], {"keys": keys, "why": why})
     head = "Reconnected" if all(w["ended"] == "fixed" for w in owed) else "Reconnect card closed"
     text = f"{head}: {row['title']}\n{said}" + (f" {cleared}." if cleared else "") + " Continue."
-    if not H._wake(c, row, row["owner_id"], text, refs={WAKE_REF: keys[0], "reconnects": keys},
-                   trigger="status_or_relation", source=keys[0]):
+    if not H._wake(
+        c,
+        row,
+        row["owner_id"],
+        text,
+        refs={WAKE_REF: keys[0], "reconnects": keys},
+        trigger="status_or_relation",
+        source=keys[0],
+    ):
         _unclaim(c, owed)
         return False
     return True
@@ -391,20 +505,25 @@ def fold_into(c, task_row, body, refs):
     """A wake to a task's owner while a reconnect wake is owed and no card still stands (a milestone, a hold that
     cleared by its own path): the owed lines ride on it, so the bot hears them once and is not woken twice
     (H._wake). Returns (body, refs)."""
-    if (refs or {}).get(WAKE_REF) or not _present(c) or not c.execute(
+    if (
+        (refs or {}).get(WAKE_REF)
+        or not _present(c)
+        or not c.execute(
             f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1",
-            (task_row["id"], task_row.get("owner_id"))).fetchone():
+            (task_row["id"], task_row.get("owner_id")),
+        ).fetchone()
+    ):
         return body, refs
     # Another hold still stands (a child, a question, another card): the wake its last clearing sends carries the news.
     from . import task_holds
+
     row = _H().task(c, task_row["id"])
     if not row or row["status"] == "waiting" and task_holds.holds(c, row):
         return body, refs
     owed = _claim_owed(c, task_row["id"], task_row.get("owner_id"))
     if not owed:
         return body, refs
-    return (f"{body}\n{' '.join(_said(c, w) for w in owed)}",
-            {**(refs or {}), "reconnects": [w["key"] for w in owed]})
+    return (f"{body}\n{' '.join(_said(c, w) for w in owed)}", {**(refs or {}), "reconnects": [w["key"] for w in owed]})
 
 
 def _release_sign_in_holds(c, bots):
@@ -412,6 +531,7 @@ def _release_sign_in_holds(c, bots):
     if not bots or not _H()._has_table(c, "run_backoff"):
         return
     from . import run_backoff
+
     for bot in sorted(bots):
         state = run_backoff.get(c, bot)
         if state.get("held_at") and state.get("error_class") == run_backoff.SIGN_IN:
@@ -432,8 +552,11 @@ def moved(c, task_id, field, old, new):
         if field == "status" or wait["owner"] != new:
             _retire(c, wait, refresh=False)
     # A fix still owed as a wake is news for the owner it was opened for, on a task still going: not after that.
-    c.execute(f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND {OWED}"
-              + ("" if field == "status" else " AND owner<>?"), (H.now(), task_id) + (() if field == "status" else (new,)))
+    c.execute(
+        f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND {OWED}"
+        + ("" if field == "status" else " AND owner<>?"),
+        (H.now(), task_id) + (() if field == "status" else (new,)),
+    )
 
 
 def bot_gone(c, bot):
@@ -451,8 +574,9 @@ def pending(c, task_id):
     if not _present(c):
         return None
     live, args = _live()
-    for row in c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created_at",
-                         (task_id, *args)).fetchall():
+    for row in c.execute(
+        f"SELECT * FROM task_reconnects r WHERE r.task_id=? AND {live} ORDER BY r.created_at", (task_id, *args)
+    ).fetchall():
         if _reads(c, row):
             return view(dict(row))
     return None
@@ -464,9 +588,15 @@ def tasks_for(c, person):
         return []
     H = _H()
     live, args = _live()
-    found = sorted((r["created_at"], r["task_id"]) for r in c.execute(
-        f"SELECT r.task_id, min(r.created_at) AS created_at, r.person FROM task_reconnects r WHERE r.person=? AND {live} "
-        "GROUP BY r.task_id", (person, *args)).fetchall() if _reads(c, r))
+    found = sorted(
+        (r["created_at"], r["task_id"])
+        for r in c.execute(
+            f"SELECT r.task_id, min(r.created_at) AS created_at, r.person FROM task_reconnects r WHERE r.person=? AND {live} "
+            "GROUP BY r.task_id",
+            (person, *args),
+        ).fetchall()
+        if _reads(c, r)
+    )
     rows = (H.task(c, task_id) for _, task_id in found)
     return [t for t in rows if t and t["status"] == "waiting"]
 
@@ -476,8 +606,11 @@ def hold(c, task_id):
     card = pending(c, task_id)
     if not card:
         return None
-    return {"why": f"{card['label']} to be reconnected" if card["service"] != "secret" else f"{card['label']} to be saved",
-            "on": card["person"], "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"]}
+    return {
+        "why": f"{card['label']} to be reconnected" if card["service"] != "secret" else f"{card['label']} to be saved",
+        "on": card["person"],
+        "what": ("save " if card["service"] == "secret" else "reconnect ") + card["label"],
+    }
 
 
 def for_tasks(c, task_ids, person):
@@ -490,8 +623,11 @@ def for_tasks(c, task_ids, person):
     out = {}
     for part in _H().chunks(ids):
         marks = ",".join("?" * len(part))
-        for row in c.execute(f"SELECT * FROM task_reconnects r WHERE r.task_id IN ({marks}) AND r.person=? AND {live} "
-                             "ORDER BY r.created_at", (*part, person, *args)).fetchall():
+        for row in c.execute(
+            f"SELECT * FROM task_reconnects r WHERE r.task_id IN ({marks}) AND r.person=? AND {live} "
+            "ORDER BY r.created_at",
+            (*part, person, *args),
+        ).fetchall():
             if row["task_id"] not in out and _reads(c, row):
                 out[row["task_id"]] = view(dict(row))
     return out
@@ -510,9 +646,13 @@ def bot_open(c, bot, prefix):
     if not _present(c):
         return False
     live, args = _live()
-    return any(_reads(c, r) for r in c.execute(
-        f"SELECT r.task_id, r.person FROM task_reconnects r WHERE r.bot=? AND r.owner=? AND r.key LIKE ? AND {live}",
-        (bot, _H().bot_actor(bot), prefix.replace("%", "") + "%", *args)).fetchall())
+    return any(
+        _reads(c, r)
+        for r in c.execute(
+            f"SELECT r.task_id, r.person FROM task_reconnects r WHERE r.bot=? AND r.owner=? AND r.key LIKE ? AND {live}",
+            (bot, _H().bot_actor(bot), prefix.replace("%", "") + "%", *args),
+        ).fetchall()
+    )
 
 
 def request_of(c, task_id, key):
@@ -520,9 +660,12 @@ def request_of(c, task_id, key):
     if not _present(c) or not _H()._has_table(c, "credential_requests"):
         return None
     live, args = _live()
-    row = c.execute(f"SELECT q.*, r.person AS card_person FROM task_reconnects r JOIN credential_requests q "
-                    f"ON q.id=json_extract(r.fix,'$.request') WHERE r.task_id=? AND r.key=? AND q.status='pending' "
-                    f"AND {live}", (task_id, key, *args)).fetchone()
+    row = c.execute(
+        f"SELECT q.*, r.person AS card_person FROM task_reconnects r JOIN credential_requests q "
+        f"ON q.id=json_extract(r.fix,'$.request') WHERE r.task_id=? AND r.key=? AND q.status='pending' "
+        f"AND {live}",
+        (task_id, key, *args),
+    ).fetchone()
     if not row or not _reads(c, {"person": row["card_person"], "task_id": task_id}):
         return None
     found = dict(row)
@@ -535,13 +678,19 @@ def waited_requests(c, bot, env):
     if not _present(c):
         return set()
     live, args = _live()
-    return {r["request"] for r in c.execute(
-        f"SELECT json_extract(r.fix,'$.request') AS request, r.task_id, r.person FROM task_reconnects r "
-        f"WHERE r.bot=? AND r.key=? AND {live}", (bot, secret_key(bot, env), *args)).fetchall() if _reads(c, r)}
+    return {
+        r["request"]
+        for r in c.execute(
+            f"SELECT json_extract(r.fix,'$.request') AS request, r.task_id, r.person FROM task_reconnects r "
+            f"WHERE r.bot=? AND r.key=? AND {live}",
+            (bot, secret_key(bot, env), *args),
+        ).fetchall()
+        if _reads(c, r)
+    }
 
 
 # ------------------------------------------------------------------------------------------------ the hooks
-DEFAULT_PROFILE = "_default"    # the computer's own login: profile names are [a-z0-9-], so no profile is called this
+DEFAULT_PROFILE = "_default"  # the computer's own login: profile names are [a-z0-9-], so no profile is called this
 
 
 def login_key(runner_id, runtime, profile=""):
@@ -556,9 +705,16 @@ def login_refused(c, settings, bot, runner_id, runtime, task_id, profile=""):
     task = _H().task(c, task_id)
     machine = (c.execute("SELECT label FROM runners WHERE id=?", (runner_id,)).fetchone() or [runner_id])[0]
     label = f"{runtime_name(runtime)} on {machine}" + (f" ({profile})" if profile else "")
-    return open(c, task_id, bot, login_key(runner_id, runtime, profile), "login", label,
-                person_for(c, settings, bot, task) if task else None,
-                {"kind": "login", "runner": runner_id, "runtime": runtime, "machine": machine, "profile": profile or ""})
+    return open(
+        c,
+        task_id,
+        bot,
+        login_key(runner_id, runtime, profile),
+        "login",
+        label,
+        person_for(c, settings, bot, task) if task else None,
+        {"kind": "login", "runner": runner_id, "runtime": runtime, "machine": machine, "profile": profile or ""},
+    )
 
 
 def login_works(c, runner_id, logins):
@@ -593,8 +749,9 @@ def login_report(c, runner_id, readiness):
     if not _present(c):
         return []
     ready = []
-    for (fix,) in c.execute("SELECT DISTINCT fix FROM task_reconnects WHERE fixed_at IS NULL AND key LIKE ?",
-                            (f"login:{runner_id}:%",)).fetchall():
+    for (fix,) in c.execute(
+        "SELECT DISTINCT fix FROM task_reconnects WHERE fixed_at IS NULL AND key LIKE ?", (f"login:{runner_id}:%",)
+    ).fetchall():
         fix = json.loads(fix or "{}")
         runtime, profile = fix.get("runtime"), fix.get("profile") or ""
         if _login_state(readiness, runtime, profile).get("authenticated") == "ready":
@@ -606,20 +763,29 @@ def _accounts(values):
     return list(dict.fromkeys(str(a).strip().lower() for a in values or () if a and str(a).strip()))
 
 
-def google_report(c, service, refused, listed=()):
+def google_report(c, service, refused, listed=(), ok=None):
     """One connector health report for `service` (mail or calendar): `refused` are the accounts whose Google sign-in
-    it was refused, `listed` every account it reports failing for any reason. A refused account's tasks get a card;
-    an account this service refused before and no longer lists works again for it (`google_good`)."""
+    it was refused, `listed` every account it reports failing for any reason. A refused account's tasks get a card.
+    An account this service refused before works again for it when `ok` names it as read by the reporting computer
+    (plan v4 P, v5 T: the caller passes only accounts no other fresh computer still fails). Without `ok` (an older
+    runner), it works again when no longer listed."""
     H = _H()
     ensure(c)
     refused = _accounts(refused)
     listed = set(_accounts(listed)) | set(refused)
     for account in refused:
-        c.execute("INSERT INTO google_signin_refusals(account,service,created_at) VALUES(?,?,?) "
-                  "ON CONFLICT(account,service) DO UPDATE SET created_at=excluded.created_at", (account, service, H.now()))
+        c.execute(
+            "INSERT INTO google_signin_refusals(account,service,created_at) VALUES(?,?,?) "
+            "ON CONFLICT(account,service) DO UPDATE SET created_at=excluded.created_at",
+            (account, service, H.now()),
+        )
     opened = google_failing(c, refused)
-    good = [a for (a,) in c.execute("SELECT account FROM google_signin_refusals WHERE service=?", (service,)).fetchall()
-            if a not in listed]
+    read = None if ok is None else set(_accounts(ok))
+    good = [
+        a
+        for (a,) in c.execute("SELECT account FROM google_signin_refusals WHERE service=?", (service,)).fetchall()
+        if a not in listed and (read is None or a in read)
+    ]
     google_good(c, service, good)
     return opened
 
@@ -650,6 +816,7 @@ def google_failing(c, accounts):
     """The connector says these mailboxes' Google sign-in was refused: the message bot that reads each one stops on
     the tasks it is working, or worked in the last RECENT_S."""
     from . import routines
+
     H = _H()
     accounts = set(_accounts(accounts))
     if not accounts:
@@ -662,11 +829,20 @@ def google_failing(c, accounts):
             continue
         bot = box["bot"]
         for (task_id,) in c.execute(
-                "SELECT DISTINCT u.task_id FROM turns u JOIN tasks t ON t.id=u.task_id WHERE u.bot=? AND t.owner_id=? "
-                "AND u.started_at>? AND (u.finished_at IS NULL OR u.finished_at>?)",
-                (bot, H.bot_actor(bot), H.shift(since, hours=-6), since)).fetchall():
-            row = open(c, task_id, bot, "google:" + address, "google", f"Google ({address})",
-                       H.human_actor(box["person_id"]), {"kind": "google", "account": address})
+            "SELECT DISTINCT u.task_id FROM attempts u JOIN tasks t ON t.id=u.task_id WHERE u.bot_id=? AND t.owner_id=? "
+            "AND u.created_at>? AND (u.settled_at IS NULL OR u.settled_at>?)",
+            (bot, H.bot_actor(bot), H.shift(since, hours=-6), since),
+        ).fetchall():
+            row = open(
+                c,
+                task_id,
+                bot,
+                "google:" + address,
+                "google",
+                f"Google ({address})",
+                H.human_actor(box["person_id"]),
+                {"kind": "google", "account": address},
+            )
             if row:
                 opened.append(task_id)
     return opened

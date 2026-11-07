@@ -1,0 +1,57 @@
+{
+  "created": [
+    {
+      "name": "Stripe failures and refunds to Finance",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "webhook",
+        "id": "trg_stripe"
+      },
+      "steps": [
+        {
+          "id": "gate",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "webhook.type",
+                  "op": "is",
+                  "value": "invoice.payment_failed"
+                }
+              ],
+              "to": "finance"
+            },
+            {
+              "when": [
+                {
+                  "field": "webhook.type",
+                  "op": "is",
+                  "value": "charge.refunded"
+                }
+              ],
+              "to": "finance"
+            }
+          ]
+        }
+      ],
+      "destinations": [
+        {
+          "id": "finance",
+          "name": "Finance",
+          "color": "green",
+          "then": [
+            {
+              "do": "create_task",
+              "args": {
+                "title": "Check the Stripe event"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

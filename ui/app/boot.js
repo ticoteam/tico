@@ -22,23 +22,35 @@ window.addEventListener('load', () => {
   });
   sw.register('/sw.js?v=41', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 });
+// The longest boot waits for the roster and /me before it says it couldn't load.
+const BOOT_ROSTER_WAIT_MS = 10000;
 (async () => {
+  bootMark('boot');
   let configVersion = nativeVisualVersion();
   // What the first page needs goes out first: a browser opens only a few connections to one server, so the
   // roster and the opening page's own read are not queued behind the sidebar's counts.
-  const roster = Promise.all([get('/employees'), get('/me'), get('/humans').catch(() => ({people: []}))]);
+  rdNavStart();                       // the sidebar memory's epoch, before /me goes out (redesign.js)
+  const employees = get('/employees'), meRead = get('/me');
+  // A roster or /me that never answers (a stalled connection, a hub that hangs) ends in the error card below, with
+  // Try again, rather than a page that waits for ever.
+  const late = new Promise((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
+    {timedOut: true})), BOOT_ROSTER_WAIT_MS));
+  const roster = Promise.race([Promise.all([employees, meRead, get('/humans').catch(() => ({people: []}))]), late]);
+  bootSnapShow(meRead);              // the last screen, as soon as /me says it is this person's (boot-snap.js)
   updPrefetch();
-  // Health and sidebar counts enrich the page; a slow diagnostic must not hold up opening a chat or task.
-  const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; cloudAccessFromStatus(); });
-  const counts = v2Refresh();
+  dashPrefetch();
   try {
     const [emps, me, people] = await roster;
+    bootMark('roster');
+    rdNavWho(me);                      // the sidebar rows kept for someone else go before this config draws them (redesign.js)
     if (authenticatedConfigPerson(me)) {
-      const applied = applyAuthenticatedConfig(me.config, configVersion);
-      configVersion = nativeVisualVersion();
-      const accepted = await applied;
-      if (!accepted || SESSION.out || accepted.version !== nativeVisualVersion()) return;
-      configVersion = accepted.version;  // the helper may have queued its own timeout clear
+      if (SESSION.out || configVersion !== nativeVisualVersion()) return;
+      // The page opens on this config now. Only trust for visual frames waits for the desktop app's answer: until
+      // it, a visual is a file chip or an Open card (visual-cards.js), and an accepted answer applies the config
+      // again and redraws the open threads with it (state.js applyAuthenticatedConfig, nativeVisualRepaint).
+      applyConfig(me.config);
+      bootSnapWho(me);
+      void applyAuthenticatedConfig(me.config, configVersion).then(done => { if (done) bootMark('native-ack'); });
     } else {
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
       const cleared = clearNativeVisualOrigin();
@@ -48,6 +60,7 @@ window.addEventListener('load', () => {
       applyConfig(me?.config);          // an older response may name the page, but cannot grant native navigation
     }
     S.emps = namedRoster(emps); S.me = me; setPeople(people);
+    sessionReturn();                  // restore drafts only after the authenticated org and person are known
     renderVersionMessage();            // once per person, so it waits for who is signed in
   } catch (e) {
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
@@ -55,7 +68,14 @@ window.addEventListener('load', () => {
     configVersion = nativeVisualVersion();
     await cleared;
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
-    $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico server start</code> in the Tico repo, or install it with <code>scripts/tico server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
+    bootSnapHandOff(); bootSnapRelease();
+    askSync();                         // no one to ask for: Ask's row, there from the first paint, goes (ask-panel.js)
+    if (e.timedOut) {
+      $('#main').innerHTML = `<section class="card"><h2>Couldn't load Tico</h2><p class="err">${esc(e.message)}</p><button type="button" data-boot-retry>Try again</button></section>`;
+      $('#main [data-boot-retry]').onclick = () => location.reload();
+      return;
+    }
+    $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico-computer server start</code> in the Tico repo, or install it with <code>scripts/tico-computer server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
     return;
   }
   if (S.me?.cloud) {
@@ -73,7 +93,15 @@ window.addEventListener('load', () => {
   window.hlBoot?.();
   // A team that has never been set up opens on its first run, not on an empty Chat.
   if (BOOT_DEFAULT_ROUTE && S.config.onboarding_needed) history.replaceState(null, '', WELCOME);
+  bootSnapHandOff();                 // a kept screen stays up, still, until this one settles
   route(); renderHeartbeat(); renderAccount();
+  bootMark('route');
+  // Health and sidebar counts enrich the page, so they go out once the roster is in and the page has asked for its own
+  // data: started alongside the roster they took the hub's time from it (Tico Team, Nov 4: roster 660-860 ms with them,
+  // 225-390 ms without), and every page waits on the roster.
+  const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; cloudAccessFromStatus(); });
+  const counts = v2Refresh();
+  bootPaintWatch();                  // marks the first screen with data and reports the open (boot-timing.js)
   sessionResume();                   // back from signing in: the task that was open opens again (session.js)
   void Promise.all([status, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();

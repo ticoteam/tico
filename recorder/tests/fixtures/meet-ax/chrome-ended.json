@@ -1,0 +1,74 @@
+{
+  "children" : [
+    {
+      "children" : [
+        {
+          "children" : [
+            {
+              "children" : [
+                {
+                  "children" : [
+                    {
+                      "children" : [
+                        {
+                          "children" : [
+                            {
+                              "children" : [
+                                {
+                                  "children" : [
+
+                                  ],
+                                  "classes" : [
+                                    "dkjMxf"
+                                  ],
+                                  "role" : "AXGroup"
+                                }
+                              ],
+                              "classes" : [
+
+                              ],
+                              "role" : "AXGroup"
+                            }
+                          ],
+                          "classes" : [
+
+                          ],
+                          "role" : "AXGroup"
+                        }
+                      ],
+                      "classes" : [
+
+                      ],
+                      "role" : "AXGroup"
+                    }
+                  ],
+                  "classes" : [
+
+                  ],
+                  "role" : "AXGroup"
+                }
+              ],
+              "classes" : [
+
+              ],
+              "role" : "AXGroup"
+            }
+          ],
+          "classes" : [
+
+          ],
+          "role" : "AXGroup"
+        }
+      ],
+      "classes" : [
+
+      ],
+      "role" : "AXGroup"
+    }
+  ],
+  "classes" : [
+
+  ],
+  "provenance" : "Read-only Chrome AX capture; names anonymized in memory; visual state classes are uninterpreted",
+  "role" : "AXGroup"
+}

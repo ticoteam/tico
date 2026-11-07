@@ -1,21 +1,27 @@
-/* Market is a Strategy tab (ui/strategy-page.js): a note and the graph of who connects to whom. It is not the Docs
-   library. */
+/* Market is a Strategy tab (ui/strategy-page.js): one page of five questions (ui/app/redesign-market.js) and, behind
+   Open map, the note and the graph of who connects to whom. It is not the Docs library. */
 'use strict';
-let MARKET_VIEW = null;
+let MARKET_VIEW = null;   // what is mounted: {kind: 'page' | 'map', shell, open(at), stop()}
 // Old #/market links land here (ui/app/router.js), keeping their query or note path.
 const MARKET_ROUTE = '#/strategy/market';
+const MARKET_MAP = MARKET_ROUTE + '/map';
 const isMarketRoute = r => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
-
-// The tab's views (ui/market-spend.js draws all but the first). #/strategy/market/<key> opens one; a note id always
-// has a slash in it, so a bare key is never a note. A bare #/strategy/market is the briefing (ui/app/redesign.js);
-// a link to a note opens the graph.
-const MARKET_VIEWS = [['players', 'Players'], ['spend', 'Spend'], ['buyers', 'Buyers'], ['value-chain', 'Value chain'], ['growth', 'Size vs growth']];
-function marketRouteView(route) {
-  if (!route.startsWith(MARKET_ROUTE + '/')) return '';
-  const key = route.slice(MARKET_ROUTE.length + 1).split('?')[0];
-  return MARKET_VIEWS.some(([k]) => k === key) ? key : '';
-}
+// The tab's old views each land on the page at their question; Players opens the map. A note id always has a slash
+// in it, so a bare key is never a note.
+const MARKET_SECTIONS = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach', listening: 'saying'};
 let MARKET_PAGE = 0;
+
+// Where an address goes: {kind: 'page', section, dimension} or {kind: 'map', note}.
+function marketAt(route) {
+  const [path, query] = route.slice(MARKET_ROUTE.length).split('?');
+  const note = new URLSearchParams(query || '').get('note');
+  const key = path.replace(/^\//, '');
+  if (note) return {kind: 'map', note};
+  if (!key) return {kind: 'page', section: ''};
+  if (MARKET_SECTIONS[key]) return {kind: 'page', section: MARKET_SECTIONS[key], dimension: key === 'buyers' ? 'buyer' : ''};
+  if (key === 'map' || key === 'players') return {kind: 'map', note: MARKET_BRIEF};
+  return {kind: 'map', note: decodeURIComponent(key)};
+}
 
 const MARKET_TYPES = [
   ['company', 'Organizations'],
@@ -67,9 +73,8 @@ document.head.appendChild(marketStyle);
 const marketSelfId = () => (typeof S !== 'undefined' && S.status && S.status.company_entity) || 'company/self';
 
 function marketNoteId() {
-  if (marketRouteView(S.route)) return MARKET_BRIEF;
-  if (S.route.startsWith(MARKET_ROUTE + '/')) return decodeURIComponent(S.route.slice(MARKET_ROUTE.length + 1).split('?')[0]);
-  return new URLSearchParams((S.route.split('?')[1] || '')).get('note') || MARKET_BRIEF;
+  const at = marketAt(S.route);
+  return at.kind === 'map' ? at.note : MARKET_BRIEF;
 }
 
 function marketHref(id) {
@@ -79,17 +84,7 @@ function marketHref(id) {
 window.marketStop = function marketStop() {
   MARKET_PAGE++;
   if (MARKET_VIEW) MARKET_VIEW.stop();
-  window.marketViewsStop?.();
 };
-
-// The view switch sits where the section's heading keeps its actions.
-function marketViewSwitch(view) {
-  const box = $('#strat-actions');
-  // The Briefing is the tab's first view and Listening its last (ui/app/redesign-market.js).
-  const views = [['briefing', 'Briefing'], ...MARKET_VIEWS, ...(settingsIsAdmin() ? [['listening', 'Listening']] : [])];
-  if (box) box.innerHTML = `<nav class="mkt-views" aria-label="Market views">${views.map(([key, label]) =>
-    `<a href="${MARKET_ROUTE}/${key}" data-market-view="${key}"${key === view ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
-}
 
 // Draws the page again from the server, when the research notice sees the market's first content.
 window.marketReload = function marketReload() {
@@ -99,35 +94,37 @@ window.marketReload = function marketReload() {
   void pageMarket();
 };
 
+// The page and the map share one mount: moving within the page only scrolls it, and a note opens inside the map.
 window.pageMarket = async function pageMarket() {
-  const page = ++MARKET_PAGE;
+  const page = ++MARKET_PAGE, at = marketAt(S.route);
   $('#main').classList.add('market-layout');
-  const view = marketRouteView(S.route);
-  if (view && view !== 'players') {
+  if (!MARKET_VIEW || MARKET_VIEW.kind !== at.kind || !document.body.contains(MARKET_VIEW.shell)) {
     if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
-    if (!$('#market-views')) $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-views" class="mkt-host"></div>';
-    marketViewSwitch(view);
-    window.marketViewsMount($('#market-views'), view);
-    return;
-  }
-  window.marketViewsStop?.();
-  const note = marketNoteId();
-  if (!MARKET_VIEW || !document.body.contains(MARKET_VIEW.shell)) {
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
-    $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-shell" class="market-shell"><p class="market-loading">Opening the market…</p></div>';
-    marketViewSwitch('players');
+    $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + `<div id="market-shell" class="${at.kind === 'map' ? 'market-shell' : 'mkt-host mkt-page'}"><p class="market-loading">Opening the market…</p></div>`;
+    if (at.kind === 'map') $('#strat-actions').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
     const shell = $('#market-shell');
     try {
-      const mounted = await mountMarket(shell);
-      if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another view or note was asked for meanwhile
-      MARKET_VIEW = mounted;
+      const mounted = await (at.kind === 'map' ? mountMarket(shell) : mountMarketPage(shell));
+      if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another address was asked for meanwhile
+      MARKET_VIEW = {...mounted, kind: at.kind};
     } catch (error) {
-      shell.innerHTML = `<p class="market-loading">${esc(error.message || 'The market graph did not load.')}</p>`;
+      shell.innerHTML = `<p class="market-loading">${esc(error.message || 'The market did not load.')}</p>`;
       return;
     }
   }
-  await MARKET_VIEW.open(note);
+  await MARKET_VIEW.open(at.kind === 'map' ? at.note : at);
 };
+
+// The market has content once it has an active entity, or a page the seed did not write ("None in the seed."). Until
+// then, and while the research notice shows, Market is its empty state. Returns the pages it may list.
+function marketBlank(count, docs) {
+  const pages = (docs || []).filter(doc => count || !doc.seeded);
+  let researching = marketResearchGet();
+  const blank = !count && !pages.length;
+  if (researching && !blank && Date.now() - Number(researching.at) >= MARKET_RESEARCH_MIN) { marketResearchSet(null); researching = null; }
+  return {blank: blank || !!researching, pages};
+}
 
 async function mountMarket(shell) {
   const today = new Date().toISOString().slice(0, 10);
@@ -144,12 +141,9 @@ async function mountMarket(shell) {
   const byId = new Map(nodes.map(row => [row.id, row]));
   const links = initial.edges || [];
   (listing.entities || []).forEach(row => byId.set(row.id, row));
-  // A fresh install starts with pages the seed wrote ("None in the seed."): they are not shown until the graph has rows.
-  const pages = (library.documents || []).filter(doc => nodes.length || !doc.seeded).sort((a, b) => a.title.localeCompare(b.title));
-  let researching = marketResearchGet();
-  const blank = !nodes.length && !pages.length;
-  if (researching && !blank && Date.now() - Number(researching.at) >= MARKET_RESEARCH_MIN) { marketResearchSet(null); researching = null; }
-  if (blank || researching) return await mountBlank(shell);
+  const {blank, pages} = marketBlank(nodes.length, library.documents);
+  if (blank) return await mountBlank(shell);
+  pages.sort((a, b) => a.title.localeCompare(b.title));
   shell.innerHTML = `<aside class="market-list" aria-label="Market notes">
       <a id="market-overview" class="market-overview-btn" href="${marketHref(MARKET_BRIEF)}">Overview</a>
       <input id="market-filter" type="search" placeholder="Search the market" aria-label="Search the market" autocomplete="off">
@@ -364,7 +358,7 @@ async function mountBlank(shell) {
   };
   const draw = () => {
     const row = marketResearchGet();
-    shell.classList.add('market-shell-blank');
+    shell.className = 'market-shell market-shell-blank';
     shell.innerHTML = marketBlankHtml(row, setup);
     watch(!!row);
     if (!row) shell.querySelector('#market-answer')?.focus();

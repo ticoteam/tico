@@ -3,22 +3,20 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant ("Tico Assistant" here), to the helpers behind it (BotOps,
-// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.js), opened by the ? beside Search. On a computer the "Ask Tico" row at the bottom of the sidebar
+// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.js), opened by the ? beside Search. On a computer the "Tico Assistant" row at the bottom of the sidebar
 // (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
 // the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"
-// means. Like the Updates chat it keeps its own small state, never the bot pages' (chat.js V2C), and drops the
+// means. It keeps its own small state, never the bot pages' (chat.js V2C), and drops the
 // Assistant page's cached copy when it sends.
 // What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
 // card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
-// answered here or by telling the Assistant. A peek beside the closed dot says, in Tico's words, that something waits.
-const ASK_PEEKS = 'tico.ask.peek';
+// answered here or by telling the Assistant.
 const ASK_MANAGE = "We'd like Tico to fully manage our company.";
 let ASK = null;
 const ASK_CARDS_MAX = 3;
 // The panel's name: "Tico Assistant", or the name a team gave its assistant.
 const askName = () => myChatName() === CONFIG_DEFAULTS.assistant_name ? 'Tico Assistant' : myChatName();
-const ASK_LOADED = Date.now();
 const askPhone = () => matchMedia('(max-width:760px)').matches;
 // The page the person is looking at: its heading, else the address.
 function askPage() {
@@ -27,31 +25,35 @@ function askPage() {
   return {path: path.slice(0, 300), title: heading.slice(0, 200)};
 }
 // The Assistant page is this chat already, and setup has no room for it.
-const askAway = () => !S.me || S.route === ASSISTANT || document.body.classList.contains('in-setup');
+const askAway = () => !S.me || S.route === ASSISTANT || document.documentElement.classList.contains('in-setup');
 // Open or closed is a class, never `hidden`: the app's `:has(… :not([hidden]))` rules make any change of a `hidden`
 // attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
 // (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
 // (ask.css). Nothing else on the way in or out writes a `hidden` (or text) it does not change (askSet); what shows
-// and goes with it (the peek, the page it sees) does so by a class, `ask-on` (askOn).
+// and goes with it (the page it sees) does so by a class, `ask-on` (askOn).
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
+// The row is there from the first paint (index.html); a click before /me answers opens Ask once the first page is
+// drawn (router.js calls askSync), and boot that never gets a person hides the row (boot.js).
+let ASK_EARLY = false;
 function askSync() {
   const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');
   if (!row || !panel) return;
+  if (ASK_EARLY && S.me) { ASK_EARLY = false; if (!askAway()) { askToggle(true); return; } }
   const name = askName(), away = askAway(), open = !!ASK?.open && !away;
   askSet(row, 'hidden', away);
+  document.documentElement.classList.toggle('ask-away', away);   // ui/theme.js set it for the first paint
   if (askShown() !== open) { panel.classList.toggle('ask-shown', open); panel.inert = !open; }
   document.body.classList.toggle('ask-open', open);
   askSet(row, 'title', name + ' (⌘J)');
   // While the panel is open a close mark holds the row's (and the phone tab's) dot place (ask.css).
   for (const el of [row, tab].filter(Boolean)) {
     el.setAttribute('aria-expanded', String(open));
-    if (open) el.setAttribute('aria-label', 'Close Ask Tico'); else el.removeAttribute('aria-label');
+    if (open) el.setAttribute('aria-label', 'Close Tico Assistant'); else el.removeAttribute('aria-label');
   }
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
-  askPeek();
   if (panel.getAttribute('aria-label') !== name) panel.setAttribute('aria-label', name);
   askSet(panel.querySelector('#ask-title'), 'textContent', name);
   if (!open) return;
@@ -138,7 +140,7 @@ function askClick(ev) {
 // question with a line of words; several picks at once, or several questions, open the task.
 function askQuestions() {
   const me = myActor();
-  return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.recipient_id === me
+  return (S.v2?.needs || []).filter(it => it.kind === 'question' && it.ask?.recipient_id === me
     && it.ask.sender_id !== me).slice(0, ASK_CARDS_MAX);
 }
 // Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
@@ -171,7 +173,6 @@ async function askAnswer(card, {pick, text}) {
   if (!it || card.dataset.busy) return;
   const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
   const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick].label])
-    : it.kind === 'ask' ? [{path: `/v2/messages/${encodeURIComponent(it.id)}/answer`, body: {text}}]
     : [{path: `/v2/tasks/${encodeURIComponent(it.id)}/comments`, body: {text}}];
   card.dataset.busy = '1';
   card.querySelectorAll('button, input, select').forEach(el => { el.disabled = true; });
@@ -187,68 +188,6 @@ async function askAnswer(card, {pick, text}) {
     card.querySelectorAll('button, input, select').forEach(el => { el.disabled = false; });
   }
 }
-
-// ---- Peeks (ask-rules.js askPeekFresh, askPeekLine): one short line beside the closed dot, Tico saying something waits
-// on the person: bots' questions, or a Confirm card once the chat has read them. Tapping it opens the chat at the first.
-const askPeekKey = () => ASK_PEEKS + '.' + (S.me?.id || 'me');
-function askPeekStore() {
-  try { const v = JSON.parse(localStorage.getItem(askPeekKey()) || '{}'); return askPeekTidy(v && typeof v === 'object' ? v : {}); }
-  catch { return askPeekTidy({}); }
-}
-function askPeekSave(store) {
-  try { localStorage.setItem(askPeekKey(), JSON.stringify(askPeekTidy(store))); } catch { /* this page only */ }
-}
-const askTypes = a => !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(a.type)));
-const askTyping = () => askTypes(document.activeElement);
-let ASK_PEEK_TIMER = 0;
-// On a computer the peek sits just past the rail, level with the Ask row (ask.css --ask-row-y). Measured only while a
-// peek shows, never on the way in or out of the panel.
-function askPeekPlace(el) {
-  const r = !askPhone() && $('#ask-row')?.getBoundingClientRect();
-  if (r?.height) el.style.setProperty('--ask-row-y', `${Math.round(innerHeight - r.bottom + r.height / 2)}px`);
-}
-function askPeek() {
-  const el = $('#ask-peek');
-  if (!el) return;
-  clearTimeout(ASK_PEEK_TIMER);
-  const now = Date.now(), open = !!ASK?.open, away = askAway() || !S.me;
-  const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
-    .concat((ASK?.pending || []).map(a => ({id: 'confirm:' + a.id, confirm: true})));
-  const store = askPeekStore(), cur = el.dataset.item;
-  if (open || away) { askOn(el, false); delete el.dataset.item; return; }
-  if (cur && el.classList.contains('ask-on') && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) { askPeekPlace(el); return; }
-  const {text, ids} = askPeekLine(askPeekFresh(items, {now, loadedAt: ASK_LOADED, typing: askTyping(), open, dismissed: store.dismissed, shown: store.shown}));
-  if (!text) {
-    askOn(el, false); delete el.dataset.item;
-    if (now - ASK_LOADED < ASK_PEEK_WAIT_MS) ASK_PEEK_TIMER = setTimeout(askPeek, ASK_PEEK_WAIT_MS - (now - ASK_LOADED) + 50);
-    return;
-  }
-  el.querySelector('[data-peek-text]').textContent = text;
-  el.querySelector('[data-peek-go]').setAttribute('aria-label', text + '. Open ' + askName());
-  el.dataset.item = ids[0];
-  el.dataset.items = ids.join(' ');
-  askPeekPlace(el);
-  askOn(el, true);
-  askPeekSave({...store, shown: {...store.shown, ...Object.fromEntries(ids.map(id => [id, now]))}});
-  ldotMove(askLiveDot(), 'hop');
-}
-// Dismissed or tapped, the line is done with every item it spoke for.
-function askPeekDone() {
-  const el = $('#ask-peek'), store = askPeekStore();
-  askPeekSave({...store, dismissed: [...store.dismissed, ...(el.dataset.items || '').split(' ').filter(Boolean)]});
-  askOn(el, false); delete el.dataset.item;
-}
-$('#ask-peek')?.addEventListener('click', ev => {
-  const el = $('#ask-peek'), id = el.dataset.item;
-  if (!id) return;
-  if (ev.target.closest('[data-peek-x]')) { askPeekDone(); return; }
-  if (!ev.target.closest('[data-peek-go]')) return;
-  askPeekDone();
-  ASK ||= {open: false, mounted: false};
-  ASK.focusQ = id;
-  askToggle(true, false);
-  ASK.draw?.();
-});
 
 async function askLoad(chat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
@@ -271,8 +210,7 @@ async function askLoad(chat) {
     // What waits on the person sits where it was asked, among the rest: Confirm cards left in other chats (BotOps'),
     // and bots' questions. One with no time comes last.
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
-    chat.pending = pending.filter(a => !here.has(a.id));   // the cards the thread shows, so a peek only points at those
-    const cards = chat.pending.map(a => ({at: a.created_at || late,
+    const cards = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
       .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
     const listed = new Set(asks.map(it => { const q = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
@@ -292,7 +230,7 @@ async function askLoad(chat) {
     else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
       `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
-    // Compared without the messages' "2m ago" (format.js agoStill): those move in place.
+    // Compared without the messages' "2m ago" (format.ts agoStill): those move in place.
     if (agoStill(html) === rendered) agoTick(thread);
     else {
       stickScroll(thread).update(() => {
@@ -306,10 +244,6 @@ async function askLoad(chat) {
     const wl = working && thread.querySelector('[data-ask-working]');
     if (wl) wl.textContent = working;
     chat.drawn = true;
-    // Opened from a peek: the card it spoke of, in view.
-    const fq = chat.focusQ || '', q = fq && thread.querySelector(fq.startsWith('confirm:')
-      ? `[data-action-host="${CSS.escape(fq.slice(8))}"]` : `[data-ask-q="${CSS.escape(fq)}"]`);
-    if (q) { chat.focusQ = ''; q.scrollIntoView({block: 'nearest'}); if (!askPhone()) q.querySelector('input, button, a')?.focus(); }
   };
   chat.draw = draw;
   // The whole chat again, with the Confirm cards waiting in other chats.
@@ -389,8 +323,8 @@ function askRowsIn(thread, seen, animate) {
       {duration: 260, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards'});
   }
 }
-$('#ask-row')?.addEventListener('click', () => askToggle());
-$('#mobile-ask')?.addEventListener('click', () => askToggle());
+$('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
+$('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
 $('#ask-panel')?.addEventListener('change', ev => {
   const choose = ev.target.closest('[data-ask-choose]');
@@ -423,13 +357,10 @@ document.addEventListener('click', ev => {
   ev.preventDefault();
   if (a.getAttribute('href').includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
 }, true);
-// Typing anywhere holds a peek back; it may come once the box is left.
-document.addEventListener('focusout', ev => { if (askTypes(ev.target)) setTimeout(askPeek, 0); });
-liveOn('needs-list', () => { ASK?.draw?.(); askPeek(); });
+liveOn('needs-list', () => { ASK?.draw?.(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
 // On a phone Ask is a page of its own: another tab, even the one already under it, leaves it.
 document.addEventListener('click', ev => {
   if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
-setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);

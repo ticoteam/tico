@@ -6,6 +6,7 @@ code, and a substituted value is never read again as a template, so a payload ca
 number or text is written as it is, true/false/null as JSON, and an object or a list as compact JSON. The output is
 cut at `cap` characters with " … (cut)".
 """
+
 import json
 import re
 
@@ -49,7 +50,7 @@ def text_of(value):
 def clip(text, cap):
     if len(text) <= cap:
         return text
-    return text[:max(0, cap - len(CUT))] + CUT
+    return text[: max(0, cap - len(CUT))] + CUT
 
 
 def render(template, values, *, cap=4096):
@@ -65,7 +66,7 @@ def render_json(template, values, *, cap=65536):
     """`template` (an object, list or text) with every string rendered. Keys stay as written. When the result is
     over `cap` characters as JSON, the longest strings are cut (with " … (cut)") until it fits, so it stays valid."""
     values = values if isinstance(values, dict) else {}
-    leaves = []         # (container, key) of every rendered string, to cut the longest first
+    leaves = []  # (container, key) of every rendered string, to cut the longest first
 
     def walk(node, depth=0):
         if depth > 12:

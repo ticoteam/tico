@@ -22,10 +22,27 @@ import fnmatch, re
 
 from . import INTERNAL_DOMAIN, Failure, RULES_FILE, duration, load_yaml, now_utc
 
-CONDITIONS = ("has_unsubscribe_link", "from_matches", "from_domain", "to_matches", "cc_matches",
-              "subject_matches", "body_matches", "subject_or_body_matches", "has_attachment_type",
-              "older_than", "is_internal", "last_reply_by", "has_label", "list_id_present",
-              "is_calendar_invite", "from_skip_list", "from_internal", "decision", "judge")
+CONDITIONS = (
+    "has_unsubscribe_link",
+    "from_matches",
+    "from_domain",
+    "to_matches",
+    "cc_matches",
+    "subject_matches",
+    "body_matches",
+    "subject_or_body_matches",
+    "has_attachment_type",
+    "older_than",
+    "is_internal",
+    "last_reply_by",
+    "has_label",
+    "list_id_present",
+    "is_calendar_invite",
+    "from_skip_list",
+    "from_internal",
+    "decision",
+    "judge",
+)
 ACTIONS = ("label", "archive", "mark_read", "star", "never_archive", "stop", "unsubscribe")
 NEEDS_THREAD = ("last_reply_by",)
 # `decision` (`judge` is the old spelling): what the decision model said about the message, from a question set in the hub's questions/
@@ -37,6 +54,7 @@ JUDGE_KEYS = ("set", "question", "is", "min", "max")
 
 
 # ---------------------------------------------------------------- loading
+
 
 def as_list(v):
     if v is None:
@@ -63,12 +81,16 @@ def skip_list(data):
 def mailboxes_map(data, what):
     boxes = data.get("mailboxes")
     if not isinstance(boxes, dict):
-        raise Failure(f"{what} has no `mailboxes:` map",
-                      "Top level is `mailboxes:` with a `common:` list and one list per address.")
+        raise Failure(
+            f"{what} has no `mailboxes:` map",
+            "Top level is `mailboxes:` with a `common:` list and one list per address.",
+        )
     unknown = [k for k in boxes if k != "common" and "@" not in str(k)]
     if unknown:
-        raise Failure(f"{what}: {', '.join(map(str, unknown))} is not a mailbox",
-                      "Keys under `mailboxes:` are `common` or an email address.")
+        raise Failure(
+            f"{what}: {', '.join(map(str, unknown))} is not a mailbox",
+            "Keys under `mailboxes:` are `common` or an email address.",
+        )
     return boxes
 
 
@@ -98,29 +120,29 @@ def load(path=None, mailbox=None, bot_path=None):
 
 def validate(rule, skip=None):
     if not isinstance(rule, dict):
-        raise Failure(f"registry/mail-rules.yaml: {rule!r} is not a rule",
-                      "Each rule is a mapping with id, when, and do.")
+        raise Failure(
+            f"registry/mail-rules.yaml: {rule!r} is not a rule", "Each rule is a mapping with id, when, and do."
+        )
     rid = str(rule.get("id") or "").strip()
     if not rid:
-        raise Failure(f"registry/mail-rules.yaml: a rule has no id ({rule!r})",
-                      "Every rule needs an id; the audit log records it.")
+        raise Failure(
+            f"registry/mail-rules.yaml: a rule has no id ({rule!r})",
+            "Every rule needs an id; the audit log records it.",
+        )
     when, do = rule.get("when") or {}, rule.get("do") or {}
     if not isinstance(when, dict) or not isinstance(do, dict):
         raise Failure(f"rule {rid}: `when` and `do` must be mappings")
     for k in when:
         if k not in CONDITIONS:
-            raise Failure(f"rule {rid}: unknown condition {k!r}",
-                          "Known conditions: " + ", ".join(CONDITIONS))
+            raise Failure(f"rule {rid}: unknown condition {k!r}", "Known conditions: " + ", ".join(CONDITIONS))
     for k in do:
         if k not in ACTIONS:
-            raise Failure(f"rule {rid}: unknown action {k!r}",
-                          "Known actions: " + ", ".join(ACTIONS))
+            raise Failure(f"rule {rid}: unknown action {k!r}", "Known actions: " + ", ".join(ACTIONS))
     if not when:
-        raise Failure(f"rule {rid}: `when` is empty",
-                      "A rule with no conditions would match every message.")
+        raise Failure(f"rule {rid}: `when` is empty", "A rule with no conditions would match every message.")
     if not do:
         raise Failure(f"rule {rid}: `do` is empty")
-    if "decision" in when:                      # `judge` is the old spelling; both are read
+    if "decision" in when:  # `judge` is the old spelling; both are read
         if "judge" in when:
             raise Failure(f"rule {rid}: `decision` and `judge` are the same condition; use `decision`")
         when = {("judge" if k == "decision" else k): v for k, v in when.items()}
@@ -147,23 +169,30 @@ def validate_judge(rid, spec):
         if k in spec and (isinstance(spec[k], bool) or not isinstance(spec[k], (int, float))):
             raise Failure(f"rule {rid}: decision {k} is a number", example)
     from .judge import J
+
     try:
         chosen = J.load_set(str(spec["set"]))
     except J.JudgeError as exc:
         raise Failure(f"rule {rid}: decision set: {exc.detail}", "Sets are questions/<name>.json in the hub.")
     question = chosen["questions"].get(str(spec["question"]))
     if not question:
-        raise Failure(f"rule {rid}: {chosen['id']} has no question {spec['question']!r}",
-                      "Questions: " + ", ".join(chosen["questions"]))
+        raise Failure(
+            f"rule {rid}: {chosen['id']} has no question {spec['question']!r}",
+            "Questions: " + ", ".join(chosen["questions"]),
+        )
     if any(q.get("dynamic") for q in chosen["questions"].values()):
         raise Failure(f"rule {rid}: {chosen['id']} has a dynamic choice; a rule cannot complete one")
     if "is" in spec:
         if question["type"] != "choice":
-            raise Failure(f"rule {rid}: `is` names an option, and {spec['question']} is a {question['type']}",
-                          "Use min/max on a noul or a score.")
+            raise Failure(
+                f"rule {rid}: `is` names an option, and {spec['question']} is a {question['type']}",
+                "Use min/max on a noul or a score.",
+            )
         if str(spec["is"]) not in question["criteria"]:
-            raise Failure(f"rule {rid}: {spec['question']} has no option {spec['is']!r}",
-                          "Options: " + ", ".join(question["criteria"]))
+            raise Failure(
+                f"rule {rid}: {spec['question']} has no option {spec['is']!r}",
+                "Options: " + ", ".join(question["criteria"]),
+            )
     elif question["type"] == "choice":
         raise Failure(f"rule {rid}: {spec['question']} is a choice; say which option with `is`")
     out = {"set": chosen["id"], "question": str(spec["question"]), "type": question["type"]}
@@ -181,6 +210,7 @@ def uses_judge(rules):
 
 
 # ---------------------------------------------------------------- matching (pure)
+
 
 def matches_pattern(value, pattern):
     """A pattern with a glob character is a glob; anything else is a substring."""
@@ -210,8 +240,7 @@ def domain_of(addr):
 
 def in_domain(addr, domains):
     d = domain_of(addr)
-    return any(d == x or d.endswith("." + x)
-               for x in (str(v).strip().lower().lstrip("@") for v in as_list(domains)))
+    return any(d == x or d.endswith("." + x) for x in (str(v).strip().lower().lstrip("@") for v in as_list(domains)))
 
 
 def attachment_matches(atts, kinds):
@@ -235,8 +264,7 @@ def check(key, want, msg, now, rule=None):
         skip = (rule or {}).get("skip") or {"addresses": [], "domains": []}
         addr = str(msg.get("from") or "").lower()
         header = str(msg.get("from_header") or "")
-        hit = any_pattern([addr, header], skip.get("addresses") or []) or in_domain(
-            addr, skip.get("domains") or [])
+        hit = any_pattern([addr, header], skip.get("addresses") or []) or in_domain(addr, skip.get("domains") or [])
         return hit == bool(want), f"from {addr!r} vs skip {skip}"
     if key == "has_unsubscribe_link":
         got = bool(msg.get("unsubscribe"))
@@ -307,7 +335,7 @@ def check(key, want, msg, now, rule=None):
             ok = ok and measure <= float(want["max"])
         bounds = " ".join(f"{k} {want[k]}" for k in ("is", "min", "max") if k in want)
         return ok, f"{name} = {value} ({confidence:.2f}) vs {bounds}"
-    raise Failure(f"unknown condition {key!r}")          # pragma: no cover - validate() guards
+    raise Failure(f"unknown condition {key!r}")  # pragma: no cover - validate() guards
 
 
 def fires(rule, msg, now=None):
@@ -324,11 +352,21 @@ def fires(rule, msg, now=None):
 
 # ---------------------------------------------------------------- the engine
 
+
 def apply(rules, msg, now=None):
     """Run every rule against one message. Pure: returns what should happen, changes nothing."""
     now = now or now_utc()
-    plan = {"labels": [], "archive": False, "mark_read": False, "star": False,
-            "never_archive": False, "unsubscribe": False, "stopped_by": "", "hits": [], "blocked": []}
+    plan = {
+        "labels": [],
+        "archive": False,
+        "mark_read": False,
+        "star": False,
+        "never_archive": False,
+        "unsubscribe": False,
+        "stopped_by": "",
+        "hits": [],
+        "blocked": [],
+    }
     for rule in rules:
         ok, why = fires(rule, msg, now)
         if not ok:
@@ -344,16 +382,18 @@ def apply(rules, msg, now=None):
             did["never_archive"] = True
         if do.get("archive"):
             if plan["never_archive"]:
-                plan["blocked"].append({"rule": rule["id"], "action": "archive",
-                                        "reason": "an earlier rule set never_archive"})
+                plan["blocked"].append(
+                    {"rule": rule["id"], "action": "archive", "reason": "an earlier rule set never_archive"}
+                )
                 did["archive"] = "blocked"
             else:
                 plan["archive"] = True
                 did["archive"] = True
         if do.get("unsubscribe"):
             if plan["never_archive"]:
-                plan["blocked"].append({"rule": rule["id"], "action": "unsubscribe",
-                                        "reason": "an earlier rule protected this message"})
+                plan["blocked"].append(
+                    {"rule": rule["id"], "action": "unsubscribe", "reason": "an earlier rule protected this message"}
+                )
                 did["unsubscribe"] = "blocked"
             else:
                 plan["unsubscribe"] = True
@@ -362,8 +402,9 @@ def apply(rules, msg, now=None):
             if plan["never_archive"]:
                 # a protected message stays unread too: a filing rule that also matches a
                 # payment-failed alert must not make it look handled
-                plan["blocked"].append({"rule": rule["id"], "action": "mark_read",
-                                        "reason": "an earlier rule protected this message"})
+                plan["blocked"].append(
+                    {"rule": rule["id"], "action": "mark_read", "reason": "an earlier rule protected this message"}
+                )
                 did["mark_read"] = "blocked"
             else:
                 plan["mark_read"] = True
@@ -386,12 +427,10 @@ def explain(rules, msg, now=None):
     out, never, stopped = [], False, ""
     for rule in rules:
         if stopped:
-            out.append({"rule": rule["id"], "fired": False,
-                        "why": [f"- not reached: {stopped} stopped processing"]})
+            out.append({"rule": rule["id"], "fired": False, "why": [f"- not reached: {stopped} stopped processing"]})
             continue
         ok, why = fires(rule, msg, now)
-        out.append({"rule": rule["id"], "fired": ok, "why": why,
-                    "do": rule["do"] if ok else {}})
+        out.append({"rule": rule["id"], "fired": ok, "why": why, "do": rule["do"] if ok else {}})
         if ok:
             never = never or bool(rule["do"].get("never_archive"))
             if rule["do"].get("stop"):

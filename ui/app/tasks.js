@@ -3,8 +3,8 @@
 'use strict';
 
 // ----------------------------------------------------------------- tasks (#/tasks)
-// One page for every piece of work the team owes: Tico's tasks, shown as **Needs you**, **Open** (a list),
-// a **Board** and **Done**. `#/board` and `#/issues` open the matching view; scheduled work is Automations.
+// One page for every piece of work the team owes: Tico's tasks, shown as **You** (what needs you), a type's open tasks
+// as a list or a **Board**, and the finished ones (**Done**, **Closed**, **Snoozed**). `#/board` and `#/issues` open the matching view; scheduled work is Automations.
 // No priority: every task has a rank in its owner's queue. Labels stand in for projects.
 // A task's thread is comments, not chat: one flat list with the author on every line.
 // The list (ui/app/task-list.js) draws one line per task; this file holds what the list, the board, the
@@ -17,8 +17,9 @@ const COMPANY_COLS = [
 ];
 const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: 'In review', ready: 'Ready to ship',
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
-// The view tabs: labelled, with counts. The keys are the routes' and the saved preference's.
-const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+// The views. The keys are the addresses' (?view=) and the saved preference's. You is the scope menu's first item; Open
+// and Board are a type's open tasks in either layout; Snoozed, Done and Closed are behind the archive button.
+const TASK_VIEWS = [['foryou', 'You'], ['list', 'Open'], ['board', 'Board'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
 // Done and Closed share one feed of finished tasks, newest first; each shows its own status.
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
@@ -27,7 +28,6 @@ let TASKS_ST = null;
 const teamOf = id => botRow(id)?.team || '';
 // A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
 const isRecurringTask = t => !!t.routine_id || /from schedule/.test(String(t.body || ''));
-const isRecurringIssue = i => (i.labels || []).some(l => /^type:recurring$/i.test(l)) || /_Created by dispatcher from schedule/.test(i.body || '');
 const hasFiles = i => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 const taskFinished = t => ['done', 'closed'].includes(String(t?.status || ''));
@@ -149,10 +149,6 @@ const needsWho = t => {
   return needsWords(pid ? 'human:' + pid : '');
 };
 // One shape for the list, the sort and the columns.
-const issueItem = i => ({kind: 'issue', key: `i${i.number}`, n: i.number, title: i.title || '',
-  slug: i.owner_id, actor: `bot:${i.owner_id}`, team: teamOf(i.owner_id), needs: !!i.needs_human,
-  rank: null, updated_at: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
-  issue: i});
 const taskItem = t => {
   const slug = actorSlug(t.owner_id);
   return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner_id,
@@ -454,7 +450,7 @@ function taskStatusGroups(items, {always = []} = {}) {
 // columns: [{id, name, hint, kind, items, drop, fold, foldable}] — readable columns share spare width; an empty one is
 // a 34px strip, and so is a folded run of backlog or finished steps (`fold`, ui/app/task-board.js). `drop` is the step
 // a card dropped on the column moves to; a board with any is one cards are dragged on.
-// The Dev tickets step a release ships from; its header gets Release now (settings-release.js fills it).
+// The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
 function boardColumnsHTML(columns, {head = ''} = {}) {
   const anyWork = columns.some(c => c.items.length);

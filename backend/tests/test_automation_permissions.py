@@ -1,6 +1,7 @@
 """Who may see and change an automation (backend/automations.py `may_change`), one rule for the UI, the CLI and MCP:
 the top of the org; the owner; anyone above the owner; the lead of its group and anyone above that lead. Peers are
 refused, and seeing follows the same rule. BotOps has whoever asked it's rights (test_botops_automations.py)."""
+
 from backend import automations as AU
 from backend.auth import Identity
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
@@ -10,6 +11,7 @@ from backend.tests.test_automation_api import as_bot
 class Chart:
     """An org chart: Chris at the top, the lead under him, two builders under the lead; the lead leads `eng`, which
     sits in `product` (led by Pat, under Chris)."""
+
     PARENTS = {"b:builder-a": "b:lead", "b:builder-b": "b:lead", "b:lead": "p:chris", "p:pat": "p:chris"}
     LEADS = {"eng": ["b:lead", "p:pat"], "product": ["p:pat"]}
 
@@ -20,7 +22,7 @@ class Chart:
             out.append(key)
         return out
 
-    OFF = ()                                   # the bots whose switch to manage their reports is off
+    OFF = ()  # the bots whose switch to manage their reports is off
 
     def manages(self, slug):
         return slug not in self.OFF
@@ -68,8 +70,11 @@ def test_the_top_of_the_org_may_change_anything_and_a_runner_nothing():
 def test_seeing_follows_the_same_rule_on_every_surface(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
-    aid = post(api, "automations", {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
-                                    "steps": []})["id"]
+    aid = post(
+        api,
+        "automations",
+        {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": []},
+    )["id"]
     assert [a["id"] for a in get(api, "automations", "ben-test")["automations"]] == [aid]
     assert get(api, "automations", "cara-test")["automations"] == []
     get(api, f"automations/{aid}", "cara-test", expected=403)
@@ -84,10 +89,28 @@ def test_automations_follow_their_owner_into_a_new_group(api):
     """A bot moved to another group takes its automations with it, so the new group's lead may change them."""
     eng = post(api, "groups", {"name": "Engineering", "add": {"bots": ["ops"]}})["id"]
     rel = post(api, "groups", {"name": "Release"})["id"]
-    aid = post(api, "automations", {"name": "Ops", "owner": "bot:ops", "group": f"group:{eng}",
-                                    "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
-    other = post(api, "automations", {"name": "Coo", "owner": "bot:coo", "group": f"group:{eng}",
-                                      "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
+    aid = post(
+        api,
+        "automations",
+        {
+            "name": "Ops",
+            "owner": "bot:ops",
+            "group": f"group:{eng}",
+            "trigger": {"type": "event", "name": "x.y"},
+            "steps": [],
+        },
+    )["id"]
+    other = post(
+        api,
+        "automations",
+        {
+            "name": "Coo",
+            "owner": "bot:coo",
+            "group": f"group:{eng}",
+            "trigger": {"type": "event", "name": "x.y"},
+            "steps": [],
+        },
+    )["id"]
     assert api.patch(f"/api/v2/groups/{rel}", json={"add": {"bots": ["ops"]}}, headers=headers()).status_code == 200
     moved = get(api, f"automations/{aid}")
     assert moved["group"] == f"group:{rel}" and moved["version"] == 1
@@ -98,8 +121,11 @@ def test_a_chat_may_name_only_an_automation_its_writer_can_see(api):
     """A chat's refs.automation (BotOps edits the open one): the automation must exist and the writer must be able to
     see it, the rule GET /api/v2/automations/{aid} applies."""
     chat = {"text": "Change this one", "refs": {"automation": "auto_missing"}}
-    aid = post(api, "automations", {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
-                                    "steps": []})["id"]
+    aid = post(
+        api,
+        "automations",
+        {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": []},
+    )["id"]
     named = {"text": "Change this one", "refs": {"automation": aid}}
     assert api.post("/api/v2/chat/ops", json=named, headers=headers()).status_code == 200
     unknown = api.post("/api/v2/chat/ops", json=chat, headers=headers())

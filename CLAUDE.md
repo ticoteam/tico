@@ -17,15 +17,32 @@ included, run `npm ci && npx playwright install chromium` and install `backend/r
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
-workflow runs, on pull requests to main, the tests a measured static dependency map (imports, plus files run or read by path) says use the change, and skips the Caddy image job unless the change reaches it; workflow, dependency, conftest, pytest.ini, docs and deleted or unparsable files fall back to the full default Python and core browser suites. Every push to main still runs those full suites to completion (a newer push cancels only a pull request's superseded run). Checks run on RunsOn Spot VMs (4 vCPU) in Tico's own AWS account; fork PRs use GitHub-hosted runners. Python and browser groups are sized from the last successful main run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 3 minutes (`TICO_CI_JOB_SECONDS`), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt downloads on warm PR runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
-RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the Release Manager starts each release. The default Python suite runs in parallel in about a minute and the whole
+workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs its selected tests and factory sim on the RunsOn
+VMs below, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+checks only. The merge queue runs the tests again, once per queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
+dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
+it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
+CHANGELOG.md or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
+and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
+the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
+review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
+Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
+ready. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test or factory-sim leg cancels its whole run, so a failing pull request or
+queue group stops at once; `checks` still runs and reports it. Hosted PR runs cannot read
+RunsOn's cache, so they start cold. Python and browser groups are sized from the latest successful Release validation
+run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 5 minutes
+(`TICO_CI_JOB_SECONDS`, 300), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
+downloads on warm queue runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check
+on a queue run links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
+RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release windows dispatch it (docs/releasing.md#release-windows). The default Python suite runs in parallel in about a minute and the whole
 default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
 `scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cjs` and pytest in a
 bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
-"waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Better still, run them off the
+"waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Release checks run off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
-`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code.
+`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code. At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
 turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
 The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
@@ -40,6 +57,21 @@ hold customer text and never enter this repository.
 
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
 never ship around a known failure. If a test may fail, it shouldn't exist.
+
+## Before you push
+Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
+
+## How we work
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: work in draft and run the tests you touched locally, run
+`gh pr ready` when done, wait for green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
+`gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
+After a queue failure, fix it and get green PR checks before enqueuing again.
+Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
+read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
+PR checks on each push run lint, and a ready PR's selected tests. A red release candidate caused by your merge is your top priority. Releases ship from
+release windows (weekdays 07:30, 11:00, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
+docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
+major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.
 
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before
@@ -68,8 +100,20 @@ When the server is slow or stuck, read `python -m backend.flight summary --since
 flight file, not the database.
 
 ## Conventions
+- Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
+  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
+  stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
+- Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
-- The UI has no build step and loads nothing from the network: vendored libraries live in
-  `ui/vendor/` with their licenses.
+- The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new
+  UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
+  compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
+  server refuses a missing or stale build (ui/README.md).
+- Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh` and never committed. `docs/openapi/v2.json`
+  is written by `python3 -m backend.openapi_v2`; never edit it by hand. On a rebase conflict, resolve
+  `backend/openapi_v2.py` and regenerate (CONTRIBUTING.md registers the merge driver that handles most).
+- New UI code is strict TypeScript, enforced by `scripts/check_ui_strict.py`: a new `.js` under `ui/` fails unless it is a
+  vendor or bundler entry, and each `.ts` must pass `ui/tsconfig.strict.json` with zero findings. Only files on
+  `ui/strict-legacy.json` are exempt, and that list only shrinks.
 - Comments say why in the present tense; they do not name who asked or when.

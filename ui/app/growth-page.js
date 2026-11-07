@@ -18,6 +18,8 @@ let GR = null;            // the open Growth page: {load, sub, month}, and Sourc
 let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
 const GR_CH_STAGE = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
+// A marketing task's step, by its stage (backend/cards.py growth_board; the step names of backend/marketing_tasks.py).
+const GR_TASK_STAGE = {idea: 'On deck', building: 'In development', testing: 'Live', scaling: 'Working'};
 
 // ----------------------------------------------------------------- shared formats and pieces
 // Who may change company-level growth records: the owner or an admin (the server checks and is the one that enforces it).
@@ -208,7 +210,7 @@ const GR_FORMAT = {count: v => grX(v, 0), usd: grUsd, pct: grPct, ratio: grRatio
 const GR_METRIC = {new_customers: 'New customers', spend: 'Spend', bot_cost: 'Bot cost', cac: 'CAC', revenue_month: 'Revenue / customer',
   margin_pct: 'Margin', ltv: 'LTV', ltv_cac: 'LTV:CAC', payback_months: 'Payback', kept_d30: 'Kept 30 days', kept_d90: 'Kept 90 days', kept_d180: 'Kept 180 days'};
 const grFmt = (format, v) => v == null ? '—' : (GR_FORMAT[format] || (x => grX(x)))(v);
-const grStageWord = stage => GR_CH_STAGE[stage] || stage;
+const grStageWord = stage => GR_TASK_STAGE[stage] || stage;
 // A channel's name as stored: from the card itself, else the Channels card on the same page, else its slug.
 function grChannelName(slug, card) {
   if (card?.data?.channel_name) return card.data.channel_name;
@@ -268,7 +270,7 @@ function grRetentionCard(d) {
   return `<div class="grc-ret"><table class="grc-table grc-ret-t"><thead><tr><th scope="col">Joined</th><th scope="col" class="grc-n">New</th>${d.columns.map(c => `<th scope="col" class="grc-k-h">${esc(c)}</th>`).join('')}</tr></thead>
     <tbody>${d.rows.map(r => `<tr><th scope="row">${esc(grMonthShort(r.month))}</th><td class="grc-n">${r.new_customers == null ? '' : esc(grX(r.new_customers, 0))}</td>${r.kept.map(cell).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
-// The Growth board: Testing, Scaling and Idea, each lane's newest tasks with their channel and owner.
+// The Growth board: Live, Working, In development and On deck, each lane's newest tasks with their channel and owner.
 function grBoardCard(d) {
   const face = ref => { const pid = actorPerson(ref), who = pid ? personDisplay(pid) : grWho(ref); return who ? `<span class="grc-face" title="${esc(who)}"><span aria-hidden="true">${esc(grInitials(who))}</span><span class="sr-only">${esc(who)}</span></span>` : ''; };
   const lanes = d.lanes.filter(l => l.count);

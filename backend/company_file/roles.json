@@ -235,38 +235,33 @@
    "default": false
   },
   {
-   "slug": "brand",
-   "template": "brand",
-   "name": "Brand Manager",
-   "department": "marketing",
+   "slug": "builder",
+   "template": "builder",
+   "name": "Builder",
+   "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Keeps the brand rules written down, reviews copy and assets against them, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself.",
-   "when": "A team whose website, emails, decks and posts no longer sound or look like one team, or that is naming a new product.",
+   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
    "tags": [
-    "brand",
-    "voice",
-    "naming",
-    "design",
-    "consistency",
-    "b2c",
-    "retail"
+    "saas",
+    "github",
+    "code",
+    "developer-tools"
    ],
    "pains": [
-    "every team describes our team differently",
-    "our logo and colours are used wrong",
-    "new copy never sounds like us",
-    "we have no brand guidelines anyone follows"
+    "bugs and small changes wait in a queue before anyone starts on them",
+    "a fix goes back and forth between the author and the reviewers for days",
+    "a change is merged without a test that would have caught the bug",
+    "nobody can say which ticket a pull request came from or what it was meant to do"
    ],
    "recommend_when": [
-    "publishes_content",
-    "sells_to_consumers",
-    "sells_to_businesses"
+    "sells_software",
+    "uses_slack"
    ],
-   "first_routine": "Monthly brand consistency audit · The 1st of each month at 10:00 team time",
+   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
    "tools": [
-    "docs",
-    "web"
+    "github"
    ],
    "default": false
   },

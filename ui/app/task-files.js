@@ -1,5 +1,5 @@
 /* ui/app/task-files.js — A task's files and questions: the strip of tiles (one per file, at its newest version), the
-   viewer that opens in place under it (versions, Compare, who added each and its question), file chips in comments,
+   viewer that opens over the task, near full screen (versions, Compare, who added each and its question), file chips in comments,
    the question block (an ask on a comment or on a file version) and the board's covers.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -100,7 +100,7 @@ function tfAdopt(d, task) {
   const slot = $('[data-task-files]', d);
   if (!slot) return;
   const id = String(task.id);
-  if (d.tfEl && d.tfEl.dataset.task === id) { slot.replaceWith(d.tfEl); return; }
+  if (d.tfEl && d.tfEl.dataset.task === id) { slot.replaceWith(d.tfEl); tfViewModal($('[data-tf-view]', d.tfEl)); return; }
   d.tfEl = slot; slot.dataset.task = id; d.tfOpen = null;
   d.taskFiles = TF_CACHE.get(id) || tfFromAttachments(task.attachments);
   tfPaint(d);
@@ -127,8 +127,12 @@ function tfPaint(d) {
   const can = d.canComment !== false;
   el.hidden = !files.length && !can;
   el.classList.toggle('tsec-empty', !files.length);       // folds into the row of small add buttons (task-list.css)
-  if (!$('.tf-strip', el)) el.innerHTML = `<h3 class="rail-h">Files<span class="muted tf-status" data-tf-status role="status"></span><button type="button" class="prop-add" data-tf-add aria-label="Add files" title="Add files, or drop them on this task, or paste a screenshot">${TL_ICON.plus}</button></h3>
-    <input type="file" multiple hidden data-tf-input aria-label="Add files to this task"><div class="tf-strip"></div><div class="tf-view" data-tf-view hidden></div>`;
+  if (!$('.tf-strip', el)) {
+    el.innerHTML = `<h3 class="rail-h">Files<span class="muted tf-status" data-tf-status role="status"></span><button type="button" class="prop-add" data-tf-add aria-label="Add files" title="Add files, or drop them on this task, or paste a screenshot">${TL_ICON.plus}</button></h3>
+    <input type="file" multiple hidden data-tf-input aria-label="Add files to this task"><div class="tf-strip"></div><dialog class="tf-view" data-tf-view aria-label="File"></dialog>`;
+    // the viewer's own Esc, a backdrop press or any other close folds the file (the keydown below usually gets Esc first)
+    $('[data-tf-view]', el).addEventListener('close', () => { if (d.tfOpen && d.tfEl === el && !$('[data-tf-view]', el).open) tfClose(d); });
+  }
   $('[data-tf-add]', el).hidden = !can;
   const strip = $('.tf-strip', el), html = files.map(f => tfTileHTML(f, d.tfOpen?.id === f.id)).join('')
     || '<p class="muted tf-empty">Drop files here or paste a screenshot.</p>';
@@ -230,15 +234,20 @@ function pasteImages(zone, take) {
   });
 }
 
-// ---- the viewer, in place under the strip
+// ---- the viewer: its own modal over the task, near full screen, so a file reads at size
 const tfPlaying = box => [...box.querySelectorAll('video, audio')].some(m => !m.paused && !m.ended);
+// Shows the viewer on top. A redraw that moved the files section (tfAdopt) took it out of the top layer; this puts it back.
+function tfViewModal(box) {
+  if (!box?.isConnected || !box.hasAttribute('open') || box.matches(':modal')) return;
+  box.close(); box.showModal();
+}
 function tfViewPaint(d, force = false) {
   const box = $('[data-tf-view]', d.tfEl);
   if (!box) return;
   const open = d.tfOpen, f = open && tfFiles(d).find(x => x.id === open.id);
-  if (!f) { if (!box.hidden) { box.querySelector('video, audio')?.pause(); box.hidden = true; box.innerHTML = ''; box.dataset.sig = ''; } return; }
+  if (!f) { if (box.open || box.dataset.sig) { box.querySelector('video, audio')?.pause(); if (box.open) box.close(); box.innerHTML = ''; box.dataset.sig = ''; } return; }
   const v = tfVersion(f, open.n), sig = JSON.stringify([f, open, d.canComment !== false]);
-  if (!force && box.dataset.sig === sig) return;
+  if (!force && box.dataset.sig === sig) { tfViewModal(box); return; }
   if (!force && d.canComment !== false && (askBusy(box) || tfPlaying(box))) return;   // never under someone answering or watching
   const kind = tfKind(f.name, v.mime || f.mime);
   const asc = f.versions.slice().reverse();
@@ -248,18 +257,18 @@ function tfViewPaint(d, force = false) {
     <button type="button" class="tf-cmp" data-tf-cmp aria-pressed="${!!cmp}">Compare</button>` : `<span class="tf-vers muted">v${v.n}</span>`;
   const others = cmp ? f.versions.filter(x => x.n !== v.n) : [];
   const refocus = box.contains(document.activeElement) && !document.activeElement.matches('[data-tf-v], [data-tf-cmp]')
-    ? '.tf-tile.on' : document.activeElement?.matches?.('[data-tf-v], [data-tf-cmp]') && box.contains(document.activeElement)
+    ? '[data-tf-close]' : document.activeElement?.matches?.('[data-tf-v], [data-tf-cmp]') && box.contains(document.activeElement)
       ? (document.activeElement.dataset.tfV ? `[data-tf-v="${document.activeElement.dataset.tfV}"]` : '[data-tf-cmp]') : '';
-  box.hidden = false;
   box.dataset.sig = sig;
   box.querySelector('video, audio')?.pause();
   box.innerHTML = `<div class="tf-view-head"><strong class="tf-view-name" title="${esc(f.name)}">${esc(f.name)}</strong>${vers}
       ${cmp ? `<label class="tf-with">with <select data-tf-with aria-label="Compare with">${others.map(x => `<option value="${x.n}"${x.n === cmp.n ? ' selected' : ''}>v${x.n}</option>`).join('')}</select></label>` : ''}
       <span class="spacer"></span><span class="tf-break" aria-hidden="true"></span>${tfCanRemove(d) ? '<button type="button" class="ghost danger tf-rm" data-tf-remove>Remove</button>' : ''}<a class="tf-dl" href="${esc(v.url)}" download aria-label="Download ${esc(f.name)} v${v.n}">↓</a>
-      <button type="button" class="ghost tf-x" data-tf-close aria-label="Close" title="Close (Esc)">✕</button></div>
+      <button type="button" class="ghost tf-x" data-tf-close aria-label="Close" title="Close (Esc)" autofocus>✕</button></div>
     ${cmp ? tfCompareHTML(f, cmp, v, kind) : `<div class="tf-body">${tfBodyHTML(f, v, kind, d)}</div>`}
     ${tfVersionMetaHTML(d, f, v)}`;
   tfBodyWire(box);
+  if (!box.open && box.isConnected && d.open) box.showModal();
   if (refocus) $(refocus, d.tfEl)?.focus({preventScroll: true});      // the redraw never drops the focus on the page
 }
 function tfBodyHTML(f, v, kind, d) {
@@ -310,7 +319,6 @@ function tfJSONView(raw) {
   const pre = document.createElement('pre'); pre.className = 'plain'; pre.textContent = JSON.stringify(data, null, 2);
   return pre;
 }
-const TF_CLAMP_LINES = 30;
 function tfBodyWire(box) {
   for (const wrap of box.querySelectorAll('.tf-media')) {
     const el = wrap.querySelector('img, video, audio');
@@ -328,10 +336,6 @@ function tfBodyWire(box) {
       if (kind === 'html') { doc.replaceChildren(htmlPreviewFrame(raw, doc.dataset.name)); return; }
       if (kind === 'json') { const view = tfJSONView(raw); if (view) { doc.replaceChildren(view); return; } }
       doc.innerHTML = kind === 'markdown' ? `<div class="md">${safeMd(raw)}</div>` : `<pre class="plain">${esc(raw)}</pre>`;
-      if (raw.split('\n').length > TF_CLAMP_LINES) {
-        doc.classList.add('clamped');
-        doc.insertAdjacentHTML('beforeend', '<button type="button" class="linkish tf-more" data-tf-more>Show all</button>');
-      }
     }, e => { if (doc.isConnected) { doc.removeAttribute('aria-busy'); doc.innerHTML = `<p class="err">${esc(e.message)}</p>`; } });
   }
   for (const diff of box.querySelectorAll('[data-tf-diff]')) {
@@ -413,7 +417,11 @@ function tfWire(d) {
     }
     const step = ev.target.closest('[data-tf-step]');
     if (step) { tfStepImage(d, Number(step.dataset.tfStep)); return; }
-    if (ev.target.closest('[data-tf-more]')) { const doc = ev.target.closest('.tf-doc'); doc.classList.remove('clamped'); ev.target.remove(); }
+    // a press on the backdrop (the dialog itself, outside its box) folds the file
+    if (ev.target.matches?.('[data-tf-view]')) {
+      const r = ev.target.getBoundingClientRect();
+      if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) tfClose(d);
+    }
   });
   d.addEventListener('change', ev => {
     if (ev.target.matches('[data-tf-with]') && d.tfOpen) { d.tfOpen.cmp = Number(ev.target.value); tfViewPaint(d); }
@@ -423,12 +431,13 @@ function tfWire(d) {
   fileDropTarget(d, take);
   pasteImages(d, take);
   d.addEventListener('cancel', ev => { if (d.tfJustClosed) { ev.preventDefault(); ev.stopImmediatePropagation(); } });
+  d.addEventListener('close', ev => { if (ev.target === d && d.tfOpen) { d.tfOpen = null; if (d.tfEl) tfPaint(d); } });
 }
 // Esc folds an open file before it closes the task; ←/→ step through the task's images. On the document, in capture:
 // a redraw can leave the focus on the page, and the task must not see the key.
 document.addEventListener('keydown', ev => {
   if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || ev.isComposing) return;
-  const d = ev.target.closest?.('dialog') || $('dialog:modal') || $('#task-peek[open]');
+  const d = ev.target.closest?.('dialog:not(.tf-view)') || $('dialog:modal:not(.tf-view)') || $('#task-peek[open]');
   if (!d?.tfOpen || !d.tfEl || ev.target.closest?.('.prop-pop')) return;
   const typing = ev.target.closest?.('input, textarea, [contenteditable]');
   if (ev.key === 'Escape' && !typing) {
@@ -445,7 +454,7 @@ function tfStepImage(d, delta) {
   const imgs = tfFiles(d).filter(x => tfKind(x.name, tfVersion(x).mime || x.mime) === 'image');
   const at = imgs.findIndex(x => x.id === d.tfOpen?.id);
   if (imgs.length < 2 || at < 0) return;
-  tfOpen(d, imgs[(at + delta + imgs.length) % imgs.length].id, null, {focus: true});
+  tfOpen(d, imgs[(at + delta + imgs.length) % imgs.length].id);
 }
 
 // ---- comments that carried files: small thumbs (images) or a chip, each opening its tile at that version
@@ -575,7 +584,7 @@ function askHTML(ask, answers, target, asker, taskId, files = [], canAnswer = tr
     ${body}${list}${!mine && !ro && answered ? '<button type="button" class="linkish ask-again" data-ask-again>Answer</button>' : ''}${form}</div>`;
 }
 async function askSubmit(el, dismiss = false) {
-  const status = $('.ask-status', el), dialog = el.closest('dialog'), opening = dialog?.taskOpening;
+  const status = $('.ask-status', el), dialog = el.closest('dialog:not(.tf-view)'), opening = dialog?.taskOpening;
   const answers = {};
   for (const q of el.querySelectorAll('.ask-q')) {
     const picked = [...q.querySelectorAll('.ask-opt[aria-pressed="true"]')].map(b => b.dataset.label);

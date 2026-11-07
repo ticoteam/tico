@@ -210,7 +210,7 @@ function recruitFor({department, briefing, share}) {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      // The page's own modules come from disk: the page shares state with them (docs-page.js
+      // The page's own modules come from disk: the page shares state with them (docs-page.ts
       // declares DOC_POLL, which route() clears on every navigation), so an empty stub would
       // break every route. Everything else that ends in .js still stubs out.
       const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
@@ -702,11 +702,11 @@ function recruitFor({department, briefing, share}) {
         assert.doesNotMatch(commands, /codex login|profile login default codex|profile login default pi/);
       }
     }
-    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
+    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico-computer -e <slug> install bot/);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector('#onb-step').textContent));
     assert.deepEqual(enrollments, [{operator: 'ana'}]);
-    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
+    assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico-computer -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
     // A Linux or cloud server gets the installer line (compose, with the updater) with the real URL and code, and no setup file.
     await page.locator('[data-onb-kind][value=linux]').check();
     const installLine = /curl -fsSL https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install\.sh -o install\.sh && sh install\.sh --runner --name tico-code --url https:\/\/initech\.test --code '<code>' --label "Ana's server"/;
@@ -936,8 +936,8 @@ function recruitFor({department, briefing, share}) {
     // Keys are entered once, in the hub's own fields, and never in a chat.
     assert.deepEqual(await page.locator('.fr-connections [data-fr-link]').evaluateAll(els => els.map(el => el.dataset.frLink)),
       ['credentials', 'integrations']);
-    assert.equal(await page.locator('[data-fr-link=credentials]').getAttribute('href'), '#/credentials');
-    assert.match(await page.locator('[data-fr-secrets]').textContent(), /Enter credentials on the Credentials page, never in a chat with a bot/);
+    assert.equal(await page.locator('[data-fr-link=credentials]').getAttribute('href'), '#/tools/keys');
+    assert.match(await page.locator('[data-fr-secrets]').textContent(), /Enter credentials in Tools › Keys, never in a chat with a bot/);
     // What was typed survives the progress poll (only the rows are redrawn).
     await page.locator('#fr-admin-form [name=name]').fill('Half typed');
     await page.evaluate(() => onbRenderDone(ONB));
