@@ -1,7 +1,7 @@
 # Public roadmaps
 
 Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type runs
-Suggested → Exploring → Spec → Approved → Building → Ready to ship → Shipped (or Declined); Engineering (or an existing Dev tickets
+Suggested → Exploring → Spec → Approved → Building → Ready to ship → Shipped → Measured (or Declined); Engineering (or an existing Dev tickets
 type, as in [The software factory](software-factory.md)) uses the development flow. Tico knows these types by their
 role (`role` in `hub task types`: `product-roadmap` and `engineering`), not by the bot that manages them, so archiving
 that bot or handing the type to another keeps the roadmap and its Approved → Building → Shipped sync working. A type
@@ -166,6 +166,11 @@ stays linked to the item it blocked, so the item still counts it.
 Ready to ship sits right after Building with status doing. It is added to an existing Product roadmap once, on
 upgrade, with Building's public name, so publicly nothing changes until Shipped; a team that removes it does not get
 it back, and without it an item goes from Building straight to Shipped.
+
+Measured sits right after Shipped with status done and Shipped's public name, so a measured item still reads as shipped
+publicly. It is added to an existing Product roadmap once, on upgrade, and a team that removes it does not get it back.
+A person can move an item there by hand; a ticket that reopens takes it back to Building, and a plain close leaves it
+where it is.
 
 Each Dev ticket also leaves a quiet line when it first starts, gets a blocker that is still open, or reaches done:
 `Started: #143 Title. Step: In Progress. PR: <url>.`, `Blocked: #143 Title. Step: In Progress. Waits on #139 Title

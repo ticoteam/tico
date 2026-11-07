@@ -45,6 +45,7 @@ def register(
             f.number,
             f.updated_since,
             f.member,
+            f.segment,
             f.ids,
         )
         if not any(named):
@@ -63,6 +64,7 @@ def register(
             member=f.member,
             role=f.role,
             snoozed=f.snoozed,
+            segment=f.segment,
             by_id=f.ids is not None or f.number is not None,
             exact=True,
         )

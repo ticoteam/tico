@@ -3910,7 +3910,8 @@ def create_app(settings=None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
-        if body.segment_id is not None:
+        # Checked only when it changes: a task tagged with a segment the company has since left can still be edited.
+        if body.segment_id is not None and (body.segment_id or None) != (row["segment_id"] or None):
             body = body.model_copy(update={"segment_id": SG.require_ours(c, body.segment_id)})
         # The org rule check (backend/org_rule_check.py): held, the task stays as it is.
         rule_gate = (

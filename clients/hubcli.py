@@ -2018,6 +2018,7 @@ def parser():
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
+    s.add_argument("--segment", dest="segment_id", help="the segment it is for (one of the company's); optional")
     ways = delivery_flags(s, steer=False)
     # The older words for --defer, kept: a deferred task with the default deadline.
     ways.add_argument("--next-run", dest="next_run", action="store_true", help="the older name for --defer")
@@ -2178,6 +2179,7 @@ def parser():
         "send <slug> ... --needs-action), or wait on its task (hub task wait <id> --on task:<its task>)",
     )
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
+    s.add_argument("--segment", dest="segment_id", help='the segment it is for; "" takes it off')
     s.add_argument(
         "--brief", action="store_true", help="keep the note on the task; chat hears only the title and status"
     )
@@ -2414,6 +2416,7 @@ def parser():
         ("updated-since", "changed after this ISO-8601 time"),
         ("member", "person or bot on it by role"),
         ("role", "role, with --where-member"),
+        ("segment", "segment id, or none for no segment"),
     ):
         s.add_argument("--where-" + name, dest="where_" + name.replace("-", "_"), help="only tasks with this " + word)
     s.add_argument(
@@ -2464,6 +2467,7 @@ def parser():
     s.add_argument("--updated-since", help="only tasks changed after this ISO-8601 time with a timezone")
     s.add_argument("--member", help="only tasks this person or bot is on in some role (me, a human id, a bot slug)")
     s.add_argument("--role", help="with --member: only tasks they are on in this role")
+    s.add_argument("--segment", help="only tasks in this segment (its id, or none for those with none)")
     s.add_argument("--brief", action="store_true", help="leave out bodies and acceptance criteria")
     s.add_argument(
         "--all", action="store_true", help="the board: every task and every bot you may see, as {tasks, bots}"
@@ -2594,6 +2598,7 @@ def parser():
     s.add_argument("--owner", help="someone else's: a bot slug or a person id")
     s.add_argument("--all", action="store_true", help="every live goal in the company")
     s.add_argument("--status", help="with --all: only these, comma-separated (red,yellow,green,gray,done,dropped)")
+    s.add_argument("--segment", help="only goals in this segment (its id, or none for those with none)")
     s.set_defaults(fn="goal list")
     s = goal.add_parser("show")
     s.add_argument("id")
@@ -2608,6 +2613,7 @@ def parser():
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--top", action="store_true", help="put it first in the owner's order")
     s.add_argument("--bet", dest="bet_id", help="the strategy bet it serves (hub strategy show lists them)")
+    s.add_argument("--segment", dest="segment_id", help="the segment it is for; optional")
     s.add_argument(
         "--on-behalf-of",
         metavar="MESSAGE_ID",
@@ -2633,6 +2639,7 @@ def parser():
     s.add_argument("--rank", type=int)
     s.add_argument("--top", action="store_true")
     s.add_argument("--bet", dest="bet_id", help='the strategy bet it serves; "" unlinks it')
+    s.add_argument("--segment", dest="segment_id", help='the segment it is for; "" takes it off')
     s.add_argument(
         "--on-behalf-of",
         metavar="MESSAGE_ID",

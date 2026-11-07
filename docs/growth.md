@@ -92,7 +92,8 @@ for. The numbers are entered from them each week; the rows stay in those systems
 
 Marketing ideas are tasks of type **Marketing**. They live on the Tasks page, on its Marketing board.
 `segment=<id>` (or `none`) on the Growth page narrows the Growth board to the marketing tests tagged to one segment. The
-numbers stay company-wide: spend is entered per month, not per segment.
+numbers stay company-wide: spend is entered per month, not per segment. `/api/v2/growth/numbers?segment=` narrows only
+its marketing-test markers the same way.
 
 - **Steps.** On deck, then In development, then Live (a test running), then Working (a test that worked, kept running).
   Paused sits to one side. A task finishes on Succeeded, Failed, Inconclusive or Dropped. A Live task with no update for

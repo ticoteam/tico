@@ -1,29 +1,32 @@
 # pyright: strict
 """The segment a goal or a task is for (goals.segment_id, tasks.segment_id): one of the company's segments, or none.
 
-Writes check the segment with `segments.require_ours`, which refuses one that is not the company's. A filter takes the
-same check, so a list asked for a segment the company does not play in is a 404 and not an empty list, and `none` asks
-for the rows that have no segment.
+Writes check the segment with `segments.require_ours`, which refuses one that is not the company's. A filter does not:
+a list asked for a segment the company does not play in (a former one, or an unknown id) is empty, not a 404, and `none`
+asks for the rows that have no segment.
 """
 
 import sqlite3
-from collections.abc import Callable
 from typing import Any, cast
 
 from . import hubdb as H
 from . import segments
 
 NONE = H.SEGMENT_NONE
+# The filter value for a segment the company does not play in: no row carries it, so the list is empty.
+NO_MATCH = "-"
 
 
 def filter_value(c: sqlite3.Connection, segment: str | None) -> str | None:
-    """A segment filter as the reads take it: None for no filter, `none`, or one of the company's segment ids."""
+    """A segment filter as the reads take it: None for no filter, `none`, the id of one of the company's segments, or
+    NO_MATCH for any other id. A former segment's tasks stay tagged, and they are not listed under it."""
     if not segment:
         return None
     if segment == NONE:
         return NONE
-    require_ours = cast(Callable[[sqlite3.Connection, str], str], segments.require_ours)
-    return require_ours(c, segment) or None
+    # segments.ours_ids has no annotations yet (track A's module, not strict): its result is typed here until it does.
+    ours = cast(set[str], cast(Any, segments).ours_ids(c))
+    return segment if segment in ours else NO_MATCH
 
 
 def name(c: sqlite3.Connection, segment_id: str | None) -> str:

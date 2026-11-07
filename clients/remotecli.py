@@ -792,6 +792,7 @@ def run(args, who=None):
                 "body": body,
                 "due": args.due,
                 "goal_id": getattr(args, "goal", None) or None,
+                "segment_id": getattr(args, "segment_id", None) or None,
             }
             for field in ("check_back_at", "check_back_note"):
                 if getattr(args, field, None) is not None:
@@ -982,6 +983,7 @@ def run(args, who=None):
                         "owner": args.owner,
                         "due": args.due,
                         "goal_id": getattr(args, "goal", None),
+                        "segment_id": getattr(args, "segment_id", None),
                     }
                 )
                 if getattr(args, "private", None) is not None:

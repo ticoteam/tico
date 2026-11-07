@@ -147,15 +147,19 @@ def _kpis(c, hidden):
     }
 
 
-def _markers(c, auth, who, since):
+def _markers(c, auth, who, since, segment=None):
+    """The marketing tests that started or finished since `since`; a segment (the Growth page's filter) keeps the tests
+    tagged to it, or `none` the untagged ones. The numbers beside them stay company-wide."""
     visible = auth.task_sql(c, who)
+    segment_sql, segment_args = H.segment_where(segment, "t.segment_id") if segment else ("1", [])
     rows = H._rows(
         c.execute(
             "SELECT e.subject_id AS task_id, e.created_at, e.new, t.title, t.goal_id FROM history_events e "
             "JOIN tasks t ON t.id=e.subject_id "
             f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
-            f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
-            [*MOVES, MT.TYPE_ID, since, MT.TYPE_ID, MARKERS_MAX],
+            f"AND {segment_sql} AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) "
+            "ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
+            [*MOVES, MT.TYPE_ID, since, *segment_args, MT.TYPE_ID, MARKERS_MAX],
         )
     )
     tags = {}
@@ -184,8 +188,9 @@ def _markers(c, auth, who, since):
     return out
 
 
-def numbers(c, auth, who, months, hidden, until=None):
-    """The numbers for the newest `months` months with rows up to `until` (default: all of them)."""
+def numbers(c, auth, who, months, hidden, until=None, segment=None):
+    """The numbers for the newest `months` months with rows up to `until` (default: all of them). `segment` narrows
+    only the markers (see _markers)."""
     window = _window(c, months, until)
     conf = G.settings(c)
     totals, by_month = {}, {}
@@ -199,7 +204,7 @@ def numbers(c, auth, who, months, hidden, until=None):
         "series": [_month(totals[m], m) for m in window],
         "channels": _channels(c, window, by_month),
         "kpis": _kpis(c, hidden),
-        "markers": _markers(c, auth, who, _since(window)),
+        "markers": _markers(c, auth, who, _since(window), segment),
         "may_edit": who.role == "bot" or admin(auth, who),
     }
 
@@ -208,13 +213,16 @@ def install(app, store, auth):
     from .goal_routes import _hidden_owners
 
     @app.get("/api/v2/growth/numbers")
-    def growth_numbers(request: Request, months: int = MONTHS_DEFAULT):
+    def growth_numbers(request: Request, months: int = MONTHS_DEFAULT, segment: str | None = None):
         """The Growth page's numbers: the months, every channel's and the total's CAC, LTV, retention, revenue and
         margin, the KPI tree with its last readings, and the marketing tests that started or finished. `months`: the
-        newest 1 to 24 months."""
+        newest 1 to 24 months. `segment` (a segment id, or `none`) keeps the marketing tests tagged to it; the numbers
+        stay company-wide."""
+        from . import segment_tags as ST
+
         who = request.state.identity
         auth.domain(who)
         if not MONTHS_MIN <= months <= MONTHS_MAX:
             raise Problem("validation", "months is between 1 and 24", 422)
         with store.read() as c:
-            return numbers(c, auth, who, months, _hidden_owners(c, auth, who))
+            return numbers(c, auth, who, months, _hidden_owners(c, auth, who), segment=ST.filter_value(c, segment))

@@ -20753,6 +20753,22 @@
               "default": 12,
               "title": "Months"
             }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
           }
         ],
         "responses": {
@@ -77464,6 +77480,18 @@
               }
             ],
             "title": "Snoozed"
+          },
+          "segment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment"
           },
           "ids": {
             "anyOf": [

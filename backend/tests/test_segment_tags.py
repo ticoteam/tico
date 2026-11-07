@@ -56,7 +56,7 @@ def test_the_goal_lists_narrow_to_one_segment_or_to_none(api):
     assert plain["id"] in none and not {here["id"], there["id"]} & none
     assert {g["id"] for g in get(api, f"goals?all=true&segment={payments}")["goals"]} == {there["id"]}
     assert {g["id"] for g in get(api, f"goals?segment={screening}")["goals"]} == {here["id"]}
-    get(api, "goals/tree?segment=segment/nope", expected=404)
+    assert get(api, "goals/tree?segment=segment/nope")["goals"] == []
 
 
 def test_a_goal_wording_proposal_names_a_segment_the_company_plays_in(api):
@@ -115,7 +115,7 @@ def test_the_task_list_narrows_to_one_segment_or_to_none(api):
     assert task_ids(api, f"segment={screening}") == {here["id"]}
     none = task_ids(api, "segment=none")
     assert plain["id"] in none and not {here["id"], there["id"]} & none
-    get(api, "tasks?segment=segment/nope", expected=404)
+    assert task_ids(api, "segment=segment/nope") == set()
 
 
 def test_the_growth_marketing_board_narrows_to_its_segment(api):
@@ -140,4 +140,104 @@ def test_the_growth_marketing_board_narrows_to_its_segment(api):
     assert live(f"?segment={screening}") == ["Screening referral ads"]
     assert live("?segment=none") == []
     assert get(api, f"places/growth?segment={payments}")["segment"] == payments
-    get(api, "places/growth?segment=segment/nope", expected=404)
+    assert live("?segment=segment/nope") == []
+
+
+def test_a_teammate_who_may_not_colour_a_goal_cannot_move_its_segment(api):
+    screening, payments, _ = segments(api)
+    gold = goal(api, "Screening pays back in a quarter", segment_id=screening)
+    post(api, f"goals/{gold['id']}", {"segment_id": payments}, token="cara-test", expected=403)
+    tree = {g["id"]: g for g in get(api, "goals/tree")["goals"]}
+    assert tree[gold["id"]]["segment_id"] == screening
+
+
+def test_accepting_a_goal_wording_proposal_sets_its_segment_and_an_empty_one_clears_it(api):
+    screening, _, _ = segments(api)
+    mine = goal(api, "Screening pays back")
+
+    def segment_of(goal_id):
+        return {g["id"]: g for g in get(api, "goals/tree")["goals"]}[goal_id]["segment_id"]
+
+    for segment, expected in ((screening, screening), ("", None)):
+        proposal = post(
+            api,
+            "goal-proposals",
+            {
+                "kind": "goal_wording",
+                "goal_id": mine["id"],
+                "payload": {"segment_id": segment},
+                "reason": "The segment this goal is for.",
+            },
+            token="ben-test",
+        )["proposal"]
+        post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
+        assert segment_of(mine["id"]) == expected
+
+
+def test_a_goal_wording_proposal_that_repeats_the_goals_segment_is_refused(api):
+    screening, _, _ = segments(api)
+    gold = goal(api, "Screening pays back", segment_id=screening)
+    plain = goal(api, "Keep the books clean")
+    for goal_id, segment in ((gold["id"], screening), (plain["id"], "")):
+        post(
+            api,
+            "goal-proposals",
+            {"kind": "goal_wording", "goal_id": goal_id, "payload": {"segment_id": segment}, "reason": "Same as now."},
+            token="ben-test",
+            expected=422,
+        )
+
+
+def test_the_goal_tree_keeps_the_goals_above_a_kept_one_as_context(api):
+    screening, _, _ = segments(api)
+    parent = goal(api, "Grow the company")
+    child = goal(api, "Screening pays back", segment_id=screening, parent_id=parent["id"])
+    tree = {g["id"]: g for g in get(api, f"goals/tree?segment={screening}")["goals"]}
+    assert set(tree) == {child["id"], parent["id"]}
+    assert tree[child["id"]]["context"] is False and tree[parent["id"]]["context"] is True
+
+
+def test_a_task_tagged_with_a_former_segment_is_still_editable_and_its_filter_is_empty(api):
+    screening, _, _ = segments(api)
+    first = task(api, "Screening onboarding copy", segment_id=screening)
+    post(api, "market/segments/target", {"id": screening, "target": "none"})
+    assert task_ids(api, f"segment={screening}") == set()
+    edited = written(
+        post(
+            api,
+            f"tasks/{first['id']}",
+            {"version": first["version"], "title": "Onboarding copy", "segment_id": screening},
+        )
+    )
+    assert edited["title"] == "Onboarding copy" and edited["segment_id"] == screening
+
+
+def test_a_bulk_change_takes_a_segment_filter(api):
+    screening, payments, _ = segments(api)
+    task(api, "Screening demo", segment_id=screening)
+    task(api, "Payments dispute flow", segment_id=payments)
+    here = post(
+        api, "task-bulk", {"filter": {"segment": screening}, "action": "owner", "owner": "ben", "dry_run": True}
+    )
+    assert here["matched"] == 1
+    nothing = post(
+        api, "task-bulk", {"filter": {"segment": "segment/nope"}, "action": "owner", "owner": "ben", "dry_run": True}
+    )
+    assert nothing["matched"] == 0
+
+
+def test_the_growth_markers_narrow_to_the_segment_when_filtered(api):
+    from backend import marketing_tasks as MT
+
+    screening, payments, _ = segments(api)
+    for title, segment in (("Screening referral ads", screening), ("Payments webinar", payments)):
+        made = task(api, title, type="idea", segment_id=segment)
+        post(api, f"tasks/{made['id']}", {"version": made["version"], "step": MT.step_id("testing")})
+
+    def marked(query):
+        return sorted(m["title"] for m in get(api, "growth/numbers" + query)["markers"])
+
+    assert marked("") == ["Payments webinar", "Screening referral ads"]
+    assert marked(f"?segment={screening}") == ["Screening referral ads"]
+    assert marked("?segment=none") == []
+    assert marked("?segment=segment/nope") == []

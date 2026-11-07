@@ -533,7 +533,7 @@ def update(
         sets.append("bet_id=:bet_id")
         args["bet_id"] = _bet(conn, actor, bet_id) if bet_id else None
         _event(conn, goal_id, actor, "bet_id", row.get("bet_id"), args["bet_id"])
-    before = row.get("segment_id") if row else None
+    before = row.get("segment_id")
     if segment_id is not None and (segment_id or None) != before:
         sets.append("segment_id=:segment_id")
         args["segment_id"] = _segment(conn, segment_id)
@@ -970,6 +970,12 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
 
                 if str(payload["segment_id"]) not in segments.ours_ids(conn):
                     return f"no segment {payload['segment_id']} of the company's"
+            if (
+                "segment_id" in payload
+                and not (payload.get("title") or payload.get("body") or payload.get("bet_id"))
+                and (payload.get("segment_id") or None) == ((goal(conn, goal_id) or {}).get("segment_id") or None)
+            ):
+                return "the goal is already in that segment: propose another one, or a change to its wording"
             if payload.get("bet_id"):
                 from . import strategy
 

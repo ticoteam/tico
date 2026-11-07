@@ -363,6 +363,7 @@ class TaskFilter(Contract):
     member: ID | None = None
     role: str | None = Field(default=None, max_length=100)
     snoozed: Literal["hide", "only", "all"] | None = None
+    segment: str | None = Field(default=None, max_length=200)  # a segment id, or `none` for the tasks with none
     ids: list[ID] | None = Field(default=None, min_length=1, max_length=100)
 
 

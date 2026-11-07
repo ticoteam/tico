@@ -1007,6 +1007,9 @@ def tag_update(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (hub_goal_list); optional"),
+        "segment_id": _s(
+            "The segment it is for, one of the company's; optional. A subtask takes its parent's when left out"
+        ),
         "next_run": {
             "type": "boolean",
             "default": False,
@@ -1042,6 +1045,7 @@ def task_create(api, args):
         "body": args.get("body") or "",
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
+        "segment_id": args.get("segment_id") or None,
     }
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
@@ -1285,6 +1289,7 @@ def task_unsnooze(api, args):
     {
         "owner": _s("Owner: a bot slug, a human id, or `me`"),
         "requester": _s("Requester: a bot slug, a human id, or `me`"),
+        "segment": _s("Only tasks in this segment: its id, or `none` for those with none"),
         "q": _s("Title words or #N"),
         "status": {
             "type": "array",
@@ -1331,7 +1336,7 @@ def task_list(api, args):
         return api.get("tasks/stuck", hours=args.get("hours") or 24)["tasks"]
     more = {
         name: args[name]
-        for name in ("type", "step", "sort", "number", "updated_since", "snoozed", "q")
+        for name in ("type", "step", "sort", "number", "updated_since", "snoozed", "segment", "q")
         if args.get(name)
     }
     if args.get("member"):
@@ -1588,6 +1593,7 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
             "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
+        "segment_id": _s("The segment it is for, one of the company's; an empty string takes it off"),
         "verdict": _s(
             "A review or QA subtask's verdict; the task that asked for it is woken with it",
             enum=["approve", "changes", "pass", "fail"],
@@ -1607,6 +1613,7 @@ def task_update(api, args):
         "owner": args.get("owner"),
         "due": args.get("due"),
         "goal_id": args.get("goal_id"),
+        "segment_id": args.get("segment_id"),
     }
     if args.get("brief") or args.get("quiet"):  # `quiet`: brief's older name
         body["quiet"] = True
@@ -1678,6 +1685,7 @@ TASK_BULK_FILTER = (
     "member",
     "role",
     "snoozed",
+    "segment",
     "ids",
 )
 
@@ -1712,6 +1720,7 @@ TASK_BULK_FILTER = (
                 "member": _s("Only tasks this person or bot is on in some role"),
                 "role": _s("With member: only tasks they are on in this role"),
                 "snoozed": {"type": "string", "enum": ["hide", "only", "all"]},
+                "segment": _s("A segment id, or `none` for the tasks with none"),
                 "ids": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -2253,12 +2262,14 @@ def goal_save(api, args):
         "owner": _s("Someone else's: a bot slug or a person id; default is yourself"),
         "all": {"type": "boolean", "default": False},
         "status": _s("With `all`: only these, comma-separated (red,yellow,green,gray,done,dropped)"),
+        "segment": _s("Only goals in this segment: its id, or `none` for those with none"),
     },
 )
 def goals(api, args):
+    segment = args.get("segment") or None
     if args.get("all"):
-        return api.get("goals", all="1", status=args.get("status") or None)["goals"]
-    return api.get("goals", owner=_target(api, args["owner"]) if args.get("owner") else None)
+        return api.get("goals", all="1", status=args.get("status") or None, segment=segment)["goals"]
+    return api.get("goals", owner=_target(api, args["owner"]) if args.get("owner") else None, segment=segment)
 
 
 @tool(
@@ -2285,6 +2296,7 @@ def goal_show(api, args):
         "body": _s("What it means, what counts, what does not", default=""),
         "top": {"type": "boolean", "default": False, "description": "Put it first in the owner's order"},
         "bet_id": _s("The strategy bet it serves (hub_strategy_show lists them)"),
+        "segment_id": _s("The segment it is for, one of the company's; optional"),
         "on_behalf_of": GOAL_YES,
     },
     required=("owner", "title"),
@@ -2300,6 +2312,7 @@ def goal_create(api, args):
             "body": args.get("body") or "",
             "top": bool(args.get("top")),
             "bet_id": args.get("bet_id") or None,
+            "segment_id": args.get("segment_id") or None,
         },
         key=_key(args),
     )["goal"]
@@ -2518,13 +2531,14 @@ def goal_strategy_bot_log(api, args):
         "rank": {"type": "integer", "description": "Position in the owner's order"},
         "top": {"type": "boolean", "default": False},
         "bet_id": _s("The strategy bet it serves; an empty string unlinks it"),
+        "segment_id": _s("The segment it is for, one of the company's; an empty string takes it off"),
         "on_behalf_of": GOAL_YES,
     },
     required=("id",),
     writes=True,
 )
 def goal_update(api, args):
-    body = {k: args.get(k) for k in ("title", "body", "parent_id", "rank", "bet_id")}
+    body = {k: args.get(k) for k in ("title", "body", "parent_id", "rank", "bet_id", "segment_id")}
     body["owner"] = _target(api, args["owner"]) if args.get("owner") else None
     body["top"] = bool(args.get("top"))
     return _asked(api, args).post("goals/" + args["id"], body, key=_key(args))["goal"]

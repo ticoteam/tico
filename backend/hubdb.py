@@ -71,7 +71,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from .batch_work import isolated
 from . import delivery
@@ -1789,9 +1789,10 @@ def migrate(conn, adopt_legacy=False):
     from .roadmaps import migrate as migrate_roadmaps
 
     migrate_roadmaps(conn)
-    from .roadmap_flow import ready_step as roadmap_ready_step
+    from .roadmap_flow import measured_step as roadmap_measured_step, ready_step as roadmap_ready_step
 
     roadmap_ready_step(conn)
+    roadmap_measured_step(conn)
     # Won't do is no longer a board step (`_task_state`): move its tasks off, then delete it.
     retire_held_steps(conn)
     task_blocked.stamp_builds(conn)
@@ -2117,7 +2118,7 @@ def writing_refusal(rule, detail):
     )
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""
@@ -7394,7 +7395,8 @@ def task_update(
     `rank` is the position in the owner's queue: a participant may rank its own tasks.
     `step_rank` is its place within its step, lower first, set the same way.
     `goal_id` names the goal the task serves; "" takes it off (backend/goals.py).
-    `segment_id` names the segment it is for; "" takes it off (backend/segment_tags.py). A subtask's is set on create only.
+    `segment_id` names the segment it is for; "" takes it off (backend/segment_tags.py). A subtask created without one
+    takes its parent's; that inheritance is at create only, and a later change to either task is its own.
     `number` gives a task that has none its number (a mover's, as on create); it never changes.
     `title` renames it, checked as a new task's title would be (`_retitle`).
     `waiting_on` names the person a `waiting` task waits on: it files them a question task with no options under it,

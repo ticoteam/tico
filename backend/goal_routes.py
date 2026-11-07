@@ -644,11 +644,23 @@ def install(app, store, auth, mutate, settings):
     @app.get("/api/v2/goals/tree")
     def goals_tree(request: Request, segment: str | None = None):
         """Every goal with its owner's name and kind, its KPIs (each with its target and colour), and the KPIs no
-        goal uses, for the page's tree and list. `segment` keeps the goals of one segment, or `none` those with none."""
+        goal uses, for the page's tree and list. `segment` keeps the goals of one segment, or `none` those with none; the
+        goals above a kept one stay as context, flagged `context` (False on the kept ones), so none is left without its
+        parent."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            rows = readable_goals(c, who, G.goals(c, live_only=False, segment=ST.filter_value(c, segment)))
+            seg = ST.filter_value(c, segment)
+            rows = readable_goals(c, who, G.goals(c, live_only=False, segment=seg))
+            if seg:
+                kept = {r["id"] for r in rows}
+                above: dict[str, dict] = {}
+                for r in rows:
+                    r["context"] = False
+                    for g in G.chain(c, r["id"]):
+                        if g["id"] not in kept:
+                            above.setdefault(g["id"], {**g, "context": True})
+                rows += readable_goals(c, who, list(above.values()))
             names = owner_names(c, rows)
             # Counted over the tasks this caller may read, so a hidden bot's work adds nothing.
             readable = auth.task_sql(c, who)

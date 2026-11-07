@@ -595,7 +595,7 @@ def _wrong_if(c, actor, value):
     kind = value.get("kind")
     if kind not in WRONG_KINDS:
         H.refuse(c, actor, "kind", f"a wrong-if is kind {'|'.join(WRONG_KINDS)}, not {kind}")
-    out = {"kind": kind}
+    out: dict[str, str | float] = {"kind": kind}
     check_by = str(value.get("check_by") or "").strip()
     if check_by:
         try:
