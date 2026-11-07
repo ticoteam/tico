@@ -387,7 +387,9 @@ class Bot:
         body = {"question": text, "on": "ana", "why": "", "topic": topic}
         if reversible:
             body["if_no_answer"] = {"do": "go ahead with the default", "kind": "reversible"}
-        status, _ = w.request("post", "task-questions", body, token=self.token)
+        status, reply = w.request("post", "task-questions", body, token=self.token)
+        # The product folds a question into the open one on its topic (`folded`): nothing new reaches the person.
+        folded = isinstance(reply, dict) and bool(reply.get("folded"))
         w.asks.append(
             {
                 "at": w.now(),
@@ -398,6 +400,7 @@ class Bot:
                 "status": status,
                 "task": task,
                 "handed": handed,
+                "folded": folded,
             }
         )
         return "asked the owner" if status < 300 else f"ask refused ({status})"
@@ -880,7 +883,7 @@ class Lead(Bot):
                 # The lead asks the owner what to do with a ticket it sees stuck, each sweep: one level below the owner.
                 self.ask_owner(
                     f"{t['title']} has sat at {step.name} with no move. What should happen to it?",
-                    f"{t['title']} {self.world.now():%Y-%m-%d %H}",
+                    f"stuck ticket {t['id']}",  # one topic per ticket: the product folds the sweep's repeat asks into one
                     reversible=bool(self.style.get("reversible")) and self.chance("reversible"),
                     task=t["id"],
                 )

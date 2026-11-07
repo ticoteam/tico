@@ -458,7 +458,13 @@ class Run:
         for t in w.tickets():
             step = board.step(t["step"])
             if step and step.release:
-                w.update(t["id"], token="release-test", step=board.steps[board.steps.index(step) + 1].name)
+                try:
+                    w.update(t["id"], token="release-test", step=board.steps[board.steps.index(step) + 1].name)
+                except Refusal as exc:
+                    # An open question its builder put on the ticket: only the builder or its manager may close it, and
+                    # the person answers it. The ticket waits at the release step, as it would for the person.
+                    if exc.status != 403 or "open subtask" not in exc.body:
+                        raise
 
     def assign(self, w, team):
         """An unowned ticket at an assigning step waits for the board to give it to a bot of that role. After 30

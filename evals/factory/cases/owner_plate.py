@@ -39,8 +39,9 @@ def no_ask_from_far(run):
 
 
 def no_duplicate_asks(run):
-    """No question is put to the owner twice while the first still waits on her."""
-    filed = [a for a in run.w.asks if a["status"] < 300]
+    """No question is put to the owner twice while the first still waits on her. An ask the product folds into the open
+    question on its topic (`folded`) is one card, not a second question, so it does not count."""
+    filed = [a for a in run.w.asks if a["status"] < 300 and not a["folded"]]
     seen: dict[str, int] = {}
     for a in filed:
         seen[a["text"]] = seen.get(a["text"], 0) + 1
