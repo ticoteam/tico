@@ -111,7 +111,7 @@ function taskPipelineBoard(items, state, head = '') {
   const STEP_KIND = {open: 'starting', doing: 'doing', waiting: 'waiting', review: 'review', ready: 'review', done: 'done', closed: 'closed', declined: 'needs'};
   for (const column of columns) {
     column.items.sort(taskByStepRank);
-    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.name, true)});
+    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true)});
     const step = type.steps.find(step => step.id === column.id);
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
@@ -129,7 +129,7 @@ function pipePhoneStageHTML(column, type) {
   const notices = taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true);
   const cards = column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>';
   return `<div class="pipe-phone"><section class="pipe-stage" data-col="${esc(column.id)}" aria-label="${esc(column.name)}">
-    <div class="pipe-stage-line"><span class="pipe-stage-name">${esc(column.name + limit)}</span>${pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.name, true)}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}</div>
+    <div class="pipe-stage-line"><span class="pipe-stage-name">${esc(column.name + limit)}</span>${pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true)}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}</div>
     ${notices}<div class="pipe-stage-cards">${cards}</div></section></div>`;
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)

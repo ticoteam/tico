@@ -8,8 +8,13 @@ const {install} = require('./support/pipeline-fixture.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const SIZES = [{width: 1440, height: 940, phone: false}, {width: 390, height: 844, phone: true}];
+// Waits for something the fake server records (a claim, a read) without a fixed sleep.
+async function until(check, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) { if (Date.now() > end) throw new Error('timed out waiting for the server to record it'); await new Promise(r => setTimeout(r, 50)); }
+}
 
-async function openReview(browser, {width, height, theme, refuseApprove = false, touch = false}) {
+async function openReview(browser, {width, height, theme, refuseApprove = false, touch = false, claimedBy = null}) {
   const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', ...(touch ? {isMobile: true, hasTouch: true} : {})});
   await context.addInitScript(([theme]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
@@ -17,7 +22,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  const state = await install(page, {refuseApprove});
+  const state = await install(page, {refuseApprove, claimedBy});
   await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
   await page.waitForSelector('.tl-head .pipe-play', {timeout: t(8000)});
   await page.locator('.tl-head .pipe-play').click();
@@ -103,6 +108,77 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       const drawn = await page.locator('.pipe-review kbd').evaluateAll(els => els.filter(el => el.getClientRects().length > 0).length);
       assert.equal(drawn, 0, 'no key hints on a touch phone');
       assert.deepEqual(errors, [], 'touch phone: no page errors');
+      await context.close();
+    }
+
+    // E4: the item on show is claimed for the viewer; another reviewer's claim disables Approve and names them.
+    {
+      const {context, page, state, errors} = await openReview(browser, {width: 1440, height: 940, theme: 'dark'});
+      await until(() => state.claims.length === 1);
+      assert.deepEqual(state.claims, ['tasks/D52/requirements/r-shots'], 'the item on show is claimed');
+      assert.equal(await page.locator('.pipe-review-approve').isDisabled(), false, 'an unclaimed item can be approved');
+      await context.close();
+      assert.deepEqual(errors, [], 'claim: no page errors');
+    }
+    {
+      const {context, page, state, errors} = await openReview(browser, {width: 1440, height: 940, theme: 'light', claimedBy: 'human:bob'});
+      await page.waitForSelector('.pipe-review-claim', {timeout: t(5000)});
+      assert.match(await page.locator('.pipe-review-claim').innerText(), /Bob is reviewing/, 'another reviewer is named');
+      assert.equal(await page.locator('.pipe-review-approve').isDisabled(), true, 'Approve waits while another reviewer holds the item');
+      assert.deepEqual(state.posts.filter(p => p.path.endsWith('/approve')), [], 'no approval is sent for a claimed item');
+      assert.deepEqual(errors, [], 'claimed: no page errors');
+      await context.close();
+    }
+
+    // E1 and E6: a file opens the version it was attached as; an image previews from its own address.
+    {
+      const {context, page, errors} = await openReview(browser, {width: 1440, height: 940, theme: 'dark'});
+      assert.equal(await page.locator('img.pipe-review-img').getAttribute('src'), 'https://example.test/shot.png', 'an image previews');
+      await page.locator('[data-review-next]').click();
+      await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent.includes('2 of 2'), null, {timeout: t(5000)});
+      assert.equal(await page.locator('.pipe-review-card a').getAttribute('href'), '/api/v2/files/f1/versions/2', 'the file opens its pinned version');
+      assert.match(await page.locator('.pipe-review-card').innerText(), /spec\.pdf/, 'the file is named');
+      assert.deepEqual(errors, [], 'files: no page errors');
+      await context.close();
+    }
+
+    // E9: each approval owns its Undo window. Approve one item, then the next four seconds later: the second toast stays
+    // for its own ten seconds, so it is still there seven seconds after its approval (the first approval's timer would
+    // have hidden it at ten seconds after the first).
+    {
+      const {context, page, state, errors} = await openReview(browser, {width: 1440, height: 940, theme: 'dark'});
+      await page.locator('.pipe-review-approve').click();
+      await page.waitForSelector('.pipe-review-toast', {timeout: t(5000)});
+      await new Promise(r => setTimeout(r, 4000));
+      await page.locator('.pipe-review-approve').click();
+      await page.waitForFunction(() => document.querySelector('.pipe-review-toast')?.textContent.includes('Undo'), null, {timeout: t(5000)});
+      assert.equal(state.posts.at(-1).path, 'tasks/D61/requirements/r-spec61/approve', 'the second approval posts');
+      await new Promise(r => setTimeout(r, 7000));
+      assert.equal(await page.locator('.pipe-review-toast').count(), 1, 'the second Undo window is still open after 7 seconds');
+      assert.deepEqual(errors, [], 'undo windows: no page errors');
+      await context.close();
+    }
+
+    // E13: a refused approval reloads the queue for the stage it was opened on, not the whole pipeline.
+    {
+      const context = await browser.newContext({viewport: {width: 1440, height: 940}, serviceWorkers: 'block'});
+      await context.addInitScript(() => {
+        try { localStorage.setItem('tico.theme', 'dark'); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
+      });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', e => errors.push(e.message));
+      const state = await install(page, {refuseApprove: true});
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('[data-col="build"] .pipe-play-chip', {timeout: t(8000)});
+      await page.locator('[data-col="build"] .pipe-play-chip').click();
+      await page.waitForSelector('.pipe-review .pipe-review-count', {timeout: t(5000)});
+      assert.equal((await page.locator('.pipe-review-count').first().innerText()).trim(), 'For you · 1 of 1', 'the Build stage has one item');
+      await page.locator('.pipe-review-approve').click();
+      await page.waitForFunction(() => document.querySelector('.pipe-review-err')?.textContent.includes('This changed'), null, {timeout: t(5000)});
+      assert.ok(state.queueReads >= 2, 'the queue is read again');
+      assert.equal((await page.locator('.pipe-review-count').first().innerText()).trim(), 'For you · 1 of 1', 'the reload keeps the Build stage');
+      assert.deepEqual(errors, [], 'stage reload: no page errors');
       await context.close();
     }
 
