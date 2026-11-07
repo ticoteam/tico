@@ -111,8 +111,8 @@ def _file_readable(conn: "sqlite3.Connection", auth: "Auth", reader: Any, row: d
         return False
     from . import files as files_module
 
-    visible: Any = files_module.file_visible
-    return bool(visible(conn, auth, reader, row, {}))
+    untyped: Any = files_module  # files.py is untyped: its functions are Any here, as hubdb's are
+    return bool(untyped.file_visible(conn, auth, reader, row, {}))
 
 
 def _source(conn: "sqlite3.Connection", auth: "Auth", who: Any, reviewer: str, body: dict[str, Any]) -> dict[str, Any]:

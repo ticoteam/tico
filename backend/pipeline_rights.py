@@ -12,6 +12,7 @@ is the same whichever form was stored.
 """
 
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -35,11 +36,11 @@ def canonical(c: "sqlite3.Connection", ref: object) -> str:
     return "bot:" + str(found[0] if found else value)
 
 
-def _unique(ids: "list[object] | tuple[object, ...]") -> list[str]:
+def _unique(ids: Sequence[object]) -> list[str]:
     return list(dict.fromkeys(str(i) for i in ids if i))
 
 
-def editable_pipeline_ids(c: "sqlite3.Connection", actor: str, ids: "list[object]") -> set[str]:
+def editable_pipeline_ids(c: "sqlite3.Connection", actor: str, ids: Sequence[object]) -> set[str]:
     """The ids, of those given, whose rules `actor` may change: a person who owns the pipeline, or is an Admin."""
     who = str(actor or "")
     wanted = _unique(ids)
@@ -59,7 +60,7 @@ def may_edit_rules(c: "sqlite3.Connection", actor: str, pipeline_id: str | None)
     return bool(pipeline_id) and str(pipeline_id) in editable_pipeline_ids(c, actor, [pipeline_id])
 
 
-def visible_pipeline_ids(c: "sqlite3.Connection", actor: str, ids: "list[object]") -> set[str]:
+def visible_pipeline_ids(c: "sqlite3.Connection", actor: str, ids: Sequence[object]) -> set[str]:
     """The ids, of those given, the reader may see. A pipeline that is not there is not visible."""
     wanted = _unique(ids)
     if not wanted:
