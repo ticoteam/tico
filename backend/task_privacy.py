@@ -1590,7 +1590,8 @@ def status_inputs(c, bots):
     snapshot(c)
     out: dict[str, dict[str, list]] = {bot: {"tasks": [], "approvals": []} for bot in bots}
     for part in H.chunks(out):
-        actors = ["bot:" + bot for bot in part]
+        # An f-string, not "+": basedpyright sometimes infers the unannotated H.chunks as Unknown | None.
+        actors = [f"bot:{bot}" for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
         for t in status_tasks(c, marks, actors * 4):
             for party in {t["owner_id"], t["requester_id"]}:
