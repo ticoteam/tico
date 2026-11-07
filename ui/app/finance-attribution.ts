@@ -5,8 +5,12 @@
    Shares are basis points in the API (share_bps, 1..10000 a part, up to 10 parts, total at most 10000); the dialogs
    show percentages and send share_bps = % × 100. Nothing here is gated for approval: the writes are the owner's, or
    anyone holding finance.attribution, and they go straight through.
-   Reads: GET /api/v2/finance/lines/{line_id}/attribution, GET /api/v2/finance/attribution-rules.
-   Writes (POST /api/v2/finance/actions): attribute, attribute_undo, attribution_rule_set, attribution_rule_delete.
+   The Attribution tab also lists the books' classes, departments and projects (a Classes table above the rules) for a
+   team each; Save posts attribution_map with the changed rows only.
+   Reads: GET /api/v2/finance/lines/{line_id}/attribution, GET /api/v2/finance/attribution-rules,
+   GET /api/v2/finance/attribution/dimensions.
+   Writes (POST /api/v2/finance/actions): attribute, attribute_undo, attribution_rule_set, attribution_rule_delete,
+   attribution_map.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    TypeScript: npm run build:ui compiles it to build/ui/app/finance-attribution.js, which the page runs in this file's place. */
 'use strict';
@@ -37,7 +41,11 @@ interface FinPick { id: string; name: string }
 interface FinAccessLite { teammates?: {teammate?: string}[]; teams?: {id: string; name: string}[] }
 interface FinRulesRead { rules?: FinRule[]; can_change?: boolean }
 interface FinNamed { id: string; name: string }
-interface FinAttrState { rules: FinRule[]; can: boolean; load: number }
+interface FinAttrState { rules: FinRule[]; can: boolean; load: number; dims: FinDim[] }
+// One class, department or project as GET /v2/finance/attribution/dimensions sends it (12 months of spend, its rule).
+interface FinDim { kind: string; id: string; name: string; lines: number; amount: number; rule_id?: string | null; splits?: FinShare[] | null }
+interface FinDimsRead { dimensions?: FinDim[] }
+const FIN_DIM_KINDS: Record<string, string> = {class: 'Class', location: 'Department', project: 'Project'};
 
 const FIN_SHARE_MAX = 10;      // parts in one split (the contract: 1 to 10)
 const FIN_SHARE_ALL = 10000;   // basis points in a whole line
@@ -204,7 +212,7 @@ async function finShareUndo(lineId: string): Promise<void> {
 // ----------------------------------------------------------------- the Attribution tab
 // Shown to the owner and anyone holding finance.attribution (or finance.admin): the rules, and + Rule for those who may change them.
 function finAttrPage(): void {
-  const state: FinAttrState = {rules: [], can: false, load: 0};
+  const state: FinAttrState = {rules: [], can: false, load: 0, dims: []};
   FIN.attr = state;
   const body = $('#fin-body');
   if (!body) return;
@@ -214,6 +222,7 @@ function finAttrPage(): void {
     const t = eventElement(ev);
     if (!t) return;
     if (t.closest('[data-fin-rule-add]')) { finRuleDialog(null); return; }
+    if (t.closest('[data-fin-class-save]')) { void finClassesSave(); return; }
     const menu = t.closest<HTMLElement>('[data-fin-rule-menu]');
     if (menu) { finPop(menu, menu.nextElementSibling as HTMLElement); return; }
     const edit = t.closest<HTMLElement>('[data-fin-rule-edit]');
@@ -233,6 +242,7 @@ function finAttrPage(): void {
   body.onchange = (ev: Event) => {
     const on = eventElement(ev)?.closest<HTMLInputElement>('input[data-fin-rule-on]');
     if (on) void finRuleToggle(on, state.rules[Number(on.dataset.finRuleOn)]);
+    if ((ev.target as HTMLElement).closest('select[data-fin-class-team]')) finClassesDirty();
   };
   void finAttrLoad();
 }
@@ -246,16 +256,63 @@ async function finAttrLoad(): Promise<void> {
   if (FIN?.attr !== state || state.load !== load || !$('#fin-rules')) return;
   state.rules = d?.rules || [];
   state.can = !!d?.can_change;
+  // The classes read is for those holding finance.attribution; anyone else sees no Classes table.
+  let dims: FinDimsRead | null = null;
+  try { dims = await get('/v2/finance/attribution/dimensions' + finAs('?'), {fresh: true}); }
+  catch { dims = null; }
+  if (FIN?.attr !== state || state.load !== load || !$('#fin-rules')) return;
+  state.dims = dims?.dimensions || [];
   for (const r of state.rules) FIN_SHARE.names.set(r.id, r.name);
   const add = $('[data-fin-rule-add]') as HTMLElement | null;
   if (add) add.hidden = !state.can;
   finAttrDraw();
 }
+// The Classes table: a row per class, department or project with its 12-month amount and a team picker (the rule dialog's
+// picker). Hidden when the books hold none. Each select keeps the team it started with, so Save sends the changes only.
+function finClassesHtml(dims: FinDim[]): string {
+  if (!dims.length) return '';
+  const rows = dims.map((d, i) => {
+    const first = d.splits?.[0];
+    const ref = first ? finShareRef(first) : '';
+    return `<tr data-fin-class-row="${i}"><td>${esc(d.name)} <span class="muted">${esc(FIN_DIM_KINDS[d.kind] || '')}</span></td><td>${finUsd(d.amount)}</td>
+      <td><select data-fin-class-team="${i}" data-fin-class-orig="${esc(ref)}" aria-label="Team for ${esc(d.name)}">${finShareOpts(ref)}</select></td></tr>`;
+  }).join('');
+  return `<section class="fin-classes" aria-label="Classes"><h3 class="fin-h">Classes</h3>
+    <div class="fin-scroll"><table class="fin-t"><thead><tr><th>Name</th><th>Amount (12 mo)</th><th>Team</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-class-save disabled>Save</button></div></section>`;
+}
+// Save is on only when a team changed.
+function finClassesDirty(): void {
+  const selects = [...document.querySelectorAll<HTMLSelectElement>('select[data-fin-class-team]')];
+  const save = document.querySelector<HTMLButtonElement>('[data-fin-class-save]');
+  if (save) save.disabled = !selects.some(s => s.value !== (s.dataset.finClassOrig || ''));
+}
+// The attribution_map item for a picker value: a teammate, a team, or neither (clears the rule).
+function finClassTarget(value: string): {teammate?: string; team?: string} {
+  if (value.startsWith('teammate:')) return {teammate: value.slice('teammate:'.length)};
+  if (value.startsWith('team:')) return {team: value.slice('team:'.length)};
+  return {};
+}
+async function finClassesSave(): Promise<void> {
+  const state = FIN.attr as FinAttrState | undefined;
+  if (!state) return;
+  const items: Record<string, unknown>[] = [];
+  for (const sel of document.querySelectorAll<HTMLSelectElement>('select[data-fin-class-team]')) {
+    if (sel.value === (sel.dataset.finClassOrig || '')) continue;
+    const d = state.dims[Number(sel.dataset.finClassTeam)];
+    if (d) items.push({kind: d.kind, id: d.id, ...finClassTarget(sel.value)});
+  }
+  if (!items.length) return;
+  try { await finAct('attribution_map', {items}); toast('Saved'); }
+  catch (e) { toast((e as Error).message, true); return; }
+  void finAttrLoad();
+}
 function finAttrDraw(): void {
   const state: FinAttrState | undefined = FIN.attr, box = $('#fin-rules');
   if (!box || !state) return;
-  if (!state.rules.length) { box.innerHTML = finNote('No rules.'); return; }
-  box.innerHTML = `<table class="fin-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th aria-label="Actions"></th></tr></thead><tbody>${state.rules.map((r, i) => {
+  const classes = finClassesHtml(state.dims);
+  if (!state.rules.length) { box.innerHTML = classes + finNote('No rules.'); return; }
+  box.innerHTML = classes + `<table class="fin-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th aria-label="Actions"></th></tr></thead><tbody>${state.rules.map((r, i) => {
     const word = FIN_SHARE_KINDS.find(k => k[0] === r.match.kind)?.[1] || '';
     const menu = state.can ? `<span class="fin-pop-at"><button type="button" class="ghost" data-fin-rule-menu aria-label="${esc(r.name)}: actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
         <div class="fin-pop fin-menu" role="menu" hidden><button type="button" role="menuitem" data-fin-rule-edit="${i}">Edit</button><button type="button" role="menuitem" data-fin-rule-del="${i}">Delete</button></div></span>` : '';

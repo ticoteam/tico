@@ -14963,6 +14963,47 @@
         ]
       }
     },
+    "/api/v2/finance/attribution/dimensions": {
+      "get": {
+        "summary": "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, largest amount first, each with its line count, amount and rule (its shares, or null); needs the finance.attribution right or admin. Set them with the attribution_map action",
+        "operationId": "listFinanceAttributionDimensions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAttributionDimensions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/balance-sheet": {
       "get": {
         "summary": "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
@@ -56462,6 +56503,85 @@
         ],
         "title": "FinanceAdRunRequest",
         "description": "Import a tool's ad spend now instead of at the next 4-hourly run."
+      },
+      "FinanceAttributionDimensions": {
+        "type": "object",
+        "properties": {
+          "dimensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "integer"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "rule_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "amount",
+                "id",
+                "kind",
+                "lines",
+                "name",
+                "rule_id",
+                "splits"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "can_change": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_change",
+          "dimensions",
+          "view_version"
+        ],
+        "additionalProperties": true
       },
       "FinanceAttributionRules": {
         "type": "object",

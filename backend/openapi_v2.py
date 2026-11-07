@@ -4905,6 +4905,16 @@ STABLE.extend(
             "FinanceAttributionRules",
         ),
         (
+            "/api/v2/finance/attribution/dimensions",
+            "get",
+            "Finance",
+            "listFinanceAttributionDimensions",
+            "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, "
+            "largest amount first, each with its line count, amount and rule (its shares, or null); needs the "
+            "finance.attribution right or admin. Set them with the attribution_map action",
+            "FinanceAttributionDimensions",
+        ),
+        (
             "/api/v2/finance/lines/{line_id}/attribution",
             "get",
             "Finance",
@@ -5745,6 +5755,25 @@ SCHEMAS.update(
                     )
                 ),
                 "can_change": "b",
+            }
+        ),
+        "FinanceAttributionDimensions": obj(
+            {
+                "dimensions": items(
+                    obj(
+                        {
+                            "kind": "s",
+                            "id": "s",
+                            "name": "s",
+                            "lines": "i",
+                            "amount": "i",
+                            "rule_id": "n",
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                        }
+                    )
+                ),
+                "can_change": "b",
+                "view_version": "i",
             }
         ),
         "FinanceMercuryUsers": obj(
