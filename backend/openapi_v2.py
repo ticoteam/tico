@@ -4735,6 +4735,15 @@ STABLE.extend(
             "FinanceBudgets",
         ),
         (
+            "/api/v2/finance/brief",
+            "get",
+            "Finance",
+            "getFinanceBrief",
+            "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when "
+            "those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
+            "FinanceBrief",
+        ),
+        (
             "/api/v2/finance/pnl",
             "get",
             "Finance",
@@ -5241,6 +5250,15 @@ SCHEMAS.update(
                 "on": "s",
                 "view_version": "i",
             }
+        ),
+        "FinanceBrief": obj(
+            {
+                "lines": items("s"),
+                "as_of": "s",
+                "changed_since": "n",
+                "version": "i",
+            },
+            required=["lines", "as_of", "version"],
         ),
         "FinanceReport": obj({"view_version": "i"}),
         "FinancePnl": obj(

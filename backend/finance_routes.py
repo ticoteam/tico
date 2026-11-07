@@ -20,6 +20,7 @@ from pydantic import Field
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
+from .finance import brief as finance_brief_mod
 from .finance import reads as finance_reads
 from .models import ID, Contract
 from .store import Problem
@@ -224,6 +225,18 @@ def install(app, store, auth, mutate):
         `at` in the period holding that day: the amount of the version in effect then."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+
+    @app.get("/api/v2/finance/brief")
+    def finance_brief(request: Request, view_as: str | None = None):
+        """What changed in Finance for the caller: a few short lines about the money they may see (their budgets, their
+        team's, cash and burn where they see the company), with `as_of` when those numbers last moved and `changed_since`
+        the `as_of` before. Empty `lines` when there is nothing to say (backend/finance/brief.py)."""
+        actor = as_viewer(request, view_as)
+        try:
+            with store.transaction() as c:
+                return finance_brief_mod.brief(c, actor)
+        except finance.FinanceError as e:
+            raise problem(e) from None
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(
