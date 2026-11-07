@@ -1425,3 +1425,15 @@ def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder
     assert "backend/tests/test_icon_font.py" in plan["python"]
     assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
+
+
+def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(tmp_path, monkeypatch):
+    # A script converted from ui/app/mapped.js to ui/app/mapped.ts keeps its UI_MAP entry: the map is keyed by the .js name.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
+    source(tmp_path, "ui/app/mapped.ts", "export const icon: string = 'home';\n")
+    source(tmp_path, "ui/tests/mapped-one.cjs", "// the browser script the map links to\n")
+    monkeypatch.setattr(checks, "UI_MAP", {"ui/app/mapped.js": ["mapped-one"]})
+    plan = checks.selection(["ui/app/mapped.ts"], root=tmp_path, core=[])
+    assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
+    assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
