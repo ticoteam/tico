@@ -305,17 +305,22 @@ function strategyAddRowHtml(kind, placeholder) {
       <button type="submit" class="strat-add">Add</button></form>`;
 }
 const stratSk = () => skelRows(3, {dot: false});
-// The sources behind a segment's dollar figure: the evidence of its own estimates that carry a size, and of its parts at
-// any depth (http and https links only). A figure with none is not shown on the map (check (a), Nov 7).
+// The sources behind a segment's dollar figure, counted the way the spend API counts it (market_spend.py, rolled spend):
+// the selected size's own evidence when that size has a spend, else the sum of its parts' sources. A part with no source
+// makes the sum unsourced. http and https links only. A figure with no source is not shown (check (a), Nov 7).
 function strategySources(seg, segs, seen = new Set()) {
   if (!seg || seen.has(seg.id)) return [];
   seen.add(seg.id);
   const urls = new Set();
-  for (const e of seg.estimates || []) {
-    if (!e || !(Number(e.spend_usd) > 0)) continue;
-    for (const x of e.evidence || []) if (/^https?:\/\//i.test(x?.source_url || '')) urls.add(x.source_url);
+  if (seg.size && seg.size.spend_usd != null) {
+    for (const x of seg.size.evidence || []) if (/^https?:\/\//i.test(x?.source_url || '')) urls.add(x.source_url);
+    return [...urls];
   }
-  for (const c of segs.filter(s => s.parent === seg.id)) for (const u of strategySources(c, segs, seen)) urls.add(u);
+  for (const c of segs.filter(s => s.parent === seg.id && s.rolled_usd)) {
+    const part = strategySources(c, segs, seen);
+    if (!part.length) return [];
+    for (const u of part) urls.add(u);
+  }
   return [...urls];
 }
 const strategyHost = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -789,6 +794,7 @@ function strategyBindMarket(state, body) {
     };
     where.onclick = ev => {
       if (!STRAT || STRAT !== state) return;
+      if (ev.target.closest('a')) return;   // a source link opens out; it does not target its tile
       const x = ev.target.closest('[data-seg-x]'), tile = ev.target.closest('[data-seg]');
       if (x && tile) {
         const id = tile.dataset.seg, all = spend()?.segments || [], seg = all.find(s => s.id === id);
