@@ -27,7 +27,7 @@ function thdLoaded(view: ThvView): ThdThread {
   return view.thread as ThdThread;
 }
 // What a settings save answers: only the parts that changed, `me` among them.
-type ThdChange = Partial<ThdThread> | null | undefined | void;
+type ThdChange = Partial<ThdThread> | null | undefined;
 
 // ----------------------------------------------------------------- choosing teammates
 // Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
@@ -82,7 +82,7 @@ function threadDialogWire(dlg: HTMLDialogElement): void { dlg.querySelectorAll<H
 // A named thread: its members, who else sees it (only them, a group, everyone) and a pin for each member. Every thread
 // needs a name; a group chat (two or more others) says so. A DM (`dm`, from a teammate's page) is the DM form.
 const NT_X = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-function threadNewOpen({dm = false, members = []}: {dm?: boolean; members?: string[]} = {}): void {
+function threadNewOpen({dm = false, members = []}: {dm?: boolean; members?: string[]} = {}) {
 
   if (dm) return threadDmOpen(members);
   const dlg = threadDialog('thread-new', 'New thread');
@@ -303,7 +303,7 @@ function threadSettingsOpen(view: ThvView): void {
   // `send` answers only what changed (with `me` as its own part), merged into the thread as it is when the answer
   // comes; saves go one at a time, so a slow one cannot put back what a later one changed. `rail`: the change shows on
   // the rail too. A refused change puts the panel back as the server has it.
-  let queue: Promise<boolean | void> = Promise.resolve();
+  let queue = Promise.resolve() as Promise<boolean | undefined>;
   const save = (send: (path: string) => Promise<ThdChange>, {rail = true}: {rail?: boolean} = {}) => (queue = queue.then(async () => {
     status.textContent = '';
     try {

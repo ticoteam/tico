@@ -548,7 +548,7 @@ function decidePaintBody(st: DecState) {
 }
 // Showing a question on its card reads it, through its task (hub-v2.js taskAsksRead).
 function decideAskRead(it: DecItem) {
-  const ask = it?.ask!;
+  const ask = it?.ask as NonNullable<DecItem["ask"]>;
   if (!askToMe(ask) || ask.read_at || ask.question_task) return;   // a question task has no message to read
   return taskAsksRead(it.id, ask.id);
 }
