@@ -73,7 +73,6 @@ function threadUnmount(view) {
   // The page's bar the view drew its actions into is empty again, unless another view has taken it since.
   const bar = view.opts.actsHost;
   if (bar && bar.dataset.thv === String(view.key)) { bar.innerHTML = ''; bar.onclick = null; delete bar.dataset.thv; }
-  window.askPeekDock?.();
 }
 // Views whose host left the page stop following.
 function thvSweep() { for (const v of THV_VIEWS) if (!v.host.isConnected) threadUnmount(v); }
@@ -801,8 +800,8 @@ function thvComposerDraw(view) {
     label: () => thvComposerLabel(view), buttons: () => thvComposerButtons(view), goalsOf: () => view.goals,
     clear: () => thvComposerClear(view), command: text => thvComposerCommand(view, text), task: text => thvComposerTask(view, text),
     newChat: view.opts.dm ? () => thvNewDm(view) : null};
-  // Above the box: the Ask's question (ask-panel.js askPeekDock) and the message being answered, each its own row.
-  host.innerHTML = `<div class="thv-peek-slot"></div><div class="thv-replying" hidden></div><div class="ask pill-thread thv-ask"><div class="p-pill">
+  // Above the box: the message being answered.
+  host.innerHTML = `<div class="thv-replying" hidden></div><div class="ask pill-thread thv-ask"><div class="p-pill">
       ${bot ? pillBotHTML(bot) : ''}
       ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
@@ -862,7 +861,6 @@ function thvComposerDraw(view) {
   thvComposerLabel(view);
   thvReplyingDraw(view);
   thvStopSync(view);
-  window.askPeekDock?.();
 }
 // Send says what it will do: in a bot's Home or DM the way's icon (pill.js sendWayPaint), the target in goal mode,
 // with the Goal chip and the empty box saying so too; elsewhere the arrow. An empty box only dims it.
