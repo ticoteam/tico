@@ -495,7 +495,9 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
-  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
+  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. A
+  seat placed with a template (`seats.template`) has that template as its one, strong applicant; hiring it with a
+  different template is refused, and retitling the seat clears the pin. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
   A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
   under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*

@@ -1,7 +1,7 @@
 # Starter bots
 
-There are 104 role templates: 101 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
-Product and Engineering) and a three-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
+There are 107 role templates: 105 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
 feature or a document: it does the research, keeps its records, prepares the finished work and carries it to the point of
@@ -27,16 +27,16 @@ Chief of Staff is no longer a default.
 
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
-| Sales | `handshake` | Sales Manager (`sales-lead`) | 9 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 16 | Be known by the customers you want |
+| Sales | `handshake` | Sales Manager (`sales-lead`) | 11 | Turn interest into revenue |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 17 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
-| Finance | `account_balance` | Head of Finance (`finance-lead`) | 13 | Know where the money is |
+| Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`people-lead`) | 11 | Hire well, keep good people |
-| Product | `category` | Head of Product (`product-lead`) | 8 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-lead`) | 13 | Ship reliable software, steadily |
-| Leadership | `star` | Chief of Staff (`chief-of-staff`) | 3 | Keep the leaders focused |
+| Product | `category` | Head of Product (`product-lead`) | 9 | Build what customers need |
+| Engineering | `code` | Head of Engineering (`engineering-lead`) | 12 | Ship reliable software, steadily |
+| Leadership | `star` | Chief of Staff (`chief-of-staff`) | 2 | Keep the leaders focused |
 
 Every group has a head (`lead: true`): it writes the group's weekly summary from what its bots and humans
 produced, proposes who should take a stuck or misrouted request, and **hires**: when repeated work in the group is not
@@ -51,8 +51,10 @@ The built-ins are not in any group and no template duplicates them: the Libraria
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
 product repositories); the Brand Owner keeps the brand book and the Brand card, which marketing bots check their drafts
-against; BotOps creates and maintains bots; the Assistant is each human's own; and the Strategy Bot keeps the
-KPIs, so no template owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
+against; BotOps creates and maintains bots; the Assistant is each human's own; the Strategy Bot (`goal-manager`) keeps
+the KPIs and computes their readings; and the Owners on the core chart each own one result and log readings for the KPI
+that measures it with `hub kpi log`. Owning a result does not make a bot the only one who logs it. No other template
+owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates
 
@@ -72,7 +74,9 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `integration_instructions` | `sales-engineer` | Sales Engineer | A weekly technical deal prep: discovery gaps, demo scripts around the buyer's workflows, POC plans scored against agreed criteria, technical and security answers from approved sources | niche | Tico and team docs; meetings and GitHub optional |
 | `partner_exchange` | `partnerships` | Partnerships Manager | A weekly partner review: registrations with a proposed decision under the rules of engagement, partner-sourced pipeline, idle partners, and fees owed for review | niche | Tico only; a CRM, public web and email optional |
 | `cast_for_education` | `sales-enablement` | Sales Enablement Manager | Weekly win/loss notes from buyers' own words with counts over 90 days, one proposed talk-track change, and a 90-day ramp plan per new seller | niche | Imported sales calls; a CRM optional |
-| `person` | `lead-generation` | Lead Generation Owner | A weekly count of qualified leads by source with Sales' accept and reject reasons, one source test a week, lead capture drafts, and sourced target lists to verify; nothing sent or bought | common | Tico only; a CRM (read) and public web optional |
+| `person_search` | `lead-generation-owner` | Lead Generation Owner | A weekly count of qualified leads by source, the rule that makes a lead qualified, and each lead handed to inbound or outbound sales with its score and reasons | common | Tico and web access for public sources; a CRM optional |
+| `call` | `inbound-sales-owner` | Inbound Sales Owner | A weekday sweep of inbound leads inside the speed-to-lead target, each sorted with a written reason, reply drafts for review, and a Monday read-out of lead-to-call rates and lost leads | common | Tico only; a CRM, the sales inbox, web and meetings optional |
+| `rocket_launch` | `outbound-sales-owner` | Outbound Sales Owner | Weekly target account lists from the ideal customer profile, sequences with stop rules, every reply read the same day, and meetings booked with a handoff note | common | Tico and web access for public sources; a CRM and sequence mailbox optional |
 
 ### Marketing
 
@@ -91,9 +95,10 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `diversity_3` | `community` | Community Manager | A weekly community digest (response time, unanswered questions, champions, guideline flags, feedback routed) and draft sourced replies | niche | Public forum or community channels (read) |
 | `play_arrow` | `video-producer` | Video Producer | One video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next; nothing published without the owner's yes on the exact file | common | Tico only; brand guide and product docs optional; voice and avatar tools need their own grants |
 | `filter_alt` | `marketing-ops` | Marketing Operations Manager | A tracking convention, tagged links for every campaign, lead handoff rules, and a weekly check of tagging, lead sources and handoff delay with fixes and owners | niche | Tico only; CRM (read) and analytics exports optional |
-| `tour` | `cro` | Conversion Rate Optimization Owner | A weekly funnel read by landing page and step, the biggest drop-off named, and one proposed test with a hypothesis, sample and stop rule; drafts only | common | Public web and a funnel export on a task; CRM optional |
-| `download` | `app-store` | App Store Owner | Weekly listing conversion and rating trend for the iOS and Google Play listings, complaint patterns, three listing changes, and drafted replies to app store reviews; drafts only | niche | Public web; console exports on a task |
-| `link` | `affiliates` | Affiliates Owner | A weekly affiliate review: applications with a proposed decision, referrals and commissions by affiliate, each payout recomputed against the published terms, a drafted payout list for a person to pay, and fraud flags with their evidence | niche | Tico only; an affiliate program export on a task; public web and mail optional |
+| `diversity_3` | `segment-marketing-owner` | Marketing Owner | Each week, one customer segment's new customers and cost per customer against goal, its growth tests, and the asks waiting on channel owners | common | Tico only; a CRM segment field and a spend report optional |
+| `query_stats` | `cro-owner` | Conversion Rate Optimization Owner | A weekly funnel map with a count on every rate, the ranked leaks, and experiment briefs with sample size and stop rules worked out before launch | common | Tico and web access to the pages; a funnel export optional |
+| `dynamic_feed` | `social-ads-owner` | Social Ad Owner | A weekly review of each paid social campaign's cost per result against target, creative fatigue with a replacement for each tired ad, and each budget, creative or audience change prepared for review | common | Tico only; ad-platform reporting, landing pages and a CRM optional |
+| `manage_search` | `search-ads-owner` | Search Ad Owner | A weekly review of each paid search campaign's cost per result against target, the search terms that spend without converting with their negatives, and bidding only where conversions support it | common | Tico only; ad-platform reporting, landing pages and a CRM optional |
 
 ### Customer Support
 
@@ -190,13 +195,13 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `dashboard_customize` | `product-ops` | Product Operations Manager | One feature request ledger with the accounts behind each request, the beta roster, an eight-week release calendar, roadmap hygiene flags and ship notices for a human to send | niche | Tico only; CRM, GitHub and calendar optional |
 | `text_fields` | `ux-writer` | UX Writer | Copy tables for each spec (labels, errors, empty states), the product glossary, and a weekly review of pull requests that change user-facing text, for an engineer to post | niche | GitHub connected (read) |
 | `sell` | `pricing` | Pricing Analyst | A monthly pricing review (competitor price changes, discounts given, plan mix) and impact notes for a price change being weighed | niche | Public web; a CRM optional |
+| `target` | `segment-product-owner` | Product Owner | Each week, one customer segment's activation and retention: its problems ranked from tickets, feedback, calls and usage, and one-page product briefs for the product lead to approve | common | Tico only; meetings, a CRM and GitHub optional |
 
 ### Engineering
 
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `developer_board` | `engineering-lead` | Head of Engineering (head) | A weekly engineering summary (shipped, stuck pull requests, incidents, blocked work), routing proposals, and a hiring proposal when repeated work has no owner | default | GitHub connected |
-| `developer_board` | `engineering-manager` | Engineering Manager | Turns a requested change into one plan with a child task per repository, follows each engineer's pull requests to merge, and reports progress with links | common | GitHub connected |
 | `bug_report` | `issue-triage` | QA Engineer | Label and duplicate proposals, repro-step requests, a weekly issue digest, and a risk-ranked test plan and regression checklist per release | default | GitHub connected; offer it only then |
 | `code_blocks` | `pr-reviewer` | Senior Software Engineer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
 | `code_blocks` | `builder` | Builder | Takes each Dev ticket on its step, builds it on a branch with a test that proves the change, and carries the ticket through review and QA fixes; merges only under the team's merge rules | common | GitHub connected |
@@ -207,7 +212,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `deployed_code` | `devops-engineer` | DevOps Engineer | A weekly CI health report: flaky tests with failure rates, slowest jobs and their trend, red-main streaks, deploy frequency and three fix plans | niche | GitHub connected (Actions) |
 | `podium` | `developer-advocate` | Developer Advocate | A weekly developer pulse: a ready answer for each public question (drafted until sending is on), the friction log with counts, and runnable samples and tutorials | niche | Public web; GitHub and a community channel optional |
 | `architecture` | `software-architect` | Software Architect | Design doc and RFC review notes, proposed ADRs for decisions made without one, the system map and a ranked technical debt register | niche | GitHub connected; docs and meetings optional |
-| `account_tree` | `pipeline` | Pipeline Owner | Reports the merge-to-production path weekly: merge wait, gating checks, release cadence, failed deploys and rollbacks; gets each release ready (readiness, changelog and notes, suggested version) and rolls out the version the owner approves; never reruns, cancels, deploys, rolls back or merges on its own | niche | GitHub connected; chat optional |
+| `developer_board` | `engineering-manager` | Engineering Manager | A plan for each requested change with one child task per repository, each engineer's pull requests followed to merge, and progress reported with links | common | Tico and GitHub connected (read) |
 
 To run these bots as one team that builds, reviews, tests and releases software, see
 [The software factory](software-factory.md): the roles in order, which model each runs on and the Dev tickets steps.
@@ -227,7 +232,6 @@ head or `suggest`. Finish setup offers it on its own, off by default, beside the
 |---|---|---|---|---|---|
 | `star` | `chief-of-staff` | Chief of Staff (head) | A weekly brief to the owner from goals, tasks, updates and meetings, stalled-goal follow-up, the Monday agenda, and hiring proposals for Leadership bots or a missing group head | niche | Tico only |
 | `strategy` | `strategy-planning` | Strategy Analyst | A quarterly plan and OKR draft (three to five objectives, about three measurable key results each), last quarter graded 0 to 1, and a mid-quarter check-in | niche | Tico only |
-| `flag` | `initiative-owner` | Initiative Owner | Runs one strategy bet's Friday check-in: reads the bet and its wrong-if test, reports progress with evidence, makes a call (on track, watch or looks wrong) and names the next step; never edits the strategy | niche | Tico only; docs and meetings optional |
 
 Every starter drafts messages to outsiders until a person who manages it turns mail sending on in Tico.
 Authorized work uses the bot's granted Tools directly; paying, changing a record or deleting does

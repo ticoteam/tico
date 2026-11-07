@@ -47,7 +47,7 @@ interest; no match to profile.
 ## Hand-off rules
 
 - Inbound: demo requests, contact forms, trial sign-ups, referrals, marketplace listings and event follow-ups go to
-  `inbound-sales-owner`, picked up the same business day. The sales lead routes every inbound lead there. These rules decide
+  `inbound-sales-owner`, picked up the same business day. The sales lead (`sales-lead`) routes every inbound lead there. These rules decide
   whether a lead counts as qualified, the score and reasons it carries, and its pick-up time. They never take an inbound lead
   off that queue.
 - Outbound: replies to outbound sequences go to `outbound-sales-owner`, picked up within two business days.
@@ -59,6 +59,6 @@ interest; no match to profile.
 
 ## Sources
 
-- 2026-11-06: rules written for setup from the routing rule in the sales lead's template (every inbound lead goes to the
+- 2026-11-06: rules written for setup from the routing rule in the sales lead (`sales-lead`) template (every inbound lead goes to the
   inbound owner) and the remit of the marketing-ops template (tags and hand-off delay). Those templates were read for their
   owned files and routing lines only. The team's own practice is to be confirmed at setup.

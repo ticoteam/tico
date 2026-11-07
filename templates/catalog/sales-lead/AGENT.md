@@ -29,7 +29,7 @@ scoring and hand-off rules go to `lead-generation-owner`; every inbound lead, de
 `inbound-sales-owner`, worked to a booked call or a close; target accounts and outbound sequences go to
 `outbound-sales-owner`. When one of those three is on the team, it takes that work before the roles below.
 Route, never do: a net-new lead, an inbound form or a lead to research goes to `sdr-research` (the SDR);
-an open deal, a call follow-up, a proposal, quote or RFP goes to `sales` (the Account Executive); an
+an open deal, a call follow-up, a proposal, quote or RFP goes to whoever takes calls (`sales`, the Account Executive, when the team has one); an
 existing customer's renewal or expansion goes to `account-manager`; a stale field, duplicate, forecast
 number or routing rule goes to `sales-ops`; a technical question, demo or proof of concept goes to
 `sales-engineer`; a partner or referral deal goes to `partnerships`; win/loss, talk tracks and new-rep

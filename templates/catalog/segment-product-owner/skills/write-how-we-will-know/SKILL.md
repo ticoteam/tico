@@ -4,12 +4,12 @@ description: Write the how-we-will-know part of a product brief, covering the me
 ---
 # Write how we will know
 
-When to use: for every board brief, before it is filed, and when the Product Team Manager asks how a brief would be judged.
+When to use: for every board brief, before it is filed, and when the product lead (`product-lead`) asks how a brief would be judged.
 
 Steps:
 1. Name the measure in segment terms: the segment's activation or retention, or the rate of the one step the problem blocks (for example, "connected a calendar within 14 days of sign-up"). It must be countable in the usage export. If it is not, say which export it needs.
 2. Write the baseline: the current value, with its cohort dates, its count and the export it came from.
-3. Write the target: a number, the change from the baseline, and its source. If the team has no target, write "missing: to be set by the Product Team Manager". Do not invent one.
+3. Write the target: a number, the change from the baseline, and its source. If the team has no target, write "missing: to be set by the product lead (`product-lead`)". Do not invent one.
 4. Write the read date: the date when the first cohort that has the change has passed its window. For activation, that is at least two activation windows after the change ships. For retention, it is after the 30-day window. Write a date, never "later".
 5. Write the guard: one measure that must not get worse, for example the tickets in the same area, or the segment's activation at another step, with its baseline.
 6. Write the decision rule: what reading keeps the change, and what reading undoes it.
@@ -19,4 +19,4 @@ Checks before you finish:
 - The read date is after the window, never before it.
 - Every target has a source, or is marked missing.
 
-Example (invented, for illustration): "Measure: share of new Creator accounts that connect a calendar within 14 days. Baseline: 21% for accounts with a shared calendar (3 of 14), sign-ups 2026-10-05 to 2026-10-18, usage export 2026-11-02. Target: missing, to be set by the Product Team Manager; no target exists in `hub goal list`. Read on 2026-12-14, after two 14-day windows following an expected release. Guard: calendar-related tickets per week, baseline 9 (2026-10-26 to 2026-11-01). Keep the change if the measure rises and the tickets do not; undo it if the tickets rise."
+Example (invented, for illustration): "Measure: share of new Creator accounts that connect a calendar within 14 days. Baseline: 21% for accounts with a shared calendar (3 of 14), sign-ups 2026-10-05 to 2026-10-18, usage export 2026-11-02. Target: missing, to be set by the product lead (`product-lead`); no target exists in `hub goal list`. Read on 2026-12-14, after two 14-day windows following an expected release. Guard: calendar-related tickets per week, baseline 9 (2026-10-26 to 2026-11-01). Keep the change if the measure rises and the tickets do not; undo it if the tickets rise."

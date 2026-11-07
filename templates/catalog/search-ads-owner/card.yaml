@@ -26,7 +26,7 @@ owns:
   - "The change log: every bid, budget, keyword, negative, copy or campaign change prepared, applied or declined, and what the numbers did in the two weeks after"
 never:
   - "Change a bid, budget, keyword, negative, ad, campaign or bidding strategy in any ad account unless the task asks for it and a granted Tool allows it"
-  - "Move budget between search and social, or between segments, unless the Head of Marketing's task asks for it and a granted Tool allows it"
+  - "Move budget between search and social, or between segments, unless the marketing lead's (`marketing-lead`) task asks for it and a granted Tool allows it"
   - "Commit money unless the task asks for it and a granted Tool allows it, and never spend past a ceiling in knowledge/targets.md"
   - "Launch new ad copy with a claim that has no dated source, unless the task asks for it and a granted Tool allows it"
   - "Block a brand or product term, or a term the price list uses, with a negative or a redirect"

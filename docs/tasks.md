@@ -1115,6 +1115,9 @@ hub task update '#18945' --step "On deck" --step-rank 2.5
 hub task list --type "Dev ticket" --sort step
 ```
 
+A bare template name is an address too: `--owner marketing-lead` reaches the one live bot built from that template when
+no bot or person has that name and no open seat has that template.
+
 `hub_task_types` lists types and ordered steps. `hub_task_create` and `hub_task_update` accept
 `type` and `step`, as ids or names, and `number`; `hub_task_update` also takes `step_rank` and `title`, and
 `hub_task_list` takes `type`, `step` and `sort`. Movers manage definitions with `hub_task_type_create`,

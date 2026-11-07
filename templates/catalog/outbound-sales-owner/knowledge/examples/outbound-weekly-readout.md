@@ -29,7 +29,7 @@ Opt-outs are counted here, not as replies. Both were honoured the same day and a
 ## Meetings
 
 - Sequence A, two meetings: an operations lead (step 2 reply) and a studio manager (step 1 reply, after a first line about a new
-  location). Handed to the Account Executive on the task with notes.
+  location). Handed to whoever takes calls, on the task with notes.
 - Sequence B, one meeting: a reply at step 1 asking for a time. Handed over the same day.
 
 ## Sends not reconciled
@@ -45,7 +45,7 @@ positive replies per unique send at 7 days. Guardrails: opt-outs; stop an arm ea
 
 ## Could not read
 
-The CRM was not connected, so the open-deal check for this week's contacts used the account list and the sales lead's note only.
+The CRM was not connected, so the open-deal check for this week's contacts used the account list and the note of the sales lead (`sales-lead`) only.
 
 ## Sources
 

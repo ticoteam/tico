@@ -28,7 +28,7 @@ From `knowledge/lead-log.md`, for the last seven days and the seven before, on t
 ## 3. Count the closes
 
 Lead-to-close counts only leads that arrived at least one sales cycle ago (the default is 60 days, from the setup
-answers). Read each outcome from the CRM (read only) or from the Account Executive's note on the task. A lead with no
+answers). Read each outcome from the CRM (read only) or from the note of whoever took the call on the task. A lead with no
 outcome is open. Report closed-won and closed-lost, and the open count beside them, so the rate can be checked.
 
 ## 4. Why each lost lead was lost

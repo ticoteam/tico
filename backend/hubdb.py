@@ -2640,6 +2640,9 @@ def _message_writer(conn, actor, msg, conv):
 def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
+    A bare name no bot or person answers to is the one live bot built from that template (`marketing-lead`), if there is
+    exactly one and no open seat is set up from that template (`_template_owner`).
+
     None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
     """
     raw = str(value or "").strip()
@@ -2656,7 +2659,28 @@ def resolve_actor(conn: object, value: object) -> "str | None":
         return bot_actor(found["id"])
     if human(conn, raw):
         return human_actor(raw)
-    return None
+    return _template_owner(conn, raw)
+
+
+def _template_owner(conn, name):
+    """The one live bot built from the template `name` (a template's own `--owner marketing-lead`), as its actor.
+    None when no live bot is, or two are: an ambiguous name is still refused. An archived bot is not live. An open seat
+    set up from the template (lifecycle.py: its `template`, closed once a bot fills it) is one more claim on the name."""
+    if not _has_table(conn, "bot_settings"):
+        return None
+    found = _rows(
+        conn.execute(
+            "SELECT s.bot_id FROM bot_settings s JOIN bots b ON b.id=s.bot_id "
+            "WHERE s.template=? AND b.state!='archived' LIMIT 2",
+            (name,),
+        )
+    )
+    if (
+        _has_table(conn, "seats")
+        and conn.execute("SELECT 1 FROM seats WHERE template=? AND closed_at IS NULL LIMIT 1", (name,)).fetchone()
+    ):
+        return None
+    return bot_actor(found[0]["bot_id"]) if len(found) == 1 else None
 
 
 HELD_STATES = ("quarantined", "paused")

@@ -19,7 +19,7 @@ Read `knowledge/targets.md` and `knowledge/changes.md`. If a similar change was 
 - **New campaign:** segment, objective, audience (prospecting or retargeting, with its exclusions), daily budget, the primary conversion and its target, the review date, and the landing page. Read the landing page. If it does not answer the ad's promise, say what to fix and route it to `cro-owner`.
 - **New creative or test:** three variants, each testing one idea (the offer, the pain or the proof), each with its claims checked. Write the test as `skills/read-an-audience-or-creative-test/SKILL.md` sets it out: the question, the count, and the earliest read date.
 - **Audience change:** from what to what, the audience size the platform estimates, and the reason with its numbers.
-- **Budget move:** from which ad set to which, how much, within the step default in `knowledge/targets.md`, and the evidence from the last 28 days. A move across segments is the Head of Marketing's decision: ask it on the task.
+- **Budget move:** from which ad set to which, how much, within the step default in `knowledge/targets.md`, and the evidence from the last 28 days. A move across segments is the marketing lead's decision (`marketing-lead`): ask it on the task.
 - **Pause:** name the ad set or ad and the spend it stops. Never pause the only live ad in an ad set without a replacement ready.
 - **Diagnosis:** the numbers before and after, the factor that moved, the most likely cause, and the check that would confirm it.
 

@@ -1,7 +1,7 @@
 # Weekly segment product review
 
 Schedule: Mondays at 08:00 team time (routine `weekly-segment-product-review`), after setup. The hour is set so the
-Product Team Manager reads it at its 09:00 summary. Also run by hand. Budget 40 minutes. The outcome is one page: the
+product lead (`product-lead`) reads it at its 09:00 summary. Also run by hand. Budget 40 minutes. The outcome is one page: the
 segment's number against target, its ranked problems, the briefs filed and the decisions waiting. Nothing is built,
 shared or changed.
 

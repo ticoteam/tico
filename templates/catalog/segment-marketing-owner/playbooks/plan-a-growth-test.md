@@ -1,6 +1,6 @@
 # Plan a growth test
 
-Run inside the weekly review, or alone when the Marketing Team Manager asks for ideas for a segment. Budget 30 minutes.
+Run inside the weekly review, or alone when the marketing lead (`marketing-lead`) asks for ideas for a segment. Budget 30 minutes.
 The outcome is up to three Marketing tasks on the board, each with its channel and segment, ready for the Monday growth
 meeting. Nothing starts, spends or changes a channel here.
 

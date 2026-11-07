@@ -17,7 +17,7 @@ pains:
   - "replies sit unread while the sequence keeps sending"
   - "we cannot say which sequence brought a meeting"
 owns:
-  - "Outbound meetings booked each week, against the target set at setup, with each meeting handed to the Account Executive in a note"
+  - "Outbound meetings booked each week, against the target set at setup, with each meeting handed to whoever takes calls in a note"
   - "Target account lists from the ideal customer profile: accounts ranked by fit and dated signal, a contact chosen by role, each checked against the do-not-contact, customer and open-deal lists"
   - "Sequences: each touch, its gap in days, one new reason per touch, and the stop rules in knowledge/outbound-method.md"
   - "A first line for each contact: one dated, public, true fact about the account or the role, checked before a draft is written"
