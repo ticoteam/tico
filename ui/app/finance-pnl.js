@@ -62,6 +62,7 @@ function finPnlPage() {
   const view = asked === 'segments' && FIN_SEG.ok !== false ? 'segments' : asked === 'expenses' || !caps.company ? 'expenses' : 'company';
   finSegProbe();
   const bySeg = FIN_SEG.ok === true;
+  if (!bySeg) p.seg = '';   // a segment picked while the read was open is dropped once it is closed (a view-as change)
   // A range the person chose stays through a change of period; until then each period opens on its own window.
   if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
