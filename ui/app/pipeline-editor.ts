@@ -1,5 +1,5 @@
 /* ui/app/pipeline-editor.ts — The pipeline editor: a pipeline's stages, their requirements and Warn after times, the
-   links that hand tickets on, and its owner, manager and prefix. It opens from the pencil by the pipeline's name on the
+   links that hand tickets on, and its goal, judge, factory, privacy, owner, manager and prefix. It opens from the pencil by the pipeline's name on the
    Tasks page, which shows only to a reader who may change the pipeline's rules (GET /api/v2/pipelines/{id}/rights).
    Every control calls a route that exists: stage names and order use the task-type route (movers only, so those
    controls show only to a mover), requirements and settings use backend/pipeline_requirements.py, links use
@@ -21,6 +21,10 @@ interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id:
 interface PeState {
   type: PeType; reqs: Map<string, PeReq[]>; links: PeLink[] | null; requirements: boolean;
   mover: boolean; warn: string; link: string;
+  /** The settings block's server view (goal, judge, factory, privacy, members), or null when the route did not answer. */
+  settings: PipelineSettings | null;
+  /** The live factories for the Factory choice, or null when the list did not load (the choice is then left out). */
+  factories: PipelineFactory[] | null;
 }
 
 const PE_KINDS: [string, string][] = [['attachment', 'Attachment'], ['field', 'Field'], ['approval', 'Approval'], ['run', 'Run']];
@@ -80,7 +84,9 @@ async function pipelineEditSync(pipelineId: string | null | undefined): Promise<
 
 async function peLoad(id: string): Promise<PeState> {
   const type: PeType = (await get(`/v2/task-types/${encodeURIComponent(id)}`, {fresh: true})).type;
-  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), warn: '', link: ''};
+  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), warn: '', link: '', settings: null, factories: null};
+  try { state.settings = await pipelineSettings(id); } catch { state.settings = null; }
+  try { state.factories = await pipelineFactories(); } catch { state.factories = null; }
   try { state.links = (await get(peRoute(`/v2/pipeline-links?pipeline=${encodeURIComponent(id)}`), {fresh: true})).links; } catch { state.links = null; }
   try {
     for (const stage of type.steps) state.reqs.set(stage.id, (await get(peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage.id)}/requirements`), {fresh: true})).requirements ?? []);
@@ -140,6 +146,26 @@ function peStageHTML(state: PeState, stage: PeStage, i: number, count: number): 
     <div class="pe-form-slot" data-pe-slot="${esc(stage.id)}"></div></li>`;
 }
 
+const PE_JUDGE_LABELS: Record<string, string> = {'haiku-5.5': 'Haiku 5.5', jev: 'Jev', sonnet: 'Sonnet'};
+
+/** The Goal, Judge, Factory and Private rows of the settings block. They show only when the server sent the settings. */
+function peGoalHTML(state: PeState): string {
+  const s = state.settings;
+  if (!s) return '';
+  const isPrivate = s.visibility === 'members';
+  const judges: [string, string][] = s.judge_models.map(v => [v, PE_JUDGE_LABELS[v] ?? v]);
+  const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
+  const members = isPrivate
+    ? `<fieldset class="pe-members"><legend>Who can see it</legend>${[...pePeople(), ...peBots()].map(p =>
+        `<label class="pe-check"><input type="checkbox" data-pe-member value="${esc(p.id)}"${s.members.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('')}</fieldset>`
+    : '';
+  return `<label class="pe-f"><span>Goal</span><input name="goal" maxlength="200" value="${esc(s.goal ?? '')}" data-pe-setting="goal" autocomplete="off"></label>
+      <label class="pe-f"><span>Judge</span><select data-pe-setting="judge_model">${peOptions(judges, s.judge_model ?? s.default_judge_model)}</select></label>
+      ${state.factories ? `<label class="pe-f"><span>Factory</span><select data-pe-setting="factory_id"${isPrivate ? ' disabled' : ''}>${peWho(factories, s.factory_id, 'None')}</select></label>` : ''}
+      <label class="pe-check"><input type="checkbox" role="switch" data-pe-private${isPrivate ? ' checked' : ''}> Private</label>
+      ${members}`;
+}
+
 function peBodyHTML(state: PeState): string {
   const t = state.type;
   const from = (state.links ?? []).filter(l => l.to_pipeline_id === t.id).map(l => {
@@ -150,7 +176,7 @@ function peBodyHTML(state: PeState): string {
       <label class="pe-f"><span>Prefix</span><input name="prefix" maxlength="2" value="${esc(t.prefix ?? '')}" data-pe-setting="prefix" autocomplete="off"></label>
       <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'No owner')}</select></label>
       <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager, 'No manager')}</select></label>
-      ${t.goal ? `<p class="pe-goal"><span>Goal</span> ${esc(t.goal)}</p>` : ''}
+      ${peGoalHTML(state)}
       ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
     <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>
     ${state.mover ? '<form class="pe-add-stage" data-pe-add-stage><input name="name" maxlength="80" placeholder="New stage" aria-label="New stage" autocomplete="off"><button type="submit" class="ghost">Add stage</button></form>' : ''}`;
@@ -255,10 +281,15 @@ async function peSaveStages(steps: {id?: string; name: string; status: string}[]
 }
 const peSteps = (): {id?: string; name: string; status: string}[] => (PE?.type.steps ?? []).map(s => ({id: s.id, name: s.name, status: s.status}));
 
-async function peSetting(key: string, value: string): Promise<void> {
+/** Save some of the pipeline's settings (only the fields given), then read the editor again. */
+async function peSaveSettings(fields: Record<string, unknown>): Promise<void> {
   if (!PE) return;
-  try { await writeRequest('PATCH', peRoute(`/v2/pipelines/${encodeURIComponent(PE.type.id)}/settings`), {[key]: value}); } catch (e) { peFail(e); }
+  try { await pipelinePatchSettings(PE.type.id, fields); } catch (e) { peFail(e); }
   await peReload();
+}
+
+async function peSetting(key: string, value: string): Promise<void> {
+  await peSaveSettings({[key]: value});
 }
 
 async function peWarnSave(target: Element, stage: string, off: boolean): Promise<void> {
@@ -330,6 +361,11 @@ function peWire(dialog: HTMLDialogElement): void {
     if (t instanceof HTMLElement && t.closest('[data-pe-form]')) { const form = t.closest('form'); if (form) peFormSync(form); return; }
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) {
       const key = t.dataset['peSetting'], renamed = t.dataset['peRename'];
+      if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-private')) { void peSaveSettings({visibility: t.checked ? 'members' : 'company'}); return; }
+      if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-member')) {
+        void peSaveSettings({members: [...dialog.querySelectorAll<HTMLInputElement>('[data-pe-member]:checked')].map(box => box.value)});
+        return;
+      }
       if (key) void peSetting(key, t.value);
       else if (renamed && PE) {
         const name = t.value.trim();
