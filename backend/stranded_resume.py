@@ -1,3 +1,4 @@
+# pyright: strict
 """Restart stranded bot work: a bot's task left in progress with nothing to move it gets one resume wake.
 
 A bot works a task in `doing`. When a run ends with the task still `doing`, and the bot neither finished it, handed it
@@ -29,7 +30,13 @@ bot that reads the task, else the owner itself. A person is never told. A task r
 waits for the next day, whatever it did.
 """
 
-from . import hubdb as H
+import sqlite3
+from typing import Any, cast
+
+from . import hubdb
+
+# hubdb is untyped: each of its functions is partially unknown, and a cast cannot clear that on the attribute.
+H: Any = hubdb
 
 SWEEP_MINUTES = 10
 QUIET_MINUTES = 15
@@ -48,29 +55,31 @@ _MARKS = ",".join("?" * len(LIVE_JOBS))
 _BOOKKEEPING = ",".join("?" * len(BOOKKEEPING))
 
 
-def sweep(store, at=None):
+def sweep(store: Any, at: str | None = None) -> dict[str, int]:
     """One pass: chosen in a read, each task then woken or stopped in its own short write, checked again there.
     Returns {"resumed": n, "stopped": n}."""
-    from .batch_work import isolated
+    from . import batch_work as _batch_work
 
-    at = at or H.now()
+    batch_work: Any = _batch_work
+
+    at = cast(str, at or H.now())
     with store.read_transaction() as c:
         resume, stop = plan(c, at)
-    done = {"resumed": 0, "stopped": 0}
+    done: dict[str, int] = {"resumed": 0, "stopped": 0}
     for task_id in stop + resume:
         with store.transaction() as c:
-            with isolated(c, "stranded_resume", task_id):
+            with batch_work.isolated(c, "stranded_resume", task_id):
                 what = act(c, task_id, at)
                 if what:
                     done[what] += 1
     return done
 
 
-def run(c, at=None):
+def run(c: sqlite3.Connection, at: str | None = None) -> dict[str, int]:
     """`sweep` in the caller's transaction (tests)."""
-    at = at or H.now()
+    at = cast(str, at or H.now())
     resume, stop = plan(c, at)
-    done = {"resumed": 0, "stopped": 0}
+    done: dict[str, int] = {"resumed": 0, "stopped": 0}
     for task_id in stop + resume:
         what = act(c, task_id, at)
         if what:
@@ -78,22 +87,28 @@ def run(c, at=None):
     return done
 
 
-def plan(c, at):
+def plan(c: sqlite3.Connection, at: str) -> tuple[list[str], list[str]]:
     """([task ids to resume], [task ids to stop resuming]), oldest first, within the sweep's limits. Reads only."""
-    rows = H._rows(
-        c.execute(
-            f"SELECT tasks.* FROM {H.TASKS} tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
-            "WHERE tasks.status='doing' AND b.state='active' AND tasks.updated_at<=? "
-            "ORDER BY tasks.updated_at, tasks.id",
-            (H.shift(at, minutes=-QUIET_MINUTES),),
-        )
+    rows = cast(
+        list[dict[str, Any]],
+        H._rows(
+            c.execute(
+                f"SELECT tasks.* FROM {H.TASKS} tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
+                "WHERE tasks.status='doing' AND b.state='active' AND tasks.updated_at<=? "
+                "ORDER BY tasks.updated_at, tasks.id",
+                (cast(str, H.shift(at, minutes=-QUIET_MINUTES)),),
+            )
+        ),
     )
-    ready, taken, per_computer = {}, set(), {}
-    resume, stop = [], []
+    ready: dict[str, bool] = {}
+    taken: set[str] = set()
+    per_computer: dict[str | None, int] = {}
+    resume: list[str] = []
+    stop: list[str] = []
     for row in rows:
         if len(resume) >= SWEEP_CAP:
             break
-        slug = H.actor_id(row["owner_id"])
+        slug = cast(str, H.actor_id(row["owner_id"]))
         if slug in taken:
             continue
         if slug not in ready:
@@ -115,9 +130,9 @@ def plan(c, at):
     return resume, stop
 
 
-def act(c, task_id, at):
+def act(c: sqlite3.Connection, task_id: str, at: str) -> str | None:
     """Resume or stop resuming one task, if it still calls for it: "resumed", "stopped" or None."""
-    row = H.task(c, task_id)
+    row = cast(dict[str, Any] | None, H.task(c, task_id))
     if row is None:
         return None
     found = state(c, row, at)
@@ -126,7 +141,7 @@ def act(c, task_id, at):
     if found["stop"]:
         H._task_event(c, task_id, H.KEEPER, STOPPED, None, hears(c, row), STOP_NOTE)
         return "stopped"
-    if not _bot_ready(c, H.actor_id(row["owner_id"])):
+    if not _bot_ready(c, cast(str, H.actor_id(row["owner_id"]))):
         return None
     n = found["since"] + 1
     body = (
@@ -136,7 +151,9 @@ def act(c, task_id, at):
         "no progress, Tico stops and lists it for your manager."
     )
     try:
-        sent = H._wake(c, row, row["owner_id"], body, {"wake": "resume", "stranded": True}, trigger="stall_check")
+        sent = cast(
+            bool, H._wake(c, row, row["owner_id"], body, {"wake": "resume", "stranded": True}, trigger="stall_check")
+        )
     except H.Refused:
         return None
     if not sent:
@@ -145,7 +162,7 @@ def act(c, task_id, at):
     return "resumed"
 
 
-def state(c, row, at):
+def state(c: sqlite3.Connection, row: dict[str, Any], at: str) -> dict[str, Any] | None:
     """None when the task is not stranded now, else {"stop": whether resumes stop here, "since": resumes in a row with
     no progress}."""
     if not stranded(c, row, at):
@@ -162,19 +179,19 @@ def state(c, row, at):
     ]
     last_run = c.execute(
         "SELECT max(coalesce(settled_at, finished_at, created_at)) FROM attempts WHERE bot_id=? AND task_id=?",
-        (H.actor_id(row["owner_id"]), tid),
+        (cast(str, H.actor_id(row["owner_id"])), tid),
     ).fetchone()[0]
     others = c.execute(
         "SELECT max(created_at) FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
         "AND sender_id IS NOT NULL AND sender_id NOT IN (?,?)",
         (row["conversation_id"], H.KEEPER, row["owner_id"]),
     ).fetchone()[0]
-    quiet_since = max(
+    quiet_since: str = max(
         t
         for t in (row["updated_at"], progress, last_run, others, resumes[-1] if resumes else None, "")
         if t is not None
     )
-    if quiet_since > H.shift(at, minutes=-QUIET_MINUTES):
+    if quiet_since > cast(str, H.shift(at, minutes=-QUIET_MINUTES)):
         return None
     since = sum(1 for r in resumes if r > progress)
     if since >= NO_PROGRESS_LIMIT:
@@ -184,49 +201,58 @@ def state(c, row, at):
         ).fetchone():
             return None  # already stopped, and listed
         return {"stop": True, "since": since}
-    if sum(1 for r in resumes if r >= H.shift(at, hours=-24)) >= DAY_LIMIT:
+    if sum(1 for r in resumes if r >= cast(str, H.shift(at, hours=-24))) >= DAY_LIMIT:
         return None
     return {"stop": False, "since": since}
 
 
-def stranded(c, row, at):
+def stranded(c: sqlite3.Connection, row: dict[str, Any] | None, at: str) -> bool:
     """Whether this task is in progress with no run and nothing recorded to wait on (the module's docstring), its
     quiet time and its resumes aside."""
-    from . import auto_tasks, task_holds
+    from . import auto_tasks as _auto_tasks
+    from . import task_holds as _task_holds
 
-    if not row or row.get("status") != "doing" or not H.is_bot(row.get("owner_id")):
+    auto_tasks: Any = _auto_tasks
+    task_holds: Any = _task_holds
+
+    if not row or row.get("status") != "doing" or not cast(bool, H.is_bot(row.get("owner_id"))):
         return False
-    row = task_holds.with_holds(c, row)
+    row = cast(dict[str, Any] | None, task_holds.with_holds(c, row))
     if row is None:
         return False
     if row.get("blocked_since") or row.get("snoozed_until") and row["snoozed_until"] > at:
         return False
-    if row.get("next_run") or row.get("resume") or row.get("carried_by") and auto_tasks.carrier_held(c, row):
+    if (
+        row.get("next_run")
+        or row.get("resume")
+        or row.get("carried_by")
+        and cast(bool, auto_tasks.carrier_held(c, row))
+    ):
         return False
     if row.get("check_back_at") and row["check_back_at"] > at:
         return False
-    if (H.type_get(c, row.get("type_id")) or {}).get("role") == "product-roadmap":
+    if (cast(dict[str, Any] | None, H.type_get(c, row.get("type_id"))) or {}).get("role") == "product-roadmap":
         return False
     owner = row["owner_id"]
-    if not H.bot_reads_task(c, owner, row):
+    if not cast(bool, H.bot_reads_task(c, owner, row)):
         return False
     if _live(c, row):
         return False
     if c.execute(
         "SELECT 1 FROM quarantine_holds WHERE bot_id=? AND task_id=? AND released_at IS NULL LIMIT 1",
-        (H.actor_id(owner), row["id"]),
+        (cast(str, H.actor_id(owner)), row["id"]),
     ).fetchone():
         return False
-    if auto_tasks.waiting(c, row):
+    if cast(bool, auto_tasks.waiting(c, row)):
         return False
     # A due date ahead says when to look again at work not begun; work in progress does not wait for it.
     return H.recorded_wait(c, {**row, "due_at": None}, at) is None
 
 
-def handles(c, row):
+def handles(c: sqlite3.Connection, row: dict[str, Any] | None) -> bool:
     """Whether the sweep has this task in hand: a bot's task in progress that it has not stopped resuming. The task
     roundup's quiet line and Health's stuck-task check leave such a task to it."""
-    if not row or row.get("status") != "doing" or not H.is_bot(row.get("owner_id")):
+    if not row or row.get("status") != "doing" or not cast(bool, H.is_bot(row.get("owner_id"))):
         return False
     progress = _progress(c, row)
     since = c.execute(
@@ -236,52 +262,52 @@ def handles(c, row):
     return since < NO_PROGRESS_LIMIT
 
 
-def hears(c, row):
+def hears(c: sqlite3.Connection, row: dict[str, Any]) -> str:
     """Who hears that resumes stopped: the owner's manager on the org chart when that is another active bot that reads
     the task, else the owner itself. Never a person."""
     owner = row["owner_id"]
-    found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
-    target = (found[0] if found else "") or ""
-    target = target if not target or H.actor_kind(target) else H.bot_actor(target)
+    found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (cast(str, H.actor_id(owner)),)).fetchone()
+    target: str = (found[0] if found else "") or ""
+    target = target if not target or cast(str | None, H.actor_kind(target)) else cast(str, H.bot_actor(target))
     if (
         target
-        and H.is_bot(target)
+        and cast(bool, H.is_bot(target))
         and target != owner
-        and (H.bot(c, H.actor_id(target)) or {}).get("state") == "active"
-        and H.bot_reads_task(c, target, row)
+        and (cast(dict[str, Any] | None, H.bot(c, cast(str, H.actor_id(target)))) or {}).get("state") == "active"
+        and cast(bool, H.bot_reads_task(c, target, row))
     ):
         return target
     return owner
 
 
-def stops_for(c, actor, at):
+def stops_for(c: sqlite3.Connection, actor: str, at: str) -> list[tuple[Any, Any, dict[str, Any]]]:
     """The stops `actor` hears of that still stand: [(history row id, when, task row)], oldest first. A stop stands while
     its task is still in progress with the same owner and nothing moved it since."""
-    out = []
+    out: list[tuple[Any, Any, dict[str, Any]]] = []
     for event_id, when, task_id in c.execute(
         "SELECT id, created_at, subject_id FROM history_events WHERE subject_type='task' AND kind=? AND created_at>? "
         "AND new=? ORDER BY created_at",
-        (STOPPED, H.shift(at, days=-STOP_LOOKBACK_DAYS), actor),
+        (STOPPED, cast(str, H.shift(at, days=-STOP_LOOKBACK_DAYS)), actor),
     ).fetchall():
-        row = H.task(c, task_id)
-        if row and row["status"] == "doing" and H.is_bot(row["owner_id"]) and _progress(c, row) < when:
+        row = cast(dict[str, Any] | None, H.task(c, task_id))
+        if row and row["status"] == "doing" and cast(bool, H.is_bot(row["owner_id"])) and _progress(c, row) < when:
             out.append((event_id, when, row))
     return out
 
 
-def told(c, at):
+def told(c: sqlite3.Connection, at: str) -> set[str]:
     """The actors told of a stop in the lookback, for the roundup's candidates."""
     return {
         r[0]
         for r in c.execute(
             "SELECT DISTINCT new FROM history_events WHERE subject_type='task' AND kind=? AND created_at>?",
-            (STOPPED, H.shift(at, days=-STOP_LOOKBACK_DAYS)),
+            (STOPPED, cast(str, H.shift(at, days=-STOP_LOOKBACK_DAYS))),
         )
         if r[0]
     }
 
 
-def _progress(c, row):
+def _progress(c: sqlite3.Connection, row: dict[str, Any]) -> str:
     """When the task last moved on (the module's docstring), or ""."""
     tid, owner = row["id"], row["owner_id"]
     hist = c.execute(
@@ -301,9 +327,9 @@ def _progress(c, row):
     return max((t for t in (hist, said, filed) if t), default="")
 
 
-def _live(c, row):
+def _live(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
     """Whether a job for the task is owed or a run on it is live."""
-    slug = H.actor_id(row["owner_id"])
+    slug = cast(str, H.actor_id(row["owner_id"]))
     if c.execute(
         "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id=? AND j.state IN ({_MARKS}) AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
@@ -319,18 +345,20 @@ def _live(c, row):
     )
 
 
-def _bot_ready(c, slug):
+def _bot_ready(c: sqlite3.Connection, slug: str) -> bool:
     """Whether the bot can take a resume now: online and not held (check_pools.online), not draining, and with no run of
     its own queued or going (a busy bot gets its resume once that work is done)."""
-    from . import check_pools
+    from . import check_pools as _check_pools
 
-    if not check_pools.online(c, slug):
+    check_pools: Any = _check_pools
+
+    if not cast(bool, check_pools.online(c, slug)):
         return False
     if c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (slug,)).fetchone():
         return False
     return (
         c.execute(
-            f"SELECT 1 FROM jobs j WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {H.unheld_sql()} "
+            f"SELECT 1 FROM jobs j WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {cast(str, H.unheld_sql())} "
             "LIMIT 1",
             (slug,),
         ).fetchone()
@@ -338,6 +366,6 @@ def _bot_ready(c, slug):
     )
 
 
-def _computer(c, slug):
+def _computer(c: sqlite3.Connection, slug: str) -> str | None:
     found = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (slug,)).fetchone()
     return found[0] if found else None
