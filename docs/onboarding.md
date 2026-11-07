@@ -291,6 +291,8 @@ whole change. Members can add seats under themselves or someone below them; only
 - **AI providers**: the first link opens Settings > Models so bots can start working.
 - **Strategy: a draft. Publish your strategy**: a link to Strategy, until a version is published (Getting started's
   `strategy` step).
+- **Connect GitHub so your bots' work is backed up**: for the owner only, while GitHub is not connected and installed, a line with
+  a **Connect GitHub** link to Tools > GitHub ([GitHub app](github-app.md)); it is gone once GitHub is connected, and nobody else sees it.
 - **Add an admin**: a name and an email. The human joins the roster and the sign-in list and is made an admin (`POST /api/v2/access/humans`,
   then `POST /api/v2/access/humans/{id}` with `role: admin`). Tico sends no email. On a local install, only you can sign in
   until you add a domain and sign-in; adding an admin still saves their roster entry.

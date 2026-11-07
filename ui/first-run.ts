@@ -174,6 +174,7 @@ function frNextHTML(state) {
   return `<p class="fr-providers" id="fr-providers"><strong>AI providers:</strong> ${esc(frProvidersName(state))}.
       <a href="#/settings" data-gs-tab="models">${S.config?.providers_configured === false ? 'Add an AI provider' : 'Change'}</a></p>
     ${strategy?.done ? '' : '<p class="fr-strategy" id="fr-strategy"><strong>Strategy:</strong> a draft. <a href="#/strategy">Publish your strategy</a></p>'}
+    ${frGithubHTML()}
     <details class="fr-owners" id="fr-owners"><summary><span>${bots.length ? `You own all ${bots.length} bots.` : 'No bots yet.'}</span> <span class="linkish">Change</span></summary>
       <div class="fr-owner-list">${owners}</div></details>
     <details class="fr-admin" id="fr-admin"><summary>Add an admin <span class="muted">(optional)</span></summary>
@@ -184,6 +185,17 @@ function frNextHTML(state) {
     <details class="fr-connections"><summary>Connect tools and credentials</summary>
       <p><a href="#/tools/keys" data-fr-link="credentials">Keys</a> · <a href="#/tools" data-fr-link="integrations">Tools</a></p>
       <p class="fr-secrets" data-fr-secrets><strong>Enter credentials in Tools › Keys, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
+}
+// The owner's line to connect GitHub (ui/app/github-nudge.ts). It is filled from the nudge's once-per-page answer, so
+// nothing polls and no screen waits on it; anyone else gets no line.
+const frGithubHTML = () => (S.me?.role === 'owner' ? '<p class="fr-github" id="fr-github" hidden></p>' : '');
+async function frGithubFill() {
+  const line = $('#fr-github');
+  if (!line) return;
+  const missing = ghNudgeAnswer ?? (await ghNudgeMissingRead());
+  if (!missing || !line.isConnected) return;   // connected, or the screen moved on while the read was out
+  line.innerHTML = `Connect GitHub so your bots' work is backed up. <a class="ghost" href="#/tools/github">Connect GitHub</a>`;
+  line.hidden = false;
 }
 
 function frWireDone(state) {
@@ -228,6 +240,7 @@ function frWireNext(state) {
     } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; }
     form.querySelector('button').disabled = false;
   };
+  void frGithubFill();
   document.querySelectorAll('[data-fr-owner]').forEach(select => select.onchange = async () => {
     const slug = select.dataset.frOwner, person = select.value;
     if (!person) return;
