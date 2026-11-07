@@ -62,7 +62,12 @@ def test_only_the_owner_edits_view_defaults_and_unbacked_grants_are_suspended(bo
         assert act(c, OWNER, "view_defaults_set", {"member": "everything"}).code == "invalid"
         done = act(c, OWNER, "view_defaults_set", {"member": "none", "manager": "own_expenses"})
         assert done.status == "committed"
-        assert done.result["defaults"] == {"manager": "own_expenses", "member": "none", "manager_payroll": "totals"}
+        assert done.result["defaults"] == {
+            "manager": "own_expenses",
+            "member": "none",
+            "manager_payroll": "totals",
+            "segment_lead": "lead",
+        }
         assert done.result["suspended_grants"] == [grant.result["grant_id"]]
         assert FR.access(c, OWNER, at=AT)["defaults"]["member"] == "none"
         assert FR.pnl(c, "human:eve", *OCT, view="expenses", at=AT)["expense"] == [0]  # her own spend is gone
