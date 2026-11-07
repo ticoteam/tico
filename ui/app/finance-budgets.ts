@@ -10,15 +10,48 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// A budget as the read sends it: the generated row, plus what the page reads that the generated type leaves out.
+type FinBudState = import('../types/api').FinanceBudgetState & {amount?: number | null; actual?: number | null; pace_end?: number | null; remaining?: number | null};
+type FinBudget = Omit<import('../types/api').FinanceBudgetRow, 'state'> & {
+  state?: FinBudState; active?: boolean; account_id: string; parent_id?: string | null; catch_all?: boolean;
+  team?: string | null; teammate?: string | null; vendor?: string | null; period: string; warn_pct: number; at_limit: string;
+  owner?: string | null;
+};
+type FinBudLine = import('../types/api').FinancePnl['rows'][number];
+// FIN.bud: the page's state for the visit (the month's read, its budgets and P&L lines, the tree, amounts by month).
+// The month's read: its budgets (as FinBudget rows) and whether the read was cut at the limit.
+type FinBudRead = {budgets?: FinBudget[]; more?: boolean};
+interface FinBudPage {
+  read?: FinBudRead | null;
+  rows: FinBudget[];
+  lines: Record<string, FinBudLine>;
+  kids: Map<string, FinBudget[]>;
+  hist: {rows: Record<string, [string, number | null][]>} | null;
+  load: number;
+  histAsk?: number;
+  mine: boolean;
+}
+interface FinBudRow { b?: FinBudget; depth?: number; group?: string; key?: string }
+interface FinBudHistoryRead { columns?: {start: string}[]; budgets?: {id: string; budget?: (number | null)[] | null}[] }
+interface FinBudCreate { name: string; period: string; account_id: string; amount: number | null; warn_pct: number; effective_from: string; parent_id?: string; teammate?: string; vendor?: string }
+// The named controls of the + Budget dialog (form.elements is a collection; its fields are read by name).
+interface FinBudControls { account_id: HTMLSelectElement; parent_id: HTMLSelectElement; teammate: HTMLSelectElement; vendor: HTMLInputElement; warn_pct: HTMLInputElement; period: HTMLSelectElement }
+const finBudControls = (form: HTMLFormElement): FinBudControls => form.elements as unknown as FinBudControls;
+
 // The month shown, the search and the row picked, kept for the visit.
 const FIN_BUD = {month: '', q: '', sel: ''};
-const FIN_PLATFORM = {google_ads: 'Google Ads', meta_ads: 'Meta Ads'};
-const FIN_BUD_PERIODS = [['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
+const FIN_PLATFORM: Record<string, string> = {google_ads: 'Google Ads', meta_ads: 'Meta Ads'};
+const FIN_BUD_PERIODS: [string, string][] = [['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_BUD_HISTORY = 6;   // months of amounts in the rail
+const FIN_BUD_PER_NAME: Record<string, string> = {month: 'month', quarter: 'quarter', year: 'year', once: 'once'};
+const FIN_BUD_SHOWN_FROM: (string | undefined)[] = ['platform', 'mixed'];   // spent_from values that show platform spend
+
+// A YYYY-MM month as its year and month number (NaN parts for a value that is not one).
+const finBudYm = (ym: string): [number, number] => { const [y = NaN, m = NaN] = ym.split('-').map(Number); return [y, m]; };
 
 // `mine`: My budget, the teammate's own budgets (a budget whose teammate they are) and nothing else, read only.
 function finBudgetsPage(mine = false) {
-  const caps = finCaps(), B = FIN_BUD;
+  const caps = finNeed(finCaps(), 'the finance caps'), B = FIN_BUD;
   if (!B.month) B.month = finToday().slice(0, 7);
   if (mine) B.q = '';
   FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
@@ -26,33 +59,35 @@ function finBudgetsPage(mine = false) {
       ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}
       <span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bud">${skelRows(6, {dot: false})}</div>`, '', 'Selected budget');
-  const body = $('#fin-body');
-  body.querySelector('[data-fin-month]').onchange = ev => {
-    if (!ev.target.value || ev.target.value === B.month) return;
-    B.month = ev.target.value; finBudReset(); void finBudLoad();
+  const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
+  const monthIn = finNeed(body.querySelector<HTMLInputElement>('[data-fin-month]'), 'the month input');
+  monthIn.onchange = () => {
+    if (!monthIn.value || monthIn.value === B.month) return;
+    B.month = monthIn.value; finBudReset(); void finBudLoad();
   };
-  const q = body.querySelector('[data-fin-q]');
-  if (q) q.oninput = ev => { B.q = ev.target.value.trim().toLowerCase(); finBudDraw(); };
-  body.onclick = ev => {
-    if (ev.target.closest('[data-fin-bud-add]')) { finBudAdd(); return; }
-    const tr = ev.target.closest('tr[data-fin-bud]');
-    if (!tr || ev.target.closest('input')) return;
+  const q = body.querySelector<HTMLInputElement>('[data-fin-q]');
+  if (q) q.oninput = () => { B.q = q.value.trim().toLowerCase(); finBudDraw(); };
+  body.onclick = (ev: Event) => {
+    const hit = eventElement(ev);
+    if (hit?.closest('[data-fin-bud-add]')) { finBudAdd(); return; }
+    const tr = hit?.closest<HTMLTableRowElement>('tr[data-fin-bud]');
+    if (!tr || hit?.closest('input')) return;
     // Marked in place, not redrawn, so a double-click on the amount still finds its cell.
-    B.sel = tr.dataset.finBud;
+    B.sel = tr.dataset.finBud!;
     body.querySelectorAll('tr[data-fin-bud]').forEach(r => r.classList.toggle('fin-on', r === tr));
     finBudRail();
   };
-  body.ondblclick = ev => { const td = ev.target.closest('td[data-fin-bud-amt]'); if (td) finBudEdit(td); };
-  body.onkeydown = ev => {
-    const td = ev.target.closest?.('td[data-fin-bud-amt]');
-    if (td && ev.key === 'Enter' && ev.target === td) { ev.preventDefault(); finBudEdit(td); }
+  body.ondblclick = (ev: Event) => { const td = eventElement(ev)?.closest<HTMLTableCellElement>('td[data-fin-bud-amt]'); if (td) finBudEdit(td); };
+  body.onkeydown = (ev: KeyboardEvent) => {
+    const hit = eventElement(ev), td = hit?.closest<HTMLTableCellElement>('td[data-fin-bud-amt]');
+    if (td && ev.key === 'Enter' && hit === td) { ev.preventDefault(); finBudEdit(td); }
   };
   void finBudLoad();
 }
 
 // A new month: the table empties at once and edits wait for its rows (finBudEditable finds none until they are in).
 function finBudReset() {
-  const state = FIN.bud;
+  const state: FinBudPage = FIN.bud;
   Object.assign(state, {read: null, rows: [], kids: new Map(), hist: null});
   const box = $('#fin-bud'); if (box) box.innerHTML = skelRows(6, {dot: false});
   finRail('');
@@ -60,104 +95,104 @@ function finBudReset() {
 const FIN_BUD_LIMIT = 500;   // the most one read returns (GET /finance/budgets limit)
 
 async function finBudLoad() {
-  const state = FIN.bud, load = ++state.load, caps = finCaps(), B = FIN_BUD;
+  const state: FinBudPage = FIN.bud, load = ++state.load, caps = finNeed(finCaps(), 'the finance caps'), B = FIN_BUD;
   const [a, z] = finMonthBounds(B.month), today = finToday();
   // This month reads as of today; any other as of its first day (the version in effect then).
   const at = B.month === today.slice(0, 7) ? today : a;
   const view = caps.company ? 'company' : 'expenses';
   // My budget reads no P&L: its rows are the teammate's own budgets, listed flat.
-  const [bud, pnl] = await Promise.allSettled([get(`/v2/finance/budgets?at=${at}&limit=${FIN_BUD_LIMIT}${finAs()}`, {fresh: true}),
-    state.mine ? Promise.resolve(null) : get(`/v2/finance/pnl?period=month&start=${a}&end=${z}&view=${view}${finAs()}`, {fresh: true})]);
+  const [bud, pnl] = await Promise.allSettled([get<FinBudRead>(`/v2/finance/budgets?at=${at}&limit=${FIN_BUD_LIMIT}${finAs()}`, {fresh: true}),
+    state.mine ? Promise.resolve(null) : get<import('../types/api').FinancePnl>(`/v2/finance/pnl?period=month&start=${a}&end=${z}&view=${view}${finAs()}`, {fresh: true})]);
   if (FIN?.bud !== state || state.load !== load || !$('#fin-bud')) return;
   if (bud.status === 'rejected') { $('#fin-bud').innerHTML = finFail(bud.reason); finRail(''); return; }
   state.read = bud.value || {};
   state.rows = (state.read.budgets || []).filter(b => b.active && (!state.mine || b.teammate === caps.who));
-  state.lines = Object.fromEntries((pnl.status === 'fulfilled' ? pnl.value?.rows || [] : []).map(r => [r.account_id, r]));
+  state.lines = Object.fromEntries((pnl.status === 'fulfilled' ? pnl.value?.rows || [] : []).map((r: FinBudLine): [string, FinBudLine] => [r.account_id, r]));
   state.hist = null;
   const ids = new Set(state.rows.map(b => b.id));
   state.kids = new Map();
-  for (const b of state.rows) if (b.parent_id && ids.has(b.parent_id)) (state.kids.get(b.parent_id) || state.kids.set(b.parent_id, []).get(b.parent_id)).push(b);
+  for (const b of state.rows) if (b.parent_id && ids.has(b.parent_id)) (state.kids.get(b.parent_id) || state.kids.set(b.parent_id, []).get(b.parent_id)!).push(b);
   finBudDraw(); finBudRail();
 }
 
 // The table's rows in order: per line (by code), a group row when the line's top isn't one budget of its own, then each
 // budget and its children; budgets with no line known to the viewer last, under Other budgets.
-function finBudOrder() {
-  const state = FIN.bud, ids = new Set(state.rows.map(b => b.id)), lines = state.lines;
+function finBudOrder(): FinBudRow[] {
+  const state: FinBudPage = FIN.bud, ids = new Set(state.rows.map(b => b.id)), lines = state.lines;
   if (state.mine) return [...state.rows].sort((x, y) => String(x.name).localeCompare(String(y.name))).map(b => ({b, depth: 0}));
   const roots = state.rows.filter(b => !b.parent_id || !ids.has(b.parent_id));
-  const groups = new Map();
+  const groups = new Map<string, FinBudget[]>();
   for (const b of roots) {
     const key = !b.catch_all && b.account_id && lines[b.account_id] ? b.account_id : '';
-    (groups.get(key) || groups.set(key, []).get(key)).push(b);
+    (groups.get(key) || groups.set(key, []).get(key)!).push(b);
   }
   const keys = [...groups.keys()].sort((x, y) => (x ? 0 : 1) - (y ? 0 : 1)
     || String(lines[x]?.code || '').localeCompare(String(lines[y]?.code || '')));
-  const byName = (x, y) => String(x.name).localeCompare(String(y.name));
-  const out = [];
+  const byName = (x: FinBudget, y: FinBudget) => String(x.name).localeCompare(String(y.name));
+  const out: FinBudRow[] = [];
   for (const key of keys) {
-    const tops = groups.get(key).sort(byName);
-    const own = key && tops.length === 1 && !tops[0].team && !tops[0].teammate && !tops[0].vendor;
-    if (!own) out.push({group: key ? lines[key].name : 'Other budgets', key});
-    const walk = (b, depth) => { out.push({b, depth}); for (const k of (state.kids.get(b.id) || []).sort(byName)) walk(k, depth + 1); };
+    const tops = groups.get(key)!.sort(byName), top = tops[0]!;
+    const own = key && tops.length === 1 && !top.team && !top.teammate && !top.vendor;
+    if (!own) out.push({group: key ? lines[key]!.name : 'Other budgets', key});
+    const walk = (b: FinBudget, depth: number): void => { out.push({b, depth}); for (const k of (state.kids.get(b.id) || []).sort(byName)) walk(k, depth + 1); };
     for (const b of tops) walk(b, own ? 0 : 1);
   }
   return out;
 }
 // What the search matches: a budget's name, teammate, team, vendor or line.
-function finBudMatch(b) {
+function finBudMatch(b: FinBudget) {
   const q = FIN_BUD.q;
   if (!q) return true;
   const line = FIN.bud.lines[b.account_id]?.name || '';
   return [b.name, b.vendor, line, b.teammate ? finWho(b.teammate) : '', b.team ? finTeamName(b.team) : '']
     .some(t => String(t || '').toLowerCase().includes(q));
 }
-const finBudPlatform = b => FIN_PLATFORM[b.platform] || '';
+const finBudPlatform = (b: FinBudget) => FIN_PLATFORM[b.platform] || '';
 // A team's row: a team budget, or a teammate's whose children are their reports' budgets.
-const finBudTeamRow = b => !!b.team && !b.teammate && !b.vendor || (!!b.teammate && (FIN.bud.kids.get(b.id) || []).length > 0 && !b.vendor);
+const finBudTeamRow = (b: FinBudget) => !!b.team && !b.teammate && !b.vendor || (!!b.teammate && (FIN.bud.kids.get(b.id) || []).length > 0 && !b.vendor);
 // How much is used, 0-100+; null with no amount or no spend in view.
-const finBudPct = b => {
-  const s = b.state || {};
+const finBudPct = (b: FinBudget): number | null => {
+  const s: Partial<FinBudState> = b.state || {};
   if (s.actual == null || !s.amount) return null;
   return Math.round(s.actual / s.amount * 100);
 };
-const finBudMeterCls = (b, pct) => pct >= 100 ? ' bad' : pct >= (b.warn_pct || 100) ? ' warn' : '';
+const finBudMeterCls = (b: FinBudget, pct: number) => pct >= 100 ? ' bad' : pct >= (b.warn_pct || 100) ? ' warn' : '';
 // "Platform data as of 9:40 AM" (or "Nov 4, 9:40 AM" on another day) when ad platform spend is in the figure.
-function finBudAsOf(b) {
-  const s = b.state || {};
-  if (!s.as_of || !['platform', 'mixed'].includes(s.spent_from)) return '';
+function finBudAsOf(b: FinBudget) {
+  const s: Partial<FinBudState> = b.state || {};
+  if (!s.as_of || !FIN_BUD_SHOWN_FROM.includes(s.spent_from)) return '';
   const d = new Date(s.as_of), time = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
   return 'Platform data as of ' + (finIso(d) === finToday() ? time : `${finDayLabel(finIso(d))}, ${time}`);
 }
 // An ad budget not on the platform's own vendor keeps its books in Spent; the platform's figure shows under it.
-function finBudReported(b) {
-  const s = b.state || {};
+function finBudReported(b: FinBudget) {
+  const s: Partial<FinBudState> = b.state || {};
   if (s.reported == null || s.actual == null) return '';
   return `<div class="muted fin-small" data-fin-bud-reported title="${esc(`Reported by ${finBudPlatform(b) || 'the platform'}, not in Spent`)}">Platform ${finUsd(s.reported)}</div>`;
 }
 const finBudMay = () => finCaps()?.may('finance.budgets');
 // An amount changes from the month shown, this month or a later one, on a monthly budget (as on a line's page).
-const finBudEditable = b => !!b && !FIN.bud?.mine && b.period === 'month' && !b.catch_all && FIN_BUD.month >= finToday().slice(0, 7) && finBudMay();
-const finBudAmount = b => {
+const finBudEditable = (b: FinBudget | undefined) => !!b && !FIN.bud?.mine && b.period === 'month' && !b.catch_all && FIN_BUD.month >= finToday().slice(0, 7) && finBudMay();
+const finBudAmount = (b: FinBudget) => {
   const amount = b.state?.amount;
   if (amount == null) return '<span class="muted">No amount</span>';
   return finUsd(amount) + (b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '');
 };
 
 function finBudDraw() {
-  const state = FIN.bud, box = $('#fin-bud'); if (!box || !state.read) return;
+  const state: FinBudPage = FIN.bud, box = $('#fin-bud'); if (!box || !state.read) return;
   const B = FIN_BUD, order = finBudOrder();
   // With a search: the matches and the budgets above them, and a group row only over what it still holds.
   let shown = order;
   if (B.q) {
-    const keep = new Set(), byId = new Map(state.rows.map(b => [b.id, b]));
-    for (const b of state.rows) if (finBudMatch(b)) for (let x = b; x && !keep.has(x.id); x = byId.get(x.parent_id)) keep.add(x.id);
+    const keep = new Set<string>(), byId = new Map<string | null | undefined, FinBudget>(state.rows.map((b): [string, FinBudget] => [b.id, b]));
+    for (const b of state.rows) if (finBudMatch(b)) for (let x: FinBudget | undefined = b; x && !keep.has(x.id); x = byId.get(x.parent_id)) keep.add(x.id);
     shown = order.filter((r, i) => r.b ? keep.has(r.b.id) : order.slice(i + 1).find(n => !n.b || keep.has(n.b.id))?.b);
   }
-  const [y, m] = B.month.split('-').map(Number), last = new Date(y, m, 0).getDate();
+  const [y, m] = finBudYm(B.month), last = new Date(y, m, 0).getDate();
   const rows = shown.map(r => {
     if (!r.b) return `<tr class="fin-grp"><td colspan="7">${esc(r.group)}</td></tr>`;
-    const b = r.b, s = b.state || {}, pct = finBudPct(b), kids = (state.kids.get(b.id) || []).length;
+    const b = r.b, s: Partial<FinBudState> = b.state || {}, pct = finBudPct(b), kids = (state.kids.get(b.id) || []).length;
     const platform = finBudPlatform(b) ? esc(finBudPlatform(b)) : finBudTeamRow(b) ? '<span class="muted">team</span>' : '';
     const edit = finBudEditable(b);
     const pace = s.pace_end == null ? '' : s.amount != null && s.pace_end > s.amount ? `<span class="pill waiting">${finUsd(s.pace_end)}</span>` : finUsd(s.pace_end);
@@ -174,11 +209,11 @@ function finBudDraw() {
 }
 
 function finBudRail() {
-  const state = FIN.bud, B = FIN_BUD;
+  const state: FinBudPage = FIN.bud, B = FIN_BUD;
   const b = state.rows.find(x => x.id === B.sel);
   if (!b) { finRail(''); return; }
-  const s = b.state || {}, pct = finBudPct(b), month = FIN_MON[Number(B.month.slice(5, 7)) - 1], line = state.lines[b.account_id]?.name;
-  const per = {month: 'month', quarter: 'quarter', year: 'year', once: 'once'}[b.period] || b.period;
+  const s: Partial<FinBudState> = b.state || {}, pct = finBudPct(b), month = FIN_MON[Number(B.month.slice(5, 7)) - 1], line = state.lines[b.account_id]?.name;
+  const per = FIN_BUD_PER_NAME[b.period] || b.period;
   const hist = state.hist?.rows?.[b.id];
   finRail(`<div class="fin-rail-title"><h2>${esc(b.name)}</h2><span class="fin-big">${s.amount == null ? '' : finUsd(s.amount)}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${finBudMeterCls(b, pct)}" aria-hidden="true"><i style="width:${Math.min(100, pct)}%"></i></div><div class="muted fin-small">${finUsd(s.actual)} of ${finUsd(s.amount)} · ${month}</div>`}
@@ -195,15 +230,15 @@ function finBudRail() {
 }
 // Each budget's amount by month, the last few months to the one shown: one budget_vs_actual read per month shown.
 async function finBudHistory() {
-  const state = FIN.bud, load = state.load;
+  const state: FinBudPage = FIN.bud, load = state.load;
   if (state.histAsk === load) return;
   state.histAsk = load;
-  const [y, m] = FIN_BUD.month.split('-').map(Number), a = finIso(new Date(y, m - FIN_BUD_HISTORY, 1)), z = finMonthBounds(FIN_BUD.month)[1];
-  let rows = {};
+  const [y, m] = finBudYm(FIN_BUD.month), a = finIso(new Date(y, m - FIN_BUD_HISTORY, 1)), z = finMonthBounds(FIN_BUD.month)[1];
+  let rows: Record<string, [string, number | null][]> = {};
   try {
-    const r = await get(`/v2/finance/reports/budget_vs_actual?period=month&start=${a}&end=${z}&top_n=200${finAs()}`, {fresh: true});
+    const r = await get<FinBudHistoryRead>(`/v2/finance/reports/budget_vs_actual?period=month&start=${a}&end=${z}&top_n=200${finAs()}`, {fresh: true});
     const cols = r?.columns || [];
-    for (const b of r?.budgets || []) rows[b.id] = cols.map((c, i) => [FIN_MON[finDate(c.start).getMonth()], b.budget?.[i] ?? null]).reverse();
+    for (const b of r?.budgets || []) rows[b.id] = cols.map((c, i): [string, number | null] => [FIN_MON[finDate(c.start).getMonth()]!, b.budget?.[i] ?? null]).reverse();
   } catch { rows = {}; }
   if (FIN?.bud !== state || state.load !== load) return;
   state.hist = {rows};
@@ -211,16 +246,16 @@ async function finBudHistory() {
 }
 
 // An amount in place: double-click (or Enter on the cell), type, Enter saves from the month shown, Esc puts it back.
-function finBudEdit(td) {
+function finBudEdit(td: HTMLTableCellElement) {
   if (td.querySelector('input')) return;
-  const state = FIN.bud, b = state.rows.find(x => x.id === td.dataset.finBudAmt), rows = state.rows;
-  if (!finBudEditable(b)) return;
+  const state: FinBudPage = FIN.bud, b = state.rows.find(x => x.id === td.dataset.finBudAmt), rows = state.rows;
+  if (!b || !finBudEditable(b)) return;
   const was = b.state?.amount ?? null, month = FIN_BUD.month;
   td.innerHTML = `<input class="fin-cell-in" inputmode="decimal" autocomplete="off" value="${finCentsField(was)}" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[Number(month.slice(5, 7)) - 1])}">`;
-  const input = td.querySelector('input');
+  const input = finNeed(td.querySelector<HTMLInputElement>('input'), 'the amount input');
   input.focus(); input.select();
   let done = false;
-  const finish = async save => {
+  const finish = async (save: boolean) => {
     if (done) return; done = true;
     const cents = finParseCents(input.value);
     if (!save || cents == null || cents === was || state.rows !== rows) { finBudDraw(); return; }
@@ -240,13 +275,13 @@ function finBudEdit(td) {
 // it starts. A teammate's or vendor's budget sits under the line's (a budget tree starts at a line), which is the
 // default Under. The name is the teammate's, else the vendor's, else the line's.
 function finBudAdd() {
-  const state = FIN.bud, lines = Object.values(state.lines).filter(l => l.type === 'expense' && !l.private)
+  const state: FinBudPage = FIN.bud, lines = Object.values(state.lines).filter(l => l.type === 'expense' && !l.private)
     .sort((x, y) => String(x.code).localeCompare(String(y.code)));
   if (!lines.length) { toast('No lines to budget', true); return; }
-  const mates = ((FIN?.acc || FIN_ACCESS)?.teammates || []).map(t => t.teammate).filter(Boolean)
-    .sort((x, y) => finWho(x).localeCompare(finWho(y)));
+  const mates: string[] = ((FIN?.acc || FIN_ACCESS)?.teammates || []).map((t: {teammate: string}) => t.teammate).filter(Boolean)
+    .sort((x: string, y: string) => finWho(x).localeCompare(finWho(y)));
   const vendors = [...new Set(['Google Ads', 'Meta Ads', ...state.rows.map(b => b.vendor).filter(Boolean)])];
-  const opt = (v, l, on = false) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(l)}</option>`;
+  const opt = (v: string, l: string, on = false): string => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(l)}</option>`;
   const dlg = finDecideDialog('Budget', `<label>Line<select name="account_id">${lines.map((l, i) => opt(l.account_id, l.name, i === 0)).join('')}</select></label>
     <label>Under<select name="parent_id"></select></label>
     <label>Teammate<select name="teammate">${opt('', '—')}${mates.map(t => opt(t, finWho(t))).join('')}</select></label>
@@ -254,23 +289,23 @@ function finBudAdd() {
     ${finAmountField('Amount')}
     <label>Warn at %<input name="warn_pct" type="number" min="1" max="100" step="1" value="80" required></label>
     <label>Period<select name="period">${FIN_BUD_PERIODS.map(([v, l]) => opt(v, l, v === 'month')).join('')}</select></label>
-    ${finFromField(FIN_BUD.month, true)}`, 'Add', form => {
-    const f = form.elements, account = f.account_id.value, parent = state.rows.find(b => b.id === f.parent_id.value);
+    ${finFromField(FIN_BUD.month, true)}`, 'Add', (form: HTMLFormElement): [string, FinBudCreate] => {
+    const f = finBudControls(form), account = f.account_id.value, parent = state.rows.find(b => b.id === f.parent_id.value);
     const teammate = f.teammate.value, vendor = f.vendor.value.trim(), cents = finAmountValue(form);
     const warn = Number(f.warn_pct.value);
     if (!Number.isInteger(warn) || warn < 1 || warn > 100) throw new Error('Warn at is 1 to 100');
     const name = teammate ? finWho(teammate) : vendor || state.lines[account]?.name || 'Budget';
-    const payload = {name, period: f.period.value, account_id: account, amount: cents, warn_pct: warn, effective_from: finFromValue(form, true)};
+    const payload: FinBudCreate = {name, period: f.period.value, account_id: account, amount: cents, warn_pct: warn, effective_from: finFromValue(form, true)};
     if (parent) payload.parent_id = parent.id;
     if (teammate) payload.teammate = teammate;
     if (vendor) payload.vendor = vendor;
     return ['budget_create', payload];
   }, 'Saved');
-  const form = dlg.querySelector('form'), f = form.elements;
+  const form = finNeed(dlg.querySelector('form'), 'the budget form'), f = finBudControls(form);
   // Under: the budgets on the line picked or a line above it (a child is on its parent's line or one under it).
   const unders = () => {
-    const above = new Set();
-    for (let id = f.account_id.value; id && !above.has(id); id = state.lines[id]?.parent_id) above.add(id);
+    const above = new Set<string | null | undefined>();
+    for (let id: string | undefined = f.account_id.value; id && !above.has(id); id = state.lines[id]?.parent_id) above.add(id);
     const fits = state.rows.filter(b => !b.catch_all && above.has(b.account_id));
     const top = finLineBudget(f.account_id.value, state.rows);
     f.parent_id.innerHTML = opt('', '—') + fits.map(b => opt(b.id, b.name, b === top)).join('');

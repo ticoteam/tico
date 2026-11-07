@@ -16,7 +16,7 @@
 const FIN_PNL: any = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: '', picked: false, compare: '', teams: [], mates: [],
   who: 'both', unattributed: false, sel: null, budgetCol: -1, last: null};
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
-const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
+const FIN_AT_LIMIT: Record<string, string> = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
 
 // ----------------------------------------------------------------- periods
 // The window a period opens on: a few periods back and a few ahead of today.
@@ -600,7 +600,7 @@ async function finLineLoad() {
   const name = $('#fin-line-name'); if (name && !name.textContent) name.textContent = state.cur.account?.name || '';
   finLineDraw(); finLineRail();
 }
-const FIN_PER = {month: 'mo', quarter: 'qtr', year: 'yr'};
+const FIN_PER: Record<string, string> = {month: 'mo', quarter: 'qtr', year: 'yr'};
 const finVendorBudget = vendor => (FIN.line?.budgets || []).find(b => b.active && b.account_id === FIN.line.id && b.vendor === vendor && !b.team && !b.teammate);
 const FIN_LINE_TOP = 50;     // the drill-down's top_n: rows past it fold into "Other · n"
 const FIN_OTHER = ' other';  // that row's key (backend/finance/reads.py OTHER): no real key starts with a space
