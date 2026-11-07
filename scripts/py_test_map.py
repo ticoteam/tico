@@ -150,8 +150,11 @@ def inert_lines(source):
             inside.update(range(opened.pop(), token.end[0] + 1))
         elif token.type == tokenize.STRING and token.end[0] > token.start[0]:
             inside.update(range(token.start[0], token.end[0] + 1))
+    lines = source.split("\n")
+    if lines[-1] == "":  # the text after the final newline is not a line (git counts none there)
+        lines.pop()
     out = set()
-    for number, text in enumerate(source.split("\n"), 1):
+    for number, text in enumerate(lines, 1):
         stripped = text.strip()
         if number not in inside and (not stripped or stripped.startswith("#")):
             out.add(number)
