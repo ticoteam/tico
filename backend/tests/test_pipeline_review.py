@@ -83,9 +83,9 @@ class World:
         task = H.task_create(self.c, ANA, title, "", owner, type=self.pipeline, step=step, lint=False)
         return task["id"]
 
-    def attach(self, task=None, requirement=None, digest="d1"):
+    def attach(self, task=None, requirement=None, digest="d1", attachment_id=None):
         values = (
-            f"a-{digest}-{time.monotonic_ns()}",
+            attachment_id or f"a-{digest}-{time.monotonic_ns()}",
             task or self.task,
             requirement or self.mockup,
             "link",
@@ -109,11 +109,18 @@ class World:
     def step_of(self, task=None):
         return self.c.execute("SELECT step_id FROM tasks WHERE id=?", (task or self.task,)).fetchone()[0]
 
-    def visit(self, task=None, at=None):
+    def visit(self, task=None, at=None, step=None):
         self.c.execute(
             "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_at) "
             "VALUES (?,?,?,?,?,?)",
-            (f"v-{time.monotonic_ns()}", task or self.task, self.pipeline, self.review, "initial", at or H.now()),
+            (
+                f"v-{time.monotonic_ns()}",
+                task or self.task,
+                self.pipeline,
+                step or self.review,
+                "initial",
+                at or H.now(),
+            ),
         )
 
     def decide(self, requirement, verdict, judge="llm", task=None, **extra):
@@ -520,6 +527,83 @@ def test_the_engine_calls_approve_and_mark_met_with_no_versions_and_catches_hubd
     assert R.mark_met(w.c, ANA, w.task, w.signoff, "note")["verdict"] == "override"
 
 
+def mixed_queue(path):
+    """Tickets that between them fill every kind of queue row: a person's review and a bot's (Badge, judged unsure), a
+    claim held by each of two people, an attachment and none, a send-back routed on, a backup the manager asked, Late and
+    not, a last requirement that moves the ticket on, and a ticket with no open visit (its time is its last step event).
+    Returns the world and each ticket's title by id, since ids are random."""
+    w = World(path)
+    w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
+    judge = w.requirement("Judge", "attachment", "bot_then_person", stage=w.making)
+    titles = {w.task: "Logo"}
+    w.attach(w.task, w.mockup, "logo", attachment_id="a-logo")
+    w.visit(w.task, "2026-11-01T09:00:00.000000Z")
+    R.claim(w.c, ANA, w.task, w.mockup)
+
+    def ticket(title, owner=None, step="Review"):
+        tid = w.ticket(title, step=step)
+        titles[tid] = title
+        if owner:
+            w.c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (owner, tid))
+        return tid
+
+    poster = ticket("Poster", owner=BEN)
+    w.attach(poster, w.mockup, "poster", attachment_id="a-poster")
+    w.visit(poster, "2999-01-01T00:00:00.000000Z")
+    w.c.execute(
+        "INSERT INTO review_claims (id, task_id, stage_requirement_id, claimed_by, claimed_at, expires_at) "
+        "VALUES ('rc-poster',?,?,?,?,'2999-01-01T00:00:00.000000Z')",
+        (poster, w.mockup, BEN, H.now()),
+    )
+    done = ticket("Done")
+    w.attach(done, w.mockup, "done", attachment_id="a-done")
+    w.visit(done, "2026-11-05T09:00:00.000000Z")
+    R.approve(w.c, ANA, done, w.mockup)
+    sent = ticket("Sent")
+    w.attach(sent, w.mockup, "sent", attachment_id="a-sent")
+    w.visit(sent, "2026-11-02T10:00:00.000000Z")
+    w.decide(
+        w.mockup,
+        "sent_back",
+        judge="person",
+        task=sent,
+        judge_actor=ANA,
+        route_next_to=BEN,
+        reason="Make the logo bigger",
+        created_at="2026-11-02T10:30:00.000000Z",
+    )
+    backup = ticket("Backup")
+    w.attach(backup, w.mockup, "backup", attachment_id="a-backup")
+    w.visit(backup, "2999-01-03T00:00:00.000000Z")
+    visit = w.c.execute("SELECT id FROM stage_visits WHERE task_id=?", (backup,)).fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa-backup',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, backup, visit, w.mockup, H.now()),
+    )
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.mockup))
+    badge = ticket("Badge", step="Making")
+    w.attach(badge, judge, "badge", attachment_id="a-badge")
+    w.visit(badge, "2026-11-03T08:00:00.000000Z", step=w.making)
+    w.decide(judge, "unsure", judge="bot", task=badge, pipeline_stage_id=w.making, reason="The badge is too small")
+    blank = ticket("Blank")
+    H.history_event(w.c, "task", blank, ANA, "step", new=w.review, created_at="2999-02-01T00:00:00.000000Z")
+    return w, titles
+
+
+def shaped_rows(w, titles, items):
+    """The queue rows with their random ids replaced by titles and names, so they compare with a fixture."""
+    names = {w.pipeline: "Design", w.making: "Making", w.review: "Review", w.shipped: "Shipped"}
+    rows = []
+    for item in items:
+        row = {**item, "task_id": titles[item["task_id"]], "pipeline_id": names[item["pipeline_id"]]}
+        row["stage_id"] = names[item["stage_id"]]
+        if item["moves_to"]:
+            row["moves_to"] = {**item["moves_to"], "stage_id": names[item["moves_to"]["stage_id"]]}
+        rows.append(row)
+    return rows
+
+
 def _queue_statements(w):
     statements = []
     w.c.set_trace_callback(statements.append)
@@ -530,9 +614,9 @@ def _queue_statements(w):
     return len(statements), len(items)
 
 
-def test_the_queue_query_count_does_not_grow_faster_than_it_did_before_the_queue_fields(world):
-    """The queue reads each row's state one row at a time, which predates the queue fields. The fields add a fixed number
-    of queries. Growing from 10 to 30 items ran 280 more queries on head 1496f6da0, before the fields; it may not grow."""
+def test_the_queue_query_count_does_not_grow_with_its_rows(world):
+    """The queue reads each kind of row once over all its items, so ten items and thirty take the same queries (the
+    count was 141 and 421 per queue before the reads were batched)."""
     w = world
     for i in range(4):
         w.attach(w.ticket(f"Ten {i}"), w.mockup, f"ten-{i}")
@@ -541,7 +625,418 @@ def test_the_queue_query_count_does_not_grow_faster_than_it_did_before_the_queue
         w.attach(w.ticket(f"Thirty {i}"), w.mockup, f"thirty-{i}")
     thirty, thirty_items = _queue_statements(w)
     assert (ten_items, thirty_items) == (10, 30)
-    assert thirty - ten <= 280
+    assert thirty - ten <= 5
+
+
+def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path, monkeypatch):
+    """Every kind of row at once (a person's review and a bot's, a claim held by each of two people, an attachment and
+    none, a send-back routed on, a backup asked, Late and not, a move to the next stage, a ticket whose time is its last
+    step event) comes out with the same keys, values and order as before the reads were batched. The rows were captured
+    from that version."""
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: [])
+    w, titles = mixed_queue(tmp_path / "hub.sqlite")
+    expected = {
+        ANA: [
+            {
+                "task_id": "Logo",
+                "title": "Logo",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-logo",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "logo",
+                "why": "reviewer",
+                "since": "2026-11-01T09:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": True,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Logo",
+                "title": "Logo",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2026-11-01T09:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Sent",
+                "title": "Sent",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-sent",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "sent",
+                "why": "reviewer",
+                "since": "2026-11-02T10:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Sent",
+                "title": "Sent",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2026-11-02T10:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Done",
+                "title": "Done",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2026-11-05T09:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": {"stage_id": "Shipped", "name": "Shipped"},
+            },
+            {
+                "task_id": "Badge",
+                "title": "Badge",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Making",
+                "stage": "Making",
+                "requirement_id": "r-judge",
+                "requirement": "Judge",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-badge",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "badge",
+                "why": "reviewer",
+                "since": "2026-11-03T08:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "The badge is too small",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": {"stage_id": "Review", "name": "Review"},
+            },
+            {
+                "task_id": "Poster",
+                "title": "Poster",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-poster",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "poster",
+                "why": "reviewer",
+                "since": "2999-01-01T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": "human:ben",
+                "claimed_by_me": False,
+                "assignee": {"id": "human:ben", "name": "Ben"},
+                "bot_note": "",
+                "reviewer_id": "human:ben",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Poster",
+                "title": "Poster",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2999-01-01T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "human:ben", "name": "Ben"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Backup",
+                "title": "Backup",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-backup",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "backup",
+                "why": "reviewer",
+                "since": "2999-01-03T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Backup",
+                "title": "Backup",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2999-01-03T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Blank",
+                "title": "Blank",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-sign-off",
+                "requirement": "Sign-off",
+                "requirement_version": 1,
+                "kind": "approval",
+                "work_version": 0,
+                "attachment": None,
+                "attachment_digest": None,
+                "why": "reviewer",
+                "since": "2999-02-01T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": True,
+                "moves_to": None,
+            },
+        ],
+        BEN: [
+            {
+                "task_id": "Sent",
+                "title": "Sent",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-sent",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "sent",
+                "why": "sent_back",
+                "since": "2026-11-02T10:00:00.000000Z",
+                "late": True,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "moves_to": None,
+            },
+            {
+                "task_id": "Backup",
+                "title": "Backup",
+                "number": None,
+                "pipeline_id": "Design",
+                "pipeline": "Design",
+                "stage_id": "Review",
+                "stage": "Review",
+                "requirement_id": "r-mockup",
+                "requirement": "Mockup",
+                "requirement_version": 1,
+                "kind": "attachment",
+                "work_version": 0,
+                "attachment": {
+                    "id": "a-backup",
+                    "source": "link",
+                    "url": "https://example.test/mockup",
+                    "blob_id": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "commit_sha": None,
+                },
+                "attachment_digest": "backup",
+                "why": "backup",
+                "since": "2999-01-03T00:00:00.000000Z",
+                "late": False,
+                "claimed_by": None,
+                "claimed_by_me": False,
+                "assignee": {"id": "bot:cmo", "name": "cmo"},
+                "bot_note": "",
+                "reviewer_id": "human:ana",
+                "can_mark_met": False,
+                "moves_to": None,
+            },
+        ],
+    }
+    assert {who: shaped_rows(w, titles, R.queue_for(w.c, who)) for who in (ANA, BEN)} == expected
+    w.c.close()
 
 
 def test_a_bot_reviewed_item_carries_its_bot_note_and_a_person_reviewed_one_carries_none(world):

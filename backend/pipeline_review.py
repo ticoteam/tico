@@ -21,6 +21,7 @@ A requirement's standing (`requirement_state`) is computed here from the decisio
 is the latest non-undone met/override decision at the current work version whose attachment was not replaced.
 """
 
+import itertools
 import json
 import uuid
 from contextlib import contextmanager
@@ -34,7 +35,7 @@ from .store import H, Problem
 
 if TYPE_CHECKING:
     import sqlite3
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Generator, Iterable
 
     from fastapi import FastAPI
 
@@ -129,11 +130,41 @@ def _person(actor: str) -> str:
 
 
 # ----------------------------------------------------------------------------- reading
+CHUNK = 500  # ids one read binds as a JSON array; a longer queue reads in more chunks, never more reads per row
+Key = tuple[str, str]  # (ticket id, requirement id)
+
+
+def _chunks(values: "Iterable[Any]") -> list[str]:
+    """The distinct non-empty values, sorted, as JSON arrays of at most CHUNK each, for `IN (SELECT value FROM json_each(?))`."""
+    ordered = sorted({str(v) for v in values if v})
+    return [json.dumps(ordered[i : i + CHUNK]) for i in range(0, len(ordered), CHUNK)]
+
+
+def _read(c: "sqlite3.Connection", sql: str, *dimensions: "Iterable[Any]") -> list[Row]:
+    """Runs `sql` once per chunk of each dimension's ids (one `?` per dimension, in order) and returns every row. A
+    (ticket, requirement) pair falls in one run, so the rows of one pair keep the order that run gave them."""
+    rows: list[Row] = []
+    for chunk in itertools.product(*(_chunks(values) for values in dimensions)):
+        rows.extend(_rows(c, sql, chunk))
+    return rows
+
+
 def _task(c: "sqlite3.Connection", task_id: str) -> Row:
     task = cast("Row | None", _hub().task(c, task_id))
     if task is None:
         raise Declined("not_found", "No such ticket", 404)
     return task
+
+
+def _tasks(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, Row]:
+    """The tickets as `hubdb.task` returns them (the TASKS view, with its tags), read once per chunk."""
+    sql = f"SELECT * FROM {_hub().TASKS} tasks WHERE id IN (SELECT value FROM json_each(?))"
+    found: dict[str, Row] = {}
+    for chunk in _chunks(task_ids):
+        rows = _rows(c, sql, (chunk,))
+        _hub().hydrate_task_tags(c, rows)
+        found.update({row["id"]: row for row in rows})
+    return found
 
 
 def _revision(task: Row) -> int:
@@ -207,15 +238,19 @@ def _met_decision(c: "sqlite3.Connection", task: Row, requirement: Row, attachme
     return _met_in(requirement, attachment, _decisions(c, task["id"], requirement["id"]), _revision(task))
 
 
-def requirement_state(c: "sqlite3.Connection", task: Row, requirement: Row) -> str:
+def _later(created_at: Any, than: Any) -> bool:
+    """Whether `created_at` is after `than`. A missing time is never after, as SQL reads a comparison with NULL."""
+    return created_at is not None and than is not None and created_at > than
+
+
+def _state_in(requirement: Row, revision: int, attachment: Row | None, decisions: list[Row]) -> str:
     """`met`, `failed` (the latest judgement at this work version), `waiting` (a reviewer is to decide) or `missing`
-    (an attachment requirement with nothing attached)."""
-    attachment = _current_attachment(c, task["id"], requirement["id"])
-    if _met_decision(c, task, requirement, attachment):
+    (an attachment requirement with nothing attached), from the decisions (newest first) and the newest attachment."""
+    if _met_in(requirement, attachment, decisions, revision):
         return "met"
-    for decision in _decisions(c, task["id"], requirement["id"]):
+    for decision in decisions:
         if decision["verdict"] in ("met", "override", "withdrawn", "failed"):
-            if decision["verdict"] == "failed" and decision["work_version"] == _revision(task):
+            if decision["verdict"] == "failed" and decision["work_version"] == revision:
                 return "failed"
             break
     if requirement["kind"] == "attachment" and attachment is None:
@@ -223,78 +258,142 @@ def requirement_state(c: "sqlite3.Connection", task: Row, requirement: Row) -> s
     return "waiting"
 
 
-def _sent_back_hold(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
-    """Whether the newest send-back still holds the item off the queue: nothing new was attached since and the work did
-    not change."""
-    for decision in _decisions(c, task["id"], requirement["id"]):
-        if decision["verdict"] != "sent_back":
-            continue
-        newer = _one(
-            c,
-            "SELECT 1 AS x FROM requirement_attachments WHERE task_id=? AND stage_requirement_id=? AND created_at>? "
-            "AND removed_at IS NULL LIMIT 1",
-            (task["id"], requirement["id"], decision["created_at"]),
-        )
-        return decision["work_version"] == _revision(task) and newer is None
-    return False
-
-
-def _routed_to(c: "sqlite3.Connection", task_id: str, requirement_id: str) -> str | None:
+def _routed_in(decisions: list[Row]) -> str | None:
     """Who the latest send-back routed the next attachment to (it skips the bot), if anyone."""
-    for decision in _decisions(c, task_id, requirement_id):
+    for decision in decisions:
         if decision["verdict"] == "sent_back":
             return cast("str | None", decision["route_next_to"])
     return None
 
 
-def _asked_backup(c: "sqlite3.Connection", task_id: str, requirement: Row) -> bool:
-    """Whether the pipeline manager asked the backup reviewer about this ticket's current visit."""
-    visit = _open_visit(c, task_id)
-    if visit is None:
-        return False
-    return (
-        _one(
-            c,
-            "SELECT 1 AS x FROM pipeline_manager_actions WHERE stage_visit_id=? AND stage_requirement_id=? "
-            "AND action='ask_backup' LIMIT 1",
-            (visit["id"], requirement["id"]),
-        )
-        is not None
-    )
-
-
-def _why_sees(c: "sqlite3.Connection", actor: str, task_id: str, requirement: Row) -> str | None:
-    """Why `actor` is to see this item: `reviewer`, `sent_back` (routed to them) or `backup`; None when they do not.
-    Only these see it, whatever else they may do on the ticket."""
-    if requirement.get("reviewer_id") == actor:
-        return "reviewer"
-    if _routed_to(c, task_id, requirement["id"]) == actor:
-        return "sent_back"
-    if requirement.get("backup_reviewer_id") == actor and _asked_backup(c, task_id, requirement):
-        return "backup"
-    return None
-
-
-def _bot_passed_it_up(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
-    """For bot_then_person: whether the bot's latest call at this work version was unsure or failed."""
-    for decision in _decisions(c, task["id"], requirement["id"]):
-        if decision["judge"] in ("llm", "bot") and decision["work_version"] == _revision(task):
+def _bot_passed_in(decisions: list[Row], revision: int) -> bool:
+    """Whether the bot's latest call at this work version, for bot_then_person, was unsure or failed."""
+    for decision in decisions:
+        if decision["judge"] in ("llm", "bot") and decision["work_version"] == revision:
             return decision["verdict"] in ("unsure", "failed")
     return False
 
 
-def _waits_on_person(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
+def _sent_back_in(decisions: list[Row], revision: int, attachment: Row | None) -> bool:
+    """Whether the newest send-back still holds the item off the queue: nothing new was attached since and the work did
+    not change. The newest attachment is the latest one, so it is after the send-back exactly when something newer came."""
+    for decision in decisions:
+        if decision["verdict"] != "sent_back":
+            continue
+        newer = attachment is not None and _later(attachment["created_at"], decision["created_at"])
+        return decision["work_version"] == revision and not newer
+    return False
+
+
+def _why_in(actor: str, requirement: Row, routed: str | None, asked: bool) -> str | None:
+    """Why `actor` is to see this item: `reviewer`, `sent_back` (routed to them) or `backup`; None when they do not."""
+    if requirement.get("reviewer_id") == actor:
+        return "reviewer"
+    if routed == actor:
+        return "sent_back"
+    if requirement.get("backup_reviewer_id") == actor and asked:
+        return "backup"
+    return None
+
+
+def _waits_in(requirement: Row, state: str, decisions: list[Row], revision: int, attachment: Row | None) -> bool:
     """Whether the requirement now waits for a person's decision: not met, something to decide on, not held off by a
     send-back, and for bot_then_person the bot passed it up or a send-back routed it to a person."""
     if requirement.get("retired_at") or requirement["reviewed_by"] not in PERSON_REVIEWED:
         return False
-    if requirement_state(c, task, requirement) in ("met", "missing"):
+    if state in ("met", "missing"):
         return False
-    if _sent_back_hold(c, task, requirement):
+    if _sent_back_in(decisions, revision, attachment):
         return False
     if requirement["reviewed_by"] == "bot_then_person":
-        return _routed_to(c, task["id"], requirement["id"]) is not None or _bot_passed_it_up(c, task, requirement)
+        return _routed_in(decisions) is not None or _bot_passed_in(decisions, revision)
     return True
+
+
+class _Facts:
+    """What the review rules read about (ticket, requirement) pairs, each kind fetched once for all of them: the decisions
+    not undone, the newest attachment, each ticket's open visit, and the visits the manager asked the backup about. The
+    queue and the single-row helpers read the rules through this, so they cannot disagree about an item."""
+
+    def __init__(self) -> None:
+        self.decisions: dict[Key, list[Row]] = {}
+        self.attachments: dict[Key, Row] = {}
+        self.visits: dict[str, Row] = {}
+        self.asked: set[Key] = set()  # (visit id, requirement id) the manager asked the backup about
+
+    @classmethod
+    def load(cls, c: "sqlite3.Connection", task_ids: "Iterable[str]", requirements: "Iterable[Row]") -> "_Facts":
+        facts = cls()
+        tasks = list(task_ids)
+        reqs = [r["id"] for r in requirements]
+        for decision in _read(
+            c,
+            "SELECT * FROM stage_decisions WHERE undone_at IS NULL AND task_id IN (SELECT value FROM json_each(?)) "
+            "AND stage_requirement_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC, rowid DESC",
+            tasks,
+            reqs,
+        ):
+            facts.decisions.setdefault((decision["task_id"], decision["stage_requirement_id"]), []).append(decision)
+        for attachment in _read(
+            c,
+            "SELECT * FROM requirement_attachments WHERE removed_at IS NULL "
+            "AND task_id IN (SELECT value FROM json_each(?)) "
+            "AND stage_requirement_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC, rowid DESC",
+            tasks,
+            reqs,
+        ):
+            facts.attachments.setdefault((attachment["task_id"], attachment["stage_requirement_id"]), attachment)
+        for visit in _read(
+            c, "SELECT * FROM stage_visits WHERE left_at IS NULL AND task_id IN (SELECT value FROM json_each(?))", tasks
+        ):
+            facts.visits.setdefault(visit["task_id"], visit)
+        visit_ids = [visit["id"] for visit in facts.visits.values()]
+        for asked in _read(
+            c,
+            "SELECT stage_visit_id, stage_requirement_id FROM pipeline_manager_actions WHERE action='ask_backup' "
+            "AND stage_visit_id IN (SELECT value FROM json_each(?)) "
+            "AND stage_requirement_id IN (SELECT value FROM json_each(?))",
+            visit_ids,
+            reqs,
+        ):
+            facts.asked.add((asked["stage_visit_id"], asked["stage_requirement_id"]))
+        return facts
+
+    def state(self, task: Row, requirement: Row) -> str:
+        key = (task["id"], requirement["id"])
+        return _state_in(requirement, _revision(task), self.attachments.get(key), self.decisions.get(key, []))
+
+    def why_sees(self, actor: str, task_id: str, requirement: Row) -> str | None:
+        key = (task_id, requirement["id"])
+        visit = self.visits.get(task_id)
+        asked = visit is not None and (visit["id"], requirement["id"]) in self.asked
+        return _why_in(actor, requirement, _routed_in(self.decisions.get(key, [])), asked)
+
+    def waits_on_person(self, task: Row, requirement: Row) -> bool:
+        key = (task["id"], requirement["id"])
+        return _waits_in(
+            requirement,
+            self.state(task, requirement),
+            self.decisions.get(key, []),
+            _revision(task),
+            self.attachments.get(key),
+        )
+
+
+def requirement_state(c: "sqlite3.Connection", task: Row, requirement: Row) -> str:
+    """`met`, `failed` (the latest judgement at this work version), `waiting` (a reviewer is to decide) or `missing`
+    (an attachment requirement with nothing attached)."""
+    return _Facts.load(c, [task["id"]], [requirement]).state(task, requirement)
+
+
+def _why_sees(c: "sqlite3.Connection", actor: str, task_id: str, requirement: Row) -> str | None:
+    """Why `actor` is to see this item, or None. Only these see it, whatever else they may do on the ticket."""
+    return _Facts.load(c, [task_id], [requirement]).why_sees(actor, task_id, requirement)
+
+
+def _waits_on_person(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
+    """Whether the item waits for a person's decision now (see `_waits_in`)."""
+    return _Facts.load(c, [task["id"]], [requirement]).waits_on_person(task, requirement)
 
 
 def _open_claim(c: "sqlite3.Connection", task_id: str, requirement_id: str, now: str | None = None) -> Row | None:
@@ -305,66 +404,6 @@ def _open_claim(c: "sqlite3.Connection", task_id: str, requirement_id: str, now:
         "AND (expires_at IS NULL OR expires_at>?)",
         (task_id, requirement_id, now or _now()),
     )
-
-
-def _entered_at(c: "sqlite3.Connection", task: Row) -> str:
-    visit = _open_visit(c, task["id"])
-    if visit:
-        return str(visit["entered_at"])
-    event = _one(
-        c,
-        "SELECT max(created_at) AS at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step'",
-        (task["id"],),
-    )
-    return str((event or {}).get("at") or task.get("created_at") or _now())
-
-
-def _late(c: "sqlite3.Connection", task: Row, since: str, now: str) -> bool:
-    """Whether the ticket has been at its stage longer than the stage's Warn after."""
-    stage = _one(c, "SELECT limit_minutes FROM task_steps WHERE id=?", (task.get("step_id") or "",))
-    minutes = (stage or {}).get("limit_minutes")
-    return bool(minutes) and since < _shift(now, minutes=-float(minutes))
-
-
-def _item(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row, why: str, now: str) -> Row:
-    attachment = _current_attachment(c, task["id"], requirement["id"])
-    stage = _one(c, "SELECT id, name FROM task_steps WHERE id=?", (requirement["pipeline_stage_id"],)) or {}
-    pipeline = _one(c, "SELECT id, name FROM task_types WHERE id=?", (requirement["pipeline_id"],)) or {}
-    claim_row = _open_claim(c, task["id"], requirement["id"], now)
-    since = _entered_at(c, task)
-    return {
-        "task_id": task["id"],
-        "title": task.get("title") or "",
-        "number": task.get("number"),
-        "pipeline_id": requirement["pipeline_id"],
-        "pipeline": pipeline.get("name") or "",
-        "stage_id": requirement["pipeline_stage_id"],
-        "stage": stage.get("name") or "",
-        "requirement_id": requirement["id"],
-        "requirement": requirement["name"],
-        "requirement_version": requirement["version"],
-        "kind": requirement["kind"],
-        "work_version": _revision(task),
-        "attachment": (
-            {
-                "id": attachment["id"],
-                "source": attachment["source"],
-                "url": attachment["url"],
-                "blob_id": attachment["blob_id"],
-                "file_id": attachment["file_id"],
-                "file_version": attachment["file_version"],
-                "commit_sha": attachment["commit_sha"],
-            }
-            if attachment
-            else None
-        ),
-        "attachment_digest": attachment["digest"] if attachment else None,
-        "why": why,
-        "since": since,
-        "late": _late(c, task, since, now),
-        "claimed_by": claim_row["claimed_by"] if claim_row and claim_row["claimed_by"] != actor else None,
-        "claimed_by_me": bool(claim_row and claim_row["claimed_by"] == actor),
-    }
 
 
 def _named(owner: str, humans: dict[str, Any], bots: dict[str, Row]) -> str:
@@ -385,95 +424,158 @@ def _bot_note(decisions: list[Row], work_version: int) -> str:
     return ""
 
 
-def _queue_fields(c: "sqlite3.Connection", actor: str, items: list[Row], now: str) -> None:
-    """Adds assignee, bot_note, moves_to, reviewer_id and can_mark_met to each queue item. Each input is read with one
-    query over all the items, so the count does not grow with the rows; `may_edit_rules` runs once per pipeline."""
+class _Queue:
+    """What the queue reads for all its rows at once, one read per kind and chunk: the unexpired claims, the stage and
+    pipeline names, the stages' Warn-after limits, and when each ticket not in a visit last stepped. Each row is built
+    from these, so the reads do not grow with the rows."""
+
+    def __init__(self, c: "sqlite3.Connection", waiting: list[tuple[Row, Row, str]], facts: _Facts, now: str) -> None:
+        tasks = [task for task, _, _ in waiting]
+        requirements = [requirement for _, requirement, _ in waiting]
+        self.facts = facts
+        self.now = now
+        self.claims: dict[Key, Row] = {}
+        for held in _read(
+            c,
+            "SELECT * FROM review_claims WHERE released_at IS NULL AND task_id IN (SELECT value FROM json_each(?)) "
+            "AND stage_requirement_id IN (SELECT value FROM json_each(?))",
+            [task["id"] for task in tasks],
+            [requirement["id"] for requirement in requirements],
+        ):
+            if held["expires_at"] is None or held["expires_at"] > now:
+                self.claims.setdefault((held["task_id"], held["stage_requirement_id"]), held)
+        self.stages: dict[str, Row] = {
+            row["id"]: row
+            for row in _read(
+                c,
+                "SELECT id, name, limit_minutes FROM task_steps WHERE id IN (SELECT value FROM json_each(?))",
+                [*(task.get("step_id") for task in tasks), *(r["pipeline_stage_id"] for r in requirements)],
+            )
+        }
+        self.types: dict[str, Any] = {
+            row["id"]: row["name"]
+            for row in _read(
+                c,
+                "SELECT id, name FROM task_types WHERE id IN (SELECT value FROM json_each(?))",
+                [requirement["pipeline_id"] for requirement in requirements],
+            )
+        }
+        self.stepped: dict[str, Any] = {
+            row["subject_id"]: row["at"]
+            for row in _read(
+                c,
+                "SELECT subject_id, max(created_at) AS at FROM history_events WHERE subject_type='task' AND kind='step' "
+                "AND subject_id IN (SELECT value FROM json_each(?)) GROUP BY subject_id",
+                [task["id"] for task in tasks if task["id"] not in facts.visits],
+            )
+        }
+
+    def since(self, task: Row) -> str:
+        """When the ticket entered its stage: the open visit's entry, else its last step, else when it was created."""
+        visit = self.facts.visits.get(task["id"])
+        if visit:
+            return str(visit["entered_at"])
+        return str(self.stepped.get(task["id"]) or task.get("created_at") or _now())
+
+    def late(self, task: Row, since: str) -> bool:
+        """Whether the ticket has been at its stage longer than the stage's Warn after."""
+        minutes = (self.stages.get(task.get("step_id") or "") or {}).get("limit_minutes")
+        return bool(minutes) and since < _shift(self.now, minutes=-float(minutes))
+
+    def item(self, actor: str, task: Row, requirement: Row, why: str) -> Row:
+        key = (task["id"], requirement["id"])
+        attachment = self.facts.attachments.get(key)
+        claim_row = self.claims.get(key)
+        since = self.since(task)
+        stage = self.stages.get(requirement["pipeline_stage_id"]) or {}
+        return {
+            "task_id": task["id"],
+            "title": task.get("title") or "",
+            "number": task.get("number"),
+            "pipeline_id": requirement["pipeline_id"],
+            "pipeline": self.types.get(requirement["pipeline_id"]) or "",
+            "stage_id": requirement["pipeline_stage_id"],
+            "stage": stage.get("name") or "",
+            "requirement_id": requirement["id"],
+            "requirement": requirement["name"],
+            "requirement_version": requirement["version"],
+            "kind": requirement["kind"],
+            "work_version": _revision(task),
+            "attachment": (
+                {
+                    "id": attachment["id"],
+                    "source": attachment["source"],
+                    "url": attachment["url"],
+                    "blob_id": attachment["blob_id"],
+                    "file_id": attachment["file_id"],
+                    "file_version": attachment["file_version"],
+                    "commit_sha": attachment["commit_sha"],
+                }
+                if attachment
+                else None
+            ),
+            "attachment_digest": attachment["digest"] if attachment else None,
+            "why": why,
+            "since": since,
+            "late": self.late(task, since),
+            "claimed_by": claim_row["claimed_by"] if claim_row and claim_row["claimed_by"] != actor else None,
+            "claimed_by_me": bool(claim_row and claim_row["claimed_by"] == actor),
+        }
+
+
+def _queue_fields(
+    c: "sqlite3.Connection", actor: str, items: list[Row], live: list[Row], tasks: dict[str, Row], queue: _Queue
+) -> None:
+    """Adds assignee, bot_note, reviewer_id, can_mark_met and moves_to to each queue item. The people and bots, the move
+    links and the pipelines' steps are each read once over all the items; `may_edit_rules` runs once per pipeline."""
     if not items:
         return
-    task_ids = _ids(i["task_id"] for i in items)
-    stage_ids = _ids(i["stage_id"] for i in items)
-    live = _rows(
-        c,
-        "SELECT * FROM stage_requirements WHERE pipeline_stage_id IN (SELECT value FROM json_each(?)) "
-        "AND retired_at IS NULL",
-        (stage_ids,),
-    )
-    req_ids = _ids(r["id"] for r in live)
-    requirements = {r["id"]: r for r in live}
-    owners = {
-        r["id"]: r["owner_id"]
-        for r in _rows(c, "SELECT id, owner_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (task_ids,))
-    }
-    bare = _ids(o.split(":", 1)[1] if ":" in o else o for o in owners.values() if o)
+    owners = {item["task_id"]: tasks[item["task_id"]].get("owner_id") for item in items}
+    bare = [o.split(":", 1)[1] if ":" in o else o for o in owners.values() if o]
     humans = {
         r["id"]: r["name"]
-        for r in _rows(c, "SELECT id, name FROM humans WHERE id IN (SELECT value FROM json_each(?))", (bare,))
+        for r in _read(c, "SELECT id, name FROM humans WHERE id IN (SELECT value FROM json_each(?))", bare)
     }
     bots = {
         r["id"]: r
-        for r in _rows(
-            c, "SELECT id, display_name, slug FROM bots WHERE id IN (SELECT value FROM json_each(?))", (bare,)
-        )
+        for r in _read(c, "SELECT id, display_name, slug FROM bots WHERE id IN (SELECT value FROM json_each(?))", bare)
     }
-    decisions: dict[tuple[str, str], list[Row]] = {}
-    for d in _rows(
-        c,
-        "SELECT * FROM stage_decisions WHERE undone_at IS NULL AND task_id IN (SELECT value FROM json_each(?)) "
-        "AND stage_requirement_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC, rowid DESC",
-        (task_ids, req_ids),
-    ):
-        decisions.setdefault((d["task_id"], d["stage_requirement_id"]), []).append(d)
-    current: dict[tuple[str, str], Row] = {}
-    for a in _rows(
-        c,
-        "SELECT id, task_id, stage_requirement_id, digest FROM requirement_attachments WHERE removed_at IS NULL "
-        "AND task_id IN (SELECT value FROM json_each(?)) AND stage_requirement_id IN (SELECT value FROM json_each(?)) "
-        "ORDER BY created_at DESC, rowid DESC",
-        (task_ids, req_ids),
-    ):
-        current.setdefault((a["task_id"], a["stage_requirement_id"]), a)
-    holders: dict[tuple[str, str], str] = {}
-    for cl in _rows(
-        c,
-        "SELECT task_id, stage_requirement_id, claimed_by FROM review_claims WHERE released_at IS NULL "
-        "AND (expires_at IS NULL OR expires_at>?) AND task_id IN (SELECT value FROM json_each(?)) "
-        "AND stage_requirement_id IN (SELECT value FROM json_each(?))",
-        (now, task_ids, req_ids),
-    ):
-        holders[(cl["task_id"], cl["stage_requirement_id"])] = cl["claimed_by"]
     links = {
         r["from_pipeline_stage_id"]: r["to_pipeline_id"]
-        for r in _rows(
+        for r in _read(
             c,
             "SELECT from_pipeline_stage_id, to_pipeline_id FROM pipeline_links WHERE mode='move' AND retired_at IS NULL "
             "AND from_pipeline_stage_id IN (SELECT value FROM json_each(?))",
-            (stage_ids,),
+            [item["stage_id"] for item in items],
         )
     }
-    pipeline_ids = {i["pipeline_id"] for i in items}
-    steps = _rows(
+    pipeline_ids = {item["pipeline_id"] for item in items}
+    steps = _read(
         c,
-        "SELECT id, type_id, name, position, status FROM task_steps WHERE type_id IN (SELECT value FROM json_each(?)) "
-        "ORDER BY position, id",
-        (_ids([*pipeline_ids, *links.values()]),),
+        "SELECT id, type_id, name, position, status FROM task_steps WHERE type_id IN (SELECT value FROM json_each(?))",
+        [*pipeline_ids, *links.values()],
     )
+    steps.sort(key=lambda step: (step["position"], step["id"]))
     names = {s["id"]: s["name"] for s in steps}
+    requirements = {r["id"]: r for r in live}
     rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
     for item in items:
         key = (item["task_id"], item["requirement_id"])
         owner = owners.get(item["task_id"])
         item["assignee"] = {"id": owner, "name": _named(owner, humans, bots)} if owner else None
-        item["bot_note"] = _bot_note(decisions.get(key, []), item["work_version"])
-        item["reviewer_id"] = holders.get(key) or requirements[item["requirement_id"]].get("reviewer_id")
+        item["bot_note"] = _bot_note(queue.facts.decisions.get(key, []), item["work_version"])
+        claim_row = queue.claims.get(key)
+        item["reviewer_id"] = (claim_row["claimed_by"] if claim_row else None) or requirements[
+            item["requirement_id"]
+        ].get("reviewer_id")
         item["can_mark_met"] = bool(rights[item["pipeline_id"]])
-        item["moves_to"] = _moves_to(item, live, decisions, current, links, steps, names)
+        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names)
 
 
 def _moves_to(
     item: Row,
     live: list[Row],
-    decisions: dict[tuple[str, str], list[Row]],
-    current: dict[tuple[str, str], Row],
+    facts: _Facts,
     links: dict[str, str],
     steps: list[Row],
     names: dict[str, str],
@@ -486,7 +588,7 @@ def _moves_to(
         if other.get("enforced_by"):
             continue  # a mirror of the review gate, which still decides it (as in `_stage_met`)
         key = (item["task_id"], other["id"])
-        if _met_in(other, current.get(key), decisions.get(key, []), item["work_version"]) is None:
+        if _met_in(other, facts.attachments.get(key), facts.decisions.get(key, []), item["work_version"]) is None:
             return None
     destination = _destination_in(item["stage_id"], item["pipeline_id"], links.get(item["stage_id"]), steps)
     if destination is None:
@@ -502,7 +604,7 @@ def queue_for(
     if not str(actor or "").startswith("human:"):
         return []
     sql = (
-        "SELECT t.id AS task_id, r.id AS requirement_id FROM stage_requirements r "
+        "SELECT t.id AS task_id, r.id AS requirement_id, r.pipeline_stage_id AS stage_id FROM stage_requirements r "
         "JOIN tasks t ON t.step_id=r.pipeline_stage_id "
         f"WHERE r.retired_at IS NULL AND r.reviewed_by IN ({','.join('?' * len(PERSON_REVIEWED))}) "
         f"AND t.status IN ({','.join('?' * len(ACTIVE))}) "
@@ -517,16 +619,28 @@ def queue_for(
         sql += " AND r.pipeline_stage_id=?"
         args.append(stage_id)
     now = _now()
-    items: list[Row] = []
-    for pair in _rows(c, sql, tuple(args)):
-        task = cast("Row | None", _hub().task(c, pair["task_id"]))
-        requirement = _one(c, "SELECT * FROM stage_requirements WHERE id=?", (pair["requirement_id"],))
+    pairs = _rows(c, sql, tuple(args))
+    tasks = _tasks(c, [pair["task_id"] for pair in pairs])
+    live = _read(
+        c,
+        "SELECT * FROM stage_requirements WHERE pipeline_stage_id IN (SELECT value FROM json_each(?)) "
+        "AND retired_at IS NULL",
+        [pair["stage_id"] for pair in pairs],
+    )
+    requirements = {r["id"]: r for r in live}
+    facts = _Facts.load(c, tasks, live)
+    waiting: list[tuple[Row, Row, str]] = []
+    for pair in pairs:
+        task = tasks.get(pair["task_id"])
+        requirement = requirements.get(pair["requirement_id"])
         if task is None or requirement is None:
             continue
-        why = _why_sees(c, actor, task["id"], requirement)
-        if why and _waits_on_person(c, task, requirement):
-            items.append(_item(c, actor, task, requirement, why, now))
-    _queue_fields(c, actor, items, now)
+        why = facts.why_sees(actor, task["id"], requirement)
+        if why and facts.waits_on_person(task, requirement):
+            waiting.append((task, requirement, why))
+    queue = _Queue(c, waiting, facts, now)
+    items = [queue.item(actor, task, requirement, why) for task, requirement, why in waiting]
+    _queue_fields(c, actor, items, live, tasks, queue)
     items.sort(key=lambda item: (not item["late"], item["since"], item["task_id"], item["requirement_id"]))
     return items
 
@@ -715,17 +829,18 @@ def _next_destination(c: "sqlite3.Connection", requirement: Row) -> tuple[str, s
 
 
 def _stage_met(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
-    """Whether every live requirement of the stage is met."""
-    for other in _rows(
-        c,
-        "SELECT * FROM stage_requirements WHERE pipeline_stage_id=? AND retired_at IS NULL",
-        (requirement["pipeline_stage_id"],),
-    ):
-        if other.get("enforced_by"):
-            continue  # a mirror of the review gate, which still decides it
-        if requirement_state(c, task, other) != "met":
-            return False
-    return True
+    """Whether every live requirement of the stage is met, judged from one read of the stage's facts."""
+    others = [
+        other
+        for other in _rows(
+            c,
+            "SELECT * FROM stage_requirements WHERE pipeline_stage_id=? AND retired_at IS NULL",
+            (requirement["pipeline_stage_id"],),
+        )
+        if not other.get("enforced_by")  # a mirror of the review gate, which still decides it
+    ]
+    facts = _Facts.load(c, [task["id"]], others)
+    return all(facts.state(task, other) == "met" for other in others)
 
 
 def _advance(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row) -> Row | None:
