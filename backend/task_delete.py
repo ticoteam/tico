@@ -62,10 +62,15 @@ TASK_ROWS = (
     "stage_decisions",
     "requirement_attachments",
     "review_claims",
+    "pipeline_handoffs",
 )
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
-TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
+# A handoff names two tasks, so either one takes its row ("a|b": a row of either column).
+TASK_KEYS = {
+    "history_events": ("subject_id", "subject_type='task'"),
+    "pipeline_handoffs": ("source_task_id|target_task_id", None),
+}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
     "attempts",
@@ -174,7 +179,8 @@ def _columns(c, table):
 
 def _has(c, table, column):
     """An older database may lack a table or a column; there is nothing in it to move."""
-    return column in _columns(c, table)
+    have = _columns(c, table)
+    return all(name in have for name in column.split("|"))
 
 
 def _marks(values):
@@ -192,14 +198,21 @@ def _task_key(table):
 
 
 def _where(column, where, p):
-    return (f"{where} AND " if where else "") + f"{column} IN ({_marks(p)})"
+    names = column.split("|")
+    found = " OR ".join(f"{name} IN ({_marks(p)})" for name in names)
+    return (f"{where} AND " if where else "") + (f"({found})" if len(names) > 1 else found)
+
+
+def _args(column, p):
+    """The parameters `_where` marks: `p` once for each column it names."""
+    return list(p) * len(column.split("|"))
 
 
 def _count(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
     return sum(
-        c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", p).fetchone()[0]
+        c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", _args(column, p)).fetchone()[0]
         for p in _parts(values)
     )
 
@@ -211,7 +224,10 @@ def _rows(c, table, column, values, where=None):
     out = []
     for p in _parts(values):
         out += [
-            dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", p)
+            dict(r)
+            for r in c.execute(
+                f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", _args(column, p)
+            )
         ]
     return out
 
@@ -219,7 +235,10 @@ def _rows(c, table, column, values, where=None):
 def _delete(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", p).rowcount for p in _parts(values))
+    return sum(
+        c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", _args(column, p)).rowcount
+        for p in _parts(values)
+    )
 
 
 def _column(c, sql, values):
