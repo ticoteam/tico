@@ -110,4 +110,7 @@ flight file, not the database.
 - Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh` and never committed. `docs/openapi/v2.json`
   is written by `python3 -m backend.openapi_v2`; never edit it by hand. On a rebase conflict, resolve
   `backend/openapi_v2.py` and regenerate (CONTRIBUTING.md registers the merge driver that handles most).
+- New UI code is strict TypeScript, enforced by `scripts/check_ui_strict.py`: a new `.js` under `ui/` fails unless it is a
+  vendor or bundler entry, and each `.ts` must pass `ui/tsconfig.strict.json` with zero findings. Only files on
+  `ui/strict-legacy.json` are exempt, and that list only shrinks.
 - Comments say why in the present tense; they do not name who asked or when.
