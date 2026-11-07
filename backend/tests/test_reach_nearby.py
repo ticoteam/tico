@@ -513,7 +513,9 @@ def two_levels_down(api):
 def test_a_bot_two_levels_down_is_refused_a_person_whatever_it_shares_with_them(api):
     two_levels_down(api)
     # Ben requested a task in ops's tree, is a reader of it, and chatted with ops in another conversation.
-    child = task(api, "pd-test", "bot:ops", title="Child of Ben's task", readers=["human:ben"])
+    child = task(api, "pd-test", "bot:ops", title="Child of Ben's task", private=True)
+    with api.app.state.store.transaction() as c:  # set as data: product-design itself may not name Ben
+        c.execute("UPDATE tasks SET readers=? WHERE id=?", ('["human:ben"]', child["id"]))
     asked = message(api, "ben-test", "ops", "Hello ops")
     other = api.post(
         "/api/v2/threads",
