@@ -403,7 +403,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
-/* Release now on the Pending Release column (ui/app/settings-release.js) */
+/* Release now on the Pending Release column (ui/app/settings-release.ts) */
 .board-release-slot:empty{display:none}
 .board-release-slot .board-release{padding:2px 8px;font-size:var(--t-sm);min-height:0}
 
@@ -425,7 +425,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .ask-filter-replay{display:grid;gap:8px;margin-top:20px;max-width:none}
 .ask-filter-replay .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .ask-filter-replay input[type=date]{max-width:180px}
-/* Pull to refresh (pull-refresh.js): the spinner slides down over the page, which stays where it is. */
+/* Pull to refresh (pull-refresh.ts): the spinner slides down over the page, which stays where it is. */
 .pull-spin{position:fixed;z-index:30;left:50%;top:calc(env(safe-area-inset-top) - 40px);width:36px;height:36px;display:grid;place-items:center;
   border-radius:50%;border:1px solid var(--line);background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.16);pointer-events:none;
   transform:translate(-50%,var(--pull,0px))}

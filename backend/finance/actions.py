@@ -34,6 +34,7 @@ from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import books_link, books_sync, delivery, rights, sync, tax, usage
+from . import vendors
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -139,6 +140,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     **prepaids.PLANNERS,
     **topups.PLANNERS,
     **attribution.PLANNERS,
+    **vendors.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
 

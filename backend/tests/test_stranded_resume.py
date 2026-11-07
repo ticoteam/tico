@@ -1,15 +1,18 @@
 """Restarting stranded bot work (backend/stranded_resume.py): a bot's task left in `doing` with no run and nothing to
 wait on gets one resume wake through the ordinary wake path, a reviewer's included; a task with a hold, a wait, a live
 job or a follow-up to come does not; a sweep takes a few tasks, oldest first, one per bot; three resumes with no
-progress stop and list the task once on the bot's manager's roundup, never a person's; progress resets the count.
+progress stop and list the task once on the bot's manager's roundup, never a person's; progress resets the count. A resume
+still queued when its task has moved on is dropped at claim; one whose task is still stranded is handed out.
 Synthetic fixtures only."""
+
+import pytest
 
 from backend import hubdb as H
 from backend import profiles as P
 from backend import stranded_resume as SR
 from backend import task_roundup
 from backend.tests.hold_rows import set_holds
-from backend.tests.test_api import api, assign, post, ready, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_profiles import add_bot, put
 
 
@@ -121,6 +124,20 @@ def test_a_task_quiet_less_than_the_quiet_time_after_its_last_run_is_not_resumed
         assert SR.run(c, H.shift(H.now(), minutes=SR.QUIET_MINUTES + 1))["resumed"] == 1
 
 
+def test_a_busy_owner_takes_its_resume_behind_its_other_work(api):
+    # A run queued for the bot on other work does not hold its resume back: the wake waits in line behind that work.
+    online(api, "ops")
+    tid = new_task(api, "Draft the notes")
+    other = new_task(api, "Other work")
+    with api.app.state.store.transaction() as c:
+        strand(c, tid)
+        row = H.task(c, other)
+        assert H._wake(c, row, row["owner_id"], "Please do the other work.", {"needs_action": True}), "a run is queued"
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] >= 1
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        assert resumes(c, tid) == ["1"]
+
+
 def test_a_reviewer_bots_task_left_in_doing_is_resumed(api):
     # The Post Release QA bot is a reviewer: it pulls no work of its own, so a check it left in doing sat there.
     with api.app.state.store.transaction() as c:
@@ -174,6 +191,62 @@ def test_a_task_with_a_hold_a_wait_a_live_job_or_a_follow_up_to_come_is_not_resu
         assert wakes(c, "ops", plain) == 1
         for tid in (blocked, snoozed, waits, live, later, quarantined, open_task, person["id"]):
             assert resumes(c, tid) == [], H.task(c, tid)["title"]
+
+
+def queued_resume(api, tid):
+    """The task stranded and its resume queued for its bot, with nothing else of the bot's queued. Returns the resume's
+    message id. The notice is written before anything that moves the task on below."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")  # the new-task notices
+        strand(c, tid)
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        message = c.execute(
+            "SELECT m.id FROM messages m JOIN jobs j ON j.message_id=m.id WHERE j.bot_id='ops' AND j.state='queued' "
+            "AND json_extract(m.refs,'$.stranded')=1 AND json_extract(m.refs,'$.task')=?",
+            (tid,),
+        ).fetchone()[0]
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-30), message))
+    return message
+
+
+def move_on(c, tid, how):
+    """The task moves on from the state its resume was written in: a step change, finished, a note its owner wrote, or
+    a new owner."""
+    if how == "step":
+        H._task_event(c, tid, H.KEEPER, "step", "in-progress", "review-1")
+    elif how == "finished":
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (tid,))
+    elif how == "note":
+        H._task_event(c, tid, H.bot_actor("ops"), "note", None, "Found the draft; two sections left", "")
+    else:
+        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))
+        H._task_event(c, tid, H.KEEPER, "owner", "bot:ops", "bot:cpo")
+
+
+@pytest.mark.parametrize("how", ["step", "finished", "note", "owner"])
+def test_a_queued_resume_whose_task_has_moved_on_is_dropped_at_claim_not_handed_out(api, how):
+    machine = online(api, "ops")
+    tid = new_task(api, "Draft the notes")
+    message = queued_resume(api, tid)
+    with api.app.state.store.transaction() as c:
+        move_on(c, tid, how)
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (message,)).fetchone()[0]
+    attempt = claim(api, machine)
+    assert attempt is None or attempt["job_id"] != job, "the claim does not hand the stale resume out"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled", (
+            "and it does not stay queued"
+        )
+
+
+def test_a_queued_resume_for_a_task_still_stranded_is_handed_out_at_claim(api):
+    machine = online(api, "ops")
+    tid = new_task(api, "Draft the notes")
+    message = queued_resume(api, tid)
+    attempt = claim(api, machine)
+    with api.app.state.store.read() as c:
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (message,)).fetchone()[0]
+    assert attempt is not None and attempt["job_id"] == job
 
 
 def test_a_paused_or_draining_bot_or_one_whose_computer_is_not_seen_gets_no_resume(api):
@@ -250,6 +323,36 @@ def test_three_resumes_with_no_progress_stop_and_list_once_on_the_managers_round
         ), "no person is told"
 
 
+def test_a_stop_that_reaches_the_manager_gives_it_one_ticket_at_once(api):
+    online(api, "ops", "cpo")
+    tid = new_task(api, "Draft the notes")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
+        put(c, "cpo", P.LEAD)  # a lead's catch-all digest row must not hold the manager's wake
+        strand(c, tid)
+        at = H.now()
+        for _ in range(SR.NO_PROGRESS_LIMIT):
+            assert SR.run(c, at)["resumed"] == 1
+            finish(c, "ops")
+            at = H.shift(at, minutes=SR.QUIET_MINUTES + 1)
+        assert SR.run(c, at)["stopped"] == 1
+        made = c.execute(
+            "SELECT owner_id, title FROM tasks WHERE title LIKE ?", ("%made no progress in 3 runs%",)
+        ).fetchall()
+        assert len(made) == 1, "one ticket for the manager"
+        assert made[0][0] == "bot:cpo" and "builder ops" in made[0][1]
+        held = c.execute(
+            "SELECT j.held FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='cpo' AND json_extract(m.refs,'$.wake')='nudge'"
+        ).fetchall()
+        assert [row[0] for row in held] == [0], "the manager's wake is immediate, not held for its digest"
+        assert SR.run(c, H.shift(at, hours=2)) == {"resumed": 0, "stopped": 0}
+        assert (
+            c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", ("%made no progress in 3 runs%",)).fetchone()[0]
+            == 1
+        ), "a stop is made once"
+
+
 def test_a_bot_with_no_manager_bot_hears_of_its_own_stop(api):
     online(api, "ops")
     tid = new_task(api, "Draft the notes")
@@ -263,6 +366,9 @@ def test_a_bot_with_no_manager_bot_hears_of_its_own_stop(api):
             at = H.shift(at, minutes=SR.QUIET_MINUTES + 1)
         assert SR.run(c, at)["stopped"] == 1
         assert stops(c, tid) == [("bot:ops", SR.STOP_NOTE)]
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", ("%made no progress%",)).fetchone()[0] == 0, (
+            "a stop that reaches the builder itself makes no ticket"
+        )
 
 
 def test_progress_between_resumes_resets_the_count(api):

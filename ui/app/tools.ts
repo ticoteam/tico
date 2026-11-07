@@ -1,4 +1,4 @@
-/* ui/app/tools.js — Tools (#/tools): every way bots and people reach the outside world, one row each, and the router
+/* ui/app/tools.ts — Tools (#/tools): every way bots and people reach the outside world, one row each, and the router
    for every page under it. The list is GET /api/v2/tool-index (backend: one row an API tool, mailbox, phone number or
    Tico address, mailing address, Slack, GitHub, meeting importer, Listening, outgoing webhook, or a tool a bot
    declares with no row of its own); the hub filters the rows per reader and this page only draws them. Each row opens
@@ -18,10 +18,26 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// A tool's status: the hub's tone (ok, wait, fail, run, idle) and the text the pill shows.
+interface ToolsStatus { tone?: string; text?: string; }
+// Someone who can use a tool: a bot or a person, with the name and face the list shows.
+interface ToolsWho { kind: string; id: string; name?: string; }
+// One row of the list, as the hub sends it for this reader.
+interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; }
+// The list's state: its run (a newer pageTools wins), its rows and counts once read, the error, the search and the filter.
+interface ToolsListState { run: number; rows: ToolsRow[] | null; counts: Record<string, number> | null; error: string; q: string; show: string; }
+// An inbox kind as ui/app/inboxes.js registers it: the order it lists in, and its Add tool item when it has one.
+interface ToolsInboxKind { key: string; order: number; add?: { label: string; admin?: boolean; open: (ctx: unknown) => unknown }; }
+
+// The inbox kind registered under a key. INBOX_KINDS is declared `{}` in inboxes.js, so its entries have no type this
+// file can check. Reflect.get reads the same property as INBOX_KINDS[key], inherited names included as before; the return
+// type is the shape this file uses.
+const toolsInboxKind = (key: string): ToolsInboxKind | undefined => Reflect.get(INBOX_KINDS, key);
+
 const TOOLS_ROUTE = '#/tools';
 const TOOLS_KEYS = '#/tools/keys';
 // The list's filters: key, label, which rows, and the counts field that numbers it.
-const TOOLS_FILTERS = [
+const TOOLS_FILTERS: [string, string, (r: ToolsRow) => boolean, string][] = [
   ['', 'All', () => true, 'all'],
   ['needs', 'Needs you', r => !!r.needs_you, 'needs_you'],
   ['api', 'APIs', r => r.kind === 'api', 'api'],
@@ -29,19 +45,22 @@ const TOOLS_FILTERS = [
   ['websites', 'Websites', r => r.kind === 'website', 'websites'],
 ];
 // Icons the UI's font holds (ui/vendor/fonts/icons.txt).
-const TOOLS_ICONS = {api: 'api', mailbox: 'mail', number: 'sms', address: 'local_shipping', slack: 'forum', github: 'code',
+const TOOLS_ICONS: Record<string, string> = {api: 'api', mailbox: 'mail', number: 'sms', address: 'local_shipping', slack: 'forum', github: 'code',
   meetings: 'co_present', listening: 'campaign', webhook: 'open_in_new', declared: 'build', website: 'travel_explore'};
 // The hub's tones as the house pills (ui/styles/components.css).
-const TOOLS_TONE = {ok: 'ok', wait: 'waiting', fail: 'fail', run: 'in-progress', idle: ''};
+const TOOLS_TONE: Record<string, string> = {ok: 'ok', wait: 'waiting', fail: 'fail', run: 'in-progress', idle: ''};
 const TOOLS_WHO_SHOWN = 4;
-let TL = null;   // {run, rows, counts, error, q, show}
+let TL: ToolsListState | null = null;   // {run, rows, counts, error, q, show}
 const TOOLS_PRIVATE = ' <span class="pill tt-private" data-private>Private</span>';
-const toolsPill = status => `<span class="pill${TOOLS_TONE[status?.tone] ? ' ' + TOOLS_TONE[status.tone] : ''} tt-status" data-tone="${esc(status?.tone || 'idle')}"><span class="tt-dot" aria-hidden="true"></span>${esc(status?.text || '')}</span>`;
+const toolsPill = (status?: ToolsStatus) => {
+  const tone = TOOLS_TONE[status?.tone ?? ''];
+  return `<span class="pill${tone ? ' ' + tone : ''} tt-status" data-tone="${esc(status?.tone || 'idle')}"><span class="tt-dot" aria-hidden="true"></span>${esc(status?.text || '')}</span>`;
+};
 // One face: a bot's avatar, or a person's photo or initials.
-const toolsFace = (w, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
+const toolsFace = (w: ToolsWho, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
   : personAvatar((S.people || []).find(p => p.id === w.id) || {id: w.id, name: w.name}, size);
 // Who can use it: up to four faces, each named on hover, then "+N more".
-function toolsWhoHTML(row) {
+function toolsWhoHTML(row: ToolsRow): string {
   const who = row.who || [], total = Math.max(row.who_total || 0, who.length);
   if (!total) return '<span class="muted">Nobody yet</span>';
   const shown = who.slice(0, TOOLS_WHO_SHOWN), more = total - shown.length;
@@ -52,7 +71,7 @@ function toolsWhoHTML(row) {
 // ----------------------------------------------------------------- the list
 async function pageTools() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
-  const show = TOOLS_FILTERS.some(([k]) => k === params.get('show')) ? params.get('show') : '';
+  const show = TOOLS_FILTERS.some(([k]) => k === params.get('show')) ? params.get('show') ?? '' : '';
   const run = (TL?.run || 0) + 1;
   TL = {run, rows: TL?.rows || null, counts: TL?.counts || null, error: '', q: TL?.q || '', show};
   $('#main').innerHTML = `<div class="tt" id="tools-root">
@@ -62,11 +81,14 @@ async function pageTools() {
     <div class="tt-bar"><div class="theme-seg tt-filters" role="radiogroup" aria-label="Show"></div>
       <input type="search" class="tt-q" placeholder="Search" aria-label="Search tools" autocomplete="off" spellcheck="false" value="${esc(TL.q)}"></div>
     <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div>`;
-  const root = $('#tools-root');
-  root.querySelector('.tt-q').oninput = ev => { TL.q = ev.target.value; toolsDraw(); };
-  root.querySelector('.tt-filters').onclick = ev => {
-    const b = ev.target.closest('[data-tl-show]'); if (!b) return;
-    TL.show = b.dataset.tlShow;
+  // The page's root, search box and filter bar are drawn just above.
+  const root: HTMLElement = $('#tools-root')!;
+  const search = root.querySelector<HTMLInputElement>('.tt-q')!;
+  search.oninput = () => { if (TL) TL.q = search.value; toolsDraw(); };
+  const filterBar = root.querySelector<HTMLElement>('.tt-filters')!;
+  filterBar.onclick = ev => {
+    const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-tl-show]'); if (!b || !TL) return;
+    TL.show = b.dataset.tlShow ?? '';
     history.replaceState(null, '', TOOLS_ROUTE + (TL.show ? '?show=' + TL.show : ''));
     S.route = LAST_ROUTE = location.hash;
     toolsDraw();
@@ -77,26 +99,30 @@ async function pageTools() {
     const d = await get('/v2/tool-index', {fresh: true});
     if (!TL || TL.run !== run) return;
     TL.rows = d.rows || []; TL.counts = d.counts || null;
-  } catch (e) { if (!TL || TL.run !== run) return; TL.error = e.message; TL.rows ||= []; }
+  } catch (e) { if (!TL || TL.run !== run) return; TL.error = errorMessage(e, ''); TL.rows ||= []; }
   if (root.isConnected) toolsDraw();
 }
 
 function toolsDraw() {
-  const root = $('#tools-root'); if (!root || !TL) return;
-  const rows = TL.rows || [], counts = TL.counts || {};
-  const count = (k, test) => counts[k] ?? rows.filter(test).length;
+  const root: HTMLElement | null = $('#tools-root'); if (!root || !TL) return;
+  // Nothing here reassigns TL, so the filter and search read the same list throughout.
+  const cur = TL;
+  const rows = cur.rows || [], counts: Record<string, number> = cur.counts || {};
+  const count = (k: string, test: (r: ToolsRow) => boolean) => counts[k] ?? rows.filter(test).length;
   // Websites shows once there is one.
-  const filters = TOOLS_FILTERS.filter(([k, , test, c]) => k !== 'websites' || count(c, test) > 0 || TL.show === 'websites');
-  root.querySelector('.tt-filters').innerHTML = filters.map(([k, label, test, c]) =>
-    `<button type="button" role="radio" data-tl-show="${k}" aria-checked="${TL.show === k}">${esc(label)}${
-      TL.rows ? ` <span class="tt-n tnum">${count(c, test)}</span>` : ''}</button>`).join('');
-  const box = root.querySelector('[data-tl-table]');
-  if (!TL.rows) return;
-  const test = (TOOLS_FILTERS.find(([k]) => k === TL.show) || TOOLS_FILTERS[0])[2];
-  const words = TL.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const filters = TOOLS_FILTERS.filter(([k, , test, c]) => k !== 'websites' || count(c, test) > 0 || cur.show === 'websites');
+  const bar = root.querySelector<HTMLElement>('.tt-filters');
+  if (!bar) return;
+  bar.innerHTML = filters.map(([k, label, test, c]) =>
+    `<button type="button" role="radio" data-tl-show="${k}" aria-checked="${cur.show === k}">${esc(label)}${
+      cur.rows ? ` <span class="tt-n tnum">${count(c, test)}</span>` : ''}</button>`).join('');
+  const box = root.querySelector<HTMLElement>('[data-tl-table]');
+  if (!box || !cur.rows) return;
+  const test = (TOOLS_FILTERS.find(([k]) => k === cur.show) || TOOLS_FILTERS[0])?.[2] ?? (() => true);
+  const words = cur.q.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = rows.filter(r => test(r) && words.every(w => [r.name, r.detail, r.way, r.status?.text, ...(r.who || []).map(x => x.name)]
     .join(' ').toLowerCase().includes(w)));
-  const err = TL.error ? `<p class="err" data-tl-error>${esc(TL.error)}</p>` : '';
+  const err = cur.error ? `<p class="err" data-tl-error>${esc(cur.error)}</p>` : '';
   if (!shown.length) {
     box.innerHTML = err + `<div class="empty" data-tl-empty>${rows.length ? 'Nothing matches.' : 'No tools yet.'}</div>`;
     return;
@@ -110,9 +136,11 @@ function toolsDraw() {
       <td class="tt-st">${toolsPill(r.status)}</td>
       <td class="tt-chev" aria-hidden="true">›</td></tr>`).join('')}</tbody></table>`;
   // The whole row opens the tool; its own links (none today) keep theirs.
-  box.querySelector('tbody').onclick = ev => {
-    if (ev.target.closest('a')) return;
-    const tr = ev.target.closest('[data-tl-row]');
+  const tbody = box.querySelector<HTMLElement>('tbody')!;   // drawn just above
+  tbody.onclick = ev => {
+    const target = eventElement(ev);
+    if (target?.closest('a')) return;
+    const tr = target?.closest('[data-tl-row]');
     const href = tr?.querySelector('.tt-tool a')?.getAttribute('href');
     if (href) location.hash = href;
   };
@@ -120,31 +148,31 @@ function toolsDraw() {
 
 // ----------------------------------------------------------------- Add tool
 // An API (POST /api-tools) for whoever manages keys, then each inbox kind's own Add (ui/app/inboxes*.js).
-function toolsAddMenu() {
+function toolsAddMenu(): string {
   const admin = settingsIsAdmin();
-  const kinds = Object.values(INBOX_KINDS).filter(k => k.add && (!k.add.admin || admin)).sort((a, b) => a.order - b.order);
-  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add.label]),
+  const kinds: ToolsInboxKind[] = Object.values(INBOX_KINDS).filter((k: ToolsInboxKind) => k.add && (!k.add.admin || admin)).sort((a: ToolsInboxKind, b: ToolsInboxKind) => a.order - b.order);
+  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
     ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
   return `<details class="tt-add" data-tl-add><summary class="primary small">Add tool</summary><div class="tt-add-menu" role="menu">
     ${items.map(([k, label]) => `<button type="button" role="menuitem" data-tl-add-item="${esc(k)}">${esc(label)}</button>`).join('')}</div></details>`;
 }
-function toolsAddBind(root) {
+function toolsAddBind(root: HTMLElement) {
   root.querySelector('[data-tl-add]')?.addEventListener('click', ev => {
-    const b = ev.target.closest('[data-tl-add-item]'); if (!b) return;
-    b.closest('details').removeAttribute('open');
-    const item = b.dataset.tlAddItem;
+    const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-tl-add-item]'); if (!b) return;
+    b.closest('details')?.removeAttribute('open');
+    const item = b.dataset.tlAddItem ?? '';
     if (item === 'api') { toolsApiCreate(); return; }
     if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
-    INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
+    toolsInboxKind(item.slice(5))?.add?.open(inboxesCtx(IB.run));
   });
 }
 
 // ----------------------------------------------------------------- routes
 // The redesign's router asks first (ui/app/redesign.js). Old addresses are replaced, so Back skips them.
-function toolsRoute(r) {
-  const [path, query = ''] = r.split('?'), q = query ? '?' + query : '';
-  const go = to => { location.replace(to); return true; };
+function toolsRoute(r: string): boolean {
+  const [path = '', query = ''] = r.split('?'), q = query ? '?' + query : '';
+  const go = (to: string) => { location.replace(to); return true; };
   // Library › Tools and its old names: a tool's page, a credential's, or the list.
   for (const old of ['#/library/tools', INTEGRATIONS]) {
     if (!rdUnder(path, old)) continue;
@@ -161,7 +189,7 @@ function toolsRoute(r) {
   if (rdUnder(path, '#/settings/inboxes')) return go(toolsFromInboxes(path.slice('#/settings/inboxes'.length).replace(/^\/+/, '')));
   const oldTab = path.match(/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(?:\/([^/]+))?\/?$/);
   if (oldTab) {
-    const [, tab, rest] = oldTab;
+    const [, tab = '', rest] = oldTab;
     return go(tab === 'mailboxes' ? (rest ? '#/tools/mailbox/' + rest : TOOLS_ROUTE + '?show=mail')
       : tab === 'mail' ? '#/tools/settings/letters-in' : ['inbox', 'google'].includes(tab) || rest === 'set-inbound' ? '#/tools/settings/email'
       : TOOLS_ROUTE + '?show=mail');
@@ -178,20 +206,20 @@ function toolsRoute(r) {
   return true;
 }
 // An old Settings › Inboxes address (what follows #/settings/inboxes/) at its home under Tools.
-function toolsFromInboxes(rest) {
-  const [head, id = ''] = rest.split('/');
+function toolsFromInboxes(rest: string): string {
+  const [head = '', id = ''] = rest.split('/');
   if (!head) return TOOLS_ROUTE + '?show=mail';
   if (head === 'settings' || INBOX_SECTIONS.some(([k]) => k === head)) {
     const section = head === 'settings' ? id : head;
     return '#/tools/settings' + (INBOX_SECTIONS.some(([k]) => k === section) ? '/' + section : '');
   }
   if (head === 'messages') return '#/tools/messages';
-  if (INBOX_KINDS[head] && id) return inboxesLink(head, decodeURIComponent(id));
+  if (toolsInboxKind(head) && id) return inboxesLink(head, decodeURIComponent(id));
   return TOOLS_ROUTE + '?show=mail';
 }
 // One inbox kind's page, mail settings or Messages, drawn by ui/app/inboxes.js into a host kept while the address stays
 // under the same page, so a redraw keeps what it drew.
-function toolsInboxPage(view) {
+function toolsInboxPage(view: string) {
   INBOXES_VIEW = view;
   if (!$('#tools-inbox')) $('#main').innerHTML = '<div class="tt tt-page" id="tools-inbox"></div>';
   void inboxesRender();

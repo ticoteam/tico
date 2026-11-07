@@ -88,7 +88,7 @@ const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks'
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
 // card on Models (settingsShow scrolls to it); repos: Repositories, now a card on General. Inboxes (and Mailboxes, Email & Phone and Mail
-// before it) moved to Tools; their addresses redirect there (ui/app/tools.js toolsRoute).
+// before it) moved to Tools; their addresses redirect there (ui/app/tools.ts toolsRoute).
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos',
   rules: 'system', routines: 'system', recurring: 'system', screening: 'security', chat: 'models', providers: 'models', subscriptions: 'models',
   limits: 'models', 'turn-levels': 'models', gateway: 'models'};

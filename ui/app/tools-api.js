@@ -1,4 +1,4 @@
-/* ui/app/tools-api.js — One API tool's page under Tools (ui/app/tools.js routes it): #/tools/api/<id> and its Activity
+/* ui/app/tools-api.js — One API tool's page under Tools (ui/app/tools.ts routes it): #/tools/api/<id> and its Activity
    tab, #/tools/api/<id>/activity. An API tool holds one key a level (Read, Read and write); who may use it is a level a
    person or bot, which the hub turns into grants on the right key (PUT /api/v2/api-tools/<id>/access/<subject>). Its
    calls go through Tico's proxy and are logged (delivery 'proxy'), or the key sits on the bots' computers ('computer',

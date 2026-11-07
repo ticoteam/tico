@@ -1,8 +1,8 @@
-/* ui/app/viewport.js — Phone keyboard: chat viewport and composer focus
+/* ui/app/viewport.ts — Phone keyboard: chat viewport and composer focus
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const isComposerInput = element => element?.matches?.('.ask textarea');
+const isComposerInput = (element: Element | null | undefined) => element?.matches?.('.ask textarea');
 function chatViewport() {
   const viewport = window.visualViewport;
   // Safari pans as well as resizes the visual viewport when the keyboard opens.
@@ -23,16 +23,20 @@ function topStrip() {
   const strip = `${bar ? Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) : 0}px`;
   if (root.getPropertyValue('--top-strip') !== strip) root.setProperty('--top-strip', strip);
 }
-if (window.ResizeObserver && document.getElementById('topbar')) new ResizeObserver(topStrip).observe(document.getElementById('topbar'));
+// A block, so the lookup's name is not a global shared with the other classic scripts.
+{
+  const bar = document.getElementById('topbar');
+  if (window.ResizeObserver && bar) new ResizeObserver(topStrip).observe(bar);
+}
 window.visualViewport?.addEventListener('resize', chatViewport);
 window.visualViewport?.addEventListener('scroll', chatViewport);
 window.addEventListener('resize', chatViewport);
 chatViewport();
 document.addEventListener('focusin', event => {
-  if (drawerMedia.matches && isComposerInput(event.target)) document.body.classList.add('mobile-composer-focus');
+  if (drawerMedia.matches && isComposerInput(eventElement(event))) document.body.classList.add('mobile-composer-focus');
 });
 document.addEventListener('focusout', event => {
-  if (!isComposerInput(event.target)) return;
+  if (!isComposerInput(eventElement(event))) return;
   setTimeout(() => {
     if (!isComposerInput(document.activeElement)) document.body.classList.remove('mobile-composer-focus');
   }, 0);

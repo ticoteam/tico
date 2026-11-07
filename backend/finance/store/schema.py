@@ -80,8 +80,8 @@ CREATE TABLE IF NOT EXISTS fin_contacts (
   updated_at TEXT);
 
 -- Every name a vendor contact has gone by (spec §3: one key per vendor), as L.name_key: a bank or card row under one
--- posts under the contact's id, and lines posted under one before count for it. Never deleted; a name maps to one
--- contact.
+-- posts under the contact's id, and lines posted under one before count for it. A name maps to one contact. Rows are
+-- removed only by vendor_unmerge, for the aliases a vendor_merge added (merged_from set; see backend/finance/vendors.py).
 CREATE TABLE IF NOT EXISTS fin_vendor_aliases (
   book_id TEXT NOT NULL REFERENCES fin_books(id), name_key TEXT NOT NULL,
   contact_id TEXT NOT NULL REFERENCES fin_contacts(id), created_at TEXT NOT NULL,
@@ -582,6 +582,12 @@ ADDED = (
     # the money-out row a money-in row refunds (migration 0037, backend/finance/refunds.py). A column, not raw: a
     # provider's update rewrites raw, and the link must survive it.
     ("fin_feed_txns", "refund_of", "TEXT"),
+    # the vendor key a bank or card row is found by: core/merchant.merchant_key of its counterparty (the contact or alias
+    # it resolves to is read on each read, so a merge takes effect without rewriting rows). Migration 20261106235900.
+    ("fin_feed_txns", "vendor_key", "TEXT NOT NULL DEFAULT ''"),
+    # set on an alias a vendor_merge added: '' for a name nobody had, the contact id it moved from otherwise (the
+    # contact's id itself for the alias that routes that contact's lines to the vendor). NULL for every other alias.
+    ("fin_vendor_aliases", "merged_from", "TEXT"),
 )
 
 

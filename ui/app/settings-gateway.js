@@ -1,5 +1,5 @@
 /* ui/app/settings-gateway.js — the Tico Gateway card on Settings > Models: its status line, prices by level, the picks bots
-   use, the API keys link and the services (GET /v2/gateway). settings-providers.js draws the card around them.
+   use, the API keys link and the services (GET /v2/gateway). settings-providers.ts draws the card around them.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
