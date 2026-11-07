@@ -2,7 +2,7 @@
 
 Schedule: weekdays at 08:00 team time (routine `outbound-run`), after setup. Also run by hand. Budget 45 minutes.
 The outcome is one run note: every reply since the last run read and sorted, stops applied, the day's touches and first
-lines ready for review, the day's new contacts checked, and the meetings handed to the Account Executive. Nothing is sent
+lines ready for review, the day's new contacts checked, and the meetings handed to whoever takes calls. Nothing is sent
 unless a task asks for it.
 
 ---
@@ -28,7 +28,7 @@ Read every reply since the last run, from the sequence mailbox (or the CRM, read
 - **Interested, or asking a question**: a meeting if they asked for a time; otherwise a draft answer on the task. A question
   about price or terms goes to a person.
 
-A positive reply is handed over in step 6 the same run. The Account Executive should hear the same business day.
+A positive reply is handed over in step 6 the same run. Whoever takes calls should hear the same business day.
 
 ## 3. Apply the stop rules
 
@@ -52,7 +52,7 @@ with its first touch. Enrolling it in a live sequence is a send act: it waits fo
 ## 6. Hand over meetings
 
 For each meeting booked: write a short note on the account (who, the role, the first line that worked, what they asked, the open
-questions), then `hub task create --owner sales --title "<account> meeting booked" --body-file <note>`. The calendar invitation is a
+questions), then `hub task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. The calendar invitation is a
 person's act.
 
 ## 7. Finish

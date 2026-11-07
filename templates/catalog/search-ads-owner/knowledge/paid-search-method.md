@@ -39,7 +39,7 @@ Cost per result = average cost per click ÷ conversion rate, where conversion ra
 - Under the minimum, keep a manual or enhanced bid with a cap on the cost per click, and read the result over 30 days, not one week. A target the volume cannot train starves delivery.
 - Set a target at the 90-day average cost per result, not below it. A target far below history starves delivery (third-party guidance, 2025-2026).
 - A bidding strategy change restarts learning. Do not change it inside a learning period unless something unusual shows.
-- A campaign that loses impression share to budget while under its target is a candidate for a budget move within the channel. A move between segments, or between search and social, is the Head of Marketing's decision.
+- A campaign that loses impression share to budget while under its target is a candidate for a budget move within the channel. A move between segments, or between search and social, is the marketing lead's decision (`marketing-lead`).
 
 ## Ad copy and landing pages
 

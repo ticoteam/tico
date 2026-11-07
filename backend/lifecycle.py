@@ -462,6 +462,10 @@ def update_seat(auth, c, who, seat_id, fields):
     values = {}
     if fields.get("title") is not None:
         values["title"] = _clean_title(fields["title"])
+        # Another role is another job: the template the seat was set up with no longer names it (recruiting's pin).
+        # The same role in other capitals is still the same role.
+        if values["title"].strip().casefold() != str(row["title"]).strip().casefold():
+            values["template"] = ""
     if fields.get("description") is not None:
         values["description"] = str(fields["description"])[:DESCRIPTION_MAX]
         # a person's words now

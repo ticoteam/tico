@@ -1,8 +1,8 @@
 # Write a board brief
 
 Triggered by the weekly review when a problem meets the brief threshold in `knowledge/product-practice.md`, or when the
-Product Team Manager asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as a task
-owned by the Product Team Manager, that can be approved, changed or declined from the page alone.
+product lead (`product-lead`) asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as a task
+owned by the product lead (`product-lead`), that can be approved, changed or declined from the page alone.
 
 ---
 
@@ -50,5 +50,5 @@ brief in `knowledge/briefs.md`: the date, the problem, the task id, and "filed".
 
 ## 5. Stop there
 
-Do not tell a customer, a salesperson or a marketer that the problem will be fixed. The Product Team Manager's decision
+Do not tell a customer, a salesperson or a marketer that the problem will be fixed. The product lead's (`product-lead`) decision
 comes back on the task, and the next weekly review records it.

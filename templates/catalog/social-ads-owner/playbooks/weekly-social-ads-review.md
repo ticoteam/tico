@@ -37,7 +37,7 @@ For each change applied 14 or more days ago: before, after, and whether it did w
 
 ## 7. Choose three changes
 
-Rank by money at stake. For each one: the exact edit (campaign or ad set, setting, from, to), the segment it serves, the evidence, the expected effect and the date you will check it. A budget move between segments is not yours to make: write it as a question to the Head of Marketing on its own line. Prepare each change with `playbooks/prepare-a-social-ads-change.md`. This review applies nothing.
+Rank by money at stake. For each one: the exact edit (campaign or ad set, setting, from, to), the segment it serves, the evidence, the expected effect and the date you will check it. A budget move between segments is not yours to make: write it as a question to the marketing lead (`marketing-lead`) on its own line. Prepare each change with `playbooks/prepare-a-social-ads-change.md`. This review applies nothing.
 
 ## 8. Write and hand over
 

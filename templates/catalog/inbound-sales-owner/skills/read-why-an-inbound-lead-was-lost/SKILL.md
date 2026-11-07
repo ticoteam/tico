@@ -7,7 +7,7 @@ description: Give each closed-lost inbound lead one primary reason from a fixed 
 When to use: for each closed-lost inbound lead in the read-out's cohort, before any reason is counted.
 
 Steps:
-1. Start from the reason the seller gave, in the CRM or the Account Executive's note, and record it as "given". Do not stop there.
+1. Start from the reason the seller gave, in the CRM or the note of whoever took the call, and record it as "given". Do not stop there.
 2. Read the buyer's last messages, not the seller's notes. Look for what the buyer said about the decision: a cost, a
    date, a person, a missing feature, a silence.
 3. Choose one primary reason from the fixed list in `knowledge/inbound-method.md`. Add a secondary reason only when the

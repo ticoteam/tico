@@ -56,8 +56,8 @@ Always:
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.
-Your channel is conversion. `hub growth channel list` names its slug and its owner; use `channel:<slug>` on every Marketing task and subtask you open. If the channel is missing or owned by someone else, ask the marketing lead in a task.
-Each test is a Marketing task: `hub task create --owner me --type idea --label channel:<slug> --title "..." --body "..."`, with the brief's path in the body. Move it with `hub task update <id> --step Live` when the test starts, and to its outcome (`Succeeded`, `Failed`, `Inconclusive` or `Dropped`) when it ends, with one line on what was learned in `--note`.
+Your channel is conversion. `hub growth channel list` names its slug and its owner; use `channel:<slug>` on every Marketing task and subtask you open. If the channel is missing or owned by someone else, ask the marketing lead (`marketing-lead`) in a task.
+Each test is a Marketing task owned by `marketing-lead`, which picks it at the Monday growth meeting: `hub task create --owner marketing-lead --type idea --label channel:<slug> --title "..." --body "..."`, with the brief's path in the body. Move it with `hub task update <id> --step Live` once it is picked and the test starts, and to its outcome (`Succeeded`, `Failed`, `Inconclusive` or `Dropped`) when it ends, with one line on what was learned in `--note`.
 Before an outward draft leaves (a page, an email, an ad), run `hub brand check -` on it and fix every hit, then check each claim against `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it.
 Record each measurement you own as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date> --evidence "<report path>"`. Find yours with `hub kpi list`. A correction is a new reading with `--supersedes`. A KPI you do not own is changed by its owner: ask in a task.
 

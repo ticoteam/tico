@@ -37,8 +37,8 @@ Reconciled: 84 creators + 57 other segments + 9 with no segment = 150 new custom
 - Creator message v3 (`knowledge/message.md`, changed 2026-10-30). "Set up your page in 10 minutes": approved (`hub brand show --section claims`, source: onboarding timing study, 2026-10-14). "Used by 300 creators": not approved, removed. The Brand Owner was asked on task 4406 whether it can be added with its source.
 
 ## Decisions waiting
-- Marketing Team Manager: decide on task 4418 at the Monday 2026-11-09 growth meeting.
-- Marketing Team Manager: confirm the November creator budget of $4,500.
+- Marketing lead (`marketing-lead`): decide on task 4418 at the Monday 2026-11-09 growth meeting.
+- Marketing lead (`marketing-lead`): confirm the November creator budget of $4,500.
 
 ## Could not read
 - The sign-up export for 2026-10-29 to 2026-10-31 was not attached. October counts come from `hub growth cohort list` and may move when the last three days land.

@@ -41,7 +41,7 @@ For each change applied 14 or more days ago: before, after, and whether it did w
 
 ## 8. Choose three changes
 
-Rank by money at stake. For each one: the exact edit (platform, campaign or ad group, setting, from, to), the segment it serves, the evidence, the expected effect and the date you will check it. A budget move between segments, or between search and social, is not yours to make: write it as a question to the Head of Marketing on its own line. A landing page that does not match its search goes to `cro-owner` with its evidence. A conversion that is counted wrongly goes to `marketing-ops`. Prepare each change with `playbooks/prepare-a-search-ads-change.md`. This review applies nothing.
+Rank by money at stake. For each one: the exact edit (platform, campaign or ad group, setting, from, to), the segment it serves, the evidence, the expected effect and the date you will check it. A budget move between segments, or between search and social, is not yours to make: write it as a question to the marketing lead (`marketing-lead`) on its own line. A landing page that does not match its search goes to `cro-owner` with its evidence. A conversion that is counted wrongly goes to `marketing-ops`. Prepare each change with `playbooks/prepare-a-search-ads-change.md`. This review applies nothing.
 
 ## 9. Write and hand over
 

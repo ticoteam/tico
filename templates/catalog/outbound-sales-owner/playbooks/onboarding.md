@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 30 minutes. The outcome is five recorded answers, a first target list with first touches
+finished. Budget 30 minutes. The outcome is six recorded answers, a first target list with first touches
 drafted on the task, and both routines checked.
 
 ---
@@ -37,12 +37,14 @@ those and use the defaults for the rest, saying which you used.
 5. Where do your do-not-contact list, your customers and your open deals live? (Default: a do-not-contact list in
    `knowledge/do-not-contact.md`, and the CRM read only if you connect it.) Every contact is checked against these before it
    enters a sequence.
+6. Who takes a meeting that outbound books, and which questions must a person answer: price, security, legal, a custom
+   build? (Default: the sales lead.) Becomes `knowledge/team.md`, which names the person who takes calls.
 
 ## 4. Record
 
 Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/icp.md`, `knowledge/voice.md` and
 `knowledge/do-not-contact.md` as present-tense statements. Write the team's meeting target and sender cap into
-`knowledge/outbound-method.md`, under the standing rules.
+`knowledge/outbound-method.md`, under the standing rules. Write who takes booked meetings into `knowledge/team.md`.
 
 ## 5. Produce the first result now
 

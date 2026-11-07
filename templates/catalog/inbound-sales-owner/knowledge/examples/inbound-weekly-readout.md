@@ -37,7 +37,7 @@ Four of the 21 have no note in the CRM. Their reasons come from the buyer's mess
 1. Add a required "team size" field to the demo form. Three demo leads this week were under five people, below the
    profile, and each took a call before it was clear. Touches about 14 leads a week. Check: the not-a-fit share on the
    demo form in the next read-out.
-2. Route pricing questions from the sales inbox straight to the Account Executive. Two of six inbox leads waited more
+2. Route pricing questions from the sales inbox straight to whoever takes calls. Two of six inbox leads waited more
    than two business hours for a person to answer a price question. Check: the time from question to person's reply.
 
 ## Could not read

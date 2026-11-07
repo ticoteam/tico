@@ -37,11 +37,11 @@ Write these fields into `knowledge/experiments/<slug>.md`:
 
 ## 4. Hand it to the page owner
 
-Open the Marketing task with the brief's path in the body:
+Open the Marketing task, owned by `marketing-lead`, with the brief's path in the body. The marketing lead (`marketing-lead`) picks it at the Monday growth meeting:
 
-    hub task create --owner me --type idea --label channel:<slug> --title "..." --body "..."
+    hub task create --owner marketing-lead --type idea --label channel:<slug> --title "..." --body "..."
 
-Ask the page owner whether to start it:
+Once it is picked, ask the page owner whether to start it:
 
     hub task question "Start the test as briefed?" --on <owner> --parent <id> --option "Start it -> the owner starts it in the testing tool and the status moves to running" --option "Change the brief -> I revise the sample and the run time"
 
@@ -50,7 +50,7 @@ Never start or stop a test yourself unless the task asks for it and a granted To
 ## 5. While it runs
 
 Each Monday, read the count in each arm, the sample ratio check and the guardrails. Do not show the primary metric's rate or
-difference before the planned end. When the owner confirms the test has started, move the task:
+difference before the planned end. When the test is picked and the owner confirms it has started, move the task:
 
     hub task update <id> --step Live
 

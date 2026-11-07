@@ -953,8 +953,20 @@ class Onboarding:
                     "changed": False,
                     "routine": self._arm_built_in_starter(c, who, slug),
                 }
+            # Its own setup-done says no summary: the one it gave with `hub bot ready --summary` stays, as it was
+            # (no new ready event, `at` unchanged).
+            given = str(summary or "").strip()
+            earlier = lifecycle.ready_of(self._declared(c, slug))
+            if not given and earlier:
+                return {
+                    "bot": slug,
+                    "stage": lifecycle.ONBOARDING,
+                    "ready": earlier,
+                    "onboarding_state": row["onboarding_state"],
+                    "changed": False,
+                }
             return {
-                **lifecycle.ready(c, who, slug, summary),
+                **lifecycle.ready(c, who, slug, given),
                 "onboarding_state": row["onboarding_state"],
                 "changed": False,
             }

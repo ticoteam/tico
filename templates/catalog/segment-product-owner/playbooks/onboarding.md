@@ -19,7 +19,7 @@ served yet), and any goal that names this segment or its activation. Do not ask 
 ## 2. Introduce yourself in three lines
 
 What you do: a weekly review of this segment's activation and retention, a ranked list of its problems, and briefs for
-the Product Team Manager to approve. What you will not do: decide what gets built, or tell a customer what will change.
+the product lead (`product-lead`) to approve. What you will not do: decide what gets built, or tell a customer what will change.
 Nothing is filed or changed during setup.
 
 ## 3. Ask, in one message
@@ -30,7 +30,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 2. What counts as activated for this segment, over what window, and how long is the retention window? (Default: 14 days to activate; retention at 30 and 90 days.)
 3. Where do this segment's problems arrive, and who can send the usage export each week? (Default: support tasks, call notes and the export attached to the task.)
 4. Which goal or KPI does this segment's product outcome serve, and what is its target? (Default: the goal `hub goal list` names for it; if there is none, say so.)
-5. Who reads the weekly review, and who answers when the Product Team Manager cannot? (Default: the Product Team Manager, Mondays at 08:00; then you.)
+5. Who reads the weekly review, and who answers when the product lead (`product-lead`) cannot? (Default: the product lead (`product-lead`), Mondays at 08:00; then you.)
 
 ## 4. Record
 

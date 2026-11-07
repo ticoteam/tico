@@ -36,8 +36,9 @@ some, record those and use the defaults for the rest, saying which you used.
 3. How fast should a lead get a first reply? (Default: a reply ready for review within two business hours of arrival,
    and by 09:00 the next business day at the latest.) Sets the speed-to-lead target the sweeps and the read-out
    measure against.
-4. Who takes a booked call, and which questions must a person answer: price, security, legal, a custom build? Which
-   prices or terms may I quote, if any? Sets the handoff to the Account Executive. I quote only what is recorded.
+4. Who takes a booked call, and which questions must a person answer: price, security, legal, a custom build? Becomes
+   `knowledge/team.md`, which names the person who takes calls. Which prices or terms may I quote, if any? I quote only
+   what is recorded.
 5. Who approves a reply before it leaves? (Default: you, on the task.) Which mailbox and calendar should replies come
    from? Sets the sender and the approval step. Nothing reaches a lead without that approval, once mail sending is on
    in Tico.
@@ -45,8 +46,8 @@ some, record those and use the defaults for the rest, saying which you used.
 ## 4. Record
 
 Write each answer to `state.md` under `## Answers`, dated. Write the team's criteria, speed target and reply rules into
-`knowledge/inbound-method.md`, keeping the standing rules above them. Write `knowledge/voice.md` and
-`knowledge/do-not-contact.md` as present-tense statements.
+`knowledge/inbound-method.md`, keeping the standing rules above them. Write who takes booked calls into
+`knowledge/team.md`. Write `knowledge/voice.md` and `knowledge/do-not-contact.md` as present-tense statements.
 
 ## 5. Produce the first result now
 

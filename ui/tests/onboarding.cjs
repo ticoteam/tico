@@ -959,7 +959,8 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#bot-onboard').waitFor();
     await shot(page, 'desktop-7-bot-page');
     assert.match(await page.locator('#bot-onboard').textContent(), /Onboarding/);
-    assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
+    assert.equal(await page.locator('#bot-onboard p.bot-onboard-tip').count(), 1);                     // the tip is the only paragraph
+    assert.equal(await page.locator('#bot-onboard p:not(.bot-onboard-tip)').count(), 0);              // the pill and the button, no other paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
     assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
     // The DM tab shows the setup conversation: the person's line, in the chat Set up wrote to.
