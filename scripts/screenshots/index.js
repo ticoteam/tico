@@ -41,7 +41,7 @@ const TASKS_UI = [
 ];
 const BOT_CHAT_UI = [
   'ui/app/bot-*.js', 'ui/bot-files.js', 'ui/bot-tools.js', 'ui/app/chat*.js', 'ui/app/feedback.js',
-  'ui/app/slash-commands.js', 'ui/app/visual-*.js', 'ui/app/question-card.js', 'ui/styles/bot-*.css',
+  'ui/app/slash-commands.js', 'ui/app/visual-*.js', 'ui/app/question-card.js', 'ui/app/github-nudge.ts', 'ui/styles/bot-*.css',
   'ui/styles/chat*.css', 'ui/styles/feedback.css', 'ui/styles/visual-*.css',
 ];
 const MEETINGS_UI = [
