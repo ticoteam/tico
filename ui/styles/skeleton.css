@@ -1,5 +1,5 @@
 /* ui/styles/skeleton.css — The one loading placeholder: shaped blocks while a first read is in flight (skelRows in
-   app/core.ts draws rows the size of the list that replaces them, so nothing jumps when the data lands), and the same
+   app/core.js draws rows the size of the list that replaces them, so nothing jumps when the data lands), and the same
    shimmer on a picture, a file or a card body still loading. One sweep, one colour pair (theme tokens, so light and dark
    follow), one corner radius for bars and blocks; a placeholder standing in for a card keeps that card's corners.
    Under reduced motion it holds still. */
@@ -27,5 +27,5 @@
   .inline-thumb:not(.ready),.md img:not(.ready),.vcard[data-state="ready"] .vcard-body:not(.ready),
   .ob-bot.sk .sk-i,.ob-bot.sk .sk-l i,.oc-ph .sk-i,.oc-ph .sk-l{animation:none!important}
 }
-/* A button whose write is still in flight (pressPending in app/api.ts). */
+/* A button whose write is still in flight (pressPending in app/api.js). */
 .is-pending{cursor:progress;opacity:.6;transition:opacity var(--dur-fast) var(--ease)}

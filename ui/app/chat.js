@@ -891,7 +891,7 @@ function chatSendWatch(P, fileCount) {
   return {
     response(code) {
       status = code;
-      // Auth failures retire telemetry immediately in api.ts; report before that
+      // Auth failures retire telemetry immediately in api.js; report before that
       // privacy boundary, never restore the retired identity to send an event.
       if ((code === 401 || code === 403) && !accessReported) { diagnostic(P.unconfirmed ? 'unconfirmed' : 'refused'); accessReported = true; }
     },

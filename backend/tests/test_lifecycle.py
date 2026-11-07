@@ -235,7 +235,7 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
     # A closed seat's reports hang where it did.
     post(api, f"seats/{lead['id']}/close", {})
     assert {s["id"]: s for s in get(api, "org")["seats"]}[agent["id"]]["org_parent"] == "b:coo"
-    # The sidebar refreshes its seats from GET /api/v2/seats (ui/app/refresh.ts): those rows hang the same way.
+    # The sidebar refreshes its seats from GET /api/v2/seats (ui/app/refresh.js): those rows hang the same way.
     listed = {s["id"]: s["org_parent"] for s in get(api, "seats")["seats"]}
     people = {s["id"]: s["org_parent"] for s in api.get("/api/people", headers=headers()).json()["seats"]}
     assert listed == people and listed[agent["id"]] == "b:coo"

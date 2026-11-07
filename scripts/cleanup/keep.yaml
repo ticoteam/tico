@@ -38,7 +38,7 @@ names:
   clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
   clients/tests/*.py: [body_json]
   backend/tests/test_hubdb.py: [payload_json]   # the documents table as it was before 0008 dropped it
-  ui/app/router.ts: [finished]          # a view transition's own `finished` promise
+  ui/app/router.js: [finished]          # a view transition's own `finished` promise
   ui/app/live.js: [started]             # the live connection's started flag
   ui/app/task-board.js: [finished]      # the board's folded-column choices
   ui/app/task-pipelines.js: [finished]

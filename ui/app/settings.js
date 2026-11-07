@@ -695,7 +695,7 @@ const STOPPED_PICK = {
   unknown: {retry: false, what: () => 'before answering',
     say: () => 'Don’t retry unless you know it did nothing. Tico has no record of what it did.'},
 };
-// A decision on one stopped request, from the review card or a Needs you row (heartbeat.ts): the same note to the bot
+// A decision on one stopped request, from the review card or a Needs you row (heartbeat.js): the same note to the bot
 // either way, and the same receipt line.
 const STOPPED_NOTE = {
   resume: 'The human chose to retry this request. Check existing work and external effects before repeating any step.',

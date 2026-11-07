@@ -17,7 +17,7 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // What waits on an answer starts as this browser last heard it (ui/theme.js marks <html> before the paint) and is set
 // right here once the answer is in: Finance (finance.js finNavSync) and Finish setup (notices.js renderOnboardingNav).
 // The answers are kept for whoever signed in here last (snapWho: this server, its owner, the person); /me answering as
-// anyone else drops them before the config is applied (boot.ts), and so does a sign-out (boot-snap.js bootSnapDrop).
+// anyone else drops them before the config is applied (boot.js), and so does a sign-out (boot-snap.js bootSnapDrop).
 // A kept answer only stands in until this visit's own arrives.
 // A sign-out in any tab stops every tab writing, as the boot snapshot's epoch does (boot-snap.js): the kept entry
 // carries an `epoch` a sign-out (or another person's /me) moves on, each tab notes the epoch its /me read, and a tab
@@ -45,7 +45,7 @@ function rdNavForget() {
   try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({epoch: RD_NAV_EPOCH})); } catch { /* nothing kept */ }
 }
 // The row and the mark on <html> together: the mark draws it before this file runs (styles/redesign.css), `hidden` after
-// (search.ts lists only rows that are not hidden).
+// (search.js lists only rows that are not hidden).
 function rdNavPaint(name, shown) {
   document.documentElement.classList.toggle(RD_NAV_ROWS[name], shown);
   const row = document.getElementById(RD_NAV_ROWS[name]);
@@ -159,7 +159,7 @@ function redesignNavCurrent(nav) {
 }
 
 // ----------------------------------------------------------------- routes
-// Runs before the router's own list (router.ts); true when it handled the address.
+// Runs before the router's own list (router.js); true when it handled the address.
 function redesignRoute(r) {
   // Old addresses of what moved.
   if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }

@@ -67,7 +67,7 @@ html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility
 :root{--r-ctl:6px;--r-pop:10px}
 *{box-sizing:border-box}
 html,body{height:100%}
-/* The rails' widths; dragging an edge changes them (ui/app/rails.ts, ui/styles/rails.css). */
+/* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
 :root{--rail-left:236px;--rail-right:320px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
@@ -118,7 +118,7 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
   .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.people-menu button,.section-toggle,.section-head,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
-/* A page change cross-fades the window, opacity only (ui/app/router.ts routeChanged). The whole window, not #main
+/* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
    alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
    gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
 ::view-transition{pointer-events:none}

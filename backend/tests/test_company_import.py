@@ -251,7 +251,7 @@ def invited_from_setup(api, finance):
     ]
 
     # On a Tico account sign-in the issuer sends it: Invite again sends to the person already added, once. A repeat of
-    # one request (same Idempotency-Key, ui/app/api.ts) sends nothing more, nor does a copy overlapping it.
+    # one request (same Idempotency-Key, ui/app/api.js) sends nothing more, nor does a copy overlapping it.
     from backend import company_import, invites
 
     keyed = lambda key, email="someone-else@acme.example": api.post(

@@ -572,7 +572,7 @@ async function phone(browser) {
   await box.locator('.brepo-row').first().waitFor();
   await box.evaluate(el => el.scrollIntoView({block: 'start'}));
   // The bot's page replaced Settings: nothing of it is left under the editor to show through once the route's
-  // cross-fade (ui/app/router.ts) has ended, so the screenshot waits for that.
+  // cross-fade (ui/app/router.js) has ended, so the screenshot waits for that.
   await settled(page);
   assert.equal(await page.locator('#set-repos').count(), 0, 'Settings is gone from the page');
   await shot(page, 'bot-repositories-chosen-phone-dark.png');

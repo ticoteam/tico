@@ -96,7 +96,7 @@ window.ticoAppUpdate = ({state, detail} = {}) => {
 };
 // The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It
 // would sit over the first-run wizard and its after-Create screen, so it waits for the first other page. Before the
-// first route() (LAST_ROUTE, ui/app/router.ts) there is no page yet: a new install's boot sends it to the wizard after
+// first route() (LAST_ROUTE, ui/app/router.js) there is no page yet: a new install's boot sends it to the wizard after
 // its config is read.
 let usageNoticeShown = false;
 function renderUsageNotice() {
@@ -304,9 +304,9 @@ document.addEventListener('visibilitychange', () => {
   configAt = Date.now(); void refreshConfig();
 });
 // The main assistant is shown under the environment's assistant name, never its slug.
-// The built-in assistant reads as what it is (assistantName, ui/app/state.ts).
+// The built-in assistant reads as what it is (assistantName, ui/app/state.js).
 const assistantShownName = () => assistantName();
-// The Strategy Bot's old name never shows (state.ts `strategyBotName`), wherever the roster is read.
+// The Strategy Bot's old name never shows (state.js `strategyBotName`), wherever the roster is read.
 // Each row carries its bot's `id` (the key every route, API call and comparison uses) and its `slug` (the label people
 // type and read). A row without an id comes from before bots had one, when its name was both.
 const namedRoster = rows => rows.map(row => {

@@ -45,7 +45,7 @@ MAX_ALTERNATIVES = 64
 MAX_DEPTH = 24
 
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
-# Helpers that take a path relative to /api (ui/app/api.ts), and the method they send.
+# Helpers that take a path relative to /api (ui/app/api.js), and the method they send.
 RELATIVE_HELPERS = {
     "get": "GET",
     "v2Get": "GET",
@@ -973,7 +973,7 @@ def enclosing_closers(toks):
 def shadow_ranges(toks):
     """(start, end, name, top) for each name this token list declares with const, let, var, function, a parameter or a
     single-parameter arrow: the name is in scope from start to end. top is set for a declaration at the top of the
-    file, which is that file's own definition (api.ts defines get, post and the rest). A destructured name is not
+    file, which is that file's own definition (api.js defines get, post and the rest). A destructured name is not
     listed: ui/assistant.js takes the page's get and post from deps, which are the helpers themselves."""
     n = len(toks)
     enclosing, match = enclosing_closers(toks)
@@ -1021,7 +1021,7 @@ def helper_calls(scan, scope, calls, skipped, consumed):
             shadows = [r for r in ranges if r[2] == name and r[0] < k < r[1]]
             if (scan.rel, name) not in LOCAL_WRAPPERS and name in HELPER_NAMES and shadows:
                 # A declaration in scope takes the name, so the call is not the helper's. A declaration at the top of
-                # the file is that file's own helper (api.ts calls its own get and post), so it is not reported.
+                # the file is that file's own helper (api.js calls its own get and post), so it is not reported.
                 if not all(r[3] for r in shadows):
                     skipped.append((scan.rel, scan.line(t), name, "a local declaration in scope takes the name"))
                 continue

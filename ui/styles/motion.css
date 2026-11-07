@@ -1,5 +1,5 @@
 /* ui/styles/motion.css — State changes that move: menus and panels arriving, counts ticking, a task's check, a card
-   lifting under the pointer, and every fold chevron's turn (ui/app/motion.ts
+   lifting under the pointer, and every fold chevron's turn (ui/app/motion.js
    drives the parts a stylesheet cannot see). Linked last, so its few rules win over the files' own.
    Rules: 200ms at most (--dur-fast 120ms for most, --dur 180ms for larger surfaces), opacity and transform only
    (the individual translate and scale properties, so an element's own transform is kept), only on a change of state,
@@ -7,7 +7,7 @@
    at the end); base.css's reduced-motion rule still shortens what other files animate. The sidebar's sliding current
    row bar is in sidebar.css (its last block), the shared skeleton shimmer in skeleton.css. */
 
-/* ---- menus and popovers: scale up from 96% at their anchor (motion.ts sets transform-origin from the anchor for
+/* ---- menus and popovers: scale up from 96% at their anchor (motion.js sets transform-origin from the anchor for
    the ones placed by script); a phone's menus are bottom sheets there and only fade (base.css). */
 @keyframes m-pop{from{opacity:0;scale:.96}}
 @media (min-width:761px){
@@ -38,7 +38,7 @@
 }
 /* The Assistant replying moves Ask's dot (liquid-dot.css states, set by ui/app/ask-panel.js askDot). */
 
-/* ---- counts (motion.ts countSet, countWatch): the old number slides up and out as the new one comes up from below.
+/* ---- counts (motion.js countSet, countWatch): the old number slides up and out as the new one comes up from below.
    The badge's box never changes: the old number is drawn over it, the new one is the badge's own text. */
 @keyframes m-count-out{to{opacity:0;translate:0 -60%}}
 @keyframes m-count-in{from{opacity:0;translate:0 60%}}
@@ -47,7 +47,7 @@
   pointer-events:none;animation:m-count-out var(--dur-fast) var(--ease) forwards}
 .m-tick-in{display:inline-block;animation:m-count-in var(--dur-fast) var(--ease)}
 
-/* ---- a task marked done: its check draws, then the row settles to muted while the list catches up (motion.ts
+/* ---- a task marked done: its check draws, then the row settles to muted while the list catches up (motion.js
    taskDoneMotion). A board's finished cards stay that quiet. */
 @keyframes m-check-draw{from{stroke-dashoffset:12}}
 .m-check path,.tmodal-act.m-checking svg path{stroke-dasharray:12;animation:m-check-draw var(--dur) var(--ease) both}

@@ -282,7 +282,7 @@ function recruitAgentSeat(main, id) {
   main.innerHTML = '<div class="recruit-page"></div>';
   window.cloudAgentsSeat(id, main.firstElementChild);
 }
-// The sidebar shows the count beside the seat; a count that changes ticks (ui/app/motion.ts).
+// The sidebar shows the count beside the seat; a count that changes ticks (ui/app/motion.js).
 function recruitCount(id, n) {
   RECRUIT.counts[id] = n;
   const badge = document.querySelector(`#tree [data-seat-open="${CSS.escape(id)}"] .cnt`);

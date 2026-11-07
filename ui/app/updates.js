@@ -133,7 +133,7 @@ function updFeedPath(state, more = false) {
   if (more && state.data?.next_before) q.set('before', state.data.next_before);
   return '/v2/updates?' + q;
 }
-// Startup asks for the feed beside the roster when Updates is the page it opens on, a round trip sooner (boot.ts).
+// Startup asks for the feed beside the roster when Updates is the page it opens on, a round trip sooner (boot.js).
 function updPrefetch() {
   if (!(location.hash === UPDATES || location.hash.startsWith(UPDATES + '?'))) return;
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -177,7 +177,7 @@ function updOrder(state, fresh) {
 }
 function updBadge(n) {
   S.updUnread = n;
-  // A new number ticks in (countSet, ui/app/motion.ts).
+  // A new number ticks in (countSet, ui/app/motion.js).
   for (const el of document.querySelectorAll('[data-upd-badge]')) { el.hidden = !n; countSet(el, n > 99 ? '99+' : String(n || '')); }
   // In the tree the badge also counts direct reports' updates from other days: the button follows it both ways.
   const allRead = $('#upd-allread');

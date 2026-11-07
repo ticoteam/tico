@@ -1,4 +1,4 @@
-// The Liquid Dot stays cheap (ui/app/liquid-dot.ts, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
+// The Liquid Dot stays cheap (ui/app/liquid-dot.js, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
 // CDP, fixtures only:
 // - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.

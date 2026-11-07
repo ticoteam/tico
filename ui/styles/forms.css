@@ -57,7 +57,7 @@ button:disabled{opacity:.5;cursor:default}
 /* Its look outranks button.ghost; its size and display stay overridable (phones make them 40px, [hidden] still hides). */
 :is(button.tmodal-x,button.peek-btn,button.tf-x,:is(dialog .tmodal-head,dialog header,.notes-modal-close,.msg-message-head,.co-head,.doc-viewer-head)>button:is([aria-label^="Close"],[aria-label="Back"],[aria-label^="Open in"])):not(.primary,.tmodal-act){padding:0 6px;border-color:transparent;border-radius:6px;background:transparent;color:var(--muted)}
 :is(button.tmodal-x,button.peek-btn,button.tf-x,:is(dialog .tmodal-head,dialog header,.notes-modal-close,.msg-message-head,.co-head,.doc-viewer-head)>button:is([aria-label^="Close"],[aria-label="Back"],[aria-label^="Open in"])):not(.primary,.tmodal-act):hover{background:var(--surface2);color:var(--ink)}
-/* A dialog's heading takes the focus when it opens (core.ts), so no control wears a ring before a key is pressed. */
+/* A dialog's heading takes the focus when it opens (core.js), so no control wears a ring before a key is pressed. */
 dialog :is(h1,h2,h3,strong)[tabindex="-1"]:focus,dialog[tabindex="-1"]:focus{outline:0}
 /* a phone: fields 40px tall, their type 16px (layout.css) */
 @media (max-width:760px){

@@ -3566,7 +3566,7 @@ mod window_state_tests {
 }
 
 // Search from the View menu (⌘K): bring the window forward, then the page opens
-// its own search dialog (`window.ticoSearch` in ui/app/search.ts). The menu accelerator takes
+// its own search dialog (`window.ticoSearch` in ui/app/search.js). The menu accelerator takes
 // ⌘K before the webview sees it, so the page's own shortcut still works everywhere else.
 pub(crate) fn open_search(app: &App) {
     show_window(app);

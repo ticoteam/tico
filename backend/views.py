@@ -2645,7 +2645,7 @@ def needs_page(items, version, limit, cursor):
 
 
 def needs_bots(items, me):
-    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.ts
+    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.js
     needsMeCounts): a task waiting on me goes with the bot that owns it; another task or question with the bot that
     asked; a question asked outside any task with the bot that asked it. A page carries this for the whole list, so
     the sidebar's numbers do not wait for every page."""

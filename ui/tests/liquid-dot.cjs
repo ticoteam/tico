@@ -1,4 +1,4 @@
-// No browser: the Liquid Dot's state rules (ui/app/liquid-dot.ts). Ask's chat maps to idle, working or talking; a dot
+// No browser: the Liquid Dot's state rules (ui/app/liquid-dot.js). Ask's chat maps to idle, working or talking; a dot
 // under 20px only idles (or holds still); an unknown state idles; and setting a drawn dot follows the same rules. The
 // idle scheduler swaps variants every 6-14 s and leaves no timer in a hidden tab; every keyframe in liquid-dot.css
 // moves transform or opacity only, and the blob's shape never animates.

@@ -77,7 +77,7 @@ const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(() => { if (!
 const LIVE_SOON = new Map();
 function liveSoon(key, fn, ms = 250) {
   if (LIVE_SOON.has(key)) return;
-  // Something changed: the reads this sets off start fresh rather than sharing one sent before the change (api.ts get).
+  // Something changed: the reads this sets off start fresh rather than sharing one sent before the change (api.js get).
   LIVE_SOON.set(key, setTimeout(() => { LIVE_SOON.delete(key); getForget(); fn(); }, ms));
 }
 // Run `fn` at most once per `ms`, the last call winning, and never while the tab is hidden: a hidden tab runs it once
@@ -108,7 +108,7 @@ function liveRestart() {
   clearTimeout(LIVE.restart);
   LIVE.restart = setTimeout(liveEventsConnect, 30);       // several views following at once reconnect once
 }
-// The task changes this page shows (refresh.ts liveTasksApply): every task's on a task list, a bot's or a person's
+// The task changes this page shows (refresh.js liveTasksApply): every task's on a task list, a bot's or a person's
 // own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope() {
   const r = typeof S !== 'undefined' && S.route || '';

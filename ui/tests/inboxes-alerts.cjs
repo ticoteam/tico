@@ -52,7 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
     });
     await page.goto('https://tico-ui.test/#/settings/company-inbox');
     // #/settings/company-inbox is an old address: route() sends it on to Tools (location.replace) and the new page draws
-    // in a view transition (ui/app/router.ts routeChanged), a frame or more later, replacing #main. Draw the card after
+    // in a view transition (ui/app/router.js routeChanged), a frame or more later, replacing #main. Draw the card after
     // that page is on the screen, or it overwrites the card and [data-alert-send-code] never appears.
     await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id && location.hash.startsWith('#/tools') && document.querySelector('#main #tools-root'));
     const draw = admin => page.evaluate(async admin => {

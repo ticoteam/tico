@@ -1,4 +1,4 @@
-/* ui/styles/liquid-dot.css — The Liquid Dot (ui/app/liquid-dot.ts ldotHTML): Tico, the assistant, and nothing else.
+/* ui/styles/liquid-dot.css — The Liquid Dot (ui/app/liquid-dot.js ldotHTML): Tico, the assistant, and nothing else.
    The cascade runs in the order index.html links these files; keep rules in order.
    Flat: one jade fill with a very slight tonal fall (--dot-hi to --dot-lo, tokens.css), no highlight and no glow, a
    little less than round (a fixed blob radius), and a soft shadow under it. The same block ships on tico.dev.

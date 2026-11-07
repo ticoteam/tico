@@ -5,7 +5,7 @@
 // User Timing marks, each set once per page load, in the order an open passes them (ms since navigation start):
 //   tico:head          theme.js ran in the head: the page's HTML has arrived
 //   tico:bundle-start  the bundle's first statement (backend/ui_bundle.py BUNDLE_MARK); not set with the files unbundled
-//   tico:boot          every script has run and boot.ts starts
+//   tico:boot          every script has run and boot.js starts
 //   tico:paint-cached  the last screen this person saw here is shown again (boot-snap.js), when there is one
 //   tico:roster        the roster, /me and the people answered
 //   tico:route         the opening page is drawn (its shell and any skeleton)
@@ -97,7 +97,7 @@ function bootTimingSend(settled: boolean): void {
 }
 // After route(): marks the first frame whose #main has content and no skeleton, then reports. A hidden page has no
 // frames, so it looks again on a timer instead.
-// A page's own loading rows (skelRows, ui/app/core.ts, and the updates feed's blocks). Other aria-busy marks are parts
+// A page's own loading rows (skelRows, ui/app/core.js, and the updates feed's blocks). Other aria-busy marks are parts
 // that load by themselves after the page (a file's preview, a send button, a Decide card), and never hold the paint.
 const BOOT_SKELETONS = '.skel, .skel-block';
 function bootPaintWatch(): void {

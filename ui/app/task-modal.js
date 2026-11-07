@@ -924,7 +924,7 @@ async function taskChatLoad(id, dialog, data = null) {
     tfLoad(state.dialog, state.id).catch(() => {});     // a new file or version, or an answer on one, without reopening
   }, 180000);
   if (state.poll) return;
-  // A change to the task itself reaches taskChatLive from the page's task events (ui/app/refresh.ts); its comments
+  // A change to the task itself reaches taskChatLive from the page's task events (ui/app/refresh.js); its comments
   // are messages in its conversation.
   const cid = state.cid;
   const offs = cid ? [liveFollow(cid), liveOn('messages', d => { if (d.conversation_id === cid) taskChatLive(state); }),

@@ -57,7 +57,7 @@ const UI = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
     const signedIn = [];        // anything the cards ask of the app's own (signed-in) file addresses
     await page.route(`${APP}/**`, route => (new URL(route.request().url()).pathname.startsWith('/api/') && signedIn.push(route.request().url()), route.fulfill({status: 200, contentType: 'text/html', body: '<!doctype html><main id="thread"></main>'})));
     await page.goto(`${APP}/chat`);
-    // The real frame and players, on a page with only what they read from the rest of the app (core.ts's esc, API).
+    // The real frame and players, on a page with only what they read from the rest of the app (core.js's esc, API).
     await page.addStyleTag({content: `:root{--line:#ccc;--surface:#fff;--surface2:#eee;--muted:#666} ${UI('styles/task-files.css')} ${UI('styles/task-modal.css')} ${UI('styles/visual-cards.css')} ${UI('styles/visual-media.css')}`});
     await page.addScriptTag({content: `'use strict';
       const API = '/api';

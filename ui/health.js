@@ -35,7 +35,7 @@ async function hlRefresh() {
 }
 
 // The computers Health lists: everyone's for owners and admins; null for others, who are shown none. The account
-// menu reads it for its one no-computer line (ui/app/heartbeat.ts).
+// menu reads it for its one no-computer line (ui/app/heartbeat.js).
 window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;

@@ -1,7 +1,7 @@
 """The Beta features: the one list the app's Beta pill, Help, the manual and support diagnostics read.
 
 A Beta feature works today and may still change. The web app gets this list in `/api/v2/config` (`beta`) and draws
-the pill only for an id here (ui/app/state.ts `betaPill`). Each `docs` entry names a manual page and the heading the
+the pill only for an id here (ui/app/state.js `betaPill`). Each `docs` entry names a manual page and the heading the
 feature lives under (None for the page's title); that heading is followed by the marker line `MARKER` opens, and no
 other heading is (backend/tests/test_beta.py). `on` says whether an install has the feature turned on or in use, for
 the support bundle (backend/diagnostics.py); None where the server cannot tell.

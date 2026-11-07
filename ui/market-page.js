@@ -2,7 +2,7 @@
    Open map, the note and the graph of who connects to whom. It is not the Docs library. */
 'use strict';
 let MARKET_VIEW = null;   // what is mounted: {kind: 'page' | 'map', shell, open(at), stop()}
-// Old #/market links land here (ui/app/router.ts), keeping their query or note path.
+// Old #/market links land here (ui/app/router.js), keeping their query or note path.
 const MARKET_ROUTE = '#/strategy/market';
 const MARKET_MAP = MARKET_ROUTE + '/map';
 const isMarketRoute = r => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');

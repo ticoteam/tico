@@ -1614,7 +1614,7 @@ async function recheckFinal(browser) {
   assert.equal(held.length, 1, 'the save\'s reload is on its way');
   await second.page.evaluate(() => refresh(false));                   // the poll starts while the save's reload is on its way
   await second.page.waitForTimeout(300);
-  assert.equal(held.length, 1, 'the poll shares the reload already on its way (ui/app/api.ts)');
+  assert.equal(held.length, 1, 'the poll shares the reload already on its way (ui/app/api.js)');
   holding = false;
   for (const release of held) release();
   await second.page.waitForFunction(() => !document.querySelector('[data-task-key="tt-access"]') && TASKS_ST.peek && TASKS_ST.peek !== 'tt-access', null, {timeout: t(10000)});

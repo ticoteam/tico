@@ -66,7 +66,7 @@ Load order matters in two ways:
 - **Scripts.** Function declarations are global once their file has loaded, so functions may call each other
   across files. A top-level statement that runs at load (`const x = f()`, `el.onclick = ...`,
   `addEventListener(...)`) may use only what earlier files define. Keep those statements in the order
-  index.html lists the files: listeners on the same event fire in the order they were registered. `boot.ts`
+  index.html lists the files: listeners on the same event fire in the order they were registered. `boot.js`
   is last; it starts the app.
 - **Styles.** Later rules win at equal specificity, so `styles/*.css` keep the order they were cut in.
   `tokens.css` first, then base, then the areas.

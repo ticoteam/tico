@@ -42,7 +42,7 @@
 .inline-thumb img{display:block;max-width:100%;max-height:220px;object-fit:cover;background:linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 0 0/16px 16px,linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 8px 8px/16px 16px,#fff}
 .media-link::before{content:attr(data-media);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);padding:1px 5px;border-radius:4px;background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink);margin-right:5px;vertical-align:1px}
 .md img{max-width:100%;border-radius:8px;cursor:zoom-in}
-/* a link to a document (ui/app/markdown.ts fileCard): type mark, name, host; never wider than its column */
+/* a link to a document (ui/app/markdown.js fileCard): type mark, name, host; never wider than its column */
 .md-card{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;box-sizing:border-box;vertical-align:middle;margin:2px 0;padding:5px 12px 5px 5px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);color:var(--ink);text-decoration:none;line-height:var(--lh-tight)}
 .md-card:hover,.md-card:focus-visible{border-color:var(--focus)}
 .md-card-icon{flex:none;min-width:36px;padding:7px 4px;border-radius:7px;text-align:center;font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink)}

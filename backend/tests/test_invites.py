@@ -94,7 +94,7 @@ def test_only_an_owner_or_admin_sends_invites_and_only_to_someone_on_the_roster(
 
 
 def test_one_invite_request_sends_one_email_across_a_repeat_an_overlap_and_a_lost_answer(signin, monkeypatch):  # noqa: F811
-    """The browser repeats a write whose answer it lost with the same Idempotency-Key (ui/app/api.ts): that request
+    """The browser repeats a write whose answer it lost with the same Idempotency-Key (ui/app/api.js): that request
     never asks the issuer twice, and its answer stays the first one. A new click is a new key and sends again."""
     from backend import invites
 
