@@ -26,10 +26,11 @@ STACK_FRAMES = 12
 
 STORES = weakref.WeakSet()  # every Store made in this process
 OPENED = weakref.WeakSet()  # pooled connections opened while the current test runs
-# What the check costs in this process: the work around each test and around each connection opened, and the joins.
-COST = {"seconds": 0.0, "joined": 0.0}
+# What the check costs in this process: its own work around each test and each connection opened, the joins, and the
+# store's own connects (timed apart: they are the store's work, not the check's).
+COST = {"seconds": 0.0, "joined": 0.0, "connect": 0.0}
 # Every test's share, summed in the process that reports (the xdist controller, or the only process): for the summary.
-SUMMED = {"tests": 0, "seconds": 0.0, "joined": 0.0}
+SUMMED = {"tests": 0, "seconds": 0.0, "joined": 0.0, "connect": 0.0}
 
 _store_init = _store.Store.__init__
 _store_connect = _store.Store.connect
@@ -43,6 +44,8 @@ def _recording_init(self, *args, **kwargs):
 def _recording_connect(self, factory=None, check_same_thread=True):
     started = time.perf_counter()
     c = _store_connect(self, factory=factory, check_same_thread=check_same_thread)
+    connected = time.perf_counter()
+    COST["connect"] += connected - started
     # The pool passes its own factory. A caller's connection without one is outside the pool's lifetime rules.
     if factory is not None:
         # Without source lines: linecache checks each file's mtime on every lookup, which cost seconds per shard. The
@@ -50,7 +53,7 @@ def _recording_connect(self, factory=None, check_same_thread=True):
         stack = traceback.StackSummary.extract(traceback.walk_stack(None), limit=STACK_FRAMES, lookup_lines=False)
         c._opened_at = (threading.current_thread().name, stack)
         OPENED.add(c)
-    COST["seconds"] += time.perf_counter() - started
+        COST["seconds"] += time.perf_counter() - connected
     return c
 
 
@@ -89,11 +92,12 @@ def add_report(report):
     SUMMED["tests"] += 1
     SUMMED["seconds"] += properties["pooled-connection-seconds"]
     SUMMED["joined"] += properties.get("pooled-connection-joined", 0.0)
+    SUMMED["connect"] += properties.get("pooled-connection-connect", 0.0)
 
 
 @pytest.fixture(autouse=True)
 def pooled_connections_closed(request):
-    seconds, joined = COST["seconds"], COST["joined"]
+    seconds, joined, connect = COST["seconds"], COST["joined"], COST["connect"]
     started = time.perf_counter()
     before = set(threading.enumerate())
     OPENED.clear()
@@ -134,5 +138,6 @@ def pooled_connections_closed(request):
     # The teardown report carries this test's share to the process that prints the summary (conftest.py).
     request.node.user_properties.append(("pooled-connection-seconds", round(COST["seconds"] - seconds, 4)))
     request.node.user_properties.append(("pooled-connection-joined", round(COST["joined"] - joined, 4)))
+    request.node.user_properties.append(("pooled-connection-connect", round(COST["connect"] - connect, 4)))
     if report is not None:
         pytest.fail(report, pytrace=False)
