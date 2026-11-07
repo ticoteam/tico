@@ -11,6 +11,21 @@ const FRAME = 'https://visuals.acme.example/visuals/acme-page.sig';
 const TALL = '<!doctype html><html><body style="margin:0"><div style="height:600px;background:#dfe">Tall page</div>'
   + '<script>parent.postMessage({ticoVisualHeight: 600}, "*")</script></body></html>';
 
+// The filter popover (Library › Files): open it if it is shut, pick the item whose set and label match, or close it.
+async function openFilters(page) {
+  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open')))) await page.locator('.lf-fbtn').click();
+  await page.locator('#lf-filter-pop').waitFor({state: 'visible', timeout: t(5000)});
+}
+async function pick(page, set, label) {
+  await openFilters(page);
+  await page.locator(`#lf-filter-pop [data-lf-set="${set}"]`, {hasText: label}).click();
+}
+async function closeFilters(page) {
+  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open')))) return;
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.getElementById('lf-filter-pop').matches(':popover-open'), null, {timeout: t(5000)});
+}
+
 run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/library/files'});
   const rows = page.locator('.lf-row');
@@ -23,35 +38,42 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   for (const want of ['Engineering weekly', 'Engineering weekly (old)', 'Launch plan', 'Signup funnel'])
     assert.ok(titles.includes(want), `${tag}: lists ${want} (${titles})`);
   if (!phone) await page.locator('#side a[data-nav="files"].cur').waitFor({state: 'attached', timeout: t(5000)});
+  // A computer lists a file on one line; a phone gives each file two (the name, then Kind · Bot · time).
   const h = await rows.first().evaluate(el => el.getBoundingClientRect().height);
-  assert.ok(h < 64, `${tag}: one dense row (${h}px)`);
+  if (phone) assert.ok(h >= 48 && h <= 76, `${tag}: two lines a row (${h}px)`);
+  else assert.ok(h >= 36 && h <= 44, `${tag}: one line a row (${h}px)`);
   assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
-  assert.ok((await page.locator('.lf-meta').allInnerTexts()).every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
+  const bots = await page.locator(phone ? '.lf-meta' : '.lf-by-n').allInnerTexts();
+  assert.ok(bots.every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
   assert.deepEqual(await page.locator('.lf-pins').allInnerTexts(), ['Pinned', 'Pinned'], `${tag}: one pin each, no count`);
-  // The filters never run off the screen: they fit, or scroll sideways with the right edge faded.
-  const frow = await page.locator('.lf-frow').evaluate(el => ({right: el.getBoundingClientRect().right, width: innerWidth,
-    over: el.scrollWidth > el.clientWidth + 1, fade: el.classList.contains('more')}));
-  assert.ok(frow.right <= frow.width && frow.over === frow.fade, `${tag}: filters fit or fade (${JSON.stringify(frow)})`);
+  // The search and the filter button share the top row.
+  const q = await page.locator('.lf-q').boundingBox(), f = await page.locator('.lf-fbtn').boundingBox();
+  assert.ok(Math.abs(q.y + q.height / 2 - (f.y + f.height / 2)) < 4, `${tag}: search and filter on one row`);
   await shot(page, `${tag}-01-files`);
 
   // Team: the team's bots' files and the files on its tasks.
-  const teams = await page.locator('.lf-team option').allInnerTexts();
-  assert.ok(['Engineering', 'Release'].every(x => teams.includes(x)), `${tag}: the teams (${teams})`);
-  await page.locator('.lf-team').selectOption({label: 'Release'});
+  await openFilters(page);
+  const teams = await page.locator('#lf-filter-pop [data-lf-set="team"]').allInnerTexts();
+  assert.ok(['Engineering', 'Release'].every(x => teams.some(y => y.includes(x))), `${tag}: the teams (${teams})`);
+  await pick(page, 'team', 'Release');
   await page.locator('.lf-list', {hasText: 'Nothing matches.'}).waitFor({timeout: t(5000)});
-  await page.locator('.lf-team').selectOption({label: 'Engineering'});
+  await pick(page, 'team', 'Engineering');
   await page.waitForFunction(() => location.hash.includes('team=') && document.querySelectorAll('.lf-row').length === 4,
     null, {timeout: t(5000)});
-  await page.locator('.lf-team').selectOption('');
+  await pick(page, 'team', 'All teams');
+  await page.waitForFunction(() => !location.hash.includes('team=') && document.querySelectorAll('.lf-row').length === 4,
+    null, {timeout: t(5000)});
 
   // Kind narrows the list and rides in the address.
-  await page.locator('.lf-kind').selectOption('page');
+  await pick(page, 'kind', 'Pages');
   await page.waitForFunction(() => location.hash.includes('kind=page') && document.querySelectorAll('.lf-row').length === 3,
     null, {timeout: t(5000)});
   assert.ok(!(await page.locator('.lf-title').allInnerTexts()).includes('Signup funnel'), `${tag}: no CSV under Pages`);
-  await page.locator('.lf-kind').selectOption('');
+  await pick(page, 'kind', 'All kinds');
+  await closeFilters(page);
 
   // Search finds a CSV by a word in its header, with an excerpt.
+  await closeFilters(page);
   await page.locator('.lf-q').fill('visitors');
   await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 1
     && /visitors/.test(document.querySelector('.lf-excerpt')?.textContent || ''), null, {timeout: t(5000)});
