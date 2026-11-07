@@ -5,17 +5,10 @@ name: Python test map
 # Nothing is committed to main and no pull request is opened: the PR checks fetch that one file (pr-checks.yml, plan job).
 # Each default-suite test file runs alone under coverage (scripts/py_test_map.py), on RunsOn like the queue's Python jobs.
 #
-# The push trigger is temporary: it measures the branch that adds this workflow, before the workflow is on main, where a
-# dispatch can find it. It runs only when this file changes (each such push measures the branch again). Remove it in
-# the change that merges.
-
 on:
   schedule:
     - cron: '41 4 * * *'
   workflow_dispatch:
-  push:
-    branches: [chris/rel-py-test-map]
-    paths: ['.github/workflows/py-test-map.yml']
 
 permissions:
   contents: read
@@ -147,9 +140,8 @@ jobs:
   publish:
     name: publish the map to ci/py-test-map
     needs: build
-    # Nightly and dispatched runs from main publish. A push to the temporary trigger branch publishes too, so the PR can
-    # read a measured map before the workflow is on main.
-    if: github.event_name == 'push' || (github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))
+    # Nightly and dispatched runs from main publish.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
