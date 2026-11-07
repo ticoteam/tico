@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from clients import judge as clients_judge
 
+from . import file_library
 from . import hubdb
 from . import judge as server_judge
 
@@ -33,6 +34,7 @@ from . import judge as server_judge
 H: Any = hubdb
 J: Any = clients_judge
 judge: Any = server_judge
+files: Any = file_library
 JudgeError = clients_judge.JudgeError
 
 if TYPE_CHECKING:
@@ -54,6 +56,7 @@ DECIDE_LEVELS = {"jev": "low", "sonnet": "medium"}
 QUESTION_SET = "pipeline-requirement"
 MET_AT, NOT_MET_AT = 0.8, 0.2
 REASON_BYTES = 500
+TEXT_CHARS = 6000  # the most of an attachment's text the judge is sent; a longer text is cut and flagged truncated
 TICK_LIMIT = 5  # attachments judged per pass, so one pass has a bounded spend
 GATEWAY_TIMEOUT = 60
 # What a bank of judges' verdict is in the decision log: a not-met answer is a failed requirement.
@@ -103,10 +106,24 @@ def _probability(value: object) -> float | None:
     return min(1.0, max(0.0, score))
 
 
+def excerpt(text: str | None) -> tuple[str | None, bool]:
+    """The first TEXT_CHARS characters of an attachment's text, and whether that cut any. None (no text) stays None."""
+    if text is None:
+        return None, False
+    return text[:TEXT_CHARS], len(text) > TEXT_CHARS
+
+
+def _reads_text(mime: str) -> bool:
+    """Whether Tico reads text from this type: a text, a table or an HTML page (a Tico page). Other bytes are not loaded."""
+    return mime in file_library.TEXT_TYPES or mime in file_library.TABLE_TYPES or mime == "text/html"
+
+
 def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str, Any]:
     """What the judge is told: the requirement and its rubric, the work as it is now (the ticket's work_revision, which
-    the attachment row does not carry), and the evidence: the version it was made for, and what it is (a description,
-    never the file's contents)."""
+    the attachment row does not carry), and the evidence: the version it was made for, what it is (a description), and
+    its text, the first TEXT_CHARS characters with `truncated` when cut. `text` is null when Tico holds no text for it (an
+    image, a video, a PDF or a link); the question set answers that as unreadable."""
+    text, cut = excerpt(attachment.get("text"))
     return {
         "requirement": {"name": requirement.get("name") or "", "rubric": requirement.get("rubric") or ""},
         "work": {"work_version": int(attachment.get("task_work_version") or 0)},
@@ -116,6 +133,8 @@ def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str,
             "digest": attachment.get("digest") or "",
             "url": attachment.get("url") or "",
             "file_version": attachment.get("file_version") or 0,
+            "text": text,
+            "truncated": cut or bool(attachment.get("truncated")),
         },
     }
 
@@ -291,10 +310,12 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     rows = c.execute(
         """SELECT a.id AS id, a.task_id, a.stage_requirement_id, a.digest, a.work_version, a.source, a.url, a.file_version,
                   t.work_revision AS task_work_version, r.name, r.rubric, r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by,
-                  r.reviewer_id
+                  r.reviewer_id, COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest
            FROM requirement_attachments a
            JOIN stage_requirements r ON r.id = a.stage_requirement_id AND r.retired_at IS NULL
            JOIN tasks t ON t.id = a.task_id
+           LEFT JOIN blobs b ON b.id = a.blob_id
+           LEFT JOIN bot_file_versions v ON v.file_id = a.file_id AND v.version = a.file_version
            WHERE a.removed_at IS NULL
              AND r.kind = 'attachment' AND r.reviewed_by IN ('bot', 'bot_then_person')
              AND r.rubric IS NOT NULL AND t.step_id = r.pipeline_stage_id
@@ -308,6 +329,23 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _text_of(c: sqlite3.Connection, job: dict[str, Any]) -> tuple[str | None, bool]:
+    """The text Tico holds for a waiting attachment, read up to file_library.READ_MAX bytes: a Tico page, a company file or
+    an uploaded blob of a text type. (None, False) when Tico holds none (an image, a video, a PDF or a link), or the bytes
+    cannot be read: the judge then answers unreadable, and the pass goes on. `truncated` is set when the bytes were cut."""
+    blobs = getattr(c, "blobs", None)
+    mime = str(job.get("mime") or "").split(";", 1)[0].strip().lower()
+    digest = job.get("blob_digest")
+    if blobs is None or not digest or not _reads_text(mime):
+        return None, False
+    try:
+        data = blobs.get(digest)
+    except Exception as exc:  # noqa: BLE001 - an unreadable file is judged as unreadable; one bad blob never stops the pass
+        LOG.warning("An attachment's bytes could not be read for the judge: %s", type(exc).__name__)
+        return None, False
+    return files.extract(mime, data, full=True), len(data) > files.READ_MAX
 
 
 def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) -> str:
@@ -390,6 +428,8 @@ def tick(store: "Store", at: Any = None) -> int:
             # Resolve the model and the Decide cap now, on this read; the answer needs no connection.
             capped = judge.over_spend_cap(c, db.settings) is not None
             chosen = judge_model_of(c, job["pipeline_id"])
+            text, cut = _text_of(c, job)
+            job = {**job, "text": text, "truncated": cut}
             asks.append((job, requirement, _base(requirement, job, chosen) | {"capped": capped}))
     if not asks:
         return 0
