@@ -4797,6 +4797,8 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Updat
 
 def _page_fields(args):
     fields = {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    if args.get("spec"):
+        fields["spec"] = True
     if "audience" in args and args["audience"] is not None:
         fields["audience"] = audience(args["audience"])
     return fields
@@ -4817,6 +4819,7 @@ def _page_fields(args):
         "replaces": {"type": "string"},
         "scope": {"enum": ["task", "bot"]},
         "path": _s("Repo-relative path"),
+        "spec": {"type": "boolean", "description": "A visual spec for the Product roadmap card in task"},
     },
     required=("name", "text"),
     writes=True,

@@ -291,3 +291,126 @@ def test_a_check_back_whose_turn_started_or_a_person_resumed_is_not_refused_as_o
             (job_id, H.human_actor("ana"), now),
         )
     assert check_back_refusal(api, r, job_id) != "obsolete_check_back", "a person resumed it: it runs"
+
+
+def stepped(c, row, actor, step, event_id):
+    """A step change to `step` by `actor`, written now: after the notices set up before it, as a real change is."""
+    H._task_event(c, row["id"], actor, "step", "in-progress", step, event_id=event_id)
+
+
+def suppressed(c, notice):
+    """The job.suppress event that dropped a queued notice, or None."""
+    row = c.execute(
+        "SELECT e.detail FROM events e JOIN jobs j ON j.id=e.target WHERE e.action='job.suppress' AND j.message_id=?",
+        (notice["id"],),
+    ).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def notice_on_a_fresh_task(c, body, refs=None):
+    """A keeper notice to the bot about a new task, written five minutes ago; the task's own history is older still."""
+    row = task(c)
+    c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    c.execute("UPDATE history_events SET created_at=? WHERE subject_id=?", (H.shift(H.now(), minutes=-10), row["id"]))
+    news = H._wake(c, row, "bot:ops", body, {"wake": "blocker", **(refs or {})}, trigger="stall_check")
+    c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-5), news["id"]))
+    return row, news
+
+
+def test_a_notice_the_bot_superseded_with_its_own_step_change_is_dropped_and_logged(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        row, news = notice_on_a_fresh_task(c, "Checks are green: move it on.")
+        stepped(c, row, "bot:ops", "review-1", "step-own")
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, news) == "canceled", "the bot made the change itself, so it knows the step"
+        detail = suppressed(c, news)
+        assert (detail["notice"], detail["step_change"], detail["task_id"]) == (news["id"], "step-own", row["id"]), (
+            "the drop names the notice and the step change that superseded it"
+        )
+        assert "newer_notice" not in detail
+
+
+def test_a_notice_a_newer_notice_about_the_same_task_supersedes_is_dropped_and_logged(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        row, old = notice_on_a_fresh_task(c, "Checks are red: fix them.")
+        stepped(c, row, "human:ana", "review-1", "step-ana")
+        newer = H._wake(c, row, "bot:ops", "Ana moved it to review: the checks are green.", {"wake": "blocker"})
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, old) == "canceled", "the newer notice carries the news about the step"
+        assert queued(c, newer) != "canceled", "the newer notice is still news: it runs"
+        assert suppressed(c, old)["newer_notice"] == newer["id"]
+        assert suppressed(c, old)["step_change"] == "step-ana"
+
+
+def test_a_notice_nothing_has_superseded_is_kept(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        row, news = notice_on_a_fresh_task(c, "Ana asked for the exports: start on them.")
+        stepped(c, row, "human:ana", "review-1", "step-ana")
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, news) != "canceled", "a person's step change with no newer notice: the bot has not heard of it"
+        assert suppressed(c, news) is None
+
+
+def test_a_notice_of_a_persons_own_act_is_kept_though_its_step_moved_on(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        row, news = notice_on_a_fresh_task(c, "Ana asked: start on the exports.", {"caused_by": "human:ana"})
+        stepped(c, row, "bot:ops", "review-1", "step-own")
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, news) != "canceled", "a notice of a person's act still owes that person its answer"
+
+
+def test_a_persons_answer_recorded_on_its_question_lets_a_later_step_change_supersede_its_notice(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        question = task(c, "Approve this exports spec?")
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (question["id"],))
+        row, news = notice_on_a_fresh_task(
+            c, "Ana marked this subtask done: Approve.", {"caused_by": "human:ana", "subtask": question["id"]}
+        )
+        stepped(c, row, H.KEEPER, "review-1", "step-keeper")
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, news) == "canceled", "the answer is on the question, and the card has moved on"
+        detail = suppressed(c, news)
+        assert (detail["step_change"], detail["reason"]) == ("step-keeper", "answer recorded; step moved"), (
+            "the drop names the step change and why it was dropped"
+        )
+
+
+def test_a_persons_answer_still_owed_keeps_its_notice_through_a_later_step_change(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        question = task(c, "Approve this exports spec?")
+        row, news = notice_on_a_fresh_task(
+            c, "Ana marked this subtask done: Approve.", {"caused_by": "human:ana", "subtask": question["id"]}
+        )
+        stepped(c, row, H.KEEPER, "review-1", "step-keeper")
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, news) != "canceled", "the question is still open: the answer is still owed"
+
+
+def test_a_persons_question_declined_lets_a_later_step_change_supersede_its_notice(api):
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        question = task(c, "Approve this exports spec?")
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (question["id"],))
+        row, news = notice_on_a_fresh_task(
+            c, "Ana marked this subtask declined: Not this spec.", {"caused_by": "human:ana", "subtask": question["id"]}
+        )
+        stepped(c, row, H.KEEPER, "review-1", "step-keeper")
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, news) == "canceled", "the question is closed and the card has moved on"
+        detail = suppressed(c, news)
+        assert (detail["step_change"], detail["reason"]) == ("step-keeper", "question closed; step moved"), (
+            "a declined question is closed, not answered: the reason says so"
+        )

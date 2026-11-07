@@ -2859,6 +2859,19 @@ def obsolete_notices_sql(c):
         "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
         "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
         "coalesce(t.step_id,'') AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
+        # Superseded (superseding_step): unread, and its task changed step after it was written, made by the recipient
+        # itself or with a newer notice to the recipient about the task. A person's act's notice still owes its answer
+        # until that answer is recorded (its question is done); then a later step change alone supersedes it.
+        "OR (m.read_at IS NULL AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%' "
+        "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind='step' "
+        "AND e.created_at>m.created_at AND (e.actor_id=m.recipient_id OR EXISTS (SELECT 1 FROM messages n "
+        "WHERE n.recipient_id=m.recipient_id AND n.kind='notice' AND n.deleted_at IS NULL AND n.id<>m.id "
+        "AND n.created_at>=e.created_at AND n.created_at>m.created_at AND json_extract(n.refs,'$.task')=t.id)))) "
+        "OR (m.read_at IS NULL AND coalesce(json_extract(m.refs,'$.caused_by'),'') LIKE 'human:%' "
+        "AND EXISTS (SELECT 1 FROM tasks q WHERE q.id=json_extract(m.refs,'$.subtask') "
+        "AND q.status IN ('done','declined','closed')) "
+        "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND e.kind='step' AND e.created_at>m.created_at)) "
         "OR (m.ref_wake='pr_checks_done' AND json_extract(m.refs,'$.pr_head') IS NOT NULL "
         "AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' AND coalesce(l.state,'')<>'closed' "
         "AND coalesce(json_extract(l.detail,'$.head_sha'),'')<>'') "
@@ -2871,9 +2884,57 @@ def obsolete_notices_sql(c):
     )
 
 
-def suppress_notice(c, job, task_id, reason):
+def superseding_step(c, job):
+    """(step change, newer notice, reason) that supersedes a queued keeper notice (obsolete_notices_sql's superseded
+    branches), or (None, None, None). A person's act's notice whose question is closed (done, declined or closed: the
+    answer recorded) is superseded by the first later step change, whoever made it. Any other is superseded by a change the notice's recipient made
+    itself, or one that queued a newer notice to the recipient about the task (its id). The claim writes all three into
+    the job.suppress event, so each drop names what superseded it and why."""
+    m = c.execute(
+        "SELECT id,kind,recipient_id,created_at,read_at,refs FROM messages WHERE id=?", (job["message_id"],)
+    ).fetchone()
+    if m is None or m["kind"] != "notice" or m["read_at"] is not None:
+        return None, None, None
+    refs = json.loads(m["refs"] or "{}") or {}
+    # A person's answer is recorded once its question is closed: done (answered), declined or closed (dismissed).
+    question = None
+    if str(refs.get("caused_by") or "").lower().startswith("human:"):
+        question = c.execute(
+            "SELECT status FROM tasks WHERE id=? AND status IN ('done','declined','closed')", (refs.get("subtask"),)
+        ).fetchone()
+    answered = (
+        None
+        if question is None
+        else ("answer recorded; step moved" if question["status"] == "done" else "question closed; step moved")
+    )
+    for e in c.execute(
+        "SELECT id,actor_id,created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
+        "AND created_at>? ORDER BY created_at,rowid",
+        (job["task_id"], m["created_at"]),
+    ).fetchall():
+        if answered:
+            return e["id"], None, answered
+        if str(refs.get("caused_by") or "").lower().startswith("human:"):
+            return None, None, None  # the answer is still owed: this notice stays
+        if e["actor_id"] == m["recipient_id"]:
+            return e["id"], None, SUPERSEDED
+        newer = c.execute(
+            "SELECT id FROM messages WHERE recipient_id=? AND kind='notice' AND deleted_at IS NULL AND id<>? "
+            "AND created_at>=? AND created_at>? AND json_extract(refs,'$.task')=? ORDER BY created_at LIMIT 1",
+            (m["recipient_id"], m["id"], e["created_at"], m["created_at"], job["task_id"]),
+        ).fetchone()
+        if newer is not None:
+            return e["id"], newer["id"], SUPERSEDED
+    return None, None, None
+
+
+SUPERSEDED = "Superseded: its task changed step after this notice, made by its recipient or with a newer notice"
+
+
+def suppress_notice(c, job, task_id, reason, detail=None):
     """Cancel one queued keeper notice nothing needs any more: its job, its claim hold, its delivery mark, the status a
-    stop left on its bot, and a job.suppress event. The claim does this for obsolete_notices_sql."""
+    stop left on its bot, and a job.suppress event (with `detail`, what superseded it). The claim does this for
+    obsolete_notices_sql."""
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job['id'],))
     claim_holds.clear(c, job['id'], "Its run is no longer needed.")
     c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job['message_id']))
@@ -2886,7 +2947,7 @@ def suppress_notice(c, job, task_id, reason):
     ):
         # Clearing the status also publishes the new header to already-open pages.
         settle_status(c, job["bot_id"], "idle", "")
-    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
+    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id, **(detail or {})})
 
 
 HAND_BACK_WAIT = 15  # seconds before a handed-back job is handed out again, doubled for each hand-back
@@ -4669,6 +4730,15 @@ class Execution:
         for old in obsolete:
             if not prepared:
                 selected = None
+            step_change, newer, reason = superseding_step(c, old)
+            if step_change:
+                # The decision log: which notice, and the step change (with the newer notice, if one replaced it) that
+                # superseded it, and why. Nothing is dropped without this record.
+                detail = {'notice': old['message_id'], 'step_change': step_change}
+                if newer:
+                    detail['newer_notice'] = newer
+                suppress_notice(c, old, old['task_id'], reason, detail)
+                continue
             suppress_notice(c, old, old['task_id'], 'Task finished or acted on before keeper notice delivery')
         company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:

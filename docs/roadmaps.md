@@ -122,6 +122,10 @@ quotes, source and Important stay internal. Teammate status comes from a verifie
 an email claim. The roadmap ranking view sorts by total requests, external requests, important
 requests, organization (alphabetically first nonempty organization), or numeric size.
 
+A roadmap card's spec is a page on the card (see [the software factory](software-factory.md#visual-specs)). Moving the
+card from Spec to Approved is a person's act: the bot asks it, and the person's Approve moves the card. A move with no
+spec page on the card is refused, and so is a bot's move.
+
 Use `/api/v2/roadmaps/settings`, `/api/v2/roadmap-tasks`, and `/api/v2/tasks/{id}/requesters`
 (GET/POST), `/requesters/{requester_id}` (POST partial update), and `/requesters/{requester_id}/delete`
 (POST). Internal writes require the usual Idempotency-Key. Requester lists are paged and do not

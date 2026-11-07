@@ -1711,6 +1711,11 @@ def parser():
     s.add_argument("--replaces", help="the id of an older page this one takes the place of")
     s.add_argument("--scope", choices=["task", "bot"])
     s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.add_argument(
+        "--spec",
+        action="store_true",
+        help="a visual spec for the Product roadmap card named by --task; styles are inlined, a person approves it",
+    )
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
