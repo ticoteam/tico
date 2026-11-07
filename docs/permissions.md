@@ -172,10 +172,13 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are.
   Everyone who can read the Home can read those messages, except one whose own references name a task, meeting or file
   its reader may not read, or one that replies, directly or through a chain of replies, to a message naming a task or
-  meeting its reader may not read. A reply does not yet carry the file refusal of the message it replies to on every
-  read path. This is fixed in Dev 779 and the clause returns when it ships. The check does not read the words typed into
-  a message or the files attached to it; an attached file is checked on its own when opened, and is refused if it is
-  linked to a task its reader may not read, or if any message it is attached to is one its reader may not read.
+  meeting its reader may not read. The file refusal of the message a reply answers is not yet applied to the reply in
+  every place the reply is shown. A fix is in progress, and the file rule returns to these pages when it ships. The check
+  does not read the words typed into a message or the files attached to it. An attached file is checked on its own when
+  opened, and is refused if it is linked to a task its reader may not read; if any message it is attached to is one its
+  reader may not read; if it is a letter's file or proof that its reader may not read; if it is the poster or thumbnail of
+  a media file that is refused to its reader; if it comes from a meeting run its reader may not read; or if its only link
+  is to a deleted task.
 - **personal**: a DM, read by the people in it, with no owner bypass. **task**: whoever may read the task.
   **meeting**: the people who may see the meeting.
 - The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
