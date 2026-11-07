@@ -349,6 +349,21 @@ def test_the_company_strategy_payload_carries_no_segment_text(api):
     assert {f["key"]: f for f in get(api, "segments/" + first)["strategy"]["fields"]}["serve"]["changed"] is True
 
 
+def test_a_segment_only_edit_counts_as_a_change_for_publish_until_it_is_published(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    publish(api, "First")
+    assert get(api, "strategy")["segment_changes"] == 0
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})
+    assert get(api, "strategy")["segment_changes"] == 1
+    assert get(api, "strategy", token="ben-test")["segment_changes"] == 0  # no draft is shown to a reader
+    assert publish(api, "Second")["n"] == 2
+    assert get(api, "strategy")["segment_changes"] == 0
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})  # the same text is no change
+    assert get(api, "strategy")["segment_changes"] == 0
+
+
 def test_a_dedicated_bot_is_handed_the_published_text_of_its_segments_and_not_the_draft(api):
     first, _, _ = defined(api)
     segment(api, "Screening", who="Landlords with 1-20 units")
