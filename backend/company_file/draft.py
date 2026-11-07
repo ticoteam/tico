@@ -238,6 +238,26 @@ def _choices(value, field, allowed, limit=None):
     return list(value)
 
 
+def regions(value, field):
+    """Where a company serves (`company.regions`) or a segment does (`strategy.market.segments[].regions`): 0..12
+    places, free text ("Worldwide", "United States", "Texas"). Control characters (a newline, a tab) become one space,
+    then each place is trimmed and must be 1..60 characters; a repeat (whatever its case) is dropped, the order kept.
+    Absent is unknown; an empty list is the same as absent (see `check`)."""
+    rows = _list(value, field, LIMITS["regions"])
+    out, seen = [], set()
+    for i, item in enumerate(rows):
+        if not isinstance(item, str):
+            raise DraftError("%s[%d] must be text" % (field, i))
+        text = re.sub("[\ud800-\udfff]", "", item)  # a lone surrogate from JSON is no text
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()  # newlines, tabs and other control characters: a space
+        if not 1 <= len(text) <= LIMITS["region"]:
+            raise DraftError("%s[%d] must be 1 to %d characters" % (field, i, LIMITS["region"]))
+        if text.casefold() not in seen:
+            seen.add(text.casefold())
+            out.append(text)
+    return out
+
+
 def number(value, field):
     if (
         isinstance(value, bool)
@@ -432,7 +452,12 @@ def _usd(value, field):
 
 def _segment(raw, at):
     field = "strategy.market.segments[%d]" % at
-    _keys(raw, field, ("key",), ("name", "parent", "usd", "method", "arithmetic", "evidence", "ours", "next"))
+    _keys(
+        raw,
+        field,
+        ("key",),
+        ("name", "parent", "usd", "method", "arithmetic", "evidence", "ours", "next", "regions"),
+    )
     method = raw.get("method") or "top_down"
     if method not in METHODS:
         raise DraftError(field + ".method is not a sizing method")
@@ -452,6 +477,10 @@ def _segment(raw, at):
     }
     if not out["evidence"]:
         out["usd"] = None  # a size stands only on its evidence: never an invented number
+    if raw.get("regions") is not None:
+        serves = regions(raw["regions"], field + ".regions")
+        if serves:
+            out["regions"] = serves  # this segment's own places; absent when it has none of its own
     return out
 
 
@@ -588,7 +617,7 @@ def check(raw, snapshot=False):
     _keys(raw, "draft", TOP, allowed + OPTIONAL)
     if raw["step"] not in ("company",) + STEPS:
         raise DraftError("draft.step is not a step")
-    company = _keys(raw["company"], "company", ("name", "about", "signals"))
+    company = _keys(raw["company"], "company", ("name", "about", "signals"), ("regions",))
     seq = raw["seq"]
     if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq <= LIMITS["seq"]:
         raise DraftError("draft.seq must be a counter")
@@ -626,6 +655,10 @@ def check(raw, snapshot=False):
         },
         "seq": seq,
     }
+    if company.get("regions") is not None:
+        serves = regions(company["regions"], "company.regions")
+        if serves:
+            draft["company"]["regions"] = serves  # absent when the company says nothing about where it serves
     if raw.get("strategy") is not None:
         draft["strategy"] = _strategy(raw["strategy"])
     for field in ("people", "bots", "goals"):
