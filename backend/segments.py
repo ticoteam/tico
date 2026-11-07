@@ -123,6 +123,10 @@ def _set_ranks(c: sqlite3.Connection, actor: str, ids: list[str]) -> None:
     cast(Callable[[sqlite3.Connection, str, list[str]], object], SM.set_ranks)(c, actor, ids)
 
 
+def _bump_finance_view(c: sqlite3.Connection, why: str) -> None:
+    cast(Callable[[sqlite3.Connection, str], None], SM.bump_finance_view)(c, why)
+
+
 def _event(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Row) -> None:
     cast(Callable[[sqlite3.Connection, str, str, str, Row], object], H.event)(c, actor, action, target, detail)
 
@@ -482,15 +486,20 @@ def set_member(c: sqlite3.Connection, actor: str, member: str, wanted: list[str]
         raise Problem("validation", "all covers every segment: send it on its own", 422)
     old = [r[0] for r in c.execute("SELECT segment_id FROM segment_members WHERE member=?", (ref,))]
     now = H.now()
+    changed = False
     for sid in old:
         if sid not in ids:
             c.execute("DELETE FROM segment_members WHERE segment_id=? AND member=?", (sid, ref))
+            changed = True
     for sid in ids:
         if sid not in old:
             c.execute(
                 "INSERT INTO segment_members (segment_id, member, created_at, created_by) VALUES (?,?,?,?)",
                 (sid, ref, now, actor),
             )
+            changed = True
+    if changed:
+        _bump_finance_view(c, "segment tags")
     _event(c, actor, "segments.member", ref, {"segments": ids})
     return {"member": ref, "segments": member_segments(c, ref)}
 
@@ -503,6 +512,7 @@ def forget_member(c: sqlite3.Connection, actor: str, ref: str) -> None:
     ]
     if segs:
         c.execute("DELETE FROM segment_members WHERE member=?", (ref,))
+        _bump_finance_view(c, "segment tags")
         _event(c, actor, "segments.member", ref, {"segments": [], "was": segs})
 
 

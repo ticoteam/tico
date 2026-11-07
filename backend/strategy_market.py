@@ -182,6 +182,17 @@ def _segment(c, segment_id):
     return row
 
 
+def bump_finance_view(c, why):
+    """A change to who is tagged with a segment moves the finance view version, which cached finance views key on
+    (backend/finance/store/access.py bump_view), as the org chart's triggers do for the roster. A no-op where the
+    finance tables are not there."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fin_view_versions'").fetchone():
+        return
+    from .finance.store import access as FA  # lazy: the finance store does not import the segment modules
+
+    FA.bump_view(c, why, H.now())
+
+
 def untag(c, actor, segment_id):
     """A segment that is not one of the company's has no teammate tagged with it: its tags go, and the event names them.
     A teammate's tags on the company's segments are unchanged."""
@@ -190,6 +201,7 @@ def untag(c, actor, segment_id):
     ]
     if members:
         c.execute("DELETE FROM segment_members WHERE segment_id=?", (segment_id,))
+        bump_finance_view(c, "segment tags")
         H.event(c, actor, "segment.untagged", segment_id, {"members": members})
 
 
@@ -255,6 +267,7 @@ def follow_merge(c, actor, segment_id, into_id):
     """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities). Its Us edge moved there with
     the graph's other edges. Its teammate tags move there when it is one of the company's (else they go), and so do the
     strategy bets that name it, its text in the draft, and the rows the other modules key by segment."""
+    had = c.execute("SELECT 1 FROM segment_members WHERE segment_id=? LIMIT 1", (segment_id,)).fetchone()
     if into_id in ours_ids(c):
         c.execute(
             "INSERT OR IGNORE INTO segment_members (segment_id, member, created_at, created_by) "
@@ -262,6 +275,8 @@ def follow_merge(c, actor, segment_id, into_id):
             (into_id, segment_id),
         )
     c.execute("DELETE FROM segment_members WHERE segment_id=?", (segment_id,))
+    if had:
+        bump_finance_view(c, "segment tags")
     c.execute("UPDATE strategy_bets SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
     for table in MOVED_BY_SEGMENT:
         if "segment_id" in _columns(c, table):

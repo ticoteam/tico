@@ -12,6 +12,8 @@ from backend import lenses as LN
 from backend import migrations
 from backend import segments as SG
 from backend import strategy as S
+from backend import strategy_market as SM
+from backend.finance.store import access as FA
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn
@@ -144,11 +146,15 @@ def test_a_market_segment_of_that_name_joins_and_a_stopped_one_joins_again_with_
     assert segment(api, "Screening")["segment"]["id"] == first
 
 
-def test_a_merged_segment_is_a_conflict_that_names_the_one_it_merged_into(api):
+def test_a_merged_segment_name_joins_the_segment_it_merged_into_and_never_reactivates_it(api):
+    """The merged name is an alias of the segment it merged into, so creating it reuses that active segment (the company
+    plays in it now); the merged one is not reactivated."""
     first, second, _ = defined(api)
     post(api, f"market/entities/{first}/merge", {"into": second})
-    refused = segment(api, "Screening", expected=409)
-    assert second in str(refused)
+    joined = segment(api, "Screening")
+    assert joined["segment"]["id"] == second
+    assert first not in ids(api)
+    assert second in ids(api)
 
 
 def test_a_bet_names_one_of_the_companys_segments_or_none(api):
@@ -436,6 +442,40 @@ def test_the_public_helpers_list_the_segments_without_faces_and_colour_the_unsta
 def test_a_bet_from_before_segments_is_no_change_against_one_with_no_segment():
     assert S._same_bet_field({"statement": "x"}, {"segment_id": None, "statement": "x"}, "segment_id")
     assert not S._same_bet_field({"segment_id": "segment/a"}, {"segment_id": None}, "segment_id")
+
+
+def test_a_change_to_who_is_tagged_moves_the_finance_view_version(api):
+    """The finance views key their caches on fin_view_versions: a tag that is set, cleared or forgotten moves it once;
+    a write that changes no tag moves nothing."""
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    setup_attempt(api, "ops")
+
+    def version():
+        with api.app.state.store.read() as c:
+            return FA.view_version(c)
+
+    before = version()
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first]})
+    tagged = version()
+    assert tagged == before + 1
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first]})  # the same tags: nothing moved
+    assert version() == tagged
+    post(api, "segments/members", {"member": "bot:ops", "segments": []})
+    assert version() == tagged + 1
+    with api.app.state.store.transaction() as c:
+        SG.forget_member(c, "human:ana", "bot:ops")  # no tag left to forget: nothing moved
+    assert version() == tagged + 1
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first]})
+    with api.app.state.store.transaction() as c:
+        SG.forget_member(c, "human:ana", "bot:ops")  # the archive path: its tags go and the view moves
+    assert version() == tagged + 3
+
+
+def test_the_finance_view_bump_does_nothing_where_the_finance_tables_are_absent():
+    conn = sqlite3.connect(":memory:")
+    SM.bump_finance_view(conn, "segment tags")
+    assert conn.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 
 def _migration(name):
