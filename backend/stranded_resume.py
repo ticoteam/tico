@@ -302,8 +302,8 @@ def hears(c: sqlite3.Connection, row: dict[str, Any]) -> str:
         f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
         (cast(str, H.actor_id(owner)),),
     ).fetchone()
-    declared = json.loads(found[1]) if found and found[1] else {}
-    target: str = (found[0] if found else "") or (declared or {}).get("reports_to") or ""
+    declared: dict[str, Any] = json.loads(found[1]) if found and found[1] else {}
+    target: str = cast(str, (found[0] if found else "") or declared.get("reports_to") or "")
     target = target if not target or cast(str | None, H.actor_kind(target)) else cast(str, H.bot_actor(target))
     if (
         target
