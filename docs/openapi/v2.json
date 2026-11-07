@@ -14922,6 +14922,47 @@
         ]
       }
     },
+    "/api/v2/finance/attribution-rules": {
+      "get": {
+        "summary": "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and apply_from); needs the finance.attribution right or admin",
+        "operationId": "listFinanceAttributionRules",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAttributionRules"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/balance-sheet": {
       "get": {
         "summary": "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
@@ -16721,6 +16762,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/lines/{line_id}/attribution": {
+      "get": {
+        "summary": "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and the line's history newest first, as far as the caller sees the line",
+        "operationId": "getFinanceLineAttribution",
+        "parameters": [
+          {
+            "name": "line_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Line Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceLineAttribution"
                 }
               }
             }
@@ -56347,6 +56456,94 @@
         "title": "FinanceAdRunRequest",
         "description": "Import a tool's ad spend now instead of at the next 4-hourly run."
       },
+      "FinanceAttributionRules": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "label"
+                  ],
+                  "additionalProperties": true
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "apply_from": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "apply_from",
+                "enabled",
+                "id",
+                "match",
+                "name",
+                "splits",
+                "updated_at"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "additionalProperties": true
+      },
       "FinanceBalanceSheet": {
         "type": "object",
         "properties": {
@@ -58009,6 +58206,124 @@
           "next_cursor",
           "open",
           "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceLineAttribution": {
+        "type": "object",
+        "properties": {
+          "line_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "object"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "splits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "teammate": {
+                  "type": "string"
+                },
+                "team": {
+                  "type": "string"
+                },
+                "share_bps": {
+                  "type": "integer"
+                },
+                "amount": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "amount",
+                "share_bps",
+                "team",
+                "teammate"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "rule_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "splits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "teammate": {
+                        "type": "string"
+                      },
+                      "team": {
+                        "type": "string"
+                      },
+                      "share_bps": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "share_bps",
+                      "team",
+                      "teammate"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "set_by": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "superseded_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "created_at",
+                "id",
+                "rule_id",
+                "set_by",
+                "source",
+                "splits",
+                "superseded_at"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "amount",
+          "history",
+          "line_id",
+          "source",
+          "splits",
+          "tags"
         ],
         "additionalProperties": true
       },
