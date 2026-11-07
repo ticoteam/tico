@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb as H
 from .auth import validate_identity
-from .github_app import GitHubApp, LIVE_TTL, REFRESH_MARGIN, repo_of
+from .github_app import GitHubApp, LIVE_TTL, REFRESH_MARGIN, account_word, repo_of
 from .store import Problem, digest, encode
 
 
@@ -83,7 +83,7 @@ class ReviewerApp(GitHubApp):
         ):
             raise Problem(
                 "github_reviewer_installation",
-                "The reviewer App must be installed on the connected GitHub organization",
+                f"The reviewer App must be installed on the connected GitHub {account_word(row)}",
                 409,
             )
         with self.lock:
@@ -138,7 +138,7 @@ def install_reviews(app, store, primary, reviewer):
         row = primary.row(c)
         repository = repo_of(name, "")
         if not row or not repository or repository.lower().split("/")[0] != row["org"].lower():
-            raise Problem("forbidden", "The review repository must be in the connected organization", 403)
+            raise Problem("forbidden", "The review repository must be in the connected account or organization", 403)
         grant = next(
             (
                 g
