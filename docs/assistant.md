@@ -38,7 +38,7 @@ but draws nothing (a class, not `hidden`), and the dot's flying copy is made onc
 What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
+task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. It answers only when your words give what the question asks, such as a price, a pick, a yes or no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer nothing: the question stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell which one you meant. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 
