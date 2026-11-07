@@ -7,7 +7,7 @@ from backend import hubdb as H
 from backend import factory_manager as FM
 from backend import pipeline_manager as PM
 from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_pipeline_manager import ANA, botops_roster, now, pipeline, stamp, step, ticket
+from backend.tests.test_pipeline_manager import ANA, botops_roster, now, pipeline, stamp, step, ticket, visit
 
 FACTORY = "Product development"
 
@@ -80,8 +80,43 @@ def test_the_same_bottleneck_on_two_passes_wakes_the_manager_once(api):
         assert checks(c) == 1
         woke = [r["woke"] for r in runs(c)]
         assert woke == [0, 1, 0]
+        assert [r["model_called"] for r in runs(c)] == [0, 1, 0]
+        assert c.execute("SELECT COUNT(*) FROM factory_manager_actions WHERE action='ask_manager'").fetchone()[0] == 1
         assert c.execute("SELECT step_id FROM tasks WHERE type_id=?", (type_id,)).fetchone()[0] == before
         assert c.execute("SELECT COUNT(*) FROM stage_decisions").fetchone()[0] == 0
+
+
+def test_a_handoff_with_no_intake_in_the_week_wakes_once_and_clears_when_the_target_takes_cards(api):
+    store = api.app.state.store
+    t0 = now()
+    with store.transaction() as c:
+        fid = factory(c, manager="ops")
+        src = pipeline(c, manager=None)
+        dst = pipeline(c, manager=None, name="Handoff target")
+        for type_id in (src, dst):
+            c.execute("UPDATE task_types SET factory_id=? WHERE id=?", (fid, type_id))
+        c.execute(
+            "INSERT INTO pipeline_links (id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, created_at) "
+            "VALUES ('link-1', ?, ?, ?, 'move', ?)",
+            (src, step(c, src, "Building"), dst, stamp(t0)),
+        )
+        c.execute(
+            "INSERT INTO pipeline_handoffs (id, pipeline_link_id, source_task_id, target_task_id, created_at) "
+            "VALUES ('handoff-1', 'link-1', 'task-a', 'task-b', ?)",
+            (stamp(t0 - timedelta(days=1)),),
+        )
+    FM.tick(store, t0)
+    with store.read() as c:
+        assert [r["woke"] for r in runs(c)] == [1]
+        assert [r["judgment_count"] for r in runs(c)] == [1]
+    FM.tick(store, t0 + timedelta(minutes=30))
+    with store.read() as c:
+        assert [r["woke"] for r in runs(c)] == [1, 0]
+    with store.transaction() as c:
+        visit(c, ticket(c, dst)["id"], dst, "Building", t0 + timedelta(minutes=40))
+    FM.tick(store, t0 + timedelta(minutes=60))
+    with store.read() as c:
+        assert [r["woke"] for r in runs(c)] == [1, 0, 0]
 
 
 def test_a_dead_pipeline_manager_opens_one_botops_task_and_wakes_the_factory_manager_once(api):

@@ -37,6 +37,7 @@ LOG = logging.getLogger("tico.factory_manager")
 ALLOWED = ("ask_manager", "open_botops", "propose_rule", "post_note")
 EMITTED = ("ask_manager",)
 EVERY = timedelta(minutes=30)
+INTAKE_PERIOD = timedelta(days=7)
 WAKE = "factory_manager"
 CHECK_PREFIX = "Factory check: "
 
@@ -89,16 +90,19 @@ def _bottleneck(c: "sqlite3.Connection", pipelines: list[dict[str, Any]], at: da
     return max(counts.values(), key=lambda entry: (entry["count"], entry["stage_id"]))
 
 
-def _no_intake(c: "sqlite3.Connection", factory_id: str) -> list[dict[str, Any]]:
-    """Handoff links out of this factory whose target pipeline has no stage to take the card."""
+def _no_intake(c: "sqlite3.Connection", factory_id: str, at: datetime) -> list[dict[str, Any]]:
+    """Handoff links out of this factory with no intake in the period: the source pipeline handed cards over in the
+    last 7 days, and the target pipeline has had no stage visit entered in that time, so nothing can take them."""
+    since = PM.stamp_of(at - INTAKE_PERIOD)
     return H._rows(
         c.execute(
-            "SELECT l.id, l.to_pipeline_id, t.name AS to_name FROM pipeline_links l "
+            "SELECT DISTINCT l.id, l.to_pipeline_id, t.name AS to_name FROM pipeline_links l "
             "JOIN task_types t ON t.id = l.to_pipeline_id "
             "JOIN task_types f ON f.id = l.from_pipeline_id "
+            "JOIN pipeline_handoffs h ON h.pipeline_link_id = l.id AND h.created_at >= ? "
             "WHERE f.factory_id=? AND l.retired_at IS NULL "
-            "AND NOT EXISTS (SELECT 1 FROM task_steps s WHERE s.type_id = l.to_pipeline_id)",
-            (factory_id,),
+            "AND NOT EXISTS (SELECT 1 FROM stage_visits v WHERE v.pipeline_id = l.to_pipeline_id AND v.entered_at >= ?)",
+            (since, factory_id, since),
         )
     )
 
@@ -146,7 +150,7 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
     items: list[str] = [f"manager:{p['id']}" for p in dead]
     if bottleneck is not None and previous is not None and previous["bottleneck_stage_id"] == bottleneck["stage_id"]:
         items.append(f"bottleneck:{bottleneck['stage_id']}")
-    no_intake = _no_intake(c, factory_id)
+    no_intake = _no_intake(c, factory_id, at)
     items.extend(f"intake:{link['id']}" for link in no_intake)
     key = ",".join(sorted(items))
     previous_key = (previous or {}).get("wake_key") or ""
@@ -161,20 +165,21 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
         lines += [f"- Handoff to {link['to_name']} has no stages to take the card." for link in no_intake]
         owner = _actor(factory["manager_id"])
         _open_check(c, factory, owner, "\n".join(lines))
-        for p in dead:
-            c.execute(
-                "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
-                "created_at) VALUES (?,?,?,'ask_manager',?,?,?)",
-                (PM.new_id("fma"), factory_id, run_id, p["manager"], "pipeline manager has not run", stamp),
-            )
+        c.execute(
+            "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
+            "created_at) VALUES (?,?,?,'ask_manager',?,?,?)",
+            (PM.new_id("fma"), factory_id, run_id, owner, "judgment wake: " + ", ".join(items), stamp),
+        )
     c.execute(
-        "UPDATE factory_manager_runs SET finished_at=?, bottleneck_stage_id=?, judgment_count=?, wake_key=?, woke=? WHERE id=?",
+        "UPDATE factory_manager_runs SET finished_at=?, bottleneck_stage_id=?, judgment_count=?, wake_key=?, woke=?, "
+        "model_called=? WHERE id=?",
         (
             PM.stamp_of(datetime.now(timezone.utc)),
             bottleneck["stage_id"] if bottleneck else None,
             len(items),
             key,
             int(woke),
+            int(woke),  # a wake is the one model call a pass can make
             run_id,
         ),
     )
