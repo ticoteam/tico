@@ -41,6 +41,7 @@ import logging
 import re
 import threading
 import time
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import Request, Response
@@ -468,7 +469,7 @@ CONFLICT_RETRY_S = 1800  # a read GitHub refused or that failed waits half an ho
 _conflict_retry = {}  # link id -> monotonic time a failed read may be tried again
 
 
-def refresh_conflicts(service):
+def refresh_conflicts(service: Any) -> int:
     """The maintenance pass's read of open pull requests on active Dev tickets whose mergeability is not known (read again
     after five minutes: GitHub computes it lazily) or has not been read for thirty (a move of the base branch sends no
     pull request event). A conflict found wakes the owner once per head, as the webhook's would (`pull_request`). At most
@@ -494,7 +495,7 @@ def refresh_conflicts(service):
                     *H.ACTIVE_STATUSES,
                     H.shift(H.now(), minutes=-CONFLICT_UNKNOWN_MINUTES),
                     H.shift(H.now(), minutes=-CONFLICT_STALE_MINUTES),
-                    CONFLICT_READS_PER_PASS * 4,
+                    500,  # the backing-off ones are dropped below, so they never fill the pass
                 ),
             )
         )
@@ -1068,9 +1069,13 @@ def pr_signal(c, event, payload):
     if event == "status" or event in ("check_run", "check_suite", "workflow_run") and not prs:
         # Fork checks and commit statuses can omit the PR list.
         sha = payload.get("sha") if event == "status" else signal.get("head_sha")
+        # A workflow run on a push to main has no PR list either: only an open PR's head is its news, never a
+        # merged PR whose head is now main's.
+        still_open = " AND state IN ('open','draft')" if event == "workflow_run" else ""
         links = H._rows(
             c.execute(
-                "SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND json_extract(detail,'$.head_sha')=?",
+                "SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND json_extract(detail,'$.head_sha')=?"
+                + still_open,
                 (repo.lower(), sha),
             )
         )

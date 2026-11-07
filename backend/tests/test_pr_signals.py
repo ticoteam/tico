@@ -166,6 +166,16 @@ def test_a_failed_workflow_run_wakes_the_builder_once_per_head(api):
     assert len(_burst(api, task['id'])) == 1
 
 
+def test_a_workflow_run_on_main_does_not_wake_a_merged_prs_owner(api):
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shipped work', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
+    hook(api, 'pull_request', pr_event('closed', state='closed', merged=True, head={'sha': HEAD}))
+    _burst(api, task['id'])  # the merge's own news
+    workflow(api, 'failure')  # main's run at the same commit: no PR list, and the PR is merged
+    assert _burst(api, task['id']) == []
+
+
 # D: the maintenance pass finds a conflict no event reported.
 def test_the_pass_finds_a_conflict_on_an_unknown_pr_once_per_head(api, monkeypatch):
     typ = dev_type(api)
