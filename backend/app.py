@@ -5849,6 +5849,9 @@ def create_app(settings=None):
 
     audit_log.install(app, store, auth)
     task_caps.install(app, store, auth, mutate)
+    from . import ci_runs
+
+    ci_runs.install(app, store, auth, mutate)  # CI build time: a builder's remote-run permit, a ticket's extension
     from . import org_rules
 
     # Org rule checks first: their /api/v2/rules/stats and /check come before org_rules' /api/v2/rules/{rule_id}.

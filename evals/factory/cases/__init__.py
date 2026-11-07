@@ -5,6 +5,9 @@ dependency map (scripts/pr_checks.py) sees exactly which files the sim runs."""
 
 SCENARIOS = []
 # One line per case, in name order:  from .<name> import SCENARIOS as _<name>; SCENARIOS += _<name>
+from .ci_caps import SCENARIOS as _ci_caps
+
+SCENARIOS += _ci_caps
 from .freezes import SCENARIOS as _freezes
 
 SCENARIOS += _freezes

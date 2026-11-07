@@ -599,6 +599,7 @@ class World:
 
         service = self.app.state.github_app
         self.github_reads, self.github_fault = True, None
+        self.workflow_runs, self.workflow_jobs = [], {}  # the repository's Actions runs, and each run's jobs (ci_runs)
         self.github_failed = []  # (when, fault) per read or mint that failed
         task_blocked._fresh["seen"].clear()
         task_blocked._fresh["tried"].clear()
@@ -657,6 +658,10 @@ class World:
                             }
                         )
                 return answer(200, {"check_runs": runs})
+            if path == f"/repos/{REPO}/actions/runs":
+                return answer(200, {"workflow_runs": self.workflow_runs})
+            if found := re.fullmatch(rf"/repos/{REPO}/actions/runs/(\d+)/jobs", path):
+                return answer(200, {"jobs": self.workflow_jobs.get(int(found[1]), [])})
             return answer(404, {"message": "Not Found"})
 
         service.row = lambda c=None: {"org": REPO.split("/")[0], "installation_id": 1, "app_id": 1}

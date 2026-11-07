@@ -482,6 +482,15 @@ def step_thread_loop_guard(ctx):
     ), not resumed
 
 
+def step_ci_sweep(ctx):
+    # The repository's workflow runs since the last sweep: recorded, priced and posted to Finance (backend/ci_runs.py).
+    from . import ci_runs
+    from .store import H
+
+    settings = ctx.settings
+    return ci_runs.sweep(ctx.store, ctx.github_app, settings.release_repo, settings.ci_rate_per_job_minute, H.now())
+
+
 def step_go_live_expiry(ctx):
     # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
     from . import go_live
