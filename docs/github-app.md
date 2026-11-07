@@ -111,18 +111,32 @@ rather than `github.com/organizations/<org>/settings/apps/...`). GitHub makes th
 so the connected account is the one GitHub reports, which may differ from the name typed.
 
 What works the same as for an organization: connecting, installing on **All repositories**, each bot's run token
-(scoped to its own repository and its grants), and the bot's work in its own repository.
+(scoped to its own repository and its grants), the bot's work in its own repository, and deleting a repository
+(with the installation's Administration).
 
-What does not work yet:
+Creating a bot's repository in a personal account needs one step by the owner: **authorize Tico** once. Tools, GitHub
+shows **Authorize Tico** for the account. GitHub asks the owner to sign in as that account and allow the app, then
+returns to Tico, which keeps the owner's user token for that account, sealed like the app's secrets (see
+"Where the key lives"). Tico uses that token for one thing: creating an empty private repository in the account
+(`POST /user/repos`). A bot's repository made from a template, and every other call, still uses installation tokens.
 
-- **Creating repositories.** Tico does not create a bot's repository in a personal account, even with
-  Administration on. A new bot waits for a person: create `<login>/bot-<slug>` as an empty private repository from
-  the link on the Needs-you task (or in Tools, GitHub) and the bot finishes on its own once it exists.
-- **Product repositories** and **deleting repositories** are not offered for a personal account.
+- The token is refreshed automatically. GitHub rotates the refresh token on each refresh, and Tico stores the new one
+  before it uses the new access token.
+- A refresh GitHub refuses, or a token GitHub rejects, forgets the authorization: Tools asks for it again, and a
+  waiting bot's Needs-you task says so. Authorizing again finishes the waiting bots on its own.
+- A sign-in as a different account than the app's is refused, and GitHub's token for it is revoked at once.
+- Disconnecting revokes the token on GitHub (best effort) and forgets it here. The owner can also remove the
+  authorization in GitHub's settings under Applications.
+- An app connected before this was added has no callback URL for the authorization. If GitHub says the redirect
+  address is not valid, add the **Callback URL** Tools shows (`<public address>/api/v2/github/app/authorized`) on the
+  app's General settings page, then authorize again.
 
-The one-time Administration change does nothing for a personal account yet, so Tools shows the waiting bots and their
-create links instead of the Administration fix. Tico already requests **Administration** when it makes a personal account's
-app, so one acceptance covers automatic repository creation once that lands; until then Tico does not use it there.
+Until the owner authorizes Tico, a bot whose repository cannot be created waits: its Needs-you task asks for the
+authorization, or for the owner to create the repository on GitHub. Product repositories in a personal account follow
+the same rule: an empty private repository, created with the owner's authorization.
+
+The one-time Administration change works the same as for an organization: Tico requests **Administration** when it
+makes a personal account's app, and one acceptance covers both template and empty repositories.
 
 ## Separate identity for reviewers
 
@@ -270,7 +284,7 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix (not yet in a personal account) from **Settings → General → Repositories**
+An Owner can create an exact product repository without the `bot-` prefix (in a personal account, once Tico is authorized for it, see Personal accounts) from **Settings → General → Repositories**
 → **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
 name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
@@ -385,7 +399,7 @@ Settings, Bots says the same); fix the cause and the next run publishes.
 
 ## Where the key lives
 
-The Team Owner can delete a repository in the connected organization (not yet in a personal account) with
+The Team Owner can delete a repository in the connected organization or personal account with
 `hub api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
 This runs directly and uses a repository-scoped GitHub App token with Administration (write).
 The App must have access to that repository and the installation must accept Administration permission.
@@ -393,7 +407,9 @@ Tico records the exact repository in its history. Success returns `deleted: true
 limited identity does not prove deletion. Removing a bot uses archive and preserves its history;
 it does not delete its repository.
 
-The app's private key, client secret and webhook secret are encrypted (AES-GCM) in the Tico database.
+The app's private key, client secret and webhook secret are encrypted (AES-GCM) in the Tico database. The owner's user
+token for a personal account is encrypted the same way, in its own table, with its refresh token, and is never written to
+logs, events or the API.
 With `TICO_CREDENTIAL_KMS_KEY` set the key is the credential vault's KMS-wrapped data key; otherwise
 it is a random `github-app.key` (mode 0600) beside the database, so a database copy alone does not
 carry the app's key. Backups copy that file beside the database and `restore` puts it back
@@ -438,7 +454,8 @@ app and reconnect, so Tico stores a key GitHub still accepts. Cached tokens keep
 
 ## Disconnect and uninstall
 
-Disconnect in Tico only forgets the app locally; bots fall back to their computers' git access. To
+Disconnect in Tico forgets the app and the owner's personal-account authorization here, and asks GitHub to revoke that
+authorization; bots fall back to their computers' git access. To
 revoke access on GitHub, uninstall the app from the account's or organization's installed apps page, or delete the
 app from its settings page.
 

@@ -6,6 +6,8 @@ import statistics
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 import httpx
 import jwt
@@ -56,11 +58,31 @@ class FakeGitHub:
         self.account_status = None  # an int, or (int, headers): every account lookup answers that instead
         self.account_down = False  # every account lookup fails to connect
         self.conversion_owner = {"login": "Acme", "type": "Organization"}  # whose account GitHub made the App under
+        self.token_login = "ana-dev"  # the login GitHub says an authorized user token is for
+        self.refuse_refresh = False  # refuse every refresh (the refresh token is no longer good)
+        self.refreshes, self.issued = 0, 0  # refreshes made; tokens issued (gho_<n> access, ghr_<n> refresh)
+        self.access_tokens, self.live_refresh = set(), set()
+        self.revoked = set()  # access tokens DELETE /applications/{client_id}/token revoked
+        self.user_repo_status = 201  # POST /user/repos answers this
+        self.expires_in = 28800
 
     def __call__(self, request):
-        body = json.loads(request.content) if request.content else None
+        raw = request.content.decode() if request.content else ""
+        try:
+            body = json.loads(raw) if raw else None
+        except ValueError:
+            body = dict(parse_qsl(raw))  # the OAuth token endpoint takes form fields
         self.calls.append((request.method, request.url.path, body, request.headers.get("authorization", "")))
         path = request.url.path
+        if path == "/login/oauth/access_token":
+            return self._oauth(body)
+        if path == "/user":
+            return httpx.Response(200, json={"login": self.token_login})
+        if path == "/user/repos":
+            return self._user_repos(request, body)
+        if path.startswith("/applications/") and path.endswith("/token"):
+            self.revoked.add(body["access_token"])
+            return httpx.Response(204)
         if path.startswith("/users/"):
             name = path.split("/")[2]
             if self.account_down:
@@ -182,6 +204,42 @@ class FakeGitHub:
                 },
             )
         return httpx.Response(404)
+
+    def _oauth(self, body):
+        """GitHub's OAuth token endpoint: a code is exchanged once, and a refresh rotates the refresh token (the one given stops
+        working). A refusal is a 200 with an error in the body, as GitHub answers it."""
+        if body.get("grant_type") == "refresh_token":
+            if self.refuse_refresh or body.get("refresh_token") not in self.live_refresh:
+                return httpx.Response(200, json={"error": "bad_refresh_token"})
+            self.live_refresh.discard(body["refresh_token"])
+            self.refreshes += 1
+        elif body.get("code") != "the-code":
+            return httpx.Response(200, json={"error": "bad_verification_code"})
+        self.issued += 1
+        access, refresh = f"gho_{self.issued}", f"ghr_{self.issued}"
+        self.access_tokens.add(access)
+        self.live_refresh.add(refresh)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": access,
+                "token_type": "bearer",
+                "expires_in": self.expires_in,
+                "refresh_token": refresh,
+                "refresh_token_expires_in": 15897600,
+            },
+        )
+
+    def _user_repos(self, request, body):
+        """POST /user/repos: an empty repository in the signed-in person's account, for a token GitHub still accepts."""
+        token = request.headers.get("authorization", "").removeprefix("Bearer ")
+        if token not in self.access_tokens or token in self.revoked:
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        if self.user_repo_status >= 300:
+            return httpx.Response(self.user_repo_status, json={"message": self.create_response_message})
+        repository = f"{self.token_login}/{body['name']}"
+        self.created_repositories.add(repository)
+        return httpx.Response(201, json={"full_name": repository, "html_url": "https://github.com/" + repository})
 
     def of(self, suffix):
         return [c for c in self.calls if c[1].endswith(suffix)]
@@ -1497,50 +1555,214 @@ def test_a_personal_app_is_saved_under_the_login_github_made_it_for_not_the_name
     assert api.app_state.github_app.installation(refresh=True) == 77
 
 
-def test_a_personal_account_waits_for_a_person_to_create_a_bots_repository(api, gh):
-    personal(gh, "ana-dev")
-    connect(api, org="ana-dev", administration="true")
-    gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
+def authorize(api):
+    """The owner authorizes Tico for the personal account: the authorize link's state, then GitHub's return with a code."""
+    link = api.get("/api/v2/github/app/authorize-link", headers=auth())
+    assert link.status_code == 200, link.text
+    state = parse_qs(urlparse(link.json()["url"]).query)["state"][0]
+    back = api.get("/api/v2/github/app/authorized", params={"code": "the-code", "state": state}, headers=auth())
+    assert back.status_code == 302, back.text
+    return back
+
+
+def expire(api):
+    """Make the stored user access token past its end, so the next use refreshes it."""
     with api.app_state.store.transaction() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),)
+        c.execute("UPDATE github_user_token SET access_expires_at=?", ("2000-01-01T00:00:00.000Z",))
+
+
+def test_a_personal_manifest_asks_for_the_authorization_callback_and_an_organization_does_not(api, gh):
+    personal(gh, "ana-dev")
+    body = manifest(api, org="ana-dev")["manifest"]
+    assert body["callback_urls"] == [PUBLIC + "/api/v2/github/app/authorized"]
+    assert body["request_oauth_on_install"] is True and body["default_permissions"]["administration"] == "write"
+    org = manifest(api)["manifest"]
+    assert "callback_urls" not in org and "request_oauth_on_install" not in org
+
+
+def test_the_owner_authorizes_tico_for_the_personal_account_once_and_only_that_account(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
+    link = api.get("/api/v2/github/app/authorize-link", headers=auth())
+    assert link.status_code == 200, link.text
+    url = urlparse(link.json()["url"])
+    query = parse_qs(url.query)
+    assert url.netloc == "github.com" and query["client_id"] == ["Iv1.abc"]
+    assert query["redirect_uri"] == [PUBLIC + "/api/v2/github/app/authorized"]
+    assert api.get("/api/v2/github/app/authorize-link", headers=auth("person-test")).status_code == 403
+    # Another login's sign-in is refused, nothing is kept, and GitHub's token for it is revoked.
+    gh.token_login = "someone-else"
+    other = api.get(
+        "/api/v2/github/app/authorized", params={"code": "the-code", "state": query["state"][0]}, headers=auth()
+    )
+    assert other.status_code == 403 and other.json()["error"]["code"] == "github_user_login", other.text
+    assert gh.revoked == {"gho_1"}
+    gh.token_login = "ana-dev"
+    with api.app_state.store.read() as c:
+        installs = c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0]
+    assert authorize(api).headers["location"] == "/#/tools/github?github=authorized"
+    with (
+        api.app_state.store.read() as c
+    ):  # the install step (installation refresh, repo sync) runs on this redirect too
+        assert (
+            c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0] == installs + 1
         )
+    status = api.get("/api/v2/github/app", headers=auth()).json()
+    assert status["authorized"] is True and status["callback_url"] == PUBLIC + "/api/v2/github/app/authorized"
+    assert "gho_" not in json.dumps(status) and "ghr_" not in json.dumps(status)
+    with api.app_state.store.read() as c:
+        sealed = bytes(c.execute("SELECT ciphertext FROM github_user_token").fetchone()[0])
+    assert b"gho_" not in sealed and b"ghr_" not in sealed, "the token is sealed, never in the clear"
+    # A state is single use: the same return again is refused.
+    again = api.get(
+        "/api/v2/github/app/authorized", params={"code": "the-code", "state": query["state"][0]}, headers=auth()
+    )
+    assert again.status_code == 400 and again.json()["error"]["code"] == "github_state"
+
+
+def test_an_empty_personal_repository_is_made_with_the_owners_token_and_a_template_one_with_the_app(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
+    botops_turn(api)
+    empty = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["repository"] == "ana-dev/bot-newbie" and empty.json()["empty"] is True
+    posts = [c for c in gh.calls if c[0] == "POST" and c[1] == "/user/repos"]
+    assert posts and posts[-1][3] == "Bearer gho_1" and posts[-1][2]["auto_init"] is False
+    assert not [c for c in gh.calls if c[0] == "POST" and c[1].startswith("/orgs/")]
+    templated = api.post("/api/v2/github/repos", json={"slug": "cpo"}, headers=auth("botops-test"))
+    assert templated.status_code == 200, templated.text
+    generated = [c for c in gh.calls if c[1].endswith("/generate")]
+    assert generated and generated[-1][3].startswith("Bearer ghs_"), (
+        "a template repository stays with the installation token"
+    )
+
+
+def test_an_expired_user_token_is_refreshed_once_and_its_rotated_refresh_token_is_kept(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    service = api.app_state.github_app
+    expire(api)
+    assert service.user_token() == "gho_2" and gh.refreshes == 1
+    assert service.user_token() == "gho_2" and gh.refreshes == 1, "a fresh token is served without a refresh"
+    with api.app_state.store.read() as c:
+        assert service._open_user(c, service._user_token_row(c)) == {"access_token": "gho_2", "refresh_token": "ghr_2"}
+
+
+def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_finishes_the_waiting_bot(api, gh):
+    from backend import repo_waits
+
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
+    gh.missing = {"bot-newbie"}  # not made yet: the bot waits
+    expire(api)
+    gh.refuse_refresh = True
     botops_turn(api)
     created = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
     error = created.json()["error"]
     assert created.status_code == 409 and error["code"] == "github_permission_missing", created.text
-    assert error["detail"].startswith("A person must act: Tico does not create repositories in a personal account yet")
-    assert error["create_url"] == "https://github.com/new?owner=ana-dev&visibility=private&name=bot-newbie"
-    assert not [c for c in gh.calls if c[0] == "POST" and c[1].startswith(("/orgs/", "/repos/", "/user/repos"))]
+    assert error["detail"].startswith("A person must act: Tico is not authorized to create repositories in ana-dev yet")
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
     with api.app_state.store.read() as c:
-        task = c.execute("SELECT title,body FROM tasks WHERE title LIKE 'Create ana-dev/bot-newbie%'").fetchone()
-    assert task["title"] == "Create ana-dev/bot-newbie on GitHub"
-    assert "organisation" not in task["body"] and "Administration" not in task["body"]
-    assert error["create_url"] in task["body"]
-    # Without Administration an organization is warned that BotOps cannot create repositories; a personal account is not,
-    # because no BotOps fix exists there (a person creates the repository).
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE github_app SET administration=0 WHERE id='app'")
-    ids = {x["id"] for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
-    assert "github_repo_create" not in ids
+        assert c.execute("SELECT count(*) FROM github_user_token").fetchone()[0] == 0
+        assert "newbie" in repo_waits.waits(c)
+    gh.refuse_refresh = False
+    authorize(api)  # the owner authorizes again: the waiting bot's empty repository is made in the account now
+    assert "ana-dev/bot-newbie" in gh.created_repositories
+    with api.app_state.store.read() as c:
+        assert "newbie" not in repo_waits.waits(c)
 
 
-def test_a_personal_account_offers_no_product_repository_and_no_delete(api, gh):
+def test_a_personal_product_repository_needs_the_authorization_and_is_made_with_the_owners_token(api, gh):
     personal(gh, "ana-dev")
     connect(api, org="ana-dev")
     gh.permissions = {"administration": "write", "metadata": "read"}
-    before = len(gh.calls)
-    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth())
-    assert preview.status_code == 200 and preview.json()["capability"] == "not_available", preview.text
+
+    def preview():
+        return api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+
+    assert preview()["capability"] == "missing"
     body = {"org": "ana-dev", "name": "tico-recorder", "visibility": "private", "auto_init": False, "confirmed": True}
     refused = product_repo_request(api, body)
-    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_account", refused.text
-    deleted = api.delete(
-        "/api/v2/github/repos/ana-dev/bot-old", headers={**auth(), "Idempotency-Key": str(uuid.uuid4())}
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_permission_missing", refused.text
+    authorize(api)
+    assert preview()["capability"] == "available"
+    made = product_repo_request(api, body, key="product-personal-1")
+    assert made.status_code == 200, made.text
+    assert made.json()["repository"] == "ana-dev/tico-recorder"
+    posts = [c for c in gh.calls if c[0] == "POST" and c[1] == "/user/repos" and c[2]["name"] == "tico-recorder"]
+    assert posts and posts[-1][3] == "Bearer gho_1"
+    assert not [c for c in gh.calls if c[0] == "POST" and c[1].startswith("/orgs/ana-dev")]
+
+
+def test_a_personal_account_deletes_its_repository_with_the_app_token(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    deleted = api.delete("/api/v2/github/repos/ana-dev/bot-old", headers=auth())
+    assert deleted.status_code == 200 and deleted.json() == {"repository": "ana-dev/bot-old", "deleted": True}, (
+        deleted.text
     )
-    assert deleted.status_code == 409 and deleted.json()["error"]["code"] == "github_account", deleted.text
-    writes = [c for c in gh.calls[before:] if c[0] == "DELETE" or c[1].startswith(("/orgs/", "/repos/", "/user/repos"))]
-    assert not writes, "a personal account is never written to: no repository is created or deleted"
+    calls = [c for c in gh.calls if c[0] == "DELETE"]
+    assert calls and calls[-1][3].startswith("Bearer ghs_"), "deleting uses the installation token, never the user's"
+
+
+def test_disconnect_revokes_the_owners_user_token_on_github_and_forgets_it(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
+    revoked = [c for c in gh.calls if c[0] == "DELETE" and c[1] == "/applications/Iv1.abc/token"]
+    assert revoked and revoked[0][2] == {"access_token": "gho_1"} and revoked[0][3].startswith("Basic ")
+    assert gh.revoked == {"gho_1"}
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM github_user_token").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM github_user_states").fetchone()[0] == 0
+
+
+def test_health_warns_a_personal_account_until_the_owner_authorizes_it(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+
+    def alerts():
+        return {x["id"]: x for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
+
+    warn = alerts()["github_repo_create"]
+    assert warn["status"] == "warn"
+    assert warn["summary"] == "Tico can't create bot repositories on ana-dev until you authorize it."
+    assert warn["fixes"][0]["href"] == "#/tools/github"
+    authorize(api)
+    assert "github_repo_create" not in alerts()
+
+
+def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
+    sql = (Path(G.__file__).parent / "migrations" / "20261107181259_github_user_token.sql").read_text(encoding="utf-8")
+    with sqlite3.connect(":memory:") as c:
+        c.executescript(sql)
+        c.executescript(sql)
+        assert {row[1] for row in c.execute("PRAGMA table_info(github_user_token)")} == {
+            "id",
+            "login",
+            "ciphertext",
+            "nonce",
+            "access_expires_at",
+            "refresh_expires_at",
+            "authorized_by",
+            "authorized_at",
+            "refreshed_at",
+        }
+        assert {row[1] for row in c.execute("PRAGMA table_info(github_user_states)")} == {
+            "nonce",
+            "actor",
+            "created_at",
+        }
 
 
 def test_links_follow_the_kind_of_account_everywhere_they_are_built():

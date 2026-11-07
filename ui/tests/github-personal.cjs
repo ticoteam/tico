@@ -1,7 +1,8 @@
-// Tools > GitHub with a personal account (ui/github-connect.js): a connected personal account says it is installed on
-// the account, that new bots wait for a person to create their repository, and links to the App's settings and the
-// uninstall page on github.com/settings. Without a connection, the form asks for one account or organization name.
-// Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
+// Tools > GitHub with a personal account (ui/github-connect.js). Until the owner authorizes Tico for the account, the card
+// says Tico can't create bot repositories on it yet and offers Authorize Tico, with the callback URL for an App set up before
+// that. Once authorized it says Tico can create them. Either way it names the waiting bot's repository and links to the App's
+// settings and the uninstall page on github.com/settings. Without a connection, the form asks for one account or organization
+// name. Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,8 +12,10 @@ const {unrouted} = require('./support/routes.cjs');
 
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const VIEWPORTS = {desktop: {width: 1440, height: 900}, phone: {width: 390, height: 844}};
+const CALLBACK = 'https://tico.acme.example/api/v2/github/app/authorized';
 const PERSONAL = {
-  connected: true, slug: 'acme-tico', org: 'ana-dev', account_type: 'User', app_id: 4242, administration: false, installed: true,
+  connected: true, slug: 'acme-tico', org: 'ana-dev', account_type: 'User', app_id: 4242, administration: true, installed: true,
+  authorized: false, callback_url: CALLBACK,
   install_url: 'https://github.com/apps/acme-tico/installations/new',
   settings_url: 'https://github.com/settings/apps/acme-tico',
   permissions_url: 'https://github.com/settings/apps/acme-tico/permissions',
@@ -21,6 +24,7 @@ const PERSONAL = {
   waiting: [{bot: 'newbie', repository: 'ana-dev/bot-newbie', task_id: 'task-1',
     create_url: 'https://github.com/new?owner=ana-dev&visibility=private&name=bot-newbie'}],
 };
+const AUTHORIZED = {...PERSONAL, authorized: true};
 
 // The routes the Tools page needs; the GitHub App's answer is read from `state.app` so one page can change it.
 async function serve(page, state) {
@@ -47,6 +51,7 @@ async function serve(page, state) {
     if (p === '/api/v2/tools') return json({integrations: [github]});
     if (p === '/api/v2/tools/github') return json({...github, queries: [], body: '', learnings: []});
     if (p === '/api/v2/github/app') return json(state.app);
+    if (p === '/api/v2/github/app/authorize-link') return json({url: 'https://github.com/login/oauth/authorize?client_id=Iv1.abc&state=fixture'});
     if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner_id: {}, rules: {}});
     if (p === '/api/v2/me/tokens') return json({tokens: []});
     if (p === '/api/v2/slack/app') return json({configured: false});
@@ -83,22 +88,36 @@ async function themed(page, locator, name) {
       const host = page.locator('#set-github'), card = page.locator('section:has(#set-github)');
       await host.locator('[data-gh-install]').waitFor();
 
-      // Connected as a personal account: no Administration fix, and the waiting bot's repository is the person's to make.
+      // Connected as a personal account, not yet authorized: Tico asks for the authorization, and names the callback URL.
       const text = await words(host);
       assert.match(text, /Connected to ana-dev through the app acme-tico\./);
       assert.match(text, /Installed on the account\./);
-      assert.match(text, /New bots wait for you to create their repository on GitHub\./);
+      assert.match(text, /Tico can't create bot repositories on ana-dev yet\./);
+      assert.doesNotMatch(text, /New bots wait for you to create their repository on GitHub\./, 'the old wait-only line is gone');
       assert.match(text, /Waiting for a repository: newbie \(create ana-dev\/bot-newbie yourself\)\./);
       assert.doesNotMatch(text, /organi[sz]ation/i, 'a personal account is never called an organization');
-      assert.equal(await host.locator('[data-gh-permissions], [data-gh-repo-fix]').count(), 0, 'no Administration fix for a personal account');
+      assert.equal(await host.getByRole('button', {name: 'Authorize Tico'}).count(), 1, 'an Authorize button');
+      assert.equal(await host.locator('code').textContent(), CALLBACK, 'the callback URL for an App set up before authorization');
+      assert.equal(await host.locator('[data-gh-permissions], [data-gh-repo-fix]').count(), 0, 'no Administration fix when it is on');
       assert.equal(await host.locator('[data-gh-events]').getAttribute('href'), PERSONAL.permissions_url);
       assert.equal(await host.locator('[data-gh-create="0"]').getAttribute('href'), PERSONAL.waiting[0].create_url);
       assert.equal(await host.getByRole('link', {name: 'Uninstall on GitHub'}).getAttribute('href'), PERSONAL.uninstall_url);
-      await themed(page, card, `github-personal-connected-${tag}`);
+      await themed(page, card, `github-personal-unauthorized-${tag}`);
       if (tag === 'phone') {
         const box = await card.boundingBox();
         assert.ok(box.x + box.width <= viewport.width, 'the card fits a phone without a sideways scroll');
       }
+
+      // Authorized: the card says Tico can create them, with no Authorize button.
+      state.app = AUTHORIZED;
+      await page.reload();
+      await host.locator('[data-gh-install]').waitFor();
+      const done = await words(host);
+      assert.match(done, /Tico can create bot repositories on ana-dev\./);
+      assert.doesNotMatch(done, /Tico can't create bot repositories on ana-dev yet/);
+      assert.equal(await host.getByRole('button', {name: 'Authorize Tico'}).count(), 0, 'no Authorize button once authorized');
+      assert.equal(await host.locator('[data-gh-authorize]').count(), 0);
+      await themed(page, card, `github-personal-connected-${tag}`);
 
       // Not connected: one field for the account or organization, and the App name and Administration choice beside it.
       state.app = {connected: false};
@@ -114,7 +133,7 @@ async function themed(page, locator, name) {
       await page.close();
     }
     assert.deepEqual(errors, [], 'the page raised no errors');
-    console.log('github-personal: connected personal account and connect form ok');
+    console.log('github-personal: unauthorized, authorized and connect form ok');
   } finally {
     await browser.close();
   }
