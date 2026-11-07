@@ -1882,8 +1882,6 @@ and after `--apply`, and each `task.purged` event names the ones its task left.
 
 Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.
 
-
-
 ## Following up bot work
 
 A bot's task may carry a **follow-up time** (`check_back_at`, shown as **Follow up by**): an inspection time, separate from the delivery deadline, that does not pause useful work. Choose a time longer than the expected work:
