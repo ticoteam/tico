@@ -2,9 +2,10 @@
 # Angeles time on weekdays, and at 07:30 and 15:00 on weekends, and stay open until a vX.Y.Z release is published after
 # them.
 # Nothing is stored: each run works the window out from GitHub (scripts/release_train.py).
-#   - At the open (schedule) or on a manual run: promote canary (Tico Team) to stable (TIDY) when the bake gate passes.
+#   - At the open (schedule), on a manual run and at the backstop: promote the canary's (Tico Team) release to stable
+#     (TIDY) once it is approved, not held and healthy (docs/releasing.md#approval).
 #   - While open, on the open, on every push to main, whenever a Release validation run finishes, and every 20 minutes as
-#     a backstop for a missed event (at :05, :25 and :45; it never opens a window or promotes): ship the first green
+#     a backstop for a missed event (at :05, :25 and :45; it never opens a window): ship the first green
 #     candidate (tag it, publish it with release.yml as not latest, update the canary, then mark it latest), which
 #     closes the window; otherwise, when no validation is running and main's head has none yet, validate main's head
 #     as the next patch (ci.yml).
@@ -57,13 +58,13 @@ jobs:
       issues: read      # whether a red candidate is already on the release-train issue
     outputs:
       go: ${{ steps.guard.outputs.go }}
-      open: ${{ steps.guard.outputs.open }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           sparse-checkout: |
             scripts/release_train.py
+            scripts/release_notes.py
             templates/catalog/release-notes/software/rollout.py
           sparse-checkout-cone-mode: false
       - id: guard
@@ -89,15 +90,16 @@ jobs:
     permissions:
       actions: write    # dispatches Release validation, and release.yml on the new tag
       contents: write   # creates the version tag, marks the release latest
-      issues: write     # the release-train issue
+      issues: write     # the release-train issue, and each candidate's approval issue
       packages: write   # points the images' latest tags at the release once the canary is healthy
+      pull-requests: read  # the merged pull requests in a candidate's release notes
+      checks: read      # their checks
     env:
       GITHUB_TOKEN: ${{ github.token }}
       CANARY_URL: ${{ vars.CANARY_URL }}
       STABLE_URL: ${{ vars.STABLE_URL }}
       CANARY_UPDATE_KEY: ${{ secrets.CANARY_UPDATE_KEY }}
       STABLE_UPDATE_KEY: ${{ secrets.STABLE_UPDATE_KEY }}
-      BAKE_HOURS: ${{ vars.BAKE_HOURS }}
       RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
       RUN_EVENT: ${{ github.event.workflow_run.event }}
       RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
@@ -110,6 +112,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             scripts/release_train.py
+            scripts/release_notes.py
             templates/catalog/release-notes/software/rollout.py
           sparse-checkout-cone-mode: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -119,15 +122,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: window
-        name: Promote at the open, then ship the first green candidate or validate main
-        env:
-          OPEN: ${{ needs.guard.outputs.open }}
-        run: |
-          if [ "$OPEN" = true ]; then
-            python3 scripts/release_train.py window --open
-          else
-            python3 scripts/release_train.py window
-          fi
+        name: Promote the approved release, then ship the first green candidate or validate main
+        run: python3 scripts/release_train.py window
       # The job reports its own outcome; this covers a job that died or timed out before it could.
       - name: Report a window step that did not finish
         if: always() && steps.checkout.outcome == 'success' && steps.window.outputs.reported != 'true'
