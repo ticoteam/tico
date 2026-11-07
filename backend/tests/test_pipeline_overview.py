@@ -394,3 +394,19 @@ def test_a_spawned_subtask_returning_ends_its_parents_lap(api):
     handoff(api, back, subtask["id"], ago(hours=1))
     (loop,) = overview(api)["loops"]
     assert loop["laps"] == 1
+
+
+def test_rights_answer_a_hidden_pipeline_the_same_as_a_missing_one(api):
+    # Ben is an Admin but not the company owner (Ana) and not on this members-only pipeline: he learns nothing from its
+    # rights, not even that it exists. A pipeline he may see answers as it should, so the Admin premise holds.
+    from backend.store import encode
+
+    visible, _ = make_type(api, "Vis", pipeline_owner_id="human:ana")
+    hidden, _ = make_type(api, "Hdn", pipeline_visibility="members", pipeline_owner_id="human:cara")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO registry_metadata VALUES('access',?)", (encode({"admins": ["ben@acme.example"]}),)
+        )
+    assert get(api, f"pipelines/{visible}/rights", "ben-test") == {"may_edit_rules": True}
+    assert get(api, f"pipelines/{hidden}/rights", "ben-test") == get(api, "pipelines/nope/rights", "ben-test")
+    assert get(api, f"pipelines/{hidden}/rights", "ben-test") == {"may_edit_rules": False}

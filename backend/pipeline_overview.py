@@ -560,6 +560,8 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         reader: Any = store
         with reader.read() as c:
             guard.domain(who)
-            return {
-                "may_edit_rules": pipeline_rights.may_edit_rules(cast("sqlite3.Connection", c), who.actor, pipeline_id)
-            }
+            c = cast("sqlite3.Connection", c)
+            # A pipeline the reader may not see answers as a missing one does: the same reply, never a hidden pipeline's rules.
+            if not pipeline_rights.may_see(c, who.actor, pipeline_id):
+                return {"may_edit_rules": False}
+            return {"may_edit_rules": pipeline_rights.may_edit_rules(c, who.actor, pipeline_id)}
