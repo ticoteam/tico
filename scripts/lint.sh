@@ -10,4 +10,5 @@ if [ -n "${LINT_BASE_REF:-}" ]; then
 fi
 python3 scripts/pytest_warning_ignores.py ${LINT_BASE_REF:+--base "$LINT_BASE_REF"}
 python3 scripts/lint_baseline.py "${args[@]}"
+python3 scripts/pr_checks.py smoke-check
 uvx ruff@0.15.9 format --check --no-cache

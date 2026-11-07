@@ -13,7 +13,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tokenize
 import xml.etree.ElementTree as ET
+
+if __package__:
+    from . import py_test_map
+else:
+    import py_test_map
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
@@ -147,7 +153,8 @@ def git_files(root):
         return [p for p in out if p and (root / p).is_file()]
     except (OSError, subprocess.CalledProcessError):
         skip = {".venv", "node_modules", ".git", "build", ".cache", "target", "__pycache__"}
-        return [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and not skip & set(p.parts)]
+        found = [p.relative_to(root) for p in root.rglob("*") if p.is_file()]
+        return [str(p) for p in found if not skip & set(p.parts)]
 
 
 TOKEN = re.compile(r"[\w.\-/]+")
@@ -248,8 +255,10 @@ class DependencyMap:
     and JavaScript files are scanned for the paths and dotted modules they name. A change reaches whoever runs the
     changed file, whoever runs those, and so on; whoever reads it (directly, through a folder that holds it, or through
     a glob on an unknown folder) is reached too, but reading a file whose dependencies changed is not running it. `git
-    ls-files` or a computed import makes a file depend on everything. Conftest code applies to the tests below it, a
-    non-autouse conftest fixture body only to the tests that name the fixture.
+    ls-files` or a computed import makes a file depend on everything. A conftest runs for the tests below it, but a file
+    that reaches one only through it does not reach those tests (selection adds the smoke set instead): a changed conftest
+    selects them itself (rule 2). A file that only a non-autouse conftest fixture body runs reaches its users through the conftest, so their
+    tests are not selected: the smoke set runs instead (rule 2).
     """
 
     def __init__(self, root):
@@ -270,6 +279,8 @@ class DependencyMap:
         self.everything, self.unparsed = set(), set()
         self.fixtures = defaultdict(dict)  # conftest -> {fixture: (runs, reads)}
         self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
+        self.imports = {}  # Python file -> the dotted names it imports (for a gone file's importers, named_by)
+        self._tokens = None  # built on first use by tokens()
         trees = {}
         for path in self.files:
             if path.endswith(".py"):
@@ -635,6 +646,16 @@ class DependencyMap:
                 prose = len(node.value.split()) > 1
                 for token in TOKEN.findall(node.value.replace(":", " ")):
                     self.path(token, reads_ if prose else runs_, reads_, module=not prose)
+        imported = set()
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                imported |= {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                prefix = package[: len(package) - node.level + 1] if node.level else []
+                module = ".".join([*prefix, *([node.module] if node.module else [])])
+                imported.add(module)
+                imported |= {".".join(filter(None, [module, alias.name])) for alias in node.names}
+        self.imports[path] = imported
         self.runs[path] |= runs
         self.reads[path] |= reads
         self.names[path] = names
@@ -653,6 +674,47 @@ class DependencyMap:
                 self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
             if IDENTIFIER.match(token) and "." in token:
                 self.runs[path] |= self.module(token, bare=True)
+
+    def tokens(self):
+        """Each text file's path-like tokens, indexed by token (built on first use). A relative token also indexes the
+        path it names from its folder, so `../x.py` in scripts/a.py indexes x.py."""
+        if self._tokens is None:
+            self._tokens = defaultdict(set)
+            for path in self.files:
+                if Path(path).suffix not in CODE | {".html"}:
+                    continue
+                try:
+                    raw = (self.root / path).read_bytes()
+                except OSError:
+                    continue
+                if len(raw) > 512 * 1024 or b"\0" in raw[:4096]:
+                    continue
+                folder = str(Path(path).parent)
+                for token in set(TOKEN.findall(raw.decode("utf-8", "replace"))):
+                    self._tokens[token].add(path)
+                    if token.startswith(("./", "../")) and folder != ".":
+                        self._tokens[os.path.normpath(folder + "/" + token)].add(path)
+        return self._tokens
+
+    def named_by(self, name):
+        """The other files that name a file in text (its path, its basename, or a longer suffix of it) or import its
+        module. A gone file has no reads to follow, so its users are found this way (rule 1)."""
+        parts = name.split("/")
+        keys = {name, parts[-1], *("/".join(parts[i:]) for i in range(1, len(parts)))}
+        found = set()
+        for key in keys:
+            found |= self.tokens().get(key, set())
+        module = name[:-3].replace("/", ".") if name.endswith(".py") else ""
+        if module.endswith(".__init__"):
+            module = module[: -len(".__init__")]
+        if module:
+            found |= {
+                p
+                for p, imported in self.imports.items()
+                if any(i == module or i.startswith(module + ".") for i in imported)
+            }
+        found.discard(name)
+        return found
 
     def readers(self, name, added):
         """The files that read a changed file: by its path, through a folder that holds it, a glob on an unknown
@@ -698,10 +760,11 @@ class DependencyMap:
         folder = str(Path(conftest).parent)
         return {p for p in self.files if is_test(p) and (folder == "." or p.startswith(folder + "/"))}
 
-    def affected(self, changed, added=None):
+    def affected(self, changed, added=None, via=None):
         """Changed files, and every tracked file that runs one of them, directly or through files that run each
         other, or that reads one; files that depend on everything and whatever runs them. A listing that uses only
-        names sees added files (None: any changed file may be new); a removed file runs the full suite."""
+        names sees added files (None: any changed file may be new). A test that reaches a file only through a conftest
+        fixture is not followed (rule 2 runs the smoke set for it); each such file is added to `via`, when given."""
         changed = set(changed)
         added = changed if added is None else set(added)
         seen = changed | self.everything
@@ -711,33 +774,33 @@ class DependencyMap:
             users = set(self.run_by.get(name, ()))
             if name in changed:
                 users |= self.readers(name, added)
-            users |= self.fixture_users(name, name in changed)
-            if Path(name).name == "conftest.py":
-                users |= self.below(name)
+            if via is not None and self.fixture_users(name, name in changed):
+                via.add(name)
             for user in users - seen:
                 seen.add(user)
                 pending.append(user)
         return seen
 
-    def read_by_tests(self, changed, added=None):
+    def read_by_tests(self, changed, added=None, via=None):
         """For data that only code reads (read_only below): the files that read a changed one, and of the checks, the
-        tests and browser scripts among those readers and the ones that run a reader directly (a conftest reader: the
-        tests below it). Not everything that imports a reader: backend/manual.py reads docs/ and backend.app imports
-        it, which would make every page edit run the suite. A test that sees such a file only through the app must
-        name its path or folder literally. Files that depend on everything (they list the repository) read it too."""
+        tests and browser scripts among those readers and the ones that run a reader directly. Not everything that
+        imports a reader: backend/manual.py reads docs/ and backend.app imports it, which would make every page edit
+        run the suite. A test that sees such a file only through the app must name its path or folder literally. Files
+        that depend on everything (they list the repository) read it too. A reader reached only through a conftest
+        fixture is added to `via`, when given (rule 2), and its tests are not selected."""
         changed = set(changed)
         added = changed if added is None else set(added)
         readers, out = set(self.everything), set(changed)
         for name in changed:
             readers |= self.readers(name, added)
-            out |= self.fixture_users(name, True)
+            if via is not None and self.fixture_users(name, True):
+                via.add(name)
         out |= readers
         for reader in readers:
-            if Path(reader).name == "conftest.py":
-                out |= self.below(reader)
-            elif not is_check(reader):
+            if not is_check(reader):
                 out |= {user for user in self.run_by.get(reader, ()) if is_check(user)}
-                out |= self.fixture_users(reader, False)
+                if via is not None and self.fixture_users(reader, False):
+                    via.add(reader)
         return out
 
 
@@ -751,6 +814,11 @@ FULL_SUITE = ("pytest.ini", "package.json", "package-lock.json", ".gitignore")
 PR_WORKFLOW = ".github/workflows/pr-checks.yml"
 CI_INPUTS = (PR_WORKFLOW, "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
 SMOKE_SCRIPT = "sign-in-redirect"
+# The smoke set (scripts/queue-smoke.json, checked by smoke_check): a few Python test files and the core browser scripts,
+# each kind measured to fit one VM. An uncertain pull request or queue group runs it, so nothing widens to the full suite.
+SMOKE_FILE = "scripts/queue-smoke.json"
+# A changed conftest runs the tests below it while there are at most this many; more, and the smoke set runs instead.
+CONFTEST_BELOW_LIMIT = 25
 # The Caddy container job builds the server image (Dockerfile, docker/, the screen relay it compiles) and runs its
 # entrypoint's caddy-config, backend/caddy_assets.py. The image also compiles and imports the Python source; a plan
 # that skips the job runs those checks itself (image_checks).
@@ -773,115 +841,663 @@ def read_only(name):
     return name == "CHANGELOG.md" or name.startswith(("docs/", ".github/"))
 
 
-def full_suite(name):
+def pinned(name):
+    """A dependency pin or one of FULL_SUITE: a change runs the tests that read it, and the smoke set (rule 2)."""
+    return name in FULL_SUITE or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None
+
+
+def is_browser(name):
+    return Path(name).parent == Path("ui/tests") and name.endswith(".cjs")
+
+
+def smoke(root=ROOT):
+    """The smoke set's Python test files and browser scripts (SMOKE_FILE): what an uncertain change runs."""
+    data = json.loads((root / SMOKE_FILE).read_text())
+    return sorted(e["file"] for e in data["python"]), sorted(e["script"] for e in data["browser"])
+
+
+def name_status(text):
+    """(status, path, old path or None, similarity) for each record of `git diff --name-status -M -z`."""
+    fields = text.split("\0")
+    out, i = [], 0
+    while i < len(fields) and fields[i]:
+        code = fields[i]
+        if code[:1] in ("R", "C") and i + 2 < len(fields):
+            out.append((code[:1], fields[i + 2], fields[i + 1], int(code[1:] or 0)))
+            i += 3
+        elif i + 1 < len(fields):
+            out.append((code[:1], fields[i + 1], None, 100))
+            i += 2
+        else:
+            break
+    return out
+
+
+def pure_ui_rename(old, new, similarity):
+    """A ui/ file moved to the same name with another extension (.js to .ts) and no other change. Only its new path is
+    selected: nothing loads the old name any more, so it is not a gone file."""
     return (
-        name in FULL_SUITE
-        or Path(name).name == "conftest.py"
-        or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None
+        similarity == 100
+        and old.startswith("ui/")
+        and new.startswith("ui/")
+        and Path(old).with_suffix("") == Path(new).with_suffix("")
+        and Path(old).suffix != Path(new).suffix
     )
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
-    """None means the full default suite; an empty list means explicitly unaffected.
+SCRIPT_SRC = re.compile(r"""<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 
-    A pull request or a merge queue group (base to head) runs the default tests that use a changed file
-    (DependencyMap) and, of the browser scripts that do, the core ones the full suite runs; a UI change runs its
-    mapped scripts or all of them. A docs page, CHANGELOG.md or a GitHub file runs the tests that read it
-    (read_only); a CI input adds a short browser smoke (CI_INPUTS). `added` names the new files (None: any may be
-    new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
-    full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
+
+def script_srcs(path, diff):
+    """The files an index.html diff's added lines load with <script src>, as repository paths beside index.html."""
+    folder = str(Path(path).parent)
+    out = set()
+    for line in diff.splitlines():
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        for src in SCRIPT_SRC.findall(line):
+            src = src.split("?", 1)[0].split("#", 1)[0]
+            if src and not src.startswith("//") and not re.match(r"[a-z][a-z0-9+.-]*:", src, re.IGNORECASE):
+                out.add(os.path.normpath(os.path.join(folder, src.lstrip("/"))))
+    return sorted(out)
+
+
+def script_changes(base, head, changed, root=ROOT):
+    """Rule 5: an index.html that changes <script src> names changes the files those names load, so each counts as
+    changed (a renamed script runs as itself, not only by its old name). Git failing adds nothing."""
+    found = set()
+    for path in changed:
+        if Path(path).name != "index.html" or not (root / path).is_file():
+            continue
+        try:
+            ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
+            diff = subprocess.check_output(
+                ["git", "diff", "-U0", "--no-renames", ancestor, head, "--", path], cwd=root, text=True
+            )
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        found |= set(script_srcs(path, diff))
+    return sorted(found)
+
+
+def git_output(root, *args):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
+
+
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
+
+
+def changed_lines(root, anc, head, name):
+    """(base line numbers a change removes or replaces, head line numbers it adds or replaces), from -U0 hunks. A pure
+    insertion adds head lines only: its neighbours keep their meaning, so they are not touched."""
+    text = git_output(root, "diff", "-U0", "--no-color", "--no-ext-diff", anc, head, "--", name)
+    old, new = set(), set()
+    for start, count, new_start, new_count in HUNK.findall(text):
+        if count != "0":
+            old.update(range(int(start), int(start) + int(count or 1)))
+        if new_count != "0":
+            new.update(range(int(new_start), int(new_start) + int(new_count or 1)))
+    return old, new
+
+
+CALLER_LIMIT = 50  # rule 6: a signature or decorator change that more functions use than this keeps the static answer
+MODULE_RULE_ERRORS = (subprocess.CalledProcessError, OSError, SyntaxError, ValueError, tokenize.TokenError)
+
+
+def grep_files(root, rev, word):
+    """Python files at `rev` that contain `word` as a whole word. git grep reads the commit, not the checkout."""
+    found = subprocess.run(
+        ["git", "grep", "-l", "-w", "-F", word, rev, "--", "*.py"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if found.returncode == 1:
+        return []
+    found.check_returncode()
+    return sorted({line.split(":", 1)[1] for line in found.stdout.splitlines()})
+
+
+def module_users(root, rev, path, wanted, trees):
+    """Every (file, qual) at `rev` that uses one of the module-level names `wanted` that `path` binds: its own functions
+    and module code, the functions and module code of the modules that import the names (`import m` then `m.NAME`,
+    `from m import NAME`, `as` aliases), and, through the modules that re-export them, the modules that import those.
+    qual is py_test_map.MODULE for module code. None when a use cannot be resolved (see py_test_map.uses)."""
+    users, seen, pending = set(), set(), [(path, frozenset(wanted))]
+    while pending:
+        module, names = pending.pop()
+        if (module, names) in seen:
+            continue
+        seen.add((module, names))
+        dotted = py_test_map.module_name(module)
+        quals, module_level, bad = py_test_map.uses(trees(module), names, {n: n for n in names}, same_file=True)
+        if bad:
+            return None
+        users |= {(module, q) for q in quals} | ({(module, py_test_map.MODULE)} if module_level else set())
+        for other in grep_files(root, rev, dotted.split(".")[-1]):
+            if other == module:
+                continue
+            modules, local, reexports = py_test_map.links(trees(other), other, dotted, names)
+            if not modules and not local:
+                continue
+            quals, module_level, bad = py_test_map.uses(trees(other), names, local, modules, dotted=dotted)
+            if bad:
+                return None
+            users |= {(other, q) for q in quals} | ({(other, py_test_map.MODULE)} if module_level else set())
+            if reexports:
+                pending.append((other, frozenset(reexports)))
+    return users
+
+
+def attribute_users(root, rev, leaf, trees):
+    """Every (file, qual) at `rev` that reads `leaf` as a name or as an attribute of any object: the callers of a method
+    (`obj.leaf(...)`) or of a nested function. None when a use cannot be resolved."""
+    users = set()
+    for rel in grep_files(root, rev, leaf):
+        quals, module_level, bad = py_test_map.uses(trees(rel), {leaf}, {leaf: leaf}, attr_any=True)
+        if bad:
+            return None
+        users |= {(rel, q) for q in quals} | ({(rel, py_test_map.MODULE)} if module_level else set())
+    return users
+
+
+def _function_tests(py_map, rel, qual, digest, assume_base):
+    """The measured tests of one function, or None when the map does not hold it: unmeasured, or measured on a body
+    other than its body at the base (`digest`). assume_base takes the map as measured at the base (replays only)."""
+    per_function = py_map["files"].get(rel, {})
+    if qual not in per_function:
+        return None
+    if not assume_base and (digest is None or py_map["hashes"].get(rel, {}).get(qual) != digest):
+        return None
+    return per_function[qual]
+
+
+def _file_tests(py_map, rel, listed):
+    """Every measured test of a file's functions (module code excepted): the answer for a file the map cannot split."""
+    return {listed[i] for qual, ran in py_map["files"].get(rel, {}).items() if qual != py_test_map.MODULE for i in ran}
+
+
+def module_change_names(pairs):
+    """The names a change to module-level code binds or unbinds, or (None, reason) when it keeps the static answer.
+    `pairs` holds (tree, changed line numbers) for each side of the change."""
+    names = set()
+    for tree, lines in pairs:
+        statements, uncovered = py_test_map.top_statements(tree, lines)
+        if uncovered:
+            return None, "module code no statement holds"
+        for stmt in statements:
+            if isinstance(stmt, ast.ClassDef):
+                return None, "a class body changed"
+            found, runs = py_test_map.bindings(stmt)
+            if found is None:
+                return None, "a name cannot be resolved (a star import)"
+            if runs:
+                return None, "module code runs at import (a call, if, try, with, for or similar)"
+            names |= found
+    return names, ""
+
+
+def py_tests_for(name, py_map, root, anc, head, graph, added, known, assume_base=False):
+    """Rule 6 for one changed Python file: the tests that executed the functions its change reaches, as the measured map
+    says. {"static": reason} when the static map decides for this file instead: it is not in the map, it does not parse
+    at one commit, it removes or renames a function, a class line or class body changed, module code runs at import, a
+    name it binds cannot be resolved, or too many functions use a changed signature (CALLER_LIMIT). Otherwise the change
+    reaches:
+
+    - the functions whose bodies changed, and the functions whose signature or decorators changed (rule 3), with their
+      own measured tests;
+    - the functions and module code that use the names a module-level statement binds (rule 2), here and in the modules
+      that import or re-export them, and, for a signature change, the functions that use the changed function (rule 3).
+
+    A reached function the map lacks, or measured on another body than its body at the base, runs its file's other tests
+    ("stale"). A test file that uses the names runs itself. Tests the map does not know keep the static answer.
+    """
+    per_function = py_map["files"].get(name)
+    if per_function is None:
+        return {"static": "not in the measured map"}
+    try:
+        before = git_output(root, "show", f"{anc}:{name}")
+        after = git_output(root, "show", f"{head}:{name}")
+        old, new = changed_lines(root, anc, head, name)
+        base_own, head_own = py_test_map.owners(before), py_test_map.owners(after)
+        base_hashes, head_hashes = py_test_map.function_hashes(before), py_test_map.function_hashes(after)
+        inert = {"old": py_test_map.inert_lines(before), "new": py_test_map.inert_lines(after)}
+        base_tree, head_tree = ast.parse(before), ast.parse(after)
+    except MODULE_RULE_ERRORS:
+        return {"static": "does not parse at one commit"}
+    if not old and not new:
+        return {"static": "no changed lines"}
+    touched, signatures, module_lines = set(), set(), {"base": [], "head": []}
+    for side, lines, own, blank in (("base", old, base_own, inert["old"]), ("head", new, head_own, inert["new"])):
+        for line in lines:
+            if line in blank:
+                continue  # a blank or comment-only line runs nothing
+            kind, qual = own[line] if line < len(own) else ("module", "")
+            if kind == "function":
+                touched.add(qual)
+            elif kind == "header":
+                if qual in base_hashes and qual in head_hashes:
+                    signatures.add(qual)  # a decorator or signature of a function that stays
+                elif qual in base_hashes or qual in head_hashes:
+                    touched.add(qual)  # a function the change adds or removes
+                else:
+                    return {"static": "a class line changed"}
+            else:
+                module_lines[side].append(line)
+    if not touched <= set(head_hashes):
+        # A function the diff removes or renames: its importers break, and the map does not see them.
+        return {"static": "a function was removed or renamed"}
+    parsed, texts, digests = {name: base_tree}, {name: before}, {}
+
+    def source(rel):
+        if rel not in texts:
+            texts[rel] = git_output(root, "show", f"{anc}:{rel}")
+        return texts[rel]
+
+    def trees(rel):
+        if rel not in parsed:
+            parsed[rel] = ast.parse(source(rel))
+        return parsed[rel]
+
+    listed = py_map["tests"]
+    reach, users, via = set(touched) | signatures, set(), []
+    try:
+        if module_lines["base"] or module_lines["head"]:
+            names, why = module_change_names([(base_tree, module_lines["base"]), (head_tree, module_lines["head"])])
+            if names is None:
+                return {"static": why}
+            if names:
+                found = module_users(root, anc, name, names, trees)
+                if found is None:
+                    return {"static": "a name cannot be resolved"}
+                users |= found
+                via.append("module names")
+        for qual in sorted(signatures):
+            leaf = qual.split(".")[-1]
+            if "." in qual:
+                found = attribute_users(root, anc, leaf, trees)
+            else:
+                found = module_users(root, anc, name, {leaf}, trees)
+            if found is None:
+                return {"static": "a name cannot be resolved"}
+            if len(found) > CALLER_LIMIT:
+                return {"static": f"a signature or decorator changed and more than {CALLER_LIMIT} places use the name"}
+            users |= found
+            via.append("signature")
+    except MODULE_RULE_ERRORS:
+        return {"static": "does not parse at one commit"}
+    tests, uncertain = set(), []
+    for rel, qual in sorted(users):
+        if py_test_map.is_test(rel):
+            tests.add(rel)  # a test that uses the names runs itself: its own functions are not measured
+        elif rel == name:
+            if qual == py_test_map.MODULE:
+                tests |= {listed[i] for i in per_function.get(py_test_map.MODULE, [])}
+            else:
+                reach.add(qual)
+        else:
+            other = py_map["files"].get(rel)
+            if other is None:
+                return {"static": "a user is not in the measured map"}
+            if qual == py_test_map.MODULE:
+                tests |= {listed[i] for i in other.get(py_test_map.MODULE, [])}
+                continue
+            if rel not in digests:
+                digests[rel] = py_test_map.function_hashes(source(rel))
+            ran = _function_tests(py_map, rel, qual, digests[rel].get(qual), assume_base)
+            if ran is None:
+                uncertain.append(
+                    f"rule 6: {rel} {qual} uses names of {name} and is new or changed since the measured map: the tests "
+                    "of its file"
+                )
+                tests |= _file_tests(py_map, rel, listed)
+            else:
+                tests |= {listed[i] for i in ran}
+    stale = sorted(
+        qual for qual in reach if _function_tests(py_map, name, qual, base_hashes.get(qual), assume_base) is None
+    )
+    if stale:
+        # The map cannot say what the stale functions run: every function's tests in this file, module code excepted.
+        uncertain.append(
+            f"rule 6: {name} {', '.join(stale)} is new or changed since the measured map: the tests of its file's "
+            "other functions"
+        )
+        tests |= _file_tests(py_map, name, listed)
+    else:
+        for qual in sorted(reach):
+            tests |= {listed[i] for i in _function_tests(py_map, name, qual, base_hashes.get(qual), assume_base)}
+    # What the map does not vouch for keeps the static answer: the tests that import the file, transitively, minus the
+    # tests the map knows (new, partial, changed since the measurement, or not in it). Importers the map knows are left
+    # out: they ran the file's module code, which this change does not touch. The tests that read the file's text, and
+    # the tests that list the repository, always run.
+    tests |= {t for t in graph.affected([name], added) if is_test(t)} - known
+    readers = graph.readers(name, added)
+    if readers:
+        tests |= {t for t in graph.affected(sorted(readers), added) if is_test(t)}
+    tests |= {t for t in graph.everything if is_test(t)}
+    tests = {t for t in tests if (root / t).is_file()}
+    return {"tests": tests, "uncertain": uncertain, "stale": bool(stale), "via": sorted(set(via))}
+
+
+def measured_tests(py_map, root, base, head, graph, added, names, notes, assume_base=False):
+    """Rule 6: for each changed Python source file in `names`, the tests the measured map ties to its change, and the
+    reason each other one keeps the static map. A map whose commit this checkout lacks is not used (static for all)."""
+    try:
+        anc = git_output(root, "merge-base", base, head).strip()
+        drift = {
+            p
+            for p in git_output(root, "diff", "--name-only", "--no-renames", py_map["sha"], anc).splitlines()
+            if is_test(p)
+        }
+    except (subprocess.CalledProcessError, OSError):
+        notes.append("rule 6: the measured map's commit is not in this checkout: static map")
+        return {}, {}
+    partial = {py_map["tests"][i] for i in py_map["partial"]}
+    known = set(py_map["tests"]) - partial - drift
+    out, static = {}, {}
+    for name in names:
+        if not name.endswith(".py") or is_test(name) or Path(name).name == "conftest.py":
+            continue  # test files run themselves, conftests are rule 2, and other files are not Python
+        found = py_tests_for(name, py_map, root, anc, head, graph, added, known, assume_base)
+        if "static" in found:
+            static[name] = found["static"]
+        else:
+            out[name] = found
+    if out:
+        notes.append(
+            f"rule 6: {len(out)} changed Python file(s) run the tests the measured map ties to their functions"
+        )
+    if static:
+        reasons = sorted({f"{reason} ({sum(r == reason for r in static.values())})" for reason in static.values()})
+        notes.append(f"rule 6: {len(static)} changed Python file(s) keep the static map: {'; '.join(reasons)}")
+    return out, static
+
+
+def selection(
+    changed,
+    event="pull_request",
+    root=ROOT,
+    graph=None,
+    base=None,
+    added=None,
+    core=None,
+    py_map=None,
+    head="HEAD",
+    map_note="",
+    assume_base=False,
+):
+    """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
+    script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
+    from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
+
+    1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests and browser scripts that name,
+       import or read it directly. Data that code reads (docs, CHANGELOG.md, GitHub files) runs the tests that read it.
+       A gone file that code other than a check names or reads adds the smoke set.
+    2. A pin (FULL_SUITE, requirements*.txt) runs the tests and browser scripts that read it directly, and the smoke set.
+       A conftest that changed or was deleted runs the tests below it while there are at most CONFTEST_BELOW_LIMIT (and the
+       tests that use its fixtures), else the smoke set. A conftest that a change only reaches, through code it runs or
+       reads, adds the smoke set; the tests below it are not reached through it.
+    3. A Python file the map cannot parse, or does not know, runs the checks that name its path, else the smoke set.
+    4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
+       it directly, and the smoke set's browser scripts. A UI_MAP file runs its scripts; a missing one runs the smoke set's
+       browser scripts instead.
+    5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
+    6. A changed Python file the measured map (py_test_map.py) covers runs the tests that executed the functions its
+       change reaches, instead of every test that imports it: the functions whose bodies changed; a function whose
+       signature or decorators changed, and the functions that use it (at most CALLER_LIMIT); the functions and module
+       code that use the names a module-level statement binds, here and through the modules that import or re-export
+       them. A class line or body, module code that runs at import, a removed or renamed function, or a name that cannot
+       be resolved keeps the static answer for that file. A function the map lacks, or measured on another body than
+       its body at the base, runs its file's other tests. Tests the map does not know (new, partial, or changed since
+       it) keep the static answer. `py_map` is the loaded map (None: static), `head` the commit under test, and
+       `assume_base` takes the map as measured at the base (replays only: the upper bound).
+
+    `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
+    scripts/ui-tests.cjs).
+    """
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
         p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/"))
         or p in ("backend/harness_actions.py", "backend/runner_versions.py")
         for p in changed
     )
-    full["rust"] = rust
     if event not in ("pull_request", "merge_group"):
-        return {**full, "conformance": runner, "reason": "main runs the full default suite"}
-    if not changed:
-        return {**full, "conformance": runner, "reason": "empty diff: full default suite", "uncertain": ["empty diff"]}
-    changed = [n for n in changed if not unread(n)]
-    uncertain = [n for n in changed if full_suite(n) or not (root / n).is_file()]
-    browser = set()
-    for name in changed:
-        if name in UI_MAP:
-            browser.update(UI_MAP[name])
-        elif name.startswith("ui/") or name == UI_RUNNER:
-            browser.add("--all")
-    if any(n != "--all" and not (root / "ui/tests" / f"{n}.cjs").is_file() for n in browser):
-        uncertain.append("missing mapped browser test")
-        browser = {"--all"}
-    if not uncertain and changed:
-        graph = graph or DependencyMap(root)
-        uncertain += [n for n in changed if n in graph.unparsed or n not in graph.files]
-    if uncertain:
         return {
-            **full,
-            "browser": ["--all"] if browser else None,
+            "python": None,
+            "browser": None,
+            "caddy": True,
+            "contracts": True,
+            "rust": rust,
             "conformance": runner,
-            "reason": "unmapped, shared, deleted or uncertain change: full default suite",
+            "reason": "main runs the full default suite",
+            "uncertain": [],
+        }
+    notes, uncertain = [], []
+
+    def plan(python=(), browser=(), caddy=False, contracts=False, reason=None):
+        return {
+            "python": sorted(p for p in python if is_test(p) and not p.startswith("ui/")),
+            "browser": sorted(browser),
+            "conformance": runner,
+            "rust": rust,
+            "caddy": caddy,
+            "contracts": contracts,
+            "reason": reason or "; ".join(dict.fromkeys(["measured dependency map", *notes])),
             "uncertain": uncertain,
         }
+
     if not changed:
-        return {
-            "python": [],
-            "browser": [],
-            "conformance": False,
-            "rust": [],
-            "caddy": False,
-            "contracts": False,
-            "reason": "documentation that no test or script reads",
+        uncertain.append("empty diff: nothing to map")
+        return plan(*smoke(root), reason="empty diff: smoke set")
+    names = [n for n in changed if not unread(n)]
+    if not names:
+        return plan(reason="documentation that no test or script reads")
+    graph = graph or DependencyMap(root)
+    added = set(names) if added is None else set(added)
+    live = [n for n in names if (root / n).is_file()]
+    gone = [n for n in names if n not in live]
+    python, browser, seeds, touched = set(), set(), set(live), set()
+    smoke_python = smoke_browser = False
+    via = set()  # files that reach tests only through a conftest fixture (rule 2)
+    for name in gone:  # rule 1
+        uncertain.append(f"rule 1: {name} is gone")
+        if read_only(name) and not graph.code(name):
+            found = graph.read_by_tests([name], added, via)
+            touched |= found
+        else:
+            found = graph.named_by(name) | graph.readers(name, added)
+            if any(not is_check(p) for p in found):
+                smoke_python = smoke_browser = True
+                uncertain.append(f"rule 1: {name} is named or read by code that is not a check: smoke set")
+        python |= {p for p in found if is_test(p)}
+        browser |= {Path(p).stem for p in found if is_browser(p)}
+    if gone:
+        notes.append("rule 1: gone files")
+    data = [n for n in live if read_only(n) and not graph.code(n)]
+    seeds -= set(data)
+    conftests = [n for n in names if Path(n).name == "conftest.py"]
+    seeds -= set(conftests)
+    for name in conftests:  # rule 2: a changed or deleted conftest
+        below = graph.below(name)
+        fixtures = set(graph.fixtures.get(name, {}))
+        python |= {p for p in below if fixtures & graph.names.get(p, set())}
+        if len(below) <= CONFTEST_BELOW_LIMIT:
+            python |= below
+            uncertain.append(f"rule 2: conftest {name} runs the {len(below)} tests below it")
+        else:
+            smoke_python = smoke_browser = True
+            uncertain.append(f"rule 2: conftest {name} has {len(below)} tests below it: smoke set")
+    pins = [n for n in names if pinned(n)]
+    seeds -= set(pins)
+    for name in pins:  # rule 2: a pin
+        direct = graph.readers(name, added)
+        python |= {p for p in direct if is_test(p)}
+        browser |= {Path(p).stem for p in direct if is_browser(p)}
+        smoke_python = smoke_browser = True
+        uncertain.append(f"rule 2: pin {name}: the tests and browser scripts that read it, and the smoke set")
+    if conftests or pins:
+        notes.append("rule 2: conftest or pin")
+    unknown = [n for n in live if n in graph.unparsed or n not in graph.files]
+    seeds -= set(unknown)
+    for name in unknown:  # rule 3
+        direct = {t for t in graph.named_by(name) if is_check(t)}
+        python |= {t for t in direct if is_test(t)}
+        browser |= {Path(t).stem for t in direct if is_browser(t)}
+        if direct:
+            uncertain.append(f"rule 3: unknown {name} names {len(direct)} check(s)")
+        else:
+            smoke_python = smoke_browser = True
+            uncertain.append(f"rule 3: unknown {name}: smoke set")
+    if unknown:
+        notes.append("rule 3: unknown files")
+    unmapped = [n for n in live if n not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
+    seeds -= set(unmapped)
+    for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
+        if name in UI_MAP:
+            missing = [s for s in UI_MAP[name] if not (root / "ui/tests" / f"{s}.cjs").is_file()]
+            browser |= set(UI_MAP[name]) - set(missing)
+            if missing:
+                smoke_browser = True
+                uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
+    for name in unmapped:  # rule 4: a UI file the map does not list
+        linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
+        browser |= {Path(p).stem for p in linked if is_browser(p)}
+        python |= {p for p in linked if is_test(p)}
+        smoke_browser = True
+        uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
+        notes.append("rule 4: ui outside UI_MAP")
+    if py_map is None and map_note:
+        notes.append(f"rule 6: {map_note}: static map")
+    rule6 = {"narrowed": [], "stale": [], "static": {}}
+    if py_map is not None and base is not None:
+        everyone = set(changed) if added is None else set(added)  # None: any changed file may be new
+        narrowed, static = measured_tests(py_map, root, base, head, graph, everyone, sorted(seeds), notes, assume_base)
+        for name, found in narrowed.items():
+            seeds.discard(name)
+            python |= found["tests"]
+            uncertain.extend(found["uncertain"])
+        rule6 = {
+            "narrowed": sorted(narrowed),
+            "stale": sorted(n for n, f in narrowed.items() if f["stale"]),
+            "static": static,
         }
-    data = [n for n in changed if read_only(n) and not graph.code(n)]
-    affected = graph.affected([n for n in changed if n not in data], added) | (
-        graph.read_by_tests(data, added) if data else set()
-    )
-    python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
-    if "--all" not in browser:
-        scripts = {Path(p).stem for p in affected if Path(p).parent == Path("ui/tests") and p.endswith(".cjs")}
-        if core is None:
-            try:
-                core = browser_scripts([], root)
-            except (OSError, subprocess.CalledProcessError, RuntimeError):
-                core = scripts
-        browser |= scripts & set(core)
-        if any(n in CI_INPUTS for n in changed) and not browser:
-            browser.add(SMOKE_SCRIPT)
-    caddy = (
-        any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS)) or PR_WORKFLOW in changed
-    )
-    contracts = any(n.startswith(CONTRACT_INPUTS) for n in changed) or bool(affected & set(CONTRACT_TESTS))
-    return {
-        "python": python,
-        "browser": sorted(browser),
-        "conformance": runner,
-        "rust": rust,
-        "caddy": caddy,
-        "contracts": contracts,
-        "reason": "measured dependency map",
-    }
+    touched |= graph.affected(sorted(seeds), added, via)
+    if data:
+        touched |= graph.read_by_tests(data, added, via)
+    if via:
+        smoke_python = True
+        notes.append("rule 2: conftest fixture")
+        uncertain.append(
+            f"rule 2: {', '.join(sorted(via)[:3])}{' and more' if len(via) > 3 else ''} reach tests only through a "
+            "conftest fixture: the direct readers and the smoke set"
+        )
+    reached = sorted(c for c in touched if Path(c).name == "conftest.py" and c not in names)
+    for conftest in reached:  # rule 2: a conftest reached through code a change runs or reads, not changed itself
+        smoke_python = smoke_browser = True
+        uncertain.append(f"rule 2: {conftest} is reached, not changed: direct readers and smoke set")
+    if reached:
+        notes.append("rule 2: reached conftest")
+    python |= {p for p in touched if is_test(p)}
+    scripts = {Path(p).stem for p in touched if is_browser(p)}
+    if core is None:
+        try:
+            core = browser_scripts([], root)
+        except (OSError, subprocess.CalledProcessError, RuntimeError):
+            core = scripts
+    browser |= scripts & set(core)
+    if smoke_python or smoke_browser:
+        smoke_tests, smoke_scripts = smoke(root)
+        if smoke_python:
+            python |= set(smoke_tests)
+        if smoke_browser:
+            browser |= set(smoke_scripts)
+    if any(n in CI_INPUTS for n in names) and not browser:
+        browser.add(SMOKE_SCRIPT)
+    caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
+    contracts = any(n.startswith(CONTRACT_INPUTS) for n in names) or bool((touched | python) & set(CONTRACT_TESTS))
+    result = plan(python, browser, caddy=caddy, contracts=contracts)
+    result["rule6"] = rule6
+    return result
 
 
 def changed_files(base, head="HEAD", root=ROOT, only=None):
+    """The paths a pull request or queue group changes, from base's merge point to head. Renames are found (-M): a moved
+    file lists its new path and its old one, which is gone (rule 1), except a pure ui/ rename (pure_ui_rename), which
+    lists only its new path. `only="A"` lists the files it adds: the new paths of added and renamed files. Git failing
+    gives an empty list, which selection runs as the smoke set."""
     try:
         ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
-        raw = subprocess.check_output(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                *([f"--diff-filter={only}"] if only else []),
-                ancestor,
-                head,
-            ],
-            cwd=root,
-        )
-        return raw.decode().rstrip("\0").split("\0") if raw else []
+        raw = subprocess.check_output(["git", "diff", "--name-status", "-M", "-z", ancestor, head], cwd=root)
     except (subprocess.CalledProcessError, OSError):
-        return []  # The uncertain path runs everything, never nothing.
+        return []
+    out = set()
+    for status, path, old, similarity in name_status(raw.decode()):
+        if only == "A":
+            if status in ("A", "R"):
+                out.add(path)
+            continue
+        out.add(path)
+        if old is not None and not pure_ui_rename(old, path, similarity):
+            out.add(old)
+    return sorted(out)
+
+
+def smoke_check(root=ROOT):
+    """Problems with SMOKE_FILE, for the static job: an unreadable file; an entry whose test file or core browser script
+    is missing; an entry with no measured time or no one-line reason; a repeat; a kind whose total needs more than one VM;
+    or a UI_MAP script that is missing. An empty list means the set is sound."""
+    try:
+        data = json.loads((root / SMOKE_FILE).read_text())
+    except (OSError, ValueError) as error:
+        return [f"{SMOKE_FILE}: {error}"]
+    if not isinstance(data, dict):
+        return [f"{SMOKE_FILE}: not a JSON object"]
+    problems = []
+    try:
+        core = set(browser_scripts([], root))
+    except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+        core = None
+        problems.append(f"cannot list the core browser scripts: {error}")
+    for kind, key in (("python", "file"), ("browser", "script")):
+        entries = data.get(kind)
+        if not isinstance(entries, list) or not entries:
+            problems.append(f"{kind}: no entries")
+            continue
+        names, total = [], 0.0
+        for entry in entries:
+            name = entry.get(key) if isinstance(entry, dict) else None
+            if not isinstance(name, str) or not name:
+                problems.append(f"{kind}: an entry has no {key}")
+                continue
+            names.append(name)
+            seconds, reason = entry.get("seconds"), entry.get("reason")
+            if (
+                isinstance(seconds, bool)
+                or not isinstance(seconds, (int, float))
+                or not math.isfinite(seconds)
+                or seconds <= 0
+            ):
+                problems.append(f"{kind} {name}: no measured seconds")
+            else:
+                total += seconds
+            if not isinstance(reason, str) or not reason.strip() or "\n" in reason:
+                problems.append(f"{kind} {name}: needs a one-line reason")
+            if kind == "python" and (not is_test(name) or not (root / name).is_file()):
+                problems.append(f"python {name}: no such test file")
+            if kind == "browser" and (
+                not (root / "ui/tests" / f"{name}.cjs").is_file() or (core is not None and name not in core)
+            ):
+                problems.append(f"browser {name}: no such core script")
+        if len(set(names)) != len(names):
+            problems.append(f"{kind}: an entry is repeated")
+        if job_count(total, kind) != 1:
+            problems.append(f"{kind} smoke set takes {total:.0f}s: more than one VM")
+    for name, scripts in UI_MAP.items():
+        for script in scripts:
+            if not (root / "ui/tests" / f"{script}.cjs").is_file():
+                problems.append(f"UI_MAP {name} names a missing script: {script}")
+    return problems
 
 
 def collect(root=ROOT):
@@ -972,7 +1588,10 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         guard_changelog(base)
     changed = changed_files(base, head) if base else []
     added = changed_files(base, head, only="A") if base else None
-    picked = selection(changed, event, base=base, added=added)
+    if base:
+        changed = sorted(set(changed) | set(script_changes(base, head, changed)))
+    py_map, map_note = py_test_map.load_map()
+    picked = selection(changed, event, base=base, added=added, py_map=py_map, head=head, map_note=map_note)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
     counts = collect() if picked["python"] != [] else Counter()
@@ -1180,6 +1799,7 @@ def main():
     execute.add_argument("--plan", default="ci-plan.json")
     sub.add_parser("durations")
     sub.add_parser("receipt")
+    sub.add_parser("smoke-check")
     args = parser.parse_args()
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head)
@@ -1190,6 +1810,11 @@ def main():
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
+    elif args.action == "smoke-check":
+        problems = smoke_check()
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1 if problems else 0
     else:
         # gh --paginate --slurp emits one jobs response per page.
         jobs, incomplete = receipt_jobs(sys.stdin.buffer.read())
