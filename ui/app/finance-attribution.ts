@@ -5,7 +5,7 @@
    Shares are basis points in the API (share_bps, 1..10000 a part, up to 10 parts, total at most 10000); the dialogs
    show percentages and send share_bps = % × 100. Nothing here is gated for approval: the writes are the owner's, or
    anyone holding finance.attribution, and they go straight through.
-   Reads: GET /api/v2/finance/lines/{line_id} (its `attribution`), GET /api/v2/finance/attribution-rules.
+   Reads: GET /api/v2/finance/lines/{line_id}/attribution, GET /api/v2/finance/attribution-rules.
    Writes (POST /api/v2/finance/actions): attribute, attribute_undo, attribution_rule_set, attribution_rule_delete.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    TypeScript: npm run build:ui compiles it to build/ui/app/finance-attribution.js, which the page runs in this file's place. */
@@ -13,7 +13,7 @@
 
 // One part of a split as the API sends it: a teammate ("bot:<slug>" / "human:<id>"), a team, or both.
 interface FinShare { teammate?: string; team?: string; share_bps: number; amount?: number | null }
-// A line's attribution (GET /v2/finance/lines/{line_id}); history is newest first.
+// A line's attribution (GET /v2/finance/lines/{line_id}/attribution); history is newest first.
 interface FinAttribution {
   splits: FinShare[];
   source: 'tags' | 'rule' | 'person' | 'bot';
@@ -132,8 +132,8 @@ function finShareRead(root: ParentNode): FinShare[] {
 async function finShareRailLoad(key: string, lines: {line_id: string; account?: string}[]): Promise<void> {
   const box = document.getElementById('fin-tx-share');
   if (!box || !lines.length) return;
-  const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}${finAs('?')}`, {fresh: true})
-    .then((r: any) => r?.attribution || null, () => null)));
+  const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}/attribution${finAs('?')}`, {fresh: true})
+    .then((r: any) => r || null, () => null)));
   if (FIN?.tx?.sel !== key || document.getElementById('fin-tx-share') !== box) return;
   const found = reads.map((a, i) => a ? {line: lines[i], a} : null).filter(Boolean) as {line: {line_id: string; account?: string}; a: FinAttribution}[];
   if (!found.length) { box.innerHTML = ''; return; }

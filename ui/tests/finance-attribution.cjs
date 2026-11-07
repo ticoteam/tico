@@ -85,7 +85,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/pay-from') return json({accounts: [{id: 'm1', name: 'Checking', last4: '0001'}]});
     if (p === '/api/v2/finance/contacts') return json({contacts: [{id: 'c-google', name: 'Google Ads', kind: 'vendor'}, {id: 'c-meta', name: 'Meta Ads', kind: 'vendor'}], next_cursor: null});
     if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
-    if (p.startsWith('/api/v2/finance/lines/') && method === 'GET') return json({attribution: ATTR[decodeURIComponent(p.split('/').pop())] || null});
+    if (p.startsWith('/api/v2/finance/lines/') && p.endsWith('/attribution') && method === 'GET') { const a = ATTR[decodeURIComponent(p.split('/').slice(-2)[0])]; return a ? json(a) : json({detail: 'not found'}, 404); }
     if (p === '/api/v2/finance/attribution-rules' && method === 'GET') return json({rules: viewer === 'ana' ? RULES : [], can_change: viewer === 'ana'});
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
     return json(unrouted(p));
