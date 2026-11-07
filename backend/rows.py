@@ -1110,3 +1110,31 @@ class SkillDeviceCodeRow(TypedDict):
     created_at: str
     updated_at: str
     client_hash: str | None
+
+
+class CiRunRow(TypedDict):
+    id: int
+    kind: str
+    status: str
+    remote_id: str
+    github_run_id: str
+    task_id: str
+    bot: str
+    cpus: int
+    requested_minutes: int
+    minutes: int
+    reserve_cents: int
+    cost_cents: int
+    hold_id: str
+    entry_id: str
+    reason: str
+    created_at: str
+    seen_at: str
+
+
+class CiRunExtensionRow(TypedDict):
+    id: int
+    task_id: str
+    minutes: int
+    granted_by: str
+    created_at: str
