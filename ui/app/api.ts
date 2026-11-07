@@ -191,7 +191,7 @@ const pressPending = (): (() => void) => {
   el.classList.add('is-pending'); el.setAttribute('aria-busy', 'true');
   return () => { el.classList.remove('is-pending'); el.removeAttribute('aria-busy'); };
 };
-const writeRequest = async (method: string, p: string, body: unknown, operationId?: string, opts?: ApiWriteOptions): Promise<UntypedJson> => { const done = pressPending(); try { return await writeRequestOnce(method, p, body, operationId, opts); } finally { done(); } };
+const writeRequest = async (method: string, p: string, body?: unknown, operationId?: string, opts?: ApiWriteOptions): Promise<UntypedJson> => { const done = pressPending(); try { return await writeRequestOnce(method, p, body, operationId, opts); } finally { done(); } };
 const postRequest = (p: string, body: unknown = {}, operationId?: string, opts?: ApiWriteOptions) => writeRequest('POST', p, body, operationId, opts);
 const patchRequest = (p: string, body: unknown = {}, operationId?: string) => writeRequest('PATCH', p, body, operationId);
 const putRequest = (p: string, body: unknown = {}, operationId?: string) => writeRequest('PUT', p, body, operationId);

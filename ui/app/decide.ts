@@ -7,61 +7,211 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-let DEC = null;                 // the open card's state, null while it is shut
+// The shapes this file reads of the server's rows and keeps for its own cards. A field is optional where the page may
+// be sent without it; the server sends more than is named here.
+/** A question on a task, or a bot's ask (`it.ask`). */
+interface DecAsk {
+  id?: string;
+  body?: string;
+  sender_id?: string;
+  recipient_id?: string | null;
+  created_at?: string;
+  read_at?: string | null;
+  question_task?: boolean;
+}
+/** One row of a stale-tickets card (`it.rows`). */
+interface DecStaleRow {
+  id?: string;
+  action?: unknown;
+  [key: string]: unknown;
+}
+/** A Needs you row (`S.v2.needs`): a question, an approval, a stale check, or a task that waits on the person. */
+interface DecItem {
+  kind: string;
+  id: string;
+  title?: string;
+  note?: string;
+  what?: string;
+  need?: string;
+  version?: number;
+  tier?: number;
+  steps_only?: boolean;
+  ask_missing?: boolean;
+  person_ask?: string;
+  created_at?: string;
+  updated_at?: string;
+  owner_id?: string | null;
+  requester_id?: string | null;
+  waiting_on?: string | null;
+  from_person?: string | null;
+  ask?: DecAsk | null;
+  payload?: { email_send_id?: string; content_sha256?: string } | null;
+  recommend?: { ask?: unknown; do: string } | null;
+  folded?: { id: string | number }[] | null;
+  merged?: (string | number)[] | null;
+  rows?: DecStaleRow[] | null;
+}
+/** The question on a question card (question-card.ts): one question with its options. */
+interface DecQuestion {
+  multi?: boolean;
+  options: { label: string; recommended?: boolean }[];
+}
+/** A card of the walk: a question to pick from, or an approval, a stale check or a task. */
+type DecCard = DecPick | DecOther;
+interface DecPick {
+  key: string;
+  type: 'pick';
+  it: DecItem;
+  q: DecQuestion;
+  at?: string | undefined;
+  yn?: boolean;
+}
+interface DecOther {
+  key: string;
+  type: 'approve' | 'stale' | 'task';
+  it: DecItem;
+  at?: string | undefined;
+  yn?: boolean;
+  q?: undefined;
+}
+/** A task file as tfNorm (task-files.ts) keeps it for the card. */
+interface DecFile {
+  name: string;
+  mime?: string;
+  archived?: boolean;
+  versions: DecFileVersion[];
+}
+interface DecFileVersion {
+  n: number;
+  url: string;
+  mime?: string;
+  size?: number;
+}
+/** A task comment as the card reads it (a note, a say, an ask). */
+interface DecComment {
+  kind?: string;
+  body?: string;
+  sender_id?: string;
+  recipient_id?: string;
+  answered_by_id?: string | null;
+  refs?: { note?: unknown } | null;
+}
+/** The frozen email an approval to send shows (`email_send_id`). */
+interface DecEmail {
+  preview_complete?: boolean;
+  send: { content_sha256?: string | null };
+}
+/** What a card has read for its item: a task's files and comments, or a frozen email; `error` when that read failed. */
+interface DecData {
+  version?: number | undefined;
+  files?: DecFile[];
+  comments?: DecComment[];
+  email?: DecEmail;
+  error?: boolean;
+}
+/** One request an action sends: its path, its body, and the key it is sent under. */
+interface DecWrite {
+  path: string;
+  body: unknown;
+  key?: string;
+}
+/** What an action sends, in order, and the line its toast says. */
+interface DecWriteSet {
+  writes: DecWrite[];
+  label: string;
+}
+/** An action taken on a card: on its toast, then in the outbox until the server confirms each request. */
+interface DecPending {
+  key: string;
+  write: { writes: DecWrite[]; label?: string };
+  note?: string;
+  me?: string | undefined;
+  timer?: number;
+  sent?: number;
+  retries?: number;
+}
+/** A write kept in this browser until the server confirms it (decideSave). */
+interface DecSaved {
+  me?: string;
+  key: string;
+  writes?: DecWrite[];
+}
+/** The open card's state: the walk's order, the card on screen, what is typed or ticked, and what is still on its way. */
+interface DecState {
+  order: string[];
+  at: string | null;
+  cards: Map<string, DecCard>;
+  pending: DecPending | null;
+  data: Map<string, DecData | null>;
+  ticks: Map<string, Set<number>>;
+  off: (() => void)[];
+  fromList: boolean;
+  opener?: Element | null;
+  shown?: string | null;
+  busy?: boolean;
+  lockUntil?: number;
+  swiped?: boolean;
+  undo?: (() => void) | null;
+  toastFor?: DecPending | null;
+  toastTimer?: number;
+}
+
+let DEC: DecState | null = null;                 // the open card's state, null while it is shut
+interface DecFailure extends ApiFailure { unconfirmed?: boolean }
 const DEC_UNDO_MS = 4000;
 const DEC_MORE_AT = 10;         // cards left when the next page of Needs you is read
 // A card's comment Send is disabled until there is a comment; its hover title says so.
 const DC_SEND_WHY = 'Type a comment to send';
 // Cards answered here, out of the list until the server's list drops them (or this page closes).
-const DEC_HANDLED = new Set();
+const DEC_HANDLED = new Set<string>();
 // A deep link's item (#/decide?item=<id>), opened once Needs you is drawn.
 let DECIDE_WANT = '';
 
 // ---- which cards, in which order (GET /v2/needs-you items)
 // A question answered in the card (question-card.js): one question with 2 to 6 options, a pick or several picks, put
 // to this person by someone else. Several questions in one ask are a task: they open the task.
-const decideQuestion = it => qcardQuestion(it);
+const decideQuestion = (it: DecItem) => qcardQuestion(it);
 // The plain ask a task card leads with, from the server's read alone (so a card's buttons never wait on its
 // comments): an open question to me, else the ask the bot wrote in its waiting note or its task's first paragraph.
-const decideAskText = it => String((it.ask?.recipient_id === myActor() && it.ask.sender_id !== myActor() ? it.ask.body : '')
+const decideAskText = (it: DecItem) => String((it.ask?.recipient_id === myActor() && it.ask.sender_id !== myActor() ? it.ask.body : '')
   || it.person_ask || '').trim();
 // A yes/no ask: its first question opens with a word that asks for a yes or a no and offers no "or". Deterministic, so
 // a card's buttons never guess.
 const DEC_YES_NO = new Set(['approve', 'can', 'could', 'should', 'shall', 'may', 'do', 'does', 'did', 'is', 'are', 'was',
   'were', 'will', 'would', 'ok', 'okay', 'send', 'publish', 'merge', 'ship', 'go', 'sign', 'confirm', 'proceed', 'accept',
   'allow', 'agree', 'have', 'has', 'want', 'renew', 'book', 'buy', 'pay', 'launch', 'post', 'keep', 'cancel']);
-function decideYesNoAsk(text) {
+function decideYesNoAsk(text: string | null | undefined): boolean {
   const q = String(text || '').trim().split(/(?<=[.!?])\s+/).find(s => s.endsWith('?'));
   if (!q || /\bor\b/i.test(q)) return false;
-  return DEC_YES_NO.has(q.split(/\s+/)[0].replace(/[^A-Za-z]/g, '').toLowerCase());
+  return DEC_YES_NO.has(q.split(/\s+/)[0]!.replace(/[^A-Za-z]/g, '').toLowerCase());
 }
 // Each Needs you item's key: its kind and id.
-const decideItemKey = it => ({approval: 'approval:', stale: 'stale:'}[it?.kind] || 'task:') + it?.id;
-function decideCards(items) {
-  const me = myActor(), asks = [], approvals = [], waiting = [], mine = [], unexplained = [];
+const decideItemKey = (it: DecItem) => ({approval: 'approval:', stale: 'stale:'}[it?.kind] || 'task:') + it?.id;
+function decideCards(items: DecItem[] | undefined): DecCard[] {
+  const me = myActor(), asks: DecCard[] = [], approvals: DecCard[] = [], waiting: DecCard[] = [], mine: DecCard[] = [], unexplained: DecCard[] = [];
   for (const it of items || []) {
     if (it.kind === 'approval') { approvals.push({key: 'approval:' + it.id, type: 'approve', it, at: it.created_at}); continue; }
     if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created_at}); continue; }
     if (!NEEDS_TASK_KINDS.includes(it.kind)) continue;
     const q = it.kind === 'question' ? decideQuestion(it) : null;
-    if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask.created_at || it.created_at});
+    if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask!.created_at || it.created_at});
     // A card still waiting for its bot to say what it needs goes last, as the server orders it.
     else (it.ask_missing ? unexplained : it.owner_id === me && it.kind === 'task' && it.waiting_on !== me ? mine : waiting)
       .push({key: 'task:' + it.id, type: 'task', it, at: (it.ask?.recipient_id === me && it.ask.created_at) || it.created_at, yn: !it.ask_missing && decideYesNoAsk(decideAskText(it))});
   }
-  const old = (a, b) => String(a.at || '').localeCompare(String(b.at || ''));
+  const old = (a: DecCard, b: DecCard) => String(a.at || '').localeCompare(String(b.at || ''));
   // The server's tier (backend/views.py decide_tier): what holds up something due, or going ahead on its own, within
   // two working days; then what holds up a roadmap item at Approved or Building; then the rest. Newest first within
   // each: how old a card is never moves it up.
-  const tier = c => c.it.tier ?? 2;
+  const tier = (c: DecCard) => c.it.tier ?? 2;
   const all = [...asks, ...approvals, ...waiting, ...mine].sort((a, b) => tier(a) - tier(b) || old(b, a));
   return [...all, ...unexplained.sort(old)];
 }
 // Declines open whole, as do tasks that ask for no yes or no and recommend nothing.
-const decideOnCard = c => c.it.kind !== 'declined' && (c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
-function needsCards(items) {
+const decideOnCard = (c: DecCard) => c.it.kind !== 'declined' && (c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
+function needsCards(items: DecItem[] | undefined): DecCard[] {
   const folded = new Set((items || []).flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
-  const cards = new Map();
+  const cards = new Map<string, DecCard>();
   for (const c of decideCards(items)) {
     if (!decideOnCard(c) || cards.has(c.key) || (['task', 'pick'].includes(c.type)
       && (folded.has(String(c.it.id)) || items === S.v2?.needs && needsFolded(c.it.id)))) continue;
@@ -70,34 +220,34 @@ function needsCards(items) {
   return [...cards.values()];
 }
 // The card an item opens as, or '' when it opens as the full task.
-const decideCardKey = it => { const c = it && decideCards([it])[0]; return c && decideOnCard(c) ? c.key : ''; };
+const decideCardKey = (it: DecItem | null | undefined): string => { const c = it && decideCards([it])[0]; return c && decideOnCard(c) ? c.key : ''; };
 // Answered here and on its way, or sent from an earlier page: out of the list and the walk.
-const decideGone = key => DEC_HANDLED.has(key) || [...DEC_OUTBOX].some(p => p.key === key);
+const decideGone = (key: string) => DEC_HANDLED.has(key) || [...DEC_OUTBOX].some(p => p.key === key);
 // The held part of the person's plate, including tasks that open whole. The server scopes it to the reader and
 // supplies the whole-list count; thread and update attention belongs to its own pages.
-function needsPlateItems() {
+function needsPlateItems(): DecItem[] {
   if (S.me?.role === 'bot') return [];
-  const seen = new Set();
+  const seen = new Set<string>();
   return decideCards(S.v2?.needs).filter(c => {
     if (seen.has(c.key) || ['task', 'pick'].includes(c.type) && needsFolded(c.it.id)) return false;
     seen.add(c.key); return true;
   }).map(c => c.it);
 }
 const needsQueueItems = () => needsPlateItems().filter(it => !decideGone(decideItemKey(it)));
-function decideCount() {
+function decideCount(): number {
   const held = needsPlateItems();
   return S.me?.role === 'bot' ? 0 : Math.max(0, (S.v2?.needsPlateCount ?? held.length)
     - held.filter(it => decideGone(decideItemKey(it))).length);
 }
 function needsBadgePaint() {
   const n = decideCount();
-  for (const badge of document.querySelectorAll('[data-needs-badge]')) {
+  for (const badge of document.querySelectorAll<HTMLElement>('[data-needs-badge]')) {
     badge.hidden = !n; badge.textContent = String(n); badge.setAttribute('aria-label', `${n} need you`);
   }
 }
 // "From Ana" beside the name when the card's work traces back to another person than the one shown;
 // "You asked" when it is the viewer's own request a bot is bringing back.
-function decideFromPerson(it, shown) {
+function decideFromPerson(it: DecItem, shown: string | null | undefined): string {
   const p = it.from_person;
   if (!p || p === shown) return '';
   return p === myActor() ? 'You asked' : `From ${actorLabel(p)}`;
@@ -105,7 +255,10 @@ function decideFromPerson(it, shown) {
 // The Needs you list's way in: Catch up in the Tasks header, only on Needs you and only when there is a card.
 function decidePaintButton() {
   needsBadgePaint();
-  const links = /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('[data-go-through]'));
+  const links = (
+    /** @type {NodeListOf<HTMLElement>} */
+    document.querySelectorAll<HTMLElement>('[data-go-through]')
+  );
   if (!links.length) return;
   const n = S.me?.role !== 'bot' && TASKS_ST && tasksNeedsQueue(TASKS_ST)
     ? needsCards(S.v2?.needs).filter(c => !decideGone(c.key)).length : 0;
@@ -123,11 +276,11 @@ function needsListsRedraw() {
 // ---- the dialog
 // The cards the list shows, in its order; a card the list does not show (not drawn yet, a page not read) goes in the
 // server's order.
-function decideListKeys() {
-  return [...new Set([...document.querySelectorAll('#task-body [data-need-card], #t-needs [data-need-card]')].map(el => el.dataset.needCard))];
+function decideListKeys(): string[] {
+  return [...new Set([...document.querySelectorAll<HTMLElement>('#task-body [data-need-card], #t-needs [data-need-card]')].map(el => el.dataset.needCard!))];
 }
-function decideDialog() {
-  let d = $('#need-card');
+function decideDialog(): HTMLDialogElement {
+  let d = $('#need-card') as HTMLDialogElement | null;
   if (d) return d;
   d = document.createElement('dialog');
   d.id = 'need-card'; d.className = 'dc-dialog'; d.setAttribute('aria-label', 'Needs you');
@@ -141,22 +294,26 @@ function decideDialog() {
     <div class="dc-actions"></div>
     <div class="dc-toast" role="status" hidden><span></span><button type="button" data-dc="undo">Undo</button></div>
   </section>`;
-  const root = $('.decide', d);
-  root.addEventListener('click', ev => { if (DEC) decideClick(DEC, ev); });
-  root.addEventListener('change', ev => { if (DEC && ev.target.matches('[data-qc-tick]')) decideTick(DEC, Number(ev.target.dataset.qcTick), ev.target.checked); });
-  root.addEventListener('input', ev => {
-    const box = ev.target.closest('.dc-note textarea');
+  const root: HTMLElement = $('.decide', d)!;
+  root.addEventListener('click', (ev: MouseEvent) => { if (DEC) decideClick(DEC, ev); });
+  root.addEventListener('change', (ev: Event) => {
+    const tick = eventElement(ev) as HTMLInputElement | null;
+    if (DEC && tick?.matches('[data-qc-tick]')) decideTick(DEC, Number(tick.dataset.qcTick), tick.checked);
+  });
+  root.addEventListener('input', (ev: Event) => {
+    const box = eventElement(ev)?.closest<HTMLTextAreaElement>('.dc-note textarea');
     if (!box) return;
     box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 120) + 'px';
-    for (const b of root.querySelectorAll('.dc-send, [data-dc-text]')) {
+    for (const b of root.querySelectorAll<HTMLButtonElement>('.dc-send, [data-dc-text]')) {
       b.disabled = !box.value.trim();
       if (b.matches('.dc-send')) b.title = b.disabled ? DC_SEND_WHY : 'Send comment';
     }
   });
-  root.addEventListener('keydown', ev => {
-    if (!DEC || ev.key !== 'Enter' || ev.shiftKey || ev.isComposing || !ev.target.matches('.dc-note textarea') || !ev.target.value.trim()) return;
-    const send = $('.dc-send, [data-dc-text]', root);
-    if (send) { ev.preventDefault(); decideAct(DEC, send.dataset.dc); }
+  root.addEventListener('keydown', (ev: KeyboardEvent) => {
+    const field = eventElement(ev) as HTMLTextAreaElement | null;
+    if (!DEC || ev.key !== 'Enter' || ev.shiftKey || ev.isComposing || !field?.matches('.dc-note textarea') || !field.value.trim()) return;
+    const send = $('.dc-send, [data-dc-text]', root) as HTMLElement | null;
+    if (send) { ev.preventDefault(); decideAct(DEC, send.dataset.dc!); }
   });
   // Esc in the note leaves the note; otherwise it closes the card.
   d.addEventListener('cancel', ev => { ev.preventDefault(); decideStop(); });
@@ -166,10 +323,10 @@ function decideDialog() {
   return d;
 }
 // Opens the card for `key`, or the first card of the list with none. False when there is no such card.
-function decideOpen(key = '') {
+function decideOpen(key: string = ''): boolean {
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
-  const st = DEC || {order: [], at: null, cards: new Map(), pending: null, data: new Map(), ticks: new Map(), off: [], fromList: false};
+  const st: DecState = DEC || {order: [], at: null, cards: new Map(), pending: null, data: new Map(), ticks: new Map(), off: [], fromList: false};
   decideSync(st, S.v2?.needs || []);
   // A card the list does not show (a filter hides it, a link names it) leads the walk.
   if (key && st.cards.has(key) && !st.order.includes(key) && !decideGone(key)) st.order.unshift(key);
@@ -177,8 +334,8 @@ function decideOpen(key = '') {
   if (!to) return false;
   if (fresh) {
     DEC = st;
-    if (typeof liveOn === 'function') st.off.push(liveOn('needs-list', items => { if (DEC === st) decideRefresh(st, items); }));
-    const keys = ev => decideKey(st, ev);
+    if (typeof liveOn === 'function') st.off.push(liveOn('needs-list', (items: DecItem[]) => { if (DEC === st) decideRefresh(st, items); }));
+    const keys = (ev: KeyboardEvent) => decideKey(st, ev);
     document.addEventListener('keydown', keys);
     st.off.push(() => document.removeEventListener('keydown', keys));
     st.opener = document.activeElement;
@@ -203,13 +360,13 @@ function decideStop() {
   DEC = null;
   void decideCommit(st);
   st.off.forEach(fn => fn());
-  const d = $('#need-card');
+  const d = $('#need-card') as HTMLDialogElement | null;
   if (d?.open) d.close();
   if (history.state?.needCard && !DEC_BACK) { DEC_BACK = true; history.back(); }
   needsListsRedraw();
   // Back to where the card was opened from, or the row of the card last shown.
-  const row = st.at && document.querySelector(`[data-need-card="${CSS.escape(st.at)}"]`);
-  const to = st.opener?.isConnected ? st.opener : row?.querySelector('.tl-open') || row;
+  const row = st.at && document.querySelector<HTMLElement>(`[data-need-card="${CSS.escape(st.at)}"]`);
+  const to = st.opener?.isConnected ? st.opener : row?.querySelector<HTMLElement>('.tl-open') || row;
   to?.focus?.({preventScroll: true});
 }
 window.addEventListener('popstate', () => {
@@ -224,15 +381,15 @@ window.addEventListener('popstate', () => {
 // A row answered on a card outside the Tasks list (a bot's rail): its card, not the task. Capturing, so the row's own
 // open-the-task handler never runs; a link to anything else (a bot, a person) keeps its place.
 document.addEventListener('click', ev => {
-  const row = ev.target.closest?.('[data-need-card]');
+  const row = eventElement(ev)?.closest?.<HTMLElement>('[data-need-card]');
   if (!row || row.closest('#task-body') || ev.button || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-  const link = ev.target.closest('a[href]');
+  const link = eventElement(ev)?.closest('a[href]');
   if (link && !link.matches('.ttl')) return;
   if (!decideOpen(row.dataset.needCard)) return;
   ev.preventDefault(); ev.stopPropagation();
 }, true);
 // A deep link to one item (an old #/decide?item=<id>): its card, or its task when it is answered whole.
-async function decideWanted(id) {
+async function decideWanted(id: string) {
   if (!needsItem(id)) { await v2Refresh(); needsListsRedraw(); }
   const it = needsItem(id);
   if (!it || !TASKS_ST) return;
@@ -241,8 +398,8 @@ async function decideWanted(id) {
 }
 
 // The server's list changed (live, or a read after a write): drop what left, add what is new where the list has it.
-const decideLive = st => st.order.filter(k => !decideGone(k));
-function decideSync(st, items) {
+const decideLive = (st: DecState) => st.order.filter(k => !decideGone(k));
+function decideSync(st: DecState, items: DecItem[] | undefined) {
   const fresh = needsCards(items), keys = new Set(fresh.map(c => c.key));
   st.cards = new Map([...st.cards].filter(([k]) => keys.has(k)));
   for (const c of fresh) st.cards.set(c.key, c);
@@ -267,61 +424,61 @@ function decideSync(st, items) {
   }
   st.order = order;
 }
-function decideRefresh(st, items) {
+function decideRefresh(st: DecState, items: DecItem[] | undefined) {
   const before = st.at, card = before && st.cards.get(before);
   decideSync(st, items);
   if (st.at !== before) decideRender(st, true);
-  else if (card && JSON.stringify([st.cards.get(before).type, st.cards.get(before).it]) !== JSON.stringify([card.type, card.it])) {
+  else if (card && JSON.stringify([st.cards.get(before!)!.type, st.cards.get(before!)!.it]) !== JSON.stringify([card.type, card.it])) {
     // The Stale tickets card mends its rows where they stand: an answered row goes, a new one comes, focus stays.
     if (card.type === 'stale') { decideStalePaint(st); return; }
     decideRedraw(st);
     // A new version: read its comments and files again. Until they land, the card shows (and Done sends) the old one.
-    if (st.cards.get(before).it.version !== card.it.version) void decideLoad(st, st.cards.get(before), true);
+    if (st.cards.get(before!)!.it.version !== card.it.version) void decideLoad(st, st.cards.get(before!)!, true);
   } else decidePaintHead(st);
 }
 // The current card changed under it (a live refresh): draw it again, buttons included, keeping what was typed.
-function decideRedraw(st) {
-  const box = $('.decide .dc-note textarea'), draft = box?.value || '', typing = box && document.activeElement === box;
+function decideRedraw(st: DecState) {
+  const box = $('.decide .dc-note textarea') as HTMLTextAreaElement | null, draft = box?.value || '', typing = box && document.activeElement === box;
   decideRender(st);
-  const again = $('.decide .dc-note textarea');
+  const again = $('.decide .dc-note textarea') as HTMLTextAreaElement | null;
   if (again && draft) { again.value = draft; again.dispatchEvent(new Event('input', {bubbles: true})); }
   if (again && typing) again.focus({preventScroll: true});
 }
 // The card `dir` steps from the current one; Skip goes round to the first from the last.
-function decideStepKey(st, dir, round = false) {
-  const live = decideLive(st), i = live.indexOf(st.at);
+function decideStepKey(st: DecState, dir: number, round = false): string | null {
+  const live = decideLive(st), i = live.indexOf(st.at!);
   if (i < 0) return live[0] || null;
   const j = i + dir;
-  return j >= 0 && j < live.length ? live[j] : round && live.length > 1 ? live[(j + live.length) % live.length] : null;
+  return j >= 0 && j < live.length ? live[j]! : round && live.length > 1 ? live[(j + live.length) % live.length]! : null;
 }
 // After a card is answered: the next card of the list, else the one before it.
-function decideAfter(st, key) {
-  const i = st.order.indexOf(key), live = k => !decideGone(k);
+function decideAfter(st: DecState, key: string): string | null {
+  const i = st.order.indexOf(key), live = (k: string) => !decideGone(k);
   return st.order.slice(i + 1).find(live) || st.order.slice(0, Math.max(i, 0)).reverse().find(live) || null;
 }
 
 // ---- drawing
 // A bot's name opens the bot, as its side-rail entry does. A bot this person can't see, a person or Tico itself has
 // no link.
-const decideChatHref = actor => {
+const decideChatHref = (actor: string | null | undefined): string => {
   const slug = actorSlug(actor);
   return slug && botRow(slug) ? `#/bot/${encodeURIComponent(slug)}` : '';
 };
-const decideCurrent = st => st.at ? st.cards.get(st.at) : null;
-function decidePaintHead(st) {
+const decideCurrent = (st: DecState) => st.at ? st.cards.get(st.at) : null;
+function decidePaintHead(st: DecState) {
   const root = $('.decide');
   if (!root) return;
-  const live = decideLive(st), at = live.indexOf(st.at), c = decideCurrent(st);
+  const live = decideLive(st), at = live.indexOf(st.at!), c = decideCurrent(st);
   if (live.length - at <= DEC_MORE_AT) void needsMoreShow();     // the next page of cards, before the last one is reached
-  $('.dc-count', root).innerHTML = c ? `<span class="tnum">${at + 1} of ${live.length}</span>` : '';
-  $('[data-dc="prev"]', root).disabled = !c || at <= 0;
-  $('[data-dc="next"]', root).disabled = !c || at >= live.length - 1;
+  $('.dc-count', root)!.innerHTML = c ? `<span class="tnum">${at + 1} of ${live.length}</span>` : '';
+  ($('[data-dc="prev"]', root) as HTMLButtonElement).disabled = !c || at <= 0;
+  ($('[data-dc="next"]', root) as HTMLButtonElement).disabled = !c || at >= live.length - 1;
 }
-function decideRender(st, enter = false) {
+function decideRender(st: DecState, enter = false) {
   const root = $('.decide');
   if (!root) return;
   decidePaintHead(st);
-  const c = decideCurrent(st), stage = $('.dc-stage', root), actions = $('.dc-actions', root);
+  const c = decideCurrent(st), stage = $('.dc-stage', root) as HTMLElement, actions = $('.dc-actions', root) as HTMLElement;
   st.shown = c?.key || null;                // every button and key acts on this card, and only once
   st.busy = false;
   root.classList.toggle('dc-empty', !c);
@@ -330,7 +487,7 @@ function decideRender(st, enter = false) {
     actions.innerHTML = actions.dataset.html = '';
     return;
   }
-  const from = c.type === 'approve' ? c.it.requester_id : c.type === 'stale' ? 'keeper' : c.type === 'pick' ? c.it.ask.sender_id
+  const from = c.type === 'approve' ? c.it.requester_id : c.type === 'stale' ? 'keeper' : c.type === 'pick' ? c.it.ask!.sender_id
     : (c.it.waiting_on === myActor() || c.it.kind === 'waiting') && String(c.it.owner_id).startsWith('bot:') ? c.it.owner_id
     : c.it.requester_id || c.it.owner_id;
   const decide = c.type !== 'task' || c.yn;
@@ -362,26 +519,26 @@ function decideRender(st, enter = false) {
   decidePaintBody(st);
   fbSync();
   actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
-  const card = $('.dc-card', stage);
+  const card = $('.dc-card', stage) as HTMLElement;
   if (enter) requestAnimationFrame(() => requestAnimationFrame(() => card.classList.remove('in')));
   decideSwipe(st, card);
   void decideLoad(st, c);
-  const next = st.cards.get(decideStepKey(st, 1));
+  const next = st.cards.get(decideStepKey(st, 1)!);
   if (next) void decideLoad(st, next);
 }
 // What a card's 👍 / 👎 rates (ui/app/feedback.ts): the approval a bot asked for, a bot's question, or a task a bot asked
 // for. It is never an answer: it goes nowhere near the outbox, and the card stays where it is.
-function decideFeedbackKey(c) {
-  const it = c.it, bot = a => String(a || '').startsWith('bot:');
+function decideFeedbackKey(c: DecCard): string {
+  const it = c.it, bot = (a: string | null | undefined) => String(a || '').startsWith('bot:');
   if (c.type === 'approve') return bot(it.requester_id) ? fbKey('approval', it.id) : '';
   if (c.type === 'pick') return it.ask?.question_task ? fbTaskKey(it) : bot(it.ask?.sender_id) && it.ask?.id ? fbKey('message', it.ask.id) : '';
   if (c.type === 'task') return fbTaskKey(it);
   return '';
 }
 // A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
-const decideDue = it => { const d = ['approval', 'stale'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
-function decidePaintBody(st) {
-  const c = decideCurrent(st), body = $('.decide .dc-body');
+const decideDue = (it: DecItem) => { const d = ['approval', 'stale'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
+function decidePaintBody(st: DecState) {
+  const c = decideCurrent(st), body = $('.decide .dc-body') as HTMLElement | null;
   if (!c || !body) return;
   // Other bots' tasks waiting on the person for the same thing are named on the card.
   const html = c.type === 'approve' ? decideApprovalHTML(st, c) : c.type === 'stale' ? decideStaleHTML(c)
@@ -390,36 +547,37 @@ function decidePaintBody(st) {
   if (c.type === 'task' || c.type === 'pick') decideAskRead(c.it);   // an option card reads its question too
 }
 // Showing a question on its card reads it, through its task (hub-v2.js taskAsksRead).
-function decideAskRead(it) {
-  if (!askToMe(it?.ask) || it.ask.read_at || it.ask.question_task) return;   // a question task has no message to read
-  return taskAsksRead(it.id, it.ask.id);
+function decideAskRead(it: DecItem) {
+  const ask = it?.ask!;
+  if (!askToMe(ask) || ask.read_at || ask.question_task) return;   // a question task has no message to read
+  return taskAsksRead(it.id, ask.id);
 }
-function decideStalePaint(st) {
-  const c = decideCurrent(st), body = $('.decide .dc-body'), actions = $('.decide .dc-actions');
+function decideStalePaint(st: DecState) {
+  const c = decideCurrent(st), body = $('.decide .dc-body') as HTMLElement | null, actions = $('.decide .dc-actions') as HTMLElement;
   if (!c || !body) return;
   const html = decideStaleHTML(c), act = decideActionsHTML(c);
   if (body.dataset.html !== html) { tasksPatch(body, html); body.dataset.html = html; }
   if (actions.dataset.html !== act) actions.innerHTML = actions.dataset.html = act;
   decidePaintHead(st);
 }
-const decideTwo = c => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
+const decideTwo = (c: DecCard): boolean => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
 // Yes / No reads No, Yes like an approval: the affirmative on the right.
-const decideYesNo = c => decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
-const decideRecommends = c => c.type === 'task' && !!c.it.recommend?.ask;
-function decideActionsHTML(c) {
-  const k = key => `<kbd>${key}</kbd>`;
+const decideYesNo = (c: DecCard) => decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
+const decideRecommends = (c: DecCard) => c.type === 'task' && !!c.it.recommend?.ask;
+function decideActionsHTML(c: DecCard): string {
+  const k = (key: string) => `<kbd>${key}</kbd>`;
   // The bot said what it would do: taking that is the main button, across the row, and the card's own answers stay
   // below it.
   // A question card's fallback is a small line at its foot, never a recommendation (question-card.js).
   const rec = decideRecommends(c)
-    ? `<button type="button" class="primary dc-rec" data-dc="recommend" title="${esc(c.it.recommend.do)}">Do what you recommend${k('R')}</button>` : '';
+    ? `<button type="button" class="primary dc-rec" data-dc="recommend" title="${esc(c.it.recommend!.do)}">Do what you recommend${k('R')}</button>` : '';
   if (rec) return rec + decideActionsPlain(c, k).replace(/ class="primary"/g, '');
   return decideActionsPlain(c, k);
 }
 // A Product roadmap item finishes or comes back only by a step move (the task window hides Done for it too): its card
 // offers no Done, and a yes or no on the person's own one goes as a comment, not a status.
-const decideStepsOnly = c => c.type === 'task' && (!!c.it.steps_only || pipelineStepsOnly(c.it));
-function decideActionsPlain(c, k) {
+const decideStepsOnly = (c: DecCard) => c.type === 'task' && (!!c.it.steps_only || pipelineStepsOnly(c.it));
+function decideActionsPlain(c: DecCard, k: (key: string) => string): string {
   const skip = `<button type="button" data-dc="skip">Skip${k('S')}</button>`;
   if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
   // A pick between files has a button under each file: no Pick one row.
@@ -432,42 +590,42 @@ function decideActionsPlain(c, k) {
   return `${skip}<button type="button" class="primary" data-dc="done">Done${k('D')}</button>`;
 }
 // An option's picture, large: the image itself when small enough, else its thumb.
-const decidePicture = (st, c, o) => qcardPicture(st.data.get(c.it.id)?.files, o);
-function decidePickHTML(st, c) {
-  return qcardBodyHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(st, c), pic: o => decidePicture(st, c, o)})
+const decidePicture = (st: DecState, c: DecPick, o: unknown) => qcardPicture(st.data.get(c.it.id)?.files, o);
+function decidePickHTML(st: DecState, c: DecPick): string {
+  return qcardBodyHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(st, c), pic: (o: unknown) => decidePicture(st, c, o)})
     + qcardFallbackHTML(c.it) + qcardDetailsHTML(c.it, c.q);
 }
 // Several picks: the ones ticked on this card, the recommended ones until the person changes them.
-function decideTicked(st, c) {
+function decideTicked(st: DecState | null | undefined, c: DecCard | undefined): Set<number> {
   if (!st || c?.type !== 'pick' || !c.q.multi) return new Set();
   if (!st.ticks.has(c.key)) st.ticks.set(c.key, qcardRecommended(c.q));
-  return st.ticks.get(c.key);
+  return st.ticks.get(c.key)!;
 }
-function decideTick(st, i, on) {
+function decideTick(st: DecState, i: number, on: boolean) {
   const c = decideCurrent(st), ticked = decideTicked(st, c);
   if (!c?.q?.multi || !(i >= 0 && i < c.q.options.length)) return;
   if (on) ticked.add(i); else ticked.delete(i);
-  const box = $(`.decide [data-qc-tick="${i}"]`); if (box) box.checked = on;
+  const box = $(`.decide [data-qc-tick="${i}"]`) as HTMLInputElement | null; if (box) box.checked = on;
   qcardRetick($('.decide .dc-actions'), c.it, c.q, ticked, 'dc');
 }
-const DEC_APPROVAL_Q = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
+const DEC_APPROVAL_Q: Record<string, string> = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
   support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?',
   finance: 'Approve this Finance change?', mail_alert: 'Let this bot send mail?'};
 // The exact payload, as Needs you has always shown it (needs-you.js approvalPayloadNode): every value set as text,
 // the raw JSON folded underneath.
-function decideApprovalHTML(st, c) {
+function decideApprovalHTML(st: DecState, c: DecCard): string {
   const frozen = c.it.what === 'send' && c.it.payload?.email_send_id;
   const preview = st.data.get(c.it.id);
-  return `<p class="dc-q">${esc(DEC_APPROVAL_Q[c.it.what] || 'Approve this?')}</p>${approvalPayloadNode(c.it).outerHTML}${frozen ? preview?.error ? '<p class="err">Could not load the frozen email. Reopen this card to try again.</p>' : preview?.email ? emailSendPreviewHTML(preview.email) : '<p role="status">Loading frozen email…</p>' : ''}`;
+  return `<p class="dc-q">${esc(DEC_APPROVAL_Q[c.it.what!] || 'Approve this?')}</p>${approvalPayloadNode(c.it).outerHTML}${frozen ? preview?.error ? '<p class="err">Could not load the frozen email. Reopen this card to try again.</p>' : preview?.email ? emailSendPreviewHTML(preview.email) : '<p role="status">Loading frozen email…</p>' : ''}`;
 }
 
 // The Stale tickets card: a row per task with Accept and Skip (needs-you.js staleCardRow), Accept all below.
-function decideStaleHTML(c) {
+function decideStaleHTML(c: DecCard): string {
   const sig = (c.it.rows || []).map(r => [r.id, r.task, r.title, r.reason, r.suggest, r.action, r.version]);
   return `<p class="dc-q">${esc(c.it.title || 'Stale tickets')}</p><div class="dc-stale" data-stale-card="${esc(c.it.id)}" data-patch-key="stale:${esc(c.it.id)}" data-patch-sig="${staleSig(sig)}">
     <ul class="stale-rows" aria-label="Stale ticket suggestions">${(c.it.rows || []).map(staleCardRow).join('')}</ul></div>`;
 }
-function decideMeta(it) {
+function decideMeta(it: DecItem): string {
   const me = myActor();
   if (it.ask_missing) return `Waiting for ${actorLabel(it.owner_id) || 'its bot'} to explain · ${ageShort(it.updated_at || it.created_at)}`;
   if (it.waiting_on === me || it.kind === 'waiting') return `Waiting on you · ${ageShort(it.updated_at || it.created_at)}`;
@@ -480,9 +638,9 @@ function decideMeta(it) {
 // those into the chat), then the task's request. A bot's card with none of these is waiting for that bot to explain
 // (`ask_missing`): the server has asked the bot to restate it. The owner's status note, the rest of the body and the
 // files fold under Details.
-function decideLead(st, c) {
+function decideLead(st: DecState, c: DecCard) {
   const it = c.it, data = st.data.get(it.id), me = myActor(), comments = data?.comments || [];
-  const note = String(it.note || '').trim(), text = s => String(s || '').trim();
+  const note = String(it.note || '').trim(), text = (s: string | null | undefined) => String(s || '').trim();
   const asked = [it.ask, ...comments.filter(m => m.kind === 'ask' && !m.answered_by_id).reverse()]
     .find(m => m && m.recipient_id === me && m.sender_id !== me && text(m.body));
   const said = comments.filter(m => m.kind === 'say' && m.sender_id !== me && m.recipient_id === me && !m.refs?.note
@@ -498,8 +656,8 @@ function decideLead(st, c) {
   return {lead, rest: lead === body ? '' : body, said: said && text(said.body) !== lead ? text(said.body) : '',
     note: note && note !== lead ? note : ''};
 }
-const decideWaitingOnMe = it => it.waiting_on === myActor() || it.kind === 'waiting';
-function decideTaskHTML(st, c) {
+const decideWaitingOnMe = (it: DecItem) => it.waiting_on === myActor() || it.kind === 'waiting';
+function decideTaskHTML(st: DecState, c: DecCard): string {
   const it = c.it, data = st.data.get(it.id);
   const {lead, rest, said, note} = decideLead(st, c);
   const bot = String(it.owner_id || '').startsWith('bot:') ? actorLabel(it.owner_id) : decideBot(c);
@@ -522,18 +680,18 @@ function decideTaskHTML(st, c) {
   return `${head}<p class="dc-title"><a href="#/task/${encodeURIComponent(it.id)}" title="Open the task">${esc(plainActors(it.title || ''))}</a></p>${details
     ? `<details class="dc-details"><summary>Details</summary>${details}</details>` : ''}`;
 }
-async function decideLoad(st, c, again = false) {
+async function decideLoad(st: DecState, c: DecCard, again = false): Promise<void> {
   if (c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id) {
     if (st.at !== c.key) return;
     if (st.data.has(c.it.id) && !again) return;
     st.data.set(c.it.id, null);
     try {
-      const email = await get(`/v2/email/sends/${encodeURIComponent(c.it.payload.email_send_id)}`, {fresh: true});
-      st.data.set(c.it.id, email.preview_complete && email.send.content_sha256 === c.it.payload.content_sha256 ? {email} : {error: true});
+      const email = await get<DecEmail>(`/v2/email/sends/${encodeURIComponent(c.it.payload.email_send_id)}`, {fresh: true});
+      st.data.set(c.it.id, email.preview_complete && email.send.content_sha256 === c.it.payload!.content_sha256 ? {email} : {error: true});
     } catch { st.data.set(c.it.id, {error: true}); }
     if (DEC === st && st.at === c.key) {
       decidePaintBody(st);
-      const actions = $('.decide .dc-actions');
+      const actions = $('.decide .dc-actions') as HTMLElement | null;
       if (actions) actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
     }
     return;
@@ -552,25 +710,25 @@ async function decideLoad(st, c, again = false) {
 
 // ---- acting
 // Who a card's answer goes to, named in its toast: the asking bot, the approval's requester, or the task's bot.
-const decideBot = c => actorLabel(c.type === 'pick' ? c.it.ask.sender_id : c.type === 'approve' ? c.it.requester_id
+const decideBot = (c: DecCard) => actorLabel(c.type === 'pick' ? c.it.ask!.sender_id : c.type === 'approve' ? c.it.requester_id
   : [c.it.owner_id, c.it.requester_id].find(a => String(a || '').startsWith('bot:')) || c.it.requester_id) || 'Tico';
 // What an action sends, as requests run in order when it commits, and what the toast says. Each request has its own
 // idempotency key from the start, so sending it again (pagehide while it is in flight) lands once.
-function decideWrite(c, what, i, note) {
+function decideWrite(c: DecCard, what: string, i: number | undefined, note: string): DecWriteSet {
   const out = decideWriteBody(c, what, i, note);
   out.writes = out.writes.map(w => ({...w, key: newRequestId()}));
   return out;
 }
-function decideWriteBody(c, what, i, note) {
+function decideWriteBody(c: DecCard, what: string, i: number | undefined, note: string): DecWriteSet {
   const shown = DEC?.data.get(c.it.id)?.version;
   const id = encodeURIComponent(c.it.id), to = decideBot(c);
   if (['pick', 'all', 'ticked'].includes(what)) {
     // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.
-    const labels = qcardLabels(c.q, what, i, decideTicked(DEC, c));
-    return {writes: qcardWrites(c.it, c.q, labels, note), label: qcardSaid(c.it, c.q, labels)};
+    const q = c.q!, labels = qcardLabels(q, what, i, decideTicked(DEC, c));
+    return {writes: qcardWrites(c.it, q, labels, note), label: qcardSaid(c.it, q, labels)};
   }
   if (what === 'recommend') {
-    const rec = c.it.recommend, version = shown || c.it.version;
+    const rec = c.it.recommend!, version = shown || c.it.version;
     return {writes: [{path: '/v2/needs-you/recommended', body: {ask: rec.ask, ...(version ? {version} : {})}},
       ...(note ? [{path: `/v2/tasks/${id}/comments`, body: {text: note}}] : [])],
       label: `Done what ${to} recommends · ${rec.do}`};
@@ -591,13 +749,13 @@ function decideWriteBody(c, what, i, note) {
   if (what === 'done' && !decideStepsOnly(c)) return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: shown || c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
   return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
 }
-function decideAct(st, what, i, shown = st.shown) {
-  const key = st.at, c = decideCurrent(st), root = $('.decide');
+function decideAct(st: DecState, what: string, i?: number, shown: string | null | undefined = st.shown) {
+  const key = st.at!, c = decideCurrent(st), root = $('.decide');
   // A second tap while the card leaves, or a button from a card no longer current, does nothing.
   if (!c || !root || st.busy || key !== shown || performance.now() < (st.lockUntil || 0)) return;
   if (what === 'yes' && c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id
       && !st.data.get(c.it.id)?.email?.preview_complete) return;
-  const card = $('.dc-card', root);
+  const card = $('.dc-card', root) as HTMLElement | null;
   if (['skip', 'next', 'prev'].includes(what)) {
     const to = decideStepKey(st, what === 'prev' ? -1 : 1, what === 'skip');
     if (!to) return;
@@ -606,7 +764,7 @@ function decideAct(st, what, i, shown = st.shown) {
     decideLeaveCard(st, card, what === 'prev' ? 'right' : 'left');
     return;
   }
-  const box = $('.dc-note textarea', root), note = box?.value.trim() || '';
+  const box = $('.dc-note textarea', root) as HTMLTextAreaElement | null, note = box?.value.trim() || '';
   if (what === 'comment' && !note) { box?.focus(); return; }
   if (what === 'ticked' && !decideTicked(st, c).size) return;
   // Request changes on a review goes with the note that says what to change.
@@ -619,9 +777,9 @@ function decideAct(st, what, i, shown = st.shown) {
   void decideCommit(st);                       // the previous action goes now
   DEC_HANDLED.add(key);
   st.at = decideAfter(st, key);
-  const pending = st.pending = {key, write, note};
+  const pending: DecPending = st.pending = {key, write, note};
   pending.timer = setTimeout(() => { if (st.pending === pending) void decideCommit(st); }, DEC_UNDO_MS);
-  if (what === 'pick') $(`.dc-opt[data-i="${i}"]`, card)?.classList.add('sel');
+  if (what === 'pick') $(`.dc-opt[data-i="${i}"]`, card!)?.classList.add('sel');
   decideLeaveCard(st, card, what === 'no' ? 'left' : 'right');
   needsListsRedraw();
   decideToast(st, write.label, () => {
@@ -630,10 +788,10 @@ function decideAct(st, what, i, shown = st.shown) {
     DEC_HANDLED.delete(key); st.at = key;
     decideRender(st, true);
     needsListsRedraw();
-    const again = $('.decide .dc-note textarea'); if (again) { again.value = note; again.dispatchEvent(new Event('input', {bubbles: true})); }
+    const again = $('.decide .dc-note textarea') as HTMLTextAreaElement | null; if (again) { again.value = note; again.dispatchEvent(new Event('input', {bubbles: true})); }
   });
 }
-function decideLeaveCard(st, card, side) {
+function decideLeaveCard(st: DecState, card: HTMLElement | null, side: 'left' | 'right') {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!card || reduce) { decideRender(st, false); return; }
   st.busy = true;
@@ -642,7 +800,7 @@ function decideLeaveCard(st, card, side) {
   setTimeout(() => { if (DEC === st) decideRender(st, true); }, 170);
 }
 // Writes on their way: in the outbox until the server confirms each request, whether or not the card is still open.
-const DEC_OUTBOX = new Set();
+const DEC_OUTBOX = new Set<DecPending>();
 // The outbox is kept in this browser too, so a write the page could not confirm before it closed goes out on the
 // next load, under the same keys.
 const DEC_SAVED = 'tico.decide.outbox';
@@ -652,20 +810,20 @@ function decideSave() {
   try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
 }
 function decideResume() {
-  let saved = [];
+  let saved: DecSaved[] = [];
   try { saved = JSON.parse(localStorage.getItem(DEC_SAVED) || '[]'); } catch {}
   // Only the person who took them: another person signed in to this browser never sends them.
   if (!S.me?.id) return;
   for (const item of Array.isArray(saved) ? saved : []) {
     if (!item?.writes?.length || item.me !== S.me.id || [...DEC_OUTBOX].some(p => p.key === item.key)) continue;
-    const p = {me: item.me, key: item.key, write: {writes: item.writes}, sent: 0};
+    const p: DecPending = {me: item.me, key: item.key, write: {writes: item.writes}, sent: 0};
     DEC_OUTBOX.add(p);
     void decideSend(null, p);
   }
 }
 setTimeout(decideResume, 3000);
 // Sends the waiting action, its requests in order.
-async function decideCommit(st) {
+async function decideCommit(st: DecState) {
   const p = st.pending;
   if (!p) return;
   st.pending = null;
@@ -677,22 +835,22 @@ async function decideCommit(st) {
   await decideSend(st, p);
 }
 // A line for the person: in the card while it is open (a page toast would sit under it), else the page's toast.
-function needsSay(text, err = false) {
-  const t = DEC && $('#need-card')?.open && $('.decide .dc-toast');
+function needsSay(text: string, err = false) {
+  const t = DEC && ($('#need-card') as HTMLDialogElement | null)?.open && ($('.decide .dc-toast') as HTMLElement | null);
   if (!t) { toast(text, err); return; }
-  clearTimeout(DEC.toastTimer);
-  $('span', t).textContent = text;
-  $('button', t).hidden = true;
+  clearTimeout(DEC!.toastTimer);
+  $('span', t)!.textContent = text;
+  ($('button', t) as HTMLButtonElement).hidden = true;
   t.hidden = false;
-  DEC.undo = null; DEC.toastFor = null;
-  DEC.toastTimer = setTimeout(() => { t.hidden = true; }, DEC_UNDO_MS);
+  DEC!.undo = null; DEC!.toastFor = null;
+  DEC!.toastTimer = setTimeout(() => { t.hidden = true; }, DEC_UNDO_MS);
 }
 // The requests not yet confirmed, in order, each under the key it got when the action was taken.
-async function decideSend(st, p) {
+async function decideSend(st: DecState | null, p: DecPending) {
   try {
     for (const w of p.write.writes.slice(p.sent)) {
       await post(w.path, w.body, w.key);
-      p.sent++;
+      p.sent!++;
       decideSave();
     }
     DEC_OUTBOX.delete(p);
@@ -702,7 +860,8 @@ async function decideSend(st, p) {
       needsListsRedraw();
     }), 300);
   } catch (e) {
-    if (e.unconfirmed) {
+    const err = e as DecFailure;
+    if (err.unconfirmed) {
       // It may have landed: never act again under new keys. It stays out of the list and is sent again as it was.
       if (!p.retries && st) needsSay('Not confirmed yet; trying again', true);
       p.retries = (p.retries || 0) + 1;
@@ -714,8 +873,8 @@ async function decideSend(st, p) {
     decideSave();
     needsListsRedraw();
     if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
-    const changed = e.status === 409 || e.body?.error?.code === 'version_conflict';
-    needsSay(changed ? 'That task changed. Look again.' : e.message, true);
+    const changed = err.status === 409 || err.body?.error?.code === 'version_conflict';
+    needsSay(changed ? 'That task changed. Look again.' : err.message, true);
     st.data.delete(String(p.key).replace(/^task:/, ''));
     if (DEC === st) {
       st.at = p.key;
@@ -733,69 +892,69 @@ function decideFlush() {
   }
   for (const p of all) for (const w of p.write.writes.slice(p.sent || 0)) {
     fetch(API + w.path, {method: 'POST', keepalive: true, body: JSON.stringify(w.body),
-      headers: {'Content-Type': 'application/json', 'Idempotency-Key': w.key}}).catch(() => {});
+      headers: {'Content-Type': 'application/json', 'Idempotency-Key': w.key!}}).catch(() => {});
   }
 }
 window.addEventListener('pagehide', decideFlush);
 // Signing out: what still waits goes out as on leaving the page, then none of it (a note's words included) stays in
 // this browser for whoever uses it next. The same links observability.js resets on.
 document.addEventListener('click', e => {
-  const link = e.target.closest?.('a[href]');
-  if (!link || !/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) return;
+  const link = eventElement(e)?.closest('a[href]');
+  if (!link || !/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(String(link.getAttribute('href')))) return;
   decideFlush();
   DEC_SIGNED_OUT = true;
   DEC_OUTBOX.clear();
   try { localStorage.removeItem(DEC_SAVED); } catch {}
 }, true);
-function decideToast(st, text, undo) {
-  const t = $('.decide .dc-toast');
+function decideToast(st: DecState, text: string, undo: () => void) {
+  const t = $('.decide .dc-toast') as HTMLElement | null;
   if (!t) return;
   clearTimeout(st.toastTimer);
-  $('span', t).textContent = text;
-  $('button', t).hidden = false;
+  $('span', t)!.textContent = text;
+  ($('button', t) as HTMLButtonElement).hidden = false;
   t.hidden = false;
   st.undo = undo;
   st.toastFor = st.pending;
   st.toastTimer = setTimeout(() => { t.hidden = true; st.undo = null; }, DEC_UNDO_MS);
 }
-function decideToastHide(st, p) {
+function decideToastHide(st: DecState, p: DecPending) {
   if (st.toastFor !== p) return;
-  const t = $('.decide .dc-toast');
+  const t = $('.decide .dc-toast') as HTMLElement | null;
   if (t) t.hidden = true;
   st.undo = null;
 }
-function decideClick(st, ev) {
+function decideClick(st: DecState, ev: Event) {
   // A link into the app leaves the card, so what it opens isn't underneath it. On a phone, closing goes Back first.
-  const inApp = ev.target.closest('a[href^="#/"]');
+  const inApp = eventElement(ev)?.closest('a[href^="#/"]');
   if (inApp) {
     ev.preventDefault();
-    const to = inApp.getAttribute('href'), backFirst = !!history.state?.needCard;
+    const to = inApp.getAttribute('href')!, backFirst = !!history.state?.needCard;
     if (backFirst) window.addEventListener('popstate', () => { location.hash = to; }, {once: true});
     decideStop();
     if (!backFirst) location.hash = to;
     return;
   }
-  const b = ev.target.closest('[data-dc]');
+  const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-dc]');
   if (!b || b.disabled || st.swiped) return;
-  const what = b.dataset.dc;
+  const what = b.dataset.dc!;
   if (what === 'close') { decideStop(); return; }
-  if (what === 'ask') { $('.decide .dc-note textarea')?.focus(); return; }
-  if (what === 'undo') { const undo = st.undo; st.undo = null; $('.decide .dc-toast').hidden = true; undo?.(); return; }
+  if (what === 'ask') { ($('.decide .dc-note textarea') as HTMLTextAreaElement | null)?.focus(); return; }
+  if (what === 'undo') { const undo = st.undo; st.undo = null; ($('.decide .dc-toast') as HTMLElement).hidden = true; undo?.(); return; }
   decideAct(st, what, Number(b.dataset.i));
 }
-function decideKey(st, ev) {
-  if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || !$('#need-card')?.open
+function decideKey(st: DecState, ev: KeyboardEvent) {
+  if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || !($('#need-card') as HTMLDialogElement | null)?.open
       || [...document.querySelectorAll('dialog[open]')].some(d => d.id !== 'need-card' && !d.contains($('#need-card')))) return;
-  if (ev.target.matches?.('textarea, input:not([type=checkbox]), select, [contenteditable]')) {   // a ticked pick keeps the keys
-    if (ev.key === 'Escape') { ev.preventDefault(); ev.target.blur(); }
+  if (eventElement(ev)?.matches('textarea, input:not([type=checkbox]), select, [contenteditable]')) {   // a ticked pick keeps the keys
+    if (ev.key === 'Escape') { ev.preventDefault(); (ev.target as HTMLElement).blur(); }
     return;
   }
   const c = decideCurrent(st), k = ev.key.toLowerCase();
   if (!c) return;
-  let what = null, i;
+  let what: string | null = null, i: number | undefined;
   if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') what = ev.key === 'ArrowLeft' ? 'prev' : 'next';
   else if (k === 's') what = 'skip';
-  else if (k === 'c') { if (!$('.decide .dc-note textarea')) return; ev.preventDefault(); $('.decide .dc-note textarea').focus(); return; }   // every card, a multi too
+  else if (k === 'c') { if (!$('.decide .dc-note textarea')) return; ev.preventDefault(); ($('.decide .dc-note textarea') as HTMLTextAreaElement).focus(); return; }   // every card, a multi too
   else if (c.type === 'pick' && c.q.multi) {
     // Several picks: a number ticks or unticks one; A says yes to all, T sends the ticked ones.
     if (/^[1-6]$/.test(k) && Number(k) <= c.q.options.length) {
@@ -815,10 +974,10 @@ function decideKey(st, ev) {
 }
 // Swipe left for the next card, right for the one before. A sideways drag that moves the card swallows the click
 // it ends with.
-function decideSwipe(st, card) {
-  let x0 = null, y0 = 0, dx = 0, id = null;
+function decideSwipe(st: DecState, card: HTMLElement) {
+  let x0: number | null = null, y0 = 0, dx = 0, id: number | null = null;
   card.addEventListener('pointerdown', ev => {
-    if (ev.button !== 0 || ev.target.closest('textarea, a, .dc-note')) return;
+    if (ev.button !== 0 || eventElement(ev)?.closest('textarea, a, .dc-note')) return;
     x0 = ev.clientX; y0 = ev.clientY; dx = 0; id = ev.pointerId; st.swiped = false;
   });
   card.addEventListener('pointermove', ev => {
@@ -832,7 +991,7 @@ function decideSwipe(st, card) {
       card.style.transform = `translateX(${m}px) rotate(${m / 40}deg)`;
     }
   });
-  const end = ev => {
+  const end = (ev: PointerEvent) => {
     if (x0 === null || ev.pointerId !== id) return;
     x0 = null;
     card.style.transition = ''; card.style.transform = '';
