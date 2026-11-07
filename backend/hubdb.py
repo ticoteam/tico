@@ -7952,7 +7952,7 @@ def task_update(
         # Nothing to write, but a waiting task's Blocked reason still follows its holds: clearing the wait on nothing
         # tracked (waiting_on "") recomputes it here, in this same write, and a bot's task goes back to open
         # (task_holds.refresh). An early return skipped that before.
-        if row.get("status") == "waiting":
+        if row and row.get("status") == "waiting":
             from . import task_holds
 
             task_holds.refresh(conn, task_id, task_holds.WAIT_CLEARED if waiting_on == "" else None)

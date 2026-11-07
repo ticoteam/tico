@@ -239,7 +239,7 @@ def recompute_reasons(conn):
         ).fetchall()
     ]:
         row = H.task(conn, task_id)
-        if not _applies(conn, row):
+        if row is None or not _applies(conn, row):
             continue
         found = holds(conn, row)
         text = (words(conn, found) if found else NOTHING)[:1000]
