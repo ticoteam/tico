@@ -92,7 +92,8 @@ class Company:
         return result
 
     def approve(self, task_id, requirement_id, actor=ANA):
-        result = pipeline_review.approve(self.c, actor, task_id, requirement_id)
+        version = self.c.execute("SELECT version FROM stage_requirements WHERE id = ?", (requirement_id,)).fetchone()[0]
+        result = pipeline_review.approve(self.c, actor, task_id, requirement_id, requirement_version=version)
         self.c.commit()
         return result
 
@@ -830,3 +831,50 @@ def test_flow_map_numbers_equal_the_database(co):
         stamp(7 * 24 * 60, base=datetime.now(UTC)),
     )
     assert product_dev["done"] == done_truth
+
+
+def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):
+    """O1: the approval filed the Engineering subtask. Undone while nobody has picked it up, the subtask closes and its
+    handoff is returned; a new approval files a new one. Once it is picked up, the undo is refused and nothing changes."""
+    card = review_card(co)
+    approved = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
+    (d41,) = subtasks(co, card)
+    pipeline_review.undo(co.c, ANA, approved["decision_id"])
+    co.c.commit()
+    assert co.where(card) == ("Product", "Review")
+    assert co.c.execute("SELECT status FROM tasks WHERE id=?", (d41,)).fetchone()[0] == "closed"
+    assert co.count("pipeline_handoffs", "target_task_id=? AND returned_at IS NOT NULL", d41) == 1
+    again = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
+    assert again["advanced"] is True
+    open_now = [t for t in subtasks(co, card) if t != d41]
+    assert len(open_now) == 1 and co.where(open_now[0]) == ("Engineering", "Todo")
+
+    picked = review_card(co, title="Light mode")
+    kept = co.approve(picked, co.requirement("Product", "Review", "Spec approved"))
+    (d_picked,) = [t for t in subtasks(co, picked)]
+    co.move(d_picked, "Doing", actor=ANA)
+    with pytest.raises(pipeline_review.Declined) as caught:
+        pipeline_review.undo(co.c, ANA, kept["decision_id"])
+    co.c.rollback()
+    assert caught.value.code == "already_started"
+    assert co.where(picked) == ("Product", "In development")
+    assert co.c.execute("SELECT status FROM tasks WHERE id=?", (d_picked,)).fetchone()[0] != "closed"
+
+
+def test_undo_refuses_a_not_validated_decision(co):
+    """O2: "Not validated" filed a follow-up and returned the card. It is not undone with the approval's undo; the person
+    closes that follow-up instead."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    with pytest.raises(pipeline_review.Declined) as caught:
+        pipeline_review.undo(co.c, ANA, result["decision_id"])
+    co.c.rollback()
+    assert caught.value.code == "not_undoable"
+    assert co.where(card) == ("Product", "In development")
