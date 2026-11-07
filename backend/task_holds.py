@@ -26,6 +26,8 @@ fields under the names the code always read (`FIELDS`).
 
 NOTHING = "Nothing tracked to wait on"
 LEFT = "Nothing left to wait on"
+# What a cleared wait with no hold left to name says it cleared (refresh's `cleared`, a waiting flag cleared by hand).
+WAIT_CLEARED = "The wait on a person was cleared"
 # Holds with a reconciliation of their own: their reason and resume stay with backend/task_blocked.py.
 OWN_RECONCILE = ("gate", "check", "worktree")
 
@@ -219,6 +221,32 @@ def refresh_private_names(conn):
 def refresh_many(conn, task_ids, cleared=None):
     for task_id in dict.fromkeys(t for t in task_ids if t):
         refresh(conn, task_id, cleared)
+
+
+def recompute_reasons(conn):
+    """The one-time repair (migration 20261107140000): each waiting task's open dependency hold gets the reason its holds
+    give now (`words`, or NOTHING when none is left). Only the reason text changes: the hold, its cause, its clock, its
+    resume step and the task's status stay as they are, so nothing clears, wakes, is messaged or touches an approval,
+    and a hold the keeper chose to keep stays with the keeper. Returns how many reasons changed."""
+    from . import hubdb as H
+
+    changed = 0
+    for task_id in [
+        r[0]
+        for r in conn.execute(
+            "SELECT t.id FROM tasks t JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
+            "WHERE t.status='waiting' AND h.cause='dependency' ORDER BY t.created_at,t.id"
+        ).fetchall()
+    ]:
+        row = H.task(conn, task_id)
+        if not _applies(conn, row):
+            continue
+        found = holds(conn, row)
+        text = (words(conn, found) if found else NOTHING)[:1000]
+        if text != row.get("blocked_reason"):
+            change(conn, task_id, "blocked", reason=text)
+            changed += 1
+    return changed
 
 
 def title(conn, row):
