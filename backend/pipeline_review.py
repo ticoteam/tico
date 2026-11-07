@@ -537,8 +537,9 @@ class _Queue:
 def _queue_fields(
     c: "sqlite3.Connection", actor: str, items: list[Row], live: list[Row], tasks: dict[str, Row], queue: _Queue
 ) -> None:
-    """Adds assignee, bot_note, reviewer_id, can_mark_met and moves_to to each queue item. The people and bots, the move
-    links and the pipelines' steps are each read once over all the items; `may_edit_rules` runs once per pipeline."""
+    """Adds assignee, bot_note, reviewer_id, can_mark_met, can_not_validate and moves_to to each queue item. The people
+    and bots, the move links and the pipelines' steps are each read once over all the items; `may_edit_rules` runs once
+    per pipeline, and Not validated's route once per stage."""
     if not items:
         return
     owners = {item["task_id"]: tasks[item["task_id"]].get("owner_id") for item in items}
@@ -570,6 +571,7 @@ def _queue_fields(
     names = {s["id"]: s["name"] for s in steps}
     requirements = {r["id"]: r for r in live}
     rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
+    routes: dict[tuple[str, str], bool] = {}  # Not validated's route per stage, read once per stage
     for item in items:
         key = (item["task_id"], item["requirement_id"])
         owner = owners.get(item["task_id"])
@@ -580,6 +582,10 @@ def _queue_fields(
             item["requirement_id"]
         ].get("reviewer_id")
         item["can_mark_met"] = bool(rights[item["pipeline_id"]])
+        route_key = (item["pipeline_id"], item["stage_id"])
+        if route_key not in routes:
+            routes[route_key] = _not_validated_route(c, actor, *route_key) is not None
+        item["can_not_validate"] = routes[route_key]
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names)
 
 
@@ -1028,6 +1034,26 @@ def _back_stage(c: "sqlite3.Connection", stage_id: str) -> Row | None:
     )
 
 
+def _not_validated_route(
+    c: "sqlite3.Connection", actor: str, pipeline_id: str, stage_id: str
+) -> tuple[Row, Row] | None:
+    """Where "Not validated" sends a card from this stage (D66): the live stage before it, and the pipeline's live spawn
+    link for the follow-up. None when the reader is not a person, there is no stage before, or no spawn link. The queue
+    flag and the action both read this, so the button shows exactly when the action would work."""
+    if not str(actor or "").startswith("human:"):
+        return None
+    back = _back_stage(c, stage_id)
+    spawn_link = _one(
+        c,
+        "SELECT l.* FROM pipeline_links l JOIN task_steps s ON s.id = l.from_pipeline_stage_id "
+        "WHERE s.type_id = ? AND l.mode = 'spawn' AND l.retired_at IS NULL ORDER BY s.position, l.id LIMIT 1",
+        (pipeline_id,),
+    )
+    if back is None or spawn_link is None:
+        return None
+    return back, spawn_link
+
+
 def not_validated(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, reason: str) -> Row:
     """Validate's "Not validated" (D64), a person's call on the validation requirement. The spec's measures did not hold:
     the card goes back to the stage before Validate (In development, which then waits on the new subtask), and one
@@ -1041,15 +1067,10 @@ def not_validated(c: "sqlite3.Connection", actor: str, task_id: str, requirement
         _check_claim(c, actor, task, requirement)
         if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
-        back = _back_stage(c, str(requirement["pipeline_stage_id"]))
-        spawn_link = _one(
-            c,
-            "SELECT l.* FROM pipeline_links l JOIN task_steps s ON s.id = l.from_pipeline_stage_id "
-            "WHERE s.type_id = ? AND l.mode = 'spawn' AND l.retired_at IS NULL ORDER BY s.position, l.id LIMIT 1",
-            (task["type_id"],),
-        )
-        if back is None or spawn_link is None:
+        route = _not_validated_route(c, actor, str(task["type_id"]), str(requirement["pipeline_stage_id"]))
+        if route is None:
             raise Declined("no_follow_up", "This pipeline has no stage to return to or no Engineering link", 409)
+        back, spawn_link = route
         current = _current_attachment(c, task_id, requirement_id)
         decision = _decide(c, actor, task, requirement, "failed", text, current)
         _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")

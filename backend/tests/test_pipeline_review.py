@@ -726,6 +726,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -752,6 +753,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -789,6 +791,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -815,6 +818,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -841,6 +845,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": {"stage_id": "Shipped", "name": "Shipped"},
             },
             {
@@ -878,6 +883,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "The badge is too small",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": {"stage_id": "Review", "name": "Review"},
             },
             {
@@ -915,6 +921,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ben",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -941,6 +948,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -978,6 +986,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1004,6 +1013,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1030,6 +1040,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
         ],
@@ -1069,6 +1080,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": False,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1106,6 +1118,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": False,
+                "can_not_validate": False,
                 "moves_to": None,
             },
         ],
@@ -1158,3 +1171,17 @@ def test_reviewer_id_is_the_claimant_and_a_plain_member_cannot_mark_met(world, m
     assert R.queue_for(w.c, BEN)[0]["reviewer_id"] == BEN
     (seen_by_ana,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff]
     assert seen_by_ana["reviewer_id"] == BEN
+
+
+def test_not_validated_is_offered_at_a_validate_stage_with_a_spawn_link_and_never_to_a_bot_or_first_stage(world):
+    """The queue's can_not_validate flag and the action share one rule: a person, a live stage before the requirement's
+    stage, and a live spawn link from the pipeline. Without the link, or at the first stage, or for a bot, it is off."""
+    w = world
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is False, "no spawn link yet, so no Not validated"
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.review, engineering, mode="spawn")
+    assert item()["can_not_validate"] is True, "Review has Making before it and a spawn link: offered"
+    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review) is None, "a bot never gets the route"
+    assert R._not_validated_route(w.c, ANA, w.pipeline, w.making) is None, "the first stage has nothing to return to"
+    assert R._not_validated_route(w.c, ANA, w.pipeline, w.review) is not None
