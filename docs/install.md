@@ -127,7 +127,7 @@ like the one above.
 **You need** the install above with its computer online, and one model sign-in on that computer: a ChatGPT sign-in for Codex,
 a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
 
-1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
+1. **Check the AI provider is ready** before any real work. Open **Settings > General > Health > Details**: **Models** should read "Codex is signed
    in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
@@ -204,7 +204,7 @@ The server answers on this computer only: compose publishes the port on `127.0.0
 sign-in refuses to start. A public address always needs sign-in.
 
 Bots' pages and SVG show as **Open** cards here: they need a separate address to show inline. Turn on
-[Tico file hosting](files.md#tico-file-hosting) on the Gateway page and they show inline from your `ticofiles.com`
+[Tico file hosting](files.md#tico-file-hosting) in **Settings → Models → Tico Gateway** and they show inline from your `ticofiles.com`
 address; nothing has to reach this computer ([Visuals](visuals.md#self-hosting)).
 
 ### Add a domain and sign-in later
@@ -637,7 +637,7 @@ Tool Credentials need a grant per bot; `hub_credential_grant` targets a bot.
 
 Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
 
-A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > Health shows
+A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > General > Health > Details shows
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
 
@@ -662,7 +662,7 @@ curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh 
   sh install.sh --runner --url https://tico.example.com --code <code> --label "Build computer"
 ```
 
-`vX.Y.Z` is your server's release (Settings and Settings > Health show it); `--runner` exists from v0.2.1.
+`vX.Y.Z` is your server's release (Settings and Settings > General > Health > Details show it); `--runner` exists from v0.2.1.
 
 `install.sh --runner` installs Docker if it is missing, puts that release's `runner.compose.yaml` and a `.env`
 (`TICO_URL`, `TICO_CODE`, `TICO_RUNNER_LABEL`, and `TICO_TAG` and `TICO_UPDATER_TAG` pinned to the release) in
@@ -729,7 +729,7 @@ docker run -d --name tico-runner --restart unless-stopped -v tico-runner:/home/r
 
 The `--user 0` and capabilities are what keep the runner's own login out of the bots' reach (below); without them the
 container runs as one user, as it did before. It has no updater: it stays on the release you pinned until you pull a newer image and recreate the container, and
-Settings > Health says so.
+Settings > General > Health > Details says so.
 
 **Who runs what.** The container's entrypoint starts as root, with five capabilities and nothing else, only to prepare
 the volume; the runner itself is the `ticorun` user that owns `/home/runner/runner.json`, its state and the tools
@@ -992,7 +992,7 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-Use **Update now** (Settings, or Health → Version for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+Use **Update now** (in the sidebar's new-version notice, or on the Version row under Settings → General → Health → Details for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 
 ![Health Version row with Update now beside Check for updates](images/settings-stage1/settings-health-version-context.png)
 

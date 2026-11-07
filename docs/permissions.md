@@ -859,7 +859,7 @@ An unchanged save answers `409 unchanged`.
 
 `private_owners` and `routing_permissions` in `registry/hub-access.yaml` no longer decide anything, and
 neither does a bot's "Can use" list (`owner_ids`), which now only says who a bot works for. The first start after upgrading resets every bot to **Open**. If either list was in the
-file, the server logs one warning and the owner finds a note on Settings > Health, "hub-access.yaml
+file, the server logs one warning and the owner finds a note on Settings > General > Health > Details, "hub-access.yaml
 private/routing lists are no longer used; bots are now Open; set access in Settings > Bots". Set the
 access you meant there; saving any bot's access, or dismissing the note, clears it.
 
