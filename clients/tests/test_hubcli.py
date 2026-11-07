@@ -59,6 +59,7 @@ SUBCOMMANDS = [
     "brand",
     "growth",
     "lens",
+    "segment",
     "market",
     "listening",
     "tool",
@@ -2411,6 +2412,8 @@ def test_the_hub_segment_commands_send_each_route_its_body(monkeypatch):
             pass
 
         def get(self, path, **query):
+            if path == "me":  # the caller's identity, which every command reads first
+                return {"actor": "human:ana", "role": "owner"}
             sent.append(("GET", path, None))
             return {}
 
