@@ -192,6 +192,19 @@ def test_three_missed_passes_open_exactly_one_botops_task(api):
         assert actions(c, "open_botops", pipeline_id=pid) == 1
 
 
+def test_run_due_is_throttled_to_one_round_a_minute_per_store(api, monkeypatch):
+    store = api.app.state.store
+    rounds = []
+    monkeypatch.setattr(PM, "tick", lambda s, at: rounds.append(at))
+    monkeypatch.setattr(PM, "watchdog", lambda s, at: None)
+    monkeypatch.setattr(PM, "_LAST_RUN", PM.WeakKeyDictionary())
+    t0 = now()
+    PM.run_due(store, t0)
+    PM.run_due(store, t0 + timedelta(seconds=10))
+    PM.run_due(store, t0 + timedelta(seconds=61))
+    assert len(rounds) == 2
+
+
 def test_a_pass_that_raises_is_recorded_as_a_failed_run_and_the_others_still_run(api, monkeypatch):
     store = api.app.state.store
     failures: list[dict[str, str]] = []

@@ -20,6 +20,7 @@ Each pipeline's pass is its own transaction, and a pass that raised is recorded 
 
 import logging
 import secrets
+from weakref import WeakKeyDictionary
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -411,18 +412,30 @@ def rail(c: "sqlite3.Connection", pipeline_id: str, at: Any = None, who: str | N
     }
 
 
+THROTTLE_SECONDS = 60  # the scheduler calls run_due every tick; the passes themselves run at most this often per store
+_LAST_RUN: "WeakKeyDictionary[Any, datetime]" = (
+    WeakKeyDictionary()
+)  # per store; weak, so a dead store's id is never reused
+
+
 def run_due(store: Any, at: Any, failures: list[dict[str, str]] | None = None) -> None:
     """The scheduler's one call: the pipeline passes, the watchdog and the Factory Managers. A failure in one is logged
-    and recorded in `failures` (the scheduler's pass record); the others still run."""
+    and recorded in `failures` (the scheduler's pass record); the others still run. Throttled: at most one round per
+    THROTTLE_SECONDS per store (tests set THROTTLE_SECONDS to 0)."""
     from . import factory_manager
 
+    when = when_of(at)
+    last = _LAST_RUN.get(store)
+    if last is not None and (when - last).total_seconds() < THROTTLE_SECONDS:
+        return
+    _LAST_RUN[store] = when
     for name, step in (
         ("pipeline_manager", tick),
         ("pipeline_manager_watchdog", watchdog),
         ("factory_manager", factory_manager.tick),
     ):
         try:
-            step(store, at)
+            step(store, when)
         except Exception as exc:  # noqa: BLE001 - recorded below; the other passes still run
             LOG.warning("%s failed: %s", name, type(exc).__name__)
             if failures is not None:
