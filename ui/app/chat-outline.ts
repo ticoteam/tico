@@ -96,7 +96,7 @@ async function chatJumpTo(state, id) {
 // jumpToMessage(slug, messageId): open that bot's chat (or the Assistant) and jump to the message. Anything that
 // links to an exchange, such as a source link, calls this; the draft in the composer stays as it was.
 function jumpToMessage(slug, id) {
-  if (V2C?.slug === slug && V2C.loaded) return chatJumpTo(V2C, id);
+  if (V2C?.slug === slug && V2C?.loaded) return chatJumpTo(V2C, id);
   CHAT_JUMP = {slug, id};
   const href = slug === assistantBot() ? ASSISTANT : `#/bot/${encodeURIComponent(slug)}`;
   if (location.hash !== href) location.hash = href;
