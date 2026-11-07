@@ -190,7 +190,7 @@ def _nudge(c: sqlite3.Connection, row: dict[str, Any], told: str) -> None:
             deduplicate=False,
             lint=False,
         )
-        H._wake(c, H.task(c, made["id"]), told, body, {"wake": "nudge"}, trigger="stall_check")
+        H._wake(c, H.task(c, made["id"]), told, body, {"wake": "nudge", "task": row["id"]}, trigger="stall_check")
     except H.Refused:
         return
 
