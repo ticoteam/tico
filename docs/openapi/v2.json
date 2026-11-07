@@ -127,6 +127,10 @@
       "description": "The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve."
     },
     {
+      "name": "Segments",
+      "description": "The business segments the company plays in (docs/strategy.md#segments): each with its dedicated teammates, leads, strategy and live bets. Anyone signed in reads them; the owner writes them, and an owner or bot admin tags teammates."
+    },
+    {
       "name": "Inbound",
       "description": "Shared company inbound email and SMS for people and agents; reads never consume messages."
     },
@@ -34795,6 +34799,486 @@
         },
         "tags": [
           "Team chart"
+        ]
+      }
+    },
+    "/api/v2/segments": {
+      "get": {
+        "summary": "The segments the company plays in, in list order, each with its dedicated teammates (faces)",
+        "operationId": "listSegments",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ]
+      },
+      "post": {
+        "summary": "Owner only: a segment the company plays in, by name. A market segment of that name joins; one that is the company's already is a 409, and one merged into a segment that is no longer active is a 409; a removed one comes back with its id",
+        "operationId": "createSegment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/segments/members": {
+      "get": {
+        "summary": "Every teammate tagged with a segment, highest on the chart first",
+        "operationId": "listSegmentMembers",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ]
+      },
+      "post": {
+        "summary": "Owner or bot admin: a teammate's segments, replaced by those sent ([] clears them)",
+        "operationId": "setSegmentMember",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentMembers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/segments/order": {
+      "post": {
+        "summary": "Owner only: the list order, every segment the company plays in once each",
+        "operationId": "orderSegments",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/segments/remove": {
+      "post": {
+        "summary": "Owner only: takes the segment out of the company's; its teammate tags go and the market keeps it",
+        "operationId": "removeSegment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__models__SegmentRemove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/segments/strategy": {
+      "put": {
+        "summary": "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision answers 409",
+        "operationId": "updateSegmentStrategy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentStrategy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ]
+      }
+    },
+    "/api/v2/segments/{segment_id}": {
+      "get": {
+        "summary": "One segment: its faces, leads, strategy (the draft for the owner, the published text for everyone else) and live bets",
+        "operationId": "getSegment",
+        "parameters": [
+          {
+            "name": "segment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Segment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
+        ]
+      },
+      "post": {
+        "summary": "Owner only: its name, one line and colour, only what is sent",
+        "operationId": "updateSegment",
+        "parameters": [
+          {
+            "name": "segment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Segment Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Segments"
         ]
       }
     },
@@ -72840,6 +73324,178 @@
         "type": "object",
         "title": "SeatUpdate"
       },
+      "SegmentCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "who": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Who",
+            "default": ""
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "blue",
+                  "green",
+                  "amber",
+                  "red",
+                  "purple",
+                  "teal",
+                  "pink",
+                  "gray"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SegmentCreate",
+        "description": "A business segment (backend/segments.py): its name, one line of who it is for, and its color."
+      },
+      "SegmentMembers": {
+        "properties": {
+          "member": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Member"
+          },
+          "segments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 60,
+            "title": "Segments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "member"
+        ],
+        "title": "SegmentMembers",
+        "description": "A teammate's segments: `bot:<id>` or `person:<id>`, and the segment ids or `all`; [] clears them."
+      },
+      "SegmentOrder": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "SegmentOrder",
+        "description": "Every segment the company plays in, once each, in the order they should list."
+      },
+      "SegmentStrategy": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "sections": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "maxProperties": 8,
+            "title": "Sections"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "revision"
+        ],
+        "title": "SegmentStrategy",
+        "description": "A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); \"\" uses the\ncompany's text again. `id` is the segment; `revision` is the draft's as read."
+      },
+      "SegmentUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "who": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Who"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "blue",
+                  "green",
+                  "amber",
+                  "red",
+                  "purple",
+                  "teal",
+                  "pink",
+                  "gray"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SegmentUpdate"
+      },
       "SendApproval": {
         "properties": {
           "approval_id": {
@@ -73958,6 +74614,18 @@
               }
             ],
             "title": "Revision"
+          },
+          "segment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Id"
           }
         },
         "additionalProperties": false,
@@ -74069,6 +74737,18 @@
               }
             ],
             "title": "Revision"
+          },
+          "segment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Id"
           }
         },
         "additionalProperties": false,
@@ -82550,6 +83230,23 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__SegmentRemove": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "SegmentRemove",
+        "description": "Take a segment out of the company's (its teammate tags go; the market keeps it)."
       },
       "backend__models__ToolUpdate": {
         "properties": {

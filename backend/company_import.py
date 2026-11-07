@@ -32,6 +32,7 @@ from . import market_watch as MW
 from . import models as M
 from . import onboarding as O
 from . import strategy as S
+from . import strategy_market as SM
 from . import strategy_setup as SS
 from .company_file import draft as D
 from .company_file import starter
@@ -409,9 +410,9 @@ def _market(c, actor, market, company, skipped):
                 evidence_ids=[evidence],
                 parent=parent,
                 entity_id=_segment_id(c, segment["key"]),
-                properties={"next": True} if segment["next"] else None,
                 force=True,
             )
+            assert seg is not None  # the entity _new_segment has just inserted
             urls = [u for u in map(_safe_url, segment["evidence"]) if u]
             if segment["usd"] is not None and urls:
                 MS.create_size(
@@ -429,15 +430,10 @@ def _market(c, actor, market, company, skipped):
                         "confidence": "low",
                     },
                 )
-            if segment["ours"]:
-                MK.create_edge(
-                    c,
-                    actor,
-                    src=_own_company(c, actor, company, evidence),
-                    rel="operates_in",
-                    dst=seg["id"],
-                    evidence_ids=[evidence],
-                )
+            if segment["ours"] or segment["next"]:  # a segment the company means to enter is one of its segments now
+                SM.set_ours(
+                    c, actor, seg["id"], True, company, evidence_ids=[evidence]
+                )  # and it lands last, in a color
             return seg["id"]
 
         found = _best_effort(c, "company_file_segment", made, skipped)

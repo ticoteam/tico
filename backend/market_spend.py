@@ -903,7 +903,6 @@ def spend(conn, dimension="offering", basis="product", year=None):
                 "bases": sorted({r["basis"] for r in rows}),
                 "players": players,
                 "self": seg_id in own,
-                "next": bool(MK.loads(tree["rows"][seg_id]["properties"], {}).get("next")),
             }
         )
     result["total"] = {k: round(v, 2) for k, v in total.items()}

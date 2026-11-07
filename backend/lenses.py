@@ -891,7 +891,15 @@ def merged(c, changes):
             for key, value in payload["sections"].items():
                 if key == "extra" and isinstance(value, dict):
                     sections["extra"] = {**sections.get("extra", {}), **value}
-                elif key != "extra" and key not in sections:
+                elif key == "segments" and isinstance(value, dict):
+                    # Per segment id and per key, the way extra merges: two changes to one segment's different keys
+                    # both stay, and the later change to the same key wins.
+                    segments = {sid: dict(item) for sid, item in sections.get("segments", {}).items()}
+                    for sid, item in value.items():
+                        if isinstance(item, dict):
+                            segments[sid] = {**segments.get(sid, {}), **item}
+                    sections["segments"] = segments
+                elif key not in ("extra", "segments") and key not in sections:
                     sections[key] = value
             trial["sections"] = sections
         if payload.get("bets"):

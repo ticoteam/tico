@@ -6976,6 +6976,91 @@ STABLE.extend(
     ]
 )
 
+TAGS['Segments'] = (
+    "The business segments the company plays in (docs/strategy.md#segments): each with its dedicated teammates, leads, "
+    "strategy and live bets. Anyone signed in reads them; the owner writes them, and an owner or bot admin tags teammates."
+)
+STABLE.extend(
+    [
+        (
+            '/api/v2/segments',
+            'get',
+            'Segments',
+            'listSegments',
+            'The segments the company plays in, in list order, each with its dedicated teammates (faces)',
+            None,
+        ),
+        (
+            '/api/v2/segments',
+            'post',
+            'Segments',
+            'createSegment',
+            'Owner only: a segment the company plays in, by name. A market segment of that name joins; one that is the '
+            "company's already is a 409, and one merged into a segment that is no longer active is a 409; "
+            "a removed one comes back with its id",
+            None,
+        ),
+        (
+            '/api/v2/segments/order',
+            'post',
+            'Segments',
+            'orderSegments',
+            'Owner only: the list order, every segment the company plays in once each',
+            None,
+        ),
+        (
+            '/api/v2/segments/members',
+            'get',
+            'Segments',
+            'listSegmentMembers',
+            'Every teammate tagged with a segment, highest on the chart first',
+            None,
+        ),
+        (
+            '/api/v2/segments/members',
+            'post',
+            'Segments',
+            'setSegmentMember',
+            "Owner or bot admin: a teammate's segments, replaced by those sent ([] clears them)",
+            None,
+        ),
+        (
+            '/api/v2/segments/{segment_id}',
+            'get',
+            'Segments',
+            'getSegment',
+            'One segment: its faces, leads, strategy (the draft for the owner, the published text for everyone else) '
+            'and live bets',
+            None,
+        ),
+        (
+            '/api/v2/segments/{segment_id}',
+            'post',
+            'Segments',
+            'updateSegment',
+            'Owner only: its name, one line and colour, only what is sent',
+            None,
+        ),
+        (
+            '/api/v2/segments/remove',
+            'post',
+            'Segments',
+            'removeSegment',
+            "Owner only: takes the segment out of the company's; its teammate tags go and the market keeps it",
+            None,
+        ),
+        (
+            '/api/v2/segments/strategy',
+            'put',
+            'Segments',
+            'updateSegmentStrategy',
+            "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision "
+            "answers 409",
+            None,
+        ),
+    ]
+)
+
 TAGS['Inbound'] = 'Shared company inbound email and SMS for people and agents; reads never consume messages.'
 STABLE.extend(
     [

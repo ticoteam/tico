@@ -865,6 +865,12 @@ _PROPOSABLE = [
         ("POST", r"/api/v2/access/(?:people|humans)(/[^/]+)?"),
         ("PUT", r"/api/v2/providers"),
         ("PATCH", r"/api/v2/files/[^/]+"),
+        # The owner's segment writes (backend/segments.py): a card the owner confirms passes the owner gate as the tap.
+        ("POST", r"/api/v2/segments"),
+        ("POST", r"/api/v2/segments/(order|remove|members)"),
+        ("POST", r"/api/v2/segments/segment/[^/]+"),
+        ("PUT", r"/api/v2/segments/strategy"),
+        ("POST", r"/api/v2/market/segments/(target|remove)"),
     )
 ]
 # What only BotOps may propose, for a person who asked it in chat (backend/botops_act.py lists the routes it

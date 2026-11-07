@@ -83,6 +83,7 @@ TABLES = {
     rows.SkillSuggestionRow: "skill_suggestions",
     rows.SkillDeviceRow: "skill_devices",
     rows.SkillDeviceCodeRow: "skill_device_codes",
+    rows.SegmentMemberRow: "segment_members",
 }
 
 

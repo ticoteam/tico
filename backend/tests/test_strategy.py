@@ -49,6 +49,7 @@ def ready(api, **bet):
 
 def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
     first = draft(api)
+    # GET /strategy carries the company's sections only; a segment's text is read per segment (_without_segments).
     assert first["guide"] == "default" and set(first["sections"]) == {*S.FIXED_KEYS, "extra"}
     saved = write(
         api,

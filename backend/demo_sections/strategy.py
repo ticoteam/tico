@@ -1,4 +1,4 @@
-"""Strategy: the vision, three bets and a market briefing.
+"""Strategy: the vision, three bets, the market map and a market briefing.
 
 Version 1 is the home business: two bets and the sections for homeowners. Version 2 is published a few days later and
 adds the business bet, a new summary and the business sections, so the history has a change to show. The Strategy
@@ -272,8 +272,8 @@ CONTENT = {
             ],
         },
     },
-    # The market map, as the owner sets it on Where we play: the root, the core segments under it, one new segment,
-    # the Us and Next marks, one accepted estimate per segment, and the companies in each. Marks: ours (Us), next.
+    # The market map, as the owner sets it on the Strategy page: the root, the core segments under it, one new segment,
+    # which of them are the company's, one accepted estimate per segment, and the companies in each. Marks: ours.
     "market": {
         "root": {
             "root_name": "Holiday light shows",
@@ -344,7 +344,7 @@ CONTENT = {
             },
             {
                 "id": "segment/towns-malls",
-                "mark": "next",
+                "mark": "ours",
                 "players": ["company/crewline"],
                 "size": {
                     "method": "owner",
@@ -368,7 +368,7 @@ CONTENT = {
         "added": [
             {
                 "name": "Event venues",
-                "mark": "next",
+                "mark": "ours",
                 "players": ["company/crewline"],
                 "summary": "Venues that light the front of the building for the season: theaters, arenas and event halls.",
                 "size": {
@@ -578,7 +578,9 @@ def _dated(b, value):
 def _market(b):
     """The market map, set up the way Where we play sets it, as Ana: the definition and its root, the core segments
     placed under the root, one new segment, the Us and Next marks, an accepted estimate for each segment, and the
-    companies in each. Every write is a market API call. The year is the build's own."""
+    companies in each. Then who works on which segment: the sales lead on home light shows, the marketing lead on
+    shops and hotels, and one segment's own summary written into the draft (unpublished: version 2 stays the published
+    one, as the test on it says). Every write is a market or segment API call. The year is the build's own."""
     spec = CONTENT["market"]
     root = b.call("PUT", "market/definition", {**spec["root"], "year": b.now.year})["root"]
     for seg in spec["existing"] + spec["added"]:
@@ -601,6 +603,20 @@ def _market(b):
             b.call(
                 "POST", "market/edges", {"src": company, "rel": "operates_in", "dst": seg_id, "evidence_ids": evidence}
             )
+    b.call("POST", "segments/members", {"member": "bot:sales-lead", "segments": ["segment/home-light-shows"]})
+    b.call("POST", "segments/members", {"member": "bot:marketing-lead", "segments": ["segment/shops-hotels"]})
+    b.call(
+        "PUT",
+        "segments/strategy",
+        {
+            "id": "segment/shops-hotels",
+            "revision": _revision(b),
+            "sections": {
+                "summary": "Storefronts, hotels and lobbies that want the building lit all season, bought by the manager "
+                "on one site."
+            },
+        },
+    )
 
 
 def _news(b, key):

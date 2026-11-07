@@ -164,6 +164,19 @@ tracks what each is still missing, ages the queue of what needs a human, and pub
 Routing a note, and writing the notes when a meeting is handed over, are **functions Tico
 performs itself**, in seconds, with no run behind either.
 
+## Segments
+
+A teammate, human or bot, can be tagged with the company's segments ([Segments](strategy.md#segments)). A tagged teammate is
+**dedicated** to that segment: it is one of the segment's faces, highest on the chart first, and the chart shows each of
+its segments as a dot in that segment's colour. A tag of **All** (`all`) means the teammate works across every segment:
+the chart labels it All, it is not one of any segment's faces, and its runs are handed every segment's summary. A teammate
+can carry several tags. A tag does not change its group or its manager.
+
+Owners and bot admins set the tags with `POST /api/v2/segments/members`. Anyone signed in reads them with
+`GET /api/v2/segments/members`, which leaves out the people the viewer may not see. A tag names one of the company's
+segments (or `all`): taking a segment out of the company takes its tags off, and a teammate who is archived (a bot) or
+removed (a person) loses all of theirs.
+
 ## Who a bot is mainly for
 
 The human to ask when that bot needs a human, and the human its work is for.

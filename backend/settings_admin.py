@@ -2278,6 +2278,9 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
         (ts, actor, bot),
     )
     c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
+    from . import segments as SG  # lazy: the segments module reads the people and the market
+
+    SG.forget_member(c, actor, "bot:" + bot)  # an archived bot is on no segment (backend/segments.py)
     c.execute("UPDATE jobs SET state='canceled' WHERE bot_id=? AND state='queued'", (bot,))
     for row in c.execute("SELECT id FROM schedules WHERE bot=? AND deleted_at IS NULL", (bot,)).fetchall():
         c.execute(

@@ -311,6 +311,9 @@ def cascade_archive(c, actor, source):
         from . import pages
 
         pages.forget_audience_member(c, actor, "bots", slug)
+        from . import segments as SG  # an archived bot is on no segment (backend/segments.py)
+
+        SG.forget_member(c, actor, "bot:" + slug)
         BS.write(c, slug, config)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (slug,))
         H.event(c, actor, "bot.branch_archived", slug, {"source": source, "previous": state})
@@ -398,6 +401,9 @@ def retire_assignments(c):
             from . import pages
 
             pages.forget_audience_member(c, H.KEEPER, "bots", bot)
+            from . import segments as SG  # an archived bot is on no segment (backend/segments.py)
+
+            SG.forget_member(c, H.KEEPER, "bot:" + bot)
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         H.setup_finished(c, bot, archived=True)

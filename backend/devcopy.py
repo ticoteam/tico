@@ -494,6 +494,7 @@ KEEP = (
             "runners",
             "runner_states",
             "seats",
+            "segment_members",  # who is tagged with which segment (backend/segments.py)
             "service_health",
             "settings_changes",
             "slack_channels",
