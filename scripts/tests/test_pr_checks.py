@@ -961,6 +961,7 @@ def test_each_push_runs_the_cheap_checks_hosted_and_a_ready_pull_request_runs_it
     queue_only = ("rust-lint", "desktop-app", "recorder", "caddy-linux", "timings")
     for name in queue_only:
         assert "github.event_name == 'merge_group'" in str(jobs[name]["if"]), name
+        assert "github.event_name == 'pull_request'" not in str(jobs[name]["if"]), name
     assert set(jobs) == {"plan", "static", "tests", "factory-sim", "checks", *queue_only}
 
 
@@ -981,7 +982,7 @@ def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
         assert job["permissions"] == {"contents": "read", "actions": "write"}, name
         cancel = job["steps"][-1]
         assert cancel["if"] == "failure()" and cancel["run"] == 'gh run cancel "$GITHUB_RUN_ID"', name
-        assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}"}, name
+        assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
     # Only the two heavy legs may cancel; every other job keeps the workflow's read-only token.
     assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim"}
     # The required gate still runs after a cancel, and a cancelled timing receipt never waits for a runner.

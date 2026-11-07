@@ -199,6 +199,7 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh run cancel "$GITHUB_RUN_ID"
 
   factory-sim:
@@ -254,6 +255,7 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh run cancel "$GITHUB_RUN_ID"
 
   static:
@@ -510,8 +512,8 @@ jobs:
 
   timings:
     name: PR job timings
-    # Merge queue groups only. Failed runs keep their timing receipt, but a canceled run ends here: a final job queued
-    # after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
+    # Merge queue groups only. A failed tests or factory-sim leg cancels the run, and a canceled run ends here: a final job
+    # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
     needs: [plan, tests, factory-sim, caddy-linux, static, rust-lint, desktop-app, recorder]
     runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
