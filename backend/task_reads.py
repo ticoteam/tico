@@ -153,8 +153,8 @@ def _pipeline_of(c, tid):
 
 def _type_at(c, tid, at):
     """(known, type_id): the pipeline a ticket was on just before `at`, from its type history (the type events name each
-    change of pipeline, and creation's old is None). Without that history the pipeline is unknown, so the caller fails
-    closed once a members-only pipeline exists."""
+    change of pipeline; creation writes none). With no type history the ticket never moved, so it is the pipeline it is on
+    (or, deleted, the one its trash kept)."""
     # The change log stamps milliseconds, truncated, and the history event that made this change lands within a
     # millisecond or two of that stamp: a type event that near is the change's own, so the pipeline before it is
     # the one this snapshot names.
@@ -170,10 +170,10 @@ def _type_at(c, tid, at):
         "ORDER BY created_at, rowid LIMIT 1",
         (tid,),
     ).fetchone()
-    if first is not None and first[0] is not None:
+    if first is not None:  # every change of pipeline writes one: the first one's old is where it began (None = untyped)
         return True, first[0]
-    private = c.execute("SELECT 1 FROM task_types WHERE pipeline_visibility='members' LIMIT 1").fetchone()
-    return private is None, None
+    # Creation writes no type event, so no history means the ticket never changed pipeline: it was on the one it is on.
+    return _pipeline_of(c, tid)
 
 
 def _could_read(c, visible_sql, tid, ref, at=None):

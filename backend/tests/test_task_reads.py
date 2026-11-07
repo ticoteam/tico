@@ -321,6 +321,16 @@ def test_a_ticket_moved_out_of_a_members_only_pipeline_is_not_gone_to_a_non_memb
     assert moved not in feed["gone"] and moved not in str(feed)
 
 
+def test_a_never_moved_ticket_made_private_is_gone_while_a_members_only_pipeline_exists(api):
+    # It never changed pipeline, so it has no type history; the members-only pipeline elsewhere must not make its
+    # earlier snapshot unknown. The company reader who could see it is told it is gone.
+    make_pipeline(api, "Lg" + uuid.uuid4().hex[:8], private=True)
+    shared = post(api, "tasks", {"owner": "ben", "title": "Review the press kit", "body": "Please."})
+    cara = tasks(api, ACTIVE, token="cara-test")["cursor"]
+    post(api, "tasks/" + shared["id"], {"version": shared["version"], "private": True})
+    assert delta(api, ACTIVE, cara, token="cara-test")["gone"] == [shared["id"]]
+
+
 def test_a_hidden_only_edit_leaves_a_non_members_list_etag_as_it_was(api):
     # A ticket on a members-only pipeline changes; a company reader who may not see it gets the same list, so the same
     # ETag, and her If-None-Match still answers 304. A change she may read moves the ETag.
