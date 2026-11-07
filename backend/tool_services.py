@@ -66,7 +66,9 @@ SERVICES = {
     ),
     "linear": _s("Linear", "https://api.linear.app", "", "header:Authorization", "LINEAR_API_KEY"),
     "calendly": _s("Calendly", "https://api.calendly.com", "/users/me", env="CALENDLY_API_KEY"),
-    "brex": _s("Brex", "https://platform.brexapis.com", "/v2/users/me", env="BREX_API_KEY"),
+    # The host and variable Finance's Brex sync uses (backend/finance/brex.py BASE; TIDY stores BREX_TOKEN), so a tool's
+    # check and Finance call the same API. A key stored as BREX_API_KEY still lands here by its name's first word.
+    "brex": _s("Brex", "https://api.brex.com", "/v2/users/me", env="BREX_TOKEN"),
     "mercury": _s("Mercury", "https://api.mercury.com/api/v1", "/accounts", env="MERCURY_API_KEY"),
     "cloudflare": _s(
         "Cloudflare", "https://api.cloudflare.com/client/v4", "/user/tokens/verify", env="CLOUDFLARE_API_TOKEN"

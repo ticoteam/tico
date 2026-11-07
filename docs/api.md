@@ -21,6 +21,10 @@ software: a web frontend your team builds, a script, another service. This page 
   `422 ask_refused`, with the reason and fix in `error.detail`. Nothing is created or changed, and it counts toward
   no quarantine or org-rule hold. A progress note is refused with instructions to post an update. Chores use the
   main ask budget. Merged repeats and fail-open behavior are unchanged.
+- **Bot questions to people:** a question whose `if_no_answer` default is `reversible` returns
+  `422 ask_default_go_ahead` (do the default and note it on the task; not when the owner turned off
+  `bots_go_ahead`), and one an open question to the same person already covers (same task, same words, or nearly)
+  returns `422 ask_duplicate` naming it. Nothing is written; a person's own asks are never refused.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers

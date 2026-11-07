@@ -256,6 +256,23 @@ or a gap of more than five minutes in observations starts a new clock. An old qu
 not establish twelve hours of refusal. Missing task threads and failed recovery delivery
 are recorded once and shown with the unstarted assignment, rather than silently omitted.
 
+### Resuming stranded work
+
+A bot's task can be left In Progress (`doing`) when a run ends without finishing it, handing it on or recording what
+it waits on. Once nothing has changed on such a task for 15 minutes after its last run ended, with no run queued or going
+for it and nothing recorded to wait on (no hold, snooze, follow-up time, deferral, blocker, open subtask, approval,
+unanswered question, worktree, milestone or pull request wait), Tico wakes its owner bot once on it. The wake goes
+through the ordinary wake path, so turn limits, budgets, back-off and lanes still apply, and it reaches a Reviewer too,
+which does not start its own open work. A sweep every 10 minutes wakes at most 25 such tasks, oldest first, one per bot
+and five per computer. It skips a bot that is paused, held, draining, busy with another run, or whose computer is offline.
+A task is resumed at most six times a day.
+
+Progress is a status, step or owner change, a note, comment or message by the bot on the task, or a subtask or question
+filed under it. After three resumes in a row with no progress, Tico stops resuming the task and lists it once on the
+task roundup of the bot's manager (another bot on the org chart), or on the bot's own roundup when it has none. A person
+is never told. Progress makes the task eligible again. People's tasks, and tasks that are open, waiting or in review, are
+never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
+
 ## Work that is waiting
 
 Keep actively worked tasks in **Doing**. When another task must finish first, relate the blocker,
@@ -454,10 +471,10 @@ sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswere
 times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
 
-Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
+Apart from [resuming stranded work](#resuming-stranded-work), Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
 is the one grouped wake for a bot's tasks: each bot gets at most one list in each run (three times a day by default,
 at 6am, noon and 6pm company time), with its lines (a follow-up time that came, an unanswered question, an assignment
-not started, a task to restate, a late Dev ticket,
+not started, a task to restate, a stranded task it stopped resuming, a late Dev ticket,
 an engineering exception, a backlog, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
 never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
 changed on it, stay out of the line.
@@ -693,6 +710,14 @@ Within each group, newest cards come first. Age never moves a card up.
 This ordering applies to Decide; it does not change the order of Needs you elsewhere.
 
 ### When nobody answers
+
+A reversible, internal default is not asked at all: a question whose `if_no_answer` has kind `reversible` is refused
+before anything is written (`422 ask_default_go_ahead`, "do your default now and record what you did in one line on
+the task"). The bot acts and leaves one line on its task, which shows in Updates, and the person can undo it. Sends,
+spending and deletes, and questions with no default, are still asked. When the owner turns off **Bots go ahead on
+their recommendation**, a reversible default is asked as before. A question is also refused when the person already
+has an open one that covers it, from any bot (`422 ask_duplicate`): the same task, the same question, or nearly the
+same words. The refusal names the open one and the bot waits on it (`hub task relate <task> blocked_by <id>`).
 
 `keeper` is the system and cannot answer. A question to it, including a system-filed task's requester, goes to the
 asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.

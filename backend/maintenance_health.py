@@ -1077,7 +1077,14 @@ def report_message(c, row):
 def report(c_factory, support, auth, settings, who, key):
     """File the finding `key` as a Tico bug: a ticket, a message on its ticket, or an approval. `c_factory` is the
     store; HQ is called outside any transaction."""
+    from .support import SOURCE_COPY, from_source
+
     store = c_factory
+    if H.is_bot(who.actor) and from_source():
+        # Only the owner's own click reports from a copy run from source (support.from_source).
+        raise Problem(
+            SOURCE_COPY, "A copy run from source sends no automatic report; set TICO_HQ_URL to send them.", 409
+        )
     with store.read() as c:
         row = c.execute(
             "SELECT * FROM health_findings WHERE key=? OR signature=? ORDER BY present DESC LIMIT 1", (key, key)
@@ -1187,8 +1194,9 @@ def file_reports(store, auth, settings, support, signatures):
     same report path as the route (`report`): a ticket once, a comment when it comes back worse, an approval when the team
     rule is off, and at most REPORTS_PER_DAY new tickets a day (the rest wait for the next run). First the reports a person
     approved since the last run are sent (`_send_approved`). With support off (TICO_SUPPORT, a demo or a rehearsal copy)
-    nothing leaves for HQ and nothing is asked. Returns {signature: answer}."""
-    from .support import require_on
+    nothing leaves for HQ and nothing is asked. A copy run from source (support.from_source) sends nothing either, and
+    says so in a `health_monitor.not_reported` event. Returns {signature: answer}."""
+    from .support import SOURCE_COPY, from_source, require_on
 
     if support is None:
         return {}
@@ -1196,6 +1204,18 @@ def file_reports(store, auth, settings, support, signatures):
         require_on(settings)
     except Problem:
         return {signature: {"signature": signature, "deferred": "support_off"} for signature in signatures}
+    if from_source():
+        if signatures:
+            log.info("Health reports not sent: this copy runs from source and sets no TICO_HQ_URL")
+            with store.transaction() as c:
+                H.event(
+                    c,
+                    "bot:" + BOTOPS,
+                    "health_monitor.not_reported",
+                    SOURCE_COPY,
+                    {"reason": SOURCE_COPY, "signatures": list(signatures)[:20]},
+                )
+        return {signature: {"signature": signature, "deferred": SOURCE_COPY} for signature in signatures}
     answers = _send_approved(store, support)
     for signature in signatures:
         if signature in answers:
