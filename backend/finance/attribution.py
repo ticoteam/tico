@@ -200,6 +200,8 @@ def attribute(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             at=ctx.at,
         )
         _reroll(ctx, who, row, line, was, splits)
+        if not splits:
+            _refresh_all(ctx, who, [line_id])  # a clear hands the line back to a matching rule, else to its tags
         return _shown(line, splits, source, line_id)
 
     what = f"a {abs(line.amount) / 100:.2f} line"
