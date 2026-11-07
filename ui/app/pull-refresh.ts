@@ -1,4 +1,4 @@
-/* ui/app/pull-refresh.js — Pull to refresh on a touch screen
+/* ui/app/pull-refresh.ts — Pull to refresh on a touch screen
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -9,14 +9,18 @@
 const PULL_ARM = 64;          // the spinner's travel, in px, past which letting go refreshes
 const PULL_MAX = 96;
 const PULL_DRAG = 0.55;       // the spinner follows the finger at this rate, so a pull is a deliberate one
-function pullAtTop(el) {
-  for (let n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) if (n.scrollTop > 0) return false;
+function pullAtTop(el: Element | null): boolean {
+  for (let n: Element | null = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) if (n.scrollTop > 0) return false;
   return (document.scrollingElement?.scrollTop || 0) <= 0;
 }
-function pullToRefresh(host, refresh, {signal, skip} = {}) {
-  if (!host) return;
-  let pull = null, busy = false, mark = null;
-  const draw = travel => {
+function pullToRefresh(host: Element | null, refresh: () => unknown, {signal, skip}: {signal?: AbortSignal; skip?: () => boolean} = {}): void {
+  // Touch listeners are typed for an HTML element. A page's pull area is one (the tasks pane is a div).
+  if (!(host instanceof HTMLElement)) return;
+  type Pull = {x: number; y: number; on: boolean; travel: number};
+  let pull: Pull | null = null, busy = false, mark: HTMLDivElement | null = null;
+  // Each listener ends with the signal, when there is one: an absent signal is the same as no option at all.
+  const listen = (options: AddEventListenerOptions): AddEventListenerOptions => signal ? {...options, signal} : options;
+  const draw = (travel: number): HTMLDivElement => {
     if (!mark?.isConnected) {
       mark = document.createElement('div');
       mark.className = 'pull-spin';
@@ -27,18 +31,22 @@ function pullToRefresh(host, refresh, {signal, skip} = {}) {
     mark.style.setProperty('--pull', travel + 'px');
     mark.style.setProperty('--turn', travel * 4 + 'deg');
     mark.classList.toggle('armed', travel >= PULL_ARM);
+    return mark;
   };
-  const clear = () => { mark?.remove(); mark = null; };
+  const clear = (): void => { mark?.remove(); mark = null; };
   signal?.addEventListener('abort', clear);
   host.addEventListener('touchstart', ev => {
     pull = null;
-    if (busy || ev.touches.length !== 1 || skip?.() || !pullAtTop(ev.target)) return;
-    pull = {x: ev.touches[0].clientX, y: ev.touches[0].clientY, on: false, travel: 0};
-  }, {passive: true, signal});
+    // One finger: the touch's own point is there when the list has exactly one.
+    const touch = ev.touches[0];
+    if (busy || ev.touches.length !== 1 || !touch || skip?.() || !pullAtTop(eventElement(ev))) return;
+    pull = {x: touch.clientX, y: touch.clientY, on: false, travel: 0};
+  }, listen({passive: true}));
   host.addEventListener('touchmove', ev => {
     if (!pull) return;
-    if (ev.touches.length !== 1 || skip?.()) { pull = null; clear(); return; }
-    const dy = ev.touches[0].clientY - pull.y, dx = ev.touches[0].clientX - pull.x;
+    const touch = ev.touches[0];
+    if (ev.touches.length !== 1 || !touch || skip?.()) { pull = null; clear(); return; }
+    const dy = touch.clientY - pull.y, dx = touch.clientX - pull.x;
     // Decided on the first move: a browser lets a touch's scroll be held only before it starts.
     if (!pull.on) {
       if (dy <= 0 || Math.abs(dx) >= dy || !ev.cancelable) { pull = null; return; }   // up, or sideways (a board's columns)
@@ -47,18 +55,18 @@ function pullToRefresh(host, refresh, {signal, skip} = {}) {
     ev.preventDefault();
     pull.travel = Math.max(0, Math.min(PULL_MAX, dy * PULL_DRAG));
     draw(pull.travel);
-  }, {passive: false, signal});
+  }, listen({passive: false}));
   host.addEventListener('touchend', async () => {
     const done = pull; pull = null;
     if (!done?.on) return;
     if (done.travel < PULL_ARM) { clear(); return; }
     busy = true;
-    draw(PULL_ARM);
-    mark.classList.add('spinning');
-    mark.setAttribute('role', 'status');
-    mark.removeAttribute('aria-hidden');
-    mark.setAttribute('aria-label', 'Refreshing');
+    const spin = draw(PULL_ARM);
+    spin.classList.add('spinning');
+    spin.setAttribute('role', 'status');
+    spin.removeAttribute('aria-hidden');
+    spin.setAttribute('aria-label', 'Refreshing');
     try { await refresh(); } catch (e) { console.error(e); } finally { busy = false; clear(); }
-  }, {signal});
-  host.addEventListener('touchcancel', () => { pull = null; if (!busy) clear(); }, {signal});
+  }, listen({}));
+  host.addEventListener('touchcancel', () => { pull = null; if (!busy) clear(); }, listen({}));
 }

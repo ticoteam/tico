@@ -872,7 +872,7 @@ function taskCommentsRender(state, data, sent = '') {
   if (!can) d.askDrafts?.clear();
   if (can && askBusy(thread)) return;     // never under someone answering
   if (html !== state.rendered) {
-    // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.js).
+    // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.ts).
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
     stick.update(() => { visualSwap(thread, html); askDraftRestore(thread, d); }, {fresh: !!state.rendered});

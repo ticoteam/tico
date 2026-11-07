@@ -40,7 +40,7 @@ It includes third-party software, kept under its own license:
   ui/tool-icons.js
       Service logo paths from Simple Icons (https://simpleicons.org), CC0 1.0 Universal. The marks
       belong to their owners and are used only to say which service a bot uses, or which agent
-      Connect an agent (ui/connect-agent.js) means.
+      Connect an agent (ui/connect-agent.ts) means.
       The xAI and Grok marks in it are from Lobe Icons (https://github.com/lobehub/lobe-icons,
       @lobehub/icons-static-svg 1.95.1), MIT License; neither is in Simple Icons.
 

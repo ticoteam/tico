@@ -49,7 +49,7 @@ html.strip #main.chat-layout{height:calc(100dvh - var(--demo-h))}
   html.strip body:has(#main.chat-layout){height:calc(100dvh - var(--demo-h))}
   html.strip #main.chat-layout{top:calc(var(--chat-viewport-top,0px) + var(--demo-h));height:calc(var(--chat-viewport-height,100dvh) - var(--demo-h))}
 }
-/* Tico Cloud (ui/app/cloud-access.js): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
+/* Tico Cloud (ui/app/cloud-access.ts): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
 #cloud-banner,#cloud-lock{display:none}
 html.cloud-frozen:not(.demo) #cloud-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:var(--lh-tight);white-space:nowrap}
 #cloud-banner strong{color:var(--ink);font-weight:600}

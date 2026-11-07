@@ -1,4 +1,4 @@
-/* ui/app/redesign-library.js — Two Tools pages (ui/app/tools.js routes them) over the declared tools and the vault:
+/* ui/app/redesign-library.js — Two Tools pages (ui/app/tools.ts routes them) over the declared tools and the vault:
    - Tools › Keys (#/tools/keys[/<service> | /credentials/<id>][?who=bot:<id>|human:<id>|group:<id>&issues=1&q=…]):
      every tool a bot declares and every stored credential, who may use each and which ones have issues. A row opens
      the tool's page (integrationDetail, ui/app/integrations.js) beside the list on a computer, as its own screen on a
@@ -309,7 +309,7 @@ function lcFactsHTML(item) {
     + `<section class="card lc-access"><header><h2>Access <span class="muted">${n}</span></h2></header>${lcAccessHTML(item)}</section>`
     + (creds ? `<section class="card lc-creds"><header><h2>Credentials</h2></header>${creds}</section>` : '');
 }
-// The facts' buttons open the vault's own dialogs (ui/app/vault.js); a saved change redraws them (lcVaultChanged).
+// The facts' buttons open the vault's own dialogs (ui/app/vault.ts); a saved change redraws them (lcVaultChanged).
 function lcWireFacts() {
   const host = $('#tool-facts');
   if (!host) return;
@@ -361,7 +361,7 @@ function lcDrawCredential(id, back) {
   lcWireFacts();
 }
 
-// A vault dialog saved a change (ui/app/vault.js vaultLoad): the list and what the open row shows follow.
+// A vault dialog saved a change (ui/app/vault.ts vaultLoad): the list and what the open row shows follow.
 function lcVaultChanged() {
   if (!LC?.rows || !document.body.contains(LC.root)) return;
   LC.items = lcModel(LC.rows);

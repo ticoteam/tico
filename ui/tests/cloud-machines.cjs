@@ -1,4 +1,4 @@
-// A bot's cloud machine in Settings (ui/app/cloud-machines.js, backend/cloud_machines.py):
+// A bot's cloud machine in Settings (ui/app/cloud-machines.ts, backend/cloud_machines.py):
 //  - on Tico Cloud the Computer select offers Shared and Own cloud machine, and never a cloud machine's computer;
 //  - a bot on its own machine has Size, Pause after, Always on and Grow storage (on by default), held
 //    until Save bot, which posts each to /cloud-machine after the definition; Pause after is off while Always on is
