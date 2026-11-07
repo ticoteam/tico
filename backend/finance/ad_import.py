@@ -537,8 +537,8 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
             day = str(seg.get("date") or "")
             cost = _micros_cents(metrics.get("costMicros") or 0)
             clicks, conversions = _int(metrics.get("clicks")), _float(metrics.get("conversions"))
-            if not day or (cost == 0 and clicks == 0 and conversions == 0):
-                continue  # a day with nothing to count (no spend, clicks or conversions) is not stored
+            if not day:
+                continue
             rows.append(
                 SA.SpendRow(
                     day,

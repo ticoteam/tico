@@ -682,7 +682,7 @@ def campaign_month(c: sqlite3.Connection, start: str, end: str) -> list[dict[str
             "COALESCE(SUM(s.conversions), 0) AS conversions, MAX(s.fetched_at) AS fetched_at "
             "FROM fin_ad_campaigns g JOIN fin_ad_accounts a ON a.id=g.ad_account_id "
             "LEFT JOIN fin_ad_spends s ON s.ad_account_id=g.ad_account_id AND s.campaign_external_id=g.external_id "
-            "AND s.day BETWEEN ? AND ? GROUP BY g.id, s.currency ORDER BY g.id",
-            (start, end),
+            "AND s.day BETWEEN ? AND ? WHERE g.first_seen_on <= ? AND g.last_seen_on >= ? GROUP BY g.id, s.currency ORDER BY g.id",
+            (start, end, end, start),
         )
     ]

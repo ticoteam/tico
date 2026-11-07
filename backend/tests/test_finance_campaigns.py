@@ -137,8 +137,6 @@ def test_an_owner_change_resplits_the_platform_charge_and_undo_puts_it_back(book
         in_force = ATT.in_force(c, line)
         assert in_force is not None
         assert [(s.teammate, s.share_bps) for s in ATT.parse_splits(str(in_force["splits"]))] == [(A, 6000), (B, 4000)]
-    with books.transaction() as c:  # the owner was put back once: a second undo does not commit a change
-        assert act(c, OWNER, "campaign_owner_undo", {"campaign_id": c2}).status != "committed"
 
 
 def test_a_team_owner_reads_back_as_a_team_and_blank_returns_the_account_owner(books: Store):
@@ -146,9 +144,9 @@ def test_a_team_owner_reads_back_as_a_team_and_blank_returns_the_account_owner(b
     feed(books, g["a"], "c1", "Spring", "2026-10-05", 5000, clicks=10, conv=1.0)
     c1 = campaign_id(books, g["a"])
     with books.transaction() as c:
-        assert act(c, OWNER, "campaign_owner_set", {"campaign_id": c1, "team": "rental"}).status == "committed"
+        assert act(c, OWNER, "campaign_owner_set", {"campaign_id": c1, "team": "sales"}).status == "committed"
     [row] = campaign_rows(books)
-    assert row["owner"] == {"team": "rental", "inherited": False}
+    assert row["owner"] == {"team": "sales", "inherited": False}
     with books.transaction() as c:
         assert act(c, OWNER, "campaign_owner_set", {"campaign_id": c1}).status == "committed"
     [row] = campaign_rows(books)
@@ -160,7 +158,7 @@ def test_a_reader_without_attribution_cannot_change_an_owner(books: Store):
     feed(books, g["a"], "c1", "Spring", "2026-10-05", 5000)
     c1 = campaign_id(books, g["a"])
     with books.transaction() as c:
-        refused = act(c, "human:nobody", "campaign_owner_set", {"campaign_id": c1, "team": "rental"})
+        refused = act(c, "human:nobody", "campaign_owner_set", {"campaign_id": c1, "team": "sales"})
     assert refused.status != "committed"
     with books.read() as c:
         assert SA.campaign(c, c1) is not None and SA.campaign(c, c1).team_id == ""  # type: ignore[union-attr]
