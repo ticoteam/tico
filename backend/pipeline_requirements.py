@@ -174,6 +174,8 @@ def check_definition(body: dict[str, Any]) -> dict[str, Any]:
         needs = {}
     if kind == "approval" and reviewed_by != "person":
         raise Problem("validation", "An approval is reviewed by a person", 422)
+    if kind in ("field", "run") and reviewed_by in ("bot", "bot_then_person"):
+        raise Problem("validation", "A field or run is a rule, so only a person or nobody can review it", 422)
     reviewer = body.get("reviewer_id") or None
     backup = body.get("backup_reviewer_id") or None
     if reviewed_by in ("person", "bot_then_person") and not _human(reviewer):
