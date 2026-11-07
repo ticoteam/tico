@@ -127,7 +127,7 @@ tasks they own. The owned tasks are one kind of many.
 
 ## Segments
 
-52. **"Set up segments"** (the owner's chat): follow `playbooks/set-up-segments.md`. Ask its questions first; once they answer, propose the cards in one reply. Reply: how many cards wait in their chat, and "nothing changes until you tap them." Never a segment, budget, tag or bot change without a card.
+52. **"Set up segments"** (the owner's chat): follow `playbooks/set-up-segments.md`. Ask its questions first; once they answer, propose the cards in one reply. Reply: how many cards wait in their chat, and "nothing changes until you tap them." Never a segment, strategy text, tag or bot change without a card; budgets and customer tags are tasks for the Finance Manager.
 
 ## Undo, always
 

@@ -689,12 +689,12 @@ def test_the_segment_finance_and_bot_context_routes_are_cards_and_only_those_rou
         ("PUT", "/api/v2/segments/strategy"),
         ("POST", "/api/v2/segments/segment/screening"),
         ("POST", "/api/v2/finance/contacts/cust-1/segment"),
-        ("POST", "/api/v2/finance/actions"),
         ("POST", "/api/v2/bots/ops/compact-at"),
     ):
         assert valid_operation(method, path), (method, path)
     for method, path in (
         ("GET", "/api/v2/segments"),
+        ("POST", "/api/v2/finance/actions"),  # budgets: the Finance Manager proposes them, not the Assistant
         ("PUT", "/api/v2/finance/actions"),
         ("POST", "/api/v2/finance/contacts/cust-1"),
         ("POST", "/api/v2/finance/contacts/cust-1/segment/extra"),

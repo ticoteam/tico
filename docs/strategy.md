@@ -165,7 +165,7 @@ not see is left out of them, and out of the count.
 
 **Its strategy.** A segment has the same fields as the company's strategy: its summary and the seven sections
 ([The page](#the-page)). The owner writes its own text for any of them in the draft
-(`PUT /api/v2/segments/strategy` with `{id, revision, sections}`, against the draft's revision). A field the segment did not change reads as the
+(`PUT /api/v2/segments/strategy` with `{id, sections}` and an optional `revision`: when sent, it is checked against the draft's revision; a card sends none and writes only the keys it has). A field the segment did not change reads as the
 company's text, and `""` gives the company's text back. Its text publishes with the rest, is in every version, and the
 diff names it `sections.segments.<id>.<field>`. `GET /api/v2/segments/{id}` gives the strategy field by field: each with
 its `text` (the segment's where it changed one; `from` says which), the company's text beside it (`company`) and whether
@@ -376,7 +376,7 @@ hub segment add --name N [--who W] [--color C]        owner only (the Assistant 
 hub segment edit <id> [--name N] [--who W|--who ""] [--color C]   only what is passed changes
 hub segment order <id> <id> ...         the list order, every segment once
 hub segment remove <id>                 takes it out of the company's; its teammate tags go
-hub segment strategy <id> --revision N [--set KEY=TEXT ...]   the segment's text in the draft; KEY= gives the company's back
+hub segment strategy <id> [--revision N] [--set KEY=TEXT ...]   the segment's text in the draft; KEY= gives the company's back
 hub segment members                     every tagged teammate, highest on the chart first
 hub segment tag <bot:ID|person:ID> <id>...  | --clear      owner only: a teammate's segments
                                         `hub market segment ...` is the market graph (the Librarian), not these
@@ -403,7 +403,7 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `GET /segments/{id}` | any reader | the segment as the list shows it, plus `leads` (its live faces whose manager is not one of them), `strategy` (`{draft, revision, version, fields: [{key, title, text, company, changed, from}]}`; the draft for the owner and the published text otherwise; `from` is `segment` or `company`) and `bets` (`{id, statement, status}`, live ones) |
 | `POST /segments/{id}` | the owner | `{name?, who?, color?}`, only what is sent changes; answers `{segment}` |
 | `POST /segments/remove` | the owner | `{id}`: takes the segment out of the company's; its teammate tags go; answers `{id, removed}` |
-| `PUT /segments/strategy` | the owner | `{id, revision, sections: {summary?, serve?, ...}}`, `""` gives the company's text back; `409` on a stale revision; answers `{strategy}` |
+| `PUT /segments/strategy` | the owner | `{id, revision?, sections: {summary?, serve?, ...}}`, `""` gives the company's text back; `409` on a stale revision when one is sent; answers `{strategy}` |
 | `GET /market/competitors` | any reader | `{competitors: [{id, name, url}]}`, by name |
 | `POST /market/competitors` | the owner or the Librarian | `{name}`: a name or a site; answers `{competitor}` |
 | `POST /market/competitors/remove` | the owner or the Librarian | `{id}`: ends its `competes_with` edges; 404 if it is not one |

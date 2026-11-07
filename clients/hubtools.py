@@ -4162,11 +4162,11 @@ def segment_remove(api, args):
 @tool(
     "hub_segment_strategy",
     "Owner: a segment's own strategy text for the sections sent, in the draft (the owner publishes on the Strategy "
-    "page). An empty text gives the company's text back for that section. `revision` is the draft's revision as "
-    "hub_segment_show reads it. Answers {strategy}.",
+    "page). An empty text gives the company's text back for that section. `revision` (optional) is the draft's "
+    "revision as hub_segment_show reads it. Answers {strategy}.",
     {
         "id": _s("The segment's id, segment/<slug>"),
-        "revision": {"type": "integer", "description": "The draft's revision as hub_segment_show read it"},
+        "revision": {"type": "integer", "description": "The draft's revision as hub_segment_show read it (optional)"},
         "sections": {
             "type": "object",
             "description": "Section key to its text. Keys: summary, serve, sell, proof, now, know, how, not",
@@ -4174,7 +4174,7 @@ def segment_remove(api, args):
         },
         "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
     },
-    ("id", "revision"),
+    ("id",),
     writes=True,
 )
 def segment_strategy(api, args):
@@ -4187,12 +4187,10 @@ def segment_strategy(api, args):
     unknown = sorted(set(sections) - set(SEGMENT_STRATEGY_KEYS))
     if unknown:
         raise APIError("validation", f"Unknown section {unknown[0]}: use {', '.join(SEGMENT_STRATEGY_KEYS)}", 422)
-    return api.call(
-        "PUT",
-        "segments/strategy",
-        {"id": args["id"], "revision": int(args["revision"]), "sections": sections},
-        key=_key(args),
-    )
+    body = {"id": args["id"], "sections": sections}
+    if args.get("revision") is not None:
+        body["revision"] = int(args["revision"])  # a confirmed card writes its keys without the revision
+    return api.call("PUT", "segments/strategy", body, key=_key(args))
 
 
 @tool(

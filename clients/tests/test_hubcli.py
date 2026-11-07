@@ -2391,8 +2391,8 @@ def test_the_hub_segment_commands_parse_their_arguments():
         p, ["segment", "strategy", "segment/a", "--revision", "4", "--set", "serve=Landlords", "--set", "now="]
     )
     assert (strategy.revision, strategy.section, strategy.fn) == (4, ["serve=Landlords", "now="], "segment strategy")
-    with pytest.raises(SystemExit):  # the draft's revision is required
-        hubcli.parse(p, ["segment", "strategy", "segment/a", "--set", "serve=Landlords"])
+    card = hubcli.parse(p, ["segment", "strategy", "segment/a", "--set", "serve=Landlords"])
+    assert (card.revision, card.section) == (None, ["serve=Landlords"])  # a confirmed card writes its keys without one
     tagged = hubcli.parse(p, ["segment", "tag", "bot:ops", "segment/a"])
     assert (tagged.member, tagged.segments, tagged.clear, tagged.fn) == ("bot:ops", ["segment/a"], False, "segment tag")
     cleared = hubcli.parse(p, ["segment", "tag", "person:cara", "--clear"])
@@ -2448,6 +2448,7 @@ def test_the_hub_segment_commands_send_each_route_its_body(monkeypatch):
         "--set",
         "now=",
     )
+    run("segment", "strategy", "segment/screening", "--set", "summary=Landlords pay on time.")
     run("segment", "members")
     run("segment", "tag", "bot:ops", "segment/screening")
     run("segment", "tag", "person:cara", "--clear")
@@ -2463,6 +2464,7 @@ def test_the_hub_segment_commands_send_each_route_its_body(monkeypatch):
             "segments/strategy",
             {"id": "segment/screening", "revision": 4, "sections": {"serve": "Landlords with 1-20 units", "now": ""}},
         ),
+        ("PUT", "segments/strategy", {"id": "segment/screening", "sections": {"summary": "Landlords pay on time."}}),
         ("GET", "segments/members", None),
         ("POST", "segments/members", {"member": "bot:ops", "segments": ["segment/screening"]}),
         ("POST", "segments/members", {"member": "person:cara", "segments": []}),

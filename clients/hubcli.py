@@ -276,7 +276,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub segment edit <segment-id> [--name ...] [--who "..."|--who ""] [--color ...]   owner: only what you pass changes
     hub segment order <segment-id> <segment-id>...   owner: the list order, every segment once each
     hub segment remove <segment-id>        owner: take a segment out of the company's; its teammate tags go
-    hub segment strategy <segment-id> --revision N [--set KEY=TEXT ...]   owner: the segment's own text, in the draft;
+    hub segment strategy <segment-id> [--revision N] [--set KEY=TEXT ...]   owner: the segment's own text, in the draft;
                                            KEY= gives the company's text back (keys: summary serve sell proof now know how not)
     hub segment members                    the teammates tagged with a segment (or all), highest on the chart first
     hub segment tag <bot:ID|person:ID> <segment-id|all>...   owner: a teammate's segments; --clear takes them all off
@@ -3297,7 +3297,11 @@ def parser():
     s.set_defaults(fn="segment remove")
     s = segment.add_parser("strategy", help="owner: a segment's own strategy text for some sections, in the draft")
     s.add_argument("id", metavar="SEGMENT_ID")
-    s.add_argument("--revision", type=int, required=True, help="the draft's revision, as hub segment show reads it")
+    s.add_argument(
+        "--revision",
+        type=int,
+        help="the draft's revision, as hub segment show reads it (optional: a confirmed card writes its keys only)",
+    )
     s.add_argument(
         "--set",
         dest="section",
