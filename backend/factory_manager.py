@@ -10,7 +10,8 @@ A pass is plain code. It finds the judgment items of the factory:
 
 The bot is woken only for those items, and only when the set of items changed since the previous pass, so the same
 bottleneck two passes running wakes it once. A wake updates one open "Factory check" task for the factory. Its allowed
-actions are ask_manager, open_botops, propose_rule and post_note (the amendment's list); this pass records ask_manager.
+actions are ask_manager, open_botops, propose_rule and post_note (the amendment's list). A wake records ask_manager, and
+a bottleneck wake also logs propose_rule (action only: there is no rule-proposal row yet). Daily notes are posted by _daily_note.
 The Factory Manager never moves a card and never marks one met: the only writes are its run log and its check task.
 Factories without a manager, and databases without the factories.manager_id column (Track A's migration), are skipped.
 """
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("tico.factory_manager")
 ALLOWED = ("ask_manager", "open_botops", "propose_rule", "post_note")
-EMITTED = ("ask_manager",)
+EMITTED = ("ask_manager", "propose_rule")
 EVERY = timedelta(minutes=30)
 INTAKE_PERIOD = timedelta(days=7)
 WAKE = "factory_manager"
@@ -203,6 +204,7 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
     key = ",".join(sorted(items))
     previous_key = (previous or {}).get("wake_key") or ""
     woke = bool(items) and key != previous_key
+    owner = _actor(factory["manager_id"])
     if woke:
         lines = [f"Factory check for {factory['name']}:"]
         lines += [
@@ -211,13 +213,27 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
         if bottleneck is not None and f"bottleneck:{bottleneck['stage_id']}" in items:
             lines.append(f"- Bottleneck: {bottleneck['name']} ({bottleneck['count']} over their Limit).")
         lines += [f"- Handoff to {link['to_name']} has no stages to take the card." for link in no_intake]
-        owner = _actor(factory["manager_id"])
         _open_check(c, factory, owner, "\n".join(lines))
         c.execute(
             "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
             "created_at) VALUES (?,?,?,'ask_manager',?,?,?)",
             (PM.new_id("fma"), factory_id, run_id, owner, "judgment wake: " + ", ".join(items), stamp),
         )
+        if bottleneck is not None and f"bottleneck:{bottleneck['stage_id']}" in items:
+            # No rule-proposal mechanism exists yet (goal proposals are for goals and KPIs), so the proposal is logged
+            # as an action only; the owner sees it in the factory's check task, not as a proposal row.
+            c.execute(
+                "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
+                "created_at) VALUES (?,?,?,'propose_rule',?,?,?)",
+                (
+                    PM.new_id("fma"),
+                    factory_id,
+                    run_id,
+                    factory["owner_id"] or owner,
+                    f"consider a rule for {bottleneck['name']} ({bottleneck['count']} over their Limit); logged only",
+                    stamp,
+                ),
+            )
     c.execute(
         "UPDATE factory_manager_runs SET finished_at=?, bottleneck_stage_id=?, judgment_count=?, wake_key=?, woke=?, "
         "model_called=? WHERE id=?",
