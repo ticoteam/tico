@@ -1932,9 +1932,52 @@ def test_an_install_return_with_no_state_is_taken_only_for_an_installation_on_th
     back = api.get("/api/v2/github/app/authorized", params=params, headers=auth())
     assert back.status_code == 302 and back.headers["location"] == "/#/tools/github?github=installed", back.text
     assert api.get("/api/v2/github/app", headers=auth()).json()["installed"] is True
-    # A code is the OAuth exchange, which stays strict: without the state it is refused.
-    strict = api.get("/api/v2/github/app/authorized", params={**params, "code": "the-code"}, headers=auth())
-    assert strict.status_code == 400 and strict.json()["error"]["code"] == "github_state", strict.text
+    # A code that comes with a state Tico did not make stays strict, and so does a code with no installation id.
+    forged = api.get(
+        "/api/v2/github/app/authorized", params={**params, "code": "the-code", "state": "not-ours"}, headers=auth()
+    )
+    assert forged.status_code == 400 and forged.json()["error"]["code"] == "github_state", forged.text
+    bare = api.get("/api/v2/github/app/authorized", params={"code": "the-code"}, headers=auth())
+    assert bare.status_code == 400 and bare.json()["error"]["code"] == "github_state", bare.text
+
+
+def test_an_install_return_with_a_code_and_no_state_is_taken_for_the_owners_installation_and_user(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    params = {"installation_id": "77", "setup_action": "install", "code": "the-code"}
+    back = api.get("/api/v2/github/app/authorized", params=params, headers=auth())
+    assert back.status_code == 302 and back.headers["location"] == "/#/tools/github?github=authorized", back.text
+    status = api.get("/api/v2/github/app", headers=auth()).json()
+    assert status["installed"] is True and status["authorized"] is True
+    assert "gho_" not in json.dumps(status) and "ghr_" not in json.dumps(status)
+
+
+def test_an_install_return_with_a_code_and_no_state_is_refused_for_another_installation(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    gh.installation_account_id = 1234  # the App's installation is on another account
+    refused = api.get(
+        "/api/v2/github/app/authorized",
+        params={"installation_id": "77", "setup_action": "install", "code": "the-code"},
+        headers=auth(),
+    )
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_installation", refused.text
+    assert gh.revoked == set()  # the code was never exchanged
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
+
+
+def test_an_install_return_with_a_code_and_no_state_is_refused_and_revoked_for_another_user(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    gh.user_id = 5555  # the sign-in is another GitHub user
+    refused = api.get(
+        "/api/v2/github/app/authorized",
+        params={"installation_id": "77", "setup_action": "install", "code": "the-code"},
+        headers=auth(),
+    )
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_user_login", refused.text
+    assert gh.revoked == {"gho_1"}  # the token is revoked and was never saved
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
 
 
 def test_an_install_return_with_no_state_is_refused_for_an_app_that_recorded_no_owner_id(api, gh):

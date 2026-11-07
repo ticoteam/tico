@@ -1949,13 +1949,13 @@ def install_github_app(app, settings, store):
     ):
         """Where GitHub sends the owner after they authorize Tico for the personal account, or after an install. Every return
         must carry the single-use state Tico made for this session (the Authorize link or the install link), unused and
-        fresh, except an install's return with no state and no code: that one is taken only for an installation on the
-        owner's own account (installed_without_state). An install's return runs the install step first, and an
-        installation_id must be the App's own installation. A return without a code (the owner declined, or the install
-        asked for no authorization) goes back to Tools after that."""
+        fresh, except an install's return with no state: that one is taken only for an installation on the owner's own
+        account, and with a code only when the token is the owner's too (installed_without_state). An install's return runs
+        the install step first, and an installation_id must be the App's own installation. A return without a code (the
+        owner declined, or the install asked for no authorization) goes back to Tools after that."""
         who = owner(request)
-        if installation_id and not (state or code or error):
-            return installed_without_state(who, installation_id)
+        if installation_id and not (state or error):
+            return installed_without_state(who, installation_id, code)
         with store.transaction() as c:
             found = c.execute("SELECT * FROM github_user_states WHERE nonce=?", (state,)).fetchone() if state else None
             if found:
@@ -1998,17 +1998,7 @@ def install_github_app(app, settings, store):
                 f"Sign in to GitHub as {row['org']} to authorize Tico for that account (this sign-in was {login})",
                 403,
             )
-        with service.user_lock:  # the lock a refresh takes: no refresh runs against the pair this replaces
-            with store.transaction() as c:
-                service.save_user_token(c, who.actor, login, github_id, tokens)
-                H.event(c, who.actor, "github.user_authorized", row["slug"], {"login": login})
-        from .repo_waits import resume
-
-        try:
-            resume(service)  # a bot waiting for its empty repository in this account goes on now
-        except (Problem, ValueError):
-            log.warning("Checking waiting bots after the authorization failed")
-        return RedirectResponse("/#/tools/github?github=authorized", status_code=302)
+        return saved_authorization(who.actor, row, login, github_id, tokens)
 
     def installed_now(actor):
         """The install step: refresh the App's installation and sync its repositories. Returns the installation's id, or None
@@ -2023,10 +2013,27 @@ def install_github_app(app, settings, store):
             H.event(c, actor, "github.app_installed", "", {"installed": bool(found)})
         return found
 
-    def installed_without_state(who, installation_id: str):
-        """An install's return with no state, which GitHub may send without the one Tico made. It is taken only when the
-        installation is this App's and sits on the owner's own account: GitHub answers for this App's installations alone,
-        so the account id is the check. A code or an error always goes through the state check instead."""
+    def saved_authorization(actor, row, login, github_id, tokens):
+        """Keeps the owner's authorization for the account, under the lock a refresh takes, and lets the bots waiting for
+        their repository in it go on. Returns Tools' redirect."""
+        with service.user_lock:  # the lock a refresh takes: no refresh runs against the pair this replaces
+            with store.transaction() as c:
+                service.save_user_token(c, actor, login, github_id, tokens)
+                H.event(c, actor, "github.user_authorized", row["slug"], {"login": login})
+        from .repo_waits import resume
+
+        try:
+            resume(service)  # a bot waiting for its empty repository in this account goes on now
+        except (Problem, ValueError):
+            log.warning("Checking waiting bots after the authorization failed")
+        return RedirectResponse("/#/tools/github?github=authorized", status_code=302)
+
+    def installed_without_state(who, installation_id: str, code: str):
+        """An install's return with no state, which GitHub may send without the one Tico made. The installation must be this
+        App's and sit on the owner's own account: GitHub answers for this App's installations alone, so the account id is the
+        check. A code (the install may ask for the authorization too) is exchanged only then, and its token is kept only when
+        GET /user gives the owner's id as well; any other token is revoked and never saved. A code that comes with a state
+        never comes here."""
         row = service.row()
         if not row or account_kind(row) != PERSONAL:
             raise Problem("github_not_connected", "Connect the personal GitHub account first", 409)
@@ -2037,8 +2044,19 @@ def install_github_app(app, settings, store):
             raise Problem(
                 "github_installation", "That installation is not this account's GitHub App; start again from Tools", 409
             )
-        installed_now(who.actor)
-        return RedirectResponse("/#/tools/github?github=installed", status_code=302)
+        installed_now(who.actor)  # the install step does not need the code, so it runs before any token is exchanged
+        if not code:
+            return RedirectResponse("/#/tools/github?github=installed", status_code=302)
+        tokens = service.exchange_user(code)
+        login, github_id = service.user_identity(tokens["access_token"])
+        if github_id != expected:
+            service.revoke_user_token(tokens["access_token"])
+            raise Problem(
+                "github_user_login",
+                f"Sign in to GitHub as {row['org']} to authorize Tico for that account (this sign-in was {login})",
+                409,
+            )
+        return saved_authorization(who.actor, row, login, github_id, tokens)
 
     @app.get("/api/v2/github/app/installed")
     def installed(request: Request):
