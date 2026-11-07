@@ -638,6 +638,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "market_edges": "1",
         "market_evidence": "1",
         "market_citations": "1",
+        # Who is tagged with which segment (backend/segments.py): the company's, like the segments themselves.
+        "segment_members": "1",
         "market_insights": "1",
         # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
         # team watches and what the Librarian wrote about them, the market's to read.
@@ -1268,6 +1270,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 "market_edges",
                 "market_evidence",
                 "market_citations",
+                "segment_members",
                 "market_insights",
                 "market_watches",
                 "market_briefings",

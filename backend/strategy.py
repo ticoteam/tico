@@ -374,9 +374,18 @@ def health(c, goals):
     return worst or "gray"
 
 
+def _without_segments(version):
+    """A version for GET /strategy: the company's sections only. A segment's own text is GET /api/v2/segments/{id}'s,
+    read per segment (backend/segments.py strategy_view), so this payload does not grow with the segments."""
+    if not version:
+        return version
+    return {**version, "sections": {k: v for k, v in version["sections"].items() if k != "segments"}}
+
+
 def view(c, auth, who):
     """GET /strategy. The owner gets the draft, every live bet and the latest retired ones; everyone else the
-    published version's bets only. No guide prompts: they are GET /strategy/guides."""
+    published version's bets only. No guide prompts: they are GET /strategy/guides. No segment text (see
+    _without_segments)."""
     from . import goal_routes
 
     editor = goal_routes.company_editor(who)
@@ -396,8 +405,8 @@ def view(c, auth, who):
     linked = goals_by_bet(c, auth, who, [b["id"] for b in listed])
     # The draft is the owner's: a bot never reads an unpublished "What we won't do".
     return {
-        **({"draft": mine} if editor else {}),
-        "current": published,
+        **({"draft": _without_segments(mine)} if editor else {}),
+        "current": _without_segments(published),
         "bets": listed,
         "label": guide(gid)["bets_label"],
         "label_one": guide(gid)["bet_label"],
@@ -459,10 +468,18 @@ def summary_text(c, published=None):
     return "\n\n".join(lines)
 
 
+def _same_bet_field(a, b, key):
+    """A bet published before segments had a segment_id has none: that is the same as an empty one."""
+    if key == "segment_id":
+        return (a.get(key) or None) == (b.get(key) or None)
+    return a.get(key) == b.get(key)
+
+
 def diff(c, a, b):
     """Two published versions: the fields that changed, and the bets added, retired or changed, by bet id and status.
     A snapshot holds every bet that was not retired, so a bet missing from `to` was retired by then; a bet moved
-    back to proposed is a change, not a retirement."""
+    back to proposed is a change, not a retirement. A bet with no segment_id (from before segments) is no change
+    against one whose segment_id is None."""
     one, two = version(c, a), version(c, b)
     if not one or not two:
         raise Problem("not_found", f"There is no strategy version {a if not one else b}", 404)
@@ -490,7 +507,7 @@ def diff(c, a, b):
         for i in after
         if i in before
         and after[i].get("status") != "retired"
-        and any(before[i].get(k) != after[i].get(k) for k in SNAPSHOT if k != "rank")
+        and any(not _same_bet_field(before[i], after[i], k) for k in SNAPSHOT if k != "rank")
     ]
     return {
         "from": a,

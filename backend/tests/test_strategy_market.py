@@ -1,6 +1,6 @@
 """The Strategy page's market cards (backend/strategy_market.py): which segments are the company's, removing a segment,
-and the competitors. A segment the company meant to enter next is one of its own now: there is one flag. Examples use
-Acme and Northwind."""
+and the competitors. A segment the company meant to enter next is one of its own now: there is one flag. A segment the
+company stops playing in stays in the market, with its teammates' tags off. Examples use Acme and Northwind."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -56,13 +56,37 @@ def test_a_segment_merged_away_stays_ours_under_the_one_it_merged_into(api):
     assert first not in segments(api) and segments(api)[second]["self"]
 
 
-def test_a_removed_segment_added_again_is_not_ours_until_someone_makes_it_so(api):
+def test_removing_a_segment_from_the_company_keeps_it_in_the_market(api):
     first, second, sub = defined(api)
     post(api, "market/segments/target", {"id": sub, "target": "ours"})
     post(api, "market/segments/remove", {"id": sub})
-    assert sub not in segments(api)
-    back = post(api, "market/segments", {"name": "Credit checks"})["segment"]
-    assert back["id"] == sub and not segments(api)[sub]["self"]
+    seen = segments(api)
+    assert sub in seen and not seen[sub]["self"]  # the market keeps it; the company no longer plays in it
+    post(api, "market/segments", {"name": "Credit checks"}, expected=409)  # still a segment of the market
+    post(api, "market/segments/target", {"id": sub, "target": "ours"})
+    assert segments(api)[sub]["self"]
+
+
+def test_the_librarian_takes_no_segment_out_of_the_company_but_cleans_up_the_rest_of_the_market(api):
+    first, second, sub = defined(api)
+    post(api, "market/segments/target", {"id": first, "target": "ours"})
+    _librarian(api)
+    _, _, librarian = setup_attempt(api, "librarian")
+    post(api, "market/segments/remove", {"id": first}, token=librarian["token"], expected=403)
+    assert segments(api)[first]["self"]
+    post(api, "market/segments/remove", {"id": second}, token=librarian["token"])  # not ours: the market's cleanup
+    assert second not in segments(api)
+
+
+def test_stopping_a_segment_takes_its_teammates_tags_off_and_keeps_its_market_entry(api):
+    first, second, sub = defined(api)
+    post(api, "market/segments/target", {"id": first, "target": "ours"})
+    post(api, "market/segments/target", {"id": second, "target": "ours"})
+    setup_attempt(api, "ops")
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first, second]})
+    post(api, "market/segments/target", {"id": second, "target": "none"})
+    assert {m["member"]: m["segments"] for m in get(api, "segments/members")["members"]} == {"bot:ops": [first]}
+    assert second in segments(api) and not segments(api)[second]["self"]
 
 
 def test_removing_a_segment_moves_its_sub_segments_up(api):

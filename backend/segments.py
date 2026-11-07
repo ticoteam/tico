@@ -5,17 +5,20 @@ strategy, the teammates dedicated to it, its goals, budget and P&L line, under t
 A segment is a market graph `segment` entity (backend/market.py) the company plays in: `company/self` has a current
 `operates_in` edge to it (backend/strategy_market.py). There is no second segment concept. This module adds:
 
-- its fields: the entity's name, one line of who it is for (its summary), a color and a rank (its properties);
+- its fields: the entity's name, one line of who it is for (its summary), a color and a rank (its properties, stamped
+  when it becomes one of the company's, backend/strategy_market.py);
 - the teammates tagged with it (`segment_members`): a teammate tagged with a segment is dedicated to it, and `all` tags
-  one who works across every segment. Its leads are the dedicated teammates whose manager is not dedicated to it too:
-  they see its P&L line (backend/finance);
+  one who works across every segment. Its leads are the dedicated teammates whose manager is not dedicated to it too
+  (the highest of them when each has a dedicated manager): they see its P&L line (backend/finance). Only teammates on
+  the org chart count: an archived bot or a removed person loses its tags (`forget_member`);
 - the segment's own strategy, in the company's draft and versions (`sections.segments`, backend/strategy.py), read
   field by field against the company's text;
 - the segment text a dedicated bot's run is handed (`run_text`, backend/learned.py).
 
-Writes are the owner's, on their own click (goal_routes.company_editor), except teammate tags, which an owner or a bot
-admin sets as they set groups. Reads are for everyone signed in. A segment that stops being one of the company's keeps its
-tags, which show again when it is one of them once more.
+Writes are the owner's, on their own click (goal_routes.company_editor, where a confirmed Assistant or BotOps card
+counts), except teammate tags, which an owner or a bot admin sets as they set groups. Reads are for everyone signed in.
+A segment that stops being one of the company's loses its tags (strategy_market.untag): a tag names one of the
+company's segments, or `all`, and nothing else.
 """
 
 import sqlite3
@@ -41,16 +44,17 @@ if TYPE_CHECKING:
     from .store import Store
 
 ALL = "all"  # a teammate tag: works across every segment
-COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")
+COLORS: tuple[str, ...] = cast("tuple[str, ...]", SM.COLORS)
 NAME_MAX = 120
 WHO_MAX = 200  # one line
 FACES_MAX = 24  # the faces a segment shows; the count of its dedicated teammates says how many there are
 SEGMENTS_MAX = 50
 MEMBERS_MAX = 500
-RUN_MAX = 12_000  # characters of segment text a run is handed
+RUN_MAX = 2_000  # characters of segment text a run is handed
 
 Row = dict[str, Any]  # a market entity, a strategy version or a bet, as the modules that keep them hand them over
 Directory = dict[str, Any]  # {"names", "depth", "hidden"}: who a viewer sees, by teammate ref
+Resolver = Callable[[sqlite3.Connection, str, list[str], dict[str, str]], list[Row]]  # market name lookup
 
 
 # ----------------------------------------------------------------------------- the modules this one reads
@@ -59,36 +63,64 @@ def _entity(c: sqlite3.Connection, sid: str) -> Row | None:
     return cast(Callable[[sqlite3.Connection, str], Row | None], MK.entity)(c, sid)
 
 
+def _named(c: sqlite3.Connection, name: str) -> list[Row]:
+    """The market entities called this name or aliased so, whatever their type or status: the market's own name
+    resolver (backend/market.py). It is private to the market; strategy_market reads it the same way."""
+    resolve = cast(Resolver, getattr(MK, "_resolve_existing"))  # noqa: B009
+    return resolve(c, name, [], {})
+
+
+def _segment_sections(version: Row) -> dict[str, Row]:
+    """The segments' own text in a strategy version: {segment id: {key: text}}."""
+    sections = cast(Row, version["sections"])
+    return cast(dict[str, Row], sections.get("segments") or {})
+
+
 def _slug(text: str) -> str:
     return cast(Callable[[str], str], MK.slug)(text)
-
-
-def _create_entity(c: sqlite3.Connection, actor: str, **fields: Any) -> None:
-    cast(Callable[..., object], MK.create_entity)(c, actor, **fields)
 
 
 def _update_entity(c: sqlite3.Connection, actor: str, sid: str, **fields: Any) -> None:
     cast(Callable[..., object], MK.update_entity)(c, actor, sid, **fields)
 
 
-def _create_edge(c: sqlite3.Connection, actor: str, **fields: Any) -> None:
-    cast(Callable[..., object], MK.create_edge)(c, actor, **fields)
-
-
 def _definition(c: sqlite3.Connection) -> Row | None:
     return cast(Callable[[sqlite3.Connection], Row | None], MS.definition)(c)
+
+
+def _define_market(c: sqlite3.Connection, actor: str, root_name: str) -> None:
+    cast(Callable[..., object], MS.set_definition)(c, actor, {"root_name": root_name})
+
+
+def _add_segment(c: sqlite3.Connection, actor: str, name: str, summary: str) -> Row:
+    """A segment of the market under its root: a removed one comes back with its id (market_spend.add_segment)."""
+    return cast(Callable[..., Row], MS.add_segment)(c, actor, name, None, summary)
 
 
 def _owner_evidence(c: sqlite3.Connection, actor: str) -> list[str]:
     return cast(Callable[[sqlite3.Connection, str], list[str]], SM.owner_evidence)(c, actor)
 
 
-def _set_ours(c: sqlite3.Connection, actor: str, sid: str, on: bool, company: str) -> None:
-    cast(Callable[[sqlite3.Connection, str, str, bool, str], object], SM.set_ours)(c, actor, sid, on, company)
+def _ours_ids(c: sqlite3.Connection) -> set[str]:
+    return cast(Callable[[sqlite3.Connection], set[str]], SM.ours_ids)(c)
+
+
+def _ordered_rows(c: sqlite3.Connection) -> list[Row]:
+    return cast(Callable[[sqlite3.Connection], list[Row]], SM.ordered_rows)(c)
+
+
+def _set_ours(
+    c: sqlite3.Connection, actor: str, sid: str, on: bool, company: str, evidence_ids: list[str] | None = None
+) -> None:
+    cast(Callable[..., object], SM.set_ours)(c, actor, sid, on, company, evidence_ids=evidence_ids)
 
 
 def _remove_segment(c: sqlite3.Connection, actor: str, sid: str) -> Row:
     return cast(Callable[[sqlite3.Connection, str, str], Row], SM.remove_segment)(c, actor, sid)
+
+
+def _set_ranks(c: sqlite3.Connection, actor: str, ids: list[str]) -> None:
+    cast(Callable[[sqlite3.Connection, str, list[str]], object], SM.set_ranks)(c, actor, ids)
 
 
 def _event(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Row) -> None:
@@ -125,10 +157,10 @@ def _unseen(c: sqlite3.Connection, who: "Identity", auth: "Auth | None") -> tupl
     return cast(Callable[..., tuple[set[str], set[str]]], teammate_access.unseen)(c, who, auth)
 
 
-def _company_editor(who: "Identity") -> bool:
+def _company_editor(who: "Identity", tap: bool = False) -> bool:
     from . import goal_routes
 
-    return cast(Callable[..., bool], goal_routes.company_editor)(who)
+    return cast(Callable[..., bool], goal_routes.company_editor)(who, tap=tap)
 
 
 def _domain(auth: "Auth", who: "Identity") -> None:
@@ -175,48 +207,35 @@ def _company_name(store: "Store") -> str:
 # ----------------------------------------------------------------------------- the segments
 def ours_ids(c: sqlite3.Connection) -> set[str]:
     """The ids of the company's segments: active `segment` entities with a current `operates_in` edge from
-    `company/self`."""
-    today = H.now()[:10]
-    rows = c.execute(
-        "SELECT e.dst FROM market_edges e JOIN market_entities s ON s.id=e.dst WHERE e.rel='operates_in' AND e.src=? "
-        "AND s.type='segment' AND s.status='active' AND (e.valid_from_on IS NULL OR substr(e.valid_from_on,1,10)<=?) "
-        "AND (e.valid_until_on IS NULL OR substr(e.valid_until_on,1,10)>=?)",
-        (MK.OWN_COMPANY_ID, today, today),
-    )
-    return {r[0] for r in rows}
+    `company/self` (backend/strategy_market.py)."""
+    return _ours_ids(c)
 
 
 def require_ours(c: sqlite3.Connection, segment_id: str | None) -> str:
     """`segment_id` normalised: "" (no segment) stays "", anything else must be one of the company's segments."""
     sid = str(segment_id or "").strip()
-    if sid and sid not in ours_ids(c):
+    if sid and sid not in _ours_ids(c):
         raise Problem("not_found", f"{sid} is not one of the company's segments", 404)
     return sid
 
 
-# ----------------------------------------------------------------------------- the segments
 def _props(row: Row) -> Row:
     return dict(row.get("properties") or {})
 
 
-def _rank(row: Row) -> int | None:
-    value = _props(row).get("rank")
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def _color(row: Row, index: int) -> str:
-    """The segment's color, or the one its place in the list gets while it has none."""
+def color_of(row: Row, index: int) -> str:
+    """The segment's color, or the one its place in the list gets while it has none (a segment that became one of the
+    company's before colors were stamped)."""
     stored = _props(row).get("color")
     return stored if stored in COLORS else COLORS[index % len(COLORS)]
 
 
-def _ordered(c: sqlite3.Connection) -> list[Row]:
-    """The company's segments in list order: their rank, then their name."""
-    rows = [
-        r for r in (_entity(c, sid) for sid in ours_ids(c)) if r and r["type"] == "segment" and r["status"] == "active"
+def ordered(c: sqlite3.Connection) -> list[Row]:
+    """The company's segments in list order, each {id, name, who, color, rank}: no faces, no viewer."""
+    return [
+        {"id": r["id"], "name": r["name"], "who": r["summary"], "color": color_of(r, i), "rank": i}
+        for i, r in enumerate(_ordered_rows(c))
     ]
-    rows.sort(key=lambda r: (_rank(r) is None, _rank(r) or 0, r["name"].lower(), r["id"]))
-    return rows
 
 
 def _row_of(c: sqlite3.Connection, sid: str) -> Row:
@@ -234,6 +253,11 @@ def _ours_row(c: sqlite3.Connection, segment_id: str | None) -> Row:
     return _row_of(c, sid)
 
 
+def _index_of(c: sqlite3.Connection, segment_id: str) -> int:
+    ids = [r["id"] for r in _ordered_rows(c)]
+    return ids.index(segment_id) if segment_id in ids else len(ids)
+
+
 def _text(text: object, limit: int, label: str, required: bool = False) -> str:
     text = " ".join(str(text or "").split())
     if required and not text:
@@ -248,7 +272,7 @@ def _segment_view(row: Row, index: int, faces: list[Row], teammates: int) -> Row
         "id": row["id"],
         "name": row["name"],
         "who": row["summary"],
-        "color": _color(row, index),
+        "color": color_of(row, index),
         "rank": index,
         "faces": faces[:FACES_MAX],
         "teammates": teammates,
@@ -257,12 +281,11 @@ def _segment_view(row: Row, index: int, faces: list[Row], teammates: int) -> Row
 
 def _view_of(c: sqlite3.Connection, segment_id: str) -> Row:
     """One segment as the list shows it, read with no viewer's hiding (the owner's own writes)."""
-    ordered = [r["id"] for r in _ordered(c)]
     directory = _directory(c)
-    tagged = _dedicated(c, segment_id)
-    live = _faces_of(tagged, directory)
-    row = _row_of(c, segment_id)
-    return _segment_view(row, ordered.index(segment_id), [_face(r, directory) for r in live], len(live))
+    live = _faces_of(_dedicated(c, segment_id), directory)
+    return _segment_view(
+        _row_of(c, segment_id), _index_of(c, segment_id), [_face(r, directory) for r in live], len(live)
+    )
 
 
 def listing(c: sqlite3.Connection, auth: "Auth", who: "Identity") -> list[Row]:
@@ -271,10 +294,19 @@ def listing(c: sqlite3.Connection, auth: "Auth", who: "Identity") -> list[Row]:
     directory = _directory(c, who, auth)
     tagged = _tagged(c)
     out: list[Row] = []
-    for index, row in enumerate(_ordered(c)[:SEGMENTS_MAX]):
+    for index, row in enumerate(_ordered_rows(c)[:SEGMENTS_MAX]):
         live = _faces_of(tagged.get(row["id"], []), directory)
         out.append(_segment_view(row, index, [_face(r, directory) for r in live], len(live)))
     return out
+
+
+def _segments_named(c: sqlite3.Connection, name: str, seg_id: str) -> list[Row]:
+    """The market's segments called this name (or aliased so), active or not, and the one with this id."""
+    rows = [r for r in _named(c, name) if r["type"] == "segment"]
+    own = _entity(c, seg_id)
+    if own and own["type"] == "segment" and own["id"] not in {r["id"] for r in rows}:
+        rows.append(own)
+    return rows
 
 
 def create(
@@ -285,57 +317,48 @@ def create(
     color: str | None = None,
     company: str = "",
 ) -> Row:
-    """A segment the company plays in: a new market segment under the market's root, or an existing one of that name
-    joins the company's, or a removed one comes back with its id and its history. Its color is the first one no
-    other segment has."""
+    """A segment the company plays in. A market segment of that name (active, or with that name as an alias) joins the
+    company's and keeps its id, its history and its color; one that is already the company's is a 409. A merged one is
+    a 409 naming the segment it merged into, as the market does. A removed one comes back with its id, and a new one is
+    made under the market's root, which is defined as "<company> market" first when there is none (the Strategy page
+    does the same). It lands last in the list, in the first color no other of the company's has, unless `color` says."""
     name = _text(name, NAME_MAX, "name", required=True)
     who = _text(who, WHO_MAX, "one line of who it is for")
     seg_id = "segment/" + _slug(name)
     if seg_id == "segment/":
         raise Problem("validation", "Give the segment a name with letters or digits", 422)
-    ours = _ordered(c)
-    used = {_color(r, i) for i, r in enumerate(ours)}
-    chosen = color or next((x for x in COLORS if x not in used), COLORS[len(ours) % len(COLORS)])
-    root = (_definition(c) or {}).get("root")
-    today = H.now()[:10]
-    ev = _owner_evidence(c, actor)
-    existing = _entity(c, seg_id)
-    if existing and existing["type"] != "segment":
-        raise Problem("exists", f"{seg_id} is not a segment", 409, extra={"id": seg_id})
-    if existing and existing["status"] == "active" and seg_id in ours_ids(c):
-        raise Problem("exists", f"{name} is already one of the company's segments", 409, extra={"id": seg_id})
-    if existing:
-        kept = _props(existing).get("color")
-        _update_entity(
-            c,
-            actor,
-            seg_id,
-            status="active",
-            summary=who or existing["summary"],
-            properties={**_props(existing), "color": kept if kept in COLORS else chosen, "rank": len(ours)},
-            evidence_ids=ev,
+    found = _segments_named(c, name, seg_id)
+    live = [r for r in found if r["status"] == "active"]
+    if live:
+        seg_id = live[0]["id"]
+        if seg_id in _ours_ids(c):
+            raise Problem(
+                "exists",
+                f"{live[0]['name']} ({seg_id}) is already one of the company's segments",
+                409,
+                extra={"id": seg_id},
+            )
+    elif any(r["status"] == "merged" for r in found):
+        merged = next(r for r in found if r["status"] == "merged")
+        raise Problem(
+            "exists",
+            f"{merged['name']} was merged into {merged['merged_into']}; the company plays in that one",
+            409,
+            extra={"id": merged["id"], "merged_into": merged["merged_into"]},
         )
     else:
-        _create_entity(
-            c,
-            actor,
-            type="segment",
-            name=name,
-            summary=who,
-            properties={"color": chosen, "rank": len(ours)},
-            evidence_ids=ev,
-            entity_id=seg_id,
-        )
-    if (
-        root
-        and not c.execute(
-            "SELECT 1 FROM market_edges WHERE src=? AND rel='member_of' AND (valid_from_on IS NULL OR "
-            "substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)",
-            (seg_id, today, today),
-        ).fetchone()
-    ):
-        _create_edge(c, actor, src=seg_id, rel="member_of", dst=root, since=today, evidence_ids=ev)
+        if not (_definition(c) or {}).get("root"):
+            _define_market(c, actor, f"{company or 'Our'} market")
+        seg_id = _add_segment(c, actor, name, who)["id"]
     _set_ours(c, actor, seg_id, True, company)
+    row = _row_of(c, seg_id)
+    changes: Row = {}
+    if who and who != row["summary"]:
+        changes["summary"] = who
+    if color is not None and color != _props(row).get("color"):
+        changes["properties"] = {**_props(row), "color": color}
+    if changes:
+        _update_entity(c, actor, seg_id, evidence_ids=_owner_evidence(c, actor), **changes)
     return _view_of(c, seg_id)
 
 
@@ -347,12 +370,26 @@ def update(
     who: str | None = None,
     color: str | None = None,
 ) -> Row:
-    """Its name, who it is for (`""` clears it) and color: only what is sent changes."""
+    """Its name, who it is for (`""` clears it) and color: only what is sent changes. A name another market segment
+    already has is a 409: the segment keeps its id, so a new one made under the old name joins it, and this one is
+    named by its own."""
     row = _ours_row(c, segment_id)
     changes: Row = {}
     if name is not None:
         name = _text(name, NAME_MAX, "name", required=True)
         if name != row["name"]:
+            clash = [
+                r
+                for r in _named(c, name)
+                if r["type"] == "segment" and r["status"] == "active" and r["id"] != segment_id
+            ]
+            if clash:
+                raise Problem(
+                    "exists",
+                    f"{name} is already the name of {clash[0]['id']}; pick another name",
+                    409,
+                    extra={"id": clash[0]["id"]},
+                )
             changes["name"] = name
     if who is not None:
         who = _text(who, WHO_MAX, "one line of who it is for")
@@ -367,19 +404,15 @@ def update(
 
 def reorder(c: sqlite3.Connection, actor: str, ids: list[str]) -> None:
     """The list order: `ids` names every segment the company plays in, once each."""
-    current = [r["id"] for r in _ordered(c)]
+    current = [r["id"] for r in _ordered_rows(c)]
     if len(set(ids)) != len(ids) or sorted(ids) != sorted(current):
         raise Problem("validation", "List every segment the company plays in, once each", 422)
-    ev: list[str] | None = None
-    for index, sid in enumerate(ids):
-        row = _row_of(c, sid)
-        if _rank(row) != index:
-            ev = ev or _owner_evidence(c, actor)
-            _update_entity(c, actor, sid, properties={**_props(row), "rank": index}, evidence_ids=ev)
+    _set_ranks(c, actor, ids)
 
 
 def remove(c: sqlite3.Connection, actor: str, segment_id: str) -> Row:
-    """Retire the segment (its sub-segments move up to its parent, backend/strategy_market.py). Its teammate tags stay."""
+    """Take the segment out of the company's: its operates_in edge ends and its teammate tags go
+    (backend/strategy_market.py). The market keeps the segment itself, with its edges, competitors and sizes."""
     _ours_row(c, segment_id)
     return _remove_segment(c, actor, segment_id)
 
@@ -387,7 +420,7 @@ def remove(c: sqlite3.Connection, actor: str, segment_id: str) -> Row:
 # ----------------------------------------------------------------------------- teammates
 def _tagged(c: sqlite3.Connection) -> dict[str, list[str]]:
     """{segment id: [teammate refs]} for the company's segments, `all` left out."""
-    ours = ours_ids(c)
+    ours = _ours_ids(c)
     out: dict[str, list[str]] = {}
     for sid, ref in c.execute("SELECT segment_id, member FROM segment_members ORDER BY segment_id, member"):
         if sid != ALL and sid in ours:
@@ -396,7 +429,8 @@ def _tagged(c: sqlite3.Connection) -> dict[str, list[str]]:
 
 
 def _dedicated(c: sqlite3.Connection, segment_id: str) -> list[str]:
-    """The teammate refs tagged with this segment (not `all`), whether or not the viewer may see them."""
+    """The teammate refs tagged with this segment (not `all`), whether or not they are on the chart or the viewer may
+    see them: `_faces_of` decides that."""
     return [
         r[0] for r in c.execute("SELECT member FROM segment_members WHERE segment_id=? ORDER BY member", (segment_id,))
     ]
@@ -404,8 +438,8 @@ def _dedicated(c: sqlite3.Connection, segment_id: str) -> list[str]:
 
 def member_segments(c: sqlite3.Connection, ref: str) -> list[str]:
     """The segments a teammate (`bot:<id>` or `person:<id>`) is tagged with: the company's segment ids, and `all` as the
-    string `all`. A tag on a segment that is not the company's is kept and not returned."""
-    ours = ours_ids(c)
+    string `all`. A tag on a segment that is not the company's is not returned."""
+    ours = _ours_ids(c)
     return [
         r[0]
         for r in c.execute("SELECT segment_id FROM segment_members WHERE member=? ORDER BY segment_id", (ref,))
@@ -430,7 +464,9 @@ def _member_ref(c: sqlite3.Connection, text: str) -> str:
 
 
 def set_member(c: sqlite3.Connection, actor: str, member: str, wanted: list[str]) -> Row:
-    """A teammate's segments, replaced by `wanted` (the company's segment ids and `all`; [] clears them). Answers
+    """A teammate's segments, replaced by `wanted` (the company's segment ids, or `all` on its own; [] clears them).
+    A tag that stays keeps its date and who set it; one that goes is deleted, and so is one on a segment that is not
+    the company's (such a tag is never kept: a segment that stops being one of the company's loses its tags). Answers
     {member, segments}."""
     ref = _member_ref(c, member)
     ids: list[str] = []
@@ -442,15 +478,32 @@ def set_member(c: sqlite3.Connection, actor: str, member: str, wanted: list[str]
             require_ours(c, sid)
         if sid not in ids:
             ids.append(sid)
+    if ALL in ids and len(ids) > 1:
+        raise Problem("validation", "all covers every segment: send it on its own", 422)
+    old = [r[0] for r in c.execute("SELECT segment_id FROM segment_members WHERE member=?", (ref,))]
     now = H.now()
-    c.execute("DELETE FROM segment_members WHERE member=?", (ref,))
+    for sid in old:
+        if sid not in ids:
+            c.execute("DELETE FROM segment_members WHERE segment_id=? AND member=?", (sid, ref))
     for sid in ids:
-        c.execute(
-            "INSERT INTO segment_members (segment_id, member, created_at, created_by) VALUES (?,?,?,?)",
-            (sid, ref, now, actor),
-        )
+        if sid not in old:
+            c.execute(
+                "INSERT INTO segment_members (segment_id, member, created_at, created_by) VALUES (?,?,?,?)",
+                (sid, ref, now, actor),
+            )
     _event(c, actor, "segments.member", ref, {"segments": ids})
     return {"member": ref, "segments": member_segments(c, ref)}
+
+
+def forget_member(c: sqlite3.Connection, actor: str, ref: str) -> None:
+    """A teammate that is archived (a bot) or removed (a person) is on no segment: its tags go, in the caller's
+    transaction (backend/settings_admin.py archive_bot, backend/people_remove.py remove)."""
+    segs = [
+        r[0] for r in c.execute("SELECT segment_id FROM segment_members WHERE member=? ORDER BY segment_id", (ref,))
+    ]
+    if segs:
+        c.execute("DELETE FROM segment_members WHERE member=?", (ref,))
+        _event(c, actor, "segments.member", ref, {"segments": [], "was": segs})
 
 
 def _managers(c: sqlite3.Connection) -> dict[str, str]:
@@ -483,9 +536,9 @@ def _levels(parent: dict[str, str], key: str) -> int:
     return levels
 
 
-def _directory(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None) -> Directory:
-    """What faces and members are listed with: each teammate on the org chart by its name, its depth on the chart (the
-    people and bots above it), and the people the viewer may not see."""
+def _chart(c: sqlite3.Connection) -> Directory:
+    """Every teammate on the org chart (an archived bot is not on it) by its name and its depth on the chart: the people
+    and bots above it. Nobody is hidden here: the viewer's hiding is `_directory`'s."""
     roster = _roster(c)
     configs = _entries(c)
     archived = {r[0] for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
@@ -504,11 +557,18 @@ def _directory(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth
     for ref in names:
         key = ("p:" if ref.startswith("person:") else "b:") + ref.split(":", 1)[1]
         depth[ref] = _levels(parent, key)
+    return {"names": names, "depth": depth, "hidden": set()}
+
+
+def _directory(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None) -> Directory:
+    """What faces and members are listed with: each teammate on the org chart by its name, its depth on the chart (the
+    people and bots above it), and the people the viewer may not see."""
+    base = _chart(c)
     hidden: set[str] = set()
     if who is not None and auth is not None:
         people_hidden, _groups = _unseen(c, who, auth)
         hidden = {"person:" + pid for pid in people_hidden}
-    return {"names": names, "depth": depth, "hidden": hidden}
+    return {**base, "hidden": hidden}
 
 
 def _faces_of(refs: list[str], directory: Directory) -> list[str]:
@@ -522,18 +582,33 @@ def _face(ref: str, directory: Directory) -> Row:
     return {"ref": ref, "name": directory["names"][ref], "kind": "bot" if ref.startswith("bot:") else "person"}
 
 
+def _leads(refs: list[str], managers: dict[str, str], chart: Directory) -> list[str]:
+    """The live teammates among `refs`, highest on the chart first, whose manager is not one of them too: the leads.
+    When every live one has a dedicated manager (a cycle), the highest of them leads."""
+    live = _faces_of(refs, chart)
+    dedicated = set(live)
+    leads_now = [r for r in live if managers.get(r, "") not in dedicated]
+    return leads_now or live[:1]
+
+
 def leads(c: sqlite3.Connection, segment_id: str) -> list[str]:
-    """The segment's leads, highest on the chart first: its dedicated teammates whose manager is not dedicated to it
-    too. They see the segment's P&L line; their reports see its budget and goals."""
-    dedicated = set(_dedicated(c, segment_id))
+    """The segment's leads (refs), highest on the chart first: its live dedicated teammates whose manager is not dedicated
+    to it too. They see the segment's P&L line; their reports see its budget and goals."""
+    return _leads(_dedicated(c, segment_id), _managers(c), _chart(c))
+
+
+def led_by(c: sqlite3.Connection, ref: str) -> set[str]:
+    """The company's segments a teammate leads (the same rule as `leads`), built from one read of the chart and the
+    managers."""
+    chart = _chart(c)
     managers = _managers(c)
-    return _faces_of([r for r in dedicated if managers.get(r, "") not in dedicated], _directory(c))
+    return {sid for sid, refs in _tagged(c).items() if ref in refs and ref in _leads(refs, managers, chart)}
 
 
 def members(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None) -> Row:
     """GET /api/v2/segments/members: every teammate tagged with one of the company's segments or `all`, highest on the
     chart first, the viewer's hidden people left out. `truncated` says the list was cut at MEMBERS_MAX."""
-    ours = ours_ids(c)
+    ours = _ours_ids(c)
     rows: dict[str, list[str]] = {}
     for ref, sid in c.execute("SELECT member, segment_id FROM segment_members ORDER BY member, segment_id"):
         if sid == ALL or sid in ours:
@@ -549,22 +624,23 @@ def members(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | 
 # ----------------------------------------------------------------------------- the segment's strategy
 def strategy_view(c: sqlite3.Connection, segment_id: str, editable: bool) -> Row:
     """The segment's strategy field by field: the summary and the seven fixed sections, each with the text the segment
-    reads (its own where it changed one, else the company's), the company's text and whether it changed. `editable`
-    (the owner) reads the draft; anyone else the published version."""
+    reads (its own where it changed one, else the company's), the company's text, whether it changed, and where its text
+    comes from ("segment" or "company"). `editable` (the owner) reads the draft; anyone else the published version."""
     from . import strategy as ST
 
     source = _draft(c) if editable else _current(c)
     if not source:
         return {"draft": editable, "revision": None, "version": None, "fields": []}
-    own = source["sections"]["segments"].get(segment_id, {})
-    company = {"summary": source["summary"], **{k: source["sections"][k] for k in ST.FIXED_KEYS}}
-    fields = [
+    own: Row = _segment_sections(source).get(segment_id) or {}
+    company: Row = {"summary": source["summary"], **{k: source["sections"][k] for k in ST.FIXED_KEYS}}
+    fields: list[Row] = [
         {
             "key": key,
             "title": "Summary" if key == "summary" else ST.TITLES[key],
             "text": own[key] if key in own else company[key],
             "company": company[key],
             "changed": key in own,
+            "from": "segment" if key in own else "company",
         }
         for key in ST.SEGMENT_KEYS
     ]
@@ -600,46 +676,41 @@ def _bets_of(c: sqlite3.Connection, segment_id: str, editable: bool) -> list[Row
 
 
 def detail(c: sqlite3.Connection, auth: "Auth", who: "Identity", segment_id: str, editable: bool) -> Row:
-    """GET /api/v2/segments/{id}: the segment (as the list shows it), its leads, its strategy and its live bets."""
+    """GET /api/v2/segments/{id}: the segment (as the list shows it), its leads, its strategy and its live bets. The
+    leads are the company's, whoever may see them; the ones the viewer may not see are left out of the list."""
     row = _ours_row(c, segment_id)
     directory = _directory(c, who, auth)
-    dedicated = set(_dedicated(c, segment_id))
-    managers = _managers(c)
-    live = _faces_of(list(dedicated), directory)
-    lead_refs = [r for r in live if managers.get(r, "") not in dedicated]
-    index = [r["id"] for r in _ordered(c)].index(segment_id)
+    tagged = _dedicated(c, segment_id)
+    live = _faces_of(tagged, directory)
+    company_leads = _leads(tagged, _managers(c), _chart(c))
     return {
-        **_segment_view(row, index, [_face(r, directory) for r in live], len(live)),
-        "leads": [_face(r, directory) for r in lead_refs],
+        **_segment_view(row, _index_of(c, segment_id), [_face(r, directory) for r in live], len(live)),
+        "leads": [_face(r, directory) for r in company_leads if r not in directory["hidden"]],
         "strategy": strategy_view(c, segment_id, editable),
         "bets": _bets_of(c, segment_id, editable),
     }
 
 
 # ----------------------------------------------------------------------------- what a run is handed
-def run_text(c: sqlite3.Connection, bot: str | None) -> str:
-    """What a bot's run is handed about the segments it is dedicated to (backend/learned.py for_turn): each one's name,
-    its one line, and the parts of its strategy the segment changed, from the published version. A bot tagged `all`
-    is handed every segment. "" when there is no published version or no segment."""
-    from . import strategy as ST
-
-    published = _current(c)
+def run_text(c: sqlite3.Connection, bot: str | None, published: Row | None) -> str:
+    """What a bot's run is handed about the segments it is dedicated to (backend/learned.py for_turn), from the published
+    version the caller read once for the turn (`published`, strategy.current): each segment as `Segment: <name> — <who>`
+    with its published summary under it, in list order. A bot tagged `all` is handed every one of the company's
+    segments; a bot with no tag is handed nothing. "" when nothing is published or there is no segment to hand over."""
     if not published:
         return ""
     mine = member_segments(c, "bot:" + str(bot or ""))
     if not mine:
         return ""
-    own = published["sections"]["segments"]
+    own = _segment_sections(published)
     blocks: list[str] = []
-    for row in _ordered(c):
+    for row in _ordered_rows(c):
         if ALL not in mine and row["id"] not in mine:
             continue
-        lines = [f"Segment: {row['name']}" + (f" ({row['summary']})" if row["summary"] else "")]
-        for key in ST.SEGMENT_KEYS:
-            text = own.get(row["id"], {}).get(key)
-            if text:
-                lines.append(f"{'Summary' if key == 'summary' else ST.TITLES[key]}: {text}")
-        blocks.append("\n".join(lines))
+        head = f"Segment: {row['name']}" + (f" — {row['summary']}" if row["summary"] else "")
+        item: Row = own.get(row["id"]) or {}
+        summary = str(item.get("summary") or "")
+        blocks.append(head + ("\n" + summary if summary else ""))
     text = "\n\n".join(blocks)
     return text if len(text) <= RUN_MAX else text[: RUN_MAX - 1].rstrip() + "…"
 
@@ -650,9 +721,10 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
         _domain(auth, who)
 
     def owner(who: "Identity") -> None:
-        """The owner on their own click: a bot proposes a segment change and the owner confirms it."""
+        """The owner on their own click: a bot proposes a segment change and the owner confirms it. A card the owner
+        confirmed in the Assistant or BotOps counts as the owner's click."""
         _domain(auth, who)
-        if _company_editor(who):
+        if _company_editor(who, tap=True):
             return
         if who.role == "bot":
             raise Problem("forbidden", "A bot proposes a change to the segments and the owner confirms it", 403)
@@ -667,7 +739,8 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
     def company() -> str:
         return _company_name(store)
 
-    # The literal routes first: a path parameter below would take them for a segment id.
+    # The literal routes first: a path parameter below would take them for a segment id. A segment id is always
+    # `segment/<slug>`, so those below never match one of these, and a segment named "remove" keeps its own route.
     @app.get("/api/v2/segments/members")
     def segment_members_list(request: Request):
         """Every teammate tagged with a segment (`segment_id` the company's or `all`), highest on the chart first."""
@@ -678,7 +751,7 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
 
     @app.post("/api/v2/segments/members")
     def segment_members_set(request: Request, body: M.SegmentMembers):
-        """A teammate's segments, replaced by the ones sent ([] clears them): the company's segment ids and `all`."""
+        """A teammate's segments, replaced by the ones sent ([] clears them): the company's segment ids, or `all` alone."""
         who: "Identity" = request.state.identity
 
         def work(c: sqlite3.Connection):
@@ -699,6 +772,28 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
 
         return mutate(request, body, work)
 
+    @app.post("/api/v2/segments/remove")
+    def segment_remove(request: Request, body: M.SegmentRemove):
+        """Take a segment out of the company's: its teammate tags go, the market keeps it. Answers {id, removed}."""
+        who: "Identity" = request.state.identity
+
+        def work(c: sqlite3.Connection):
+            owner(who)
+            return remove(c, who.actor, body.id)
+
+        return mutate(request, body, work)
+
+    @app.put("/api/v2/segments/strategy")
+    def segment_strategy_write(request: Request, body: M.SegmentStrategy):
+        """The segment's own text for the sections sent ("" gives the company's back), in the draft. Answers {strategy}."""
+        who: "Identity" = request.state.identity
+
+        def work(c: sqlite3.Connection):
+            owner(who)
+            return {"strategy": write_strategy(c, who.actor, body.id, body.revision, body.sections)}
+
+        return mutate(request, body, work)
+
     @app.get("/api/v2/segments")
     def segment_list(request: Request):
         """The segments the company plays in, in list order: id, name, who, color, rank, faces (the dedicated teammates,
@@ -716,28 +811,6 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
         def work(c: sqlite3.Connection):
             owner(who)
             return {"segment": create(c, who.actor, body.name, body.who, body.color, company())}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/segments/{segment_id:path}/remove")
-    def segment_remove(request: Request, segment_id: str, body: M.Empty):
-        """Retire the segment: it is no longer one of the company's. Answers {id, removed}."""
-        who: "Identity" = request.state.identity
-
-        def work(c: sqlite3.Connection):
-            owner(who)
-            return remove(c, who.actor, segment_id)
-
-        return mutate(request, body, work)
-
-    @app.put("/api/v2/segments/{segment_id:path}/strategy")
-    def segment_strategy_write(request: Request, segment_id: str, body: M.SegmentStrategy):
-        """The segment's own text for the sections sent ("" gives the company's back), in the draft. Answers {strategy}."""
-        who: "Identity" = request.state.identity
-
-        def work(c: sqlite3.Connection):
-            owner(who)
-            return {"strategy": write_strategy(c, who.actor, segment_id, body.revision, body.sections)}
 
         return mutate(request, body, work)
 

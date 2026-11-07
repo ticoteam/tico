@@ -955,10 +955,17 @@ class SegmentMembers(Contract):
     segments: list[str] = Field(default_factory=list, max_length=60)
 
 
+class SegmentRemove(Contract):
+    """Take a segment out of the company's (its teammate tags go; the market keeps it)."""
+
+    id: str = Field(min_length=3, max_length=200)
+
+
 class SegmentStrategy(Contract):
     """A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); "" uses the
-    company's text again. `revision` is the draft's as read."""
+    company's text again. `id` is the segment; `revision` is the draft's as read."""
 
+    id: str = Field(min_length=3, max_length=200)
     revision: int | None = None
     sections: dict[str, str] = Field(default_factory=dict, max_length=8)
 

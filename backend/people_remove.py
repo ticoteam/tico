@@ -121,6 +121,9 @@ def remove(c, actor, roster, person):
         )
         H.event(c, actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     c.execute("DELETE FROM human_tokens WHERE human=?", (pid,))
+    from . import segments as SG  # lazy: the segments module reads the people and the market
+
+    SG.forget_member(c, actor, "person:" + pid)  # a removed person is on no segment (backend/segments.py)
     # The invite bindings stay, so a repeat of an invite request answers from them and never invites the person again
     # (invites.replay). What names them goes: the hash of the address, and any refusal text that carries it.
     c.execute("UPDATE idempotency SET request_hash='' WHERE binding=? AND subject=?", (invites.BINDING, pid))

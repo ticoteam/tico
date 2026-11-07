@@ -6995,7 +6995,8 @@ STABLE.extend(
             'post',
             'Segments',
             'createSegment',
-            'Owner only: a segment the company plays in, by name; a market segment of that name joins',
+            'Owner only: a segment the company plays in, by name. A market segment of that name joins; one that is the '
+            "company's already, or merged away, is a 409; a removed one comes back with its id",
             None,
         ),
         (
@@ -7027,7 +7028,8 @@ STABLE.extend(
             'get',
             'Segments',
             'getSegment',
-            'One segment: its faces, leads, strategy (the draft for the owner) and live bets',
+            'One segment: its faces, leads, strategy (the draft for the owner, the published text for everyone else) '
+            'and live bets',
             None,
         ),
         (
@@ -7039,19 +7041,20 @@ STABLE.extend(
             None,
         ),
         (
-            '/api/v2/segments/{segment_id}/remove',
+            '/api/v2/segments/remove',
             'post',
             'Segments',
             'removeSegment',
-            "Owner only: no longer one of the company's segments; its teammate tags stay",
+            "Owner only: takes the segment out of the company's; its teammate tags go and the market keeps it",
             None,
         ),
         (
-            '/api/v2/segments/{segment_id}/strategy',
+            '/api/v2/segments/strategy',
             'put',
             'Segments',
             'updateSegmentStrategy',
-            "Owner only: the segment's own text for the sections sent, in the draft; a stale revision answers 409",
+            "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision "
+            "answers 409",
             None,
         ),
     ]

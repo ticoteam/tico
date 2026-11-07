@@ -138,7 +138,9 @@ def for_turn(c, settings, conversation, bot):
     from . import segments, strategy
 
     layers = _layers(c, settings, conversation, bot)
-    text = "\n\n".join(x for x in (strategy.summary_text(c), segments.run_text(c, bot)) if x)
+    published = strategy.current(c)  # read once for the turn: the company's text and every segment's come from it
+    parts = [strategy.summary_text(c, published), segments.run_text(c, bot, published)] if published else []
+    text = "\n\n".join(x for x in parts if x)
     if text:
         layers = {**(layers or {}), "strategy": text}
     if growth_facing(c, bot):

@@ -764,7 +764,12 @@ function strategyBindMarket(state, body) {
       if (x && tile) {
         const id = tile.dataset.seg, all = spend()?.segments || [], seg = all.find(s => s.id === id);
         if (!seg) return;
-        // Its sub-segments move up to its parent, as the server does.
+        if (seg.self) {
+          // One of the company's: it stops being one (the segments remove route), and the market keeps it, so the tile stays.
+          post('/v2/segments/remove', {id}).then(() => again('spend')).catch(error => failed('spend', error));
+          return;
+        }
+        // Not the company's: the market's cleanup retires it, and its sub-segments move up to its parent, as the server does.
         spend().segments = all.filter(s => s !== seg).map(s => (s.parent === id ? {...s, parent: seg.parent, depth: Math.max(1, (s.depth || 2) - 1)} : s));
         strategyPaintMarket('spend');
         post('/v2/market/segments/remove', {id}).then(() => again('spend')).catch(error => failed('spend', error));

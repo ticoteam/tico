@@ -75,12 +75,13 @@ removes a thing.
   - `status`: `proposed`, `active` or `retired`. A retired bet keeps its goals.
 - **Where we play.** The market's segments by spend ([Librarian](librarian.md#market-spend)), a sized segment inside
   its sized parent, unsized ones as plain tiles. The segments the company plays in are marked. A click on a segment
-  toggles its mark, and several may be marked. × removes a segment (its sub-segments move up to its parent), and
-  **Add a segment** adds one to the market by name (defining the market first, as "<company> market", when there is
-  none). The mark is the market graph's own row: `company/self` has a current `operates_in` edge to each segment the
-  company plays in, as the company file's import writes them. Only the owner marks a segment. A removed segment keeps
-  its teammates' tags but is not the company's again until the owner marks it. [Segments](#segments) says what a
-  segment is once it is the company's.
+  toggles its mark, and several may be marked. × on a marked segment takes it out of the company (its teammates' tags go,
+  and it stays in the market); × on any other segment retires it from the market, its sub-segments moving up to its
+  parent. **Add a segment** adds one to the market by name (defining the market first, as "<company> market", when there
+  is none). The mark is the market graph's own row: `company/self` has a current `operates_in` edge to each segment the
+  company plays in, as the company file's import writes them. Only the owner marks a segment or takes one out. A segment
+  is the company's again only when the owner marks it. [Segments](#segments) says what a segment is once it is the
+  company's.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
   company the graph has by that name or domain, or makes it, and adds the edge.
@@ -145,36 +146,43 @@ next before this release is one of its own now; that mark folded into the flag.
 joins the company's, and a removed one comes back with its id and its history. The owner also renames it, sets its one
 line and its colour (blue, green, amber, red, purple, teal, pink or gray; a new one gets the first colour no other
 segment has) and orders the list (`POST /api/v2/segments/order` names every segment once). A bot cannot change a
-segment. Removing one (`POST /api/v2/segments/{id}/remove`, or × on the Where we play card) takes it out of the
-company's segments and moves its sub-segments up to its parent. Its teammate tags stay, and show again when it is the
-company's once more. Merging it into another segment moves its tags and its bets to that one; its own strategy text
-does not move, and is written again under the segment it merged into.
+segment. Removing one (`POST /api/v2/segments/remove` with `{id}`, or × on the Where we play card) takes it out of the
+company's segments. The market keeps it, with its sizes and its place in the tree, and its teammates' tags go: a tag
+names one of the company's segments, so it has no teammate until the owner makes it the company's again, and it comes
+back with none. Merging it into another segment moves its bets and the rows keyed by segment (goals, tasks, budgets,
+finance contacts and market briefings) to that one, and its teammate tags too when that one is the company's (they go
+otherwise). Its draft text fills the sections that one has no text for; where both have text, the one it merged into
+keeps its own.
 
 **Who is dedicated.** A teammate, human or bot, tagged with a segment is dedicated to it: one of its **faces**, highest
 on the team chart first (the people and bots above it count as its depth; groups do not). A tag of `all` means the
-teammate works across every segment. It is not one of their faces, and its runs are handed every segment's text. A
-teammate may carry several tags. A segment's **leads** are its dedicated teammates whose manager is not dedicated to it
-too. Anyone signed in can read a segment, its faces and its leads. A teammate the viewer may not see is left out of
-them, and out of the count.
+teammate works across every segment. It is not one of their faces, and its runs are handed every segment's summary. A
+teammate may carry several tags. A segment's **leads** are its live dedicated teammates whose manager is not dedicated to
+it too; when every one of them has a dedicated manager (a loop in the chart), the highest one leads. Archived bots and
+removed people lose their tags. Anyone signed in can read a segment, its faces and its leads. A teammate the viewer may
+not see is left out of them, and out of the count.
 
 **Its strategy.** A segment has the same fields as the company's strategy: its summary and the seven sections
 ([The page](#the-page)). The owner writes its own text for any of them in the draft
-(`PUT /api/v2/segments/{id}/strategy`, against the draft's revision). A field the segment did not change reads as the
+(`PUT /api/v2/segments/strategy` with `{id, revision, sections}`, against the draft's revision). A field the segment did not change reads as the
 company's text, and `""` gives the company's text back. Its text publishes with the rest, is in every version, and the
-diff names it `sections.segments.<id>.<field>`. `GET /api/v2/segments/{id}` gives the strategy field by field, each with
-the company's text beside it and whether it changed. A bot can propose strategy text for a segment in a
+diff names it `sections.segments.<id>.<field>`. `GET /api/v2/segments/{id}` gives the strategy field by field: each with
+its `text` (the segment's where it changed one; `from` says which), the company's text beside it (`company`) and whether
+the segment changed it (`changed`). A bot can propose strategy text for a segment in a
 `strategy_draft` proposal, which the owner confirms.
 
 **Bets.** A bet can name one segment, one of the company's, or none ([the API](#hub-and-the-api)). The segment's detail
 lists its live bets.
 
-**In a run.** A bot dedicated to a segment, or tagged `all`, is handed in its run context the name and one line of each
-of those segments, and the segment text that is published (the fields it changed), at most 12,000 characters. Drafts are
-never handed to a run. The company's summary still goes to every run, in the same context.
+**In a run.** A bot dedicated to a segment is handed, in its run context, each of its segments as
+`Segment: <name> — <who>` with the segment's published summary under it. A bot tagged `all` is handed every one of the
+company's segments that way. Only published text is handed, never a draft, and at most 2,000 characters in all (a longer
+one is cut with `…`). The company's summary still goes to every run, in the same context.
 
 **Who may do what.** Anyone signed in reads the segments. The draft is the owner's, as the company's is. The owner, on
-their own click, writes a segment, its strategy and the list; a bot's request to do so gets `403`. The owner or a bot
-admin tags a teammate with a segment; a member gets `403`.
+their own click or by a card they confirmed in the Assistant, writes a segment, its strategy and the list, and takes one
+out of the company; a bot's request to do so gets `403`. A Librarian may retire a segment that is not the company's. The
+owner or a bot admin tags a teammate with a segment; a member gets `403`.
 
 ## Lenses
 
@@ -371,18 +379,16 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `GET /strategy/diff?from=&to=` | any reader | `{fields: [{key, from, to}], bets: {added, retired, changed}}`, keyed by bet id and status |
 | `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active, at most 30 not retired; `rules_out` and `wrong_if` optional; `segment_id`, one of the company's segments or `""` for none ([Segments](#segments)) |
 | `POST /market/segments/target` | the owner (a bot, the Librarian too, gets 403) | `{id, target: ours\|none}`: the segment becomes one of the company's or is not, other segments unchanged; `next` is read as `ours`; answers `{id, ours}` |
-| `POST /market/segments/remove` | the owner or the Librarian | `{id}`: retires the segment (it is no longer one of the company's; its teammate tags stay) and moves its sub-segments up to its parent; not the root |
+| `POST /market/segments/remove` | the owner or the Librarian | `{id}`: a segment that is not the company's is retired (its sub-segments move up to its parent; not the root); one that is the company's is taken out of the company by the owner only (`403` for anyone else, as `POST /segments/remove`). Either way its teammate tags go |
 | `GET /segments` | any reader | `{segments: [{id, name, who, color, rank, faces, teammates}]}` in list order; `faces` are the dedicated teammates `{ref, name, kind}`, highest on the chart first, at most 24; `teammates` counts them all, hidden people left out |
 | `POST /segments` | the owner | `{name, who?, color?}`: a segment the company plays in (a market segment of that name joins, a removed one comes back with its id); answers `{segment}` |
 | `POST /segments/order` | the owner | `{ids}`: every segment the company plays in, once each; answers `{segments}` |
 | `GET /segments/members` | any reader | `{members: [{member, segments}], truncated}`: every tagged teammate, highest on the chart first, at most 500; `segments` lists the ids and `"all"` |
 | `POST /segments/members` | the owner or a bot admin | `{member: "bot:<id>" or "person:<id>", segments: [id or "all"]}`, `[]` clears; answers `{member, segments}` |
-| `GET /segments/{id}` | any reader | the segment as the list shows it, plus `leads` (faces), `strategy` (`{draft, revision, version, fields: [{key, title, text, company, changed}]}`, the draft for the owner and the published text otherwise) and `bets` (`{id, statement, status}`, live ones) |
+| `GET /segments/{id}` | any reader | the segment as the list shows it, plus `leads` (its live faces whose manager is not one of them), `strategy` (`{draft, revision, version, fields: [{key, title, text, company, changed, from}]}`; the draft for the owner and the published text otherwise; `from` is `segment` or `company`) and `bets` (`{id, statement, status}`, live ones) |
 | `POST /segments/{id}` | the owner | `{name?, who?, color?}`, only what is sent changes; answers `{segment}` |
-| `POST /segments/{id}/remove` | the owner | answers `{id, removed}`; its teammate tags stay |
-| `PUT /segments/{id}/strategy` | the owner | `{revision, sections: {summary?, serve?, ...}}`, `""` gives the company's text back; `409` on a stale revision; answers `{strategy}` |
-
-Ids contain a slash (`segment/screening`), so the path is `/api/v2/segments/segment/screening`.
+| `POST /segments/remove` | the owner | `{id}`: takes the segment out of the company's; its teammate tags go; answers `{id, removed}` |
+| `PUT /segments/strategy` | the owner | `{id, revision, sections: {summary?, serve?, ...}}`, `""` gives the company's text back; `409` on a stale revision; answers `{strategy}` |
 | `GET /market/competitors` | any reader | `{competitors: [{id, name, url}]}`, by name |
 | `POST /market/competitors` | the owner or the Librarian | `{name}`: a name or a site; answers `{competitor}` |
 | `POST /market/competitors/remove` | the owner or the Librarian | `{id}`: ends its `competes_with` edges; 404 if it is not one |
@@ -390,6 +396,10 @@ Ids contain a slash (`segment/screening`), so the path is `/api/v2/segments/segm
 | `POST /strategy/draft-from`, `GET /strategy/draft-from/{job}` | the owner | setup research from `{url?, text?}`: fills the empty sections the pages support, marked unconfirmed, and proposes bets; gives up, reporting what it found, if the owner wrote the draft meanwhile. States are in [Setup](#setup); 422 for a missing or internal address |
 | `GET /strategy/guides` | any reader | deprecated: the Default guide only |
 | `/lenses/...` | see [Lenses](lenses.md#hub-and-the-api) | list, run, read, add a change to the draft, sharpen |
+
+Ids contain a slash (`segment/screening`), so a segment's path is `/api/v2/segments/segment/screening`. The writes that
+name a segment in the body (`POST /segments/remove`, `PUT /segments/strategy`) are not under `/segments/{id}`, so no
+segment id can reach them.
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
