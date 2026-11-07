@@ -811,6 +811,8 @@ class Lead(Bot):
 
     def act(self, task, message):
         refs = message.get("refs") or {}
+        if refs.get("wake") == "nudge" and refs.get("task"):
+            return self.reassign_once(refs["task"])
         if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
             self.world.post(
                 f"tasks/{task['id']}/comments",
@@ -833,6 +835,23 @@ class Lead(Bot):
         told = self.sweep()
         self.world.update(task["id"], token=self.token, status="done", note=told)
         return told
+
+    def reassign_once(self, task_id):
+        """A ticket Tico stopped resuming (three runs with no progress): the lead moves it once, to the least loaded peer of
+        its builder's kind, never back to that builder. No peer, no move: the lead says so."""
+        w = self.world
+        row = next((t for t in w.tickets() if t["id"] == task_id), None)
+        if row is None or row["status"] in FINISHED or not str(row["owner_id"]).startswith("bot:"):
+            return "the stopped ticket is gone"
+        owner = row["owner_id"]
+        role = next((r for r, slugs in w.roles.items() if owner[4:] in slugs), None)
+        peers = ["bot:" + slug for slug in w.roles.get(role, []) if "bot:" + slug != owner]
+        if not peers:
+            return f"noted the stop on {owner[4:]}: no other builder to move it to"
+        load = Counter(t["owner_id"] for t in w.tickets() if t["status"] not in FINISHED)
+        target = min(peers, key=lambda o: load[o])
+        w.update(task_id, token=self.token, owner=target)
+        return f"moved the stopped ticket from {owner[4:]} to {target[4:]}"
 
     def spread(self, task):
         """A backlog at a step: hand the busiest bot owner's surplus there to the least loaded bot of the same kind.
