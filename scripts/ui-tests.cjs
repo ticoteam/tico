@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Runs the browser scripts in ui/tests/*.cjs a few at a time (npm run test:ui).
 // Each script's output is held and printed together, so a failure reads as one block.
+// EXCLUSIVE scripts (dot-perf, the Liquid Dot's throttled frame budgets) run after the others, alone.
 // Usage: node scripts/ui-tests.cjs [-j N] [--all] [--group NAME] [--list] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
 // --list prints the scripts the same arguments would run, one name per line, and runs nothing (CI splits them
 // across VMs). With TICO_UI_TIMINGS set, each passing script's seconds are written there as JSON {name: seconds}.
@@ -220,6 +221,8 @@ function stoppedReport({pending, calls, stopped}) {
 
 // Named groups of scripts: a group is every ui/tests script whose name starts with its prefix.
 const GROUPS = {e2e: 'e2e-'};
+// Frame-budget scripts (the Liquid Dot's throttled p95): run alone, after the others, so their frames are not stolen by a sibling's browser.
+const EXCLUSIVE = ['dot-perf'];
 
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
@@ -278,10 +281,13 @@ async function main() {
     }
   };
 
-  const queue = [...files];
+  // EXCLUSIVE scripts measure frame budgets on a throttled page: they run alone, after the rest, so no sibling browser takes a core from them.
+  const alone = files.filter(f => EXCLUSIVE.includes(f.replace(/\.cjs$/, '')));
+  const queue = files.filter(f => !alone.includes(f));
   await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
     while (queue.length) await run(queue.shift());
   }));
+  for (const file of alone) await run(file);
   const secs = ((Date.now() - started) / 1000).toFixed(0);
   if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
   console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (${secs}s)`
