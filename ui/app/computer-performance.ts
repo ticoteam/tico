@@ -13,7 +13,6 @@ interface ComputerPerfOverload {
   ended_at: number | null;
   last_seen_at: number;
   minutes: number;
-  ended?: boolean;
   reasons: string[];
   cpu_max: number | null;
   mem_max: number | null;
@@ -202,8 +201,8 @@ function perfChart(state: ComputerPerfState): void {
     const p = d.points[at];
     if (!p) return;
     const px = x(p[0]);
-    // The hover layer is an SVG g: its `hidden` has always been a plain property, which Object.assign sets the same way.
-    Object.assign(hover, {hidden: false});
+    // The hover layer is an SVG g, which has no hidden property: its hidden attribute is toggled.
+    hover.toggleAttribute('hidden', false);
     const cross = hover.querySelector<SVGLineElement>('.perf-cross')!;
     cross.setAttribute('x1', String(px)); cross.setAttribute('x2', String(px));
     PERF_SERIES.forEach(([key, col]) => {
@@ -228,7 +227,7 @@ function perfChart(state: ComputerPerfState): void {
     while (lo < hi) { const mid = (lo + hi) >> 1; if (d.points[mid]![0] < ts) lo = mid + 1; else hi = mid; }
     return lo > 0 && ts - d.points[lo - 1]![0] < d.points[lo]![0] - ts ? lo - 1 : lo;
   };
-  const hide = () => { Object.assign(hover, {hidden: true}); tip.hidden = true; };
+  const hide = () => { hover.toggleAttribute('hidden', true); tip.hidden = true; };
   hit.onpointermove = event => {
     const r = svg.getBoundingClientRect(), vx = (event.clientX - r.left) * W / r.width;
     show(nearest(d.since + (vx - L) / pw * (d.until - d.since)));
@@ -270,7 +269,7 @@ function perfOverloadsHTML(d: ComputerPerformance): string {
   const rows = [...d.overloads].reverse().map(o => {
     const end = o.ended_at || o.last_seen_at + 60;
     const replay = '#/replay?' + new URLSearchParams({from: new Date(o.started_at * 1000).toISOString(), to: new Date(end * 1000).toISOString()});
-    return `<tr><td class="tnum">${esc(perfWhen(o.started_at))}</td><td class="tnum">${esc(perfMinutes(o.minutes))}${o.ended ? '' : ' <span class="pill fail">now</span>'}</td>
+    return `<tr><td class="tnum">${esc(perfWhen(o.started_at))}</td><td class="tnum">${esc(perfMinutes(o.minutes))}${o.ended_at ? '' : ' <span class="pill fail">now</span>'}</td>
       <td>${esc(o.reasons.map(r => PERF_REASONS[r] || r).join(', '))}<span class="settings-cell-note">peak CPU ${perfPct(o.cpu_max)} · memory ${perfPct(o.mem_max)} · ${o.runs_max} turn${o.runs_max === 1 ? '' : 's'}</span></td>
       <td>${esc(o.bots.map(b => perfBot(b.bot) + (b.runs > 1 ? ` ×${b.runs}` : '')).join(', ') || '–')}</td>
       <td>${esc(o.procs.slice(0, 3).map(p => p.name).join(', ') || '–')}</td><td><a href="${esc(replay)}">Replay</a></td></tr>`;
