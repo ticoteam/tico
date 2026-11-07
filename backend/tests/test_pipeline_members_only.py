@@ -171,7 +171,10 @@ def test_ticket_lists_search_and_the_pipeline_view_leave_out_a_members_only_pipe
 
     everything, readers_own = {theirs, mine, asked}, {mine, asked}
     assert listed("ana-test", f"tasks?type={typ}&limit=500") == everything
-    assert listed("cara-test", f"tasks?type={typ}&limit=500") == readers_own
+    get(api, f"tasks?type={typ}&limit=500", "cara-test", expected=422)  # a hidden type is no type to her
+    assert theirs not in listed("cara-test", "tasks?limit=500") and readers_own <= listed(
+        "cara-test", "tasks?limit=500"
+    )
     assert listed("ana-test", f"tasks?q={tag}&limit=500") == everything
     assert listed("cara-test", f"tasks?q={tag}&limit=500") == readers_own
     get(api, f"pipeline?type={typ}", "cara-test", expected=422)  # a hidden type is no type to her
@@ -216,3 +219,32 @@ def test_the_affected_count_of_a_members_only_stage_is_not_found_to_a_non_member
             "INSERT INTO pipeline_members (pipeline_id, actor_id, created_at) VALUES (?,?,?)", (typ, "human:cara", T)
         )
     assert get(api, path, "cara-test")["count"] == 1
+
+
+def test_flow_stats_and_ticket_filters_name_a_members_only_pipeline_to_no_one_outside_it(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Legal" + tag, private=True)
+    with api.app.state.store.transaction() as c:
+        H.type_create(c, H.KEEPER, "Hush" + tag, [{"name": "Hush" + tag, "status": "doing"}])
+        hush = H.type_get(c, "Hush" + tag)["id"]
+        c.execute("UPDATE task_types SET pipeline_visibility='members' WHERE id=?", (hush,))
+    ticket(api, typ, "Open " + tag, owner="human:ben")
+
+    def answer(path, token):
+        response = api.get("/api/v2/" + path, headers=headers(token))
+        return response.status_code, response.text
+
+    # A hidden type is refused as an unknown one is, with the same error (the name it was given is the only difference).
+    for path, unknown in (
+        (f"tasks/flow?type={typ}", "tasks/flow?type=nope" + tag),
+        (f"tasks?type={typ}&limit=5", "tasks?type=nope" + tag),
+        (f"tasks?step=Hush{tag}&limit=5", "tasks?step=nope" + tag),
+    ):
+        hidden, missing = answer(path, "cara-test"), answer(unknown, "cara-test")
+        assert hidden[0] == missing[0] == 422, (path, hidden, missing)
+        assert hidden[1].replace(typ, "X").replace("Hush" + tag, "X").replace("nope" + tag, "X") == missing[1].replace(
+            "nope" + tag, "X"
+        ), (path, hidden, missing)
+        assert "Legal" not in hidden[1]
+    assert answer(f"tasks/flow?type={typ}", "ana-test")[0] == 200
+    assert answer(f"tasks?step=Hush{tag}&limit=5", "ana-test")[0] == 200

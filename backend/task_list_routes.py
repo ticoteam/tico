@@ -65,6 +65,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 member=member,
                 role=role,
                 snoozed=snoozed,
+                viewer=who.task_actor or who.actor,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
@@ -337,6 +338,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             owner = H.resolve_actor(c, owner) if owner else None
             requester = H.resolve_actor(c, requester) if requester else None
             typ = H.type_get(c, type) if type else None
+            # A members-only pipeline is no type to someone outside it: refused as an unknown one is.
+            if typ and not pipeline_rights.may_see(c, who.task_actor or who.actor, typ["id"]):
+                typ = None
             if type and not typ:
                 raise Problem("type", "No task type " + type, 422)
             tz = max(-840, min(840, tz))  # minutes east of UTC; days are the viewer's days
