@@ -54,7 +54,7 @@ def test_a_person_approves_a_spec_with_a_page_and_the_builder_ticket_carries_it(
             "SELECT p.spec FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE f.task_id=?", (ticket[0],)
         ).fetchall()
         assert ticket is not None and "Spec page:" in ticket[1]
-        assert ("frozen",) in frozen
+        assert "frozen" in [r[0] for r in frozen]
 
 
 def test_a_bot_cannot_approve_a_spec(api):
