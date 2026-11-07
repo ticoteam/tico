@@ -306,7 +306,7 @@ def apply_factory_setup(
     return {"preset": preset, "factories": factories, "pipelines": pipelines, "changes": made}
 
 
-class SetupBody(BaseModel):
+class PipelineSetupBody(BaseModel):
     preset: str = "tico_default"
     replace: bool = False
 
@@ -318,7 +318,7 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
     from .store import Problem
 
     @app.post("/api/v2/pipelines/setup")  # pyright: ignore[reportUntypedFunctionDecorator]
-    def setup(request: Request, body: SetupBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    def setup(request: Request, body: PipelineSetupBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         who = request.state.identity
         guard: Any = auth
         if guard.company_role(who) not in ("owner", "admin"):
