@@ -85,6 +85,7 @@
  "hub_file_read": "usage",
  "hub_file_review": "validation",
  "hub_finance_action": "404 not_found",
+ "hub_finance_contact_segment": "validation",
  "hub_finance_inbox": "404 not_found",
  "hub_finance_metric": "404 not_found",
  "hub_finance_report": "404 not_found",
