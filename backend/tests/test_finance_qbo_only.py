@@ -9,6 +9,7 @@ from backend.finance import reads as FR
 from backend.finance.attribution import PLANNERS
 from backend.finance.core import kinds as K
 from backend.finance.core import mirror as M
+from backend.finance.store import ledger as SL
 from backend.finance.core.errors import DENIED, INVALID
 from backend.finance.store import attribution as ATT
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
@@ -290,3 +291,29 @@ def test_attribution_map_is_a_live_kind_that_needs_the_attribution_right():
     assert "attribution_map" in K.ALL and "attribution_map" in K.LIVE
     assert K.NEEDS["attribution_map"] == "finance.attribution"
     assert "attribution_map" in K.SHAPES and "attribution_map" in K.WORDS
+
+
+def test_a_tico_kept_book_counts_a_bill_once_when_its_feed_payment_clears_it(books):
+    """A Tico-kept book posts a bill to payables and the bank's payment is the charge: Watch reads the feed row only.
+    The bill's expense entry must not count as a second charge."""
+    with books.transaction() as c:
+        assert SL.book(c).mode != "mirror"  # type: ignore[union-attr]
+        made = act(c, OWNER, "contact_create", {"name": "Acme Software", "kind": "vendor"})
+        assert made.status == "committed", made
+        vendor = str(made.result["contact_id"])
+        bill = act(
+            c,
+            OWNER,
+            "bill_create",
+            {
+                "vendor_id": vendor,
+                "bill_date": "2026-10-10",
+                "lines": [{"account_id": account(c, "6100"), "amount": 4_000}],
+            },
+        )
+        assert bill.status == "committed", bill
+        assert act(c, OWNER, "bill_approve", {"bill_id": str(bill.result["bill_id"])}).status == "committed"
+        _money, feed_id = _bank_row(c, -4_000, "2026-10-12")
+    with books.read() as c:
+        charges = FR._charges(c, OWNER, AT)
+        assert [ch.id for ch in charges] == [feed_id]

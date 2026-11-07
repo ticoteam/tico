@@ -2731,7 +2731,8 @@ def _month_windows(today: date, n: int = 4) -> list[tuple[str, str, str]]:
 
 def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
     """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them: the feed rows (not pending), and for
-    each money account with no feed rows in the window, its posted expense entries (a mirrored book with no bank)."""
+    each money account with no feed rows in the window, its posted expense entries. Only a mirrored book (QuickBooks or
+    Xero) reads entries: in a Tico-kept book a bill's entry and its feed payment would count the same charge twice."""
     today = date.fromisoformat(at[:10])
     start = (today - timedelta(days=WATCH_HISTORY_DAYS)).isoformat()
     out: list[W.Charge] = []
@@ -2764,6 +2765,9 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
+    book = SL.book(c)
+    if book is None or book.mode != "mirror":
+        return out  # a Tico-kept book pays its bills from the feed, and that feed row is the charge
     fed = _fed_money_accounts(c, start, today.isoformat())
     return out + _entry_charges(c, viewer, start, today.isoformat(), fed)
 
