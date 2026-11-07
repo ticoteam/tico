@@ -666,6 +666,7 @@ class Checker(Bot):
         parent = w.parent_of(task["id"])
         if task["owner_id"] != "bot:" + self.slug or task["status"] in FINISHED or not parent:
             return None
+        w.read_context(self, task["id"], parent)
         head = w.head_for(task)
         if self.chance("off_script"):
             target = next(s.name for s in w.board.steps if s.work)

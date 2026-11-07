@@ -449,6 +449,12 @@ def record_moved_input(c, from_attempt, to_attempt, message):
 
 def readable(c, actor, ids, who=None):
     principals = actor if isinstance(actor, tuple) else (actor,)
+    ids = set(ids)
+    from . import review_blind
+
+    # A bot's open later check is blind to the earlier reviews of its ticket, wherever they are named (backend/review_blind.py).
+    if any(review_blind.hidden_from(c, principals, tid) for tid in ids):
+        return False
     # Every permission is current in this snapshot. Tags and wide task bodies
     # contribute nothing to the decision, and shared provenance needs one lookup.
     rows = _task_rows(c, set(ids))
@@ -503,6 +509,10 @@ def message_readable(c, actor, message, current=False):
     stored = message if current else H.message(c, message.get("id"), include_deleted=True)
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
+        return False
+    from . import review_blind
+
+    if review_blind.hides_message(c, actor, message):
         return False
     if has_letters(c) and message.get("id"):
         letter = read_cache.one(c, LETTER_MESSAGE_SQL, (message["id"],))

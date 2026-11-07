@@ -129,6 +129,8 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
 
     Returns (counts by kind, the written-out lines, how many still wait), for `summary`."""
     H = _H()
+    from . import review_blind
+
     ids = [c for c in dict.fromkeys(conversation_ids) if c]
     stamp = H.now()
     counts, lines, settle, left, size, moot = {}, [], [], [], 0, []
@@ -147,6 +149,11 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
                 continue
             if not _carrier_ok(conn, bot, item, refs, room, session):
                 moot.append(rid)  # the bot may no longer read what it carries: never written out
+                continue
+            if kind in ("comment", "message") and review_blind.hides_message(
+                conn, "bot:" + str(bot), {"refs": refs, "conversation_id": room}
+            ):
+                moot.append(rid)  # a later review's check does not carry an earlier review's findings
                 continue
             if item != current:
                 text = (

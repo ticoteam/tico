@@ -11,7 +11,7 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 |---|---|---|---|
 | 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
-| 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
+| 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes. It judges the change on its own, blind to Review 1's findings, which it cannot read |
 | 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
 | 5 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
 | 6 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
@@ -56,7 +56,8 @@ approval before merge even when the team's task review policy allows a fixes-onl
    then it waits. Tico records the configured and executed families on the check. Set this per bot (its task model, which its checks run on, or
    its model), or use a check model on a subtask (see [Tasks](tasks.md)).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
-   reason on the ticket. There is no second round of the same review after fixes.
+   reason on the ticket. There is no second round of the same review after fixes. Reviewer 2 is blind to the earlier
+   reviews' findings and the messages that carry them, so it judges the change against its spec, diff and evidence.
 4. **QA runs tests it didn't write.** Head of Product writes the acceptance tests in Given/When/Then form. Each is
    tagged *check live*, *watch live* (unsafe to trigger in production: payments, sending, deleting, third-party
    actions) or *not checkable live*.

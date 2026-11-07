@@ -646,16 +646,18 @@ def _drop(c, ticket_id, keep_step=None, why="the ticket moved on"):
 def _file(c, ticket, step, slug, title, heads, snapshots, why):
     """File the check to `slug` as the ticket's owner would; the child, or None when a rule refused it (the refusal is
     rolled back and the check keeps waiting)."""
-    from . import review_gate
+    from . import review_blind, review_gate
 
     actor = H.KEEPER if step.get("detached") and not H.task_private(c, ticket) else ticket["owner_id"]
     audience = {"id": "", "private": True, "owner_id": "bot:" + slug, "requester_id": actor, "readers": None}
     if not review_gate.can_copy_prs(c, ticket, audience):
         return None
+    independent = review_blind.INDEPENDENT + " " if review_blind.blinds(c, step) else ""
     body = (
         f"{kind(step)} of {title.split(':', 1)[-1].strip()}"
         + (f" at head {', '.join(heads)}" if heads else "")
-        + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head."
+        + f". Tico gave it to you from the {step['name']} pool ({why}). {independent}"
+        + "End with your VERDICT line for that head."
     )
     if step.get("detached"):
         body += "\n" + step["pr"]["url"]

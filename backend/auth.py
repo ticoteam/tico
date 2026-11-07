@@ -1037,6 +1037,12 @@ class Auth:
         denied = counsel.denied_page_copies(c, who, self)
         if denied:
             audience += " AND id NOT IN " + A.qlist(sorted(denied))
+        from . import review_blind
+
+        # A bot's open later check does not list the earlier reviews' subtasks of its ticket (backend/review_blind.py).
+        blind = review_blind.hidden_task_ids(c, (who.actor, who.task_actor) if who.task_actor else who.actor)
+        if blind:
+            audience += " AND id NOT IN " + A.qlist(sorted(blind))
         return audience
 
     def operator(self, c, who, bot):
@@ -1299,6 +1305,11 @@ class Auth:
         if who.task_actor and not (
             H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
         ):
+            raise Problem("not_found", "Task not found", 404)
+        from . import review_blind
+
+        if review_blind.hidden_from(c, (who.actor, who.task_actor) if who.task_actor else who.actor, row["id"]):
+            # An earlier review's subtask is not read by a bot whose later check on its ticket is open.
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (

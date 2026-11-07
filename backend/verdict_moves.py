@@ -353,7 +353,10 @@ def after_capture(c, check_id, head, attempt_id, *, snapshots=None):
 
         check_pools.entered(c, H.KEEPER, ticket, snapshots=snapshots)
     if out.get("handoff"):
+        from . import review_blind
+
         refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
+        refs.update(review_blind.marks(c, check, ticket, step=step))
         if out["handoff"] == "merge":
             refs["pr_head"] = head
         forward(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket["id"], refs), sources=out["source_tasks"])

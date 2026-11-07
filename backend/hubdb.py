@@ -6126,6 +6126,10 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
     ):
         return
     refs = {"subtask": row["id"], **({"subtask_result": key} if key else {})}
+    # A review's result carries its review step, so a later check on the ticket does not read it (backend/review_blind.py).
+    from . import review_blind
+
+    refs.update(review_blind.marks(conn, row, parent))
     # The parent's owner reads the verdict and the head it judged as fields, not only as prose.
     judged = task(conn, row["id"]) or row
     if judged.get("verdict"):

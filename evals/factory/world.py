@@ -70,6 +70,7 @@ class World:
         self.limit_next = {}  # runtime -> usage limit text: the next turn on it meets that limit
         self.server_errors = []  # (when, route, status, body) for each call the server answered with a 5xx
         self.input_reads = []  # (when, bot, attempt, message ids): the inputs a turn read as it started
+        self.context_reads = []  # (when, bot, check, ticket, [(path, status, reply)]): a check's turn reads its ticket
         self.attempt_posts = []  # (when, path, caller, bot, bot on, bot running) for each renew or events post
         self.limit_windows = []  # one per limited turn: the bot's limit as the server holds it after the turn
         self.down = False  # the server is stopped (go_down): nothing reaches it until restart()
@@ -364,6 +365,15 @@ class World:
 
     def get(self, path, token="ana-test"):
         return self.call("get", path, token=token)
+
+    def read_context(self, bot, check, ticket):
+        """What a check's turn reads of its ticket, as the bot's own token reads it: the check, the ticket and the
+        comments on it. The reads are kept whole, so a case can look for anything in them that the bot must not see."""
+        reads = []
+        for path in (f"tasks/{check}", f"tasks/{ticket}", f"tasks/{ticket}/comments"):
+            status, reply = self.request("get", path, token=bot.token)
+            reads.append((path, status, reply))
+        self.context_reads.append((self.now(), bot.slug, check, ticket, reads))
 
     def task(self, task_id):
         return self.get("tasks/" + task_id)["task"]
