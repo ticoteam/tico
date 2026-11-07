@@ -37,7 +37,7 @@ semantic versioning, suggest a date-based name in its own style.
 
 `reports/YYYY-MM-DD-release-notes.md` in the shape of `knowledge/examples/release-notes.md`:
 1. **Suggested version and date range**, and the one change a user will notice most.
-2. **Changelog entry**, in the repository's own CHANGELOG format, each line ending with its full pull request URL (`https://github.com/<repo>/pull/<n>`), since a bare number does not link outside the repository.
+2. **Changelog entry**, one line per change, each line ending with its full pull request URL (`https://github.com/<repo>/pull/<n>`), since a bare number does not link outside the repository.
 3. **Customer-facing notes**, plain language, in the voice in `knowledge/voice.md`, no internal names.
 4. **Could not classify**: pull request, why, the question for a human.
 5. **Left out**: counts by reason.

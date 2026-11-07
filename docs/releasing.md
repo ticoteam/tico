@@ -4,16 +4,9 @@ A release is a version tag. Everything it ships is built once, by the Release va
 version, and that same build is what the gate tests. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which
 builds nothing: it takes that run's runner binaries and image digests, builds the installer bundle and publishes the
 GitHub release. Running installations look for that release and offer it as
-"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
-and once the release is published it files one task for the Technical Writer to write that version's section of
-[CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
-so a release's notes reach users with the next build that contains them. No separate product announcement is required.
-Don't edit CHANGELOG.md in a PR. The notes land as a CHANGELOG-only pull request that needs review at its final head,
-and each notes commit needs a `Changelog-Release: vX.Y.Z` trailer for each version section it changes; preserve the
-trailers in the merged commit. PR checks reject ordinary changelog edits before selecting tests. A pull request that
-corrects a shipped section needs the same trailers. Keep the versioned sections on `main`, so later builds retain the
-complete history and do not announce already shipped work again. A released section is held to its tag, or, for a
-release tagged before its notes were written, to the section as first written on `main`: a later difference fails the tests.
+"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit, and the notes are on the
+release's approval issue (label `release-approval`), built from the pull requests it ships. No separate product
+announcement is required.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
@@ -218,7 +211,8 @@ hotfix's approval issue decides stable, as for any canary release.
    command waits for that run and checks its title and candidate commit. The 8-minute target is report-only.
 4. **Tag that commit.** The command checks main again and pushes the version tag at the validated commit.
    The GitHub release is published about a minute later: the version tags are pointed at the tested images.
-5. **Notes follow.** Once the release is published, the command files one Technical Writer task for its notes.
+5. **Notes task.** Once the release is published, the command files one Technical Writer task. The notes are already
+   on the release's approval issue.
 6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
@@ -359,7 +353,7 @@ back to a different validation automatically.
 
 Any change to main after the freeze, however small, requires a fix pull request, a new freeze and a new **full**
 gate on the new commit. This includes test fixes, main re-merges and docs edits: a green run for the old commit cannot
-be reused. The notes pull request lands after publication, so it does not affect the release it describes. An admin
+be reused. An admin
 merge is allowed only on that fix-PR/new-full-gate path; it does not waive review or exact-commit validation. Do not move the tag to a
 new commit to borrow an old run. Roll back this tooling change by reverting it; the manual steps below still work.
 
@@ -375,7 +369,7 @@ it selects them from the group's merged change (base to group head) with the mea
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
 files, folders it lists or globs). The Caddy image job runs only when a change reaches the image inputs or
 `backend/caddy_assets.py`; otherwise the plan compiles the changed files and runs the Dockerfile's import check itself.
-A `docs/` page, CHANGELOG.md or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
+A `docs/` page or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
 the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
 `scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
 a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
@@ -563,7 +557,7 @@ python scripts/freeze_guard.py --head <candidate> --receipts receipts.json
 ```
 
 It names every change that undoes a pull request an earlier release shipped (a stale tree committed over newer work,
-or a reverted fix put back): all of it, however small, or most of its meaningful product lines; tests and release notes
+or a reverted fix put back): all of it, however small, or most of its meaningful product lines; tests
 don't count. It compares against all history unless `--releases N` limits it (about 15 seconds for a release of 60
 pull requests). It also names every merged pull request whose final head has no approving GitHub review or ticket
 review receipt at that commit (an approval of an earlier head counts only when the change is the same line for line),
@@ -673,8 +667,8 @@ hosted gate.
    version you will tag, dispatched from main: the tag publishes only a validation run of ci.yml from main.
 2. Once it is green, check main still equals that commit, then the Release Manager tags it and pushes:
    `git tag vX.Y.Z <validated-commit> && git push origin vX.Y.Z`.
-3. Once the release is published, file the Technical Writer's notes task. The notes go in `CHANGELOG.md` under
-   `## [X.Y.Z] - YYYY-MM-DD`, below a fresh empty `## [Unreleased]`, with the link references at the bottom updated.
+3. Once the release is published, file the Technical Writer's notes task. The notes are already on the release's
+   approval issue.
 
 The workflow then:
 
@@ -693,8 +687,7 @@ The workflow then:
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
   (and `latest` for a stable version) at those digests before publishing, so no installer runs against missing images;
 - marks a tag with a suffix such as `v0.2.0-rc.1` a prerelease, which the update check ignores;
-- publishes the release with those four files and the runner binaries, with no notes: the notes are written
-  afterwards in `CHANGELOG.md`. That is everything the installer, the server's update
+- publishes the release with those four files and the runner binaries, with no notes: the notes are on the release's approval issue. That is everything the installer, the server's update
   check and the updater read (`install.sh`, the bundle and `SHA256SUMS`), so the server rollout can start at once.
 
 The images set `TICO_VERSION` in the image, which is how the running app

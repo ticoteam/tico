@@ -1,6 +1,7 @@
 """CI selection cannot omit uncertain work or turn an empty/red test run green."""
 
 from collections import Counter
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -91,8 +92,6 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
         "backend/tests/test_scheduler.py": 1,
     }
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
-    guarded = []
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: guarded.append(base))
     imaged = []
     monkeypatch.setattr(checks, "image_checks", lambda changed: imaged.append(changed))
     monkeypatch.setattr(
@@ -103,7 +102,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     timing_dir.mkdir(parents=True)
     (timing_dir / "durations.json").write_text(json.dumps({"backend/tests/test_task_loops.py": 100}))
     focused = checks.prepare("pull_request", "base", target, timing_dir.parent)
-    assert guarded == ["base"] and imaged == [["backend/task_loops.py"]]
+    assert imaged == [["backend/task_loops.py"]]
     assert focused["timed_files"] == 1
     assert (
         sorted(sum([j["files"] for j in focused["matrix"]["include"] if j["suite"].startswith("python-")], []))
@@ -111,7 +110,6 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
         == sorted(files)
     )
     main = checks.prepare("push", "base", target)
-    assert guarded == ["base"]  # A direct release cut on main is checked by the release guards.
     groups = [j for j in main["matrix"]["include"] if j["suite"].startswith("python-")]
     # 48 measured seconds fit one VM; the time target, not a fixed count, sets the number of groups.
     assert len(groups) == 1 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
@@ -179,7 +177,6 @@ def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parall
         "contracts": True,
     }
     monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
     monkeypatch.setattr(checks, "collect", lambda: Counter({checks.CONTRACT_TESTS[0]: 1}))
     target = tmp_path / "plan.json"
@@ -243,7 +240,6 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     for changed in (["backend/harness_actions.py"], ["backend/task_loops.py"], ["ui/app/chat.js"], []):
         assert checks.selection(changed)["rust"] == [] and checks.selection(changed, "push")["rust"] == []
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 1}))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
         checks,
         "changed_files",
@@ -283,74 +279,6 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
 
 
 @pytest.mark.slow
-def test_pr_changelog_guard_rejects_product_edits_and_accepts_release_cut(tmp_path, monkeypatch):
-    def git(*args):
-        return subprocess.check_output(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
-        ).strip()
-
-    def commit(message):
-        git("add", "-A")
-        git("commit", "-qm", message)
-
-    git("init", "-q", "-b", "main")
-    notes = tmp_path / "CHANGELOG.md"
-    notes.write_text("# Changelog\n## [Unreleased]\n\n## [1.0.0]\n- Shipped.\n")
-    commit("Start")
-    base = git("rev-parse", "HEAD")
-    monkeypatch.setattr(checks, "ROOT", tmp_path)
-    monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
-    target = tmp_path / "plan.json"
-    # A normal PR without notes passes through the real planning entrypoint.
-    checks.prepare("pull_request", base, target)
-    target.unlink()
-    notes.write_text(notes.read_text().replace("## [Unreleased]\n", "## [Unreleased]\n- Per-PR note.\n"))
-    commit("Product change")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.prepare("pull_request", base, target)
-    assert not target.exists()  # The check fails before generating any test matrix.
-
-    git("checkout", "-qb", "release-notes", base)
-    notes.write_text(notes.read_text().replace("## [Unreleased]\n", "## [Unreleased]\n\n## [1.1.0]\n- New release.\n"))
-    commit("Release notes\n\nChangelog-Release: v1.1.0")
-    checks.prepare("pull_request", base, target)
-    target.unlink()
-    # Bringing main's own notes edit in is a clean union; a note the merge itself adds is an ordinary edit.
-    release = git("rev-parse", "HEAD")
-    git("checkout", "-qb", "main-notes", base)
-    notes.write_text(notes.read_text() + "- Corrected on main.\n")
-    commit("Main notes fix")
-    main = git("rev-parse", "HEAD")
-    git("checkout", "-qb", "union", release)
-    git("merge", "-q", "--no-edit", main)
-    checks.guard_changelog(main)
-    git("checkout", "-qb", "slipped", release)
-    git("merge", "-q", "--no-commit", main)
-    notes.write_text(notes.read_text().replace("## [1.1.0]\n", "## [1.1.0]\n- Slipped in by the merge.\n"))
-    commit("Merge main")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(main)
-    git("checkout", "-q", "release-notes")
-    # An old release trailer cannot bless another edit or a product file.
-    (tmp_path / "product.py").write_text("changed = True\n")
-    commit("Product change")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(base)
-    git("rm", "product.py")
-    notes.write_text(notes.read_text() + "- Another ordinary note.\n")
-    commit("Another edit")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(base)
-    # Deleting/renaming notes is also an edit; missing history never silently passes.
-    git("checkout", "-qb", "rename", base)
-    git("mv", "CHANGELOG.md", "OLD.md")
-    commit("Move notes")
-    with pytest.raises(RuntimeError, match="No PR edits CHANGELOG.md"):
-        checks.guard_changelog(base)
-    with pytest.raises(subprocess.CalledProcessError):
-        checks.guard_changelog("missing-base")
-
-
 def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -406,12 +334,7 @@ def test_cached_system_packages_match_the_locked_browser_version():
 
 
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
-    # Exercise selector inputs independently of the separate release-notes guard.
-    monkeypatch.setattr(checks, "guard_changelog", lambda _: None)
-    for read, reader in (
-        ("docs/openapi/v2.json", "backend/tests/test_openapi_v2.py"),
-        ("CHANGELOG.md", "scripts/tests/test_release_checklist.py"),
-    ):
+    for read, reader in (("docs/openapi/v2.json", "backend/tests/test_openapi_v2.py"),):
         both = checks.selection(["backend/task_loops.py", read])["python"]
         assert reader in both and "backend/tests/test_scheduler.py" in both, read
     monkeypatch.setattr(
@@ -499,7 +422,7 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
 
 
-def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
+def test_docs_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_path, mapped):
     # The manual reads docs/ and the app imports the manual: a page edit runs the tests that read docs/ and the tests of
     # the manual itself, not every test that imports the app. A deleted page still runs everything.
     source(tmp_path, "backend/__init__.py", "")
@@ -520,16 +443,11 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
     )
     source(
         tmp_path,
-        "scripts/tests/test_notes.py",
-        "from pathlib import Path\ndef test_x(): Path('CHANGELOG.md').read_text()\n",
-    )
-    source(
-        tmp_path,
         "scripts/tests/test_release_workflow.py",
         "from pathlib import Path\nROOT = Path(__file__).parents[2]\n"
         "def test_x(): (ROOT / '.github' / 'workflows' / 'release.yml').read_text()\n",
     )
-    for name in ("docs/api.md", "docs/other.md", "CHANGELOG.md", ".github/workflows/release.yml", checks.PR_WORKFLOW):
+    for name in ("docs/api.md", "docs/other.md", ".github/workflows/release.yml", checks.PR_WORKFLOW):
         source(tmp_path, name, "text\n")
 
     def picked(*changed):
@@ -537,7 +455,8 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
 
     assert picked("docs/other.md") == ["backend/tests/test_manual.py"]
     assert picked("docs/api.md") == ["backend/tests/test_api_guide.py", "backend/tests/test_manual.py"]
-    assert picked("CHANGELOG.md") == ["scripts/tests/test_notes.py"]
+    # A top-level page that no test or script reads selects nothing, deleted or not.
+    assert picked("CHANGELOG.md") == []
     assert picked(".github/workflows/release.yml") == ["scripts/tests/test_release_workflow.py"]
     # Code beside a page still reaches whatever imports it.
     assert "backend/tests/test_api.py" in picked("docs/other.md", "backend/manual.py")
@@ -557,7 +476,7 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
     page = checks.selection(["docs/api.md"], added=[])["python"]
     assert {"backend/tests/test_docs.py", "backend/tests/test_manual.py"} <= set(page) and len(page) < 60
     assert "backend/tests/test_api.py" not in page
-    assert "backend/tests/test_changelog.py" in checks.selection(["CHANGELOG.md"], added=[])["python"]
+    assert checks.selection(["CHANGELOG.md"], added=[])["python"] == []
     assert "scripts/tests/test_release_workflow.py" in checks.selection([".github/workflows/release.yml"])["python"]
     for changed in (checks.PR_WORKFLOW, "scripts/pr_checks.py", "scripts/ci_install.sh"):
         plan = checks.selection([changed], added=[])
@@ -681,7 +600,6 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     listed = []
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: listed.append(args) or names)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
         checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.js"]
     )
@@ -737,7 +655,7 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
         ).strip()
 
     git("init", "-q", "-b", "main")
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n## [Unreleased]\n")
+    (tmp_path / "start.py").write_text("x = 0\n")
     git("add", "-A")
     git("commit", "-qm", "Start")
     stale = git("rev-parse", "HEAD")
@@ -746,14 +664,24 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
     git("add", "-A")
     git("commit", "-qm", "Product change")
     git("checkout", "-q", "main")
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n## [Unreleased]\n\n## [1.1.0]\n- Cut.\n")
+    (tmp_path / "other.py").write_text("y = 2\n")
     git("add", "-A")
-    git("commit", "-qm", "Release notes\n\nChangelog-Release: v1.1.0")
+    git("commit", "-qm", "Other change on main")
+    main_tip = git("rev-parse", "HEAD")
     # GitHub checks out the PR merged into current main; the event's base sha is still the older tip.
     git("merge", "-q", "--no-edit", "feature")
-    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    # changed_files, script_changes and selection bind ROOT at import, so they get this checkout as their root.
+    # merge_parent gets it too; prepare and the diffs it runs are otherwise unchanged.
+    monkeypatch.setattr(checks, "merge_parent", partial(checks.merge_parent, root=tmp_path))
+    monkeypatch.setattr(checks, "changed_files", partial(checks.changed_files, root=tmp_path))
+    monkeypatch.setattr(checks, "script_changes", partial(checks.script_changes, root=tmp_path))
+    monkeypatch.setattr(checks, "selection", partial(checks.selection, root=tmp_path, core=[]))
+    # image_checks needs the Dockerfile of a real checkout; this temporary repo has none.
+    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
-    checks.prepare("pull_request", stale, tmp_path / "plan.json")
+    assert checks.merge_parent(stale) == main_tip
+    plan = checks.prepare("pull_request", stale, tmp_path / "plan.json")
+    assert plan["changed"] == ["app.py"]
 
 
 def receipt_job(name, url, status="completed", conclusion="success"):
@@ -920,7 +848,6 @@ def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_g
         raise AssertionError("a merge queue group is checked from its own base, not from a pull request's merge parent")
 
     monkeypatch.setattr(checks, "merge_parent", refuse)
-    monkeypatch.setattr(checks, "guard_changelog", refuse)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     seen = []
 
