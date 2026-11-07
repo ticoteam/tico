@@ -49,7 +49,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import maintenance_limits, run_triggers
+from . import ci_runs, maintenance_limits, run_triggers
 from .store import H, Problem
 
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -797,6 +797,9 @@ def request_text(
             facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
         if quiet:
             facts.append("Nothing new from: " + ", ".join(_label(c, a) for a in quiet))
+        # The company's CI build time today, one line (backend/ci_runs.py digest_line), for the manager to report on.
+        if ci_line := ci_runs.digest_line(c):
+            facts.append(ci_line)
     if redo:
         old = c.execute("SELECT body FROM updates WHERE bot=? AND kind=? AND day=?", (bot, kind, day)).fetchone()
         ask.insert(

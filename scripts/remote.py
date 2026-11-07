@@ -9,6 +9,10 @@ signed in with permission to dispatch workflows on the repository. scripts/heavy
 At most TICO_REMOTE_MAX (4 by default; 0 means no cap) of the repository's remote runs go at once: a run past that waits
 up to 20 minutes for a slot, then exits without dispatching. A failed exit is never 0: see EXIT_CODES (75 when the run
 was never dispatched, 76 when it was dispatched but ended without the command's result).
+
+A builder's run (one started by a Tico bot, which has HUB_TOKEN and HUB_TASK_ID) first asks Tico for a permit
+(backend/ci_runs.py): when its ticket has used its build-time minutes, or today's CI share is used up, the run is not
+dispatched, one line says why, and the exit code is 3. A run that Tico cannot be asked about is refused too.
 """
 
 import argparse
@@ -21,6 +25,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +45,8 @@ EXIT_CODES = """exit codes:
                            the commit is not pushed, or TICO_REMOTE_MAX is not a whole number
   76                       dispatched, but no result: cancelled, the VM was lost or never ran the command, the log
                            is missing or unreadable, or the run did not finish within 2 hours
+  3                        refused by Tico's CI cap: a builder's ticket or the company's daily CI share is used up
+                           (not dispatched; one line says why)
   2                        a bad command line
 """
 
@@ -47,6 +55,10 @@ def fail(code, message):
     """Say why remote.py stopped on stderr, and exit with `code` (see EXIT_CODES)."""
     print(f'remote: {message}', file=sys.stderr, flush=True)
     raise SystemExit(code)
+
+
+REFUSED = 3  # the exit code when Tico's CI cap refuses a builder's run
+PERMIT_TIMEOUT = 30  # seconds a permit request may take
 
 
 def rate_limit_wait():
@@ -235,6 +247,32 @@ def wait_for_capacity(cap):
         time.sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
 
 
+def permit(run_id, cpus, minutes, environ=os.environ):
+    """Tico's answer for a builder's run: None to go ahead, or the one line that refuses it. A run with no hub credential
+    (one a person starts from a terminal) needs no permit. A builder whose Tico cannot be asked is refused, so its
+    minutes are never spent unrecorded."""
+    url, token, task = (environ.get(name, '').strip() for name in ('HUB_API_URL', 'HUB_TOKEN', 'HUB_TASK_ID'))
+    if not (url and token and task):
+        return None
+    body = json.dumps({'task_id': task, 'remote_id': run_id, 'cpus': int(cpus), 'minutes': int(minutes)}).encode()
+    request = urllib.request.Request(
+        url.rstrip('/') + '/api/v2/ci/permits',
+        data=body,
+        method='POST',
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=PERMIT_TIMEOUT) as response:
+            answer = json.loads(response.read() or b'{}')
+    except urllib.error.HTTPError as error:
+        return f'Tico refused the run (HTTP {error.code}); not starting it'
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return f'could not reach Tico for the CI cap ({type(error).__name__}); not starting the run'
+    if answer.get('allowed') is True:
+        return None
+    return ' '.join(str(answer.get('message') or 'Remote run refused').split())
+
+
 def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     """Run `command` on a fresh VM against the pushed `ref` (HEAD) and wait for it: (exit code, the run's log folder).
     The code is None when the VM never ran the command to the end (setup failed, canceled, timed out, or the Spot
@@ -255,6 +293,10 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
         file=sys.stderr,
         flush=True,
     )
+    refusal = permit(run_id, cpus, minutes)
+    if refusal:
+        print(f'remote: {refusal}', file=sys.stderr, flush=True)
+        raise SystemExit(REFUSED)
     wait_for_capacity(cap)
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
     gh(

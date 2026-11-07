@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -14,6 +15,9 @@ from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
 from . import sources as SRC
+
+if TYPE_CHECKING:
+    from .heartbeat import Context
 
 LOG = logging.getLogger("tico.scheduler")
 
@@ -480,6 +484,15 @@ def step_thread_loop_guard(ctx):
     return (
         SR.count_words(resumed, "paused reply", "paused replies") + " let go" if resumed else "Nothing paused"
     ), not resumed
+
+
+def step_ci_sweep(ctx: "Context") -> tuple[str, bool]:
+    # The repository's workflow runs since the last sweep: recorded, priced and posted to Finance (backend/ci_runs.py).
+    from . import ci_runs
+    from .store import H
+
+    settings = ctx.settings
+    return ci_runs.sweep(ctx.store, ctx.github_app, settings.release_repo, settings.ci_rate_per_job_minute, H.now())
 
 
 def step_go_live_expiry(ctx):
