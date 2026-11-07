@@ -236,8 +236,11 @@ a Why line", never one per goal. It closes by itself once every one is settled.
 
 ### Proposals
 
-A proposal is what a caller makes when they may not make the change themselves. The owner confirms it (and only a human, on
-their own click) or rejects it; confirming makes the change as that human.
+A proposal is what a caller makes when they may not make the change themselves. The owner confirms it or rejects it on
+its card. For a goal's wording, a KPI added to a goal, a KPI's definition or target, a flag or a Why line, the owner can
+also agree it in their [Assistant](assistant.md#goals-agreed-in-words) chat: a yes confirms it, and a no turns it down,
+except for a Why line, whose no stays a click on its card. A recovery or a strategy draft is decided only on its card.
+Only a human can; confirming makes the change as that human.
 
 | Kind | Payload | Confirmed by |
 |---|---|---|
@@ -300,9 +303,8 @@ edited or logged to.
 The goals tree is the main column; the Strategy Bot has the right rail (below the tree on narrow windows): one line on what it does (keeps KPIs current and each goal green, yellow or
 red; humans set the goals), its routines as the server has them (when each runs and when it next does, or paused), and its
 last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included. To change one of your goals, ask your
-[Assistant](assistant.md#goals-agreed-in-words): it writes the change back to you in your chat and saves only on your
-plain yes. Colour, done or dropped and archive stay clicks on this page, not agreed in chat. The Strategy Bot's own
-suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card, or agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your plain yes confirms it, and it leaves **Needs you**. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
+[Assistant](assistant.md#goals-agreed-in-words): it writes the change back to you in your chat and saves only on your yes, plain or by number. Colour, done or dropped and archive stay clicks on this page, not agreed in chat. The Strategy Bot's own
+suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card. For a wording, KPI, KPI definition, target, flag or Why suggestion, you can also agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your yes confirms it, and it leaves **Needs you**. A no in that chat turns it down, unless it is a Why line. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
 One tree, built like the team chart: the team on top, then every human and every bot that is not archived, indented
