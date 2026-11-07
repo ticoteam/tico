@@ -8,6 +8,7 @@ finishes), and marks that where it happens."""
 import datetime as dt
 
 from evals.factory.scenarios import BASE, Scenario, at, board_keeps_moving, both, tickets
+from evals.factory.sim import Allowance
 from evals.factory.world import START
 
 WEEKLY = "You've hit your weekly limit · resets Oct 27, 9am (UTC)"  # a reset days away: the login is held for it
@@ -16,6 +17,23 @@ TWO_DAYS = "You've hit your session limit · resets Oct 22, 9am (UTC)"  # a seco
 PACKET_BOT = "fleet-01"  # the bot the moved-input run messages
 PACKET_TEXTS = ("Check the packet figures.", "Confirm the totals before you answer.")
 LOWERED = [(at(1, 30), at(1, 42))]  # a cap is lowered from 10:30 to 10:42
+FLEET_STUCK = (
+    Allowance(
+        "fleet bots are inert stand-ins (their turns do nothing), so a backlog task on one never moves; the freeze "
+        "checks cover whether claims resume",
+        None,
+        "Routine",
+        owner="fleet-",
+    ),
+)
+PACKET_STUCK = FLEET_STUCK + (
+    Allowance(
+        "the packet's bot is a fleet stand-in: its turns do nothing, so the packet task never moves",
+        None,
+        "Acme packet",
+        owner=PACKET_BOT,
+    ),
+)
 
 
 def hit(runtime, text):
@@ -395,6 +413,7 @@ SCENARIOS = [
         signed_in=("fake",),
         capacity=8,
         fleet=24,
+        stuck=FLEET_STUCK,
         during=at_times([(at(1, 30), cap("company", 3)), (at(1, 42), cap("company", 40))]),
         checks=freeze_checks(
             at(1, 30),
@@ -412,6 +431,7 @@ SCENARIOS = [
         signed_in=("fake",),
         capacity=8,
         fleet=24,
+        stuck=FLEET_STUCK,
         during=at_times([(at(1, 30), cap("groups/engineering", 3)), (at(1, 42), cap("groups/engineering", 40))]),
         checks=freeze_checks(
             at(1, 30),
@@ -433,6 +453,7 @@ SCENARIOS = [
         signed_in=("fake", "codex"),
         capacity=8,
         fleet=24,
+        stuck=FLEET_STUCK,
         during=at_times([(at(0, 20), hit("fake", WEEKLY))]),
         checks=freeze_checks(
             at(0, 20),
@@ -449,6 +470,7 @@ SCENARIOS = [
         signed_in=("fake", "codex", "claude"),
         capacity=8,
         fleet=24,
+        stuck=FLEET_STUCK,
         during=at_times(
             [
                 (at(0, 20), hit("fake", WEEKLY)),
@@ -497,6 +519,7 @@ SCENARIOS = [
         claim="runner",
         signed_in=("fake",),
         fleet=1,
+        stuck=PACKET_STUCK,
         during=at_times(
             [
                 (at(0, 20), steer(PACKET_BOT)),

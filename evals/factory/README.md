@@ -21,9 +21,20 @@ the round's readiness snapshot, falsely reporting starvation. The claim-round ch
 `SIM_TRACE=1` prints every turn: time, bot, what woke it, whether the notice was already stale (`*`), and what the
 bot did. The seed makes each run repeat exactly.
 
-A run prints FAIL for a check that does not hold and NOTE for what it only reports: tickets not merged by the end,
-and tickets that took over 24 h or sat at one step over 12 h. Those usually mean a bug, but the product only tells
-the manager about them and never stops the work, so the run does not fail on them.
+A run prints FAIL for a check that does not hold and NOTE for what it only reports: tickets not merged by the end.
+
+Every scenario also gets the stuck-work check: no open or doing task (review and QA subtasks and Release Manager jobs
+included) waits `LATE_HOURS` (4 h, the threshold the product itself uses to call a working step late) while its owner
+is free and nothing is happening to it. The clock runs only while the owner can work: not while the owner is busy,
+paused, out of usage, or has a queued job, and not while the task is held, blocked, snoozed, or waiting on child
+tasks. A scenario whose work legitimately takes longer declares an `Allowance(reason, hours, match)` in its `stuck`
+field; `hours=None` leaves the matching work out of the count, and the reason is the thing to read when reviewing it.
+
+Bots get the profile, reach and pull settings of their catalog template (`templates/catalog/<slug>/bot.yaml`, through
+the profile name rules in `backend/profiles.py`) unless a scenario sets `profiles`. Each bot reports to
+`engineering-lead` when the scenario has one, and the lead reports to the human owner. Styles can also make a bot
+leave a turn's task in progress (`leave_doing`), be restarted mid-turn (`restart_mid_turn`), and ask the owner a
+question (`asks`, `reversible`).
 
 It runs on RunsOn by default, never on this computer: `python -m evals.factory.run --seeds 1-3` packs the
 (scenario, seed) pairs by `timings.json` into groups of about three minutes, starts one 4-vCPU Spot VM per group at

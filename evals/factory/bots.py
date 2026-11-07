@@ -14,10 +14,14 @@ A bot's `style` is how its model behaves, as probabilities per turn that does re
   only skips it posts none; a receipt the gate refused it puts right on its next turn
 Every number is drawn from the scenario's seeded random generator, so a run repeats exactly."""
 
+import json
 import os
 from collections import Counter
 from .board import MERGE
 from .world import PRIMARY, Refusal
+
+# After world, which sets the sim's environment before backend loads. The product's resume limit before a stop.
+from backend.stranded_resume import NO_PROGRESS_LIMIT as NO_PROGRESS_RUNS
 
 TOKENS = {  # (cached input, uncached input, output) per kind of turn: a real team's averages over a week
     "work": (3_700_000, 90_000, 17_000),  # a Builder's run
@@ -88,6 +92,7 @@ class Bot:
     }
     # One turn in twenty runs long: a build of three or four hours, an hour-long review.
     TAIL = {"build": (180, 240), "fix": (60, 120), "review": (30, 60), "qa": (40, 60), "plan": (60, 120)}
+    steers = False  # reads the inputs queued for its turn as it starts (steer); a freeze case names the others
 
     def start(self, attempt):
         """Begin a claimed turn: read what woke the bot, then ask the server for a computer place before anything starts
@@ -95,18 +100,21 @@ class Bot:
         w = self.world
         self._token = attempt["token"]
         self.attempt = attempt
+        self.read = []  # the inputs the turn read as it started (steer): a wake that came while the claim was queued
         # Where the turn runs: its own login, or the fallback a hold sends it to (the runner's choice, made on the claim).
         self.runtime, self.held = w.turn_runtime(attempt.get("job_id"))
         message = attempt.get("message") or {}
         refs = message.get("refs") or {}
         task = attempt.get("task")
+        why = self.stale_why(task, message)
         self.record = {
             "at": w.now(),
             "bot": self.slug,
             "news": refs.get("handoff") or refs.get("news") or refs.get("rule") or message.get("kind"),
             "task": task and task["id"],
             "kind": "noise",
-            "stale": self.stale(task, message),
+            "stale": bool(why),
+            "stale_why": why,
             "action": None,
             "text": str(message.get("body") or "").replace("\n", " "),
             "runtime": self.runtime,
@@ -114,6 +122,7 @@ class Bot:
             # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
             # returns it, since no input row is written for it.
             "prompt": message.get("id"),
+            "wake": refs.get("wake"),
         }
         return self.ask_place() == "started"
 
@@ -163,7 +172,7 @@ class Bot:
             raise Refusal(status, str(reply))
         self.parked = False
         self.record["at"] = w.now()
-        if self.slug in w.steer_bots:
+        if self.slug in w.steer_bots or self.steers:
             self.steer()
         task = attempt.get(
             "task"
@@ -233,6 +242,13 @@ class Bot:
             if window:
                 w.limit_windows.append(window)
             return self.log(record)
+        if self.style.get("restart_mid_turn") and self.chance("restart_mid_turn"):
+            # The runner restarted under the turn: it ends interrupted, and nothing it did is filed (recover files a lost one
+            # the same way). Whether anything picks the work up again is the board's and the wake rules' to decide.
+            self.unfinished.add(message.get("id"))
+            record["kind"] = "restart"
+            self.finish(attempt, "interrupted", tokens=None, text="Runner restarted during execution")
+            return self.log(record)
         if self.chance("silent"):
             self.unfinished.add(message.get("id"))
             record["kind"] = "silent"
@@ -248,7 +264,7 @@ class Bot:
                 w.post("updates", {"body": "- Worked my tickets."}, token=self.token)
                 action = "posted update"
             else:
-                settled = self.settle()
+                settled = self.settle(task)
                 action = self.act(task, message) if task else None
                 action = ", ".join(filter(None, (settled, action))) or None
         except Refusal as exc:
@@ -298,6 +314,7 @@ class Bot:
         if status >= 400:
             raise Refusal(status, str(reply))
         mids = [message["id"] for message in reply["messages"]]
+        self.read = reply["messages"]
         w.input_reads.append((w.now(), self.slug, attempt["id"], mids))
         for mid in mids:
             w.call("post", f"attempts/{attempt['id']}/inputs/{mid}/ack", {}, token=w.runner["token"])
@@ -319,9 +336,9 @@ class Bot:
             )
         return record
 
-    def finish(self, attempt, outcome, limited=False, resets=None, tokens=None, seq=0):
+    def finish(self, attempt, outcome, limited=False, resets=None, tokens=None, seq=0, text="done"):
         w = self.world
-        body = {"outcome": outcome, "text": "done", "last_seq": seq, "limited": limited}
+        body = {"outcome": outcome, "text": text, "last_seq": seq, "limited": limited}
         if resets:
             body["limit_resets_at"] = resets.strftime("%Y-%m-%dT%H:%M:%SZ")
         if self.held:
@@ -340,29 +357,90 @@ class Bot:
             }
         w.post(f"attempts/{attempt['id']}/complete", body, token=w.runner["token"])
 
-    def stale(self, task, message):
-        """Whether Tico's notice was out of date when the bot read it: its task had already finished, its CI news was
-        for a head the PR has moved past, or it had moved to another step after the notice was written."""
+    def stale_why(self, task, message):
+        """Why Tico's notice was out of date when the bot read it, or "" when it was not: its task had already finished
+        (the claim's view of it), its CI news was for a head the PR has moved past, or it had moved to another step after
+        the notice was written. A turn's record keeps the reason, so a failing check can name it."""
         if not task or message.get("sender_id") not in (None, "keeper"):
-            return False  # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
+            return ""  # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
         if message.get("id") in self.unfinished:
-            return False  # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
+            return ""  # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
         if task["status"] in ("done", "closed", "declined"):
-            return True
+            return f"its task was {task['status']} at the claim"
         head = (message.get("refs") or {}).get("pr_head")
         if head:  # CI news is about a head, not a step: it is out of date once the PR moved on
             pr = self.world.pr_of(task["id"])
-            return bool(pr) and self.world.prs[pr]["head"] != head
+            if pr and self.world.prs[pr]["head"] != head:
+                return f"its CI news was for head {head[:7]}, the PR is at {self.world.prs[pr]['head'][:7]}"
+            return ""
+        # The server's queue cleanup (execution.obsolete_notices_sql) drops a step's news once the task is at another step:
+        # a late warning, a review gate's comment and a step's verdict (at_step). A resume of an awaited task keeps its turn
+        # after a move, so only those refs make a notice stale here.
+        refs = message.get("refs") or {}
+        if not any(refs.get(key) for key in ("step_late", "review_gate", "at_step")):
+            return ""
         moved = self.world.step_entered_at(task["id"], claimed_by="bot:" + self.slug)
-        return bool(moved and message.get("created_at") and message["created_at"] < moved)
+        if moved and message.get("created_at") and message["created_at"] < moved:
+            return "its task moved to another step after the notice was written"
+        return ""
 
     # ------------------------------------------------------------------ role behaviour
     def act(self, task, message):
         raise NotImplementedError
 
-    def settle(self):
+    def settle(self, task=None):
         """What the bot owes from an earlier turn, done first on its next one, whatever woke it."""
         return None
+
+    def ask_owner(self, text, topic, reversible=False, task=None):
+        """A decision put to the owner the way a bot asks one (POST task-questions, as `hub task question` does): a question
+        task on the person's plate. Each ask is kept for the checks with the status the server answered, the task it is
+        about, and whether the person handed that task to this bot (requester is the person, owner is the bot: the
+        exemption reach.handed gives, #2879), read before the ask is filed."""
+        w = self.world
+        handed = bool(task) and bool(
+            w.sql(
+                "SELECT 1 FROM tasks WHERE id=? AND requester_id='human:ana' AND owner_id=? "
+                "AND status NOT IN ('done','closed','declined')",
+                (task, f"bot:{self.slug}"),
+            )
+        )
+        # An earlier question of this bot on the same topic that still waits on the person, read before this ask is filed:
+        # a repeat filed anyway, not folded into it, is a duplicate; a repeat after the first was answered is a new question.
+        waiting = any(
+            a["bot"] == self.slug
+            and a["topic"] == topic
+            and a["question"]
+            and w.sql(
+                "SELECT 1 FROM tasks WHERE id=? AND questions IS NOT NULL AND answer IS NULL "
+                "AND status IN ('open','doing','waiting','review','ready')",
+                (a["question"],),
+            )
+            for a in w.asks
+        )
+        body = {"question": text, "on": "ana", "why": "", "topic": topic}
+        if reversible:
+            body["if_no_answer"] = {"do": "go ahead with the default", "kind": "reversible"}
+        status, reply = w.request("post", "task-questions", body, token=self.token)
+        # The product folds a question into the open one on its topic (`folded`): nothing new reaches the person.
+        folded = isinstance(reply, dict) and bool(reply.get("folded"))
+        question = reply["task"]["id"] if status < 300 and not folded and isinstance(reply, dict) else None
+        w.asks.append(
+            {
+                "at": w.now(),
+                "bot": self.slug,
+                "text": text,
+                "topic": topic,
+                "reversible": reversible,
+                "status": status,
+                "task": task,
+                "handed": handed,
+                "folded": folded,
+                "question": question,
+                "waiting": bool(waiting),
+            }
+        )
+        return "asked the owner" if status < 300 else f"ask refused ({status})"
 
 
 class Builder(Bot):
@@ -379,6 +457,7 @@ class Builder(Bot):
         self.owed = {}  # ticket id -> what its refused move needs: "receipt", or "push" for a failure at the head
         self.posted = []  # (when, ticket id, head, wording) per receipt, "none" for one left out
         self.moves = []  # (when, ticket id, step, refusal text or None) per move this builder made
+        self.left = []  # (when, ticket id) per turn that ended with the ticket still in progress (`leave_doing`)
 
     def act(self, task, message):
         w, board = self.world, self.world.board
@@ -396,6 +475,10 @@ class Builder(Bot):
             nxt = board.steps[board.steps.index(step) + 1]
             w.update(task["id"], token=self.token, step=nxt.name)
             step = nxt
+        if step.work and self.style.get("leave_doing") and self.chance("leave_doing"):
+            # The turn ends with the ticket still in progress: nothing moved, nothing said, and nothing left to wake it.
+            self.left.append((w.now(), task["id"]))
+            return None
         if step.work:
             fixes = board.fixes_for(step.name)
             return self.fix(task, step, fixes, pr) if fixes else self.build(task, step, pr)
@@ -590,7 +673,17 @@ class Builder(Bot):
         self.moves.append((self.world.now(), task["id"], step, None))
         return "moved to " + step
 
-    def settle(self):
+    def settle(self, task=None):
+        """What the builder owes, and a question it puts to its owner on its turn when its style asks (`asks`: asked
+        directly, two levels below the owner, so the rules route or refuse it)."""
+        asked = None
+        if task and self.style.get("asks") and self.chance("asks"):
+            asked = self.ask_owner(
+                f"Should I keep going on {task['title']}?", f"builder {task['title']}", task=task["id"]
+            )
+        return "; ".join(filter(None, (asked, self._settle()))) or None
+
+    def _settle(self):
         """A move the gate refused for its receipt, put right as a real builder does on reading the refusal: a clean
         receipt at the head, or, when its tests failed there, a fix pushed with one. Tico makes the move itself."""
         w, done = self.world, []
@@ -735,7 +828,17 @@ class Architect(Bot):
 class Lead(Bot):
     """Head of Engineering: on its hourly sweep (a routine) it looks for stuck tickets and gets each moving the way a
     lead does: it tells the owner, with what it sees, flagged as needing action (a plain comment from one bot to another
-    waits for the owner's next run). It never moves a ticket itself. Any other wake is noise."""
+    waits for the owner's next run). A stop's ticket (Tico's "made no progress in 3 runs" ticket on its plate) is settled
+    on every turn that finds it open: the stuck task is retried once through its builder, and on the next turn that finds
+    it still stuck it is reassigned once (a refused retry is reassigned at once); the ticket is done with one line that says
+    what was done. Any other wake is noise."""
+
+    steers = True  # its runtime reads the notices folded into its turn: a stop's notice reaches the turn that is queued
+
+    def settle(self, task=None):
+        """The open stop tickets on the lead's plate, before the turn's own work, whatever woke the turn: a stop's notice
+        is read as the turn starts, and a ticket left open is the lead's to close."""
+        return ", ".join(self.settle_stop(ticket) for ticket in self.stop_tickets()) or None
 
     def act(self, task, message):
         refs = message.get("refs") or {}
@@ -753,6 +856,15 @@ class Lead(Bot):
         if refs.get("step_backlog"):
             return self.spread(task)
         if (
+            task["owner_id"] == "bot:" + self.slug
+            and task["status"] not in FINISHED
+            and "made no progress in" not in task["title"]  # a stop's ticket is settle()'s to close
+            and not task["title"].startswith("Hourly board sweep")
+        ):
+            # A ticket given to the lead itself: the lead works it and closes it, as the owner of any ticket does.
+            self.world.update(task["id"], token=self.token, status="done", note="Took it on and closed it.")
+            return "closed its own ticket"
+        if (
             not task["title"].startswith("Hourly board sweep")
             or task["owner_id"] != "bot:" + self.slug
             or task["status"] in FINISHED
@@ -761,6 +873,93 @@ class Lead(Bot):
         told = self.sweep()
         self.world.update(task["id"], token=self.token, status="done", note=told)
         return told
+
+    def stop_tickets(self):
+        """The open stop tickets on the lead's plate, oldest first."""
+        return self.world.sql(
+            "SELECT id,title,status,conversation_id FROM tasks WHERE owner_id=? AND title LIKE '%made no progress in%' "
+            "AND status NOT IN ('done','closed','declined') ORDER BY created_at, id",
+            ("bot:" + self.slug,),
+        )
+
+    def settle_stop(self, ticket):
+        """One stop ticket, in two steps over the lead's turns: its task is retried once through its builder, and on the next
+        turn that finds the ticket still open (Tico's resume of it) reassigned once, if the task still sits. A refused step
+        is said in the one line the ticket is done with, never raised, so the turn's other work still runs."""
+        stuck = self.stopped_task(ticket)
+        if stuck is None or stuck["status"] in FINISHED:
+            line = "the stopped task is done or gone: nothing to move"
+        elif not self.retried(stuck):
+            line = self.retry(stuck)
+            if line:
+                return line  # the ticket stays open: the next turn on it reassigns the task once if it still sits
+            line = self.reassign_once(stuck)  # the server refused the retry: the one move left
+        else:
+            line = self.reassign_once(stuck)
+        self.world.update(ticket["id"], token=self.token, status="done", note=line)
+        return line
+
+    def stopped_task(self, ticket):
+        """The task a stop ticket is about: the task ref on the stop's notice, which Tico writes into the ticket's thread."""
+        w = self.world
+        for row in w.sql(
+            "SELECT refs FROM messages WHERE conversation_id=? ORDER BY created_at", (ticket["conversation_id"],)
+        ):
+            refs = json.loads(row["refs"] or "{}")
+            if refs.get("wake") == "nudge" and refs.get("task"):
+                found = w.sql("SELECT id,title,owner_id,status,conversation_id FROM tasks WHERE id=?", (refs["task"],))
+                return found[0] if found else None
+        return None
+
+    def retried(self, stuck):
+        """Whether the lead's retry comment went onto the stuck task: it is in the task's thread."""
+        return bool(
+            self.world.sql(
+                "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND body LIKE '%Retry:%' LIMIT 1",
+                (stuck["conversation_id"], "bot:" + self.slug),
+            )
+        )
+
+    def retry(self, stuck):
+        """Hand the stuck task back to its builder with a short note: a comment that needs action wakes the builder. Its
+        line for the ticket when the comment went, or None when the server refuses it."""
+        try:
+            self.world.post(
+                f"tasks/{stuck['id']}/comments",
+                {
+                    "text": f"@{stuck['owner_id'][4:]} Retry: {stuck['title']} made no progress in "
+                    f"{NO_PROGRESS_RUNS} runs. Carry on with it: finish it, hand it on, or record what it waits on.",
+                    "needs_action": True,
+                },
+                token=self.token,
+            )
+        except Refusal:
+            return None
+        return f"retried {stuck['title']} once through {stuck['owner_id'][4:]}"
+
+    def open_tasks(self, slug):
+        """How many open or doing tasks a bot owns: its load when a task is reassigned."""
+        return self.world.sql(
+            "SELECT count(*) n FROM tasks WHERE owner_id=? AND status IN ('open','doing')", ("bot:" + slug,)
+        )[0]["n"]
+
+    def reassign_once(self, stuck):
+        """The stuck task moves once, to the least loaded other builder of its owner's role (a builder other than the one
+        that stalled it). Its line for the ticket: the move, or, with no other builder or a refused change, a line for the
+        person who owns the board."""
+        w = self.world
+        slug = stuck["owner_id"][4:]
+        role = next((r for r, slugs in w.roles.items() if slug in slugs), None)
+        others = [s for s in w.roles.get(role, []) if s != slug]
+        stays = f"for ana: {stuck['title']} made no progress and could not be retried or moved; it stays with {slug}"
+        if not others:
+            return stays
+        target = min(others, key=lambda s: (self.open_tasks(s), s))
+        try:
+            w.update(stuck["id"], token=self.token, owner="bot:" + target)
+        except Refusal:
+            return stays
+        return f"reassigned {stuck['title']} from {slug} to {target}"
 
     def spread(self, task):
         """A backlog at a step: hand the busiest bot owner's surplus there to the least loaded bot of the same kind.
@@ -823,6 +1022,14 @@ class Lead(Bot):
             )
             w.stuck_told.append((w.now(), t["id"]))
             told.append(t["title"])
+            if self.style.get("asks") and self.chance("asks"):
+                # The lead asks the owner what to do with a ticket it sees stuck, each sweep: one level below the owner.
+                self.ask_owner(
+                    f"{t['title']} has sat at {step.name} with no move. What should happen to it?",
+                    f"stuck ticket {t['id']}",  # one topic per ticket: the product folds the sweep's repeat asks into one
+                    reversible=bool(self.style.get("reversible")) and self.chance("reversible"),
+                    task=t["id"],
+                )
         return ("told owners of " + ", ".join(told)) if told else "swept: nothing stuck"
 
 

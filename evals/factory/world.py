@@ -35,6 +35,15 @@ PRIMARY = (
     "fake"  # the bots' own login: a usage limit on it holds their turns (login_holds keys the login by this runtime)
 )
 RUNTIME_OF = {"openai": "codex", "anthropic": "claude"}  # the runtime each AI provider signs in
+TEMPLATE_OF = {  # a sim bot -> the catalog template a team's bot of its role is made from (the template's name sets its profile)
+    "builder-claude": "builder",
+    "builder-openai": "builder",
+    "reviewer-gpt": "pr-reviewer",
+    "reviewer-xai": "pr-reviewer",
+    "reviewer-muse": "pr-reviewer",
+    "release-manager": "release-notes",
+    "architect": "software-architect",
+}
 
 
 class Refusal(Exception):
@@ -46,8 +55,11 @@ class Refusal(Exception):
 class World:
     """One run of one scenario. Use as a context manager: it starts the clock and the server, and stops both."""
 
-    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0, signed_in=(), capacity=4):
+    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0, signed_in=(), capacity=4, profiles=None):
         self.board = board
+        self.profiles = dict(profiles or {})  # slug -> the profile a scenario sets, instead of its template's
+        self.manager_of = {}  # slug -> the person or bot it reports to (World.chart)
+        self.asks = []  # one per question a bot put to a person: who, its text, topic, reversible default, status
         self.bot_slugs = list(bots)
         self.roles = {}
         for slug, (role, _family) in bots.items() if isinstance(bots, dict) else []:
@@ -136,6 +148,7 @@ class World:
                 (encode({"people": [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),),
             )
             for slug, config in bots.items():
+                config = self.chart(c, slug, config)
                 c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
                 bot_settings.write(c, slug, config)
             if "release-manager" in bots:  # signed in as an agent, as an external Release Manager is
@@ -165,6 +178,24 @@ class World:
         self.heartbeat(self.bot_slugs)
         self.configure()
         return self
+
+    def chart(self, c, slug, config):
+        """The bot's declaration as a team's bot of its name has it: its profile from its template (profiles.default_for,
+        the rule the upgrade applies by name), unless a scenario sets one, and its manager (`reports_to`): Head of
+        Engineering for the builders, reviewers, QA and architect, the owner for Head of Engineering itself."""
+        from backend import profiles
+
+        if slug in self.profiles:
+            name, options = self.profiles[slug], {}
+        else:
+            name, options, _ = profiles.default_for(c, TEMPLATE_OF.get(slug, slug), config)
+        boss = (
+            "human:ana"
+            if slug == "engineering-lead" or "engineering-lead" not in self.bot_slugs
+            else "engineering-lead"
+        )
+        self.manager_of[slug] = boss.split(":")[-1]
+        return {**config, **options, "profile": name, "reports_to": boss}
 
     def configure(self):
         """Set the board up as a team would, through the API only: each step's flow and check pool, and the lead's

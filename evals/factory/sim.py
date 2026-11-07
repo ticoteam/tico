@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from . import bots as B
 from .board import dev_board
 from .world import PRIMARY, Refusal, World
+from backend.step_age import (
+    LATE_HOURS as STUCK_HOURS,
+)  # the product's late hours for a working step (world imports first)
 
 PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}  # $ per million: uncached input, cached input, output
 SHORT_ROUNDS = 40  # a run reads the reasons of at most this many short claim rounds (see Run.reasons)
@@ -71,6 +74,16 @@ class Run:
         self.short_rounds = 0  # short rounds whose reasons were read (at most SHORT_ROUNDS)
         self.stale_busy = None  # a bot a scenario keeps naming busy for its first rounds (see stale_round)
         self.stale_named = None  # the bot stale_round names busy in the current claim round, if any
+        self.stuck = {}  # task id -> the stuck stretch found on it: title, step, owner, status, idle hours, since
+        self.idle = (
+            Counter()
+        )  # task id -> hours it has waited with its owner free and nothing on it since its last event
+        self.acted = {}  # task id -> when a turn last did something on it (a turn that did nothing is no event)
+        self.resume_trace = {}  # task id -> [(when, resume_why answer)] at each change of the answer (diagnostic only)
+        self.resume_last = {}  # task id -> the last answer put in resume_trace
+        self.seen_turns = Counter()  # bot slug -> turns stuck_tick has read
+        self.tick_at = None  # when the last tick was observed
+        self.plate_peak = 0  # the most open items on the owner's plate at any tick (the questions and tasks she owns)
 
     def team(self, w):
         styles = self.scenario.styles
@@ -119,6 +132,7 @@ class Run:
             ci_fail=s.ci_fail,
             signed_in=s.signed_in,
             capacity=s.capacity,
+            profiles=s.profiles,
         ) as w:
             self.w = w
             team = self.team(w)
@@ -241,7 +255,12 @@ class Run:
             "slugs": candidates,
             "ready": ready,
             "blocked": blocked,
+            "started_bots": list(started_bots),
+            "cap_held": {},
+            "cap_seen": [],
         }
+        if free and ready and started < min(free, len(ready)):
+            mark["cap_held"], mark["cap_seen"] = self.cap_holds(w, [b for b in ready if b not in started_bots])
         if free and ready and started < min(free, len(ready)) and self.short_rounds < SHORT_ROUNDS:
             self.short_rounds += 1
             gone = [job for job in before if job not in queued and job not in started_jobs]
@@ -251,8 +270,140 @@ class Run:
                 f"({', '.join(sorted({before[job] for job in gone})) or 'none'}); the last claim answered "
                 f"{answers[-1] if answers else None}"
             )
+            lines.extend(self.turn_states(w, team, [b for b in ready if b not in started_bots]))
             mark["why"] = " | ".join(lines)
         self.marks.append(mark)
+
+    def turn_states(self, w, team, slugs):
+        """Diagnostic only, read on a short round: for each ready bot the round did not start, the sim's own turn for it
+        (running, parked, since when) and the server's newest attempt for it (id, state, lease, stop, and the start
+        place's wait reason). A bot the sim names busy in the claim body is refused by the claim, whatever readiness says."""
+        from backend import bot_settings as BS
+        from backend import lifecycle
+        from backend.claim_holds import CHECK
+        from backend.execution import (
+            CAPACITY_CONTINUE,
+            RUNNER_SQL,
+            SOURCE_CONTINUE,
+            capability_set,
+            continuation_thread,
+            scoped_sql,
+            unfenced_sql,
+        )
+
+        lines = []
+        execution = w.app.state.execution
+        with w.store.read() as c:
+            runner = c.execute(RUNNER_SQL, (w.runner["runner_id"],)).fetchone()
+            caps = capability_set(runner["capabilities"]) if runner else frozenset()
+            for slug in slugs:
+                bot = team.bot(slug)
+                row = c.execute(
+                    "SELECT a.id,a.state,a.lease_until,a.stop_requested_at,p.wait_reason,p.start_until,a.started_at,"
+                    "a.thread_id,json_extract(a.result,'$.lease_continue'),json_extract(a.result,'$.quota_continue') "
+                    "FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+                    "WHERE a.bot_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT 1",
+                    (slug,),
+                ).fetchone()
+                health = c.execute("SELECT last_error FROM service_health WHERE service=?", (CHECK + slug,)).fetchone()
+                queued = c.execute(
+                    "SELECT id,held,redirect FROM jobs WHERE bot_id=? AND state='queued' "
+                    "ORDER BY created_at,id LIMIT 1",
+                    (slug,),
+                ).fetchone()
+                thread = continuation_thread(c, queued[0]) if queued else None
+                predicates = ""
+                if queued:
+                    # The claim's own predicates for this bot's oldest queued job, in the order candidate() applies them.
+                    job, rid = queued[0], w.runner["runner_id"]
+                    checks = [
+                        (
+                            "assigned to this runner and bot active",
+                            c.execute(
+                                "SELECT EXISTS(SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot "
+                                f"JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
+                                "WHERE a.bot=? AND a.runner_id=? AND b.state='active')",
+                                (slug, rid),
+                            ).fetchone()[0],
+                        ),
+                        (
+                            "claim message state",
+                            c.execute(
+                                "SELECT EXISTS(SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                "JOIN conversations cv ON cv.id=m.conversation_id "
+                                f"WHERE j.id=? AND {lifecycle.claim_message_sql()})",
+                                (job,),
+                            ).fetchone()[0],
+                        ),
+                        (
+                            "interrupted-work fence and scope",
+                            c.execute(
+                                "SELECT EXISTS(SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                "JOIN conversations cv ON cv.id=m.conversation_id "
+                                f"WHERE j.id=? AND {unfenced_sql()} AND {scoped_sql()})",
+                                (job,),
+                            ).fetchone()[0],
+                        ),
+                        ("not named busy in the claim body", not bot.running),
+                    ]
+                    failed = [name for name, ok in checks if not ok]
+                    predicates = (
+                        f"; oldest job {job[:8]} predicates "
+                        + ", ".join(f"{name} {bool(ok)}" for name, ok in checks)
+                        + f"; dropped at: {failed[0] if failed else 'none, every predicate passes'}"
+                    )
+                lines.append(
+                    f"{slug} turn: sim running {bot.running}, parked {bot.parked}, available {bot.available}; "
+                    f"server newest attempt {tuple(row) if row else None}; claim check backoff "
+                    f"{execution.check_backoff.get(slug)} waiting {execution.check_waiting(slug)} "
+                    f"health {health[0] if health else None}; oldest queued job {tuple(queued) if queued else None} "
+                    f"continues thread {thread} (runner continues capacity {CAPACITY_CONTINUE in caps}, "
+                    f"source {SOURCE_CONTINUE in caps}){predicates}"
+                )
+        return lines
+
+    def cap_holds(self, w, bots):
+        """The bots a usage cap holds that the records show reached: ({bot: {scope, period, limit, spent}}, seen). The
+        server holds a bot on a limit (usage_limits.over) only when its window's spend has reached the limit. This reads
+        that spend again from the usage records the caps are counted from (usage_records.RUNS, the runs the window's
+        spend is summed over, with the company's subscription setting), in its own query, and keeps a bot only when the
+        spend is at or over the limit. A hold the records do not show is not kept, so its round stays judged. `seen`
+        says, for each bot the caps name, what the hold reads and what the records sum to, for a failing round."""
+        from backend import usage_limits
+        from backend.usage_records import RUNS
+
+        held, seen = {}, []
+        if not bots:
+            return held, seen
+        with w.store.read() as c:
+            subscription = bool(usage_limits.company(c)["count_subscription"])
+            for bot in bots:
+                found = usage_limits.over(c, bot)
+                if not found or found.get("scope") == "budget" or not found.get("limit"):
+                    seen.append(f"{bot} no usage hold")
+                    continue
+                scope, period = found["scope"], found["period"]
+                _, start, end = usage_limits.bounds(None)[period]
+                sql = (
+                    f"SELECT coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
+                    "AND (? OR coalesce(billing, 'api') != 'subscription')"
+                )
+                params = [start, end, 1 if subscription else 0]
+                if scope == "bot":
+                    sql += " AND bot = ?"
+                    params.append(bot)
+                elif scope != usage_limits.COMPANY:
+                    members = sorted(usage_limits.members(c, scope))
+                    if not members:
+                        seen.append(f"{bot} {scope} has no members")
+                        continue
+                    sql += " AND bot IN (" + ",".join("?" * len(members)) + ")"
+                    params += members
+                amount = float(c.execute(sql, params).fetchone()[0] or 0.0)
+                seen.append(f"{bot} {scope} {period} limit ${found['limit']:g}, records ${amount:.2f}")
+                if amount + 1e-9 >= found["limit"]:
+                    held[bot] = {"scope": scope, "period": period, "limit": found["limit"], "spent": round(amount, 2)}
+        return held, seen
 
     def places_used(self, team):
         """The computer's places in use: its running turns, less the parked ones, which hold no place."""
@@ -446,7 +597,13 @@ class Run:
         for t in w.tickets():
             step = board.step(t["step"])
             if step and step.release:
-                w.update(t["id"], token="release-test", step=board.steps[board.steps.index(step) + 1].name)
+                try:
+                    w.update(t["id"], token="release-test", step=board.steps[board.steps.index(step) + 1].name)
+                except Refusal as exc:
+                    # An open question its builder put on the ticket: only the builder or its manager may close it, and
+                    # the person answers it. The ticket waits at the release step, as it would for the person.
+                    if exc.status != 403 or "open subtask" not in exc.body:
+                        raise
 
     def assign(self, w, team):
         """An unowned ticket at an assigning step waits for the board to give it to a bot of that role. After 30
@@ -476,6 +633,239 @@ class Run:
                 self.violations["merged_blocked"].append((now, t["title"]))
         for b in team.builders:
             self.peak_doing[b.slug] = max(self.peak_doing[b.slug], w.slots(b.slug))
+        self.stuck_tick(w, team)
+        self.trace_resume(w)
+        plate = w.sql(
+            "SELECT count(*) n FROM tasks WHERE owner_id IN ('human:ana','ana') AND status IN ('open','doing','review')"
+        )
+        self.plate_peak = max(self.plate_peak, plate[0]["n"])
+
+    def stuck_tick(self, w, team):
+        """The stuck-work invariant, once per tick, over every open or doing task with a bot as its owner (a ticket, a
+        review or QA subtask, a lead's task). Such a task counts the time it waits while its owner is free: no turn
+        running, no job queued for the owner, its computer on, not paused, not on a usage limit. Any event on the task
+        (a history event, a change to it, a turn that did something on it) since the last tick restarts the count, so
+        only a stretch with no event at all is stuck. A task waiting on a hold (Blocked, snoozed), on its subtasks, or on
+        its owner's full slots is not counted. Reaching STUCK_HOURS (or the scenario's allowance for it) records the task
+        once in `stuck`."""
+        H, now, hours = w.H, w.now(), self.scenario.tick_minutes / 60
+        for b in team.all:
+            for r in b.turns[self.seen_turns[b.slug] :]:
+                if r.get("task") and r.get("action"):
+                    self.acted[r["task"]] = r["at"]
+            self.seen_turns[b.slug] = len(b.turns)
+        events = {
+            r["subject_id"]: H.parse_ts(r["at"])
+            for r in w.sql(
+                "SELECT subject_id, max(created_at) at FROM history_events WHERE subject_type='task' GROUP BY subject_id"
+            )
+        }
+        held = {
+            r["task_id"]
+            for r in w.sql(
+                "SELECT task_id FROM task_holds WHERE released_at IS NULL AND (kind='blocked' OR (kind='snoozed' AND until_at>?))",
+                (H.now(),),
+            )
+        }
+        parents = {
+            r["to_task"]
+            for r in w.sql(
+                "SELECT r.to_task FROM task_relations r JOIN tasks c ON c.id=r.from_task "
+                "WHERE r.kind='parent' AND c.status IN ('open','doing','review')"
+            )
+        }
+        # A held job will not run, so it does not make its bot busy: the bot's other tasks still count as waiting.
+        queued = {
+            r["bot_id"] for r in w.sql("SELECT DISTINCT bot_id FROM jobs WHERE state='queued' AND coalesce(held,0)=0")
+        }
+        bots = {b.slug: b for b in team.all}
+        live = set()
+        for row in w.sql(
+            "SELECT id,title,owner_id,status,step_id,updated_at FROM tasks WHERE status IN ('open','doing') AND owner_id LIKE 'bot:%'"
+        ):
+            bot = bots.get(row["owner_id"][4:])
+            if bot is None:
+                continue
+            tid = row["id"]
+            live.add(tid)
+            last = max(x for x in (events.get(tid), H.parse_ts(row["updated_at"]), self.acted.get(tid)) if x)
+            if self.tick_at is not None and last > self.tick_at:
+                self.idle[tid] = 0.0  # something happened on it since the last tick
+            elif self.waiting(w, row, bot, now, held, parents, queued) and not self.day_capped(w, tid):
+                self.idle[tid] += hours
+            limit = self.limit_for(row["title"], bot.slug)
+            if limit is not None and self.idle[tid] >= limit - 1e-6 and tid not in self.stuck:
+                self.stuck[tid] = {
+                    "title": row["title"],
+                    "step": w.step_of(row),
+                    "owner": bot.slug,
+                    "status": row["status"],
+                    "idle": self.idle[tid],
+                    "since": now,
+                    "why": self.resume_why(w, tid),
+                }
+        for tid in list(self.idle):
+            if tid not in live:
+                del self.idle[tid]
+        self.tick_at = now
+
+    def trace_resume(self, w):
+        """Diagnostic only: each tick, the resume's answer (resume_why) for every bot task in progress, kept whenever the
+        answer changes, so a late pickup shows what held the task through the hours before it."""
+        import re
+
+        now = w.now()
+        for r in w.sql("SELECT tasks.id FROM tasks WHERE tasks.status='doing' AND tasks.owner_id LIKE 'bot:%'"):
+            why = self.resume_why(w, r["id"])
+            key = re.sub(r"[\d.]+", "#", why)  # minutes and amounts move every tick; the answer is what changes
+            if self.resume_last.get(r["id"]) != key:
+                self.resume_last[r["id"]] = key
+                self.resume_trace.setdefault(r["id"], []).append((now, why))
+
+    def resume_why(self, w, tid):
+        """Diagnostic only: the first condition of the stranded resume (backend/stranded_resume.py) that holds this task
+        back now, read in a read of the store with the product's own helpers, so the answer is the sweep's."""
+        from backend import auto_tasks, check_pools, task_holds
+        from backend import hubdb as H
+        from backend import stranded_resume as SR
+
+        with w.store.read() as c:
+            row = H.task(c, tid)
+            if row is None:
+                return "task gone"
+            slug = H.actor_id(row["owner_id"])
+            if not SR._bot_ready(c, slug):
+                jobs = c.execute(
+                    f"SELECT count(*) FROM jobs j WHERE j.bot_id=? AND j.state IN ('queued','leased','running') "
+                    f"AND {H.unheld_sql()}",
+                    (slug,),
+                ).fetchone()[0]
+                drain = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (slug,)).fetchone()
+                return (
+                    f"owner not ready: online={check_pools.online(c, slug)}, draining={drain is not None}, "
+                    f"unheld jobs={jobs}"
+                )
+            at = H.now()
+            if not SR.stranded(c, row, at):
+                reasons = []
+                if task_holds.with_holds(c, row) is None:
+                    reasons.append("hold")
+                if row.get("blocked_since") or (row.get("snoozed_until") and row["snoozed_until"] > at):
+                    reasons.append("blocked or snoozed")
+                if row.get("next_run") or row.get("resume") or row.get("carried_by"):
+                    reasons.append("carried or next run or resume recorded")
+                if row.get("check_back_at") and row["check_back_at"] > at:
+                    reasons.append("check-back ahead")
+                if not H.bot_reads_task(c, row["owner_id"], row):
+                    reasons.append("owner does not read it")
+                if SR._live(c, row):
+                    reasons.append("a job or run is live")
+                if c.execute(
+                    "SELECT 1 FROM quarantine_holds WHERE bot_id=? AND task_id=? AND released_at IS NULL LIMIT 1",
+                    (slug, tid),
+                ).fetchone():
+                    reasons.append("quarantined")
+                if auto_tasks.waiting(c, row):
+                    reasons.append("auto-task waiting")
+                if H.recorded_wait(c, {**row, "due_at": None}, at) is not None:
+                    reasons.append("recorded wait")
+                return "not stranded: " + (", ".join(reasons) or "no single condition (see stranded_resume.stranded)")
+            found = SR.state(c, row, at)
+            if found is None:
+                return "stranded, not resumed: " + self.quiet_parts(c, row, at, slug)
+            return f"stranded and ready: resumes in a row with no progress={found['since']}, stop={found['stop']}"
+
+    def quiet_parts(self, c, row, at, slug):
+        """Diagnostic only: the parts of the stranded resume's quiet time (backend/stranded_resume.py `state`), each as
+        minutes before `at`, and the newest of them, which blocks the resume while it is under QUIET_MINUTES."""
+        import sqlite3
+
+        from backend import hubdb as H
+        from backend import stranded_resume as SR
+
+        try:
+            tid = row["id"]
+            progress = SR._progress(c, row)
+            resumes = [
+                r[0]
+                for r in c.execute(
+                    "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
+                    "ORDER BY created_at",
+                    (tid, SR.RESUMED),
+                )
+            ]
+            last_run = c.execute(
+                "SELECT max(coalesce(settled_at, finished_at, created_at)) FROM attempts WHERE bot_id=? AND task_id=?",
+                (slug, tid),
+            ).fetchone()[0]
+            others = c.execute(
+                "SELECT max(created_at) FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+                "AND sender_id IS NOT NULL AND sender_id NOT IN (?,?)",
+                (row["conversation_id"], H.KEEPER, row["owner_id"]),
+            ).fetchone()[0]
+            parts = {
+                "task row": row["updated_at"],
+                "progress": progress or None,
+                "last run": last_run,
+                "others' messages": others,
+                "last resume": resumes[-1] if resumes else None,
+            }
+            now = H.parse_ts(at)
+            ages = {k: round((now - H.parse_ts(v)).total_seconds() / 60, 1) for k, v in parts.items() if v}
+            day = sum(1 for r in resumes if r >= H.shift(at, hours=-24))
+            if not ages:
+                return f"no quiet-time part; resumes in 24 h {day}"
+            newest = min(ages, key=lambda k: ages[k])
+            return f"newest part {newest} {ages[newest]} min before; parts (min before): {ages}; resumes in 24 h {day}"
+        except (
+            sqlite3.Error,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:  # a diagnostic reports its failure, it does not end the run
+            return f"quiet parts unreadable: {type(exc).__name__}: {exc}"
+
+    def waiting(self, w, row, bot, now, held, parents, queued):
+        """Whether the task waits for its owner to act: the owner is free to take it, and nothing holds the task back."""
+        if row["id"] in held or row["id"] in parents:
+            return False
+        if not bot.available or bot.slug in self.paused or bot.running or bot.slug in queued:
+            return False
+        if bot.limited_until and now < bot.limited_until:
+            return False
+        if row["status"] == "open" and bot.role == "builder" and w.slots(bot.slug) >= w.board.slots:
+            return False  # its slots are full: the task waits in line, which is no stall
+        return True
+
+    def day_capped(self, w, tid):
+        """Whether the daily resume limit holds this task now: it is stranded (no progress since its last resume) and
+        DAY_LIMIT resumes fell in the 24 hours up to now (backend/stranded_resume.py state). That wait is the product's
+        documented rule, so the stuck check does not count it; the late hours and the explain name it."""
+        from backend import hubdb as H
+        from backend import stranded_resume as SR
+
+        now = w.now()
+        recent = sum(
+            1
+            for r in w.sql(
+                "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=?",
+                (tid, SR.RESUMED),
+            )
+            if now - dt.timedelta(hours=24) <= H.parse_ts(r["created_at"]) <= now
+        )
+        if recent < SR.DAY_LIMIT:
+            return False
+        with w.store.read() as c:
+            row = H.task(c, tid)
+            return row is not None and bool(SR.stranded(c, row, H.now()))
+
+    def limit_for(self, title, slug):
+        """The hours a task may wait with its owner free: the scenario's first allowance that names its owner and title
+        gives it (None: not counted), else STUCK_HOURS."""
+        for a in self.scenario.stuck:
+            if (not a.owner or slug.startswith(a.owner)) and (not a.match or a.match in title):
+                return a.hours
+        return STUCK_HOURS
 
     def shipped(self, t):
         return t["step"] in self.w.board.merged_steps() or self.w.board.finished(t["step"])
@@ -502,9 +892,16 @@ class Run:
     def explain(self):
         """Where each unfinished ticket stands: its step, its checks and the owners' jobs."""
         out = []
-        for t in self.final:
-            if self.shipped(t):
-                continue
+        # Diagnostic: a merged ticket a check names (blocked after its merge, or moved by hand) is shown with the rest.
+        named = {title for _, title in self.violations["merged_blocked"]}
+        named |= {f[2] for f in self.w.fallbacks if "merged" in f[3] or "moved to" in f[3]}
+        shown = [t for t in self.final if not self.shipped(t) or t["title"] in named]
+        # Diagnostic: a manager's ticket about a stop (no step) is shown too, with its turns and jobs.
+        shown += [
+            dict(r, step=None, blocked_since=None)
+            for r in self.w.sql("SELECT id,title,owner_id,status FROM tasks WHERE title LIKE '%made no progress in%'")
+        ]
+        for t in shown:
             out.append(
                 f"{t['title']} @ {t['step']} ({t['status']}, {t['owner_id']})"
                 + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else "")
@@ -516,12 +913,24 @@ class Run:
             for e in self.w.sql(
                 "SELECT e.created_at, e.actor_id AS actor, e.kind AS field, coalesce(s.name, e.new) new, e.note FROM history_events e "
                 "LEFT JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? AND e.kind IN ('step','verdict_move',"
-                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
+                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait','resumed','resume_stopped') "
+                "ORDER BY e.created_at, e.rowid",
                 (t["id"],),
             ):
                 out.append(
                     f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}"
                 )
+            for a in self.w.sql(
+                "SELECT created_at, bot_id, state, settled_at FROM attempts WHERE task_id=? ORDER BY created_at",
+                (t["id"],),
+            ):
+                out.append(
+                    f"  turn {a['created_at'][11:16]} {a['bot_id']} {a['state']} settled {str(a['settled_at'])[11:16]}"
+                )
+            if t["step"] is None:  # diagnostic: what each turn on a step-less task (a manager's ticket) did
+                for r in self.turns():
+                    if r.get("task") == t["id"]:
+                        out.append(f"  sim turn {str(r['at'])[11:16]} {r.get('news')} -> {r.get('action')}")
             pr = self.w.pr_of(t["id"])
             if pr:
                 out.append(
@@ -542,6 +951,18 @@ class Run:
         """Diagnostic only: the lost probe's posts, the readiness read after each returning bot's heartbeat, each
         limited bot's wait as the server holds it, and the probes that held a login."""
         out, w = [], self.w
+        # Diagnostic only: each nudge notice the lead was sent about a stop, with its job, and each lead turn that read one.
+        for m in w.sql(
+            "SELECT m.created_at, json_extract(m.refs,'$.task') AS task, (SELECT group_concat(j.state) FROM jobs j "
+            "WHERE j.message_id=m.id) AS states FROM messages m WHERE m.recipient_id='bot:engineering-lead' "
+            "AND json_extract(m.refs,'$.wake')='nudge'"
+        ):
+            out.append(
+                f"nudge notice {m['created_at'][11:16]} about {str(m['task'])[:8]}: jobs {m['states'] or 'none'}"
+            )
+        for r in self.turns():
+            if r.get("wake") == "nudge":
+                out.append(f"nudge turn {str(r['at'])[11:16]} task {str(r.get('task'))[:8]} -> {r.get('action')}")
         if self.lost_probe:
             lp = self.lost_probe
             posts = [p for p in w.attempt_posts if p[1].startswith(f"attempts/{lp['attempt']}/")]
@@ -588,6 +1009,7 @@ class Run:
             "parked": sum(1 for r in turns if r.get("parked")),
             "silent": kinds["silent"],
             "crash": kinds["crash"],
+            "restarted": kinds["restart"],
             "limited": kinds["limited"],
             "cost": round(self.cost(), 2),
             "steps": dict(steps),
@@ -608,6 +1030,18 @@ class Run:
             if tid == t["id"]
         )
         return round(hours[len(hours) // 2], 1) if hours else None
+
+
+@dataclass
+class Allowance:
+    """A task that may wait longer than STUCK_HOURS with its owner free, and why. It names the tasks by owner (a prefix
+    of the bot's slug, empty: any bot) and by title (a substring, empty: any task); both must match. `hours` None means
+    the task is not counted at all, which only fleet stand-ins (inert bots) may use."""
+
+    reason: str
+    hours: float | None = None
+    match: str = ""
+    owner: str = ""
 
 
 @dataclass
@@ -632,6 +1066,8 @@ class Scenario:
     signed_in: tuple = ()  # runtimes the computer reports signed in (empty: the plain per-bot readiness map)
     capacity: int = 4  # the computer's slots, as its heartbeat says
     fleet: int = 0  # extra bots beyond the team, for a backlog (their turns do nothing)
+    profiles: dict = field(default_factory=dict)  # slug -> profile name, instead of the template's (World.chart)
+    stuck: tuple = ()  # Allowances: tasks that may wait longer than STUCK_HOURS here, each with its reason
 
 
 def tickets(run, w, n, owner=None, step=None, title="Ticket"):

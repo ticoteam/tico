@@ -11,6 +11,18 @@ SCENARIOS += _freezes
 from .github_read_outage import SCENARIOS as _github_read_outage
 
 SCENARIOS += _github_read_outage
+
+from .held_expiry import SCENARIOS as _held_expiry
+
+SCENARIOS += _held_expiry
+
+from .owner_plate import SCENARIOS as _owner_plate
+
+SCENARIOS += _owner_plate
+
+from .qa_reviewer_profile import SCENARIOS as _qa_reviewer_profile
+
+SCENARIOS += _qa_reviewer_profile
 from .qa_waiver_head import SCENARIOS as _qa_waiver_head
 
 SCENARIOS += _qa_waiver_head
@@ -29,3 +41,6 @@ SCENARIOS += _verdict_past_open_sibling
 from .source_outages import SCENARIOS as _source_outages
 
 SCENARIOS += _source_outages
+from .stranded_doing import SCENARIOS as _stranded_doing
+
+SCENARIOS += _stranded_doing

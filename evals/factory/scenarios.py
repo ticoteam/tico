@@ -7,6 +7,8 @@ from .board import design_board
 from .sim import Scenario, at, tickets
 from .world import START
 
+from backend.step_age import LATE_HOURS as STUCK_HOURS  # imported after world, which sets the test environment
+
 QUEUE = "queue cleanup"  # stale notices dropped, the rest folded into one turn (Dev 601 spec)
 TIMEOUT = "Dev 601 task timeout"
 HOLD = "Dev 598"
@@ -14,7 +16,7 @@ SLOTS = "Dev 542"
 HOE = "Dev 606"
 ASSIGN = "assignment rule"
 REPORT = "report"  # printed for a person to read, never failed: how long work takes is measured, not judged
-LONG_TICKET_HOURS, LONG_STEP_HOURS = 24, 12
+STUCK_CHECK = f"no open or doing task waits {STUCK_HOURS} h with its owner free and nothing happening"
 
 
 # ---------------------------------------------------------------------------------------------- checks
@@ -23,24 +25,17 @@ def all_through(run):
     return not left, ", ".join(left[:6]) + (f" (+{len(left) - 6})" if len(left) > 6 else "")
 
 
-def long_running(run):
-    """Tickets that took over LONG_TICKET_HOURS to merge (or are still open past it), and stays at one step over
-    LONG_STEP_HOURS: most likely a bug, but a hard change can take that long, so they are reported, not failed."""
-    end = run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    long = []
-    for t in run.final:
-        hours = ((run.merged_at.get(t["id"]) or run.end) - run.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
-        steps = [
-            f"{name} {span:.0f}h"
-            for name, span in run.w.step_spans(t["id"], until=end)
-            if span > LONG_STEP_HOURS
-            and run.w.board.step(name)
-            and not run.w.board.step(name).merged
-            and not run.w.board.finished(name)
-        ]
-        if hours > LONG_TICKET_HOURS or steps:
-            long.append(f"{t['title']} {hours:.0f}h" + (f" ({', '.join(steps)})" if steps else ""))
-    return not long, ", ".join(long[:6]) + (f" (+{len(long) - 6})" if len(long) > 6 else "")
+def no_stuck_work(run):
+    """Stuck work: an open or doing task of any kind (a ticket, a review or QA subtask, a lead's task) that waits with its
+    owner free and nothing happening on it for STUCK_HOURS, the product's late hours for a working step (sim.Run.stuck_tick).
+    It fails whatever the scenario is about, unless the scenario declares an allowance for that task with its reason."""
+    found = sorted(run.stuck.values(), key=lambda s: s["since"])
+    text = "; ".join(
+        f"{s['title']} at {s['step']} ({s['owner']}, {s['status']}) waited {s['idle']:.0f} h with its owner free"
+        + (f" [resume: {s['why']}]" if s.get("why") else "")
+        for s in found[:4]
+    )
+    return not found, text + (f" (+{len(found) - 4})" if len(found) > 4 else "")
 
 
 def never_blocked_after_merge(run):
@@ -51,7 +46,10 @@ def never_blocked_after_merge(run):
 def no_stale_turns(run):
     stale = [r for r in run.turns() if r["stale"]]
     kinds = Counter(r["news"] for r in stale)
-    return not stale, f"{len(stale)} turns on stale notices: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common())
+    named = "; ".join(f"{r['bot']} {r['at']:%H:%M} {r['news']}: {r.get('stale_why') or 'stale'}" for r in stale[:3])
+    return not stale, f"{len(stale)} turns on stale notices: " + ", ".join(
+        f"{k} {n}" for k, n in kinds.most_common()
+    ) + (f" [{named}]" if named else "")
 
 
 def noise_under(share):
@@ -145,19 +143,24 @@ def board_keeps_moving(since, waits=(), fallback=False):
     is a stall whatever its reason, and that reason is printed with the round (sim.Run.reasons). `waits` are (from, to)
     windows of the scenario's clock in which a team-wide or group-wide cap holds every login: a round inside one is not
     judged. `fallback` also requires a judged round in which a bot started on a fallback login, for a scenario whose
-    point is that fallback. A run with no judged round fails, since nothing then shows the board moved."""
+    point is that fallback. A round whose every ready bot is held by a usage cap the records show reached (sim.Run.cap_holds)
+    is not judged either: the server holds those bots by design, and the count of such rounds is printed. Any other hold
+    is judged. A run with no judged round fails, since nothing then shows the board moved."""
 
     def check(run):
         if not run.marks:
             return False, "no runner claim rounds: this check needs runner-style claims"
         start = START + since
         windows = [(START + lo, START + hi) for lo, hi in waits]
-        judged, short, waived, on_fallback = 0, [], 0, 0
+        judged, short, waived, on_fallback, capped = 0, [], 0, 0, []
         for m in run.marks:
             if m["at"] < start or not m["free"] or not m["ready"]:
                 continue
             if any(lo <= m["at"] < hi for lo, hi in windows):
                 waived += 1
+                continue
+            if m["started_at"] < min(m["free"], len(m["ready"])) and _held_by_reached_caps(m):
+                capped.append(m)
                 continue
             judged += 1
             on_fallback += bool(m["fallback"])
@@ -178,6 +181,18 @@ def board_keeps_moving(since, waits=(), fallback=False):
                 "scenario is about was never tested"
             )
         note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
+        if capped:
+            holds = sorted(
+                {
+                    f"{h['scope']} {h['period']} ${h['limit']:g} reached at ${h['spent']:.2f}"
+                    for m in capped
+                    for h in m["cap_held"].values()
+                }
+            )
+            note += (
+                f"; {len(capped)} rounds where every ready bot was held by a usage cap the records show reached "
+                f"were not judged ({'; '.join(holds[:3])})"
+            )
         return True, (
             f"all {judged} claim rounds with a free slot and a ready bot started the smaller of the two; "
             f"{on_fallback} of them started a bot on a fallback login{note}"
@@ -186,12 +201,22 @@ def board_keeps_moving(since, waits=(), fallback=False):
     return check
 
 
+def _held_by_reached_caps(m):
+    """Whether every ready bot a round did not start is held by a usage cap the records show reached (sim.Run.cap_holds):
+    the server keeps a bot on a limit only when its window's spend has met the cap, so such a round is not a stall."""
+    held = m.get("cap_held") or {}
+    unstarted = [bot for bot in m["ready"] if bot not in (m.get("started_bots") or [])]
+    return bool(unstarted) and all(bot in held for bot in unstarted)
+
+
 def _round_line(m):
     """One short round for a failing check: its time, its ready bots, its turns started, and the server's reasons."""
     ready = ", ".join(m["ready"][:6]) + (f" (+{len(m['ready']) - 6})" if len(m["ready"]) > 6 else "")
     text = f"{m['at']:%H:%M} free {m['free']}, ready {ready}, started {m['started_at']}"
     if m.get("why"):
         text += " [" + m["why"][:700] + "]"
+    if m.get("cap_seen"):
+        text += " {usage holds: " + "; ".join(m["cap_seen"][:4]) + "}"
     return text
 
 
@@ -245,13 +270,15 @@ def lead_only_scheduled(run):
     from backend import rules
 
     roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
-    other = [
-        r
-        for r in run.t.bot("engineering-lead").turns
-        if r["action"] is None and r["news"] != "update" and r["news"] not in roundups
-    ]
+    turns = run.t.bot("engineering-lead").turns
+    # The lead's routine news is held for its one digest a day (profiles.SPEC LEAD): a digest run is its schedule's
+    # run, so it counts as scheduled, but never twice on one day.
+    scheduled = {*roundups, "profile_lead_digest"}
+    other = [r for r in turns if r["action"] is None and r["news"] != "update" and r["news"] not in scheduled]
+    digests = [r for r in turns if r["news"] == "profile_lead_digest"]
+    doubled = len(digests) - len({r["at"].date() for r in digests})
     kinds = Counter(r["news"] for r in other)
-    return not other, f"{len(other)} turns on routine notices: " + ", ".join(
+    return not other and doubled == 0, f"{len(other)} turns on routine notices, {doubled} extra digests: " + ", ".join(
         f"{k} {n}" for k, n in kinds.most_common(4)
     )
 
@@ -348,7 +375,7 @@ def company_cap(per_30m):
 
 BASE = [
     ("tickets not merged by the end", REPORT, all_through),
-    (f"tickets over {LONG_TICKET_HOURS} h, or a step over {LONG_STEP_HOURS} h", REPORT, long_running),
+    (STUCK_CHECK, None, no_stuck_work),
     ("merged tickets never Blocked", HOLD, never_blocked_after_merge),
     ("no call got a server error", None, no_server_error),
 ]
@@ -609,3 +636,8 @@ SCENARIOS = [
 from .cases import SCENARIOS as _CASES  # evals/factory/cases/: one file per scenario
 
 SCENARIOS += _CASES
+
+# Every scenario carries the stuck-work invariant, whatever checks it lists (a case may leave BASE out).
+for _scenario in SCENARIOS:
+    if not any(fn is no_stuck_work for _, _, fn in _scenario.checks):
+        _scenario.checks.insert(0, (STUCK_CHECK, None, no_stuck_work))
