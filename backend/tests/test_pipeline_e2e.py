@@ -917,6 +917,69 @@ def test_flow_map_numbers_equal_the_database(co):
     assert product_dev["done"] == done_truth
 
 
+NOTES = "https://docs.example.test/dark-mode-notes"
+
+
+class _Guard:
+    """The Auth the attachment API takes for reads of the ticket; the test's ticket is readable to its owner."""
+
+    def task(self, conn, who, task_id):
+        return None
+
+
+def test_the_spawned_ticket_carries_the_spec_page_first_and_then_the_ordinary_links(co):
+    """Fix V-5: the spec is attached through the real attachment API on a requirement named "Spec page", and an ordinary
+    link is added to the card. Approving Review files D41 with both as its links, the spec first, so both show on D41."""
+    from types import SimpleNamespace
+
+    from backend import requirement_attachments
+
+    card = co.ticket("Product", "Specifying", "Dark mode")
+    spec_req = co.require("Product", "Specifying", "Spec page", needs={"formats": ["link"]})
+    requirement_attachments.attach(
+        co.c, _Guard(), SimpleNamespace(actor=BUILDER), card, spec_req, {"source": "link", "url": SPEC}
+    )
+    H.task_link(co.c, BUILDER, card, NOTES)
+    co.c.commit()
+    co.move(card, "Review")
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    assert [link["url"] for link in H.task_links(co.c, d41)] == [SPEC, NOTES]
+
+
+def test_a_card_whose_spawn_the_rules_refuse_stays_in_review_and_files_nothing(co):
+    """Fix V-8: the source owner is quarantined, so the Engineering ticket cannot be filed. The approval is refused with
+    409 spawn_refused, the card stays in Review, no child and no handoff are written, and no approval is kept."""
+    from backend.store import Problem
+
+    card = review_card(co)
+    co.c.execute("UPDATE bots SET state='quarantined' WHERE slug='builder'")
+    co.c.commit()
+    with pytest.raises(Problem) as refused_move:
+        approve_spec(co, card)
+    assert (refused_move.value.code, refused_move.value.status) == ("spawn_refused", 409)
+    assert co.where(card) == ("Product", "Review")
+    assert subtasks(co, card) == []
+    assert co.count("pipeline_handoffs", "source_task_id = ?", card) == 0
+    assert co.count("stage_decisions", "task_id = ? AND verdict = 'met'", card) == 0
+
+
+def test_the_spawned_ticket_is_owned_as_the_engineering_intake_pool_assigns_it(co):
+    """Fix V-11: Engineering's first stage has an assign pool naming the bot `eng`. D41 is owned by `eng`, as a new ticket
+    filed at that stage is, and its requester stays the Product card's owner."""
+    H.sync_registry(co.c, {"eng": {}}, None)
+    co.c.execute(
+        "UPDATE task_steps SET flow = ? WHERE id = ?",
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Todo")),
+    )
+    co.c.commit()
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    assert H.task(co.c, d41)["owner_id"] == "bot:eng"
+    assert H.task(co.c, d41)["requester_id"] == BUILDER
+
+
 def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):
     """O1: the approval filed the Engineering subtask. Undone while nobody has picked it up, the subtask closes and its
     handoff is returned; a new approval files a new one. Once it is picked up, the undo is refused and nothing changes."""

@@ -156,7 +156,9 @@ def test_an_ask_is_made_once_per_visit_and_again_after_a_move_back_then_forward(
         assert actions(c, "ask") == 2
 
 
-def test_a_hold_pauses_the_limit_and_the_clock_starts_again_at_the_release(api):
+def test_a_hold_pauses_the_limit_and_the_time_before_and_after_it_both_count(api):
+    """D40: a hold pauses the Warn after. 30 active minutes, a 60 minute hold, then 30 more: 60 active, so Late at the
+    release-plus-30 mark and not a minute before."""
     store = api.app.state.store
     base = now()
     with store.transaction() as c:
@@ -164,13 +166,24 @@ def test_a_hold_pauses_the_limit_and_the_clock_starts_again_at_the_release(api):
         c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
         task = ticket(c, type_id, created=base - timedelta(hours=2))
         visit(c, task["id"], type_id, "Building", base - timedelta(hours=2))
-        task_holds.put(c, task["id"], "blocked", stamp(base - timedelta(hours=1)))
-        assert PM.over_limit(c, type_id, base) == []
+        task_holds.put(c, task["id"], "blocked", stamp(base - timedelta(minutes=90)))
         task_holds.release(c, task["id"], "blocked", stamp(base - timedelta(minutes=30)))
-        assert PM.over_limit(c, type_id, base) == []
-        [item] = PM.over_limit(c, type_id, base + timedelta(minutes=40))
+        assert PM.over_limit(c, type_id, base - timedelta(minutes=1)) == []
+        [item] = PM.over_limit(c, type_id, base)
         assert item["task_id"] == task["id"] and item["limit_hours"] == 1
         assert item["limit_minutes"] == 60  # the Warn after value the rail prefers; limit_hours stays for older clients
+
+
+def test_an_open_hold_pauses_the_clock_until_it_is_released(api):
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        task = ticket(c, type_id, created=base - timedelta(hours=2))
+        visit(c, task["id"], type_id, "Building", base - timedelta(hours=2))
+        task_holds.put(c, task["id"], "blocked", stamp(base - timedelta(minutes=90)))
+        assert PM.over_limit(c, type_id, base + timedelta(hours=5)) == []  # 30 active minutes, then held
 
 
 def test_one_ticket_is_late_on_the_rail_and_the_overview_at_the_same_instant(api):
@@ -416,13 +429,13 @@ def test_a_ticket_with_no_visit_is_late_from_its_move_into_the_step_not_from_its
 
 
 def test_waiting_pauses_the_clock_without_a_hold_row(api):
-    """Fix L2-5: entered 08:00, waiting 08:10, back to doing 11:59. The clock restarts at 11:59, as it does after a hold
-    (test_a_hold_pauses_the_limit...): at 12:58 it is 59 minutes in, and Late at 12:59 with a 60 min Warn after."""
+    """Fix L2-5, D40: entered 08:00, waiting 08:10, back to doing 11:59. The active time is 10 minutes, then 1 more at
+    12:00: 11 in all, so an 11 minute Warn after is Late at 12:00 and a 12 minute one is not."""
     store = api.app.state.store
     t0 = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
     with store.transaction() as c:
         type_id = pipeline(c)
-        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        building = step(c, type_id, "Building")
         task = ticket(c, type_id, created=t0)
         visit(c, task["id"], type_id, "Building", t0)
         H.history_event(
@@ -439,6 +452,75 @@ def test_waiting_pauses_the_clock_without_a_hold_row(api):
             created_at=stamp(t0 + timedelta(hours=3, minutes=59)),
         )
         rows = [H.task(c, task["id"])]
-        assert PM.late_tickets(c, rows, t0 + timedelta(hours=4, minutes=58)) == {}
-        late = PM.late_tickets(c, rows, t0 + timedelta(hours=4, minutes=59))
-        assert late[task["id"]]["since"] == stamp(t0 + timedelta(hours=3, minutes=59))
+        c.execute("UPDATE task_steps SET limit_minutes=11 WHERE id=?", (building,))
+        assert PM.late_tickets(c, rows, t0 + timedelta(hours=3, minutes=59)) == {}
+        late = PM.late_tickets(c, rows, t0 + timedelta(hours=4))
+        assert late[task["id"]]["since"] == stamp(t0)
+        c.execute("UPDATE task_steps SET limit_minutes=12 WHERE id=?", (building,))
+        assert PM.late_tickets(c, rows, t0 + timedelta(hours=4)) == {}
+
+
+def test_active_time_before_a_wait_counts_after_it_and_a_new_visit_starts_from_zero(api):
+    """Fix L2-5 / Codex 15: 50 active minutes, a 10 minute wait, then 10 active minutes against a 60 minute Warn after: Late.
+    A new visit into the stage starts the count from zero again."""
+    store = api.app.state.store
+    t0 = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        task = ticket(c, type_id, created=t0)
+        visit(c, task["id"], type_id, "Building", t0)
+        H.history_event(
+            c, "task", task["id"], ANA, "status", "doing", "waiting", created_at=stamp(t0 + timedelta(minutes=50))
+        )
+        H.history_event(
+            c, "task", task["id"], ANA, "status", "waiting", "doing", created_at=stamp(t0 + timedelta(minutes=60))
+        )
+        rows = [H.task(c, task["id"])]
+        assert PM.late_tickets(c, rows, t0 + timedelta(minutes=69)) == {}
+        assert task["id"] in PM.late_tickets(c, rows, t0 + timedelta(minutes=70))
+        visit(c, task["id"], type_id, "Building", t0 + timedelta(minutes=70))
+        assert PM.late_tickets(c, rows, t0 + timedelta(minutes=129)) == {}
+        assert task["id"] in PM.late_tickets(c, rows, t0 + timedelta(minutes=130))
+
+
+def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api):
+    """Fix V-12: visibility is one query over the late ids, so 100 late tickets cost no more queries than 4; the answer is
+    capped at LATE_CAP with `more` set; `ids` limits it to the cards asked for."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+
+    def add(count, start):
+        with store.transaction() as c:
+            for n in range(start, start + count):
+                row = H.task_create(c, ANA, f"Late {n}", "", ANA, type=type_id, step="Building", lint=False)
+                visit(c, row["id"], type_id, "Building", base - timedelta(hours=2))
+
+    def selects(wanted=None):
+        with store.read() as c:
+            statements: list[str] = []
+            c.set_trace_callback(statements.append)
+            try:
+                listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, wanted)
+            finally:
+                c.set_trace_callback(None)
+        return sum(1 for s in statements if s.lstrip().upper().startswith("SELECT")), listing, more
+
+    add(4, 0)
+    few, listing, more = selects()
+    assert len(listing) == 4 and more is False
+    add(96, 4)
+    many, listing, more = selects()
+    assert len(listing) == 100 and more is False
+    assert many == few and many < 15
+
+    add(401, 100)
+    _, listing, more = selects()
+    assert len(listing) == PM.LATE_CAP == 500 and more is True
+
+    picked = [sorted(listing)[0], sorted(listing)[1], "not-late"]
+    _, listing, more = selects(set(picked))
+    assert sorted(listing) == sorted(picked[:2]) and more is False

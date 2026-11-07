@@ -404,6 +404,17 @@ def text_of_bytes(mime: str, data: bytes, size: int) -> tuple[str | None, bool]:
     return files.extract(mime, data[: files.READ_MAX], full=True), cut
 
 
+def _intact(data: bytes, digest: str, size: int) -> bool:
+    """Whether the bytes a range read gave are the blob's bytes as far as the judge reads them. A blob within the cap must
+    come back whole: its length is the stored size and its sha256 is the stored digest. A larger one must give exactly
+    READ_MAX + 1 bytes, the cap and the extra byte that says more follows. Anything else is a damaged or cut read."""
+    if size > files.READ_MAX:
+        return len(data) == files.READ_MAX + 1
+    if len(data) != size:
+        return False
+    return hashlib.sha256(data).hexdigest() == digest
+
+
 def _text_of(c: sqlite3.Connection, job: dict[str, Any]) -> tuple[str | None, bool]:
     """The text Tico holds for a waiting attachment, read up to file_library.READ_MAX bytes: a Tico page, a company file or
     an uploaded blob of a text type. (None, False) when Tico holds none (an image, a video, a PDF or a link), or the bytes
@@ -413,12 +424,16 @@ def _text_of(c: sqlite3.Connection, job: dict[str, Any]) -> tuple[str | None, bo
     digest = job.get("blob_digest")
     if blobs is None or not digest or not _reads_text(mime):
         return None, False
+    size = int(job.get("blob_size") or 0)
     try:
         data = read_prefix(blobs, digest)
     except Exception as exc:  # noqa: BLE001 - an unreadable file is judged as unreadable; one bad blob never stops the pass
         LOG.warning("An attachment's bytes could not be read for the judge: %s", type(exc).__name__)
         return None, False
-    return text_of_bytes(mime, data, int(job.get("blob_size") or 0))
+    if not _intact(data, str(digest), size):
+        LOG.warning("An attachment's bytes came back short or altered for the judge; it is judged as unreadable")
+        return None, False
+    return text_of_bytes(mime, data, size)
 
 
 def _open_visit(c: sqlite3.Connection, task_id: str) -> str | None:

@@ -328,3 +328,27 @@ def test_replace_relocating_a_card_off_a_spawn_stage_files_no_linked_work(tmp_pa
     assert rows(c, "SELECT pipeline_stage_id AS s FROM stage_visits WHERE task_id=? AND left_at IS NULL", card) == [
         {"s": now}
     ]
+
+
+def test_replace_retires_the_revenue_links_an_older_setup_made_and_keeps_their_handoffs(tmp_path):
+    """Fix V-10: an older setup linked Marketing to Sales and Sales to Success. Replacing with the current preset retires
+    both links (their handoff rows stay on record) and keeps the Product to Engineering link live."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, "tico_default")
+    marketing_done = step_id(c, _type(c, "Marketing"), "Done")
+    sales_won = step_id(c, _type(c, "Sales"), "Won")
+    to_sales = L.create_link(c, ANA, marketing_done, _type(c, "Sales"), "move")
+    to_success = L.create_link(c, ANA, sales_won, _type(c, "Success"), "move")
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=_type(c, "Sales"), step="Won", lint=False)["id"]
+    L.record_handoff(c, to_success["id"], card, card)
+    L.record_handoff(c, to_sales["id"], card, card)
+    c.commit()
+
+    S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+
+    retired = {r["id"] for r in rows(c, "SELECT id FROM pipeline_links WHERE retired_at IS NOT NULL")}
+    assert {to_sales["id"], to_success["id"]} <= retired
+    assert len(L.handoffs(c, to_sales["id"])) == 1 and len(L.handoffs(c, to_success["id"])) == 1
+    review = step_id(c, _type(c, "Product"), "Review")
+    assert L.link_for_stage(c, review)["to_pipeline_id"] == _type(c, "Engineering")
+    assert L.link_for_stage(c, marketing_done) is None and L.link_for_stage(c, sales_won) is None
