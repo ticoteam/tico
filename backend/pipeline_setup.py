@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 Row = dict[str, Any]
 CLOSING = ("closed", "declined")
-OPEN_STATUSES = "('open','doing','waiting','review','ready')"
+OPEN_STATUSES = ("open", "doing", "waiting", "review", "ready")
 
 
 def _stages(*pairs: tuple[str, str]) -> list[dict[str, str]]:
@@ -235,32 +235,41 @@ def _pipeline_stages(spec: Row) -> list[dict[str, str]]:
 
 def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[str, str]], made: list[str]) -> None:
     """replace=True on a type with no role: its stages become `stages` (from _pipeline_stages, the list it was made with),
-    in that order. Writes nothing when the stages already match. Never done to a type that holds a role."""
+    in that order. A stage the list keeps (same name) keeps its id, and its cards stay where they are with their status.
+    Only cards on a removed stage move: an open one to the first stage, a done or closed one to Closed, its status kept.
+    Each move is a step event. Writes nothing when the stages already match. Never done to a type that holds a role."""
     want = [dict(s) for s in stages]
 
     def shape(steps: list[Row]) -> list[tuple[str, str]]:
         return [(str(s["name"]).lower(), str(s["status"])) for s in steps]
 
-    current = _rows(
-        conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position, id", (row["id"],)
-    )
-    if shape(current) == shape(want):
-        return
-    open_cards = _rows(conn, f"SELECT id FROM tasks WHERE type_id = ? AND status IN {OPEN_STATUSES}", (row["id"],))
-    for task in open_cards:
-        H.task_close(conn, actor, task["id"], note="Closed by pipeline setup (replace)")
-    if open_cards:
-        made.append(f"cleared {row['name']}")
-    cards = _one(conn, "SELECT id FROM tasks WHERE type_id = ? LIMIT 1", (row["id"],)) is not None
-    if cards and not any(str(s["name"]).lower() == "closed" for s in current):
-        keep = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in current]
-        H.type_update(conn, actor, row["id"], steps=[*keep, {"name": "Closed", "status": "closed"}], mover=True)
-        current = _rows(
+    def read() -> list[Row]:
+        return _rows(
             conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position, id", (row["id"],)
         )
+
+    current = read()
+    if shape(current) == shape(want):
+        return
+    have = {str(s["name"]).lower() for s in current}
+    missing = [s for s in want if str(s["name"]).lower() not in have]
+    if missing:  # the new stages exist first, so cards have somewhere to go before a removed stage is dropped
+        keep = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in current]
+        H.type_update(conn, actor, row["id"], steps=[*keep, *missing], mover=True)
+        current = read()
     by_name = {str(s["name"]).lower(): s for s in current}
-    if cards:
-        conn.execute("UPDATE tasks SET step_id = ? WHERE type_id = ?", (by_name["closed"]["id"], row["id"]))
+    kept = {str(s["name"]).lower() for s in want}
+    moved = 0
+    for step in [s for s in current if str(s["name"]).lower() not in kept]:
+        for card in _rows(conn, "SELECT id, status FROM tasks WHERE step_id = ?", (step["id"],)):
+            dest = by_name[str(want[0]["name"]).lower()] if card["status"] in OPEN_STATUSES else by_name["closed"]
+            conn.execute("UPDATE tasks SET step_id = ?, updated_at = ? WHERE id = ?", (dest["id"], H.now(), card["id"]))
+            H._task_event(  # pyright: ignore[reportPrivateUsage]
+                conn, card["id"], actor, "step", step["id"], dest["id"], "Moved by pipeline setup (replace)"
+            )
+            moved += 1
+    if moved:
+        made.append(f"moved {moved} cards off removed stages of {row['name']}")
     final: list[dict[str, Any]] = []
     for s in want:
         old = by_name.get(str(s["name"]).lower())

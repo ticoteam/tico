@@ -90,7 +90,7 @@ def test_a_manager_bot_with_a_matching_name_is_set_and_no_other(tmp_path):
     assert managers["Sales"] == "sales-manager" and managers["Marketing"] is None
 
 
-def test_replace_clears_open_cards_only_when_asked(tmp_path):
+def test_replace_moves_an_open_card_on_a_removed_stage_to_the_first_stage_and_keeps_it_open(tmp_path):
     c = fresh(tmp_path)
     old = H.type_create(
         c,
@@ -107,8 +107,9 @@ def test_replace_clears_open_cards_only_when_asked(tmp_path):
     S.apply_factory_setup(c, ANA)
     assert rows(c, "SELECT status FROM tasks WHERE id=?", task["id"])[0]["status"] == "open"
     out = S.apply_factory_setup(c, ANA, replace=True)
-    assert "cleared Sales" in out["changes"]
-    assert rows(c, "SELECT status FROM tasks WHERE id=?", task["id"])[0]["status"] == "closed"
+    assert "moved 1 cards off removed stages of Sales" in out["changes"]
+    now = rows(c, "SELECT k.status, s.name FROM tasks k JOIN task_steps s ON s.id = k.step_id WHERE k.id=?", task["id"])
+    assert now == [{"status": "open", "name": "Lead"}]
 
 
 def test_replace_on_a_booted_hub_makes_every_declared_link_and_a_second_run_changes_nothing(tmp_path):
@@ -243,3 +244,37 @@ def test_two_replace_runs_in_a_row_change_nothing_the_second_time(tmp_path):
     assert snapshot(c) == before
     assert rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"] == events
     assert rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id") == cards
+
+
+def test_replace_keeps_cards_on_kept_stages_and_moves_only_cards_on_removed_stages(tmp_path):
+    """A replace rewrites no finished history: a card on a stage the preset keeps stays put with its status. On a removed
+    stage an open card goes to the first stage, a done or closed one goes to Closed with its status kept, and each move
+    is a step event."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, "tico_default")
+    won = H.task_create(c, ANA, "Acme deal", "", ANA, type=_type(c, "Sales"), step="Won", lint=False)["id"]
+    working = H.task_create(c, ANA, "Spring push", "", ANA, type=_type(c, "Marketing"), step="Working", lint=False)[
+        "id"
+    ]
+    dropped = H.task_create(c, ANA, "Old list", "", ANA, type=_type(c, "Marketing"), step="Dropped", lint=False)["id"]
+    c.commit()
+    before = {t: rows(c, "SELECT step_id, status FROM tasks WHERE id=?", t)[0] for t in (won, working, dropped)}
+    S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+
+    def now(task):
+        return rows(c, "SELECT k.status, s.name FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", task)[0]
+
+    assert now(won) == {"status": before[won]["status"], "name": "Won"}
+    assert now(working)["name"] == "Targets" and now(working)["status"] == before[working]["status"] == "doing"
+    assert now(dropped) == {"status": "closed", "name": "Closed"}
+    moved = rows(
+        c,
+        "SELECT subject_id FROM history_events WHERE subject_type='task' AND kind='step' AND subject_id IN (?,?)",
+        working,
+        dropped,
+    )
+    assert {r["subject_id"] for r in moved} == {working, dropped}
+
+
+def _type(c, name):
+    return rows(c, "SELECT id FROM task_types WHERE name=? COLLATE NOCASE", name)[0]["id"]
