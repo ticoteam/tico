@@ -1319,12 +1319,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
       assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
       await page.goBack();
-      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 10);
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 11);
       await page.goForward();
       await page.locator('.fin-as').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
-      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 10);
+      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 11);
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
