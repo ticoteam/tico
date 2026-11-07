@@ -128,7 +128,8 @@ keeping as a guard.
   follow-up answer, an ambiguous reply that must not answer an open question for them, a routing change for one bot's
   tasks with a rule, and "those" read as the items just listed (not the page they are on); a close-all ask that keeps five
   and closes the rest, a five-item list one line each, a self-picked target that keeps the decisions and answers routine
-  bot questions with the decline note (bot work in progress stays), and a decision asked in the reply, not filed as a task.
+  bot questions with the decline note (bot work in progress stays), a decision asked in the reply, not filed as a task, and
+  a decision the person handed over ("whatever you think is right"), which the Assistant picks and says so.
 - `cases/goals.yaml`: where the person stands on their goals, what to do today (at most three, the red goal first), a
   suggestion they turned down, work a bot can do (a task for the bot), the keep-going offer in a chat and when it stops, an
   ordinary chore with no offer, a non-owner's own area, and the morning message (one send, none on a quiet day, no retry
