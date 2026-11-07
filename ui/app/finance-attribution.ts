@@ -33,6 +33,10 @@ interface FinRule {
   apply_from?: string | null;
 }
 interface FinPick { id: string; name: string }
+// The access read's parts this file uses (GET /api/v2/finance/access), and a rules read.
+interface FinAccessLite { teammates?: {teammate?: string}[]; teams?: {id: string; name: string}[] }
+interface FinRulesRead { rules?: FinRule[]; can_change?: boolean }
+interface FinNamed { id: string; name: string }
 
 const FIN_SHARE_MAX = 10;      // parts in one split (the contract: 1 to 10)
 const FIN_SHARE_ALL = 10000;   // basis points in a whole line
@@ -68,9 +72,9 @@ function finShareChips(parts: FinShare[]): string {
 
 // ----------------------------------------------------------------- the share rows (a dialog's part)
 function finShareOpts(selected: string): string {
-  const acc: any = FIN?.acc || FIN_ACCESS;
-  const mates: FinPick[] = (acc?.teammates || []).filter((t: any) => t.teammate).map((t: any) => ({id: 'teammate:' + t.teammate, name: finWho(t.teammate)}));
-  const teams: FinPick[] = (acc?.teams || []).map((t: any) => ({id: 'team:' + t.id, name: t.name}));
+  const acc = (FIN?.acc || FIN_ACCESS) as FinAccessLite | null;
+  const mates: FinPick[] = (acc?.teammates || []).filter(t => t.teammate).map(t => ({id: 'teammate:' + t.teammate, name: finWho(t.teammate)}));
+  const teams: FinPick[] = (acc?.teams || []).map(t => ({id: 'team:' + t.id, name: t.name}));
   const all = [...mates, ...teams];
   // A part that is no longer on the list (a teammate who left) still shows, so it can be changed.
   if (selected && !all.some(o => o.id === selected)) all.unshift({id: selected, name: finWho(selected.replace(/^(teammate|team):/, ''))});
@@ -133,16 +137,16 @@ async function finShareRailLoad(key: string, lines: {line_id: string; account?: 
   const box = document.getElementById('fin-tx-share');
   if (!box || !lines.length) return;
   const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}/attribution${finAs('?')}`, {fresh: true})
-    .then((r: any) => r && Array.isArray(r.splits) && Array.isArray(r.history) ? r : null, () => null)));
+    .then((r: unknown) => { const a = r as FinAttribution | null; return a && Array.isArray(a.splits) && Array.isArray(a.history) ? a : null; }, () => null)));
   if (FIN?.tx?.sel !== key || document.getElementById('fin-tx-share') !== box) return;
   const found = reads.map((a, i) => a ? {line: lines[i], a} : null).filter(Boolean) as {line: {line_id: string; account?: string}; a: FinAttribution}[];
   if (!found.length) { box.innerHTML = ''; return; }
   // A rule's name, for "Rule: <name>": read once, when a line shows one (none when the viewer may not read the rules).
   if (found.some(f => f.a.source === 'rule') && !FIN_SHARE.names.size) {
-    try { (((await get('/v2/finance/attribution-rules' + finAs('?'), {fresh: true})) as any)?.rules || []).forEach((r: FinRule) => FIN_SHARE.names.set(r.id, r.name)); }
+    try { for (const r of ((await get('/v2/finance/attribution-rules' + finAs('?'), {fresh: true})) as FinRulesRead | null)?.rules || []) FIN_SHARE.names.set(r.id, r.name); }
     catch { /* the rule shows as "Rule" */ }
   }
-  found.forEach(f => FIN_SHARE.at.set(f.line.line_id, f.a));
+  for (const f of found) FIN_SHARE.at.set(f.line.line_id, f.a);
   box.innerHTML = found.map(f => finShareSection(f.line, f.a, found.length > 1)).join('');
   box.onclick = ev => {
     const t = ev.target as HTMLElement;
@@ -198,7 +202,8 @@ async function finShareUndo(lineId: string): Promise<void> {
 // ----------------------------------------------------------------- the Attribution tab
 // Shown to the owner and anyone holding finance.attribution (or finance.admin): the rules, and + Rule for those who may change them.
 function finAttrPage(): void {
-  const state = FIN.attr = {rules: [] as FinRule[], can: false, load: 0};
+  const state = {rules: [] as FinRule[], can: false, load: 0};
+  FIN.attr = state;
   $('#fin-body')!.innerHTML = `<div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-rule-add hidden>+ Rule</button></div>
     <div class="fin-scroll" id="fin-rules">${skelRows(4, {dot: false})}</div>`;
   const body = $('#fin-body')!;
@@ -231,13 +236,13 @@ async function finAttrLoad(): Promise<void> {
   const state = FIN.attr;
   if (!state) return;
   const load = ++state.load;
-  let d: any;
+  let d: FinRulesRead | null;
   try { d = await get('/v2/finance/attribution-rules' + finAs('?'), {fresh: true}); }
   catch (e) { if (FIN?.attr === state && $('#fin-rules')) $('#fin-rules')!.innerHTML = finFail(e); return; }
   if (FIN?.attr !== state || state.load !== load || !$('#fin-rules')) return;
   state.rules = d?.rules || [];
   state.can = !!d?.can_change;
-  state.rules.forEach(r => FIN_SHARE.names.set(r.id, r.name));
+  for (const r of state.rules) FIN_SHARE.names.set(r.id, r.name);
   const add = $('[data-fin-rule-add]') as HTMLElement | null;
   if (add) add.hidden = !state.can;
   finAttrDraw();
@@ -271,8 +276,8 @@ async function finRuleDelete(rule: FinRule | undefined): Promise<void> {
 // The lines a rule can apply to, by kind: vendors (contacts), P&L accounts (the chart) or the bank and card accounts.
 async function finRulePicks(kind: string): Promise<FinPick[]> {
   try {
-    if (kind === 'vendor') return ((await finContacts('vendor')) as any[]).map(c => ({id: c.id, name: c.name}));
-    if (kind === 'account') return ((await finChart('journal')) as any[]).map(a => ({id: a.id, name: a.name}));
+    if (kind === 'vendor') return ((await finContacts('vendor')) as FinNamed[]).map(c => ({id: c.id, name: c.name}));
+    if (kind === 'account') return ((await finChart('journal')) as FinNamed[]).map(a => ({id: a.id, name: a.name}));
     return await finPayFrom();
   } catch { return []; }
 }
