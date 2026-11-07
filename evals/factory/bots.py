@@ -829,8 +829,9 @@ class Lead(Bot):
     """Head of Engineering: on its hourly sweep (a routine) it looks for stuck tickets and gets each moving the way a
     lead does: it tells the owner, with what it sees, flagged as needing action (a plain comment from one bot to another
     waits for the owner's next run). A stop's ticket (Tico's "made no progress in 3 runs" ticket on its plate) is settled
-    on every turn that finds it open: the stuck task is retried once through its builder, reassigned once if it is still
-    stuck, and the ticket is done with one line. Any other wake is noise."""
+    on every turn that finds it open: the stuck task is retried once through its builder, or, if the server refuses that
+    (a manager that is no party to a generic task may not write on it), reassigned once; the ticket is done with one line
+    that says what was done. Any other wake is noise."""
 
     steers = True  # its runtime reads the notices folded into its turn: a stop's notice reaches the turn that is queued
 
@@ -882,16 +883,13 @@ class Lead(Bot):
         )
 
     def settle_stop(self, ticket):
-        """One stop ticket: its task is retried once through its builder; a task already retried and still stuck is
-        reassigned once. The ticket is done with the one line that says what was done."""
+        """One stop ticket: its task is retried once through its builder, and when the server refuses that, reassigned once.
+        A refusal is said in the one line the ticket is done with, never raised: the turn's other work still runs."""
         stuck = self.stopped_task(ticket)
         if stuck is None or stuck["status"] in FINISHED:
             line = "the stopped task is done or gone: nothing to move"
-        elif self.retried(stuck):
-            line = self.reassign_once(stuck)
         else:
-            self.retry(stuck)
-            line = f"retried {stuck['title']} once through {stuck['owner_id'][4:]}"
+            line = self.retry(stuck) or self.reassign_once(stuck)
         self.world.update(ticket["id"], token=self.token, status="done", note=line)
         return line
 
@@ -907,26 +905,22 @@ class Lead(Bot):
                 return found[0] if found else None
         return None
 
-    def retried(self, stuck):
-        """Whether the lead has retried this task before: its own retry comment is in the task's thread."""
-        return bool(
-            self.world.sql(
-                "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND body LIKE '%Retry:%' LIMIT 1",
-                (stuck["conversation_id"], "bot:" + self.slug),
-            )
-        )
-
     def retry(self, stuck):
-        """Hand the stuck task back to its builder with a short note: a comment that needs action wakes the builder."""
-        self.world.post(
-            f"tasks/{stuck['id']}/comments",
-            {
-                "text": f"@{stuck['owner_id'][4:]} Retry: {stuck['title']} made no progress in {NO_PROGRESS_RUNS} runs. "
-                "Carry on with it: finish it, hand it on, or record what it waits on.",
-                "needs_action": True,
-            },
-            token=self.token,
-        )
+        """Hand the stuck task back to its builder with a short note: a comment that needs action wakes the builder. Its
+        line for the ticket when the comment went, or None when the server refuses it."""
+        try:
+            self.world.post(
+                f"tasks/{stuck['id']}/comments",
+                {
+                    "text": f"@{stuck['owner_id'][4:]} Retry: {stuck['title']} made no progress in "
+                    f"{NO_PROGRESS_RUNS} runs. Carry on with it: finish it, hand it on, or record what it waits on.",
+                    "needs_action": True,
+                },
+                token=self.token,
+            )
+        except Refusal:
+            return None
+        return f"retried {stuck['title']} once through {stuck['owner_id'][4:]}"
 
     def open_tasks(self, slug):
         """How many open or doing tasks a bot owns: its load when a task is reassigned."""
@@ -935,8 +929,8 @@ class Lead(Bot):
         )[0]["n"]
 
     def reassign_once(self, stuck):
-        """A task already retried and still stuck: the lead moves it once, to the least loaded builder of its owner's role
-        that has nothing in progress. No free builder: a one-line note for the person who owns the board, and it stays."""
+        """The stuck task moves once, to the least loaded builder of its owner's role that has nothing in progress. Its line
+        for the ticket: the move, or, with no such builder or a refused change, a line for the person who owns the board."""
         w = self.world
         slug = stuck["owner_id"][4:]
         role = next((r for r, slugs in w.roles.items() if slug in slugs), None)
@@ -945,17 +939,14 @@ class Lead(Bot):
             for s in w.roles.get(role, [])
             if s != slug and not w.sql("SELECT 1 FROM tasks WHERE owner_id=? AND status='doing' LIMIT 1", ("bot:" + s,))
         ]
+        stays = f"for ana: {stuck['title']} made no progress and could not be retried or moved; it stays with {slug}"
         if not free:
-            w.post(
-                f"tasks/{stuck['id']}/comments",
-                {
-                    "text": f"@ana {stuck['title']} made no progress after a retry, and no other builder is free to take it."
-                },
-                token=self.token,
-            )
-            return f"noted for ana: no free builder to take {stuck['title']}"
+            return stays
         target = min(free, key=lambda s: (self.open_tasks(s), s))
-        w.update(stuck["id"], token=self.token, owner="bot:" + target)
+        try:
+            w.update(stuck["id"], token=self.token, owner="bot:" + target)
+        except Refusal:
+            return stays
         return f"reassigned {stuck['title']} from {slug} to {target}"
 
     def spread(self, task):
