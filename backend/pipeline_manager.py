@@ -149,12 +149,13 @@ def _visits(c: "sqlite3.Connection", pipeline_id: str) -> list[dict[str, Any]]:
 
 
 def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -> dict[str, dict[str, Any]]:
-    """The one Late rule: the manager's rail and the overview both read it. A live ticket is late once it has spent its
-    stage's Warn after (task_steps.limit_minutes, D55) in its open stage visit, and at the limit exactly. Time on hold does
-    not count (D40): an open hold, or a waiting ticket, pauses it, and its clock starts again at the latest release or
-    the move back from waiting. A ticket with no open visit counts from its latest move into its step.
+    """The one Late rule: the manager's rail and the overview both read it. A live ticket is late once its active time in
+    its stage's Warn after (task_steps.limit_minutes, D55) reaches the limit. Active time is the time since the start of its
+    open stage visit, less the time on hold (any task_holds row, open or released) and the time it sat in status waiting
+    (D40), so a pause never restarts the clock and time before a pause still counts. A new visit starts from zero. A ticket
+    with no open visit counts from its latest move into its step, and one with neither from its creation.
     `rows` are task rows (id, type_id, step_id, status, created_at). Returns {task id: {since, hours, limit_hours,
-    limit_minutes}} for the late ones only."""
+    limit_minutes}} for the late ones only; `since` is when the visit's clock started."""
     now = when_of(at)
     limits: dict[str, int] = {
         str(r["id"]): r["limit_minutes"]
@@ -189,48 +190,77 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
             )
         )
     }
-    # Waiting pauses the clock as a hold does, with or without a hold row (product roadmap moves make none): the clock
-    # starts again when the ticket leaves waiting (Fix L2-5).
-    left_waiting = {
-        r["task_id"]: r["at"]
-        for r in H._rows(
-            c.execute(
-                "SELECT subject_id AS task_id, max(created_at) AS at FROM history_events WHERE subject_type='task' "
-                f"AND kind='status' AND old='waiting' AND subject_id IN ({marks}) GROUP BY subject_id",
-                ids,
-            )
+    began: dict[str, datetime] = {}
+    for r in live:
+        ticket = r["id"]
+        start = H.parse_ts(entered.get(ticket) or into_step.get((ticket, str(r.get("step_id"))), "") or "")
+        start = start or H.parse_ts(r.get("created_at") or "")
+        if start is not None:
+            began[ticket] = start
+    if not began:
+        return {}
+    # The paused spans of each ticket: every hold (open ones run to now) and every stretch in status waiting, which pauses
+    # the clock with or without a hold row (product roadmap moves make none).
+    paused: dict[str, list[tuple[datetime, datetime]]] = {}
+    for hold in H._rows(
+        c.execute(f"SELECT task_id, created_at, released_at FROM task_holds WHERE task_id IN ({marks})", ids)
+    ):
+        start = H.parse_ts(hold["created_at"])
+        end = H.parse_ts(hold["released_at"]) or now
+        if start is not None:
+            paused.setdefault(hold["task_id"], []).append((start, end))
+    earliest = stamp_of(min(began.values()))
+    waiting_since: dict[str, datetime] = {}
+    for event in H._rows(
+        c.execute(
+            "SELECT subject_id AS task_id, old, new, created_at FROM history_events WHERE subject_type='task' "
+            f"AND kind='status' AND subject_id IN ({marks}) AND created_at >= ? ORDER BY created_at, rowid",
+            (*ids, earliest),
         )
-    }
-    open_now: set[str] = set()
-    released: dict[str, list[str]] = {}
-    for hold in H._rows(c.execute(f"SELECT task_id, released_at FROM task_holds WHERE task_id IN ({marks})", ids)):
-        if hold["released_at"]:
-            released.setdefault(hold["task_id"], []).append(hold["released_at"])
-        else:
-            open_now.add(hold["task_id"])
+    ):
+        ticket = str(event["task_id"])
+        when = H.parse_ts(event["created_at"])
+        if when is None:
+            continue
+        if event["new"] == "waiting":
+            waiting_since[ticket] = when
+        elif event["old"] == "waiting":
+            # A stretch that began before this visit counts from the visit's start.
+            start = waiting_since.pop(ticket, began.get(ticket, when))
+            paused.setdefault(ticket, []).append((start, when))
+    for ticket, start in waiting_since.items():
+        paused.setdefault(ticket, []).append((start, now))
     out: dict[str, dict[str, Any]] = {}
     for r in live:
         ticket = r["id"]
-        if ticket in open_now:
+        if ticket not in began:
             continue
-        since_step = into_step.get((ticket, str(r.get("step_id"))))
-        starts = [H.parse_ts(entered.get(ticket) or since_step or r.get("created_at") or "")]
-        starts += [H.parse_ts(at_release) for at_release in released.get(ticket, [])]
-        if left_waiting.get(ticket):
-            starts.append(H.parse_ts(left_waiting[ticket]))
-        began = max((t for t in starts if t is not None), default=None)
-        if began is None:
-            continue
-        minutes = (now - began).total_seconds() / 60
+        start = began[ticket]
+        minutes = (now - start).total_seconds() / 60 - _paused_minutes(paused.get(ticket, []), start, now)
         limit = limits[str(r["step_id"])]
         if minutes >= limit:
             out[ticket] = {
-                "since": stamp_of(began),
+                "since": stamp_of(start),
                 "hours": round(minutes / 60, 2),
                 "limit_hours": limit / 60,
                 "limit_minutes": limit,
             }
     return out
+
+
+def _paused_minutes(spans: list[tuple[datetime, datetime]], start: datetime, now: datetime) -> float:
+    """The minutes of [start, now] that the spans cover, each counted once however they overlap."""
+    clipped = sorted((max(a, start), min(b, now)) for a, b in spans if min(b, now) > max(a, start))
+    total = 0.0
+    edge: datetime | None = None
+    for a, b in clipped:
+        if edge is None or a > edge:
+            total += (b - a).total_seconds() / 60
+            edge = b
+        elif b > edge:
+            total += (b - edge).total_seconds() / 60
+            edge = b
+    return total
 
 
 def over_limit(c: "sqlite3.Connection", pipeline_id: str, at: Any) -> list[dict[str, Any]]:
