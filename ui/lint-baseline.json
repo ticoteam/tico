@@ -126,7 +126,6 @@
     "ui/org-builder.js": 4,
     "ui/overview/bridge.js": 1,
     "ui/overview/building.js": 25,
-    "ui/replay-player.js": 1,
     "ui/slack-channels.js": 1,
     "ui/strategy-page.js": 1,
     "ui/support.js": 4,

@@ -26,7 +26,6 @@ declare var LivekitClient: any;
 declare var DocsEditor: any;
 declare var DocsSearch: any;
 declare var TicoModelLogin: any;
-declare var TicoReplay: any;
 declare var assistantChat: any;
 declare var botFiles: any;
 declare var botTools: any;
