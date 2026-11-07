@@ -721,6 +721,11 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
             if not seen:
                 raise Problem("not_found", "No such pipeline", 404)
             late, more = late_listing(
-                c, who.task_actor or who.actor, auth.task_sql(c, who), pipeline_id, datetime.now(timezone.utc), wanted
+                c,
+                who.task_actor or who.actor,
+                auth.task_sql(c, who),  # pyright: ignore[reportUnknownMemberType]
+                pipeline_id,
+                datetime.now(timezone.utc),
+                wanted,
             )
         return {"late": late, "more": more}
