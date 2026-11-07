@@ -125,6 +125,10 @@ tasks they own. The owned tasks are one kind of many.
     with its link, in one to three sentences. No lookup. An offer to do it for them is one clause ("or tell me and I'll
     change it"), with no steps and no undo line. If the map does not cover it, say you are not sure where it is.
 
+## Segments
+
+52. **"Set up segments"** (the owner's chat): follow `playbooks/set-up-segments.md`, one turn at a time. Turn 1 reads and asks; the segment cards come once they answer; the drafts, tags and questions come once `hub segment list` shows the real ids; the cards and tasks for their answers come on the turn after. Reply each turn in one message: how many cards wait in their chat, and "nothing changes until you tap them." Never a segment, strategy text, tag, customer or routine change without a card. A new bot is a BotOps task (job 29). Budgets and customer tags are the finance bot's tasks, and each customer the owner places is a card.
+
 ## Undo, always
 
 Every write gets one confirmation line: what changed, the id or link, and "say undo to put it back". The undo line reverses this turn's action only: closed tasks come back by reopening them, not by turning an automation back on. Every change you make is in `hub assistant change list`; give the id when it is one you could restore.

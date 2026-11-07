@@ -208,3 +208,12 @@ def test_only_the_new_sync_tool_takes_the_inbox_and_an_older_server_still_syncs(
     api = _Sync(True)
     hubtools.BY_NAME["hub_grokbot_sync"]["fn"](api, {"bots": bots})  # routines from before the inbox ignore it
     assert api.bodies == [{"provider": "grokbot", "bots": bots}]
+
+
+def test_the_segment_reads_are_offered_to_the_assistant_and_its_writes_are_cards_it_proposes():
+    """The Assistant reads the segments; a change to them is the owner's on their own click, so the write tools are not
+    offered to its turn (it proposes the route with `hub assistant propose`)."""
+    offered = {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert {"hub_segment_list", "hub_segment_show", "hub_segment_members"} <= offered
+    writes = {"hub_segment_add", "hub_segment_edit", "hub_segment_order", "hub_segment_remove", "hub_segment_strategy"}
+    assert (writes | {"hub_segment_tag"}) & offered == set()

@@ -4060,6 +4060,170 @@ def market_segment_add(api, args):
     )
 
 
+# ----------------------------------------------------------------------------- the company's segments
+# What the company plays in (backend/segments.py): the market's segments the company operates in, each with its
+# dedicated teammates and its own strategy text. Writes are the owner's on their own click: the Assistant proposes
+# them as cards (`hub assistant propose`), and a bot admin is refused by the route.
+SEGMENT_COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")
+SEGMENT_STRATEGY_KEYS = ("summary", *STRATEGY_SECTIONS)
+
+
+def _segment_path(segment_id):
+    """A segment id is `segment/<slug>`: its slash stays, the route takes the rest of the path."""
+    return "segments/" + quote(str(segment_id), safe="/")
+
+
+@tool(
+    "hub_segment_list",
+    "The company's segments in list order: id, name, who, color, rank, faces (dedicated teammates) and teammates "
+    "(how many).",
+    {},
+)
+def segment_list(api, args):
+    return api.get("segments")
+
+
+@tool(
+    "hub_segment_show",
+    "One segment: leads, strategy fields (text, the company's text, changed; the owner reads the draft and its "
+    "revision) and live bets.",
+    {"id": _s("segment/<slug>")},
+    ("id",),
+)
+def segment_show(api, args):
+    return api.get(_segment_path(args["id"]))
+
+
+@tool(
+    "hub_segment_add",
+    "Owner: a segment the company plays in. A market segment of that name joins the company's and keeps its id; a "
+    "new one lands last in the list. Answers {segment}.",
+    {
+        "name": _s("The segment's name"),
+        "who": _s("One line: who it is for"),
+        "color": {
+            "type": "string",
+            "enum": list(SEGMENT_COLORS),
+            "description": "Its color; default the next free one",
+        },
+    },
+    ("name",),
+    writes=True,
+)
+def segment_add(api, args):
+    return api.post(
+        "segments",
+        {"name": args["name"], "who": args.get("who") or "", "color": args.get("color") or None},
+        key=_key(args),
+    )
+
+
+@tool(
+    "hub_segment_edit",
+    "Owner: a segment's name, who it is for or color. Only what is sent changes; who \"\" clears it. Answers {segment}.",
+    {
+        "id": _s("The segment's id, segment/<slug>"),
+        "name": _s("New name"),
+        "who": _s("One line: who it is for; an empty string clears it"),
+        "color": {"type": "string", "enum": list(SEGMENT_COLORS)},
+    },
+    ("id",),
+    writes=True,
+)
+def segment_edit(api, args):
+    body = {k: args[k] for k in ("name", "who", "color") if args.get(k) is not None}
+    if not body:  # refused here, before any request: there is nothing to change
+        raise APIError("validation", "Name what to change: --name, --who or --color", 422)
+    return api.post(_segment_path(args["id"]), body, key=_key(args))
+
+
+@tool(
+    "hub_segment_order",
+    "Owner: the list order of the company's segments: every segment it plays in, once each, in the order given. "
+    "Answers {segments}, the list.",
+    {"ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Every segment id, in order"}},
+    ("ids",),
+    writes=True,
+)
+def segment_order(api, args):
+    return api.post("segments/order", {"ids": list(args["ids"])}, key=_key(args))
+
+
+@tool(
+    "hub_segment_remove",
+    "Owner: take a segment out of the company's. Its operates-in edge ends and its teammate tags go; the market keeps "
+    "the segment with its edges, competitors and sizes. Answers {id, removed}.",
+    {"id": _s("The segment's id, segment/<slug>")},
+    ("id",),
+    writes=True,
+)
+def segment_remove(api, args):
+    return api.post("segments/remove", {"id": args["id"]}, key=_key(args))
+
+
+@tool(
+    "hub_segment_strategy",
+    "Owner: a segment's own strategy text for the sections sent, in the draft (the owner publishes on the Strategy "
+    "page). An empty text gives the company's text back for that section. `revision` (optional) is the draft's "
+    "revision as hub_segment_show reads it. Answers {strategy}.",
+    {
+        "id": _s("The segment's id, segment/<slug>"),
+        "revision": {"type": "integer", "description": "The draft's revision as hub_segment_show read it (optional)"},
+        "sections": {
+            "type": "object",
+            "description": "Section key to its text. Keys: summary, serve, sell, proof, now, know, how, not",
+            "additionalProperties": {"type": "string"},
+        },
+    },
+    ("id",),
+    writes=True,
+)
+def segment_strategy(api, args):
+    sections = dict(args.get("sections") or {})
+    unknown = sorted(set(sections) - set(SEGMENT_STRATEGY_KEYS))
+    if unknown:
+        raise APIError("validation", f"Unknown section {unknown[0]}: use {', '.join(SEGMENT_STRATEGY_KEYS)}", 422)
+    body = {"id": args["id"], "sections": sections}
+    if args.get("revision") is not None:
+        body["revision"] = int(args["revision"])  # a confirmed card writes its keys without the revision
+    return api.call("PUT", "segments/strategy", body, key=_key(args))
+
+
+@tool(
+    "hub_segment_members",
+    "Teammates tagged with a segment (or all): member (bot:<id> or person:<id>) and segments. truncated says the list "
+    "was cut.",
+    {},
+)
+def segment_members(api, args):
+    return api.get("segments/members")
+
+
+@tool(
+    "hub_segment_tag",
+    "Owner: a teammate's segments, replaced by the ones given: segment ids, or `all` alone for every segment. clear "
+    "takes every tag off. The member is bot:<id> or person:<id>. Answers {member, segments}.",
+    {
+        "member": _s("bot:<id> or person:<id>"),
+        "segments": {"type": "array", "items": {"type": "string"}, "description": "Segment ids, or [\"all\"]"},
+        "clear": {"type": "boolean", "description": "Take every segment tag off"},
+    },
+    ("member",),
+    writes=True,
+)
+def segment_tag(api, args):
+    segments = list(args.get("segments") or [])
+    if args.get("clear") and segments:
+        raise APIError("validation", "Send segments or clear, not both", 422)
+    if not segments and not args.get("clear"):
+        raise APIError("validation", "Name a segment (or all), or send clear to take every tag off", 422)
+    return api.post(
+        "segments/members",
+        {"member": args["member"], "segments": [] if args.get("clear") else segments},
+        key=_key(args),
+    )
+
+
 @tool(
     "hub_market_size_add",
     "Librarian or owner: file one estimate of a segment's yearly spend in US dollars. Every method "
@@ -9322,30 +9486,11 @@ def turns(api, args):
 
 @tool(
     "hub_pipeline",
-    "A task type's pipeline and the fleet's queues in one read, counted the way the Tasks board counts "
-    "(only tickets you may read; closed and finished ones never count). Defaults: the engineering board (Dev tickets), "
-    "snoozed tickets included, failures since 24h. Use it for \"where is work stuck and on whom\" instead of paging "
-    "hub_task_list or hub_sql. Fields, one line each:\n"
-    "- steps[]: each working step in board order: id, name, status.\n"
-    "- steps[].count / snoozed: tickets in the step now / how many of them are snoozed.\n"
-    "- steps[].oldest_hours / median_hours / oldest: time since tickets entered this step; `oldest` is that ticket's number (or id).\n"
-    "- steps[].ids / ids_more: up to 50 ticket numbers (or ids) in board order / how many more there are.\n"
-    "- steps[].by_owner: tickets per owner.\n"
-    "- steps[].waits_on: tickets waiting on a bot, a person, something external (GitHub, a release) or nothing (the owner acts).\n"
-    "- steps[].waits_on_actor: tickets per actor waited on (an open child's or blocker's owner, an asked person, `person` for an approval).\n"
-    "- steps[].prs: open pull requests linked to the step's tickets and the oldest one's age in hours.\n"
-    "- no_step: live tickets of the type with no step of it, counted the same way (absent when none).\n"
-    "- total / truncated: tickets counted / true when the type holds more than 5000 live ones.\n"
-    "- queues.<bot>.running / stalled: runs out now / of those, silent for 5+ minutes.\n"
-    "- queues.<bot>.queued / oldest_queued_hours: jobs that will be handed out when a turn is free / the oldest one's wait.\n"
-    "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
-    "- queues.<bot>.quarantine_held: jobs held after repeated refusals; resume after cooldown or quarantine clear.\n"
-    "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
-    "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-    "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
-    "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-    "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
-    "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
+    "A task type's pipeline and the queues in one read, counted as the Tasks board counts (closed ones never count). "
+    "Defaults: the engineering board, snoozed included, failures since 24h. Use it for where work is stuck and on whom, "
+    "not hub_task_list. steps[] (board order): count, snoozed, oldest_hours, median_hours, ids, by_owner, waits_on, "
+    "waits_on_actor, prs. queues.<bot>: running, stalled, queued, held, quarantine_held, dead, uncertain. "
+    "failures: total, by_cause, by_bot. exceptions[]: the engineering manager only.",
     {
         "type": _s("Task type id or name; default the engineering board"),
         "owner": _s("Only tickets this person or bot owns"),
@@ -12988,6 +13133,19 @@ ASSISTANT_WRITES = {
 }
 ASSISTANT_WRITES.update('hub_email_' + action for action in EMAIL_ORGANIZE)
 AUDIENCE = {
+    # The owner's segment writes (backend/segments.py `owner`): a bot proposes them as a card and the owner's tap runs
+    # them. The Assistant is not offered them, and a turn's own write is refused (backend/assistant.py NEVER).
+    **{
+        name: ("owner",)
+        for name in (
+            "hub_segment_add",
+            "hub_segment_edit",
+            "hub_segment_order",
+            "hub_segment_remove",
+            "hub_segment_strategy",
+            "hub_segment_tag",
+        )
+    },
     **{
         name: HUMANS_AND_ASSISTANT
         for name in (

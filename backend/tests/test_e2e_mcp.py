@@ -27,6 +27,10 @@ SMOKE = "Acme smoke"
 OVERRIDES = {
     # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
     "hub_thread_create": {"title": SMOKE},
+    # The owner tags the seeded bot `ops` with every segment (`all` alone is every segment).
+    "hub_segment_tag": {"member": "bot:ops", "segments": ["all"]},
+    # A change must name a field (refused before any request otherwise); the segment is not seeded, so the route says 404.
+    "hub_segment_edit": {"name": SMOKE},
 }
 # Values a string must match when its schema gives a pattern (the first candidate that matches is used).
 PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)

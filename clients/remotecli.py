@@ -350,6 +350,17 @@ def run(args, who=None):
         )
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd == "segment":
+        if getattr(args, "section", None) is not None:  # `strategy --set KEY=TEXT` sends the sections map
+            sections = {}
+            for item in args.section:
+                key, sep, text = str(item).partition("=")
+                if not sep:
+                    raise APIError("validation", f"'{item}': use KEY=TEXT (KEY= gives the company's text back)", 422)
+                sections[key.strip()] = text
+            args.sections = sections
+            args.section = None
+        return via_tool(client, args)
     if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
@@ -1838,6 +1849,23 @@ def growth_text(fn, result):
     return "\n".join(_plain(result)) or "Nothing yet."
 
 
+def segment_list_text(result):
+    """One line per segment, in list order: its colour as a dot, its name, its id (what the other segment commands take),
+    who it is for, and how many teammates are tagged with it."""
+    rows = (result or {}).get("segments") or []
+    if not rows:
+        return "No segments yet: hub segment add --name <name>"
+    lines = []
+    for row in rows:
+        count = int(row.get("teammates") or 0)
+        parts = [f"● {row.get('color') or 'none'}", row.get("name") or "", row.get("id") or ""]
+        if row.get("who"):
+            parts.append(row["who"])
+        parts.append(f"{count} teammate" if count == 1 else f"{count} teammates")
+        lines.append("  ".join(parts))
+    return "\n".join(lines)
+
+
 def strategy_section_text(result, key):
     """One section of the published strategy as text, for `hub strategy show --section`."""
     current = result.get("current") if isinstance(result, dict) else None
@@ -1925,6 +1953,8 @@ def main(args, who=None):
 
             print(dbquery.render(result, args))
             return 0 if result.get("ok", True) else 2
+        elif args.fn == "segment list" and not args.json:
+            print(segment_list_text(result))
         elif args.fn == "tool list" and not args.bot and not args.json:
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:

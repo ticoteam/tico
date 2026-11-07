@@ -59,6 +59,7 @@ SUBCOMMANDS = [
     "brand",
     "growth",
     "lens",
+    "segment",
     "market",
     "listening",
     "tool",
@@ -2370,3 +2371,172 @@ def test_the_segment_commands_parse_their_arguments():
     assert (review.limit, review.cursor, review.fn) == (5, None, "finance segment-review")
     by = hubcli.parse(p, ["finance", "report", "pnl_by", "--by", "segment"])
     assert (by.kind, by.by, by.fn) == ("pnl_by", "segment", "finance report")
+
+
+def test_the_hub_segment_commands_parse_their_arguments():
+    p = hubcli.parser()
+    listed = hubcli.parse(p, ["segment", "list"])
+    assert listed.fn == "segment list"
+    shown = hubcli.parse(p, ["segment", "show", "segment/screening"])
+    assert (shown.id, shown.fn) == ("segment/screening", "segment show")
+    added = hubcli.parse(p, ["segment", "add", "--name", "Screening", "--who", "Landlords", "--color", "teal"])
+    assert (added.name, added.who, added.color, added.fn) == ("Screening", "Landlords", "teal", "segment add")
+    edited = hubcli.parse(p, ["segment", "edit", "segment/screening", "--who", ""])
+    assert (edited.id, edited.who, edited.name, edited.fn) == ("segment/screening", "", None, "segment edit")
+    with pytest.raises(SystemExit):
+        hubcli.parse(p, ["segment", "add", "--name", "Screening", "--color", "orange"])  # not one of the eight colors
+    ordered = hubcli.parse(p, ["segment", "order", "segment/a", "segment/b"])
+    assert (ordered.ids, ordered.fn) == (["segment/a", "segment/b"], "segment order")
+    strategy = hubcli.parse(
+        p, ["segment", "strategy", "segment/a", "--revision", "4", "--set", "serve=Landlords", "--set", "now="]
+    )
+    assert (strategy.revision, strategy.section, strategy.fn) == (4, ["serve=Landlords", "now="], "segment strategy")
+    card = hubcli.parse(p, ["segment", "strategy", "segment/a", "--set", "serve=Landlords"])
+    assert (card.revision, card.section) == (None, ["serve=Landlords"])  # a confirmed card writes its keys without one
+    tagged = hubcli.parse(p, ["segment", "tag", "bot:ops", "segment/a"])
+    assert (tagged.member, tagged.segments, tagged.clear, tagged.fn) == ("bot:ops", ["segment/a"], False, "segment tag")
+    cleared = hubcli.parse(p, ["segment", "tag", "person:cara", "--clear"])
+    assert (cleared.segments, cleared.clear) == ([], True)
+    assert hubcli.parse(p, ["segment", "members"]).fn == "segment members"
+    assert hubcli.parse(p, ["segment", "remove", "segment/a"]).fn == "segment remove"
+
+
+def test_the_hub_segment_commands_send_each_route_its_body(monkeypatch):
+    from clients import remotecli
+    from clients.tico import APIError
+
+    sent = []
+
+    class API:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **query):
+            if path == "me":  # the caller's identity, which every command reads first
+                return {"actor": "human:ana", "role": "owner"}
+            sent.append(("GET", path, None))
+            return {}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body))
+            return {}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", API)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+
+    def run(*argv):
+        return remotecli.run(hubcli.parser().parse_args(list(argv)))
+
+    run("segment", "list")
+    run("segment", "show", "segment/screening")
+    run("segment", "add", "--name", "Screening", "--who", "Landlords")
+    run("segment", "edit", "segment/screening", "--who", "")
+    run("segment", "order", "segment/a", "segment/b")
+    run("segment", "remove", "segment/a")
+    run(
+        "segment",
+        "strategy",
+        "segment/screening",
+        "--revision",
+        "4",
+        "--set",
+        "serve=Landlords with 1-20 units",
+        "--set",
+        "now=",
+    )
+    run("segment", "strategy", "segment/screening", "--set", "summary=Landlords pay on time.")
+    run("segment", "members")
+    run("segment", "tag", "bot:ops", "segment/screening")
+    run("segment", "tag", "person:cara", "--clear")
+    assert sent == [
+        ("GET", "segments", None),
+        ("GET", "segments/segment/screening", None),
+        ("POST", "segments", {"name": "Screening", "who": "Landlords", "color": None}),
+        ("POST", "segments/segment/screening", {"who": ""}),
+        ("POST", "segments/order", {"ids": ["segment/a", "segment/b"]}),
+        ("POST", "segments/remove", {"id": "segment/a"}),
+        (
+            "PUT",
+            "segments/strategy",
+            {"id": "segment/screening", "revision": 4, "sections": {"serve": "Landlords with 1-20 units", "now": ""}},
+        ),
+        ("PUT", "segments/strategy", {"id": "segment/screening", "sections": {"summary": "Landlords pay on time."}}),
+        ("GET", "segments/members", None),
+        ("POST", "segments/members", {"member": "bot:ops", "segments": ["segment/screening"]}),
+        ("POST", "segments/members", {"member": "person:cara", "segments": []}),
+    ]
+    with pytest.raises(APIError):
+        run("segment", "strategy", "segment/screening", "--revision", "4", "--set", "bogus=text")
+    with pytest.raises(APIError):
+        run("segment", "strategy", "segment/screening", "--set", "serve")  # KEY=TEXT, not a bare key
+    with pytest.raises(APIError):
+        run("segment", "tag", "bot:ops")  # no segment and no --clear: never a silent clear
+    with pytest.raises(APIError):
+        run("segment", "tag", "bot:ops", "segment/a", "--clear")
+
+
+def test_a_segment_edit_with_nothing_to_change_is_refused_before_any_request(monkeypatch):
+    from clients import remotecli
+    from clients.tico import APIError
+
+    sent = []
+
+    class API:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner"}
+            sent.append(("GET", path))
+            return {}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body))
+            return {}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", API)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    with pytest.raises(APIError):
+        remotecli.run(hubcli.parser().parse_args(["segment", "edit", "segment/screening"]))
+    assert sent == []
+
+
+def test_hub_segment_list_prints_one_line_per_segment_in_list_order():
+    from clients import remotecli
+
+    text = remotecli.segment_list_text(
+        {
+            "segments": [
+                {
+                    "id": "segment/small-businesses",
+                    "name": "Small businesses",
+                    "who": "Landlords",
+                    "color": "blue",
+                    "faces": [{"id": "bot:ops"}],
+                    "teammates": 1,
+                },
+                {
+                    "id": "segment/creators",
+                    "name": "Creators",
+                    "who": "",
+                    "color": "green",
+                    "faces": [],
+                    "teammates": 0,
+                },
+            ]
+        }
+    )
+    assert text.splitlines() == [
+        "● blue  Small businesses  segment/small-businesses  Landlords  1 teammate",
+        "● green  Creators  segment/creators  0 teammates",
+    ]
+    assert remotecli.segment_list_text({"segments": []}).startswith("No segments yet")

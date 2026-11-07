@@ -722,3 +722,75 @@ def test_a_merge_moves_the_draft_text_and_leaves_the_published_version_as_it_was
     draft_segments = json.loads(row[0])["segments"]
     assert first not in draft_segments
     assert draft_segments[second]["summary"] == "Small landlords, one building at a time."
+
+
+def test_the_segment_and_customer_segment_routes_are_cards_and_only_those_routes_are():
+    """The Assistant proposes these by card (`hub assistant propose`): each route is proposable, and its neighbours in
+    the same shape are not."""
+    from backend.assistant import valid_operation
+
+    for method, path in (
+        ("POST", "/api/v2/segments/members"),
+        ("PUT", "/api/v2/segments/strategy"),
+        ("POST", "/api/v2/segments/segment/screening"),
+        ("POST", "/api/v2/finance/contacts/cust-1/segment"),
+    ):
+        assert valid_operation(method, path), (method, path)
+    for method, path in (
+        ("GET", "/api/v2/segments"),
+        ("POST", "/api/v2/finance/actions"),  # budgets: the Finance Manager proposes them, not the Assistant
+        ("PUT", "/api/v2/finance/actions"),
+        ("POST", "/api/v2/finance/contacts/cust-1"),
+        ("POST", "/api/v2/finance/contacts/cust-1/segment/extra"),
+    ):
+        assert not valid_operation(method, path), (method, path)
+
+
+def test_a_turns_own_write_to_a_segment_is_refused(api):
+    """The owner's segment writes are cards: an Assistant turn's own write is refused (the NEVER list in
+    backend/assistant.py, and the owner's gate behind it), and nothing changes."""
+    from backend.assistant import admits_on_turn
+
+    assert not admits_on_turn("POST", "/api/v2/segments/members", {"member": "bot:ops", "segments": []})
+    assert not admits_on_turn("PUT", "/api/v2/segments/strategy", {"id": "segment/x", "sections": {}})
+    seg = segment(api, "Screening")["segment"]["id"]
+    _r, attempt = assistant_turn(api, "ana-test")
+    token = attempt["token"]
+    before = get(api, "segments/members")
+    post(api, "segments/members", {"member": "bot:ops", "segments": [seg]}, token=token, expected=403)
+    put(
+        api,
+        "segments/strategy",
+        {"id": seg, "sections": {"summary": "Landlords pay on time."}},
+        token=token,
+        expected=403,
+    )
+    post(api, f"segments/{seg}", {"who": "Landlords"}, token=token, expected=403)
+    assert get(api, "segments/members") == before
+
+
+def test_a_confirmed_customer_segment_card_stores_the_persons_choice(api):
+    """The owner taps the card: the customer's segment is their own choice (segment_sure 1), not a guess."""
+    from backend.tests.test_finance_fixtures import AT
+    from backend.tests.test_finance_fixtures import act as finance_act
+
+    seg = segment(api, "Small businesses")["segment"]["id"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, "human:ana", AT)
+        customer = finance_act(c, "human:ana", "contact_create", {"name": "Fabrikam", "kind": "customer"})
+        cid = str(customer.result["contact_id"])
+    _r, attempt = assistant_turn(api, "ana-test")
+    operation = {
+        "summary": "Put Fabrikam in Small businesses",
+        "method": "POST",
+        "path": f"/api/v2/finance/contacts/{cid}/segment",
+        "body": {"segment_id": seg},
+    }
+    action = post(api, "assistant/actions", operation, token=attempt["token"])["action"]
+    assert action["status"] == "pending"
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
+    with store.read() as c:
+        row = c.execute("SELECT segment_id, segment_sure FROM fin_contacts WHERE id=?", (cid,)).fetchone()
+    assert tuple(row) == (seg, 1)

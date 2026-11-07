@@ -12,6 +12,7 @@ one per person per company day. It is not a tidy-up: no card, no close, no decli
    - one line on what moved since yesterday, only if the record shows it;
    - then one to three things only they can do today, each with its goal linked and one link to act.
    No queue counts, no task lists, no offer of more, no Next line.
+   The line on what moved may come from the week's segment notes, when a person's segments have one.
 5. The server answers 409 `already_sent_today`, or refuses in any other way: stop for that person. Never retry, never send
    them a second message. Go to the next person.
 6. A stalled Marketing task (the skill's step 5) is its bot's to move. Add at most one comment for that bot, if your last

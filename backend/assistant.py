@@ -276,6 +276,10 @@ def require_direct_setting(c, method, path, body, trial=None, base=""):
 NEVER = [
     (m, re.compile(p))
     for m, p in (
+        # The owner's segment writes (backend/segments.py `owner`): a turn proposes each as a card, and the owner's tap runs it
+        # (a confirmed card is not checked here).
+        ("POST", r"/api/v2/segments(/.*)?"),
+        ("PUT", r"/api/v2/segments/strategy"),
         # A personal token, a service key, a stored credential (its value, its grants, its import and its deletion) is issued,
         # shown or revoked by the person in Settings or Credentials, never through a chat. Every route that writes a
         # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and
@@ -871,6 +875,9 @@ _PROPOSABLE = [
         ("POST", r"/api/v2/segments/segment/[^/]+"),
         ("PUT", r"/api/v2/segments/strategy"),
         ("POST", r"/api/v2/market/segments/(target|remove)"),
+        # A customer's segment (backend/finance_routes.py): the tap records the owner's choice.
+        # Budgets are not cards: the Finance Manager proposes them through its own approvals.
+        ("POST", r"/api/v2/finance/contacts/[^/]+/segment"),
     )
 ]
 # What only BotOps may propose, for a person who asked it in chat (backend/botops_act.py lists the routes it
