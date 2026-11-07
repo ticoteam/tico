@@ -1,6 +1,7 @@
 """CI selection cannot omit uncertain work or turn an empty/red test run green."""
 
 from collections import Counter
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -666,10 +667,19 @@ def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base
     (tmp_path / "other.py").write_text("y = 2\n")
     git("add", "-A")
     git("commit", "-qm", "Other change on main")
+    main_tip = git("rev-parse", "HEAD")
     # GitHub checks out the PR merged into current main; the event's base sha is still the older tip.
     git("merge", "-q", "--no-edit", "feature")
-    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    # changed_files, script_changes and selection bind ROOT at import, so they get this checkout as their root.
+    # merge_parent gets it too; prepare and the diffs it runs are otherwise unchanged.
+    monkeypatch.setattr(checks, "merge_parent", partial(checks.merge_parent, root=tmp_path))
+    monkeypatch.setattr(checks, "changed_files", partial(checks.changed_files, root=tmp_path))
+    monkeypatch.setattr(checks, "script_changes", partial(checks.script_changes, root=tmp_path))
+    monkeypatch.setattr(checks, "selection", partial(checks.selection, root=tmp_path, core=[]))
+    # image_checks needs the Dockerfile of a real checkout; this temporary repo has none.
+    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"scripts/tests/test_pr_checks.py": 1}))
+    assert checks.merge_parent(stale) == main_tip
     plan = checks.prepare("pull_request", stale, tmp_path / "plan.json")
     assert plan["changed"] == ["app.py"]
 
