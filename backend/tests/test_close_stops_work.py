@@ -25,6 +25,13 @@ def requester(api, task_id):
         return c.execute("SELECT requester_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
 
 
+def finish(conn, who, task_id, status, note):
+    # A close goes through task_close (task_update refuses status closed); a decline is a status change.
+    if status == "closed":
+        return H.task_close(conn, who, task_id, note=note)
+    return H.task_update(conn, who, task_id, status=status, note=note)
+
+
 def stop_flag(api, attempt_id):
     with api.app.state.store.read() as c:
         return c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()[0]
@@ -46,7 +53,7 @@ def test_closing_or_declining_asks_the_running_turn_to_stop(api, status):
     machine, task, attempt, conversation = task_turn(api)
     who = requester(api, task["id"])
     with api.app.state.store.transaction() as c:
-        H.task_update(c, who, task["id"], status=status, note="Not needed.")
+        finish(c, who, task["id"], status, "Not needed.")
     assert stop_flag(api, attempt["id"]) == who
     assert work_events(api, task["id"]) == ["Stopped 1 running turn."]
 
@@ -61,7 +68,7 @@ def test_closing_cancels_the_queued_runs_on_it(api):
         queued = [row[0] for row in c.execute("SELECT id FROM jobs WHERE state='queued' AND bot_id='ops'")]
     assert len(queued) == 1
     with api.app.state.store.transaction() as c:
-        H.task_update(c, who, task["id"], status="closed", note="Done.")
+        H.task_close(c, who, task["id"], note="Done.")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (queued[0],)).fetchone()[0] == "canceled"
     assert stop_flag(api, attempt["id"]) == who
@@ -75,7 +82,7 @@ def test_the_turn_making_the_close_is_not_stopped(api):
     token = H.RUN.set(attempt["id"])
     try:
         with api.app.state.store.transaction() as c:
-            H.task_update(c, who, task["id"], status="closed", note="Counted.")
+            H.task_close(c, who, task["id"], note="Counted.")
     finally:
         H.RUN.reset(token)
     assert stop_flag(api, attempt["id"]) is None
@@ -113,7 +120,7 @@ def answer_after_close(api, close):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])
     if close:
         with api.app.state.store.transaction() as c:
-            H.task_update(c, who, task["id"], status="closed", note="Counted elsewhere.")
+            H.task_close(c, who, task["id"], note="Counted elsewhere.")
     post(
         api,
         f"attempts/{attempt['id']}/complete",
