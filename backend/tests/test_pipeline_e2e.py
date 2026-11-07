@@ -25,6 +25,7 @@ from backend import (
     pipeline_manager,
     pipeline_overview,
     pipeline_review,
+    pipeline_rights,
     pipeline_setup,
     task_relations as TR,
 )
@@ -152,6 +153,11 @@ class Company:
     def link(self, pipeline, stage, to, mode="move"):
         """A pipeline link, made by the real helper."""
         pipeline_links.create_link(self.c, ANA, self.stage(pipeline, stage), self.type[to], mode)
+        self.c.commit()
+
+    def create_spawn_link(self, pipeline, stage, to):
+        """A spawn link from a stage to another pipeline, made by the real helper."""
+        pipeline_links.create_link(self.c, ANA, self.stage(pipeline, stage), self.type[to], "spawn")
         self.c.commit()
 
     def push(self, task_id):
@@ -537,10 +543,12 @@ def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_o
 
 
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
+    """A subtask declined is closed without shipping: with nothing shipped the card does not pass. (A close lands a
+    subtask in the Done stage, which the visit rule counts as shipped, so a decline is the not-shipped case.)"""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.close(d41)
+    co.set_status(d41, "declined")
     assert co.where(card) == ("Product", "In development")
     assert co.dots(card)["Engineering shipped"]["state"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
@@ -1081,3 +1089,153 @@ def test_the_spawned_ticket_carries_a_tico_page_attached_to_the_spec_first(co, m
     links = [link["url"] for link in H.task_links(co.c, d41)]
     assert links[0] == "https://hub.example.test/api/v2/files/file-dark-spec/versions/1"
     assert NOTES in links
+
+
+# ----------------------------------------------------------------------------- finding 6: shipping is a visit, not a status
+def standing_names(co, card, stage="In development"):
+    """{requirement name: state} for a card read as if it sat at `stage` (a closed card has no dots, so this reads the
+    engine's standings directly)."""
+    row = {"id": card, "type_id": co.type["Product"], "step_id": co.stage("Product", stage), "status": "doing"}
+    return {s.requirement["name"]: s.state for s in pipeline_engine.standings(co.c, [row]).get(card, [])}
+
+
+def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(co):
+    """Finding 6: the booted Engineering Done stage has status closed. A real move there is shipped, so Product leaves In
+    development for Validate without a status "done" write."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert co.where(card) == ("Product", "Validate")
+
+
+def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
+    """Finding 6: a subtask closed with its card is gone. d41 shipped through its Done visit; d42 closed with the card.
+    The shipped one meets the requirement and the cascade-closed one neither counts nor blocks."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)  # shipped; d42 is still open, so the card waits in development
+    assert co.where(card) == ("Product", "In development")
+    co.close(card, actor=ANA)  # the cascade closes d42 with its card
+    assert H.task(co.c, d42)["status"] == "closed"
+    assert standing_names(co, card)["Engineering shipped"] == "met"
+
+
+def test_a_subtask_that_only_closed_with_its_card_never_passes_the_card(co):
+    """Finding 6: with nothing shipped and only a cascade-closed subtask, the card is not met (the PM is asked)."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.close(card, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert standing_names(co, card)["Engineering shipped"] == "failed"
+
+
+# ----------------------------------------------------------------------------- finding 7: decline cascades like close
+def test_declining_a_product_card_closes_its_open_subtask_and_keeps_the_shipped_one(co):
+    """Finding 7 (D66): an authorized move of a Product card into the Declined stage closes its open Engineering subtask
+    with "Parent declined"; a subtask already done stays done. The editor passes the card's open requirements with an
+    override, as the move gate asks."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)  # shipped: the card moves to Validate
+    co.move(card, "Declined", actor=ANA, override_requirements=True, note="Dropped")
+    assert co.where(card) == ("Product", "Declined")
+    assert H.task(co.c, d42)["status"] == "closed"
+    assert H.task(co.c, d42)["note"] == "Parent declined"
+    assert H.task(co.c, d41)["status"] == "closed"  # shipped stays shipped: it is in Done
+    assert co.where(d41) == ("Engineering", "Done")
+
+
+# ----------------------------------------------------------------------------- finding 13: a named reviewer can decide
+def test_a_named_reviewer_who_is_not_an_editor_can_file_not_validated(co):
+    """Finding 13 (D64/D66): Ben is Validate's named reviewer and not a pipeline editor. Not validated succeeds, the card
+    goes back to In development, and the events name Ben as the actor."""
+    ben_card = review_card(co)
+    approve_spec(co, ben_card)
+    (d41,) = subtasks(co, ben_card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    assert co.where(ben_card) == ("Product", "Validate")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.c.execute("UPDATE stage_requirements SET reviewer_id = ? WHERE id = ?", (BEN, checked))
+    co.c.commit()
+    assert not pipeline_rights.may_edit_rules(co.c, BEN, co.type["Product"])  # Ben is not an editor
+    co.attach(ben_card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, BEN, ben_card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert result["verdict"] == "failed"
+    assert co.where(ben_card) == ("Product", "In development")
+    actors = {
+        r[0]
+        for r in co.c.execute(
+            "SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step'",
+            (ben_card,),
+        )
+    }
+    assert BEN in actors
+
+
+def test_a_person_who_is_neither_the_reviewer_nor_an_editor_cannot_file_not_validated(co):
+    """Finding 13: Cal is neither the named reviewer nor an editor. Refused with 403, and nothing moves."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.c.execute("UPDATE stage_requirements SET reviewer_id = ? WHERE id = ?", (BEN, checked))
+    co.c.commit()
+    co.attach(card, checked, url=VALIDATION)
+    with pytest.raises(pipeline_review.Declined) as caught:
+        pipeline_review.not_validated(co.c, CAL, card, checked, "Load time stayed over 4 s")
+    co.c.rollback()
+    assert caught.value.status == 403
+    assert co.where(card) == ("Product", "Validate")
+
+
+# ----------------------------------------------------------------------------- ST10: the follow-up binds to the spawn that filed the subtasks
+def test_not_validated_files_into_the_spawn_that_filed_the_subtasks_not_a_nearer_link(co):
+    """ST10: a later In development -> Support spawn link is nearer Validate than the Review -> Engineering spawn that filed
+    the card's subtasks. The follow-up still goes into Engineering, the link whose handoff the card's subtasks came from."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    co.create_spawn_link("Product", "In development", "Success")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert co.where(result["follow_up"]) == ("Engineering", "Todo")

@@ -763,7 +763,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "assignee": {"id": "bot:cmo", "name": "cmo"},
                 "bot_note": "",
                 "reviewer_id": "human:ana",
-                "can_mark_met": True,
+                "can_mark_met": False,
                 "can_not_validate": False,
                 "moves_to": None,
             },
@@ -828,7 +828,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "assignee": {"id": "bot:cmo", "name": "cmo"},
                 "bot_note": "",
                 "reviewer_id": "human:ana",
-                "can_mark_met": True,
+                "can_mark_met": False,
                 "can_not_validate": False,
                 "moves_to": None,
             },
@@ -855,7 +855,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "assignee": {"id": "bot:cmo", "name": "cmo"},
                 "bot_note": "",
                 "reviewer_id": "human:ana",
-                "can_mark_met": True,
+                "can_mark_met": False,
                 "can_not_validate": False,
                 "moves_to": {"stage_id": "Shipped", "name": "Shipped"},
             },
@@ -958,7 +958,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "assignee": {"id": "human:ben", "name": "Ben"},
                 "bot_note": "",
                 "reviewer_id": "human:ana",
-                "can_mark_met": True,
+                "can_mark_met": False,
                 "can_not_validate": False,
                 "moves_to": None,
             },
@@ -1023,7 +1023,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "assignee": {"id": "bot:cmo", "name": "cmo"},
                 "bot_note": "",
                 "reviewer_id": "human:ana",
-                "can_mark_met": True,
+                "can_mark_met": False,
                 "can_not_validate": False,
                 "moves_to": None,
             },
@@ -1050,7 +1050,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "assignee": {"id": "bot:cmo", "name": "cmo"},
                 "bot_note": "",
                 "reviewer_id": "human:ana",
-                "can_mark_met": True,
+                "can_mark_met": False,
                 "can_not_validate": False,
                 "moves_to": None,
             },
@@ -1199,8 +1199,14 @@ def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_
     )
     # Making now waits on its Engineering subtasks: Review is the Validate stage and Not validated is offered.
     w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    # The follow-up goes through the link that filed this ticket's subtasks, so a real spawn handoff is recorded first.
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    first_follow_up = L.spawn(w.c, link_row, w.task)
+    assert first_follow_up is not None
+    # The first follow-up is finished before Not validated files a second one: an open twin would be refused as a duplicate.
+    H.task_close(w.c, ANA, first_follow_up, note="Done")
     assert item()["can_not_validate"] is True
-    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review) is None, "a bot never gets the route"
+    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review, w.task) is None, "a bot never gets the route"
     # A stale work version or requirement version refuses, inside the transaction.
     refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev + 1, requirement_version=1)
     refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=2)
@@ -1285,3 +1291,12 @@ def test_a_requirement_for_one_label_is_not_asked_of_a_ticket_without_that_label
     )
     w.c.execute("INSERT INTO task_tags (task_id, tag_id) VALUES (?, 'tg-legal')", (w.task,))
     assert legal in {i["requirement_id"] for i in R.queue_for(w.c, ANA)}
+
+
+def test_protected_approval_is_not_offered_mark_met_in_the_queue(world):
+    """An approval can never be overridden, so the queue does not advertise Mark met for it even to an editor, while an
+    attachment requirement the same editor reviews still offers it."""
+    w = world
+    rows = {i["requirement_id"]: i for i in R.queue_for(w.c, ANA)}
+    assert rows[w.signoff]["can_mark_met"] is False
+    assert rows[w.mockup]["can_mark_met"] is True

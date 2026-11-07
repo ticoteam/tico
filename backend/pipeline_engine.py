@@ -28,8 +28,10 @@ stages it has visited; a requirement added later does not reach a card already p
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from . import hubdb, pipeline_rights, requirement_attachments
@@ -230,8 +232,9 @@ class _Facts:
     decisions: dict[tuple[str, str], Row]
     attachments: dict[tuple[str, str], Row]
     links: dict[str, list[Row]]
-    children: dict[str, list[Row]]  # a ticket's subtasks: id, status, type_id
+    children: dict[str, list[Row]]  # a ticket's subtasks: id, status, type_id, cascaded (closed with its parent)
     spawns: dict[str, set[str]]  # a pipeline id -> the pipelines its spawn links file tickets into
+    shipped: set[str] = field(default_factory=set)  # subtask ids that visited their pipeline's output stage
 
 
 def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[str], kinds: set[str]) -> _Facts:
@@ -286,7 +289,9 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
         for part in _chunks(task_ids):
             for record in _rows(
                 conn,
-                "SELECT r.to_task AS parent, c.id AS id, c.status AS status, c.type_id AS type_id "
+                "SELECT r.to_task AS parent, c.id AS id, c.status AS status, c.type_id AS type_id, "
+                "EXISTS (SELECT 1 FROM history_events h WHERE h.subject_type = 'task' AND h.subject_id = c.id "
+                "AND h.kind = 'closed_with' AND h.new = r.to_task) AS cascaded "
                 "FROM task_relations r JOIN tasks c ON c.id = r.from_task "
                 f"WHERE r.kind = 'parent' AND r.to_task IN ({_marks(part)}) ORDER BY c.created_at, c.id",
                 part,
@@ -297,21 +302,74 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
             "SELECT from_pipeline_id, to_pipeline_id FROM pipeline_links WHERE mode = 'spawn' AND retired_at IS NULL",
         ):
             spawns.setdefault(str(record["from_pipeline_id"]), set()).add(str(record["to_pipeline_id"]))
-    return _Facts(tasks, labels, decisions, attachments, links, children, spawns)
+    shipped = _shipped_ids(conn, children, spawns)
+    return _Facts(tasks, labels, decisions, attachments, links, children, spawns, shipped)
+
+
+def output_stage(conn: sqlite3.Connection, pipeline_id: str) -> str | None:
+    """The stage a pipeline's work is output at: its factory's output stage when set, else its last stage that is not
+    declined (the booted Engineering Done stage is closed, and it is the output)."""
+    found = _one(
+        conn,
+        "SELECT f.output_stage_id AS stage FROM task_types t JOIN factories f ON f.id = t.factory_id "
+        "JOIN task_steps s ON s.id = f.output_stage_id WHERE t.id = ? AND s.type_id = ?",
+        (pipeline_id, pipeline_id),
+    )
+    if found and found["stage"]:
+        return str(found["stage"])
+    last = _one(
+        conn,
+        "SELECT id FROM task_steps WHERE type_id = ? AND status != 'declined' ORDER BY position DESC, id LIMIT 1",
+        (pipeline_id,),
+    )
+    return str(last["id"]) if last else None
+
+
+def _shipped_ids(conn: sqlite3.Connection, children: dict[str, list[Row]], spawns: dict[str, set[str]]) -> set[str]:
+    """The subtasks that reached the output stage of their own pipeline: a visit to it, or standing at it. The visit (or the
+    stage a subtask is left at) is the evidence, so it still counts after the subtask is closed or archived."""
+    outputs = {
+        pipeline: stage_id
+        for pipeline in {p for targets in spawns.values() for p in targets}
+        if (stage_id := output_stage(conn, pipeline))
+    }
+    kids = {str(child["id"]): str(child["type_id"]) for rows in children.values() for child in rows}
+    shipped: set[str] = set()
+    if not outputs or not kids:
+        return shipped
+    for part in _chunks(list(kids)):
+        # A pipeline with no requirements writes no visits (the off switch), so a subtask at its output stage counts too.
+        for record in _rows(conn, f"SELECT id, step_id FROM tasks WHERE id IN ({_marks(part)})", part):
+            if outputs.get(kids[str(record["id"])]) == str(record["step_id"]):
+                shipped.add(str(record["id"]))
+        for record in _rows(
+            conn,
+            "SELECT DISTINCT task_id, pipeline_stage_id FROM stage_visits "
+            f"WHERE task_id IN ({_marks(part)}) AND pipeline_stage_id IN ({_marks(list(outputs.values()))})",
+            [*part, *outputs.values()],
+        ):
+            if outputs.get(kids[str(record["task_id"])]) == str(record["pipeline_stage_id"]):
+                shipped.add(str(record["task_id"]))
+    return shipped
 
 
 def _subtasks_state(task_id: str, facts: _Facts) -> str:
-    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into, every one of them is
-    finished (done, closed or declined), and at least one is done. A closed-only set is failed, never passed; no subtask
-    is none. More subtasks count as they are added."""
+    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into. A subtask shipped when it is
+    done or visited its pipeline's output stage (its Done, whatever its status column says). A subtask closed with its
+    card or declined is gone: it neither counts as shipped nor blocks. Every live subtask must be finished, and at least
+    one must have shipped; a set that is all closed with none shipped is failed (the PM is asked), never passed."""
     card = facts.tasks.get(task_id) or {}
     wanted = facts.spawns.get(str(card.get("type_id") or ""), set())
     kids = [child for child in facts.children.get(task_id, []) if str(child["type_id"]) in wanted]
     if not kids:
         return "none"
-    if any(str(child["status"]) not in DONE for child in kids):
+    live = [k for k in kids if not (k["status"] == "declined" or k["cascaded"])]
+    if not live:
+        return "failed"
+    if any(str(child["status"]) not in DONE for child in live):
         return "waiting"
-    return "met" if any(child["status"] == "done" for child in kids) else "failed"
+    shipped = any(child["status"] == "done" or str(child["id"]) in facts.shipped for child in live)
+    return "met" if shipped else "failed"
 
 
 def _run_state(task_id: str, requirement: Row, facts: _Facts, conn: sqlite3.Connection) -> str:
@@ -593,11 +651,29 @@ def on_step_change(
     task_id = str(row.get("id") or "")
     if not task_id:
         return
-    old_type: str | None = row.get("type_id")
-    old_step: str | None = row.get("step_id")
     current = open_visit(conn, task_id)
     _leave_spawn_stage(conn, row, type_id, step_id)
+    _move_visit(conn, actor, row, type_id, step_id, ts, current)
+    target = stage(conn, step_id)
+    if target is not None and target["status"] == "declined" and row.get("status") != "declined":
+        _decline_children(conn, actor, row, type_id)
     _settle_parent(conn, task_id)
+
+
+def _move_visit(
+    conn: sqlite3.Connection,
+    actor: str,
+    row: Row,
+    type_id: str | None,
+    step_id: str | None,
+    ts: str,
+    current: Row | None,
+) -> None:
+    """The stage visit side of a step change. Runs before the parent settles, so a subtask that has just reached its
+    pipeline's output stage counts as shipped."""
+    task_id = str(row.get("id") or "")
+    old_type: str | None = row.get("type_id")
+    old_step: str | None = row.get("step_id")
     if current is None and not (has_requirements(conn, old_type) or has_requirements(conn, type_id)):
         return
     if current is None and old_type and old_step:
@@ -666,6 +742,47 @@ def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
         advance(conn, H.KEEPER, str(parent_id))
 
 
+# ---------------------------------------------------------------------------------------------- decline
+DECLINE_NOTE = "Parent declined"
+
+
+def _spawned_open(conn: sqlite3.Connection, card: Row) -> list[Row]:
+    """The open subtasks of a card that its pipeline spawned into (the Engineering tickets of a Product card)."""
+    targets = [
+        str(r["to_pipeline_id"])
+        for r in _rows(
+            conn,
+            "SELECT to_pipeline_id FROM pipeline_links WHERE from_pipeline_id = ? AND mode = 'spawn' AND retired_at IS NULL",
+            (str(card.get("type_id") or ""),),
+        )
+    ]
+    if not targets:
+        return []
+    kids = [H.task(conn, kid_id) for kid_id in H.TR.child_ids(conn, str(card["id"]))]
+    return [k for k in kids if k and str(k.get("type_id") or "") in targets and k["status"] in H.ACTIVE_STATUSES]
+
+
+def _decline_preflight(
+    conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None, step_id: str | None
+) -> None:
+    """A card moving into a declined stage must be closable with its open subtasks by this actor, as a close cascade would
+    need. Refuses before anything is written (D66)."""
+    target = stage(conn, step_id)
+    if target is None or target["status"] != "declined" or row.get("status") == "declined":
+        return
+    for kid in _spawned_open(conn, {**row, "type_id": type_id or row.get("type_id")}):
+        H._check_task_close(conn, actor, kid, DECLINE_NOTE, None)  # pyright: ignore[reportPrivateUsage]
+
+
+def _decline_children(conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None) -> None:
+    """A card was declined: its open spawned subtasks close with it, noted "Parent declined", each with its own open
+    descendants. Subtasks already done stay done. Same transaction as the decline (called after its write)."""
+    card = {**row, "type_id": type_id or row.get("type_id")}
+    for kid in _spawned_open(conn, card):
+        H.task_close(conn, actor, str(kid["id"]), note=DECLINE_NOTE, with_parent=str(row["id"]), strict=True)
+        H._finish_children(conn, actor, H.task(conn, str(kid["id"])), None, False, strict=True)  # pyright: ignore[reportPrivateUsage]
+
+
 # ---------------------------------------------------------------------------------------------- the move gate
 def _unmet(found: list[Standing]) -> list[Standing]:
     """What stops a forward move: every requirement that is not met, except one the review gate still decides."""
@@ -720,6 +837,21 @@ def override_reason(note: str | None) -> str:
     return f"{OVERRIDE_REASON}: {text}".encode()[:REASON_MAX_BYTES].decode(errors="ignore")
 
 
+# The actor whose decision prescribes the move now being made (a named reviewer's "Not validated"). Only that actor's backward
+# move skips the rule-editor test; the reviewer is still recorded as the actor of the move.
+_DECIDED_MOVE: ContextVar[str | None] = ContextVar("pipeline_engine_decided_move", default=None)
+
+
+@contextmanager
+def decided_move(actor: str) -> "Generator[None, None, None]":
+    """Runs the moves inside it as a decision the actor already made (its authority is checked by the caller)."""
+    token = _DECIDED_MOVE.set(actor)
+    try:
+        yield
+    finally:
+        _DECIDED_MOVE.reset(token)
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,
@@ -750,7 +882,7 @@ def check_move(
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
     if target is not None and target["type_id"] == here["type_id"] and target["position"] < here["position"]:
         if (
-            has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor
+            has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor and _DECIDED_MOVE.get() != actor
         ):  # the off switch: no rules, no gate
             H.refuse(
                 conn,
@@ -793,6 +925,7 @@ def check_forward(conn: sqlite3.Connection, actor: str, row: Row, type_id: str |
     if before is not None and after is not None and after["type_id"] == before["type_id"]:
         if after["position"] < before["position"]:
             return
+    _decline_preflight(conn, actor, row, type_id, step_id)
     check_move(conn, actor, {**row, "type_id": type_id}, step_id)
 
 

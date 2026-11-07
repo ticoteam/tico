@@ -558,7 +558,7 @@ def _queue_fields(
 ) -> None:
     """Adds assignee, bot_note, reviewer_id, can_mark_met, can_not_validate and moves_to to each queue item. The people
     and bots, the move links and the pipelines' steps are each read once over all the items; `may_edit_rules` runs once
-    per pipeline, and Not validated's route once per stage."""
+    per pipeline; Not validated's route is read per ticket at its stage (it follows the ticket's own handoff)."""
     if not items:
         return
     owners = {item["task_id"]: tasks[item["task_id"]].get("owner_id") for item in items}
@@ -590,7 +590,19 @@ def _queue_fields(
     names = {s["id"]: s["name"] for s in steps}
     requirements = {r["id"]: r for r in live}
     rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
-    routes: dict[tuple[str, str], bool] = {}  # Not validated's route per stage, read once per stage
+    candidates: dict[
+        tuple[str, str], tuple[Row, list[Row]] | None
+    ] = {}  # Not validated's candidates per stage, read once
+    at_stage_tasks = [item["task_id"] for item in items if tasks[item["task_id"]].get("step_id") == item["stage_id"]]
+    handed = _handed_links(c, at_stage_tasks)
+
+    def _route_ok(item: Row) -> bool:
+        key = (str(item["pipeline_id"]), str(item["stage_id"]))
+        if key not in candidates:
+            candidates[key] = _route_candidates(c, actor, *key)
+        found = candidates[key]
+        return found is not None and _pick_link(found[1], handed.get(item["task_id"], set())) is not None
+
     for item in items:
         key = (item["task_id"], item["requirement_id"])
         owner = owners.get(item["task_id"])
@@ -600,12 +612,10 @@ def _queue_fields(
         item["reviewer_id"] = (claim_row["claimed_by"] if claim_row else None) or requirements[
             item["requirement_id"]
         ].get("reviewer_id")
-        item["can_mark_met"] = bool(rights[item["pipeline_id"]])
+        # An approval is never overridden (mark_met refuses protected_approval), so the action is not offered for one.
+        item["can_mark_met"] = bool(rights[item["pipeline_id"]]) and item["kind"] != "approval"
         at_stage = tasks[item["task_id"]].get("step_id") == item["stage_id"]
-        route_key = (item["pipeline_id"], item["stage_id"])
-        if at_stage and route_key not in routes:
-            routes[route_key] = _not_validated_route(c, actor, *route_key) is not None
-        item["can_not_validate"] = at_stage and routes[route_key]
+        item["can_not_validate"] = at_stage and _route_ok(item)
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names) if at_stage else None
 
 
@@ -1117,14 +1127,12 @@ def _back_stage(c: "sqlite3.Connection", stage_id: str) -> Row | None:
     )
 
 
-def _not_validated_route(
+def _route_candidates(
     c: "sqlite3.Connection", actor: str, pipeline_id: str, stage_id: str
-) -> tuple[Row, Row] | None:
-    """Where "Not validated" sends a card from this stage (D66), or None when it is not offered. It is offered only on a
-    stage that comes directly after a live In development stage: the one before it holds a live run requirement whose
-    source is `subtasks` (the stage that waits on its Engineering subtasks). The card goes back to that stage, and the
-    follow-up spawns from the nearest live spawn link from a stage before this one. The reader must be a person. The
-    queue flag and the action both read this, so the button shows exactly when the action would work."""
+) -> tuple[Row, list[Row]] | None:
+    """The back stage and the spawn links that could file the follow-up for a card at this stage, nearest first. None when
+    Not validated is not offered here at all: the reader is not a person, there is no stage before, or the stage before does
+    not wait on a `subtasks` run. The queue flag and the action both read this."""
     if not str(actor or "").startswith("human:"):
         return None
     back = _back_stage(c, stage_id)
@@ -1138,17 +1146,49 @@ def _not_validated_route(
     )
     if waits_on_subtasks is None:
         return None
-    spawn_link = _one(
+    links = _rows(
         c,
         "SELECT l.* FROM pipeline_links l JOIN task_steps s ON s.id = l.from_pipeline_stage_id "
         "WHERE s.type_id = ? AND s.position < (SELECT position FROM task_steps WHERE id = ?) "
         "AND s.status NOT IN ('closed','declined') AND l.mode = 'spawn' AND l.retired_at IS NULL "
-        "ORDER BY s.position DESC, l.id LIMIT 1",
+        "ORDER BY s.position DESC, l.id",
         (pipeline_id, stage_id),
     )
-    if spawn_link is None:
+    return (back, links) if links else None
+
+
+def _handed_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, set[str]]:
+    """{ticket id: the spawn link ids whose live handoff filed that ticket's subtasks}, from one read."""
+    out: dict[str, set[str]] = {}
+    for part in _chunks(task_ids):
+        for row in _rows(
+            c,
+            "SELECT source_task_id AS task_id, pipeline_link_id AS link_id FROM pipeline_handoffs "
+            "WHERE returned_at IS NULL AND source_task_id IN (SELECT value FROM json_each(?))",
+            (part,),
+        ):
+            out.setdefault(str(row["task_id"]), set()).add(str(row["link_id"]))
+    return out
+
+
+def _pick_link(links: list[Row], handed: set[str]) -> Row | None:
+    """The spawn link the follow-up goes through: the one whose handoff filed this ticket's subtasks (D64), else the nearest
+    live spawn link before the stage (a ticket no handoff filed)."""
+    return next((link for link in links if str(link["id"]) in handed), links[0] if links else None)
+
+
+def _not_validated_route(
+    c: "sqlite3.Connection", actor: str, pipeline_id: str, stage_id: str, task_id: str
+) -> tuple[Row, Row] | None:
+    """Where "Not validated" sends a card from this stage (D66), or None when it is not offered: the back stage and the
+    spawn link the follow-up files through (see _pick_link). It is offered only on a stage that comes directly after a
+    live In development stage that waits on its `subtasks`. The reader must be a person."""
+    found = _route_candidates(c, actor, pipeline_id, stage_id)
+    if found is None:
         return None
-    return back, spawn_link
+    back, links = found
+    link = _pick_link(links, _handed_links(c, [task_id]).get(task_id, set()))
+    return (back, link) if link is not None else None
 
 
 def not_validated(
@@ -1178,13 +1218,14 @@ def not_validated(
             raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
         if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
-        route = _not_validated_route(c, actor, str(task["type_id"]), str(requirement["pipeline_stage_id"]))
+        route = _not_validated_route(c, actor, str(task["type_id"]), str(requirement["pipeline_stage_id"]), task_id)
         if route is None:
             raise Declined("not_validatable", "Not validated is not offered at this stage", 409)
         back, spawn_link = route
         current = _current_attachment(c, task_id, requirement_id)
         decision = _decide(c, actor, task, requirement, "failed", text, current)
-        _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
+        with pipeline_engine.decided_move(actor):  # the reviewer decided it; the move is recorded as theirs
+            _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
         child = pipeline_links.spawn(c, spawn_link, task_id, again=True, note=text)
         if child is None:
             raise Declined("not_filed", "The follow-up ticket could not be filed", 409)
