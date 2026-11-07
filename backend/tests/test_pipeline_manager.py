@@ -156,6 +156,7 @@ def test_a_hold_pauses_the_limit_and_the_clock_starts_again_at_the_release(api):
         assert PM.over_limit(c, type_id, base) == []
         [item] = PM.over_limit(c, type_id, base + timedelta(minutes=40))
         assert item["task_id"] == task["id"] and item["limit_hours"] == 1
+        assert item["limit_minutes"] == 60  # the Warn after value the rail prefers; limit_hours stays for older clients
 
 
 def test_the_backup_is_asked_once_when_the_card_is_past_its_limit(api, woken):

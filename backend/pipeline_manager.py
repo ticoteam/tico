@@ -168,6 +168,7 @@ def over_limit(c: "sqlite3.Connection", pipeline_id: str, at: Any) -> list[dict[
                     "stage": SA._step(c, row),
                     "hours": round(hours, 2),
                     "limit_hours": limit,
+                    "limit_minutes": round(limit * 60),
                     "since": start,
                 }
             )
