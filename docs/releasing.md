@@ -829,8 +829,9 @@ run on the server: `docker compose pull && docker compose up -d`.
 
 ## Publish the release docs
 
-The tagged repository is the source for that release's manual. Run `python -m backend.openapi_v2` and
-`python scripts/build_api_docs.py` after changing API descriptions; check the spec and API guide together.
+The tagged repository is the source for that release's manual. The API spec is generated, not committed: publish
+`python3 -m backend.openapi_v2 > <site>/openapi/v2.json` from the tag. Run `python3 scripts/build_api_docs.py` after
+changing API descriptions or tags; check the spec and API guide together.
 
 Publish the public site's docs from the same tag, including the docs landing page's three reader paths and its **Use Tico** and
 **Glossary** links. The website source and publishing process live outside this repository. Check that its install and demo pages

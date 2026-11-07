@@ -10,7 +10,7 @@ adds the fields every item has, whatever its kind, so a client lists, orders and
 - `actions`: the writes that settle it, from `ACTIONS`.
 """
 
-# Each action, and the write it is (docs/openapi/v2.json has them all).
+# Each action, and the write it is (the v2 spec, backend/openapi_v2.py, has them all).
 ACTIONS = {
     "update": "POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is "
     "answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task})",

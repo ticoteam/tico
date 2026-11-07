@@ -4,7 +4,7 @@ Start here if your team wants its own web app on top of a running Tico: a custom
 different look for the same data. Tico's server is an HTTP API, and a separate web app can sign your humans in and
 use it from any address you allow. A working example that needs no build step is in
 [`examples/custom-frontend/`](../examples/custom-frontend/); the full contract is in [api.md](api.md) and
-[`openapi/v2.json`](openapi/v2.json).
+[the v2 spec](api.md#the-contract).
 
 In ten minutes you can have the example talking to your server:
 
@@ -190,7 +190,7 @@ curl -H "Authorization: Bearer $TICO_TOKEN" https://tico.example.com/api/v2/need
 
 All paths are under your server's address, and all need `Authorization: Bearer ...` except `/healthz` and the sign-in
 routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are trimmed to the fields a frontend uses;
-[`openapi/v2.json`](openapi/v2.json) has the full list.
+[The v2 spec](api.md#the-contract) has the full list.
 
 | Resource | Request | Answer |
 |---|---|---|
@@ -219,7 +219,7 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Remove a tool | `DELETE /api/v2/bots/{bot}/tools/{id}` | `{"removal": true, "task_id"}`: a BotOps task to take a declared tool out of `bot.yaml` (the id is from the list; `model` and `repo` cannot be removed). A `pending-…` id withdraws a request instead: `{"canceled": true}`. `POST /api/v2/bots/{bot}/tools/{id}/delete` does the same for clients that only send GET and POST (the `hub` CLI and MCP tools use it). |
 | Files | `GET /api/v2/bots/{bot}/files?limit=3&cursor=...` | `{"bot", "files": [{"id", "title", "kind", "locator", "scope", "version", "state", "synced", "open": {"type": "tico"\|"external", "url"}, "note", "task_title", "working", "github_url", "actor", "actor_name", "last_activity_at"}], "total", "next_cursor", "has_more", "can_manage"}`. Newest activity first; only what the caller may see, the total included. A stored file's `open.url` is a Tico route that needs the bearer; an `external` one opens at its provider. `PATCH /api/v2/files/{id}` with `{"promote": true}` or `{"archived": true}` (owner and bot administrators). See [files.md](files.md). |
 | Assistant | `GET /api/v2/assistant` | `{"available", "name", "can_turn_on", "room_id", "messages": [...], "execution", "actions": {...}, "pending": [...]}`: the caller's own private Assistant DM ([assistant.md](assistant.md)). `POST /api/v2/assistant/messages` `{"text"}` starts a bot run: poll `GET /api/v2/assistant` while `execution` is set (show "thinking"). A message with `refs.action` is a Confirm / Cancel card: `POST /api/v2/assistant/actions/{id}/confirm` or `/cancel` (the human's own session only). `POST /api/v2/assistant/turn-on` (owner) turns it on when `available` is false. Links in a reply are `[title](#/task/<id>)`-style in-app routes or `https:` links: map the `#/` ones to your own routes. |
-| Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval", "title", "first_line", "requester", ...}]}`. Every item, whatever its kind, has `id`, `kind`, `title`, `body` (or `null`), `subject` (`{"type", "id"}`: the task, message or approval it is about, or `null` for a card that stands for several things or a setting), `created_at` and `actions` (the writes that settle it: `answer`, `update`, `decide`, `add_reading` or `open`; the `NeedsYouItem` schema in docs/openapi/v2.json); the rest are the fields its card reads. `GET /api/v2/goals/needs-you` items have the same fields. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
+| Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval", "title", "first_line", "requester", ...}]}`. Every item, whatever its kind, has `id`, `kind`, `title`, `body` (or `null`), `subject` (`{"type", "id"}`: the task, message or approval it is about, or `null` for a card that stands for several things or a setting), `created_at` and `actions` (the writes that settle it: `answer`, `update`, `decide`, `add_reading` or `open`; the `NeedsYouItem` schema in the v2 spec, `GET /api/v2/openapi.json`); the rest are the fields its card reads. `GET /api/v2/goals/needs-you` items have the same fields. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
 | Answer a question | `POST /api/v2/tasks/{id}/answers` `{"target": {"task": "<id>"}, "answers": {"<question id>": ["<label>"]}, "other": "<text>"}` | A question is a task: answer it with its task id. Pick a label, or send `other` for a typed answer. Leave it open to say nothing. |
 | Decide an approval | `POST /api/v2/approvals/{id}` `{"decision": "approved", "note": ""}` | `decision` is `approved` or `declined`. The item's `id` is the approval id. |
 | Meetings | `GET /api/v2/meetings/search?q=roadmap&limit=20` | `{"results": [{"id", "title", "created_at", "excerpt", "passages": [...]}], "next_offset"}`. No `q` lists the newest. `GET /api/v2/meetings/transcript?id=...` reads one. |
@@ -410,12 +410,12 @@ Tico applies **no request-rate limit** to the API: it will answer as fast as it 
 ## Versioning
 
 The path carries the version: `/api/v2/`. The rules are in [api.md](api.md#stable-and-internal); in short, what is in
-`openapi/v2.json` only grows within v2, everything else is internal, and unknown response fields are to be ignored.
+The v2 spec only grows within v2, everything else is internal, and unknown response fields are to be ignored.
 `info.version` in the spec is the API version (`2.0.0`), not the server's; `GET /api/v2/config` has the server's `version`.
 Pin your generated client to the spec you built against and watch [CHANGELOG.md](../CHANGELOG.md), where API additions
 are listed under "Added".
 
-To generate a typed client, feed `openapi/v2.json` to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
+To generate a typed client, feed `GET /api/v2/openapi.json` (or the file `python3 -m backend.openapi_v2` prints) to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
 are described loosely on purpose (`additionalProperties` is open), so treat the generated types as a floor.
 
 ## Security

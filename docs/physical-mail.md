@@ -204,7 +204,7 @@ same provider idempotency key; it never gets a fresh incident id to bypass dedup
 spend are visible in Alerts settings. Tests bypass quiet hours but still require consent and both spend caps.
 
 These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
-subroutes (see [the v2 contract](openapi/v2.json)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
+subroutes (see [the v2 contract](api.md#the-contract)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
 and MCP's `hub_alerts_*`, offered only to people. `hub alerts test --accept-charge --operation-id <stable-id>` keeps
 retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
 HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal
