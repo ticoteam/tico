@@ -19,6 +19,12 @@ def task_turn(api, title="Count the words"):
     return machine, task, attempt, conversation
 
 
+def requester(api, task_id):
+    # Only the requester may close a task a person asked for, so the tests close it as its requester.
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT requester_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+
+
 def stop_flag(api, attempt_id):
     with api.app.state.store.read() as c:
         return c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()[0]
@@ -38,14 +44,16 @@ def work_events(api, task_id):
 @pytest.mark.parametrize("status", ["closed", "declined"])
 def test_closing_or_declining_asks_the_running_turn_to_stop(api, status):
     machine, task, attempt, conversation = task_turn(api)
+    who = requester(api, task["id"])
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", task["id"], status=status, note="Not needed.")
-    assert stop_flag(api, attempt["id"]) == "human:ana"
+        H.task_update(c, who, task["id"], status=status, note="Not needed.")
+    assert stop_flag(api, attempt["id"]) == who
     assert work_events(api, task["id"]) == ["Stopped 1 running turn."]
 
 
 def test_closing_cancels_the_queued_runs_on_it(api):
     machine, task, attempt, conversation = task_turn(api)
+    who = requester(api, task["id"])
     post(
         api, "messages", {"to": "ops", "kind": "say", "text": "Also check the footer.", "conversation_id": conversation}
     )
@@ -53,19 +61,21 @@ def test_closing_cancels_the_queued_runs_on_it(api):
         queued = [row[0] for row in c.execute("SELECT id FROM jobs WHERE state='queued' AND bot_id='ops'")]
     assert len(queued) == 1
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", task["id"], status="closed", note="Done.")
+        H.task_update(c, who, task["id"], status="closed", note="Done.")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (queued[0],)).fetchone()[0] == "canceled"
-    assert stop_flag(api, attempt["id"]) == "human:ana"
+    assert stop_flag(api, attempt["id"]) == who
     assert work_events(api, task["id"]) == ["Stopped 1 running turn; canceled 1 queued run."]
 
 
 def test_the_turn_making_the_close_is_not_stopped(api):
     machine, task, attempt, conversation = task_turn(api)
+    who = requester(api, task["id"])
+    # H.RUN is the run whose own tool call makes the close: that turn is the one never stopped by it.
     token = H.RUN.set(attempt["id"])
     try:
         with api.app.state.store.transaction() as c:
-            H.task_update(c, "bot:ops", task["id"], status="closed", note="Counted.")
+            H.task_update(c, who, task["id"], status="closed", note="Counted.")
     finally:
         H.RUN.reset(token)
     assert stop_flag(api, attempt["id"]) is None
@@ -74,10 +84,11 @@ def test_the_turn_making_the_close_is_not_stopped(api):
 
 def test_closing_a_parent_stops_the_turn_running_on_its_subtask(api):
     machine, parent, attempt, conversation = task_turn(api, "Launch")
+    who = requester(api, parent["id"])
     with api.app.state.store.transaction() as c:
-        child = H.task_create(c, "human:ana", "Write the notes", "", "ops", parent_id=parent["id"], lint=False)
+        child = H.task_create(c, who, "Write the notes", "", "ops", parent_id=parent["id"], lint=False)
     with api.app.state.store.transaction() as c:
-        H.task_close(c, "human:ana", parent["id"], note="Launch cancelled")
+        H.task_close(c, who, parent["id"], note="Launch cancelled")
     with api.app.state.store.read() as c:
         assert H.task(c, child["id"])["status"] == "closed"
         assert (
@@ -88,12 +99,13 @@ def test_closing_a_parent_stops_the_turn_running_on_its_subtask(api):
             ).fetchone()[0]
             == 0
         )
-    assert stop_flag(api, attempt["id"]) == "human:ana"
-    assert "Stopped 1 running turn." in work_events(api, parent["id"])
+    assert stop_flag(api, attempt["id"]) == who
+    assert any(said.startswith("Stopped 1 running turn") for said in work_events(api, parent["id"]))
 
 
 def answer_after_close(api, close):
     machine, task, attempt, conversation = task_turn(api)
+    who = requester(api, task["id"])
     # Filed from a chat, the task answers in its room as the chat would (execution.complete): without the stop or the
     # close, this answer posts; so the room gets nothing only because the stopped turn's answer is filed on its run.
     with api.app.state.store.transaction() as c:
@@ -101,7 +113,7 @@ def answer_after_close(api, close):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])
     if close:
         with api.app.state.store.transaction() as c:
-            H.task_update(c, "human:ana", task["id"], status="closed", note="Counted elsewhere.")
+            H.task_update(c, who, task["id"], status="closed", note="Counted elsewhere.")
     post(
         api,
         f"attempts/{attempt['id']}/complete",
