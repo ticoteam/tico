@@ -460,6 +460,33 @@ def _link(conn: sqlite3.Connection, actor: str, spec: Row, pipelines: dict[str, 
     return None
 
 
+def _retire_obsolete(
+    conn: sqlite3.Connection, actor: str, spec: Row, pipelines: dict[str, str], made: list[str]
+) -> None:
+    """With replace, a live link between two pipelines the preset manages that the preset does not declare is retired. Its
+    handoffs stay on record: retiring only sets retired_at (Fix V-10, D65: no revenue links)."""
+    from . import pipeline_links
+
+    declared: set[str] = set()
+    for link in spec["links"]:
+        stage = _one(
+            conn,
+            "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE",
+            (pipelines[link["from"]], link["stage"]),
+        )
+        if stage is not None:
+            declared.add(str(stage["id"]))
+    managed = set(pipelines.values())
+    for live in pipeline_links.links(conn):
+        if (
+            str(live["from_pipeline_id"]) in managed
+            and str(live["to_pipeline_id"]) in managed
+            and str(live["from_pipeline_stage_id"]) not in declared
+        ):
+            pipeline_links.retire_link(conn, actor, str(live["id"]))
+            made.append(f"retired link {live['from_pipeline_stage_id']} to {live['to_pipeline_id']}")
+
+
 def apply_factory_setup(
     c: sqlite3.Connection, actor: str, preset: str = "tico_default", replace: bool = False
 ) -> dict[str, Any]:
@@ -486,6 +513,8 @@ def apply_factory_setup(
             missing = _link(c, actor, link, pipelines, made)
             if missing:
                 unresolved.append(missing)
+        if replace:
+            _retire_obsolete(c, actor, spec, pipelines, made)
         # A factory's output stage (D56): the last done stage of its last pipeline, unless one is already set.
         for f in spec["factories"]:
             in_factory = [p["name"] for p in spec["pipelines"] if p.get("factory") == f["name"]]
