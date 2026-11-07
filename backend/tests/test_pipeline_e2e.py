@@ -727,32 +727,59 @@ def test_a_bot_that_never_answers_makes_the_card_late_not_silent(co):
 
 # ----------------------------------------------------------------------------- merge queue
 def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(co):
-    from backend import github
+    """The real path: the queue's webhooks mark the removal for checking, the maintenance pass reads the pull request on
+    GitHub, and a removal that was not a merge ejects the card a stage back with the reason."""
+    from types import SimpleNamespace
+
+    from backend import github as G
 
     shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")  # the pipeline has requirements
     task = co.ticket("Engineering", "Doing", "Merge me")
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
     co.move(task, "In review", actor=ANA)
-    link_id = "lnk-pr-1"
-    detail = {
-        "head_sha": "abc123",
-        "merge_queue": {"state": "dequeued", "reason": "checks failed", "head": "abc123", "verify": True},
-    }
+    url = "https://github.com/acme/app/pull/7"
+    co.insert("repositories", id="repo-acme-app", full_name="acme/app", enabled=1, reachable=1)
     co.insert(
         "task_links",
-        id=link_id,
+        id="lnk-pr-1",
         task_id=task,
         kind="pr",
-        url="https://github.com/acme/app/pull/7",
+        url=url,
+        repo="acme/app",
+        number=7,
         state="open",
         added_by=BUILDER,
         created_at=stamp(),
-        detail=json.dumps(detail),
+        detail=json.dumps({"head_sha": "abc123"}),
     )
     co.c.commit()
-    github._settle_removal(co.c, link_id, {"state": "open", "merged": False, "head": {"sha": "abc123"}})
+    pr = {"html_url": url, "number": 7, "state": "open", "merged": False, "head": {"sha": "abc123"}}
+    G.pull_request(co.c, {"action": "enqueued", "pull_request": pr})
+    G.pull_request(co.c, {"action": "dequeued", "reason": "checks failed", "pull_request": pr})
     co.c.commit()
+    assert co.where(task) == ("Engineering", "In review")  # the webhook sends nothing for a removal that is not a merge
+    assert H.task_links(co.c, task)[0]["detail"] and "verify" in json.loads(H.task_links(co.c, task)[0]["detail"])["merge_queue"]
+
+    reads = []
+
+    class GitHub:
+        """The maintenance pass's service: the pull request is still open at the removed head."""
+
+        store = co.store
+
+        def row(self, c=None):
+            return {"org": "acme"}
+
+        def mint(self, repos, permissions, **kw):
+            return "token", None
+
+        def _call(self, method, path, headers=None, **kw):
+            reads.append((method, path))
+            return SimpleNamespace(status_code=200, json=lambda: {"state": "open", "merged": False, "head": {"sha": "abc123"}})
+
+    G.refresh_queue_removals(GitHub())
+    assert reads == [("GET", "/repos/acme/app/pulls/7")]
     assert co.where(task) == ("Engineering", "Doing")
     notes = [
         row[0]
@@ -762,6 +789,8 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
         )
     ]
     assert notes == ["checks failed"]
+    G.refresh_queue_removals(GitHub())
+    assert len(reads) == 1  # the removal was settled: nothing is read again
 
 
 # ----------------------------------------------------------------------------- Mark met
