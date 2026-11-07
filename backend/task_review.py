@@ -44,9 +44,14 @@ def comment_rights(c, auth, who, task_id):
         a for a in dict.fromkeys([row["owner_id"], row["requester_id"], origin]) if a and a not in (who.actor, H.KEEPER)
     ]
     target = next((a for a in others if H.is_bot(a)), None)
-    if target and not H.task_represents(c, who.actor, row["owner_id"]):
+    # The requester seat on its own ticket: the bot that asked for the work may comment on it to the bot that holds it,
+    # whatever that bot's access and contact settings say. Only this task, only the requester, only its owner.
+    requester_seat = (
+        bool(target) and who.role == "bot" and target == row["owner_id"] and row["requester_id"] == who.actor
+    )
+    if target and not requester_seat and not H.task_represents(c, who.actor, row["owner_id"]):
         auth.require_write(c, who, H.actor_id(target))
-    if target:
+    if target and not requester_seat:
         auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")
     return row
 
