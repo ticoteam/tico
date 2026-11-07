@@ -1316,6 +1316,9 @@ class Store:
             from . import pipeline_views as _pipeline_views
 
             _pipeline_views.ensure(c)  # after task_steps.flow, task_types.role and manager exist
+            from . import pipeline_engine as _pipeline_engine
+
+            _pipeline_engine.boot(c)  # prefixes D and P, default Warn after, open stage visits
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
 
