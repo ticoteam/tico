@@ -76,10 +76,11 @@ pages it drew on, which open the note and light up on the graph. An entity or ev
 question, and the rows that match more of the words come first. Docs and Market each keep their own thread while the page
 is open. The sentence is written by the company's model: Tico AI Gateway when it is connected and the model choices run on
 it, otherwise the company's own enabled provider whose key the server holds. Without a model, when the call fails, or in
-rehearsal, the answer is the rows that were pulled. Each model call is a `market.ask` event (the model, latency, how many
-excerpts and how long the question was, and the error when it failed: `unconfigured` when no model is set up, otherwise the
-error's type; never its text) and counts per person per day under the decision caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted
-apart from decisions); over the cap the ask is a 429.
+rehearsal, the answer is the rows that were pulled. Each ask that finds rows outside rehearsal is a `market.ask` event (the
+model, latency, how many excerpts and how long the question was; never its text). With no model set up, the event is still
+written, with `error` set to `unconfigured` and no model called; when a call fails, `error` is the error's type. Events count
+per person per day under the decision caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask
+is a 429.
 
 **Bots and the Assistant.** `hub doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
 `{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is an `ask` message to the Librarian, the ordinary
