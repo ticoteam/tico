@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Run one heavy command on a fresh RunsOn VM (.github/workflows/remote-run.yml) instead of on this computer.
 
-    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8|16] [--minutes N] [--ref SHA] -- CMD...
+    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8|16] [--minutes N] [--ref SHA] [--hosted] -- CMD...
 
 It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
 command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
 signed in with permission to dispatch workflows on the repository. scripts/heavy.sh calls it when TICO_HEAVY_REMOTE=1.
 At most TICO_REMOTE_MAX (4 by default; 0 means no cap) of the repository's remote runs go at once: a run past that waits
-up to 20 minutes for a slot, then exits without dispatching.
+up to 20 minutes for a slot, then exits without dispatching. `--hosted` (or TICO_REMOTE_HOSTED=1) runs it on a
+GitHub-hosted runner instead, under its own cap (HOSTED_CAP, 6) that RunsOn runs do not count against. It has no RunsOn
+cache, and --cpus is ignored.
 """
 
 import argparse
@@ -26,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
 CAP = 4  # remote runs of this repository at once; TICO_REMOTE_MAX overrides it
+HOSTED_CAP = 6  # GitHub-hosted runs of this repository at once; they do not count against CAP
+HOSTED_TITLE = ' (hosted)'  # ends the run name of a hosted run, which tells it apart from a RunsOn one (remote-run.yml)
 WAIT_LIMIT = 20 * 60  # seconds a dispatch waits for a free slot
 CHECK_LIMIT = 2 * 60  # seconds the count may keep failing before a dispatch goes ahead without it
 BUSY = ('queued', 'in_progress', 'waiting', 'pending')
@@ -101,6 +105,7 @@ def setup_for(command):
 
 def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
+    titles = (title, title + HOSTED_TITLE)
     time.sleep(5)  # the dispatched run takes a few seconds to reach the list
     while time.monotonic() < deadline:
         runs = json.loads(
@@ -119,7 +124,7 @@ def find_run(run_id, deadline):
             )
         )
         for run in runs:
-            if run['displayTitle'] == title:
+            if run['displayTitle'] in titles:
                 return run
         time.sleep(10)
     raise SystemExit(f'remote: dispatched, but "{title}" did not appear; see the Remote run workflow in Actions')
@@ -147,9 +152,15 @@ def remote_cap():
     return int(value)
 
 
-def busy_remote_runs():
-    """How many of the newest 100 runs of the workflow are queued, running, waiting or pending. One API call: GitHub
-    filters a run list by a single status, so the four states are counted from one list."""
+def hosted_requested(flag):
+    """Whether this run goes to a GitHub-hosted runner: the --hosted flag, or TICO_REMOTE_HOSTED=1 in the environment."""
+    return bool(flag) or os.environ.get('TICO_REMOTE_HOSTED') == '1'
+
+
+def busy_remote_runs(hosted=False):
+    """How many of the newest 100 runs of the workflow are queued, running, waiting or pending: the GitHub-hosted ones
+    with `hosted`, the RunsOn ones without it. One API call: GitHub filters a run list by a single status, so the four
+    states are counted from one list."""
     result = subprocess.run(
         ['gh', 'api', f'repos/{{owner}}/{{repo}}/actions/workflows/{WORKFLOW}/runs?per_page=100'],
         cwd=ROOT,
@@ -160,22 +171,25 @@ def busy_remote_runs():
     if result.returncode:
         raise RuntimeError(' '.join((result.stderr or 'gh api failed').split()))
     try:
-        return sum(run['status'] in BUSY for run in json.loads(result.stdout)['workflow_runs'])
+        return sum(
+            run['status'] in BUSY and ((run.get('display_title') or '').endswith(HOSTED_TITLE) == bool(hosted))
+            for run in json.loads(result.stdout)['workflow_runs']
+        )
     except (ValueError, KeyError, TypeError) as error:
         raise RuntimeError(f'unreadable run list ({error})') from None
 
 
-def wait_for_capacity(cap):
-    """Return True once fewer than `cap` remote runs are busy. While the count fails, retry with backoff; after two
-    minutes of failures, warn and return False, so the caller dispatches anyway and CI still works. A wait past 20
-    minutes exits without dispatching."""
+def wait_for_capacity(cap, hosted=False):
+    """Return True once fewer than `cap` remote runs of the kind `hosted` selects are busy. While the count fails, retry
+    with backoff; after two minutes of failures, warn and return False, so the caller dispatches anyway and CI still
+    works. A wait past 20 minutes exits without dispatching."""
     if not cap:
         return True
     started = time.monotonic()
     failing_since, retry = None, 5
     while True:
         try:
-            busy = busy_remote_runs()
+            busy = busy_remote_runs(hosted)
         except RuntimeError as error:
             now = time.monotonic()
             failing_since = now if failing_since is None else failing_since
@@ -199,33 +213,34 @@ def wait_for_capacity(cap):
         if busy < cap:
             return True
         waited = time.monotonic() - started
+        kind = 'hosted remote' if hosted else 'remote'
         if waited >= WAIT_LIMIT:
-            raise SystemExit(
-                f'remote: {busy} remote runs still busy (cap {cap}) after 20 min; not dispatching. '
-                'Wait for them to finish, or raise TICO_REMOTE_MAX.'
-            )
-        print(f'waiting: {busy} remote run{"" if busy == 1 else "s"} busy (cap {cap})', file=sys.stderr, flush=True)
+            hint = 'Wait for them to finish.' if hosted else 'Wait for them to finish, or raise TICO_REMOTE_MAX.'
+            raise SystemExit(f'remote: {busy} {kind} runs still busy (cap {cap}) after 20 min; not dispatching. {hint}')
+        print(f'waiting: {busy} {kind} run{"" if busy == 1 else "s"} busy (cap {cap})', file=sys.stderr, flush=True)
         # Jittered, so agents that started together don't all poll and dispatch together.
         time.sleep(min(random.uniform(30, 60), WAIT_LIMIT - waited))
 
 
-def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
+def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True, hosted=False):
     """Run `command` on a fresh VM against the pushed `ref` (HEAD) and wait for it: (exit code, the run's log folder).
     The code is None when the VM never ran the command to the end (setup failed, canceled, timed out, or the Spot
-    VM was reclaimed). `echo` prints the command's last lines here, as `remote.py` itself does."""
-    cap = remote_cap()
+    VM was reclaimed). `echo` prints the command's last lines here, as `remote.py` itself does. `hosted` runs it on a
+    GitHub-hosted runner under HOSTED_CAP instead of a RunsOn VM."""
+    cap = HOSTED_CAP if hosted else remote_cap()
     ref = git('rev-parse', ref or 'HEAD')
     if not git('branch', '-r', '--contains', ref):
         raise SystemExit(f'remote: {ref[:7]} is not pushed; push it first (the VM runs the pushed commit)')
     command = portable(command)
     run_id = uuid.uuid4().hex[:12]
     setup = setup or setup_for(command)
+    where = 'a GitHub-hosted runner' if hosted else f'{cpus} vCPUs'
     print(
-        f'remote: {shlex.join(command)} at {ref[:7]} on {cpus} vCPUs ({setup} setup), id {run_id}',
+        f'remote: {shlex.join(command)} at {ref[:7]} on {where} ({setup} setup), id {run_id}',
         file=sys.stderr,
         flush=True,
     )
-    wait_for_capacity(cap)
+    wait_for_capacity(cap, hosted)
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
     gh(
         'workflow',
@@ -245,6 +260,8 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
         f'cpus={cpus}',
         '-f',
         f'minutes={minutes}',
+        '-f',
+        f'hosted={"true" if hosted else "false"}',
     )
     found = find_run(run_id, time.monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
@@ -301,6 +318,11 @@ def main(argv=None):
     # The whole default Python suite takes 25-28 minutes on 4 vCPUs; a 30-minute limit cut it off near the end.
     parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')
     parser.add_argument('--ref', help='commit to run (default: HEAD, which must be pushed)')
+    parser.add_argument(
+        '--hosted',
+        action='store_true',
+        help=f'run on a GitHub-hosted runner, under its own cap of {HOSTED_CAP} (--cpus is ignored)',
+    )
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
@@ -308,7 +330,8 @@ def main(argv=None):
         parser.error('a command is required, after --')
     if git('status', '--porcelain', '--untracked-files=no'):
         print('remote: uncommitted changes are not included; running the pushed commit', file=sys.stderr)
-    code, _ = run(command, setup=args.setup, cpus=args.cpus, minutes=args.minutes, ref=args.ref)
+    hosted = hosted_requested(args.hosted)
+    code, _ = run(command, setup=args.setup, cpus=args.cpus, minutes=args.minutes, ref=args.ref, hosted=hosted)
     return 1 if code is None else code
 
 
