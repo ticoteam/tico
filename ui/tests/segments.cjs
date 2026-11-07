@@ -73,7 +73,8 @@ const lastWrite = (writes, path) => writes.filter(w => w.path === path).at(-1);
       // Move the first row down: the whole order goes.
       await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
       await page.locator('#strat-segs .seg-row').first().locator('[data-seg-down]').click();
-      await page.locator('#strat-segs .seg-main b', {hasText: 'Deploy pipelines'}).first().waitFor();
+      // The list is read again after the order is saved: wait for its first row, not for a name that was already there.
+      await page.waitForFunction(() => document.querySelector('#strat-segs .seg-main b')?.textContent.trim() === 'Deploy pipelines');
       assert.deepEqual(lastWrite(writes, '/api/v2/segments/order').body, {ids: [DEPLOY, CHECKS, 'segment/mid-size-firms']}, tag + ': the order body');
       assert.deepEqual(await texts(page, '#strat-segs .seg-main b'), ['Deploy pipelines', 'Release gates', 'Mid-size firms'], tag + ': the new order');
       // Remove one, after the confirm.
