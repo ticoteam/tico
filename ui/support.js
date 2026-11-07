@@ -249,7 +249,7 @@
       }
     }
     // Stays on the newest message only while the reader is there, so a poll never moves someone reading back
-    // (ui/app/stick-scroll.js); a reply that lands while they are scrolled up shows the "New reply" pill instead.
+    // (ui/app/stick-scroll.ts); a reply that lands while they are scrolled up shows the "New reply" pill instead.
     const stick = stickScroll(host);
     if (pin) stick.toBottom();
     if (host.dataset.shown !== html) {

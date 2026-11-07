@@ -620,7 +620,7 @@ function v2WithBotTalk(state, messages) {
   return out.concat(talk.slice(t));
 }
 const shownById = (state, id) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
-// Scrolled up when something new lands: a small pill above the composer takes you to it (ui/app/stick-scroll.js).
+// Scrolled up when something new lands: a small pill above the composer takes you to it (ui/app/stick-scroll.ts).
 // Only the conversation counts, and a reply as it streams in; a side item joins its folded line without a pill.
 const v2Latest = state => state.lastMain ? state.lastMain.id + (state.live?.text ? ':live' : '') : '';
 function v2Jump(state) {
