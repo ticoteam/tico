@@ -280,6 +280,8 @@ async function capture() {
           // before left would otherwise differ from run to run, and a same-ref run must shoot the same pictures.
           await page.goto(demo.url + '/');
           await page.locator('#tree a.node').first().waitFor({state: 'attached'});
+          // The route renders the page's layout (a "More" fold measures its text), so the font must be in before it does.
+          await page.evaluate(() => document.fonts.ready);
           const route = typeof spec.route === 'function' ? await spec.route(page) : spec.route;
           await page.evaluate(hash => { location.hash = hash; }, route);
           // Settings renders after the route, and keeps System, Webhooks and Billing in a More group that starts closed.
@@ -291,7 +293,8 @@ async function capture() {
           }
           await page.getByText(spec.ready).first().waitFor({timeout: 20000}).catch(() => problems.push(`${label}: never showed "${spec.ready}"`));
           if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
-          await page.waitForTimeout(600);
+          // Items mark themselves read 700 to 900 ms after they show (ui/app/updates.js), so a shot waits past that.
+          await page.waitForTimeout(2000);
           // A click scrolls its target into view and a list that loads late moves the page again: every shot starts at the
           // top of the page and of each scroller (the tour keeps the scroll its steps asked for).
           if (spec.name !== 'tour') {
