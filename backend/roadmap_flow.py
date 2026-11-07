@@ -243,7 +243,9 @@ def sync(c, task_id):
     step = next((s for s in typ['steps'] if s['name'] == goal), None)
     if not step or current == goal:
         return
-    H._set_status(c, H.KEEPER, row, step=step['id'])
+    # The parent's own move is automatic: a refusal (its requirements) is logged on the card and leaves the child's change.
+    if not H.try_auto_move(c, H.KEEPER, row, step=step['id']):
+        return
     version = ',version=version+1' if 'version' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')} else ''
     c.execute('UPDATE tasks SET done_at=?' + version + ' WHERE id=?', (H.now() if goal == 'Shipped' else None, task_id))
     H._recount(c, row['owner_id'])

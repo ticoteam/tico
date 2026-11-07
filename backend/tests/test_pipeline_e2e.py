@@ -1239,3 +1239,30 @@ def test_not_validated_files_into_the_spawn_that_filed_the_subtasks_not_a_nearer
     result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
     co.c.commit()
     assert co.where(result["follow_up"]) == ("Engineering", "Todo")
+
+
+def test_undo_closes_an_untouched_subtask_past_an_unmet_requirement_on_its_stage(co):
+    """O3 (Codex): a move into a later Closed stage is cancellation, not forward progress. The subtask the approval filed
+    is still at Todo, which has an unmet due-date requirement. The undo closes it anyway, and the card returns to Review."""
+    co.require("Engineering", "Todo", "Due", kind="field", needs={"field": "due"})
+    card = review_card(co)
+    approved = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
+    (d41,) = subtasks(co, card)
+    pipeline_review.undo(co.c, ANA, approved["decision_id"])
+    co.c.commit()
+    assert co.c.execute("SELECT status FROM tasks WHERE id=?", (d41,)).fetchone()[0] == "closed"
+    assert co.where(card) == ("Product", "Review")
+
+
+def test_an_automatic_move_the_rules_refuse_is_logged_and_the_rest_of_the_write_stands(co):
+    """Y1: an automatic step write refused by a stage requirement is undone alone. The card gets an auto_move_refused
+    event with the reason, and a change made in the same transaction stands."""
+    co.require("Engineering", "Todo", "Due", kind="field", needs={"field": "due"})
+    task = co.ticket("Engineering", "Todo", "Dark mode")
+    row = H.task(co.c, task)
+    co.c.execute("UPDATE tasks SET note=? WHERE id=?", ("kept", task))
+    assert H.try_auto_move(co.c, H.KEEPER, row, step=co.stage("Engineering", "Doing")) is False
+    co.c.commit()
+    assert co.where(task) == ("Engineering", "Todo")
+    assert co.c.execute("SELECT note FROM tasks WHERE id=?", (task,)).fetchone()[0] == "kept"
+    assert co.count("history_events", "subject_type='task' AND subject_id=? AND kind='auto_move_refused'", task) == 1
