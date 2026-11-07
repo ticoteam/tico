@@ -11,7 +11,7 @@ const USE_DIMENSIONS = [['harness', 'Harness'], ['model', 'Model'], ['effort', '
 let USE = null;
 const useDay = date => date.toISOString().slice(0, 10);
 const useAdd = (day, n) => useDay(new Date(Date.parse(day + 'T00:00:00Z') + n * 864e5));
-function useSpan(range, custom) {
+function useSpan(range, custom?) {
   const today = useDay(new Date());
   if (range === 'today') return {from: today, to: today};
   if (range === '30d') return {from: useAdd(today, -29), to: today};
