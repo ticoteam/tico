@@ -1,13 +1,11 @@
-/* ui/app/router.js — route(): hash routes to pages
+/* ui/app/router.ts — route(): hash routes to pages
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
+let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE: ViewTransition | null = null;
 // The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
-/** @param {string | undefined} h @returns {string} */
-const routePage = h => { const p = String(h || '').split('?')[0]; return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
-/** @param {string} [hash] */
-function route(hash = location.hash) {
+const routePage = (h: string | undefined): string => { const [p = ''] = String(h || '').split('?'); return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
+function route(hash: string = location.hash): void {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
       const raw = new URLSearchParams(hash.split('?')[1]).get('recruit');
@@ -30,8 +28,8 @@ function route(hash = location.hash) {
   S.route = LAST_ROUTE = hash || UPDATES;
   // The tab address Settings wrote for itself is still Settings: a redraw (route() called again) keeps the page as it is.
   if (from === SETTINGS && S.route === SETTINGS_ADDRESS) S.route = LAST_ROUTE = SETTINGS;
-  if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_PRESENCE.timer = null; }
-  const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
+  if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer ?? undefined); SETTINGS_PRESENCE.timer = null; }
+  const botOf = (r: string): string => r.startsWith('#/bot/') ? (r.slice(6).split('/')[0] ?? '') : '';
   const botHere = botOf(S.route);
   document.body.classList.toggle('bot-page', !!botHere);   // a phone gives the bot page the whole screen
   if (!botHere) pageTitle();
@@ -83,15 +81,15 @@ function route(hash = location.hash) {
   else if (S.route === OVERVIEW_CAMPUS) pageOverview();
   else if (S.route === OVERVIEW_GRAPH || S.route.startsWith(OVERVIEW_GRAPH + '?')) pageOverviewGraph();
   else if (S.route === OVERVIEW_COMPANY) pageOverviewCompany();
-  else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0]));
+  else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0] ?? ''));
   else if (S.route === WELCOME) pageWelcome();
   else if (S.route === '#/roadmap') pageRoadmap();
   else if (S.route === '#/tags') pageTags();
   else if (S.route.startsWith('#/tag/')) pageTag(decodeURIComponent(S.route.slice(6)));
   else if (S.route.startsWith('#/task/')) pageTasks('', decodeURIComponent(S.route.slice(7)));
-  else if (S.route.startsWith(TASKS + '/')) { location.replace('#/task/' + S.route.slice(TASKS.length + 1).split('?')[0]); return; }   // #/tasks/<id> is the same task
+  else if (S.route.startsWith(TASKS + '/')) { location.replace('#/task/' + (S.route.slice(TASKS.length + 1).split('?')[0] ?? '')); return; }   // #/tasks/<id> is the same task
   else if (S.route === CHAT) { location.hash = TASKS; return; }
-  else if (S.route.startsWith(MEETINGS + '/live/')) pageLiveMeetings({pinned: decodeURIComponent(S.route.slice((MEETINGS + '/live/').length))});
+  else if (S.route.startsWith(MEETINGS + '/live/')) pageLiveMeetings(decodeURIComponent(S.route.slice((MEETINGS + '/live/').length)));
   else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) {
     const live = new URLSearchParams(S.route.split('?')[1] || '').get('live');
     if (live) { location.replace(MEETINGS + '/live/' + encodeURIComponent(live)); return; }
@@ -99,13 +97,13 @@ function route(hash = location.hash) {
   }
   else if (S.route.startsWith('#/bot/')) {
     // A bot's page is at its id; a link that names it by slug (typed, or from before ids) moves to the id.
-    const [ref, tab] = S.route.slice(6).split('/'), found = botByRef(decodeURIComponent(ref));
+    const [ref = '', tab] = S.route.slice(6).split('/'), found = botByRef(decodeURIComponent(ref));
     if (found && found.id !== decodeURIComponent(ref)) { location.replace('#/bot/' + encodeURIComponent(found.id) + (tab !== undefined ? '/' + tab : '')); return; }
     pageBot(decodeURIComponent(ref), tab);
   }
   else if (S.route === THREADS_ROUTE || S.route.startsWith(THREADS_ROUTE + '?')) pageThreads();
-  else if (S.route.startsWith(THREAD_ROUTE)) pageThread(decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0]));
-  else if (S.route.startsWith('#/seat/')) { const [id, template] = S.route.slice(7).split('?')[0].split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
+  else if (S.route.startsWith(THREAD_ROUTE)) pageThread(decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? ''));
+  else if (S.route.startsWith('#/seat/')) { const [id = '', template] = (S.route.slice(7).split('?')[0] ?? '').split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
   else if (S.route === ASSISTANT) pageAssistant();
   else if (S.route === LEARNED) pageLearned();
   else if (S.route === SKILLS_CONNECT || S.route.startsWith(SKILLS_CONNECT + '?')) pageSkillsConnect();   // the skills helper's approve page
@@ -115,7 +113,7 @@ function route(hash = location.hash) {
   }
   else if (isTasksRoute(S.route)) {
     // #/tasks?owner=bot:eng&tag=bug: the filters ride in the query (ui/app/task-list.js)
-    const base = S.route.split('?')[0];
+    const base = S.route.split('?')[0] ?? '';
     pageTasks(base === BOARD ? 'board' : base === ISSUES ? 'list' : '');
   }
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
@@ -133,7 +131,7 @@ function route(hash = location.hash) {
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
   // Settings > System (it was Rules, before that Routines): Tico's own jobs are Automations' System jobs now.
-  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { location.replace(settingsMovedOut('system')); return; }
+  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0] ?? '')) { location.replace(settingsMovedOut('system')); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (S.route === '#/settings/computers') { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }
   else if (['#/settings/subscriptions', '#/subscriptions'].includes(S.route)) { SETTINGS_TAB = 'models'; location.replace(SETTINGS); return; }   // Subscriptions are on Models
@@ -143,7 +141,7 @@ function route(hash = location.hash) {
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
   // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
-    const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    const [path = '', query] = S.route.slice(11).split('?'), [tab = '', card] = path.split('/');
     // A System card (or the tab) that moved out of Settings opens where it went; Releases reads its bot first.
     const moved = settingsMovedOut(tab, card);
     if (moved) { if (moved !== 'wait') location.replace(moved); return; }
@@ -162,7 +160,7 @@ function route(hash = location.hash) {
   else if (isLensesRoute(S.route)) pageLenses();
   else if (isStrategyRoute(S.route)) pageStrategy();
   else if ((S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) && new URLSearchParams(S.route.split('?')[1] || '').get('collection') === 'market') {
-    const id = S.route.startsWith(DOCS + '/') ? S.route.slice(DOCS.length + 1).split('?')[0] : '';
+    const id = S.route.startsWith(DOCS + '/') ? (S.route.slice(DOCS.length + 1).split('?')[0] ?? '') : '';
     location.hash = MARKET_ROUTE + (id ? '?note=' + encodeURIComponent(id) : '');
     return;
   }
@@ -171,8 +169,8 @@ function route(hash = location.hash) {
   else if (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?')) pageLearnings();
   else if (S.route === '#/usage') pageUsage();
   else if (S.route === '#/replay' || S.route.startsWith('#/replay?')) pageReplay();
-  else if (/^#\/computers\/[^/?]+\/screen$/.test(S.route)) pageComputerScreen(decodeURIComponent(S.route.split('/')[2]), from);
-  else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2]));
+  else if (/^#\/computers\/[^/?]+\/screen$/.test(S.route)) pageComputerScreen(decodeURIComponent(S.route.split('/')[2] ?? ''), from);
+  else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2] ?? ''));
   else if (isAutomationsRoute(S.route)) pageAutomations();
   else location.hash = HOME;            // unknown or empty routes land on My dashboard, home
   redesignAfterRoute();
@@ -184,8 +182,8 @@ function route(hash = location.hash) {
 // the browser holds the old page's picture while route() draws, so the switch never shows a half-drawn frame. A query
 // change, reduced motion, a hidden window and a browser without view transitions draw at once. An error in route()
 // still surfaces as an error (not a rejected transition).
-function routeChanged() {
-  const path = h => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
+function routeChanged(): void {
+  const path = (h: string | undefined): string => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
   // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
   // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
   // first page writes for itself (Settings names its tab) gives way to the newer one.
@@ -211,9 +209,11 @@ function routeChanged() {
 // (ui/styles/base.css). So a press during the fade ends it at once and goes to what is under it: the press, and the
 // click it makes (which the browser gives to the root, where the press began). A pointer moved during the fade is told
 // where it is when the fade ends, so a tooltip or a hover shows without another move.
-let ROUTE_PRESS = null, ROUTE_MOVE = null;
-const routeMouse = (type, e, el) => {
-  const init = {bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail, button: e.button,
+/** A pointer or mouse event: the fields a pointer event has are read only when the event is one (a mouse event has none). */
+type Pointing = MouseEvent & Partial<PointerEvent>;
+let ROUTE_PRESS: Element | null = null, ROUTE_MOVE: Pointing | null = null;
+const routeMouse = (type: string, e: Pointing, el: Element): boolean => {
+  const init: PointerEventInit = {bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail, button: e.button,
     buttons: e.buttons, clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
     ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey};
   const pointer = type.startsWith('pointer');
@@ -221,10 +221,10 @@ const routeMouse = (type, e, el) => {
     width: e.width, height: e.height, pressure: e.pressure});
   return el.dispatchEvent(pointer ? new PointerEvent(type, init) : new MouseEvent(type, init));
 };
-const routeUnder = e => { const el = document.elementFromPoint(e.clientX, e.clientY); return el === document.documentElement ? null : el; };
-function routeFadeHover() {
+const routeUnder = (e: Pointing): Element | null => { const el = document.elementFromPoint(e.clientX, e.clientY); return el === document.documentElement ? null : el; };
+function routeFadeHover(): void {
   const e = ROUTE_MOVE, el = e && routeUnder(e); ROUTE_MOVE = null;
-  if (el) for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) routeMouse(type, e, el);
+  if (e && el) for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) routeMouse(type, e, el);
 }
 document.addEventListener('pointerdown', e => {
   if (!e.isTrusted) return;
@@ -235,19 +235,26 @@ document.addEventListener('pointerdown', e => {
   ROUTE_PRESS = el; e.stopImmediatePropagation();
   routeMouse('pointerdown', e, el);
 }, true);
-for (const type of ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu']) document.addEventListener(type, e => {
+type ClickType = 'mousedown' | 'click' | 'auxclick' | 'dblclick' | 'contextmenu';
+const CLICK_TYPES: ClickType[] = ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu'];
+for (const type of CLICK_TYPES) document.addEventListener(type, e => {
   const el = ROUTE_PRESS;
   if (!el || !e.isTrusted || e.target !== document.documentElement) return;
   if (type !== 'mousedown') ROUTE_PRESS = null;
   e.stopImmediatePropagation(); e.preventDefault();
   const hit = routeUnder(e);
   if (type !== 'mousedown' && !(hit && (el.contains(hit) || hit.contains(el)))) return;   // released somewhere else
-  if (routeMouse(type, e, el) && type === 'mousedown')
-    el.closest('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable]')?.focus({preventScroll: true});
+  if (routeMouse(type, e, el) && type === 'mousedown') {
+    // Only an HTML or SVG element has focus(): a focusable Element without it is left alone (the original threw there).
+    const target = el.closest('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable]');
+    if (target instanceof HTMLElement || target instanceof SVGElement) target.focus({preventScroll: true});
+  }
 }, true);
 // A scroll during the fade ends it too, so the page under the pointer scrolls, not the window.
 document.addEventListener('wheel', e => { if (ROUTE_FADE && e.target === document.documentElement) ROUTE_FADE.skipTransition(); }, {capture: true, passive: true});
-for (const type of ['pointermove', 'mousemove']) document.addEventListener(type, e => {
+type MoveType = 'pointermove' | 'mousemove';
+const MOVE_TYPES: MoveType[] = ['pointermove', 'mousemove'];
+for (const type of MOVE_TYPES) document.addEventListener(type, e => {
   if (ROUTE_FADE && e.isTrusted && e.target === document.documentElement) ROUTE_MOVE = e;
 }, true);
 window.addEventListener('hashchange', routeChanged);

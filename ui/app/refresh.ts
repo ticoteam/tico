@@ -1,4 +1,4 @@
-/* ui/app/refresh.js — The refresh loop
+/* ui/app/refresh.ts — The refresh loop
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -6,7 +6,7 @@
 // Recruiting seats change only by a recruit flow here (each refreshes with force) or another person's: a poll reads
 // them every 5th time, or when the last answer is 10 minutes old.
 let SEATS_POLLS = 0, SEATS_AT = 0;
-async function refresh(force) {
+async function refresh(force = false): Promise<void> {
   // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) and the campus's computers (only while it
   // is open) do not wait for the roster.
   const v2 = v2Refresh(), computers = overviewLoadComputers();
@@ -56,17 +56,34 @@ async function refresh(force) {
 // heartbeat, the paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once
 // per burst.
 // The same JSON value, whatever order its keys come in (a live event's copy of a task is built apart from the list's).
-function sameData(a, b) {
+// A JSON object read by key: sameData checks it is one before it reads a key.
+const fieldsOf = (v: object): Record<string, unknown> => v as Record<string, unknown>;
+function sameData(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Object.keys(a);
   if (ka.length !== Object.keys(b).length) return false;
-  return ka.every(k => Object.hasOwn(b, k) && sameData(a[k], b[k]));
+  const fa = fieldsOf(a), fb = fieldsOf(b);
+  return ka.every(k => Object.hasOwn(b, k) && sameData(fa[k], fb[k]));
 }
 // What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
 // changes only that, once a minute per tree.
-const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
-function liveTasksApply(events) {
+const taskListCopy = (t: LiveTaskRow | null | undefined): unknown => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
+/** One live task event: the task it names (task_id or id), whether it is gone or a bulk change, and the task's copy. */
+interface LiveTaskEvent {
+  id?: unknown;
+  task_id?: unknown;
+  gone?: unknown;
+  bulk?: unknown;
+  task?: {lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown} | null;
+}
+/** A task row in a list: its id, and the rest of the row as the server sends it. */
+interface LiveTaskRow { id?: unknown; [key: string]: unknown; }
+/** The list a live change applies to, the open one or the kept one (S.lastRead.tasks), with its rows and cursor. */
+interface KeptTaskList { tasks: LiveTaskRow[]; since?: unknown; }
+// The kept list S.lastRead.tasks: LastRead types its tasks key as unknown, so this is the one place it is cast.
+const keptTasks = (): KeptTaskList | undefined => S.lastRead.tasks as KeptTaskList | undefined;
+function liveTasksApply(events: LiveTaskEvent[]): void {
   events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
   if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
     if (TASK_CHAT.dialog.taskLive) taskLiveGone(TASK_CHAT.dialog, TASK_CHAT.dialog.taskLive);
@@ -82,24 +99,26 @@ function liveTasksApply(events) {
   // The open list, or away from it the list kept for the next visit (S.lastRead.tasks): kept current the same way, so a
   // return paints what is true now. A bulk change drops the kept list; the next visit reads it.
   if (bulk && !state) S.lastRead.tasks = null;
-  const list = state && isTasksRoute(S.route) && state.tasks ? state : !state ? S.lastRead.tasks : null;
+  const kept = keptTasks();
+  const list: KeptTaskList | null = state && isTasksRoute(S.route) && state.tasks ? state : !state ? kept ?? null : null;
   if (list) {
-    const known = new Map(list.tasks.map((t, i) => [String(t.id), i]));
+    const known = new Map<string, number>(list.tasks.map((t, i): [string, number] => [String(t.id), i]));
     let changed = false;
     for (const d of events) {
       const i = known.get(String(d.id));
-      if (d.gone) { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      if (d.gone) { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => { known.set(String(t.id), j); }); changed = true; } continue; }
       if (!d.task) continue;
-      if ((d.task.lane || 'company') !== 'company') { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      const task = d.task;   // a closure below cannot keep d.task's narrowing
+      if ((d.task.lane || 'company') !== 'company') { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => { known.set(String(t.id), j); }); changed = true; } continue; }
       // A write that shows nothing new on the list: no redraw. The open task follows any change (a worktree's
       // progress shows there), so only an identical copy is left out of that.
-      if (i != null && sameData(taskListCopy(list.tasks[i]), taskListCopy(d.task))) {
-        if (sameData(list.tasks[i], d.task)) unchanged.add(String(d.id));
-        else list.tasks = list.tasks.map((t, j) => j === i ? d.task : t);
+      if (i != null && sameData(taskListCopy(list.tasks[i]), taskListCopy(task))) {
+        if (sameData(list.tasks[i], task)) unchanged.add(String(d.id));
+        else list.tasks = list.tasks.map((t, j) => j === i ? task : t);
         continue;
       }
-      if (i != null) list.tasks = list.tasks.map((t, j) => j === i ? d.task : t);
-      else { list.tasks = [...list.tasks, d.task]; known.set(String(d.id), list.tasks.length - 1); }   // a new task arrives whole
+      if (i != null) list.tasks = list.tasks.map((t, j) => j === i ? task : t);
+      else { list.tasks = [...list.tasks, task]; known.set(String(d.id), list.tasks.length - 1); }   // a new task arrives whole
       changed = true;
     }
     // Never the whole list again: every open tab gets every change, and a busy team's bots change tasks every few
@@ -120,11 +139,13 @@ function liveTasksApply(events) {
   }
   if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
 }
-function liveWire() {
+/** A bot's live status line: the bot, and its status (absent when the bot has none). */
+interface LiveBotEvent { bot: string; status?: V2BotState; }
+function liveWire(): void {
   if (!S.me?.cloud || !liveAvailable()) return;
-  let tasks = [];
-  liveOn('tasks', d => { tasks.push(d); liveSoon('tasks', () => { const batch = tasks; tasks = []; liveTasksApply(batch); }, 200); });
-  liveOn('bots', d => {
+  let tasks: LiveTaskEvent[] = [];
+  liveOn('tasks', (d: LiveTaskEvent) => { tasks.push(d); liveSoon('tasks', () => { const batch = tasks; tasks = []; liveTasksApply(batch); }, 200); });
+  liveOn('bots', (d: LiveBotEvent) => {
     if (d.status) S.v2.status[d.bot] = d.status; else delete S.v2.status[d.bot];
     tipRefresh(d.bot);
     liveSoon('bots', () => {
@@ -136,7 +157,7 @@ function liveWire() {
     }, 200);
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
-  liveOn('needs', d => void v2NeedsChanged(d).then(moved => {
+  liveOn('needs', (d: unknown) => void v2NeedsChanged(d).then(moved => {
     // A live change reaches the browser notifications too, not only the refresh (hub-v2.js); one memory serves both.
     if (typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
     if (!moved) return;
@@ -151,14 +172,14 @@ function liveWire() {
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
   for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; const keptList = keptTasks(); if (keptList) keptList.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
 // cursor (tasksLoad), which costs only what changed while it was away, or a full read when the list has no cursor (its
 // paging stopped part-way, or its last read failed).
 let tasksHiddenAt = 0;
-function tasksCatchUp() {
+function tasksCatchUp(): void {
   if (TASKS_ST && isTasksRoute(S.route)) liveSoon('tasks-catch-up', () => { if (TASKS_ST && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true}); }, 300);
 }
 // The open list never drifts for long: it is read in full (tasksReadFull) at least every 15 minutes while it is on
@@ -168,7 +189,7 @@ function tasksCatchUp() {
 // being hidden first, so a gap between two ticks of the 30-second clock counts as well.
 const TASKS_FULL_MS = 15 * 60e3, TASKS_AWAY_MS = 10 * 60e3;
 let tasksTickAt = Date.now();
-function tasksFreshen() {
+function tasksFreshen(): void {
   const state = TASKS_ST;
   if (!state || !isTasksRoute(S.route) || document.hidden || state.fullRead) return;
   if (!state.stale && Date.now() - (state.fullAt || 0) < TASKS_FULL_MS) return;
@@ -177,11 +198,11 @@ function tasksFreshen() {
 }
 // The stream is reconnected once per return, not on each tick a failing full read leaves the list stale: that would
 // undo the stream's own backoff while the server is down.
-function tasksBack(away) {
+function tasksBack(away: number): void {
   if (away > TASKS_AWAY_MS) { liveResume(); if (TASKS_ST) TASKS_ST.stale = true; tasksFreshen(); }
   else if (away > 30000) tasksCatchUp();
 }
-function tasksTick() {
+function tasksTick(): void {
   const now = Date.now(), slept = now - tasksTickAt;
   tasksTickAt = now;
   if (document.hidden) return;

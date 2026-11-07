@@ -418,9 +418,12 @@ class Support:
             from pathlib import Path
 
             ui = Path(__file__).resolve().parent.parent / "ui"
+            # A browser event names its script by the last part of its URL, which is .ts for a TypeScript file.
             files = (
                 {p.name for p in ui.glob("*.js")}
+                | {p.name for p in ui.glob("*.ts")}
                 | {p.name for p in (ui / "app").glob("*.js")}
+                | {p.name for p in (ui / "app").glob("*.ts")}
                 | {"app.bundle.js"}
                 | {f"app.bundle.{n}.js" for n in range(2, 100)}
             )

@@ -50,7 +50,7 @@ def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_m
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
     assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
     # A UI file the map does not list runs its linked scripts and the smoke browser scripts, never every script.
-    core = checks.selection(["ui/app/core.js"])
+    core = checks.selection(["ui/app/core.ts"])
     assert "--all" not in core["browser"] and set(checks.browser_scripts([])) <= set(core["browser"])
     assert checks.selection(["runner-rs/harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
@@ -655,7 +655,7 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
     corpus = checks.selection(["backend/tests/fixtures/golden_corpus/kept/handbook.md"], added=[])["python"]
     assert "backend/tests/test_golden_corpus.py" in corpus
     # A UI file outside the map runs the tests that name it or read it directly, not every reader's importers.
-    assert "scripts/tests/test_pr_checks.py" in checks.selection(["ui/app/api.js"], added=[])["python"]
+    assert "scripts/tests/test_pr_checks.py" in checks.selection(["ui/app/api.ts"], added=[])["python"]
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):
@@ -683,7 +683,7 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
-        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.js"]
+        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.ts"]
     )
     monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     timings = tmp_path / "durations.json"
@@ -1305,7 +1305,7 @@ def test_pull_requests_and_queue_groups_never_run_the_full_suite_or_every_browse
         ["requirements.txt"],
         ["pytest.ini"],
         ["package-lock.json"],
-        ["ui/app/core.js"],
+        ["ui/app/core.ts"],
         ["ui/app/chat.js"],
         ["backend/missing.py"],
         ["docs/missing.md"],
