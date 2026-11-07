@@ -447,6 +447,16 @@ class ThreadPinRow(TypedDict):
     updated_at: str
 
 
+class SegmentMemberRow(TypedDict):
+    """One teammate tagged to a business segment (backend/segments.py): `member` is `bot:<id>` or `person:<id>`, and
+    `segment_id` is `all` for one who works across every segment."""
+
+    segment_id: str
+    member: str
+    created_at: str
+    created_by: str
+
+
 class MessageRouteRow(TypedDict):
     """Who routing asked for one person's message, kept as history (routing was retired: backend/threads.py `plan`):
     `bot_ids` is a JSON list of bot actors, `[]` when it asked none."""
