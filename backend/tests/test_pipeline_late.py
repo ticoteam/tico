@@ -27,7 +27,9 @@ def test_the_late_list_names_each_late_ticket_and_leaves_out_one_within_its_limi
     fresh = late_ticket(api, typ, steps, "Fresh " + tag, minutes_ago=5)
     held = late_ticket(api, typ, steps, "Held " + tag, minutes_ago=180)
     with api.app.state.store.transaction() as c:
-        task_holds.put(c, held, "blocked", H.shift(H.now(), minutes=-120))
+        task_holds.put(
+            c, held, "blocked", H.shift(H.now(), minutes=-150)
+        )  # 30 active minutes, then on hold: under its 60-minute limit
 
     body = get(api, f"pipelines/{typ}/late")
     assert set(body["late"]) == {late}, body
