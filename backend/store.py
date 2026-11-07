@@ -2120,6 +2120,10 @@ class Store:
                 from .marketing_tasks import ensure as ensure_marketing
 
                 ensure_marketing(c)
+                # The built-in Product task type product ideas are filed as (backend/product_tasks.py).
+                from .product_tasks import ensure as ensure_product
+
+                ensure_product(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules

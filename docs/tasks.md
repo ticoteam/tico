@@ -3,7 +3,8 @@
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
 pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
-each standard status except waiting and declined (below).
+each standard status except waiting and declined (below). Two built-in types come with every team: Marketing ([growth](growth.md))
+and Product, whose steps run Idea, Shaping, Ready for engineering, Building, Shipped, Measured, with Dropped to one side.
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. The Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
@@ -1172,6 +1173,9 @@ tickets to Done; moving a task into ready stays with people.
 using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply.
 
 ## Subtasks and PRs
+
+A task can name the company's segment it is for (`segment_id`, or none). A subtask takes its parent's segment when
+it is filed unless it names one; `segment=<id>` or `segment=none` on `GET /api/v2/tasks` narrows the list.
 
 Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester. When a
 worker finishes a subtask under a bot-owned task, its result returns directly to the immediate

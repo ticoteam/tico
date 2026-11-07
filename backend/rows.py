@@ -142,6 +142,7 @@ class TaskRow(TypedDict):
     closed_by_id: str | None
     note: str | None
     goal_id: str | None
+    segment_id: str | None
     labels: str
     type_id: str | None
     step_id: str | None

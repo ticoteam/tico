@@ -61,9 +61,14 @@ def goal(conn, goal_id):
     return H._one(conn, "SELECT * FROM goals WHERE id=?", (goal_id,))
 
 
-def goals(conn, owner=None, parent_id=None, status=None, live_only=False):
-    """Goals, filtered. `status` is one status or a tuple; `live_only` leaves out done and dropped."""
+def goals(conn, owner=None, parent_id=None, status=None, live_only=False, segment=None):
+    """Goals, filtered. `status` is one status or a tuple; `live_only` leaves out done and dropped; `segment` is one
+    segment id, or `none` for the goals that have none (backend/segment_tags.py)."""
     where, args = [], []
+    if segment:
+        sql_segment, segment_args = H.segment_where(segment)
+        where.append(sql_segment)
+        args += segment_args
     if owner:
         where.append("owner_id=?")
         args.append(owner)
@@ -283,6 +288,14 @@ def _next_rank(conn, owner, top=False):
     return (highest + 1) if highest is not None else 0
 
 
+def _segment(conn, segment_id):
+    """The company's segment a goal is for (backend/segments.py), None for none. A segment that is not the company's
+    is a 404 there."""
+    from . import segments
+
+    return segments.require_ours(conn, segment_id) or None
+
+
 def _bet(conn, actor, bet_id):
     """The strategy bet a goal serves (backend/strategy.py), checked to exist. A retired bet still counts: the goal
     keeps showing where it came from."""
@@ -293,7 +306,7 @@ def _bet(conn, actor, bet_id):
     return bet_id
 
 
-def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id=None):
+def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id=None, segment_id=None):
     """A new goal starts uncoloured until its data supplies an automatic colour or a person sets one.
     A parent links it to the goal it supports; with none it is simply unlinked."""
     H._writer(conn, actor)
@@ -305,6 +318,7 @@ def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id
     if parent_id and owner == COMPANY:
         H.refuse(conn, actor, "kind", "a company goal does not support another goal")
     bet_id = _bet(conn, actor, bet_id) if bet_id else None
+    segment_id = _segment(conn, segment_id) if segment_id else None
     ts = H.now()
     row = {
         "id": H.new_id(),
@@ -317,16 +331,19 @@ def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id
         "created_by_id": actor,
         "updated_at": ts,
         "bet_id": bet_id,
+        "segment_id": segment_id,
     }
     conn.execute(
         "INSERT INTO goals (id, title, owner_id, parent_id, body, status, status_note, rank, created_at, "
-        "created_by_id, updated_at, bet_id) VALUES (:id, :title, :owner_id, :parent_id, :body, NULL, '', :rank, "
-        ":created_at, :created_by_id, :updated_at, :bet_id)",
+        "created_by_id, updated_at, bet_id, segment_id) VALUES (:id, :title, :owner_id, :parent_id, :body, NULL, '', "
+        ":rank, :created_at, :created_by_id, :updated_at, :bet_id, :segment_id)",
         row,
     )
     _event(conn, row["id"], actor, "created", None, title)
     if bet_id:
         _event(conn, row["id"], actor, "bet_id", None, bet_id)
+    if segment_id:
+        _event(conn, row["id"], actor, "segment_id", None, segment_id)
     H.event(conn, actor, "goal.create", row["id"], {"owner": owner, "title": title, "parent_id": parent_id})
     return goal(conn, row["id"])
 
@@ -451,9 +468,21 @@ def reopen(conn, actor, goal_id, status=None, note="", undo=False):
     return goal(conn, goal_id)
 
 
-def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=None, rank=None, top=False, bet_id=None):
-    """Edit the words, the parent, the owner, the place in the owner's order, or the strategy bet it serves
-    ("" unlinks)."""
+def update(
+    conn,
+    actor,
+    goal_id,
+    title=None,
+    body=None,
+    parent_id=None,
+    owner=None,
+    rank=None,
+    top=False,
+    bet_id=None,
+    segment_id=None,
+):
+    """Edit the words, the parent, the owner, the place in the owner's order, the strategy bet it serves, or the
+    segment it is for ("" unlinks either)."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:
@@ -504,6 +533,10 @@ def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=No
         sets.append("bet_id=:bet_id")
         args["bet_id"] = _bet(conn, actor, bet_id) if bet_id else None
         _event(conn, goal_id, actor, "bet_id", row.get("bet_id"), args["bet_id"])
+    if segment_id is not None and (segment_id or None) != row.get("segment_id"):
+        sets.append("segment_id=:segment_id")
+        args["segment_id"] = _segment(conn, segment_id)
+        _event(conn, goal_id, actor, "segment_id", row.get("segment_id"), args["segment_id"])
     if not sets:
         return row
     args["id"], args["updated_at"] = goal_id, H.now()
@@ -929,8 +962,13 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     try:
         if kind == "goal_wording":
             # A bet alone links the goal to the strategy bet it serves (the Strategy Bot's goals per bet).
-            if not (payload.get("title") or payload.get("body") or payload.get("bet_id")):
-                return "propose a new title, body or bet_id"
+            if not (payload.get("title") or payload.get("body") or payload.get("bet_id") or "segment_id" in payload):
+                return "propose a new title, body, bet_id or segment_id"
+            if payload.get("segment_id"):
+                from . import segments
+
+                if str(payload["segment_id"]) not in segments.ours_ids(conn):
+                    return f"no segment {payload['segment_id']} of the company's"
             if payload.get("bet_id"):
                 from . import strategy
 
@@ -1064,6 +1102,16 @@ def card(conn, p, hidden, editor):
                 bet = lambda bid: published.get(bid) if bid else ""
             changes.append(
                 {"label": "Serves", "now": bet(row.get("bet_id")) or "", "proposed": bet(pl["bet_id"]) or ""}
+            )
+        if "segment_id" in pl:
+            from . import segment_tags
+
+            changes.append(
+                {
+                    "label": "Segment",
+                    "now": segment_tags.name(conn, row.get("segment_id")),
+                    "proposed": segment_tags.name(conn, pl["segment_id"] or ""),
+                }
             )
         out["changes"] = changes
     return out
@@ -1218,6 +1266,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
                 title=payload.get("title"),
                 body=payload.get("body"),
                 bet_id=payload.get("bet_id") or None,
+                segment_id=(payload.get("segment_id") or "") if "segment_id" in payload else None,
             )
         elif row["kind"] == "kpi_definition":
             kpi_edit(conn, actor, kpi_id, payload)

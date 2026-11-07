@@ -19244,6 +19244,22 @@
               ],
               "title": "Status"
             }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
           }
         ],
         "responses": {
@@ -19560,6 +19576,24 @@
       "get": {
         "summary": "Every goal with its owner, its KPIs (each with its target and colour), the KPIs no goal uses and the pending proposals: what the Goals page draws",
         "operationId": "getGoalTree",
+        "parameters": [
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -29875,6 +29909,22 @@
               ],
               "title": "Month"
             }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
           }
         ],
         "responses": {
@@ -39454,6 +39504,22 @@
               "type": "string",
               "default": "",
               "title": "Q"
+            }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
             }
           }
         ],
@@ -59476,6 +59542,12 @@
       "Goal": {
         "type": "object",
         "properties": {
+          "segment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -59826,6 +59898,18 @@
               }
             ],
             "title": "Bet Id"
+          },
+          "segment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Id"
           }
         },
         "additionalProperties": false,
@@ -60432,6 +60516,12 @@
           "goal": {
             "type": "object",
             "properties": {
+              "segment_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -60644,6 +60734,12 @@
             "items": {
               "type": "object",
               "properties": {
+                "segment_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "id": {
                   "type": "string"
                 },
@@ -60898,6 +60994,18 @@
               }
             ],
             "title": "Bet Id"
+          },
+          "segment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Id"
           }
         },
         "additionalProperties": false,
@@ -75395,6 +75503,12 @@
       "Task": {
         "type": "object",
         "properties": {
+          "segment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "private": {
             "type": "boolean"
           },
@@ -76579,6 +76693,18 @@
               }
             ],
             "title": "Goal Id"
+          },
+          "segment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Id"
           },
           "acceptance_criteria": {
             "items": {
@@ -78468,6 +78594,18 @@
               }
             ],
             "title": "Goal Id"
+          },
+          "segment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment Id"
           },
           "close": {
             "type": "boolean",

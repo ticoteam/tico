@@ -26,6 +26,8 @@ from . import goals as G
 from . import kpis as K
 from . import models as M
 from . import names as N
+from . import segment_tags as ST
+from . import segments as SG
 from . import strategy as S
 from . import views
 from .store import H, Problem
@@ -604,17 +606,27 @@ def install(app, store, auth, mutate, settings):
                 G.mark_read(c, who.actor, due)
 
     @app.get("/api/v2/goals")
-    def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
+    def goals_list(
+        request: Request,
+        owner: str | None = None,
+        all: bool = False,
+        status: str | None = None,
+        segment: str | None = None,
+    ):
         """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal, or every one
-        `owner` owns."""
+        `owner` owns. `segment` keeps the goals of one segment, or `none` the goals with none; the chain above and the
+        company's goals stay as context."""
         who = request.state.identity
         auth.domain(who)
         due = []
         with store.read() as c:
+            seg = ST.filter_value(c, segment)
             if all:
                 statuses = tuple(status.split(",")) if status else None
                 whose = goal_owner(c, who, owner) if owner else None
-                rows = readable_goals(c, who, G.goals(c, owner=whose, status=statuses, live_only=not statuses))
+                rows = readable_goals(
+                    c, who, G.goals(c, owner=whose, status=statuses, live_only=not statuses, segment=seg)
+                )
                 return {"goals": scrub_rows(c, who, rows)}
             actor = goal_owner(c, who, owner)
             roster, entries, archived = org_shape(c)
@@ -623,17 +635,20 @@ def install(app, store, auth, mutate, settings):
                 scrub_rows(c, who, out[key])
             if who.role == "bot" and actor == who.actor:
                 due = G.reads_due(c, who.actor, [g["id"] for g in out["goals"] + out["chain"]])
+            if seg:
+                for key in ("goals", "reports"):
+                    out[key] = [g for g in out[key] if ST.keeps(g, seg)]
         mark_read(who, due)
         return out
 
     @app.get("/api/v2/goals/tree")
-    def goals_tree(request: Request):
+    def goals_tree(request: Request, segment: str | None = None):
         """Every goal with its owner's name and kind, its KPIs (each with its target and colour), and the KPIs no
-        goal uses, for the page's tree and list."""
+        goal uses, for the page's tree and list. `segment` keeps the goals of one segment, or `none` those with none."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            rows = readable_goals(c, who, G.goals(c, live_only=False))
+            rows = readable_goals(c, who, G.goals(c, live_only=False, segment=ST.filter_value(c, segment)))
             names = owner_names(c, rows)
             # Counted over the tasks this caller may read, so a hidden bot's work adds nothing.
             readable = auth.task_sql(c, who)
@@ -870,13 +885,27 @@ def install(app, store, auth, mutate, settings):
             bet = raw.get("bet_id") or None
             if bet and not S.bet(c, bet):
                 raise Problem("not_found", f"Change {n}: no strategy bet {bet}", 404)
+            segment = raw.get("segment_id") or None
+            if segment and segment not in SG.ours_ids(c):
+                raise Problem("not_found", f"Change {n}: no segment {segment} of the company's", 404)
             why = plain(raw.get("why"))
-            step("/api/v2/goals", {"title": title, "owner": owner, "parent_id": parent and parent["id"], "bet_id": bet})
+            step(
+                "/api/v2/goals",
+                {
+                    "title": title,
+                    "owner": owner,
+                    "parent_id": parent and parent["id"],
+                    "bet_id": bet,
+                    "segment_id": segment,
+                },
+            )
             words = [bold(title), "owner " + owner_name(c, owner)]
             if parent:
                 words.append("supports " + q(parent["title"]))
             if bet:
                 words.append("serves the bet " + q(bet_words(c, bet)))
+            if segment:
+                words.append("for the segment " + q(ST.name(c, segment)))
             if why:
                 step(f"/api/v2/goals/{GR.NEW}/why", {"why": why})
                 words.append("Why " + q(why))
@@ -923,6 +952,16 @@ def install(app, store, auth, mutate, settings):
                     said.append(
                         f"bet was {q(bet_words(c, row['bet_id'])) if row.get('bet_id') else 'none'}, "
                         f"now {q(bet_words(c, bet)) if bet else 'none'}"
+                    )
+            if raw.get("segment_id") is not None:
+                segment = raw["segment_id"] or None
+                if segment and segment not in SG.ours_ids(c):
+                    raise Problem("not_found", f"Change {n}: no segment {segment} of the company's", 404)
+                if segment != (row.get("segment_id") or None):
+                    sets["segment_id"] = segment or ""
+                    said.append(
+                        f"segment was {q(ST.name(c, row['segment_id'])) if row.get('segment_id') else 'none'}, "
+                        f"now {q(ST.name(c, segment)) if segment else 'none'}"
                     )
             if sets:
                 step(f"/api/v2/goals/{row['id']}", sets)
@@ -1213,7 +1252,17 @@ def install(app, store, auth, mutate, settings):
                         "or for someone below you on the org chart",
                         403,
                     )
-            row = G.create(c, who.actor, body.title, owner, body.parent_id, body.body, top=body.top, bet_id=body.bet_id)
+            row = G.create(
+                c,
+                who.actor,
+                body.title,
+                owner,
+                body.parent_id,
+                body.body,
+                top=body.top,
+                bet_id=body.bet_id,
+                segment_id=body.segment_id,
+            )
             return {"goal": goal_view(c, who, row)}
 
         return mutate(request, body, work)
@@ -1299,8 +1348,10 @@ def install(app, store, auth, mutate, settings):
                     "forbidden", "Moving a goal is for the owner of the goal it serves or someone above its owner", 403
                 )
             structural = body.parent_id is not None or body.owner is not None
-            # Linking it to the goal it serves, or to the strategy bet it serves, is the same right.
-            if (body.parent_id is not None or body.bet_id is not None) and not may_colour(c, who, row):
+            # Linking it to the goal it serves, its strategy bet or its segment is the same right.
+            if (
+                body.parent_id is not None or body.bet_id is not None or body.segment_id is not None
+            ) and not may_colour(c, who, row):
                 raise Problem(
                     "forbidden",
                     "Linking a goal is for its owner, the owner of the goal it serves, or someone above its owner",
@@ -1330,6 +1381,7 @@ def install(app, store, auth, mutate, settings):
                         rank=body.rank,
                         top=body.top,
                         bet_id=body.bet_id,
+                        segment_id=body.segment_id,
                     ),
                 )
             }

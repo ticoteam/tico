@@ -43,6 +43,7 @@ from . import groups as G
 from . import models as M
 from . import people as P
 from . import read_cache
+from . import segment_tags as ST
 from .store import H, Problem, encode
 
 SCHEMA = """
@@ -197,10 +198,13 @@ def monday(at=None):
 class Ctx:
     """One reader's request: the org chart and what they may read, each worked out once however many cards ask."""
 
-    def __init__(self, c, auth, who, settings=None, task_view=None, pages=None, asked_month=None):
+    def __init__(self, c, auth, who, settings=None, task_view=None, pages=None, asked_month=None, segment=None):
         self.c, self.auth, self.who, self.settings, self.task_view = c, auth, who, settings, task_view
         self.pages = pages  # backend/pages.py Pages: a pinned page's full read (status line, src)
         self.asked_month = asked_month  # YYYY-MM from the Growth page's month picker, or None
+        # One segment id, or `none`, from the Growth page's segment picker: narrows the marketing tasks (not the
+        # numbers, which are company-wide). None is every segment.
+        self.segment = segment
         self._memo = {}
 
     def memo(self, key, make):
@@ -826,13 +830,15 @@ def marketing_tasks(ctx):
     def make():
         steps = {MT.step_id(key): key for key in ("idea", "building", "testing", "scaling")}
         marks = ",".join("?" * len(steps))
+        segment_sql, segment_args = H.segment_where(ctx.segment, "t.segment_id") if ctx.segment else ("1", [])
         found = {}
         for r in ctx.c.execute(
             "SELECT t.id, t.title, t.owner_id, t.step_id, t.updated_at, tg.key FROM tasks t "
             "LEFT JOIN task_tags tt ON tt.task_id=t.id LEFT JOIN tags tg ON tg.id=tt.tag_id AND tg.key LIKE 'channel:%' "
-            f"WHERE t.type_id=? AND t.step_id IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) "
+            f"WHERE t.type_id=? AND t.step_id IN ({marks}) AND {segment_sql} "
+            f"AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) "
             "ORDER BY t.id, tg.key",
-            (MT.TYPE_ID, *steps),
+            (MT.TYPE_ID, *steps, *segment_args),
         ):
             task = found.get(r["id"])
             if task is None:
@@ -1299,7 +1305,7 @@ def place_view(ctx, place, timings=None):
         # The month picker: the month the cards read, and the newest months with cohort rows, oldest first.
         from . import growth_numbers as GN
 
-        out.update(month=ctx.month, months=GN._window(ctx.c, GN.MONTHS_MAX))
+        out.update(month=ctx.month, months=GN._window(ctx.c, GN.MONTHS_MAX), segment=ctx.segment)
     if kind == "team":
         out.update(group=ident, name=ctx.groups[ident].get("name") or ident, audience=audience_of(ctx.c, place))
     return out
@@ -1723,19 +1729,29 @@ def choices(ctx, team="", place=""):
 
 
 def install(app, store, auth, mutate, settings, task_view):
-    def context(c, request, month=None):
+    def context(c, request, month=None, segment=None):
         who = request.state.identity
         auth.domain(who)
-        return Ctx(c, auth, who, settings, task_view, getattr(app.state, "pages", None), month)
+        return Ctx(
+            c,
+            auth,
+            who,
+            settings,
+            task_view,
+            getattr(app.state, "pages", None),
+            month,
+            segment=ST.filter_value(c, segment),
+        )
 
     @app.get("/api/v2/places/{place}")
-    def place_show(request: Request, place: str, month: str | None = None):
+    def place_show(request: Request, place: str, month: str | None = None, segment: str | None = None):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
         out. A Dashboard, team page or My dashboard nobody saved shows its default cards, pins without ids (`saved`
-        false). The Growth page takes `month` (YYYY-MM): the month its cards read, and the months it may pick from."""
+        false). The Growth page takes `month` (YYYY-MM): the month its cards read, and the months it may pick from.
+        `segment` (a segment id, or `none`) narrows its marketing tasks to that segment; its numbers stay company-wide."""
         timings = {}
         with store.read_transaction() as c:
-            out = place_view(context(c, request, month_of(month)), place, timings)
+            out = place_view(context(c, request, month_of(month), segment), place, timings)
         request.state.server_timing = place_timing(timings)
         return out
 

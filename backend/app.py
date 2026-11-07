@@ -63,6 +63,8 @@ from . import task_roles as TRo
 from . import placement as placing
 from . import turns as turn_work
 from . import goals as G
+from . import segment_tags as ST
+from . import segments as SG
 from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
@@ -2993,6 +2995,7 @@ def create_app(settings=None):
         snoozed=None,
         by_id=False,
         exact=False,
+        segment=None,
     ):
         """The filters `GET /api/v2/tasks` takes, checked and resolved: (owner, requester, H.tasks keywords). A bulk
         change (`POST /api/v2/task-bulk`) selects with the same ones. `exact` refuses an owner or requester that names
@@ -3046,6 +3049,7 @@ def create_app(settings=None):
                 member=member,
                 role=TRo.role_name(role) if role else None,
                 snoozed=None if snoozed == "all" or (snoozed is None and by_id) else snoozed or "hide",
+                segment=ST.filter_value(c, segment),
             ),
         )
 
@@ -3472,6 +3476,8 @@ def create_app(settings=None):
             ask_ingest.skipped(c, ingest, "joined" if joins else "not_applied")
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
+        # None leaves the segment to the parent (H.task_create); "" names none.
+        segment_id = SG.require_ours(c, body.segment_id) if body.segment_id is not None else None
         requester_actor = None
         if asked and private:
             if who.role != "bot" or owner != who.actor:
@@ -3533,6 +3539,7 @@ def create_app(settings=None):
             top=body.top,
             lint=lint,
             goal_id=body.goal_id,
+            segment_id=segment_id,
             next_run=body.next_run,
             type=body.type,
             step=body.step,
@@ -3903,6 +3910,8 @@ def create_app(settings=None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
+        if body.segment_id is not None:
+            body = body.model_copy(update={"segment_id": SG.require_ours(c, body.segment_id)})
         # The org rule check (backend/org_rule_check.py): held, the task stays as it is.
         rule_gate = (
             org_rule_check.apply(
@@ -3940,6 +3949,7 @@ def create_app(settings=None):
                     body.rank,
                     body.roles,
                     body.goal_id,
+                    body.segment_id,
                     body.type,
                     body.step,
                     body.step_rank,

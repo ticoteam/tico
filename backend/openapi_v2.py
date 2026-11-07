@@ -2488,6 +2488,7 @@ SCHEMAS = {
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj(
         {
+            "segment_id": {"type": ["string", "null"]},
             "private": "b",
             "id": "s",
             "title": "s",
@@ -3835,6 +3836,7 @@ SCHEMAS = {
     # Goals and KPIs
     "Goal": obj(
         {
+            "segment_id": {"type": ["string", "null"]},
             "id": "s",
             "title": "s",
             "owner_id": "s",
