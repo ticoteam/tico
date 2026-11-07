@@ -285,6 +285,101 @@ CONTENT = {
         },
         {"name": "Marketplace fees", "account": "6200", "owner": OWNER, "amount": 100000, "by": OWNER},
         {"name": "Freight in", "account": "5400", "owner": ACCOUNTS_PAYABLE, "amount": 250000, "by": OWNER},
+        # One budget per segment, on an expense account no other budget uses (the budget overlap rule).
+        {
+            "name": "Home kit units",
+            "account": "5300",
+            "owner": "bot:sales-lead",
+            "amount": 2500000,
+            "by": OWNER,
+            "segment": "segment/home-light-shows",
+        },
+        {
+            "name": "Storefront installs",
+            "account": "5500",
+            "owner": "human:cara",
+            "amount": 900000,
+            "by": OWNER,
+            "segment": "segment/shops-hotels",
+        },
+        {
+            "name": "Town bids",
+            "account": "6900",
+            "owner": "bot:bids",
+            "amount": 400000,
+            "by": OWNER,
+            "segment": "segment/towns-malls",
+        },
+    ],
+    # Who set each customer's segment. A person's choice is final; a bot's is a guess a person can change. The two bot
+    # guesses are what the segment review list asks a person to settle.
+    "customer_segments": [
+        ("homestead", OWNER, "segment/home-light-shows"),
+        ("harborvine", OWNER, "segment/shops-hotels"),
+        ("mapleridge", OWNER, "segment/towns-malls"),
+        ("tidewater", BOOKKEEPER, "segment/shops-hotels"),
+        ("ridgeline", BOOKKEEPER, "segment/shops-hotels"),
+    ],
+    # This month's segment books, posted by Ana: a bot's entry over $5,000 waits for approval. Each line carries its
+    # segment as an explicit tag, so the segment P&L reads them whatever the budgets and customers say. The store,
+    # marketplace and subscription lines stay untagged: they are what the P&L's Unallocated column holds.
+    "segment_entries": [
+        {
+            "memo": "Homeworks retail orders, {month}",
+            "lines": [
+                ("1000", 3640000, "Retail settlements"),
+                ("4300", -3640000, "Retail partner sales", {"segment": "segment/home-light-shows"}),
+            ],
+        },
+        {
+            "memo": "Starter kit units from the manufacturer, {month}",
+            "lines": [
+                ("5300", 1180000, "Units for home kits", {"segment": "segment/home-light-shows"}),
+                ("1000", -1180000, "Paid from bank"),
+            ],
+        },
+        {
+            "memo": "Storefront and hotel installs, {month}",
+            "lines": [
+                ("1000", 1190000, "Install payments"),
+                ("4400", -1190000, "Business installs", {"segment": "segment/shops-hotels"}),
+            ],
+        },
+        {
+            "memo": "Crew payouts for storefront installs, {month}",
+            "lines": [
+                ("5500", 290000, "Installer crew payouts", {"segment": "segment/shops-hotels"}),
+                ("1000", -290000, "Paid from bank"),
+            ],
+        },
+        {
+            "memo": "Public bid installs for towns and malls, {month}",
+            "lines": [
+                ("1000", 950000, "Contract payment"),
+                ("4400", -950000, "Business installs", {"segment": "segment/towns-malls"}),
+            ],
+        },
+        {
+            "memo": "Survey and crew travel for public bids, {month}",
+            "lines": [
+                ("6900", 135000, "Survey and travel", {"segment": "segment/towns-malls"}),
+                ("1000", -135000, "Paid from bank"),
+            ],
+        },
+        {
+            "memo": "Event hall lighting installs, {month}",
+            "lines": [
+                ("1000", 620000, "Contract payment"),
+                ("4400", -620000, "Business installs", {"segment": "segment/event-venues"}),
+            ],
+        },
+        {
+            "memo": "Crew payouts for event hall installs, {month}",
+            "lines": [
+                ("5500", 180000, "Installer crew payouts", {"segment": "segment/event-venues"}),
+                ("1000", -180000, "Paid from bank"),
+            ],
+        },
     ],
     # Gate and posting rules. `account` is a chart code and becomes an account id when the rule is written.
     "rules": [
@@ -427,7 +522,8 @@ def _line(account_id, amount, description="", tags=None):
 
 
 def _journal(c, cal, who, tag, when, memo, rows, codes):
-    lines = [_line(codes[code], amount, text) for code, amount, text in rows]
+    """A journal entry. A row is (code, amount, text), or (code, amount, text, tags) for a line with explicit tags."""
+    lines = [_line(codes[row[0]], row[1], row[2], row[3] if len(row) > 3 else None) for row in rows]
     _act(
         c,
         cal,
@@ -490,6 +586,8 @@ def _setup(c, cal):
             "effective_from": start.isoformat(),
             "at_limit": "warn",
         }
+        if bud.get("segment"):
+            payload["segment_id"] = bud["segment"]
         _act(c, cal, bud["by"], "budget_create", payload, f"budget-{i}", opened)
 
 
@@ -600,6 +698,16 @@ def _billing(c, cal):
             ("prev", 1),
         )
         customers[cu["key"]] = res.result["contact_id"]
+    for key, who, segment in CONTENT["customer_segments"]:
+        _act(
+            c,
+            cal,
+            who,
+            "contact_segment",
+            {"contact_id": customers[key], "segment_id": segment},
+            f"segment-{key}",
+            ("prev", 1),
+        )
     for inv in CONTENT["invoices"]:
         line = _line(codes[inv["account"]], inv["amount"], cal.words(inv["description"], inv["date"]))
         made = _act(
@@ -729,12 +837,21 @@ def _approve_rule(c, cal, approval_id, rule):
         raise AssertionError(f"finance demo: the rule approval did not commit: {done and done.status}")
 
 
+def _segment_books(c, cal):
+    """This month's segment entries, posted by Ana and dated the first of the month, so this month's segment figures hold
+    whatever day the build is."""
+    codes = _codes(c, cal)
+    for i, entry in enumerate(CONTENT["segment_entries"]):
+        _journal(c, cal, OWNER, f"segment-{i}", ("this", 1), entry["memo"], entry["lines"], codes)
+
+
 def seed(b):
     cal = Calendar(b.now)
     b.write(lambda c: _setup(c, cal))
     with _hub_clock(b, days=6):
         b.write(lambda c: _bookkeeper_view(c, cal))
     b.write(lambda c: _books(c, cal))
+    b.write(lambda c: _segment_books(c, cal))
     b.write(lambda c: _billing(c, cal))
     b.write(lambda c: _rules_and_tasks(c, cal))
     with _hub_clock(b, days=4):

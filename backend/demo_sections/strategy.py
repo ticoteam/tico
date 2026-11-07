@@ -422,16 +422,99 @@ CONTENT = {
             "confidence": "medium",
         },
     },
+    # Who is on each segment: the dedicated teammates, as `bot:<id>` or `person:<id>`. Cara leads shops and hotels, so
+    # her marketing lead and content bot sit under her there: a person with a manager and a report.
+    "team": {
+        "segment/home-light-shows": ["bot:sales-lead", "bot:sales", "bot:sales-engineer"],
+        "segment/shops-hotels": ["bot:marketing-lead", "bot:content", "person:cara"],
+        "segment/towns-malls": ["bot:bids", "bot:partners"],
+        "segment/event-venues": ["bot:account-manager"],
+    },
+    # The shared specialists the whole company draws on: tagged `all`, so every segment lists them.
+    "shared": ["bot:pricing", "bot:product-analyst", "bot:sales-ops"],
+    # One goal per segment, under the company's top goal: its owner, its status and the note under the status.
+    "segment_goals": [
+        {
+            "title": "Sell 120 home kits through retail by the end of the season",
+            "owner": "bot:sales-lead",
+            "segment": "segment/home-light-shows",
+            "status": "green",
+            "note": "Homeworks reordered ahead of last year's first order.",
+        },
+        {
+            "title": "Sign two storefront licenses a month",
+            "owner": "human:cara",
+            "segment": "segment/shops-hotels",
+            "status": "yellow",
+            "note": "One storefront signed this month; the hotel quote waits on its survey.",
+        },
+        {
+            "title": "Win one public bid this season",
+            "owner": "bot:bids",
+            "segment": "segment/towns-malls",
+            "status": "green",
+            "note": "Two bids in review, both with a fixed date.",
+        },
+    ],
+    # Our own revenue in each segment this year, from our books. Our share is this over the segment's yearly spend.
+    "segment_figures": [
+        {
+            "segment": "segment/home-light-shows",
+            "value": 7_812_000,
+            "text": "Our home kit and Scene Library revenue this year, from our books.",
+        },
+        {
+            "segment": "segment/shops-hotels",
+            "value": 1_088_000,
+            "text": "Our storefront and hotel revenue this year, from our books.",
+        },
+    ],
+    # This week's briefing for one segment, written as the Librarian: What changed lists its items.
+    "segment_briefing": {
+        "segment": "segment/home-light-shows",
+        "title": "Home light shows this week",
+        "items": [
+            ("change", "Glimmerco's two-unit kit at $399 is the lowest home kit price on bigmarket.example."),
+            ("theme", "Five of this week's home tickets asked for a second calibration visit."),
+            ("signal", "Homeworks asked for a reorder of 120 starter kits ahead of next season."),
+        ],
+        "body": "# Home light shows this week\n\n"
+        "Price and the first night moved this week. Glimmerco's marketplace cut is the change to watch; calibration "
+        "is the part we can fix ourselves.\n\n"
+        "## What moved\n\n"
+        "- Glimmerco's two-unit kit at $399 on bigmarket.example, $50 under Home Pro.\n"
+        "- Five of this week's home tickets asked for a second calibration visit.\n"
+        "- Homeworks asked for a reorder of 120 starter kits ahead of next season.\n",
+    },
+    # The Product roadmap item for the calibration pass, already in Measured after it shipped.
+    "roadmap": {
+        "title": "One-pass facade mapping in the calibration app",
+        "body": "Shipped in the app. Measured against the 16 in 100 first calibrations that still fail, on the same homes "
+        "and the same season.",
+        "owner": "bot:product-manager",
+        "type": "product-roadmap",
+        "step": "Measured",
+    },
+    # A task for one segment: the public bids the towns team has to price before their deadline.
+    "bid": {
+        "title": "Price the two town bids from the survey",
+        "body": "Both towns publish the scope and a fixed date. Survey each site before the deadline, and quote from the "
+        "survey, not from the size of the wall.",
+        "owner": "bot:bids",
+        "segment": "segment/towns-malls",
+    },
     # Days ago, most first: when each step happened.
     "days": {
         "setup": 5.7,
         "version_1": 5.5,
         "brand": 4.2,
+        "roadmap": 3.1,
         "business": 2.4,
         "version_2": 2.2,
         "market": 2.0,
         "news_rival": 1.9,
         "briefing": 1.4,
+        "bid": 1.3,
         "news_town": 1.2,
         "proposal": 1.0,
         "accepted": 0.8,
@@ -453,6 +536,8 @@ def seed(b):
 
     b.at(days=days["brand"])
     _brand(b)
+    b.at(days=days["roadmap"])
+    _roadmap_task(b)
 
     b.at(days=days["business"])
     for spec in CONTENT["bets"]:
@@ -464,11 +549,16 @@ def seed(b):
 
     b.at(days=days["market"])
     _market(b)
+    _segment_goals(b, goals)
+    _figures(b)
 
     b.at(days=days["news_rival"])
     _news(b, "news_rival")
     b.at(days=days["briefing"])
     _briefing(b)
+    _segment_briefing(b)
+    b.at(days=days["bid"])
+    _bid_task(b)
     b.at(days=days["news_town"])
     _news(b, "news_town")
     b.at(days=days["proposal"])
@@ -578,9 +668,8 @@ def _dated(b, value):
 def _market(b):
     """The market map, set up the way Where we play sets it, as Ana: the definition and its root, the core segments
     placed under the root, one new segment, the Us and Next marks, an accepted estimate for each segment, and the
-    companies in each. Then who works on which segment: the sales lead on home light shows, the marketing lead on
-    shops and hotels, and one segment's own summary written into the draft (unpublished: version 2 stays the published
-    one, as the test on it says). Every write is a market or segment API call. The year is the build's own."""
+    companies in each. Then who is on each segment, and one segment's own summary written into the draft (unpublished:
+    version 2 stays the published one, as the test on it says). Every write is a market or segment API call. The year is the build's own."""
     spec = CONTENT["market"]
     root = b.call("PUT", "market/definition", {**spec["root"], "year": b.now.year})["root"]
     for seg in spec["existing"] + spec["added"]:
@@ -603,8 +692,11 @@ def _market(b):
             b.call(
                 "POST", "market/edges", {"src": company, "rel": "operates_in", "dst": seg_id, "evidence_ids": evidence}
             )
-    b.call("POST", "segments/members", {"member": "bot:sales-lead", "segments": ["segment/home-light-shows"]})
-    b.call("POST", "segments/members", {"member": "bot:marketing-lead", "segments": ["segment/shops-hotels"]})
+    for seg_id, members in CONTENT["team"].items():
+        for member in members:
+            b.call("POST", "segments/members", {"member": member, "segments": [seg_id]})
+    for member in CONTENT["shared"]:
+        b.call("POST", "segments/members", {"member": member, "segments": ["all"]})
     b.call(
         "PUT",
         "segments/strategy",
@@ -637,3 +729,77 @@ def _news(b, key):
         )
 
     b.write(work)
+
+
+def _segment_goals(b, goals):
+    """One goal per segment, under the company's top goal, owned by who runs the segment. Each gets its status and note."""
+    for spec in CONTENT["segment_goals"]:
+        made = b.call(
+            "POST",
+            "goals",
+            {
+                "title": spec["title"],
+                "owner": spec["owner"],
+                "parent_id": goals.get("company"),
+                "segment_id": spec["segment"],
+            },
+        )
+        b.call("POST", "goals/" + made["goal"]["id"] + "/status", {"status": spec["status"], "note": spec["note"]})
+
+
+def _figures(b):
+    """Our own revenue in each segment this year, as the owner enters it. The Market compare reads it as our share."""
+    as_of = b.now.date().replace(day=1).isoformat()
+    for spec in CONTENT["segment_figures"]:
+        b.call(
+            "POST",
+            "market/figures",
+            {
+                "entity_id": "company/self",
+                "segment_id": spec["segment"],
+                "metric": "revenue",
+                "value": spec["value"],
+                "text": spec["text"],
+                "kind": "reported",
+                "as_of": as_of,
+                "evidence": [{"source_kind": "other", "quote": spec["text"], "our_read": "From our own books."}],
+            },
+        )
+
+
+def _segment_briefing(b):
+    """This week's briefing for one segment, written as the Librarian. What changed lists its items."""
+    spec = CONTENT["segment_briefing"]
+    items = [MB.BriefingItem(text=text, kind=kind) for kind, text in spec["items"]]
+    week = MB.this_week(b.now)
+
+    def work(c):
+        MB.post(c, Identity(MK.CURATOR, "bot"), week, spec["title"], spec["body"], items, segment_id=spec["segment"])
+
+    b.write(work)
+
+
+def _roadmap_task(b):
+    """The Product roadmap item for the calibration pass, already in Measured after it shipped."""
+    spec = CONTENT["roadmap"]
+    b.call(
+        "POST",
+        "tasks",
+        {
+            "title": spec["title"],
+            "body": spec["body"],
+            "owner": spec["owner"],
+            "type": spec["type"],
+            "step": spec["step"],
+        },
+    )
+
+
+def _bid_task(b):
+    """A task tagged with its segment: the public bids the towns team prices before their deadline."""
+    spec = CONTENT["bid"]
+    b.call(
+        "POST",
+        "tasks",
+        {"title": spec["title"], "body": spec["body"], "owner": spec["owner"], "segment_id": spec["segment"]},
+    )
