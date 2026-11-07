@@ -139,8 +139,8 @@ def test_the_daily_share_refuses_a_run_that_no_longer_fits_and_no_amount_means_n
         assert share == 100
         # 50 minutes on 16 vCPUs is 32 cents: three fit in $1.00, the fourth does not.
         for n in range(3):
-            assert permit(c, task, remote_id=f"66666666666{n}", cpus=16)["allowed"] is True
-        full = permit(c, task, remote_id="777777777777", cpus=16)
+            assert permit(c, ticket(c, f"Share run {n}"), remote_id=f"66666666666{n}", cpus=16)["allowed"] is True
+        full = permit(c, ticket(c, "Share run full"), remote_id="777777777777", cpus=16)
         assert full["allowed"] is False and "today's CI share" in full["message"]
         held = c.execute("SELECT count(*), sum(amount) FROM fin_holds WHERE source='ci'").fetchone()
         assert held[0] == 3 and held[1] == 96
