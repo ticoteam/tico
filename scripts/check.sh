@@ -175,11 +175,13 @@ else
   skip "ui types (tsc, API types)" "no UI or backend Python changed"
 fi
 
-# 7a. docs/openapi/v2.json is what the generator writes from the app's routes: any backend change can make it stale.
-if [ "$ALL" = 1 ] || changed_matches '^backend/.*\.py$|^docs/openapi/|^scripts/json_merge\.py$'; then
-  run "openapi document (v2.json)" python3 -m backend.openapi_v2 --check
+# 7a. The API spec is generated from the app's routes and never committed: it must generate, and the same bytes twice.
+#     The API guide's operation table (docs/api.md) follows the same tags.
+if [ "$ALL" = 1 ] || changed_matches '^backend/.*\.py$|^docs/api\.md$|^scripts/build_api_docs\.py$'; then
+  run "openapi spec (generates the same bytes twice)" python3 -m backend.openapi_v2 --check
+  run "API guide tags (docs/api.md)" python3 scripts/build_api_docs.py --check
 else
-  skip "openapi document (v2.json)" "no backend Python or OpenAPI file changed"
+  skip "openapi spec (generates the same bytes twice)" "no backend Python or API guide changed"
 fi
 
 # 7b. Every API path the UI calls is a route the backend serves (the app is imported, not run: seconds).

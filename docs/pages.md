@@ -154,7 +154,7 @@ on the full view). An archived page leaves lists and search and still opens from
 
 ## API
 
-Stable v2 (`docs/openapi/v2.json`, tag **Pages**):
+Stable v2 (`GET /api/v2/openapi.json`, tag **Pages**):
 
 | Call | What it does |
 |---|---|

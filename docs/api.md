@@ -6,9 +6,10 @@ software: a web frontend your team builds, a script, another service. This page 
 
 ## The contract
 
-- **Spec:** [`openapi/v2.json`](openapi/v2.json) in this repository, and `GET /api/v2/openapi.json` on your
-  server (OpenAPI 3.1, the same document). The server copy needs a sign-in, like the API; there is no
-  public schema, and FastAPI's own `/docs` and `/openapi.json` pages are off.
+- **Spec:** `GET /api/v2/openapi.json` on your server (OpenAPI 3.1). It needs a sign-in, like the API; there is no
+  public schema, and FastAPI's own `/docs` and `/openapi.json` pages are off. The same document as a file, for each
+  release: `https://github.com/ticoteam/tico/releases/latest/download/openapi-v2.json`. Or generate it from any checkout
+  with `python3 -m backend.openapi_v2 > openapi-v2.json`. The spec is generated from the code, not committed.
 - **Base:** your server's address, for example `https://tico.example.com`. Every stable route is under `/api/v2/`,
   plus `/auth/login`, `/auth/token` and `/auth/token/revoke` for signing in.
 - **Format:** JSON in, JSON out, UTF-8. Timestamps are ISO 8601 in UTC (`2026-09-29T13:50:46.836453Z`).
@@ -102,7 +103,7 @@ Use `ids=` to mend changed rows after a live event, and `limit`/`cursor` to load
 
 Tico's own app uses more of the API than the spec lists. The line:
 
-- **Stable.** Operations in `openapi/v2.json`. Within v2 they only grow: a field may be added to an answer, an optional
+- **Stable.** Operations in the spec. Within v2 they only grow: a field may be added to an answer, an optional
   field to a request, a new route to the spec. Nothing is removed or renamed, and a request that worked keeps working.
   A breaking change would be a new version (`/api/v3`) with `/api/v2` kept alongside for a release cycle.
 - **Internal.** Everything else: the `/api/...` routes without `v2` (the web app's own: `/api/me`, `/api/employees`,
@@ -116,8 +117,8 @@ Tico's own app uses more of the API than the spec lists. The line:
   what it does not know and never fails on an extra field.
 
 The spec describes answers with the fields a frontend relies on (`required`) and leaves the rest open. A test in this
-repository checks those against live responses, and another checks that `openapi/v2.json` is what the server
-generates; after a change to the API, `python -m backend.openapi_v2` rewrites it.
+repository checks those against live responses, and `python3 -m backend.openapi_v2 --check` checks that the spec
+generates the same bytes twice.
 
 ## History
 
