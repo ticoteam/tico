@@ -147,7 +147,10 @@ function pageGrowth() {
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   const load = ++GR_LOAD, m = new URLSearchParams(query || '').get('m') || '';
   GR = {load, sub, month: GR_MONTH_RE.test(m) ? m : '', data: null};
-  if (sub !== 'sources') { void pageDashboard('growth', {month: GR.month}); return; }
+  if (sub !== 'sources') {
+    void segTagsLoad().then(() => { if (DASH?.place === 'growth') grSegPaint(DASH.root, DASH.segment || ''); });   // the name once read
+    void pageDashboard('growth', {month: GR.month, segment: segQuery()}); return;
+  }
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = `<div class="strat-head rd-strat-head gr-head"><a class="gr-back" href="${GR_ROUTE}" data-gr-back>Growth</a><span class="muted" aria-hidden="true">/</span><h1>Sources</h1><span class="spacer"></span>
@@ -160,6 +163,21 @@ function grReload(state) {
   if (GR === state && DASH?.place === 'growth') void dashRefresh(DASH);
 }
 
+// The Segment filter in the Growth head: the picked segment's name beside the icon, drawn again on a pick.
+function grSegPaint(root, seg) {
+  const slot = root?.querySelector('[data-gr-seg-slot]');
+  if (!slot) return;
+  slot.dataset.seg = seg;
+  slot.innerHTML = segFilterButton(seg);
+}
+function growthSegmentPick(state, id) {
+  if ((state.segment || '') === id) return;
+  state.segment = id;
+  segQuerySet(id);
+  state.key = dashKey(state);
+  grSegPaint(state.root, id);
+  void dashRefresh(state);
+}
 // ----------------------------------------------------------------- the head over the grid
 // A KPI's figure: a word unit is the KPI's name's to say, a sign stays on the number.
 const grKpiFig = (v, unit) => ['$', '€', '£', '%', 'pp'].includes(String(unit || '').trim()) ? kpiNum(v, unit) : kpiNum(v);
@@ -167,20 +185,26 @@ DASH_PLACES.growth = {
   first: 'growth_number',
   // A bot pins only cards here (backend/cards.py).
   pages: () => S.me?.role !== 'bot',
-  head: () => `<h1>Growth</h1><a class="grh-ns" data-gr-ns hidden></a><span class="spacer"></span>
+  head: state => `<h1>Growth</h1><a class="grh-ns" data-gr-ns hidden></a><span class="spacer"></span>
     <label class="grh-month" hidden><span class="sr-only">Month</span><select data-gr-month></select></label>
+    <span class="grh-seg" data-gr-seg-slot data-seg="${esc(state.segment || '')}">${segFilterButton(state.segment || '')}</span>
     <a class="gr-btn grh-btn" href="${grBoardHref()}" data-gr-board>Growth board</a>
     ${grAdmin() ? '<button type="button" class="ghost grh-btn" data-gr-settings>Settings</button>' : `<a class="gr-btn grh-btn" href="${GR_SOURCES}" data-gr-sources>Sources</a>`}`,
   wire(state) {
     const root = state.root;
     root.querySelector('[data-gr-settings]')?.addEventListener('click', () => { if (GR) void gcSettings(GR); });
-    // A month picked reads every card again for it; the address keeps it.
+    // The Segment filter (the shared icon, a menu of the segments): a pick reads the page again for it.
+    root.addEventListener('click', ev => {
+      const button = ev.target.closest('[data-seg-filter]');
+      if (button) segFilterOpen(button, state.segment || '', id => growthSegmentPick(state, id));
+    });
+    // A month picked reads every card again for it; the address keeps it (and the segment).
     root.querySelector('[data-gr-month]').addEventListener('change', ev => {
       const month = ev.target.value;
       if (!GR_MONTH_RE.test(month) || DASH !== state) return;
       state.month = month; state.key = dashKey(state);
       if (GR) GR.month = month;
-      const hash = `${GR_ROUTE}?m=${encodeURIComponent(month)}`;
+      const hash = `${GR_ROUTE}?m=${encodeURIComponent(month)}${state.segment ? '&segment=' + encodeURIComponent(state.segment) : ''}`;
       history.replaceState(history.state, '', location.pathname + location.search + hash);
       S.route = LAST_ROUTE = hash;
       void dashRefresh(state);
@@ -188,6 +212,7 @@ DASH_PLACES.growth = {
   },
   drawn(state) {
     const v = state.view, root = state.root;
+    if (root.querySelector('[data-gr-seg-slot]')?.dataset.seg !== (state.segment || '')) grSegPaint(root, state.segment || '');
     // The month picker: the months with numbers, newest first, and the one the cards read.
     const months = [...new Set([...(v.months || []), ...(v.month ? [v.month] : [])])].sort().reverse();
     const sel = root.querySelector('[data-gr-month]');
