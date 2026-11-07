@@ -1,9 +1,9 @@
 /* ui/app/inboxes-email.js — The Google mailboxes Tico uses (backend/mailboxes.py), under Tools.
    Kind 'mailbox': one mailbox's page (#/tools/mailbox/<address or id>: who can use it, Read or Read and write, its key,
    its message automations, its recent mail, Check now and Stop using in Tico; the sending Limits card is
-   ui/app/inboxes-sending.js's), its Activity tab (#/tools/mailbox/<…>/activity: what was sent from it, GET
+   ui/app/inboxes-sending.ts's), its Activity tab (#/tools/mailbox/<…>/activity: what was sent from it, GET
    /v2/email/sends) and Add tool > Email (Connect mailbox). On Tools › Settings › Email: the Connection card
-   (ui/google-connect.js draws it into #set-google) and What Tico may do. Registry: ui/app/inboxes.js.
+   (ui/google-connect.js draws it into #set-google) and What Tico may do. Registry: ui/app/inboxes.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
