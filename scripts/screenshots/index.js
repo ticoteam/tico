@@ -117,6 +117,18 @@ const PAGES = [
     await page.locator('#docs-h-linked').waitFor();
   }},
   {name: 'market', route: '#/strategy/market?note=company%2Fbrightyard', ready: 'It launched a free scene tier for home projectors last month.',
+    // The graph lays itself out a frame at a time until it settles, so the shot waits until the canvas stops changing.
+    steps: async page => {
+      const canvas = page.locator('#market-canvas');
+      await canvas.waitFor();
+      let last = await canvas.screenshot();
+      for (let quiet = 0, tries = 0; quiet < 2 && tries < 40; tries++) {
+        await page.waitForTimeout(250);
+        const now = await canvas.screenshot();
+        quiet = now.equals(last) ? quiet + 1 : 0;
+        last = now;
+      }
+    },
     ui: ['ui/market-*.js', 'ui/app/redesign.js', 'ui/app/redesign-market.js', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
       'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'strategy', route: '#/strategy', ready: 'Who we serve',
@@ -280,6 +292,8 @@ async function capture() {
           // before left would otherwise differ from run to run, and a same-ref run must shoot the same pictures.
           await page.goto(demo.url + '/');
           await page.locator('#tree a.node').first().waitFor({state: 'attached'});
+          // The mouse stays where the page before left it, and a hover state there would differ between runs.
+          await page.mouse.move(0, 0);
           // The route renders the page's layout (a "More" fold measures its text), so the font must be in before it does.
           await page.evaluate(() => document.fonts.ready);
           const route = typeof spec.route === 'function' ? await spec.route(page) : spec.route;
