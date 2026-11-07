@@ -93,7 +93,9 @@ const SEG_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M1
 function segmentListHtml(list: SegItem[], owner: boolean, failed = ''): string {
   const add = owner && !SEG_LIST.adding ? '<button class="strat-add" type="button" data-seg-add>+ Segment</button>' : '';
   const suggest = owner ? '<button class="strat-add" type="button" data-seg-suggest>Ask Assistant to suggest</button>' : '';
-  const head = `<div class="strat-card-head"><h2 class="strat-k" id="strat-segs-h">Segments</h2>${add}${suggest}</div>`;
+  // The two buttons share a group pinned to the right edge (strategy.css gives each .strat-add its own auto margin).
+  const acts = add || suggest ? `<span class="seg-head-acts">${add}${suggest}</span>` : '';
+  const head = `<div class="strat-card-head"><h2 class="strat-k" id="strat-segs-h">Segments</h2>${acts}</div>`;
   const form = owner && SEG_LIST.adding ? `<form class="seg-form seg-new" data-seg-new novalidate>
       <input type="text" name="name" maxlength="120" autocomplete="off" placeholder="Name" aria-label="Name" required>
       <input type="text" name="who" maxlength="200" autocomplete="off" placeholder="Who it is for" aria-label="Who it is for">
