@@ -204,11 +204,11 @@ function segFilterOpen(anchor: HTMLElement, current: string, pick: (id: string) 
 }
 
 // A Segment select for a dialog: None first (an optional segment), then the segments in list order. Used beside
-// Bet on a goal, in a task and on a budget.
-function segSelectHtml(current: string, {label = 'Segment', name = 'segment'}: {label?: string; name?: string} = {}): string {
+// Bet on a goal, in a task and on a budget. `cls` is the label's class (a form's field class), `disabled` a read-only one.
+function segSelectHtml(current: string, {label = 'Segment', name = 'segment', cls = 'bd-field', disabled = false}: {label?: string; name?: string; cls?: string; disabled?: boolean} = {}): string {
   const rows = segTagRows();
   const known = !current || rows.some(row => row.id === current) ? '' : `<option value="${esc(current)}" selected>${esc(segTagName(current))}</option>`;
-  return `<label class="bd-field"><span>${esc(label)}</span><select name="${esc(name)}">
+  return `<label class="${esc(cls)}"><span>${esc(label)}</span><select name="${esc(name)}"${disabled ? ' disabled' : ''}>
     <option value="">None</option>${known}${rows.map(row => `<option value="${esc(row.id)}"${row.id === current ? ' selected' : ''}>${esc(row.name)}</option>`).join('')}</select></label>`;
 }
 
