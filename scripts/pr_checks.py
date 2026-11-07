@@ -950,11 +950,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        tests that use its fixtures), else the smoke set. A conftest that a change only reaches, through code it runs or
        reads, adds the smoke set; the tests below it are not reached through it.
     3. A Python file the map cannot parse, or does not know, runs the checks that name its path, else the smoke set.
-    4. A ui/ file runs the tests that run a module that lists its folder (a test that globs ui/*.js is reached through the
-       module it runs), whether or not UI_MAP lists it. A ui/ file or the browser runner outside UI_MAP also runs the
-       browser scripts the map links to it, the tests that read it directly, and the smoke set's browser scripts. A
-       changed browser script runs itself. A UI_MAP file runs its scripts; a missing one runs the smoke set's browser
-       scripts instead.
+    4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
+       it directly or run a module that lists its folder (a test that globs ui/*.js is reached through the module it
+       runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
+       a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
@@ -1064,16 +1063,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             if missing:
                 smoke_browser = True
                 uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
-    for name in [n for n in live if n.startswith("ui/")]:  # rule 4: a module that lists the ui folder, mapped or not
-        # scripts/build-icon-font.py globs ui/*.js: the tests that run it are reached by any file in that folder.
-        listed = {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
-        if listed:
-            python |= listed
-            notes.append("rule 4: ui folder listing")
     for name in unmapped:  # rule 4: a UI file the map does not list
         linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
         browser |= {Path(p).stem for p in linked if is_browser(p)}
         python |= {p for p in linked if is_test(p)}
+        # A module that lists the folder (scripts/build-icon-font.py globs ui/*.js) reaches the tests that run it.
+        python |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
         if is_browser(name):  # a changed browser script runs itself: it is the check that changed
             browser.add(Path(name).stem)
         smoke_browser = True
