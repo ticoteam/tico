@@ -49,6 +49,9 @@ COLUMNS = (
     ("request_state", "TEXT NOT NULL DEFAULT ''"),
     ("request_ticket", "TEXT NOT NULL DEFAULT ''"),
     ("first_task", "TEXT NOT NULL DEFAULT ''"),
+    # The template setup placed the seat with (a company file's or the setup chart's role): Recruit offers it alone
+    # (backend/recruiting.py `candidates`). '' for a seat a person added, which Recruit ranks by its title.
+    ("template", "TEXT NOT NULL DEFAULT ''"),
 )
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
 # wrote seats then, so it reads as a person's words.
@@ -384,14 +387,26 @@ def create_seat(auth, c, who, title, description="", reports_to="", team="", des
     return _seat(seat(c, _insert(c, who.actor, title, description, reports_to, team, description_by)))
 
 
-def _insert(c, actor, title, description, reports_to, team, description_by=None):
+def _insert(c, actor, title, description, reports_to, team, description_by=None, template=""):
     now, seat_id = H.now(), uuid.uuid4().hex
     description = str(description or "")[:DESCRIPTION_MAX]
     by = (actor if description.strip() else "") if description_by is None else str(description_by)
     c.execute(
-        "INSERT INTO seats(id,title,description,reports_to,team,created_at,created_by,updated_at,updated_by,description_by) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (seat_id, _clean_title(title), description, reports_to, str(team or "").strip(), now, actor, now, actor, by),
+        "INSERT INTO seats(id,title,description,reports_to,team,created_at,created_by,updated_at,updated_by,description_by,"
+        "template) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            seat_id,
+            _clean_title(title),
+            description,
+            reports_to,
+            str(team or "").strip(),
+            now,
+            actor,
+            now,
+            actor,
+            by,
+            str(template or ""),
+        ),
     )
     H.event(c, actor, "seat.created", seat_id, {"reports_to": reports_to})
     return seat_id
@@ -402,7 +417,7 @@ def lay_out(c, actor, roles):
     its reporting line, and no bot, repository, computer slot or BotOps task for any of them. Only setup calls this, as
     the owner, so no placement rule applies.
 
-    `roles` is {key: {title, description, reports_to, team}}; a `reports_to` naming another key reports to that seat,
+    `roles` is {key: {title, description, reports_to, team, template?}}; a `reports_to` naming another key reports to that seat,
     anything else is a person (`human:<id>`) or a bot. Managers are laid out before their reports, so every line holds
     when it is written. Returns {key: seat id}."""
     made = {}
@@ -423,6 +438,7 @@ def lay_out(c, actor, roles):
             reports_to,
             role.get("team") or "",
             role.get("description_by", "chart"),
+            role.get("template") or "",
         )
         return made[key]
 
@@ -446,6 +462,10 @@ def update_seat(auth, c, who, seat_id, fields):
     values = {}
     if fields.get("title") is not None:
         values["title"] = _clean_title(fields["title"])
+        # Another role is another job: the template the seat was set up with no longer names it (recruiting's pin).
+        # The same role in other capitals is still the same role.
+        if values["title"].strip().casefold() != str(row["title"]).strip().casefold():
+            values["template"] = ""
     if fields.get("description") is not None:
         values["description"] = str(fields["description"])[:DESCRIPTION_MAX]
         # a person's words now

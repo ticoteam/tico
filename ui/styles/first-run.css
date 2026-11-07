@@ -244,6 +244,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--muted)) 50%,v
 .tree-setup .nav-icon{width:14px;height:14px;font-size:14px;color:var(--wait-ink);font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
 .bot-onboard{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:0 0 var(--s3);padding:10px 14px;border:1px solid color-mix(in srgb,var(--wait) 40%,var(--line));border-radius:var(--radius);background:color-mix(in srgb,var(--wait) 8%,var(--surface))}
 .bot-onboard .primary,.bot-onboard .muted{margin-left:auto}
+.bot-onboard .bot-onboard-tip{flex-basis:100%;margin:0}
 @media(max-width:760px){
   .fr-form{grid-template-columns:1fr}
   .fr-owner select{width:100%}

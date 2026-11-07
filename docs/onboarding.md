@@ -256,7 +256,11 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
-  own DM with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
+  own DM with it (the **Chat** tab); any first message from a person does the same. Every bot interviews top-down
+  (runner-rs `SETUP_TURN`): the company (its market, target segments and who it loses to), then its goals, then its own job
+  from its playbook. It reads what Tico knows first and never asks what that says, adds what it learns about the company to
+  the shared doc `onboarding/interview.md` so the next bot only asks whether anything changed, and suggests the person open
+  the mic and just talk; the Onboarding pill carries the same tip. It learns only: it answers and asks in
   its thread, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
   comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
@@ -491,7 +495,9 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
-  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
+  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. A
+  seat placed with a template (`seats.template`) has that template as its one, strong applicant; hiring it with a
+  different template is refused, and retitling the seat clears the pin. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
   A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
   under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*

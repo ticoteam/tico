@@ -48,7 +48,7 @@ reviewed". Nothing is shared and no task is created for anyone.
 ## 6. Check the routines
 
 Setting you up switched your first routine on. List your automations with
-`hub automation list --owner bot:marketing-lead`. If `weekly-marketing-summary` shows off, turn it on with
+`hub automation list`. If `weekly-marketing-summary` shows off, turn it on with
 `hub automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-numbers` and
 `weekly-growth-meeting`, each by its id from that list.
 

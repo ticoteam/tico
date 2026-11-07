@@ -9,7 +9,7 @@ lead: true
 icon: campaign
 suggest: default
 tags: [marketing, weekly-summary, calendar, b2b, b2c, smb]
-team_templates: [content, seo-visibility, listening, email-marketing, product-marketing, reputation, paid-media, events, pr, community, marketing-ops, video-producer]
+team_templates: [segment-marketing-owner, cro-owner, seo-visibility, social-ads-owner, search-ads-owner, content, listening, email-marketing, product-marketing, reputation, paid-media, events, pr, community, marketing-ops, video-producer]
 summary: "Runs the marketing team's week: one page on what moved, what is blocked and the six-week calendar, plus routing and hiring proposals. Routing and set-up tasks happen only when the task asks for them and a granted Tool allows it."
 when: "A team with two or more marketing bots or humans who wants one weekly view of marketing instead of five separate reports."
 pains:

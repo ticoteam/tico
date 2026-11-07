@@ -788,27 +788,40 @@ def _needs(raw):
     return out
 
 
+def _pinned(cards, row):
+    """The recruitable card the seat was set up with (lifecycle `template`), or None: a seat a person added has none,
+    and a template since removed from the catalog pins nothing."""
+    template = row["template"]
+    return next((card for card in cards if template and card["template"] == template), None)
+
+
 def candidates(auth, onboarding, c, who, seat_id):
     """Recruit: up to eight Tico templates for the seat, strong matches first, then good ones, each tier best first.
     `match` is "strong" for the template that is the job (the one a draft is written from, `_ranked_fits`) and any that
     fits as well, "good" when its tags, name or summary fit the title or job description inside the job's department,
     else "". A coding job ("Rust engineer") also gets the supported cloud agents as `agents`, placed after the first
-    `agents_at` templates: no template writes features, so they lead unless a template is the job. Deterministic and
-    local: the same seat gives the same list, and nothing leaves this server."""
+    `agents_at` templates: no template writes features, so they lead unless a template is the job. A seat setup placed
+    with its template (lifecycle `template`: the company file's core chart) is that template's job: it is the one
+    candidate, strong. A coding job in Engineering still lists the cloud agents after it. Deterministic and local: the
+    same seat gives the same list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
     # Listing candidates changes nothing: BotOps lists them with the rights of the person it acts for, and the pick is
     # their own tap on a card (botops_act.CONFIRM).
     _may_hire(auth, c, replace(who, confirmed=True) if who.via == "botops" else who, row)
     value, cards = _recruitable(onboarding)
     departments = {d["id"]: d["name"] for d in value["departments"]}
+    pinned = _pinned(cards, row)
+    if pinned:
+        cards = [pinned]
     t = _title(row["title"])
     fits = _ranked_fits(cards, row["title"])
     best = fits[0][1] if fits else None
     # Strong: as good a fit by name as the template the description is drafted from ("Head of Sales" is the Sales
     # Manager's job, not the Sales Engineer's, though both say "Sales").
     strong = {card["template"] for key, card in fits if key[0][:5] == fits[0][0][0][:5]}
-    # The department the job is in: the template that is the job's, else the one the title's words point to.
-    department = best["department"] if best else _department_hint(row["title"])
+    # The department the job is in: the pinned template's, else the template that is the job's, else the one the
+    # title's words point to.
+    department = pinned["department"] if pinned else best["department"] if best else _department_hint(row["title"])
     # The title's words of work, not of rank or its kind ("Developer" in "Go Developer" is no fit to the Developer
     # Advocate).
     title = [
@@ -823,7 +836,7 @@ def candidates(auth, onboarding, c, who, seat_id):
         shared = _fit(card, t)
         score += 2 * named + 3 * shared
         here = not department or card["department"] == department
-        match = "strong" if card["template"] in strong else "good" if (score > 0 and here) or shared else ""
+        match = "strong" if pinned or card["template"] in strong else "good" if (score > 0 and here) or shared else ""
         # Then, the department's own first; a head's template not for a job of a kind ("Head of Engineering" is no
         # applicant for "Rust engineer") and first for a head's title; a template named for the title's work ("QA
         # Engineer" for "QA Analyst"); the same kind of job ("Engineer"); the better fit; a template whose name is all
@@ -1027,6 +1040,9 @@ def hire(auth, onboarding, c, who, seat_id, body):
     card = next((card["raw"] for card in cards if card["template"] == body.template), None)
     if not card:
         raise Problem("template", "Pick one of the candidates Recruit offered", 422)
+    pinned = _pinned(cards, row)
+    if pinned and pinned["template"] != body.template:
+        raise Problem("template", "Pick the template this seat was set up with", 422)
     if not card["starter"] and not H.bot(c, BOTOPS):
         raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
     if body.model:
