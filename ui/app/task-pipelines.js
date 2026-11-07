@@ -89,7 +89,8 @@ function taskPipelineBoard(items, state, head = '') {
   const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
   let lead = 0;
   while (lead < working.length && working[lead].status === 'open') lead++;
-  const phone = pipelinePhone();
+  // A pipeline with no requirements keeps the board as it always was; the one-stage phone layout is for pipelines with them.
+  const phone = pipelinePhone() && !!type.has_requirements;
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
