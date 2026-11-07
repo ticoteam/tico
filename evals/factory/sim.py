@@ -278,6 +278,8 @@ class Run:
         """Diagnostic only, read on a short round: for each ready bot the round did not start, the sim's own turn for it
         (running, parked, since when) and the server's newest attempt for it (id, state, lease, stop, and the start
         place's wait reason). A bot the sim names busy in the claim body is refused by the claim, whatever readiness says."""
+        from backend import bot_settings as BS
+        from backend import lifecycle
         from backend.claim_holds import CHECK
         from backend.execution import (
             CAPACITY_CONTINUE,
@@ -285,6 +287,8 @@ class Run:
             SOURCE_CONTINUE,
             capability_set,
             continuation_thread,
+            scoped_sql,
+            unfenced_sql,
         )
 
         lines = []
@@ -308,13 +312,53 @@ class Run:
                     (slug,),
                 ).fetchone()
                 thread = continuation_thread(c, queued[0]) if queued else None
+                predicates = ""
+                if queued:
+                    # The claim's own predicates for this bot's oldest queued job, in the order candidate() applies them.
+                    job, rid = queued[0], w.runner["runner_id"]
+                    checks = [
+                        (
+                            "assigned to this runner and bot active",
+                            c.execute(
+                                "SELECT EXISTS(SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot "
+                                f"JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
+                                "WHERE a.bot=? AND a.runner_id=? AND b.state='active')",
+                                (slug, rid),
+                            ).fetchone()[0],
+                        ),
+                        (
+                            "claim message state",
+                            c.execute(
+                                "SELECT EXISTS(SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                "JOIN conversations cv ON cv.id=m.conversation_id "
+                                f"WHERE j.id=? AND {lifecycle.claim_message_sql()})",
+                                (job,),
+                            ).fetchone()[0],
+                        ),
+                        (
+                            "interrupted-work fence and scope",
+                            c.execute(
+                                "SELECT EXISTS(SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                "JOIN conversations cv ON cv.id=m.conversation_id "
+                                f"WHERE j.id=? AND {unfenced_sql()} AND {scoped_sql()})",
+                                (job,),
+                            ).fetchone()[0],
+                        ),
+                        ("not named busy in the claim body", not bot.running),
+                    ]
+                    failed = [name for name, ok in checks if not ok]
+                    predicates = (
+                        f"; oldest job {job[:8]} predicates "
+                        + ", ".join(f"{name} {bool(ok)}" for name, ok in checks)
+                        + f"; dropped at: {failed[0] if failed else 'none, every predicate passes'}"
+                    )
                 lines.append(
                     f"{slug} turn: sim running {bot.running}, parked {bot.parked}, available {bot.available}; "
                     f"server newest attempt {tuple(row) if row else None}; claim check backoff "
                     f"{execution.check_backoff.get(slug)} waiting {execution.check_waiting(slug)} "
                     f"health {health[0] if health else None}; oldest queued job {tuple(queued) if queued else None} "
                     f"continues thread {thread} (runner continues capacity {CAPACITY_CONTINUE in caps}, "
-                    f"source {SOURCE_CONTINUE in caps})"
+                    f"source {SOURCE_CONTINUE in caps}){predicates}"
                 )
         return lines
 
