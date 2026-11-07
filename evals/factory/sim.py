@@ -616,8 +616,58 @@ class Run:
                 return "not stranded: " + (", ".join(reasons) or "no single condition (see stranded_resume.stranded)")
             found = SR.state(c, row, at)
             if found is None:
-                return "stranded, but quiet time not reached, or the daily limit, or already stopped and listed"
+                return "stranded, not resumed: " + self.quiet_parts(c, row, at, slug)
             return f"stranded and ready: resumes in a row with no progress={found['since']}, stop={found['stop']}"
+
+    def quiet_parts(self, c, row, at, slug):
+        """Diagnostic only: the parts of the stranded resume's quiet time (backend/stranded_resume.py `state`), each as
+        minutes before `at`, and the newest of them, which blocks the resume while it is under QUIET_MINUTES."""
+        import sqlite3
+
+        from backend import hubdb as H
+        from backend import stranded_resume as SR
+
+        try:
+            tid = row["id"]
+            progress = SR._progress(c, row)
+            resumes = [
+                r[0]
+                for r in c.execute(
+                    "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
+                    "ORDER BY created_at",
+                    (tid, SR.RESUMED),
+                )
+            ]
+            last_run = c.execute(
+                "SELECT max(coalesce(settled_at, finished_at, created_at)) FROM attempts WHERE bot_id=? AND task_id=?",
+                (slug, tid),
+            ).fetchone()[0]
+            others = c.execute(
+                "SELECT max(created_at) FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+                "AND sender_id IS NOT NULL AND sender_id NOT IN (?,?)",
+                (row["conversation_id"], H.KEEPER, row["owner_id"]),
+            ).fetchone()[0]
+            parts = {
+                "task row": row["updated_at"],
+                "progress": progress or None,
+                "last run": last_run,
+                "others' messages": others,
+                "last resume": resumes[-1] if resumes else None,
+            }
+            now = H.parse_ts(at)
+            ages = {k: round((now - H.parse_ts(v)).total_seconds() / 60, 1) for k, v in parts.items() if v}
+            day = sum(1 for r in resumes if r >= H.shift(at, hours=-24))
+            if not ages:
+                return f"no quiet-time part; resumes in 24 h {day}"
+            newest = min(ages, key=lambda k: ages[k])
+            return f"newest part {newest} {ages[newest]} min before; parts (min before): {ages}; resumes in 24 h {day}"
+        except (
+            sqlite3.Error,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:  # a diagnostic reports its failure, it does not end the run
+            return f"quiet parts unreadable: {type(exc).__name__}: {exc}"
 
     def waiting(self, w, row, bot, now, held, parents, queued):
         """Whether the task waits for its owner to act: the owner is free to take it, and nothing holds the task back."""
