@@ -15,8 +15,8 @@ GitHub's runs and jobs (world.py connect_github) stand in for them, each finishe
   job on a hosted runner costs nothing.
 """
 
-from backend import ci_runs
 from backend.finance import actions as FA
+from backend.finance import ci as FC
 from backend.finance.store import ledger as SL
 from evals.factory.scenarios import Scenario, at, standard, tickets
 from evals.factory.world import REPO, START
@@ -221,7 +221,7 @@ def day_posted(run):
         book = SL.book(c)
         account = c.execute("SELECT id FROM fin_accounts WHERE code='6150'").fetchone()
         posted = SL.rollup_sum(c, book.id, day[:10], day[:10], [str(account["id"])])
-        share = ci_runs.day_share(c, day)[1]
+        share = FC.day_share(c, day)[1]
     return posted, share
 
 
