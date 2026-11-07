@@ -246,7 +246,7 @@ function finAttrDraw(): void {
   const state = FIN.attr, box = $('#fin-rules');
   if (!box || !state) return;
   if (!state.rules.length) { box.innerHTML = finNote('No rules.'); return; }
-  box.innerHTML = `<table class="fin-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${state.rules.map((r, i) => {
+  box.innerHTML = `<table class="fin-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th aria-label="Actions"></th></tr></thead><tbody>${state.rules.map((r, i) => {
     const word = FIN_SHARE_KINDS.find(k => k[0] === r.match.kind)?.[1] || '';
     const menu = state.can ? `<span class="fin-pop-at"><button type="button" class="ghost" data-fin-rule-menu aria-label="${esc(r.name)}: actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
         <div class="fin-pop fin-menu" role="menu" hidden><button type="button" role="menuitem" data-fin-rule-edit="${i}">Edit</button><button type="button" role="menuitem" data-fin-rule-del="${i}">Delete</button></div></span>` : '';
