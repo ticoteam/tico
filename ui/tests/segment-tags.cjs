@@ -5,9 +5,8 @@
 // its Segment filter. Finance: the budgets' Segment filter, a budget's Segment in the rail (Edit saves budget_update
 // from this month), + Budget with a segment; the P&L's By segment view, which the probe shows or hides (a 403 hides
 // it), a column's drill into the company P&L with no budget cell to edit, and a line split by segment, with and
-// without the server's echo. Known gaps are asserted last, so every scenario above still runs: a Goals segment pick
-// (ui/app/goals.js calls goalsReload, which is not defined) and the Finance pages' segment lists on a direct entry
-// (they never call segTagsLoad). Every surface is checked for no sideways scroll on a phone. TICO_UI_SHOTS=<dir>
+// without the server's echo. The last checks are a Goals segment pick and the Finance pages' segment lists on a direct
+// entry. Every surface is checked for no sideways scroll on a phone. TICO_UI_SHOTS=<dir>
 // saves <surface>-<light|dark>-<desktop|phone>.png for each surface at both sizes and both themes.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -324,8 +323,14 @@ async function sizes(browser, name, hash, ready, opts = {}) {
       await page.locator('[data-pick-field="segment"]').click();
       await page.locator('input[name="tl-segment"][value="seg-rental"]').check();
       await page.locator('[data-chip="segment"]').waitFor();
-      assert.deepEqual(await taskKeys(page), ['t-rent-1', 't-rent-2'], tag + ': the rows of that segment');
-      await page.locator('[data-task-key="t-rent-1"] .tl-title').click();
+      await page.keyboard.press('Escape');
+      // A row's key is 't' + the task id (the peek opens from [data-open-task="t<id>"]), and the list redraws a moment after
+      // its chip shows: wait for the rows to settle, then name the keys in the failure.
+      await page.waitForFunction(want => JSON.stringify([...document.querySelectorAll('#task-body [data-task-key]')].map(el => el.dataset.taskKey).sort()) === JSON.stringify(want),
+        ['tt-rent-1', 'tt-rent-2'], {timeout: 5000}).catch(() => {});
+      const keys = await taskKeys(page);
+      assert.equal(JSON.stringify(keys), JSON.stringify(['tt-rent-1', 'tt-rent-2']), `${tag}: the rows of that segment, got ${keys.join(', ') || 'none'}`);
+      await page.locator('#task-body [data-open-task="tt-rent-1"]').click();
       const peek = page.locator('#task-peek');
       await peek.locator('.tmodal-title', {hasText: 'Draft the rental offer page'}).waitFor();
       await peek.locator('[data-prop="segment"]').click();
@@ -469,8 +474,8 @@ async function sizes(browser, name, hash, ready, opts = {}) {
     await run('sizes: pnl-segments', () => sizes(browser, 'pnl-segments', '#/finance/pnl?view=segments', p => p.locator('[data-fin-segcol]').first().waitFor()));
     await run('sizes: line', () => sizes(browser, 'line', '#/finance/line/a-6400?segment=seg-rental', p => p.locator('#fin-line tr[data-fin-key]').first().waitFor()));
 
-    // Known gaps: the behaviour each surface should have, after every scenario above has run.
-    await run('known gap (ui/app/goals.js:491 calls goalsReload, which is not defined): a Goals segment pick re-reads the tree', async () => {
+    // Direct entries: each page read on its own, with nothing above it loaded.
+    await run('goals: a segment pick re-reads the tree', async () => {
       const {page, errors, hub} = await open(browser, {hash: '#/strategy/goals'});
       await page.locator('#strat-actions [data-seg-filter]').click();
       await page.locator('.seg-menu.seg-filter [data-value="seg-consumer"]').click();
@@ -479,7 +484,7 @@ async function sizes(browser, name, hash, ready, opts = {}) {
       assert.deepEqual(errors, [], 'no page errors');
       await page.close();
     });
-    await run('known gap (no finance page calls segTagsLoad): a direct entry to P&L lists the segments in its Segment filter', async () => {
+    await run('pnl: a direct entry lists the segments in its Segment filter', async () => {
       const {page, errors} = await open(browser, {hash: '#/finance/pnl'});
       await page.locator('#fin-pl table.fin-pl').waitFor();
       await page.locator('#fin-body [data-seg-filter]').click();
@@ -487,7 +492,7 @@ async function sizes(browser, name, hash, ready, opts = {}) {
       assert.deepEqual(errors, [], 'no page errors');
       await page.close();
     });
-    await run('known gap (no finance page calls segTagsLoad): a direct entry to Budgets lists the segments in + Budget', async () => {
+    await run('budgets: a direct entry lists the segments in + Budget', async () => {
       const {page, errors} = await open(browser, {hash: '#/finance/budgets'});
       await page.locator('[data-fin-bud-add]').waitFor();
       await page.locator('[data-fin-bud-add]').click();
