@@ -128,14 +128,14 @@ def handoffs(conn: sqlite3.Connection, link_id: str) -> list[Row]:
     )
 
 
-class LinkBody(BaseModel):
+class PipelineLinkBody(BaseModel):
     from_stage_id: str
     to_pipeline_id: str
     mode: str = "move"
     return_stage_id: str | None = None
 
 
-class RetireBody(BaseModel):
+class PipelineRetireBody(BaseModel):
     pass
 
 
@@ -152,7 +152,7 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
             return {"links": links(cast("sqlite3.Connection", read), pipeline)}
 
     @app.post("/api/v2/pipeline-links")  # pyright: ignore[reportUntypedFunctionDecorator]
-    def add_link(request: Request, body: LinkBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    def add_link(request: Request, body: PipelineLinkBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> dict[str, Any]:
@@ -165,7 +165,7 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
         return cast("dict[str, Any]", mutate(request, body, work))
 
     @app.post("/api/v2/pipeline-links/{link_id}/retire")  # pyright: ignore[reportUntypedFunctionDecorator]
-    def drop_link(request: Request, link_id: str, body: RetireBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    def drop_link(request: Request, link_id: str, body: PipelineRetireBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> dict[str, Any]:
