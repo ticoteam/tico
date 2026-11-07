@@ -162,6 +162,9 @@ def record_handoff(conn: sqlite3.Connection, link_id: str, source_task_id: str, 
 
 MAX_CARRIED = 10  # the source's links carried to a spawned ticket, the spec page first
 
+# The address this hub is reached at, set by install, so a company file or page is linked by its absolute URL.
+hub_origin = ""
+
 
 def _label(conn: sqlite3.Connection, task_id: str) -> str:
     """The ticket's id as people read it (prefix and number, D41), else its id."""
@@ -220,31 +223,48 @@ def _one(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> Ro
 
 
 def _evidence(conn: sqlite3.Connection, source_id: str, stage_id: str | None) -> list[Row]:
-    """The source's attachments that can travel as links, the spec first: a requirement attachment on a requirement whose
-    name contains "spec", else the newest attachment of the stage the card leaves; then its other link attachments, newest
-    first; then its ordinary links (url and doc), oldest first. Each is a row with `url` and `title`. Files and blobs have
-    no link to carry and are listed separately by _uncarried."""
+    """The source's attachments that can travel as links, then its ordinary links. Each is a row with `url`, `title`,
+    `requirement` and `stage`. An attachment's url is its content address (requirement_attachments.views): a link's URL,
+    or a company file's or page's version, made absolute on hub_origin (empty when the hub has none, so it is not
+    carried). Attachments come newest first; the spec is moved to the front by _spec_first. Ordinary links (url and
+    doc) follow, oldest first."""
+    from . import requirement_attachments
+
     attached = _rows(
         conn,
-        "SELECT a.url AS url, '' AS title, r.name AS requirement, r.pipeline_stage_id AS stage "
-        "FROM requirement_attachments a JOIN stage_requirements r ON r.id = a.stage_requirement_id "
-        "WHERE a.task_id = ? AND a.removed_at IS NULL AND a.source = 'link' AND a.url IS NOT NULL "
-        "ORDER BY a.created_at DESC, a.rowid DESC",
+        "SELECT a.source, a.url, a.blob_id, a.file_id, a.file_version, r.name AS requirement, "
+        "r.pipeline_stage_id AS stage FROM requirement_attachments a "
+        "JOIN stage_requirements r ON r.id = a.stage_requirement_id "
+        "WHERE a.task_id = ? AND a.removed_at IS NULL ORDER BY a.created_at DESC, a.rowid DESC",
         (source_id,),
     )
+    carried: list[Row] = []
+    for view in requirement_attachments.views(conn, attached):
+        href = str(view.get("href") or "")
+        if view.get("source") == "link":
+            url, title = href, ""
+        else:
+            url, title = (hub_origin + href if hub_origin and href else ""), str(view.get("name") or "")
+        carried.append({"url": url, "title": title, "requirement": view["requirement"], "stage": view["stage"]})
     ordinary = _rows(
         conn,
         "SELECT url, title, '' AS requirement, NULL AS stage FROM task_links "
         "WHERE task_id = ? AND kind IN ('url', 'doc') ORDER BY created_at, id",
         (source_id,),
     )
-    return [*attached, *ordinary]
+    return [*carried, *ordinary]
 
 
 def _spec_first(rows: list[Row], leaving_stage: str | None) -> list[Row]:
-    """`rows` with the spec in front: the first requirement attachment named like a spec, else the newest one on the
-    leaving stage. The rest keep their order."""
-    spec = next((r for r in rows if "spec" in str(r["requirement"]).lower()), None)
+    """`rows` with the spec in front: the first requirement attachment named like a spec (a "Spec approved" approval is
+    not the spec, so a "Spec" requirement wins over it), else the newest one on the leaving stage. The rest keep their order."""
+
+    def named(r: Row) -> str:
+        return str(r["requirement"]).lower()
+
+    spec = next((r for r in rows if "spec" in named(r) and "approv" not in named(r)), None)
+    if spec is None:
+        spec = next((r for r in rows if "spec" in named(r)), None)
     if spec is None and leaving_stage:
         spec = next((r for r in rows if r["stage"] == leaving_stage), None)
     if spec is None:
@@ -375,6 +395,10 @@ class PipelineRetireBody(BaseModel):
 def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "Auth") -> None:
     """GET /api/v2/pipeline-links (?pipeline=), POST /api/v2/pipeline-links, POST /api/v2/pipeline-links/{id}/retire."""
     from fastapi import Request
+
+    global hub_origin
+    guard: Any = auth  # the Auth class is untyped
+    hub_origin = str(guard.settings.public_url or "").rstrip("/")
 
     @app.get("/api/v2/pipeline-links")  # pyright: ignore[reportUntypedFunctionDecorator]
     def list_links(  # pyright: ignore[reportUnusedFunction]
