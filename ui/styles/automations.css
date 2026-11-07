@@ -217,7 +217,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-newbox{position:relative}
 .au-newm{top:calc(100% + 4px);right:0;min-width:220px}
 
-/* the board (automations-flow.js auBoardHTML): an inbox's rules, questions and LLM down one column, each row's chain
+/* the board (automations-flow.ts auBoardHTML): an inbox's rules, questions and LLM down one column, each row's chain
    to its right, and the destinations the LLM picks from under it. Narrow, a row's chain goes under it. */
 .au{--au-amber:#e2b25a;--au-orange:#f0a35a;--au-violet:#b9a8f0;--au-green:#6cc48f;--au-blue:#7fb3f0;--au-teal:#5fc4c4;--au-pink:#d99ad0;--au-gray:#979a99;--au-red:#f08080}
 :root[data-theme="light"] .au{--au-amber:#a8701a;--au-orange:#b85a18;--au-violet:#6650bd;--au-green:#2f7a4f;--au-blue:#2b5f96;--au-teal:#1d7778;--au-pink:#a3458b;--au-gray:#6a736e;--au-red:#c53030}
@@ -482,7 +482,7 @@ button.au-chip:hover{background:var(--surface2)}
 }
 @media (max-width:1099px) and (min-width:761px){.au.ed-pop .au-body,.au.ed-pop.ed-open .au-body{grid-template-columns:184px minmax(0,1fr)}}
 
-/* New inbox and Apply template (automations-new.js): a dialog over the page, a sheet from the bottom on a phone */
+/* New inbox and Apply template (automations-new.ts): a dialog over the page, a sheet from the bottom on a phone */
 .tmodal.au-nd{width:min(620px,calc(100vw - 32px))}
 .au-nd .tmodal-head>.nav-icon{flex:none;font-size:18px;width:18px;height:18px;color:var(--muted)}
 .au-nd .au-ndb{display:grid;align-content:start;gap:16px;padding:18px}
@@ -511,7 +511,7 @@ button.au-chip:hover{background:var(--surface2)}
   .au-ndf>button{min-height:40px}
 }
 
-/* Maintenance (automations-maintenance.js): the run's settings, one numbered row per step, a tap opens its details */
+/* Maintenance (automations-maintenance.ts): the run's settings, one numbered row per step, a tap opens its details */
 .mt-meta{font-size:var(--t-sm);white-space:nowrap}
 .mt-now{white-space:nowrap}
 .mt{display:grid;gap:14px;max-width:720px}
@@ -549,7 +549,7 @@ button.au-chip:hover{background:var(--surface2)}
 .mt-stat span{font-size:var(--t-xs)}
 .mt-runs .mt-by{white-space:nowrap}
 .au-tag.mt-bad{color:var(--fail);border-color:color-mix(in srgb,var(--fail) 50%,var(--line))}
-/* The Heartbeat (automations-heartbeat.js): Maintenance's rows, grouped by kind, with each step's numbers on the right */
+/* The Heartbeat (automations-heartbeat.ts): Maintenance's rows, grouped by kind, with each step's numbers on the right */
 .hb-every select{min-width:0;width:auto}
 .hb-group{display:grid;gap:6px}
 .hb-kind{margin:0}

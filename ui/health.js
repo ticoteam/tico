@@ -2,7 +2,7 @@
    GET /api/v2/health computed; the only local state is which page is open. General's Health line counts it and opens
    the full page (#/settings/health); Health has no tab of its own. */
 'use strict';
-let HL = null;
+/** @type {any} bridged: .ts files read it through healthState() (ui/health-state.ts); typed when this file converts */ let HL = null;
 let HL_LOAD = 0;
 let HL_METRICS = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
 let HL_FINDINGS = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)

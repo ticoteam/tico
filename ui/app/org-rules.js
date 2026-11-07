@@ -19,7 +19,7 @@ const RU_REPEATS = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly
 const RU_STATUS = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'ready'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', 'ok']};
 const RU_KINDS = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
 // If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js and
-// overview-graph.js use the same words).
+// overview-graph.ts use the same words).
 const RU_BROKEN = [['block', 'Stop'], ['escalate', 'Ask first'], ['warn', 'Warn']];
 const RU_BROKEN_HINT = {block: 'The output is refused.', escalate: 'Held until the reviewer OKs it.', warn: 'It goes through with a note.'};
 const RU_PAGES = 50;        // pages read for one list at most (a page stops at 100 rows or at its byte budget)
@@ -1268,6 +1268,7 @@ async function ruDuePanel(side, id, ruleId, note = '') {
 // ----------------------------------------------------------------- Add rule
 // Internal or External first; Internal asks Rule, Who (Followed by) and With, External asks Rule, Who and From (an
 // existing one, or a new name with its kind); then If broken. A person who can't manage what they wrote adds a suggestion, which the server decides.
+/** @param {{kind?: string, who?: {people?: string[], bots?: string[]} | null, after?: (() => void) | null}} [opts] */
 async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   let dlg = document.getElementById('ru-add');
   if (!dlg) {

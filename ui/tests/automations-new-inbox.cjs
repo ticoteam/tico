@@ -1,4 +1,4 @@
-// New inbox (ui/app/automations-new.js) against the fake hub in support/automations-fake.cjs: + New → New inbox on a
+// New inbox (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cjs: + New → New inbox on a
 // person's email inbox offers Person and Bot only (a channel adds Group and Other); a refused template fill shows in
 // the dialog and saves nothing; Create POSTs the filled template's steps and destinations with Turn on now as
 // switched, then opens the new automation as a board; the dialog fits a phone with no sideways scroll.
@@ -66,6 +66,21 @@ async function openDialog(page) {
       assert.match(await page.evaluate(() => location.hash), /^#\/automations\/au_\d+$/);
       assert.equal(await page.locator('.au-dest[data-board^="dest:"]:not(.au-dest-add)').count(), 4);
       assert.equal(await page.locator('[data-bmode="draft"]').getAttribute('aria-pressed'), 'true');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    // Turn on now is the dialog's own switch: with an automation open behind the dialog, flipping it on and off
+    // saves nothing on that automation. The switch carries the page's `au-sw` class; only the dialog stopping its
+    // events (auDialog) keeps the page's switch handler from PATCHing the open automation's `enabled`.
+    {
+      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP});
+      await page.locator('tr.au-row').first().click();
+      await page.waitForFunction(() => /^#\/automations\/./.test(location.hash));
+      await openDialog(page);
+      await page.locator('.au-nd [data-n="on"]').check();
+      await page.locator('.au-nd [data-n="on"]').uncheck();
+      assert.deepEqual(writes.filter(w => w.method === 'PATCH'), [], 'the open automation is not switched');
       assert.deepEqual(errors, []);
       await page.close();
     }
