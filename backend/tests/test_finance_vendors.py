@@ -150,10 +150,17 @@ def test_a_price_increase_is_found_across_a_renamed_descriptor(books):
     assert len(found) == 1
 
 
+def _aliases(c) -> list[tuple[str, str]]:
+    return sorted(
+        (str(k), str(v)) for k, v in c.execute("SELECT name_key, contact_id FROM fin_vendor_aliases").fetchall()
+    )
+
+
 def test_a_merge_makes_spend_and_budgets_one_vendor_and_unmerge_restores_exactly(books):
     ads, llc = _merge_setup(books)
     with books.transaction() as c:
         before = _by_vendor(c)
+        aliases_before = _aliases(c)
         assert before == {llc: 30_000, ads: 20_000}
         root = act(
             c,
@@ -192,8 +199,7 @@ def test_a_merge_makes_spend_and_budgets_one_vendor_and_unmerge_restores_exactly
         assert _by_vendor(c) == before
         assert FA.budget_state(c, bid, AT).actual == 20_000
         assert c.execute("SELECT active FROM fin_contacts WHERE id=?", (llc,)).fetchone()[0] == 1
-        for key in keys:
-            assert SAP.alias_of(c, _books_id(c), key) == ""
+        assert _aliases(c) == aliases_before
 
 
 def test_a_merge_refuses_itself_an_unknown_contact_and_a_name_another_contact_goes_by(books):
