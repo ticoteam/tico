@@ -25,9 +25,18 @@ function inboxesAlertsCheck(name: string, title: string, checked: boolean | null
   return `<label class="ib-alert-check"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}><span>${title}</span></label>`;
 }
 
-// A named control of a form this card draws (form.elements.NAME in the old code): each name is on one control.
-function alertsField(form: HTMLFormElement, name: string): HTMLInputElement {
-  return form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+// The named controls of this card's forms (all inputs). form.elements has no typed names, so each use casts it (erased).
+interface IbAlertsControls {
+  sms_consent: HTMLInputElement;
+  phone: HTMLInputElement;
+  call_consent: HTMLInputElement;
+  code: HTMLInputElement;
+  timezone: HTMLInputElement;
+  monthly_cap: HTMLInputElement;
+  quiet: HTMLInputElement;
+  quiet_start: HTMLInputElement;
+  quiet_end: HTMLInputElement;
+  [name: string]: HTMLInputElement;
 }
 
 async function inboxesAlerts(host: Element | null, ctx: Pick<InboxCtx, 'admin' | 'me' | 'live'>): Promise<void> {
@@ -101,12 +110,12 @@ async function inboxesAlerts(host: Element | null, ctx: Pick<InboxCtx, 'admin' |
   };
   const add = card.querySelector<HTMLFormElement>('[data-alert-add]');
   if (add) {
-    const sms = alertsField(add, 'sms_consent'), button = add.querySelector<HTMLButtonElement>('[data-alert-send-code]')!;
+    const sms = (add.elements as unknown as IbAlertsControls /* named control */).sms_consent, button = add.querySelector<HTMLButtonElement>('[data-alert-send-code]')!;
     button.disabled = !sms.checked;
     sms.onchange = () => { button.disabled = !sms.checked; };
     add.onsubmit = e => { e.preventDefault(); if (!add.reportValidity() || !sms.checked) return;
       void work(add, async () => {
-        await post('/v2/alerts/me/phone', {phone: alertsField(add, 'phone').value, sms_consent: true, call_consent: alertsField(add, 'call_consent').checked});
+        await post('/v2/alerts/me/phone', {phone: (add.elements as unknown as IbAlertsControls /* named control */).phone.value, sms_consent: true, call_consent: (add.elements as unknown as IbAlertsControls /* named control */).call_consent.checked});
         if (!ctx.live()) return;
         await redraw();
       });
@@ -114,19 +123,19 @@ async function inboxesAlerts(host: Element | null, ctx: Pick<InboxCtx, 'admin' |
   }
   const confirm = card.querySelector<HTMLFormElement>('[data-alert-confirm]');
   if (confirm) confirm.onsubmit = e => { e.preventDefault(); if (!confirm.reportValidity()) return;
-    void work(confirm, async () => { await post('/v2/alerts/me/phone/confirm', {code: alertsField(confirm, 'code').value}); if (ctx.live()) await redraw(); });
+    void work(confirm, async () => { await post('/v2/alerts/me/phone/confirm', {code: (confirm.elements as unknown as IbAlertsControls /* named control */).code.value}); if (ctx.live()) await redraw(); });
   };
   const pref = card.querySelector<HTMLFormElement>('[data-alert-preferences]')!;
-  alertsField(pref, 'quiet').onchange = () => { for (const key of ['quiet_start', 'quiet_end']) alertsField(pref, key).disabled = !alertsField(pref, 'quiet').checked; };
+  (pref.elements as unknown as IbAlertsControls /* named control */).quiet.onchange = () => { for (const key of ['quiet_start', 'quiet_end']) (pref.elements as unknown as IbAlertsControls /* named control */)[key]!.disabled = !(pref.elements as unknown as IbAlertsControls /* named control */).quiet.checked; };
   pref.onsubmit = e => { e.preventDefault(); if (!pref.reportValidity()) return;
-    const values: Record<string, unknown> = Object.fromEntries([...IB_ALERT_EVENTS.map(([k]) => k), 'urgent_calls', 'emergency_exception'].map((k): [string, boolean] => [k, !alertsField(pref, k).disabled && alertsField(pref, k).checked]));
-    Object.assign(values, {timezone: alertsField(pref, 'timezone').value, monthly_cap: Number(alertsField(pref, 'monthly_cap').value),
-      quiet_start: alertsField(pref, 'quiet').checked ? alertsField(pref, 'quiet_start').value : '', quiet_end: alertsField(pref, 'quiet').checked ? alertsField(pref, 'quiet_end').value : ''});
+    const values: Record<string, unknown> = Object.fromEntries([...IB_ALERT_EVENTS.map(([k]) => k), 'urgent_calls', 'emergency_exception'].map((k): [string, boolean] => [k, !(pref.elements as unknown as IbAlertsControls /* named control */)[k]!.disabled && (pref.elements as unknown as IbAlertsControls /* named control */)[k]!.checked]));
+    Object.assign(values, {timezone: (pref.elements as unknown as IbAlertsControls /* named control */).timezone.value, monthly_cap: Number((pref.elements as unknown as IbAlertsControls /* named control */).monthly_cap.value),
+      quiet_start: (pref.elements as unknown as IbAlertsControls /* named control */).quiet.checked ? (pref.elements as unknown as IbAlertsControls /* named control */).quiet_start.value : '', quiet_end: (pref.elements as unknown as IbAlertsControls /* named control */).quiet.checked ? (pref.elements as unknown as IbAlertsControls /* named control */).quiet_end.value : ''});
     void work(pref, async () => { await put('/v2/alerts/me', values); if (ctx.live()) { await redraw(); toast('Alert preferences saved'); } });
   };
   const company = card.querySelector<HTMLFormElement>('[data-alert-company]');
   if (company) company.onsubmit = e => { e.preventDefault(); if (!company.reportValidity()) return;
-    void work(company, async () => { await put('/v2/alerts/company', {monthly_cap: Number(alertsField(company, 'monthly_cap').value)}); if (ctx.live()) await redraw(); });
+    void work(company, async () => { await put('/v2/alerts/company', {monthly_cap: Number((company.elements as unknown as IbAlertsControls /* named control */).monthly_cap.value)}); if (ctx.live()) await redraw(); });
   };
   // Settings renders several cards together; each Alerts action submits only its own form, including Enter.
   for (const form of card.querySelectorAll('form')) {
