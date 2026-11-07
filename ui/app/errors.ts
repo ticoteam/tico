@@ -10,7 +10,7 @@ function errorMessage(error: unknown, fallback: string): string {
   return typeof message === 'string' && message ? message : fallback;
 }
 
-// The parts of a thrown value, read with checks instead of casts. api.js throws an Error that carries `body` (the failure's
+// The parts of a thrown value, read with checks instead of casts. api.ts throws an Error that carries `body` (the failure's
 // JSON answer) and `status` (its HTTP status). Any other thrown value, or a part that is missing, gives the empty answer.
 function isErrorRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

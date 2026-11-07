@@ -77,7 +77,7 @@ const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(() => { if (!
 const LIVE_SOON = new Map();
 function liveSoon(key, fn, ms = 250) {
   if (LIVE_SOON.has(key)) return;
-  // Something changed: the reads this sets off start fresh rather than sharing one sent before the change (api.js get).
+  // Something changed: the reads this sets off start fresh rather than sharing one sent before the change (api.ts get).
   LIVE_SOON.set(key, setTimeout(() => { LIVE_SOON.delete(key); getForget(); fn(); }, ms));
 }
 // Run `fn` at most once per `ms`, the last call winning, and never while the tab is hidden: a hidden tab runs it once

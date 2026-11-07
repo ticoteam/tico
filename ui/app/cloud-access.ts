@@ -39,7 +39,7 @@ async function cloudAccessPoll() {
   }
   CLOUD_TIMER = setTimeout(cloudAccessPoll, CLOUD_POLL);
 }
-// Any request refused 402 `locked` (api.js signInRedirect): Pay to continue at once, not at the next poll.
+// Any request refused 402 `locked` (api.ts signInRedirect): Pay to continue at once, not at the next poll.
 function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
 }

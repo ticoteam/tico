@@ -655,7 +655,7 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
     corpus = checks.selection(["backend/tests/fixtures/golden_corpus/kept/handbook.md"], added=[])["python"]
     assert "backend/tests/test_golden_corpus.py" in corpus
     # A UI file outside the map runs the tests that name it or read it directly, not every reader's importers.
-    assert "scripts/tests/test_pr_checks.py" in checks.selection(["ui/app/api.js"], added=[])["python"]
+    assert "scripts/tests/test_pr_checks.py" in checks.selection(["ui/app/api.ts"], added=[])["python"]
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):

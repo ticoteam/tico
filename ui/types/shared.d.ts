@@ -1,10 +1,10 @@
-// Types for the globals the classic scripts under ui/ share (ui/app/core.js, api.js, state.js, ...). A declaration here is
+// Types for the globals the classic scripts under ui/ share (ui/app/core.js, api.ts, state.js, ...). A declaration here is
 // read by the JSDoc on the JavaScript that defines the global, and by the TypeScript files that use it. No file here
 // is a module, so every name below is global, as the scripts' own names are.
 // A field the server sends but the page does not read is left out. A field read on the page is optional when the
 // server or the page may leave it out.
 
-// ---------------------------------------------------------------- the API client's errors (ui/app/api.js)
+// ---------------------------------------------------------------- the API client's errors (ui/app/api.ts)
 
 /** The JSON body of a failed answer: a Problem (`error.code`), a task cap's 409 (`message` beside a code), or FastAPI's validation list. */
 interface ApiFailureBody {
@@ -14,13 +14,13 @@ interface ApiFailureBody {
   [key: string]: unknown;
 }
 
-/** What get, post, put and patch throw for a failed answer (apiFailure in ui/app/api.js): an Error with the body and the HTTP status. */
+/** What get, post, put and patch throw for a failed answer (apiFailure in ui/app/api.ts): an Error with the body and the HTTP status. */
 interface ApiFailure extends Error {
   body: ApiFailureBody;
   status: number;
 }
 
-// ---------------------------------------------------------------- toast (ui/app/api.js)
+// ---------------------------------------------------------------- toast (ui/app/api.ts)
 
 interface ToastAction {
   label: string;

@@ -426,7 +426,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   try { doc = (await get<DocsPageResult>('/v2/docs/' + encodeURIComponent(selected))).doc; }
   catch (error) {
     if (!current()) return;
-    // errorStatus (ui/app/errors.ts) reads the HTTP status api.js puts on a thrown ApiFailure; other values have none.
+    // errorStatus (ui/app/errors.ts) reads the HTTP status api.ts puts on a thrown ApiFailure; other values have none.
     reader.innerHTML = back + `<div class="empty">${errorStatus(error) === 404 ? 'That doc does not exist, or it was archived.' : esc(errorMessage(error, ''))}</div>`;
     return;
   }

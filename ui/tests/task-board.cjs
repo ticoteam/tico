@@ -386,7 +386,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-modal').getByRole('textbox', {name: 'Message'}).count(), 1);
     await page.locator('#task-modal [data-modal-close]').click();
     // Reopened on the server, not through the page: a read already on its way shares its answer with a load that
-    // joins it (api.js GET_INFLIGHT), so the change waits until no read is out, and the list waits until it is open.
+    // joins it (api.ts GET_INFLIGHT), so the change waits until no read is out, and the list waits until it is open.
     await page.waitForFunction(() => GET_INFLIGHT.size === 0);
     tasks.find(t => t.id === 'Approve the budget').status = 'open';
     await page.evaluate(() => tasksLoad(TASKS_ST));

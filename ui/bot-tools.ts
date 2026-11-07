@@ -21,7 +21,7 @@ type BtToolsPage = import('./types/api').ListBotToolsResponse & {report_error?: 
 interface BtInboxBots {
   bots?: Array<{bot: string; sources?: Array<{kind: string; name: string}>}>;
 }
-// The page's get(path) from ui/app/api.js: resolves with the parsed JSON body.
+// The page's get(path) from ui/app/api.ts: resolves with the parsed JSON body.
 type BtGet = <T>(path: string) => Promise<T>;
 // The page's esc from ui/app/core.js.
 type BtEsc = (value: unknown) => string;

@@ -38,7 +38,7 @@ async function open(browser, me, view, strategyName) {
     if (p === '/api/v2/conversations') return json({conversations: []});
     for (const answer of helpers.map(h => h(p, url, route.request().method()))) if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(view);
-    // A send: words as JSON, files as a form, like any bot chat (ui/app/api.js cloudCompose).
+    // A send: words as JSON, files as a form, like any bot chat (ui/app/api.ts cloudCompose).
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
       const request = route.request(), form = !p.includes('/uploads/');
       sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer().toString('latin1')});
