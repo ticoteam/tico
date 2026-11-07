@@ -339,6 +339,8 @@ def run(args, who=None):
         )
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd == "segment":
+        return via_tool(client, args)
     if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
