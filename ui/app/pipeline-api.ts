@@ -22,17 +22,26 @@ interface PipelineRequirement {
   kind?: string;
   /** The evidence attached to it, newest first (attachment requirements, on the ticket page). */
   attachments?: PipelineReqAttachment[];
+  /** Who passed it and under which requirement version, when a decision met it (the ticket page). */
+  passed?: { by: string | null; version: number; current: number };
 }
 
-/** One piece of evidence attached to a requirement: a file, an upload or a link. */
+/** One piece of evidence attached to a requirement, as the server's read view sends it (views in
+    backend/requirement_attachments.py). `href` is the content's immutable address: a company file's pinned version, a blob,
+    or a link's own URL. `format` says how to show it. */
 interface PipelineReqAttachment {
   id: string;
   source: 'file' | 'blob' | 'link' | 'check_run' | 'receipt';
+  format: 'image' | 'video' | 'page' | 'file' | 'link';
+  name: string;
+  href: string | null;
   url: string | null;
   file_id: string | null;
-  by: string | null;
-  at: string;
+  file_version: number | null;
+  digest: string;
   work_version: number;
+  attached_by: string | null;
+  created_at: string;
 }
 
 interface PipelineAttachment {
@@ -50,6 +59,8 @@ interface PipelineReviewItem {
   task_title?: string;
   stage_name?: string;
   pipeline_id?: string;
+  /** The stage the item waits at: the editor's stage the reviewer is working through. */
+  stage_id?: string;
   /** The assignee for "Message <assignee>", or null. */
   assignee?: { id: string; name: string } | null;
   why: string;
@@ -60,8 +71,8 @@ interface PipelineReviewItem {
   /** Whether the viewer may mark it met by hand. */
   can_mark_met?: boolean;
   attachments: PipelineAttachment[];
-  /** Another reviewer holding the item, or null. */
-  claim: { by: string } | null;
+  /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
+  claim: { by: string; label: string } | null;
   /** Where Approve moves the ticket on the stage's last requirement, or null. */
   moves_to?: string | null;
   /** Late items sort first in the queue. */
@@ -125,7 +136,8 @@ interface ServerDot {
   state: ServerReqState;
 }
 
-/** One requirement of GET /api/v2/tasks/{id}/requirements (the ticket's detail row). */
+/** One requirement of GET /api/v2/tasks/{id}/requirements (the ticket's detail row). `decision` is who decided it (the judge
+    and its actor) and under which requirement version; `attachments` is the newest few, as read views. */
 interface ServerRequirementDetail {
   id: string;
   name: string;
@@ -137,8 +149,9 @@ interface ServerRequirementDetail {
   reviewed_by: string;
   reviewer_id: string | null;
   version: number;
-  decision: { id: string; verdict: string; requirement_version: number; at: string } | null;
+  decision: { id: string; judge: string; judge_actor: string | null; verdict: string; requirement_version: number; at: string } | null;
   attachment: { id: string; source: 'file' | 'blob' | 'link'; digest: string; by: string; at: string } | null;
+  attachments: PipelineReqAttachment[];
 }
 
 interface ServerQueueItem {
@@ -153,7 +166,9 @@ interface ServerQueueItem {
   requirement_version: number;
   kind: string;
   work_version: number;
-  attachment: { id: string; source: 'file' | 'blob' | 'link'; url: string | null; file_id?: string | null } | null;
+  /** The evidence the item waits on, with its content address (queue read view). */
+  attachment: { id: string; source: 'file' | 'blob' | 'link'; url: string | null; file_id?: string | null;
+    file_version?: number | null; format: PipelineReqAttachment['format']; name: string; href: string | null } | null;
   attachment_digest: string | null;
   why: string;
   since: string;
@@ -204,11 +219,12 @@ const REQ_STATE: Record<ServerReqState, PipelineReqState> = {
   met: 'met', waiting: 'waiting', out_of_date: 'out_of_date', failed: 'failed', none: 'missing',
 };
 
-const ATTACH_KIND: Record<string, PipelineAttachment['kind']> = { file: 'file', blob: 'file', link: 'link' };
-
-/** A board dot, as the requirement the board shows. The board has no reviewer, so next_actor is null. */
-function requirementFromDot(dot: ServerDot): PipelineRequirement {
-  return { id: dot.id, name: dot.name, state: REQ_STATE[dot.state] ?? 'missing', next_actor: null };
+/** A board dot as the requirement the view shows: the server's `none` is the UI's `missing`; a dot already mapped passes
+    through. The board has no reviewer, so next_actor is null. */
+function requirementFromDot(dot: ServerDot | PipelineRequirement): PipelineRequirement {
+  const state = dot.state as string;
+  const mapped = (REQ_STATE as Record<string, PipelineReqState>)[state] ?? (state as PipelineReqState);
+  return { ...dot, state: mapped, next_actor: ('next_actor' in dot ? dot.next_actor : null) ?? null } as PipelineRequirement;
 }
 
 /** A queue row, as the review view shows it. The row has one attachment; the view takes a list. */
@@ -220,15 +236,16 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     task_title: row.title,
     stage_name: row.stage,
     pipeline_id: row.pipeline_id,
+    stage_id: row.stage_id,
     assignee: row.assignee ?? null,
     why: row.why,
     bot_note: row.bot_note ?? '',
     reviewer_id: row.reviewer_id ?? null,
     can_mark_met: !!row.can_mark_met,
     attachments: a
-      ? [{ id: a.id, label: a.url || a.file_id || 'Attachment', kind: ATTACH_KIND[a.source] ?? 'file', ...(a.url ? { url: a.url } : {}) }]
+      ? [{ id: a.id, label: a.name || 'Attachment', kind: a.format, ...(a.href ? { url: a.href } : {}) }]
       : [],
-    claim: row.claimed_by && !row.claimed_by_me ? { by: row.claimed_by } : null,
+    claim: row.claimed_by && !row.claimed_by_me ? { by: row.claimed_by, label: `${actorLabel(row.claimed_by)} is reviewing` } : null,
     moves_to: row.moves_to?.name ?? null,
     late: row.late,
     work_version: row.work_version,
@@ -237,9 +254,14 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
   };
 }
 
-/** A ticket's requirement row, as the ticket view shows it. */
+/** A ticket's requirement row, as the ticket view shows it: what stands, who decided it, under which version, and the
+    evidence attached (its newest few, each with its content address). */
 function requirementFromDetail(row: ServerRequirementDetail): PipelineRequirement {
   const detail = row.state === 'met' || row.state === 'none' ? undefined : row.why ?? undefined;
+  const decision = row.decision;
+  const passed = row.state === 'met' && decision
+    ? { by: decision.judge_actor, version: decision.requirement_version, current: row.version }
+    : undefined;
   return {
     id: row.id,
     name: row.name,
@@ -247,6 +269,8 @@ function requirementFromDetail(row: ServerRequirementDetail): PipelineRequiremen
     next_actor: row.state === 'met' ? null : row.reviewer_id,
     ...(detail ? { detail } : {}),
     kind: row.kind,
+    attachments: row.attachments ?? [],
+    ...(passed ? { passed } : {}),
   };
 }
 
@@ -285,11 +309,12 @@ function managerViewFromRail(rail: ServerRail): PipelineManagerView {
 }
 
 /** The ticket's requirements on the board (their dots), for the card's requirement dots. */
-function pipelineBoardDots(dots: ServerDot[]): PipelineRequirement[] {
+function pipelineBoardDots(dots: (ServerDot | PipelineRequirement)[]): PipelineRequirement[] {
   return dots.map(requirementFromDot);
 }
 
-/** The requirements that count on one ticket, with who decided and what is attached: the ticket page's list. */
+/** The requirements that count on one ticket, with who decided and what is attached: the ticket page's list. One read
+    carries the attachments too, so the page makes no request per requirement. */
 async function pipelineTaskRequirements(taskId: string): Promise<PipelineRequirement[]> {
   const res = await get(`/v2/tasks/${encodeURIComponent(taskId)}/requirements`) as { requirements: ServerRequirementDetail[] };
   return res.requirements.map(requirementFromDetail);
@@ -315,6 +340,11 @@ async function pipelineApprove(item: PipelineReviewItem, note: string): Promise<
   return { decision_id: res.decision_id, moved_to: res.advanced ? item.moves_to ?? 'next stage' : null };
 }
 
+/** Start reviewing an item for ten minutes. A 409 means another reviewer holds it; the caller shows who. */
+async function pipelineClaim(taskId: string, requirementId: string): Promise<{ expires_at: string }> {
+  return post(pipelineRoute(reviewPath(taskId, requirementId) + '/claim'), {}) as Promise<{ expires_at: string }>;
+}
+
 /** Take back an approval made in the last 10 seconds. */
 async function pipelineUndo(decisionId: string): Promise<{ ok: boolean }> {
   const res = await post(pipelineRoute(`/decisions/${encodeURIComponent(decisionId)}/undo`), {}) as { undone: boolean };
@@ -335,6 +365,12 @@ async function pipelineMessageManager(taskId: string, requirementId: string, tex
 /** Mark one requirement met by hand, with a reason. Logged; new work makes it out of date like any approval. */
 async function pipelineMarkMet(taskId: string, requirementId: string, why: string): Promise<{ decision_id: string }> {
   return post(pipelineRoute(reviewPath(taskId, requirementId) + '/mark-met'), { why }) as Promise<{ decision_id: string }>;
+}
+
+/** How many open tickets at a stage a requirement with this label would apply to right now: the rule editor's note. */
+async function pipelineAffectedCount(stageId: string, label: string): Promise<{ count: number; stage: string }> {
+  const query = label ? `?label=${encodeURIComponent(label)}` : '';
+  return get(`/v2/pipeline-stages/${encodeURIComponent(stageId)}/affected${query}`) as Promise<{ count: number; stage: string }>;
 }
 
 /** The manager's status for one pipeline: last run, late cards, the log. */

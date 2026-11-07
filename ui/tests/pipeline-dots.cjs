@@ -26,6 +26,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.equal(await d52.getAttribute('aria-label'), '2 of 3 requirements met');
       assert.equal(await page.locator('[data-task-key="tD52"] .pdot').count(), 3);
       assert.equal(await page.locator('[data-task-key="tD17"] .pdots').count(), 0, 'a ticket without requirements has no dots');
+      // E5: a requirement the stage does not have yet (the server's "none") is a hollow missing dot, not an invisible one.
+      assert.equal(await page.locator('[data-task-key="tD61"] .pdot-missing').count(), 1, 'a missing requirement is drawn hollow');
 
       // Tap a dot: the names open on that card, and the card does not open the ticket.
       await page.locator('[data-task-key="tD52"] .pdot').nth(2).click();
@@ -49,6 +51,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.locator('[data-task-key="tD52"] .bcard-open').click();
       await page.waitForSelector('.task-requirements', {timeout: t(5000)});
       assert.equal(await page.locator('.task-req').count(), 3);
+      // E8: the ticket's requirements and their attachments come in one request, not one per attachment requirement.
+      assert.equal(state.requirementReads.D52, 1, 'one request reads the ticket');
+      assert.equal(state.attachmentReads, 0, 'no request per requirement for its attachments');
+      // E7: a met requirement says who passed it, and under which version when the rule has changed since.
+      assert.match(await page.locator('.task-req[data-req-id="r-spec"]').innerText(), /Met under v1 · You/, 'who passed it (the viewer is named You), under which version');
+      // E6: an attachment's link and its picture open the version it was attached as, not the file's latest.
+      assert.equal(await page.locator('.task-req[data-req-id="r-shots"] .task-req-thumb').getAttribute('href'), '/api/v2/files/f9/versions/3', 'the link opens the pinned version');
+      assert.equal(await page.locator('.task-req[data-req-id="r-shots"] img').getAttribute('src'), '/api/v2/files/f9/versions/3', 'the picture is the pinned version');
       assert.match(await page.locator('.task-requirements h3').innerText(), /REQUIREMENTS · 2 OF 3/i);
       await page.locator('.task-req[data-req-id="r-shots"] [data-req-more]').click();
       await page.locator('.task-req[data-req-id="r-shots"] [data-req-mark] button[type=submit]').click();

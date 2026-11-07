@@ -4,7 +4,7 @@ from fastapi import Request
 
 from . import hubdb as H
 from . import models as M
-from . import pipeline_rights
+from . import pipeline_engine, pipeline_rights
 from .store import Problem
 
 
@@ -26,6 +26,8 @@ def install_task_types(app, store, auth, mutate, mover):
             editable = pipeline_rights.editable_pipeline_ids(c, who.actor, [typ["id"] for typ in listed])
             for typ in listed:
                 typ["can_edit_rules"] = typ["id"] in editable
+                # Whether it has any requirement, so the pipeline keeps its plain layout without one.
+                typ["has_requirements"] = pipeline_engine.has_requirements(c, typ["id"])
             return {"types": listed}
 
     @app.get("/api/v2/task-types/{type_id}")

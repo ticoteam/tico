@@ -14,6 +14,7 @@ Attaching is a change to the ticket: it takes the rights a change takes (`_may_e
 """
 
 import hashlib
+import json
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
 
 SOURCES = ("file", "blob", "link")
 URL_MAX = 2000
+ATTACH_LIMIT = 20  # the newest attachments a ticket shows against one requirement
 MIME_FORMATS = {"image/": "image", "video/": "video"}
 
 
@@ -56,12 +58,14 @@ class AttachBody(Contract):
     url: str | None = Field(default=None, max_length=URL_MAX)
 
 
-def attachments_for(conn: "sqlite3.Connection", task_id: str, stage_requirement_id: str) -> list[dict[str, Any]]:
-    """The attachments a ticket has against one requirement, newest first. Removed ones are left out."""
+def attachments_for(
+    conn: "sqlite3.Connection", task_id: str, stage_requirement_id: str, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """The attachments a ticket has against one requirement, newest first. Removed ones are left out; `limit` caps them."""
     rows = conn.execute(
         "SELECT * FROM requirement_attachments WHERE task_id=? AND stage_requirement_id=? AND removed_at IS NULL "
-        "ORDER BY created_at DESC, id DESC",
-        (task_id, stage_requirement_id),
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+        (task_id, stage_requirement_id, -1 if limit is None else limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -80,6 +84,46 @@ def _format_of(mime: str, name: str) -> str:
     if lowered == "application/pdf" or name.lower().endswith(".pdf"):
         return "page"
     return "file"
+
+
+def views(conn: "sqlite3.Connection", rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each attachment row with what a reader needs to show it: `format` (image, video, page, file or link), `name` and
+    `href`, the address of its content. A company file's href pins the version that was attached, so a later version
+    never changes what was reviewed; a link's href is its URL. The media of all rows come from one query per kind."""
+    files = sorted(
+        {f"{r['file_id']}:{int(r['file_version'])}" for r in rows if r.get("file_id") and r.get("file_version")}
+    )
+    blobs = sorted({str(r["blob_id"]) for r in rows if r.get("blob_id")})
+    media: dict[str, tuple[str, str]] = {}
+    if files:
+        for found in conn.execute(
+            "SELECT file_id, version, mime, name FROM bot_file_versions "
+            "WHERE file_id || ':' || version IN (SELECT value FROM json_each(?))",
+            (json.dumps(files),),
+        ).fetchall():
+            media[f"{found[0]}:{found[1]}"] = (str(found[2]), str(found[3]))
+    if blobs:
+        for found in conn.execute(
+            "SELECT id, content_type, name FROM blobs WHERE id IN (SELECT value FROM json_each(?))",
+            (json.dumps(blobs),),
+        ).fetchall():
+            media[str(found[0])] = (str(found[1]), str(found[2]))
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        source = str(r.get("source") or "")
+        if source == "link":
+            fmt, name, href = "link", str(r.get("url") or ""), r.get("url")
+        elif source == "blob" and r.get("blob_id"):
+            mime, name = media.get(str(r["blob_id"]), ("", "File"))
+            fmt, href = _format_of(mime, name), f"/api/v2/files/{r['blob_id']}"
+        elif r.get("file_id") and r.get("file_version"):
+            version = int(r["file_version"])
+            mime, name = media.get(f"{r['file_id']}:{version}", ("", str(r["file_id"])))
+            fmt, href = _format_of(mime, name), f"/api/v2/files/{r['file_id']}/versions/{version}"
+        else:
+            fmt, name, href = "file", source.replace("_", " ").capitalize() or "File", None
+        out.append({**r, "format": fmt, "name": name, "href": href})
+    return out
 
 
 def _digest_text(text: str) -> str:
@@ -293,11 +337,12 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
     @app.get("/api/v2/tasks/{tid}/requirements/{requirement_id}/attachments")
     def requirement_attachments(request: Request, tid: str, requirement_id: str) -> dict[str, Any]:
-        """The evidence attached to one requirement on a ticket, newest first, with its digest and work version."""
+        """The evidence attached to one requirement on a ticket, newest first, with its digest, work version, format,
+        name and href (see views). At most ATTACH_LIMIT rows."""
         who = request.state.identity
         with db.read() as c:
             guard.task(c, who, tid)
-            return {"attachments": attachments_for(c, tid, requirement_id)}
+            return {"attachments": views(c, attachments_for(c, tid, requirement_id, ATTACH_LIMIT))}
 
     @app.delete("/api/v2/requirement-attachments/{attachment_id}")
     def requirement_detach(request: Request, attachment_id: str) -> dict[str, Any]:

@@ -50,8 +50,12 @@ const peOptions = (rows: [string, string][], on: string | null | undefined): str
   rows.map(([v, l]) => `<option value="${esc(v)}"${v === on ? ' selected' : ''}>${esc(l)}</option>`).join('');
 const pePeople = (): {id: string; name: string}[] => (S.people || []).filter(p => !p.hidden).map(p => ({id: 'human:' + p.id, name: p.name || p.id}));
 const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => e.state !== 'archived').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
-const peWho = (rows: {id: string; name: string}[], on: string | null | undefined, none: string): string =>
-  `<option value="">${esc(none)}</option>${rows.map(r => `<option value="${esc(r.id)}"${r.id === on ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
+/** A choice of one person or bot. A clearable choice offers `none` as an empty value. One that cannot be cleared (an owner
+    or a manager: the server refuses an empty one) shows `none` only while nothing is set, as a disabled placeholder. */
+const peWho = (rows: {id: string; name: string}[], on: string | null | undefined, none: string, clearable = true): string => {
+  const empty = clearable ? `<option value="">${esc(none)}</option>` : on ? '' : `<option value="" disabled selected>${esc(none)}</option>`;
+  return `${empty}${rows.map(r => `<option value="${esc(r.id)}"${r.id === on ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
+};
 
 /** "2 days", "90 minutes": a Warn after time the way the person would say it. */
 function peAfter(minutes: number | null | undefined): string {
@@ -155,8 +159,11 @@ function peGoalHTML(state: PeState): string {
   const isPrivate = s.visibility === 'members';
   const judges: [string, string][] = s.judge_models.map(v => [v, PE_JUDGE_LABELS[v] ?? v]);
   const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
+  // A member the roster does not show (a hidden person, an archived bot) still gets a checked box, so saving keeps it.
+  const roster = [...pePeople(), ...peBots()];
+  const unlisted = s.members.filter(id => !roster.some(p => p.id === id)).map(id => ({id, name: id.replace(/^(human|bot):/, '')}));
   const members = isPrivate
-    ? `<fieldset class="pe-members"><legend>Who can see it</legend>${[...pePeople(), ...peBots()].map(p =>
+    ? `<fieldset class="pe-members"><legend>Who can see it</legend>${[...roster, ...unlisted].map(p =>
         `<label class="pe-check"><input type="checkbox" data-pe-member value="${esc(p.id)}"${s.members.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('')}</fieldset>`
     : '';
   return `<label class="pe-f"><span>Goal</span><input name="goal" maxlength="200" value="${esc(s.goal ?? '')}" data-pe-setting="goal" autocomplete="off"></label>
@@ -174,8 +181,8 @@ function peBodyHTML(state: PeState): string {
   }).join('');
   return `<div class="pe-settings">
       <label class="pe-f"><span>Prefix</span><input name="prefix" maxlength="2" value="${esc(t.prefix ?? '')}" data-pe-setting="prefix" autocomplete="off"></label>
-      <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'No owner')}</select></label>
-      <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager, 'No manager')}</select></label>
+      <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'Not set', false)}</select></label>
+      <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager, 'Not set', false)}</select></label>
       ${peGoalHTML(state)}
       ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
     <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>
@@ -186,8 +193,19 @@ function peRender(): void {
   const body = document.getElementById('pe-body');
   if (!body || !PE) return;
   const scroll = body.scrollTop;
+  // A setting the reader is typing in keeps its unsaved text, caret and focus across a redraw (another save, a live
+  // update). The redraw replaces every field, so without this a half-typed Goal lost its focus and its words.
+  const typing = document.activeElement;
+  const kept = typing instanceof HTMLInputElement && body.contains(typing) && typing.dataset['peSetting']
+    ? {key: typing.dataset['peSetting'], text: typing.value, start: typing.selectionStart, end: typing.selectionEnd} : null;
   body.innerHTML = peBodyHTML(PE);
   body.scrollTop = scroll;
+  if (!kept) return;
+  const field = body.querySelector<HTMLInputElement>(`[data-pe-setting="${CSS.escape(kept.key)}"]`);
+  if (!field) return;
+  field.focus();
+  field.value = kept.text;
+  try { field.setSelectionRange(kept.start, kept.end); } catch { /* a field with no caret keeps its place */ }
 }
 
 async function peReload(): Promise<void> {
@@ -215,6 +233,7 @@ function peReqFormHTML(stageId: string, r: PeReq | null): string {
     <label class="pe-f" data-pe-by="backup"><span>Backup reviewer</span><select name="backup_reviewer_id">${peWho(people, r?.backup_reviewer_id, 'None')}</select></label>
     <label class="pe-f" data-pe-by="rubric"><span>Rubric</span><textarea name="rubric" rows="3" maxlength="2000">${esc(r?.rubric ?? '')}</textarea></label>
     <label class="pe-f"><span>Only for label</span><input name="applies_to_label" maxlength="80" value="${esc(r?.applies_to_label ?? '')}" autocomplete="off"></label>
+    <p class="pe-affected muted" data-pe-affected hidden></p>
     <p class="err" role="alert" data-pe-error hidden></p>
     <div class="pe-form-foot"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-pe-cancel>Cancel</button>
       ${r ? `<button type="button" class="ghost pe-retire" data-pe-retire="${esc(r.id)}">Retire</button>` : ''}</div></form>`;
@@ -234,17 +253,36 @@ function peFormSync(form: HTMLFormElement): void {
   show('rubric', by === 'bot' || by === 'bot_then_person');
 }
 
+/** The requirement's body as its review mode allows: a reviewer only for a person's review, a backup and a rubric only when
+    someone reviews. A field the mode does not use is cleared, not sent (the server refuses a Nobody with a reviewer). */
 function peReqBody(form: HTMLFormElement): Record<string, unknown> {
   const data = new FormData(form), text = (k: string): string => String(data.get(k) ?? '').trim();
-  const kind = text('kind');
+  const kind = text('kind'), by = text('reviewed_by');
   const needs: Record<string, unknown> = kind === 'attachment'
     ? {formats: data.getAll('format').map(String), newer_than_change: data.has('newer'), is_work: data.has('is_work')}
     : kind === 'field' ? {field: text('field')} : kind === 'run' ? {source: text('source')} : {};
+  const person = by === 'person' || by === 'bot_then_person', someone = by !== 'nobody';
   return {
-    name: text('name'), kind, needs, reviewed_by: text('reviewed_by'),
-    reviewer_id: text('reviewer_id') || null, backup_reviewer_id: text('backup_reviewer_id') || null,
-    rubric: text('rubric') || null, applies_to_label: text('applies_to_label') || null,
+    name: text('name'), kind, needs, reviewed_by: by,
+    reviewer_id: person ? text('reviewer_id') || null : null,
+    backup_reviewer_id: someone ? text('backup_reviewer_id') || null : null,
+    rubric: someone ? text('rubric') || null : null, applies_to_label: text('applies_to_label') || null,
   };
+}
+
+/** The line under the form: how many open cards at the stage the requirement would apply to right now. Read again when the
+    label changes, and only written when the label it was read for is still the one typed. */
+async function peAffectedSync(form: HTMLFormElement): Promise<void> {
+  const note = form.querySelector<HTMLElement>('[data-pe-affected]');
+  const stageId = form.dataset['peForm'] ?? '';
+  if (!note || !stageId) return;
+  const label = String(new FormData(form).get('applies_to_label') ?? '').trim();
+  try {
+    const {count, stage} = await pipelineAffectedCount(stageId, label);
+    if (!form.isConnected || String(new FormData(form).get('applies_to_label') ?? '').trim() !== label) return;
+    note.textContent = count === 0 ? `Applies to no cards in ${stage} now.` : `Applies to the ${count} card${count === 1 ? '' : 's'} in ${stage} now.`;
+    note.hidden = false;
+  } catch { note.hidden = true; }
 }
 
 async function peSaveReq(form: HTMLFormElement): Promise<void> {
@@ -267,7 +305,7 @@ function peOpenForm(stageId: string, r: PeReq | null): void {
   for (const other of document.querySelectorAll<HTMLElement>('[data-pe-slot]')) other.innerHTML = '';
   slot.innerHTML = peReqFormHTML(stageId, r);
   const form = slot.querySelector('form');
-  if (form) { peFormSync(form); form.querySelector<HTMLInputElement>('[name="name"]')?.focus(); }
+  if (form) { peFormSync(form); void peAffectedSync(form); form.querySelector<HTMLInputElement>('[name="name"]')?.focus(); }
 }
 
 // ---- stage changes go through the task-type route, which takes the whole list of stages
@@ -356,9 +394,16 @@ function peWire(dialog: HTMLDialogElement): void {
     if (t.closest('[data-pe-close]')) { dialog.close(); return; }
     if (t.closest('button')) void peClick(t);
   });
+  // A setting or the Goal saves on Enter as well as on change (the Goal sits in no form, so nothing else would send it).
+  dialog.addEventListener('keydown', ev => {
+    const t = ev.target;
+    if (ev.key !== 'Enter' || !(t instanceof HTMLInputElement) || !t.dataset['peSetting']) return;
+    ev.preventDefault();
+    void peSetting(t.dataset['peSetting'], t.value);
+  });
   dialog.addEventListener('change', ev => {
     const t = ev.target;
-    if (t instanceof HTMLElement && t.closest('[data-pe-form]')) { const form = t.closest('form'); if (form) peFormSync(form); return; }
+    if (t instanceof HTMLElement && t.closest('[data-pe-form]')) { const form = t.closest('form'); if (form) { peFormSync(form); void peAffectedSync(form); } return; }
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) {
       const key = t.dataset['peSetting'], renamed = t.dataset['peRename'];
       if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-private')) { void peSaveSettings({visibility: t.checked ? 'members' : 'company'}); return; }

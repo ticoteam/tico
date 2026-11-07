@@ -8,6 +8,21 @@ const {install} = require('./support/pipeline-fixture.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const overflow = page => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+// Waits for something the fake server records (a read) without a fixed sleep.
+async function until(check, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) { if (Date.now() > end) throw new Error('timed out waiting for the server to record it'); await new Promise(r => setTimeout(r, 50)); }
+}
+const newPage = async (browser, viewport, extra = {}) => {
+  const context = await browser.newContext({viewport, serviceWorkers: 'block', ...extra});
+  await context.addInitScript(() => {
+    try { localStorage.setItem('tico.theme', 'dark'); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  return {context, page, errors};
+};
 // The composer sits inside its panel with a gutter on both sides, never on the viewport's edge.
 const composerInside = async (page, panel) => {
   const box = await page.locator(panel).boundingBox(), composer = await page.locator('.pr-chat .thv-composer').boundingBox();
@@ -119,6 +134,77 @@ const composerInside = async (page, panel) => {
       assert.ok(await overflow(page) <= 0, label + ': no horizontal scroll with the ticket open');
 
       assert.deepEqual(errors, [], label + ': no page errors');
+      await context.close();
+    }
+
+    // E3: a member who owns the pipeline may mark met: the server says so per pipeline (can_edit_rules absent here), and the
+    // owner check reads pipeline_owner_id. The rules controls follow that answer.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 1440, height: 940});
+      await install(page, {ownerOnly: true, member: true});
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('[data-task-key="tD52"] .bcard-open', {timeout: t(8000)});
+      await page.locator('[data-task-key="tD52"] .bcard-open').click();
+      await page.waitForSelector('.task-req[data-req-id="r-shots"] [data-req-more]', {timeout: t(5000)});
+      assert.equal(await page.locator('.task-req[data-req-id="r-spec"] [data-req-more]').count(), 0, 'a met requirement offers no mark');
+      assert.deepEqual(errors, [], 'owner controls: no page errors');
+      await context.close();
+    }
+
+    // E10: a card past its stage's loaded limit shows the late clock with no manager beside the board.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 1440, height: 940});
+      await install(page);
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('[data-task-key="tD17"] [data-step-age]', {timeout: t(8000)});
+      assert.equal(await page.locator('[data-task-key="tD52"] [data-step-age]').count(), 0, 'a card within its limit shows nothing');
+      assert.equal(await page.locator('#pipe-rail').count(), 0, 'no manager, so no rail');
+      assert.deepEqual(errors, [], 'late without a rail: no page errors');
+      await context.close();
+    }
+
+    // E12: the manager poll runs while Tasks is open and stops when the page is left.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 1440, height: 940});
+      await page.clock.install();
+      const state = await install(page, {manager: true});
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('#pipe-rail', {state: 'attached', timeout: t(8000)});
+      await until(() => state.managerReads >= 1);
+      const before = state.managerReads;
+      await page.clock.fastForward(61000);
+      await until(() => state.managerReads > before);
+      await page.evaluate(() => { location.hash = '#/overview'; });
+      await new Promise(r => setTimeout(r, 500));
+      const left = state.managerReads;
+      await page.clock.fastForward(10 * 60000);
+      await new Promise(r => setTimeout(r, 300));
+      assert.equal(state.managerReads, left, 'the manager poll stops when Tasks is left');
+      assert.deepEqual(errors, [], 'poll: no page errors');
+      await context.close();
+    }
+
+    // E-extra: the phone's one-stage view is for a pipeline with requirements; a pipeline without them keeps the board.
+    for (const [has, label] of [[false, 'no requirements'], [true, 'with requirements']]) {
+      const {context, page, errors} = await newPage(browser, {width: 390, height: 844}, {hasTouch: true});
+      await install(page, {noRequirements: !has});
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('#task-body [data-task-key]', {state: 'attached', timeout: t(8000)});
+      assert.equal(await page.locator('#task-body .pipe-stage').count() > 0, has, label + ': the one-stage phone view');
+      assert.deepEqual(errors, [], label + ': no page errors');
+      await context.close();
+    }
+
+    // FHI9: on the phone's one stage, Select all selects that stage's cards.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 390, height: 844}, {hasTouch: true});
+      await install(page);
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('#task-body .pipe-stage .bcol-all', {timeout: t(8000)});
+      await page.locator('#task-body .pipe-stage .bcol-all').click();
+      await page.waitForSelector('#task-body.has-sel', {timeout: t(5000)});
+      assert.ok(await page.locator('#task-body .pipe-stage [data-task-key].sel').count() >= 2, 'Select all takes the stage cards');
+      assert.deepEqual(errors, [], 'select all: no page errors');
       await context.close();
     }
   } finally {

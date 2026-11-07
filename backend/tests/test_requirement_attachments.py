@@ -8,6 +8,7 @@ import pytest
 
 from backend import files as files_module
 from backend import hubdb as H
+from backend import pipeline_engine
 from backend import pipeline_requirements as R
 from backend import requirement_attachments as A
 from backend import task_privacy as privacy
@@ -290,3 +291,69 @@ def test_evidence_the_reviewer_cannot_read_is_refused_for_a_file_and_for_a_blob(
     with pytest.raises(Problem) as hidden:
         A.attach(c, auth, caller, task["id"], file_req["id"], {"source": "file", "file_id": "file-1"})
     assert hidden.value.status == 404
+
+
+def test_a_file_attachment_links_to_the_version_it_pinned_and_names_its_media(tmp_path):
+    """A reviewer sees what was attached: the pinned version's address, its name, and whether it is an image, a page or
+    a file. A later version of the same file leaves the pinned address alone."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    c.execute("PRAGMA foreign_keys=OFF")  # the file row is not what this test reads; only its version rows are
+    c.execute(
+        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+        "VALUES ('f1', 1, 'b1', 'd1', 3, 'shot.png', 'image/png', ?, ?)",
+        (ANA, H.now()),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+        "VALUES ('f1', 2, 'b2', 'd2', 3, 'shot.png', 'image/png', ?, ?)",
+        (ANA, H.now()),
+    )
+    pinned = {"id": "a1", "source": "file", "file_id": "f1", "file_version": 1, "blob_id": None, "url": None}
+    [view] = A.views(c, [pinned])
+
+    assert view["format"] == "image"
+    assert view["name"] == "shot.png"
+    assert view["href"] == "/api/v2/files/f1/versions/1"
+
+
+def test_a_link_and_a_blob_show_their_own_address_and_media(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) "
+        "VALUES ('b9', ?, 'd', 4, 'launch.pdf', 'application/pdf', ?)",
+        (ANA, H.now()),
+    )
+    link = {"id": "a1", "source": "link", "url": "https://example.com/launch"}
+    blob = {"id": "a2", "source": "blob", "blob_id": "b9", "file_id": None, "file_version": None, "url": None}
+    link_view, blob_view = A.views(c, [link, blob])
+
+    assert (link_view["format"], link_view["href"]) == ("link", "https://example.com/launch")
+    assert (blob_view["format"], blob_view["name"], blob_view["href"]) == ("page", "launch.pdf", "/api/v2/files/b9")
+
+
+def test_a_ticket_lists_each_requirements_attachments_with_their_addresses_in_one_read(tmp_path):
+    """The ticket's requirement list carries each requirement's newest attachments, so the page makes no request per
+    attachment requirement, and the list is capped."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev, stage, task = _ticket(c)
+    req = R.add(
+        c,
+        ANA,
+        stage,
+        {"name": "Live link", "kind": "attachment", "needs": {"formats": ["link"]}, "reviewed_by": "nobody"},
+    )
+    who = SimpleNamespace(actor=ANA)
+    for n in range(A.ATTACH_LIMIT + 2):
+        A.attach(c, Auth(), who, task["id"], req["id"], {"source": "link", "url": f"https://example.com/{n}"})
+
+    [entry] = pipeline_engine.detail(c, task["id"])
+
+    assert len(entry["attachments"]) == A.ATTACH_LIMIT
+    assert entry["attachments"][0]["href"] == f"https://example.com/{A.ATTACH_LIMIT + 1}"
+    assert entry["attachments"][0]["format"] == "link"

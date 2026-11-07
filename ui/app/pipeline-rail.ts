@@ -19,6 +19,8 @@ interface PipelineTasksState {
   tasks: { id: string | number; title?: string; owner_id?: string; type_id?: string; status?: string }[];
   /** The stage chosen on a phone, by step id. */
   pipeStage?: string;
+  /** Aborted when the Tasks page is left: the rail's timers and listeners stop with it. */
+  layoutAbort?: AbortController | null;
 }
 
 interface PipelineRail {
@@ -55,11 +57,11 @@ function pipelineStepLate(task: { id: string | number }): boolean {
     and that answer is read. Only when a server sends no such field does this guess the same rule from what the page knows;
     the server still decides. */
 function pipelineMayEditRules(typeId: string | null | undefined): boolean {
-  const type = (TASK_TYPES as { id: string; owner_id?: string; can_edit_rules?: boolean }[]).find(item => item.id === typeId);
+  const type = (TASK_TYPES as { id: string; pipeline_owner_id?: string; can_edit_rules?: boolean }[]).find(item => item.id === typeId);
   if (typeof type?.can_edit_rules === 'boolean') return type.can_edit_rules;
   const me = myActor();
   if (!me) return false;
-  return type?.owner_id === me || S.me?.role === 'owner' || S.me?.bot_admin === true;
+  return type?.pipeline_owner_id === me || S.me?.role === 'owner' || S.me?.bot_admin === true;
 }
 
 // ---------------------------------------------------------------- words
@@ -142,9 +144,9 @@ function pipelineRailBar(): HTMLElement | null {
 
 /** The manager's panel: head, tabs, Late and the tab's list; and the phone's bar. Chat is mounted beside it and never
     redrawn here. */
-function pipelineRailPaint(state: PipelineTasksState): void {
+function pipelineRailPaint(state: PipelineTasksState | null): void {
   const rail = pipelineRail;
-  if (!rail) return;
+  if (!rail || !state) return;  // the Tasks page is gone: nothing to draw into or from
   const view = rail.view;
   const tasks = pipelineRailTasks(state, rail);
   const phone = pipelinePhone();
@@ -228,7 +230,7 @@ async function pipelineRailLoad(): Promise<void> {
     const changed = late.size !== pipelineLateIds.size || [...late].some(id => !pipelineLateIds.has(id));
     pipelineLateIds.clear();
     late.forEach(id => pipelineLateIds.add(id));
-    if (changed) tasksRender(TASKS_ST);       // the cards past their limit say so
+    if (changed && TASKS_ST) tasksRender(TASKS_ST);       // the cards past their limit say so
     else pipelineRailPaint(TASKS_ST);
   } catch {
     // The manager's status is not there (an older server, or a pipeline with none): the rail shows what it has.
@@ -250,7 +252,7 @@ function pipelineRailHide(hidden: boolean): void {
   if (S.me?.cloud) void post('/v2/preferences/' + PIPELINE_RAIL_PREF, { value: hidden }).catch(() => undefined);
 }
 
-function pipelineRailEnter(type: { id: string }, manager: string, page: Element): void {
+function pipelineRailEnter(type: { id: string }, manager: string, page: Element, signal?: AbortSignal): void {
   pipelineRailLeave();
   const host = document.createElement('aside');
   host.id = 'pipe-rail';
@@ -273,6 +275,8 @@ function pipelineRailEnter(type: { id: string }, manager: string, page: Element)
   const rail: PipelineRail = { pipelineId: type.id, manager, view: null, tab: 'log', sheet: false, host, chat: null, timer: 0, drawn: '' };
   pipelineRail = rail;
   rail.timer = window.setInterval(() => { void pipelineRailLoad(); }, PIPELINE_RAIL_REFRESH_MS);
+  // The poll belongs to the Tasks page: leaving it (the router aborts the page's signal) takes the rail and its timer away.
+  signal?.addEventListener('abort', () => { if (pipelineRail === rail) pipelineRailLeave(); }, { once: true });
   void pipelineRailPrefRead();
   void pipelineRailLoad();
 }
@@ -301,7 +305,7 @@ function pipelineRailSync(state: PipelineTasksState): void {
   if (type) void pipelineMineSync(type.id);
   if (!type || !manager || !page) { pipelineRailLeave(); return; }
   if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== manager || !pipelineRail.host.isConnected) {
-    pipelineRailEnter(type, manager, page);
+    pipelineRailEnter(type, manager, page, state.layoutAbort?.signal);
   }
   pipelineRailPaint(state);
 }
