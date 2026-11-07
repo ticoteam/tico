@@ -4,7 +4,7 @@
    messages with Reveal code, Check connection and Stop using in Tico) and a phone request's page while TICO prices and
    approves it. Tools' Add tool makes a Tico address, or asks for a number (an admin). On Tools › Settings: the company
    connection (Email) and phone requests (Texts). Bodies are external text, never HTML.
-   Registry: ui/app/inboxes.js.
+   Registry: ui/app/inboxes.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 

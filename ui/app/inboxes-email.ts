@@ -1,9 +1,9 @@
-/* ui/app/inboxes-email.ts — The Google mailboxes Tico uses (backend/mailboxes.py), under Tools.
+/* ui/app/inboxes-email.js — The Google mailboxes Tico uses (backend/mailboxes.py), under Tools.
    Kind 'mailbox': one mailbox's page (#/tools/mailbox/<address or id>: who can use it, Read or Read and write, its key,
    its message automations, its recent mail, Check now and Stop using in Tico; the sending Limits card is
    ui/app/inboxes-sending.ts's), its Activity tab (#/tools/mailbox/<…>/activity: what was sent from it, GET
    /v2/email/sends) and Add tool > Email (Connect mailbox). On Tools › Settings › Email: the Connection card
-   (ui/google-connect.ts draws it into #set-google) and What Tico may do. Registry: ui/app/inboxes.js.
+   (ui/google-connect.js draws it into #set-google) and What Tico may do. Registry: ui/app/inboxes.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -273,7 +273,7 @@ function mbConnectDialog(ctx) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- Tools › Settings › Email
-// The Connection card (ui/google-connect.ts) draws into one #set-google kept across draws and visits: it holds a paused
+// The Connection card (ui/google-connect.js) draws into one #set-google kept across draws and visits: it holds a paused
 // check, the way picked and typed values, so leaving Tools › Settings and coming back resumes them.
 let MB_GOOGLE_HOST = null;
 async function mbMountGoogle(slot) {

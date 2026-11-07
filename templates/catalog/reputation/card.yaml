@@ -41,7 +41,7 @@ prerequisites:
     why: "Optional. Read-only Slack lets it see the marketing channel; posting the digest there is a separate choice the owner makes."
     required: false
 onboarding:
-  - ask: "Which review sites matter to your buyers: Google, Yelp, the Better Business Bureau, G2, Capterra, the app stores, Glassdoor? Where are your listings?"
+  - ask: "Which review sites matter to your buyers: Google, Yelp, the Better Business Bureau, G2, Capterra, Glassdoor? Where are your listings? (App store reviews are the App Store Owner's when the team has one.)"
     why: "Becomes knowledge/surfaces.md. Only surfaces you name are read, and each is checked against the platform's own rules."
   - ask: "Do you own or have claimed each listing? Who holds the login?"
     why: "A listing only its owner can claim becomes a task for that human with exact steps. I never sign up or claim anything myself."

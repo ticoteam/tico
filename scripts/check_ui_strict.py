@@ -67,7 +67,6 @@ KEPT_JS = {
     "optional arguments; a .ts signature drops both",
     "ui/app/state.js": "the global S: its null and empty-array starts are never in a .ts file, and strict files read S.me "
     "and S.emps",
-    "ui/app/inboxes.js": "the global INBOX_KINDS = {}: as .ts it is {}, and tools.ts then gets unknown[]",
     "ui/app/finance.js": "the globals FIN and FIN_ACCESS: as .ts they are implicit any where finance-attribution.ts reads them",
     "ui/app/automations.js": "the global AU: as .ts it is implicit any where the automations files read it",
     "ui/app/automations-editors.js": "auAnswer: strict .ts files call it with its JSDoc signature, and its arguments become required",

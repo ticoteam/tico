@@ -1,7 +1,7 @@
-/* The inbox kinds' pages under Tools (ui/app/inboxes.js and one file a kind; ui/styles/tools.css has the shared frame). One commented block a file; colours are theme tokens only,
+/* The inbox kinds' pages under Tools (ui/app/inboxes.ts and one file a kind; ui/styles/tools.css has the shared frame). One commented block a file; colours are theme tokens only,
    so light and dark follow the theme. At phone width the list's rows become cards and nothing scrolls sideways. */
 
-/* Settings and an inbox's page (ui/app/inboxes.js) */
+/* Settings and an inbox's page (ui/app/inboxes.ts) */
 .ib-jump{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 12px;position:sticky;top:0;z-index:2;padding:6px 0;background:var(--bg, var(--surface))}
 .ib-section{scroll-margin-top:48px;margin:0 0 20px;min-width:0}
 .ib-section>h2{font-size:var(--t-base);margin:0 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}

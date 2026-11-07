@@ -1,40 +1,129 @@
 /* ui/app/inboxes-outbox.ts — Letters out through Tico's Gateway: its page (#/tools/address/outbox) and its card on
-   Tools › Settings › Letters out. Registry: ui/app/inboxes.js. */
+   Tools › Settings › Letters out. Registry: ui/app/inboxes.ts. */
 'use strict';
 
-const LETTERS_OUT_MODES = [['ask_first', 'Ask first'], ['on_their_own', 'On their own'], ['never', 'Never']];
-let LETTERS_OUT_LIVE = null;
-const lettersOutMoney = micros => '$' + (Number(micros || 0) / 1000000).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
-const lettersOutAddress = address => address ? [address.name, address.line1, address.line2,
+// The fields of the letters routes' answers that this page reads (api.d.ts has no type for them).
+interface LettersOutAddress {
+  [field: string]: string | null | undefined;
+}
+interface LettersOutConfig {
+  id?: string;
+  availability?: string;
+  mode?: string;
+  return_address?: LettersOutAddress | null;
+  monthly_cap_micros?: number | null;
+}
+interface LettersOutGrant {
+  grantee_type: string;
+  grantee_id: string;
+  mode?: string | null;
+  monthly_cap_micros?: number | null;
+}
+interface LettersOutGrants {
+  grants?: LettersOutGrant[];
+}
+interface LettersOutRow {
+  id: string;
+  acting_bot_id?: string | null;
+  automation_id?: string | null;
+  billing?: string | null;
+  can_cancel?: boolean | null;
+  cancel_possible?: boolean;
+  color?: boolean;
+  created_at: string;
+  duplex?: boolean;
+  error?: string | null;
+  mail_class: string;
+  page_count?: number | null;
+  proof?: string | null;
+  recipient?: LettersOutAddress | null;
+  redacted?: boolean;
+  requested_by?: string | null;
+  return_address?: LettersOutAddress | null;
+  status: string;
+  total_micros?: number | null;
+  tracking?: { barcode: string; status?: string | null }[] | null;
+}
+interface LettersOutPage {
+  items?: LettersOutRow[];
+  next_before?: string | null;
+}
+// One change to the letters list, pushed live: the letter it sets, or the id of one that is gone.
+interface LettersOutEvent {
+  id: string;
+  gone?: boolean;
+  invalidate?: boolean;
+  letter?: LettersOutRow;
+}
+interface LettersOutAccess {
+  send?: boolean;
+}
+interface LettersOutBot {
+  id: string;
+  display_name?: string | null;
+  name?: string | null;
+  slug?: string | null;
+}
+interface LettersOutAutomation {
+  id: string;
+  name?: string | null;
+  enabled?: boolean;
+  flow?: unknown;
+}
+type LettersOutAutomations = LettersOutAutomation[] | { automations?: LettersOutAutomation[] };
+
+// The named controls of this card's forms. form.elements has no typed names, so each use casts it to this (erased).
+interface LettersOutControls {
+  principal: HTMLSelectElement;
+  mode: HTMLSelectElement;
+  cap: HTMLInputElement;
+  [name: string]: HTMLInputElement | HTMLSelectElement;
+}
+
+const LETTERS_OUT_MODES: [string, string][] = [['ask_first', 'Ask first'], ['on_their_own', 'On their own'], ['never', 'Never']];
+let LETTERS_OUT_LIVE: (() => void) | null = null;
+const lettersOutMoney = (micros: number | null | undefined) => '$' + (Number(micros || 0) / 1000000).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
+const lettersOutAddress = (address: LettersOutAddress | null | undefined) => address ? [address.name, address.line1, address.line2,
   [address.city, address.state, address.postal_code].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '';
-const lettersOutSettings = ctx => ctx.once('letters-out-settings', async () => {
+const lettersOutSettings = (ctx: InboxCtx): Promise<LettersOutConfig> => ctx.once('letters-out-settings', async (): Promise<LettersOutConfig> => {
   try { return await get('/v2/letters/settings', {fresh: true}); }
-  catch (e) { if (e.status === 404 || e.status === 503 || e.code === 'not_found' || e.code === 'unconfigured') return {availability: 'unconfigured'}; throw e; }
+  catch (e) {
+    // The code of a thrown value: api.js's ApiFailure carries no top-level code, so this reads the property only when it is there.
+    const code = typeof e === 'object' && e !== null && 'code' in e ? e.code : undefined;
+    if (errorStatus(e) === 404 || errorStatus(e) === 503 || code === 'not_found' || code === 'unconfigured') return {availability: 'unconfigured'};
+    throw e;
+  }
 });
-const lettersOutGrants = ctx => ctx.admin ? ctx.once('letters-out-grants', () => get('/v2/letters/outboxes/company/grants', {fresh: true})) : Promise.resolve({grants: []});
-const lettersOutName = grant => grant.grantee_type === 'bot' ? botDisplayName(grant.grantee_id) : personDisplay(grant.grantee_id);
-const lettersOutStatus = settings => settings.mode === 'never' ? ['off', 'Never']
+const lettersOutGrants = (ctx: InboxCtx): Promise<LettersOutGrants> => ctx.admin ? ctx.once('letters-out-grants', () => get('/v2/letters/outboxes/company/grants', {fresh: true})) : Promise.resolve({grants: []});
+const lettersOutName = (grant: LettersOutGrant) => grant.grantee_type === 'bot' ? botDisplayName(grant.grantee_id) : personDisplay(grant.grantee_id);
+const lettersOutStatus = (settings: LettersOutConfig): [string, string] => settings.mode === 'never' ? ['off', 'Never']
   : settings.availability === 'unconfigured' ? ['off', 'Coming soon']
   : settings.availability !== 'ready' ? ['off', 'Not set up']
   : !settings.return_address ? ['attention', 'Return address needed'] : ['ok', 'Ready'];
-function lettersOutOptions(value, company, inherit = false) {
+function lettersOutOptions(value: string | null | undefined, company?: string | null, inherit = false) {
   if ((company === 'never' && value !== 'never') || (company === 'ask_first' && value === 'on_their_own')) value = null;
   return (inherit ? `<option value=""${value == null ? ' selected' : ''}>Company default</option>` : '') +
     LETTERS_OUT_MODES.map(([key, label]) => `<option value="${key}"${key === value ? ' selected' : ''}${
       (company === 'never' && key !== 'never') || (company === 'ask_first' && key === 'on_their_own') ? ' disabled' : ''}>${label}</option>`).join('');
 }
-function lettersOutCap(value) {
+// A grant's principal as 'type:id': its option's value, or a grant row's data-lo-grant.
+function lettersGrantParts(value: string): [string, string] {
+  const [type = '', id = ''] = value.split(':');
+  return [type, id];
+}
+function lettersOutCap(value: string) {
   if (String(value).trim() === '') return null;
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount < 0 || amount > 1000000) throw new Error('Enter a monthly cap from $0 to $1,000,000.');
   return Math.round(amount * 1000000);
 }
-function lettersOutProof(row) {
+function lettersOutProof(row: LettersOutRow) {
   return /^\/api\/v2\/files\/[A-Za-z0-9_-]+$/.test(String(row.proof || ''))
     ? `<a href="${esc(row.proof)}" target="_blank" rel="noopener">Proof PDF</a>` : '';
 }
-function lettersOutActivity(row) {
-  const labels = {quoted: 'Quoted', waiting_for_ok: 'Waiting for OK', ready: 'Queued', submitting: 'Checking submission',
+// row.billing may be null (never billed): includes() is then false, as before the ! typed it.
+function lettersOutActivity(row: LettersOutRow) {
+  const labels: Record<string, string> = {quoted: 'Quoted', waiting_for_ok: 'Waiting for OK', ready: 'Queued', submitting: 'Checking submission',
     needs_review: 'Needs review',
     submitted: 'Submitted', printing: 'Printing', mailed: 'Mailed', delivered: 'Delivered', returned: 'Returned',
     failed: 'Failed', cancelled: 'Cancelled', declined: 'Declined'};
@@ -48,7 +137,7 @@ function lettersOutActivity(row) {
     <div class="lo-letter-meta"><time datetime="${esc(row.created_at)}">${esc(new Date(row.created_at).toLocaleDateString())}</time>
     <span>${esc(row.page_count ?? '—')} pages</span><span>${esc(String(row.mail_class).replaceAll('_', ' '))}</span>
     <span>${sender ? esc(actorLabel(sender)) : 'Person'}</span><strong>${lettersOutMoney(row.total_micros)}</strong>
-    ${['none', 'void', 'reversed'].includes(row.billing) ? '<span>Not charged</span>' : ''}</div>
+    ${['none', 'void', 'reversed'].includes(row.billing!) ? '<span>Not charged</span>' : ''}</div>
     ${row.status === 'needs_review' ? '<p class="muted">Submission needs an admin’s review. The total stays reserved until the outcome is confirmed.</p>' : ''}
     <div class="lo-letter-actions">${row.redacted ? '' : lettersOutProof(row)}${!row.redacted && row.status === 'waiting_for_ok' ? '<a href="#/foryou">Review</a>' : ''}
       ${canCancel ? `<button class="ghost small" type="button" data-lo-cancel="${esc(row.id)}">Cancel</button>` : ''}
@@ -58,13 +147,13 @@ function lettersOutActivity(row) {
       ${row.error ? `<dt>Status</dt><dd>${esc(row.error.replaceAll('_', ' '))}</dd>` : ''}</dl></details>`}</div></li>`;
 }
 
-async function lettersOutAccess(host, ctx, config, grants) {
+async function lettersOutAccess(host: Element, ctx: InboxCtx, config: LettersOutConfig, grants: LettersOutGrant[]): Promise<void> {
   if (!ctx.admin) {
-    const access = await get('/v2/letters/access', {fresh: true});
+    const access: LettersOutAccess = await get('/v2/letters/access', {fresh: true});
     if (ctx.live()) host.innerHTML = inboxesCard('lo-access', 'Who can use it', `<p>${access.send ? 'Send access' : 'No send access'}</p>`);
     return;
   }
-  const bots = await ctx.once('letters-out-bots', () => get('/v2/bots', {fresh: true}));
+  const bots: LettersOutBot[] = await ctx.once('letters-out-bots', () => get('/v2/bots', {fresh: true}));
   if (!ctx.live()) return;
   const candidates = [...(Array.isArray(bots) ? bots : []).map(b => ({type: 'bot', id: b.id, name: b.display_name || b.name || b.slug || b.id})),
     ...(S.people || []).filter(p => !p.hidden).map(p => ({type: 'person', id: p.id, name: p.name || p.id}))]
@@ -78,38 +167,41 @@ async function lettersOutAccess(host, ctx, config, grants) {
     ${candidates.length ? `<form data-lo-add class="lo-grant-add"><label>Teammate<select name="principal">${candidates.map(p =>
       `<option value="${esc(p.type + ':' + p.id)}">${esc(p.name)}${p.type === 'bot' ? ' · Bot' : ''}</option>`).join('')}</select></label>
       <button type="submit" class="ghost">Give send access</button></form>` : ''}`);
-  host.querySelector('[data-lo-add]')?.addEventListener('submit', async event => {
-    event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button'); button.disabled = true;
-    const [type, id] = form.elements.principal.value.split(':');
+  const addForm = host.querySelector<HTMLFormElement>('[data-lo-add]');
+  addForm?.addEventListener('submit', async event => {
+    event.preventDefault(); const form = addForm!, button = form.querySelector<HTMLButtonElement>('button')!, controls = form.elements as unknown as LettersOutControls; button.disabled = true;
+    const [type, id] = lettersGrantParts(controls.principal.value);
     try { await put(`/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, {level: 'send'}); if (ctx.live()) ctx.refresh(); }
-    catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
+    catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
   });
-  for (const item of host.querySelectorAll('[data-lo-grant]')) {
-    const [type, id] = item.dataset.loGrant.split(':'), path = `/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
-    item.querySelector('[data-lo-revoke]').onclick = async event => {
-      const button = event.currentTarget; button.disabled = true;
+  for (const item of host.querySelectorAll<HTMLElement>('[data-lo-grant]')) {
+    const [type, id] = lettersGrantParts(item.dataset.loGrant!), path = `/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
+    const revoke = item.querySelector<HTMLButtonElement>('[data-lo-revoke]')!;
+    revoke.onclick = async () => {
+      const button = revoke; button.disabled = true;
       try { await writeRequest('DELETE', path, {}); if (ctx.live()) ctx.refresh(); }
-      catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
+      catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
     };
-    item.querySelector('form')?.addEventListener('submit', async event => {
-      event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button'); button.disabled = true;
-      try { await put(`/v2/letters/bots/${encodeURIComponent(id)}/settings`, {mode: form.elements.mode.value || null, monthly_cap_micros: lettersOutCap(form.elements.cap.value)});
+    const policy = item.querySelector<HTMLFormElement>('form');
+    policy?.addEventListener('submit', async event => {
+      event.preventDefault(); const form = policy!, button = form.querySelector<HTMLButtonElement>('button')!, controls = form.elements as unknown as LettersOutControls; button.disabled = true;
+      try { await put(`/v2/letters/bots/${encodeURIComponent(id)}/settings`, {mode: controls.mode.value || null, monthly_cap_micros: lettersOutCap(controls.cap.value)});
         if (ctx.live()) { toast('Saved'); button.disabled = false; } }
-      catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
+      catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
     });
   }
 }
 
-async function lettersOutDetail(host, id, ctx) {
+async function lettersOutDetail(host: Element, _id: string, ctx: InboxCtx): Promise<{kind: string; id: string; name: string; address: string} | undefined> {
   LETTERS_OUT_LIVE?.(); LETTERS_OUT_LIVE = null;
   const config = await lettersOutSettings(ctx); if (!ctx.live()) return;
   if (config.id !== 'company') { host.innerHTML = inboxesSoon('lo-outbox', 'Letters out'); return {kind: 'outbox', id: 'company', name: 'Letters out', address: ''}; }
   const [grantData, activity] = await Promise.all([lettersOutGrants(ctx), get('/v2/letters?limit=25', {fresh: true})]);
   if (!ctx.live()) return;
   const [status, statusText] = lettersOutStatus(config), grants = grantData.grants || [];
-  const rows = new Map((activity.items || []).map(row => [row.id, row])); let next = activity.next_before;
-  let refreshing = null, refreshDirty = false, epoch = 0, revision = 0;
-  const rowRevisions = new Map();
+  const rows = new Map<string, LettersOutRow>((activity.items || []).map((row: LettersOutRow): [string, LettersOutRow] => [row.id, row])); let next: string | null | undefined = activity.next_before;
+  let refreshing: Map<string, LettersOutEvent> | null = null, refreshDirty = false, epoch = 0, revision = 0;
+  const rowRevisions = new Map<string, number>();
   host.innerHTML = inboxesHead(host, {name: 'Letters out', status, statusText, sub: 'Tico Gateway · At cost + 25%',
     actions: '<a class="ghost" href="#/tools/settings/letters-out">Settings</a>'}) +
     '<div class="lo-layout"><div><div data-lo-access></div>' +
@@ -120,11 +212,11 @@ async function lettersOutDetail(host, id, ctx) {
       <dt>Monthly cap</dt><dd>${config.monthly_cap_micros == null ? 'No cap' : lettersOutMoney(config.monthly_cap_micros)}</dd><dt>Billed by</dt><dd>Tico Gateway</dd></dl>`) + '</aside></div>';
   const paint = () => {
     if (!ctx.live()) return;
-    host.querySelector('[data-lo-activity]').innerHTML = rows.size ? [...rows.values()].map(lettersOutActivity).join('') : '<li class="muted">No letters yet</li>';
-    host.querySelector('[data-lo-more]').hidden = !next;
+    host.querySelector<HTMLElement>('[data-lo-activity]')!.innerHTML = rows.size ? [...rows.values()].map(lettersOutActivity).join('') : '<li class="muted">No letters yet</li>';
+    host.querySelector<HTMLElement>('[data-lo-more]')!.hidden = !next;
   };
   paint();
-  const apply = event => {
+  const apply = (event: LettersOutEvent) => {
     if (event.gone) rows.delete(event.id);
     else if (event.letter) {
       if (!rows.has(event.id)) { const old = [...rows]; rows.clear(); rows.set(event.id, event.letter); for (const [key, value] of old) rows.set(key, value); }
@@ -136,35 +228,36 @@ async function lettersOutDetail(host, id, ctx) {
     // Every invalidation hides revoked content, including while an older read is in flight.
     rows.clear(); next = null; paint();
     if (refreshing) { refreshDirty = true; return; }
-    const pending = new Map(); refreshing = pending; refreshDirty = false;
+    const pending = new Map<string, LettersOutEvent>(); refreshing = pending; refreshDirty = false;
     get('/v2/letters?limit=25', {fresh: true}).then(page => {
       if (!ctx.live() || refreshDirty) return;
       rows.clear(); for (const row of page.items || []) rows.set(row.id, row);
       for (const event of pending.values()) apply(event);
       next = page.next_before; paint();
-    }).catch(e => { if (ctx.live() && !refreshDirty) toast(e.message, true); }).finally(() => {
+    }).catch(e => { if (ctx.live() && !refreshDirty) toast(errorMessage(e, ''), true); }).finally(() => {
       const again = refreshDirty; refreshing = null; refreshDirty = false;
       if (again && ctx.live()) invalidate();
     });
   };
-  host.querySelector('[data-lo-activity]').onclick = async event => {
-    const button = event.target.closest('[data-lo-cancel]'); if (!button) return; button.disabled = true;
-    const id = button.dataset.loCancel, started = epoch, seen = rowRevisions.get(id);
-    try { const row = await post(`/v2/letters/${encodeURIComponent(button.dataset.loCancel)}/cancel`, {});
-      if (ctx.live() && started === epoch && seen === rowRevisions.get(id)) {
+  host.querySelector<HTMLElement>('[data-lo-activity]')!.onclick = async event => {
+    const button = eventElement(event)!.closest<HTMLButtonElement>('[data-lo-cancel]'); if (!button) return; button.disabled = true;
+    const id2 = button.dataset.loCancel!, started = epoch, seen = rowRevisions.get(id2);
+    try { const row: LettersOutRow = await post(`/v2/letters/${encodeURIComponent(button.dataset.loCancel!)}/cancel`, {});
+      if (ctx.live() && started === epoch && seen === rowRevisions.get(id2)) {
         rows.set(row.id, row); paint(); toast(row.status === 'cancelled' ? 'Cancelled' : row.status); } }
-    catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
+    catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
   };
-  host.querySelector('[data-lo-more]').onclick = async event => {
-    const button = event.currentTarget; button.disabled = true;
+  const loadMore = host.querySelector<HTMLButtonElement>('[data-lo-more]')!;
+  loadMore.onclick = async () => {
+    const button = loadMore; button.disabled = true;
     const started = epoch, seen = revision;
-    try { const more = await get(`/v2/letters?limit=25&before=${encodeURIComponent(next)}`, {fresh: true}); if (!ctx.live() || started !== epoch) return;
+    try { const more = await get(`/v2/letters?limit=25&before=${encodeURIComponent(next!) /* the more button is hidden without a cursor */}`, {fresh: true}); if (!ctx.live() || started !== epoch) return;
       for (const row of more.items || []) if ((rowRevisions.get(row.id) || 0) <= seen) rows.set(row.id, row);
       next = more.next_before; paint(); }
-    catch (e) { if (ctx.live()) toast(e.message, true); }
+    catch (e) { if (ctx.live()) toast(errorMessage(e, ''), true); }
     finally { if (ctx.live()) button.disabled = false; }
   };
-  LETTERS_OUT_LIVE = liveOn('letters', event => {
+  LETTERS_OUT_LIVE = liveOn('letters', (event: LettersOutEvent) => {
     if (!ctx.live()) { LETTERS_OUT_LIVE?.(); LETTERS_OUT_LIVE = null; return; }
     if (event.invalidate) { invalidate(); return; }
     if (event.gone || event.letter) {
@@ -172,22 +265,22 @@ async function lettersOutDetail(host, id, ctx) {
       refreshing?.set(event.id, event); apply(event); paint();
     }
   });
-  await lettersOutAccess(host.querySelector('[data-lo-access]'), ctx, config, grants);
+  await lettersOutAccess(host.querySelector('[data-lo-access]')!, ctx, config, grants);
   if (!ctx.live()) return;
-  const automations = await ctx.once('automations', () => get('/v2/automations?limit=100', {fresh: true}));
+  const automations: LettersOutAutomations = await ctx.once('automations', () => get('/v2/automations?limit=100', {fresh: true}));
   if (!ctx.live()) return;
   const used = new Set([...rows.values()].map(row => row.automation_id).filter(Boolean));
   const related = (Array.isArray(automations) ? automations : automations.automations || []).filter(a => used.has(a.id) || /hub_letter_(quote|send)/.test(JSON.stringify(a.flow || {})));
-  host.querySelector('[data-lo-automations]').innerHTML = related.length ? `<ul class="ib-autos">${related.map(a =>
+  host.querySelector<HTMLElement>('[data-lo-automations]')!.innerHTML = related.length ? `<ul class="ib-autos">${related.map(a =>
     `<li><a href="#/automations/${encodeURIComponent(a.id)}">${esc(a.name || a.id)}</a>${a.enabled === false ? ' <span class="muted">· off</span>' : ''}</li>`).join('')}</ul>` : '<p class="muted">None</p>';
   return {kind: 'outbox', id: 'company', name: 'Letters out', address: ''};
 }
 
-async function lettersOutSettingsRender(host, ctx) {
+async function lettersOutSettingsRender(host: Element, ctx: InboxCtx): Promise<void> {
   const config = await lettersOutSettings(ctx); if (!ctx.live()) return;
   if (config.id !== 'company') { host.innerHTML = inboxesSoon('inboxes-letters-out', 'Letters out'); return; }
-  const [status, statusText] = lettersOutStatus(config), address = config.return_address || {};
-  const fields = [['name', 'Name'], ['line1', 'Street'], ['line2', 'Suite (optional)'], ['city', 'City'], ['state', 'State'], ['postal_code', 'ZIP']];
+  const [status, statusText] = lettersOutStatus(config), address: LettersOutAddress = config.return_address || {};
+  const fields: [string, string][] = [['name', 'Name'], ['line1', 'Street'], ['line2', 'Suite (optional)'], ['city', 'City'], ['state', 'State'], ['postal_code', 'ZIP']];
   host.innerHTML = inboxesCard('inboxes-letters-out', 'Letters out', `<p>${inboxesPill(status, statusText)} <span class="muted">Tico Gateway · At cost + 25%</span></p>
     <form class="lo-settings"><fieldset${ctx.admin ? '' : ' disabled'}><legend>Return address</legend><div class="lo-address">${fields.map(([name, label]) =>
       `<label>${label}<input name="${name}" value="${esc(address[name] || '')}" maxlength="${name === 'state' ? 2 : name === 'postal_code' ? 10 : 100}"${name === 'state' ? ' pattern="[A-Z]{2}"' : name === 'postal_code' ? ' pattern="[0-9]{5}(-[0-9]{4})?"' : ''}></label>`).join('')}</div>
@@ -196,26 +289,27 @@ async function lettersOutSettingsRender(host, ctx) {
     <div class="lo-setting-row"><span>Always ask</span><span>Certified mail<br>Courts and agencies<br>Letters we couldn’t fully read<br>First letter to an address</span></div>
     ${ctx.admin ? '<div class="lo-controls"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-lo-check>Check connection</button><a href="#/tools/address/outbox">Who can use it</a></div>' : ''}</fieldset></form>`);
   if (!ctx.admin) return;
-  const form = host.querySelector('form');
+  const form = host.querySelector<HTMLFormElement>('form')!, controls = form.elements as unknown as LettersOutControls;
   form.onsubmit = async event => {
-    event.preventDefault(); const button = form.querySelector('[type=submit]'); button.disabled = true;
+    event.preventDefault(); const button = form.querySelector<HTMLButtonElement>('[type=submit]')!; button.disabled = true;
     try {
-      const returnAddress = Object.fromEntries(fields.map(([key]) => [key, form.elements[key].value.trim()]));
+      const returnAddress: Record<string, string> = Object.fromEntries(fields.map(([key]): [string, string] => [key, controls[key]!.value.trim()]));
       const any = Object.values(returnAddress).some(Boolean);
       if (any && ['name', 'line1', 'city', 'state', 'postal_code'].some(key => !returnAddress[key])) throw new Error('Complete the return address.');
-      await put('/v2/letters/settings', {return_address: any ? returnAddress : null, mode: form.elements.mode.value,
-        monthly_cap_micros: lettersOutCap(form.elements.cap.value)});
+      await put('/v2/letters/settings', {return_address: any ? returnAddress : null, mode: controls.mode.value,
+        monthly_cap_micros: lettersOutCap(controls.cap.value)});
       if (ctx.live()) { toast('Saved'); ctx.refresh(); }
-    } catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
+    } catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
   };
-  host.querySelector('[data-lo-check]').onclick = async event => {
-    const button = event.currentTarget; button.disabled = true;
+  const check = host.querySelector<HTMLButtonElement>('[data-lo-check]')!;
+  check.onclick = async () => {
+    const button = check; button.disabled = true;
     try { const result = await get('/v2/letters/settings?check=true', {fresh: true}); if (ctx.live()) {
       const [state, label] = lettersOutStatus(result), pill = host.querySelector('[data-ib-status]');
       if (pill) pill.outerHTML = inboxesPill(state, label);
       toast(label); button.disabled = false;
     } }
-    catch (e) { if (ctx.live()) { toast(e.message, true); button.disabled = false; } }
+    catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
   };
 }
 

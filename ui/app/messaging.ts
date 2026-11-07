@@ -2,15 +2,84 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The messaging routes' server rows (GET /v2/messaging/bots and /v2/messaging/bots/{bot}...): the fields the page reads.
+// The /v2/messaging routes are not in ui/types/api.d.ts.
+interface MessagingSource {
+  id: string;
+  kind: string;
+  name: string;
+  purpose?: string | null;
+  error?: string | null;
+  post?: boolean;
+  synced_at?: string | null;
+}
+interface MessagingBot {
+  bot: string;
+  name: string;
+  description?: string | null;
+  state: string;
+  can_manage?: boolean;
+  sources: MessagingSource[];
+  last_run?: string | null;
+  next_run?: string | null;
+  slack_interval_minutes?: number | null;
+}
+interface MessagingListItem {
+  bot: string;
+  state: string;
+  revision?: number | null;
+}
+interface MessagingList {
+  bots: MessagingListItem[];
+}
+interface MessagingSlackMessage {
+  ts: string | number;
+  thread_ts?: string;
+  channel?: string;
+  author?: string | null;
+  text?: string | null;
+  url?: string | null;
+  deleted?: boolean;
+}
+interface MessagingSlackPost {
+  created_at: string;
+  thread_ts: string;
+  channel: string;
+  state: string;
+  error?: string | null;
+  text?: string | null;
+}
+interface MessagingDigest {
+  id: string;
+  created_at: string;
+  channels: string[];
+  count: number;
+  skipped?: number | null;
+  run?: { state?: string | null } | null;
+}
+interface MessagingInstructions {
+  published: boolean;
+  updated_at?: string | null;
+  content?: string | null;
+}
+interface MessagingDetail {
+  bot: MessagingBot;
+  mail?: MailPageMessage[];
+  slack?: MessagingSlackMessage[];
+  slack_posts?: MessagingSlackPost[];
+  slack_digests?: MessagingDigest[];
+  instructions: MessagingInstructions;
+}
+
 // ----------------------------------------------------------------- Message bot review
 // Bots are the primary unit. Provider messages remain evidence behind a run or action.
-let MESSAGING_LOAD = 0, MESSAGING_LIST = null;
-function messagingParams() {
+let MESSAGING_LOAD = 0, MESSAGING_LIST: MessagingList | null = null;
+function messagingParams(): {bot: string; source: string} {
   const raw = S.route.startsWith(MESSAGING) ? S.route.slice(MESSAGING.length) : '';
   const q = new URLSearchParams(raw.startsWith('?') ? raw.slice(1) : '');
   return {bot: q.get('bot') || '', source: q.get('source') || ''};
 }
-function messagingGo(patch) {
+function messagingGo(patch: {bot?: string | undefined; source?: string | undefined}) {
   const state = {...messagingParams(), ...patch}, q = new URLSearchParams();
   if (state.bot) q.set('bot', state.bot);
   if (state.source) q.set('source', state.source);
@@ -18,7 +87,7 @@ function messagingGo(patch) {
   if (next !== S.route) location.hash = next;
   else pageMessaging();
 }
-function messagingLabel(m, bot) {
+function messagingLabel(m: MailPageMessage, bot: string): string {
   const labels = m.labels || [];
   if (labels.includes('hub/handled/' + bot)) return 'Handled by ' + bot;
   if (labels.includes('hub/triaged/' + bot)) return 'Triaged by ' + bot;
@@ -26,10 +95,10 @@ function messagingLabel(m, bot) {
   if (labels.includes('hub/drafted')) return 'Drafted';
   return 'Source message';
 }
-function messagingEvidence(data) {
+function messagingEvidence(data: MessagingDetail): string {
   const bot = data.bot.bot;
   const events = [
-    ...(data.mail || []).map(m => ({kind: 'mail', at: +(new Date(m.date)) || m.epoch * 1000,
+    ...(data.mail || []).map(m => ({kind: 'mail', at: +(new Date(m.date ?? '')) || Number(m.epoch) * 1000,
       html: `<button class="msg-evidence" type="button" data-msg-mail="${esc(m.thread_id)}" data-msg-mailbox="${esc(m.mailbox)}">
         <span class="msg-evidence-top"><strong>${esc(m.subject || '(no subject)')}</strong><span class="spacer"></span><span class="muted">${esc(mailWhen(m.date, m.epoch))}</span></span>
         <span class="msg-evidence-meta"><span>Email · ${esc(m.mailbox)}</span><span>${esc(mailFrom(m))}</span><span>${esc(messagingLabel(m, bot))}</span></span>
@@ -52,14 +121,14 @@ function messagingEvidence(data) {
   return events.length ? events.slice(0, 70).map(e => e.html).join('') : '<div class="empty">No synced messages for these sources yet.</div>';
 }
 // The Slack checks this bot ran; its schedules and other triggers are automations (#/automations, searched by its name).
-function messagingRuns(data) {
+function messagingRuns(data: MessagingDetail): string {
   return (data.slack_digests || []).map(d => `<div class="msg-run">
     <div class="msg-run-top"><strong>Slack channel check</strong><span class="spacer"></span><span class="muted">${esc(ago(d.created_at))}</span></div>
     <div class="msg-run-meta"><span>${esc(d.channels.join(' · '))}</span><span>${d.count} message${d.count === 1 ? '' : 's'}</span>${d.skipped ? `<span>${d.skipped} skipped in high volume</span>` : ''}<span>${esc(d.run?.state || 'Queued')}</span></div>
     <button class="ghost" type="button" data-msg-digest="${esc(d.id)}" style="margin-top:8px">View messages reviewed</button>
   </div>`).join('');
 }
-function messagingDetail(data) {
+function messagingDetail(data: MessagingDetail): void {
   const b = data.bot, state = messagingParams();
   const sources = `<button type="button" class="msg-source${state.source ? '' : ' on'}" data-msg-source="">All sources</button>` +
     b.sources.map(s => `<button type="button" class="msg-source${state.source === s.id ? ' on' : ''}" data-msg-source="${esc(s.id)}" title="${esc(s.purpose || s.error || s.name)}">${s.kind === 'email' ? '✉' : '#'} ${esc(s.name.replace(/^#/, ''))}</button>`).join('');
@@ -68,7 +137,7 @@ function messagingDetail(data) {
     : `<div class="msg-sources" aria-label="Sources covered by ${esc(b.name)}">${sources}</div>`;
   const shownSources = state.source ? b.sources.filter(s => s.id === state.source) : b.sources.length > 8 ? [] : b.sources;
   const checks = messagingRuns(data);
-  $('#msg-detail').innerHTML = `<div class="msg-workspace">
+  $('#msg-detail')!.innerHTML = `<div class="msg-workspace">
     <div class="msg-config">
       <div class="msg-detail-head"><div><h1>${esc(b.name)}</h1><div class="muted">${esc(b.description || b.bot)}</div></div>
         <div class="msg-actions"><a class="ghost" href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a class="ghost" href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>${b.can_manage && ['active', 'paused'].includes(b.state) ? `<button class="ghost" type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : ''}</div></div>
@@ -89,78 +158,88 @@ function messagingDetail(data) {
     </section>
   </div>`;
 }
-async function messagingOpenMail(mailbox, thread) {
-  const d = $('#msg-message-dialog'), body = $('#msg-message-body');
-  $('#msg-message-title').textContent = 'Email thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
+// The message dialog, its title and body: the page draws them once, so one lookup serves each call.
+function messagingMessageDialog(): {d: HTMLDialogElement; body: HTMLElement; title: HTMLElement} {
+  return {d: $('#msg-message-dialog') as HTMLDialogElement, body: $('#msg-message-body')!, title: $('#msg-message-title')!};
+}
+async function messagingOpenMail(mailbox: string, thread: string): Promise<void> {
+  const {d, body, title} = messagingMessageDialog();
+  title.textContent = 'Email thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
-    const data = await get(`/v2/mail/threads/${encodeURIComponent(thread)}?mailbox=${encodeURIComponent(mailbox)}`);
-    $('#msg-message-title').textContent = data.messages?.[0]?.subject || 'Email thread';
+    const data = await get<MailPageThread>(`/v2/mail/threads/${encodeURIComponent(thread)}?mailbox=${encodeURIComponent(mailbox)}`);
+    title.textContent = data.messages?.[0]?.subject || 'Email thread';
     body.innerHTML = (data.messages || []).map(m => `<article class="mail-msg"><div class="meta"><strong>${esc(mailFrom(m))}</strong><span class="muted">${esc(fmt(m.date))}</span></div>
       <div class="tags">${mailTags(m.labels)}${(m.rule_hits || []).map(h => `<span class="pill">Rule ${esc(h.id || 'matched')}</span>`).join('')}</div>
       <pre>${esc(m.body || '')}</pre></article>`).join('') || '<div class="empty">No messages.</div>';
-  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
 }
-async function messagingOpenSlack(bot, channel, thread) {
-  const d = $('#msg-message-dialog'), body = $('#msg-message-body');
-  $('#msg-message-title').textContent = 'Slack thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
+async function messagingOpenSlack(bot: string, channel: string, thread: string): Promise<void> {
+  const {d, body, title} = messagingMessageDialog();
+  title.textContent = 'Slack thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
     const qs = new URLSearchParams({channel, thread_ts: thread});
-    const data = await get(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-thread?${qs}`);
+    const data = await get<{messages?: MessagingSlackMessage[] | null}>(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-thread?${qs}`);
     body.innerHTML = (data.messages || []).map(m => `<article class="mail-msg"><div class="meta"><strong>${esc(m.author)}</strong><span class="muted">${esc(mailWhen('', Number(m.ts)))}</span><a href="${esc(m.url)}" target="_blank" rel="noopener">Open in Slack</a></div>
       <pre>${esc(m.deleted ? '(message removed)' : m.text)}</pre></article>`).join('');
-  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
 }
-async function messagingOpenDigest(bot, digest) {
-  const d = $('#msg-message-dialog'), body = $('#msg-message-body');
-  $('#msg-message-title').textContent = 'Slack check'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
+async function messagingOpenDigest(bot: string, digest: string): Promise<void> {
+  const {d, body, title} = messagingMessageDialog();
+  title.textContent = 'Slack check'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
-    const data = await get(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-digests/${encodeURIComponent(digest)}`);
+    const data = await get<MessagingDigest & {messages?: MessagingSlackMessage[] | null}>(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-digests/${encodeURIComponent(digest)}`);
     body.innerHTML = `<p class="muted">${data.count} message${data.count === 1 ? '' : 's'} delivered to the bot${data.skipped ? ` · ${data.skipped} skipped in high volume` : ''} · ${esc(fmt(data.created_at))}</p>` +
       ((data.messages || []).map(m => `<article class="mail-msg"><div class="meta"><strong>${esc(m.author)}</strong><span class="muted">${esc(mailWhen('', Number(m.ts)))}</span><a href="${esc(m.url)}" target="_blank" rel="noopener">Open in Slack</a></div><pre>${esc(m.deleted ? '(message removed)' : m.text)}</pre></article>`).join('') || '<div class="empty">The delivered message records are unavailable.</div>');
-  } catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
 }
-async function pageMessaging() {
+async function pageMessaging(): Promise<void> {
   if (S.me && !S.me.mail_access && S.me.role !== 'owner') { location.hash = TASKS; return; }
-  $('#main').classList.add('messaging-layout');
+  const main = $('#main')!;
+  main.classList.add('messaging-layout');
   const load = ++MESSAGING_LOAD;
   if (!$('#message-bot-page')) {
-    $('#main').innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail"><div class="empty">Loading message bot…</div></div>
+    main.innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail"><div class="empty">Loading message bot…</div></div>
       <dialog class="msg-message-dialog" id="msg-message-dialog"><div class="msg-message-head"><strong id="msg-message-title"></strong><button class="ghost" type="button" id="msg-message-close" aria-label="Close message">×</button></div><div class="msg-message-body" id="msg-message-body"></div></dialog></div>`;
-    $('#msg-message-close').onclick = () => $('#msg-message-dialog').close();
-    $('#msg-detail').onclick = async ev => {
-      const source = ev.target.closest('[data-msg-source]'); if (source) { messagingGo({source: source.dataset.msgSource}); return; }
+    ($('#msg-message-close') as HTMLElement).onclick = () => messagingMessageDialog().d.close();
+    const detailPanel = $('#msg-detail') as HTMLElement;
+    detailPanel.onclick = async ev => {
+      const hit = eventElement(ev)!;
+      const source = hit.closest<HTMLElement>('[data-msg-source]'); if (source) { messagingGo({source: source.dataset.msgSource}); return; }
       const bot = messagingParams().bot;
-      const mail = ev.target.closest('[data-msg-mail]'); if (mail) { messagingOpenMail(mail.dataset.msgMailbox, mail.dataset.msgMail); return; }
-      const slack = ev.target.closest('[data-msg-slack]'); if (slack) { messagingOpenSlack(bot, slack.dataset.msgChannel, slack.dataset.msgSlack); return; }
-      const digest = ev.target.closest('[data-msg-digest]'); if (digest) { messagingOpenDigest(bot, digest.dataset.msgDigest); return; }
-      const pause = ev.target.closest('[data-msg-pause]');
+      const mail = hit.closest<HTMLElement>('[data-msg-mail]'); if (mail) { messagingOpenMail(mail.dataset.msgMailbox!, mail.dataset.msgMail!); return; }
+      const slack = hit.closest<HTMLElement>('[data-msg-slack]'); if (slack) { messagingOpenSlack(bot, slack.dataset.msgChannel!, slack.dataset.msgSlack!); return; }
+      const digest = hit.closest<HTMLElement>('[data-msg-digest]'); if (digest) { messagingOpenDigest(bot, digest.dataset.msgDigest!); return; }
+      const pause = hit.closest<HTMLButtonElement>('[data-msg-pause]');
       if (!pause) return;
       pause.disabled = true;
       try {
-        const current = MESSAGING_LIST.bots.find(b => b.bot === bot);
+        const current = MESSAGING_LIST!.bots.find(b => b.bot === bot)!;
         await post(`/v2/bots/${encodeURIComponent(bot)}/definition`, {status: current.state === 'active' ? 'paused' : 'active', expected_revision: current.revision});
         MESSAGING_LIST = null;
         pageMessaging();
-      } catch (e) { toast(e.message, true); pause.disabled = false; }
+      } catch (e) { toast(errorMessage(e, ''), true); pause.disabled = false; }
     };
-    $('#msg-detail').onchange = ev => {
-      if (ev.target.id === 'msg-source-select') messagingGo({source: ev.target.value});
+    detailPanel.onchange = ev => {
+      const target = ev.target;
+      if (target instanceof HTMLSelectElement && target.id === 'msg-source-select') messagingGo({source: target.value});
     };
   }
-  try { if (!MESSAGING_LIST) MESSAGING_LIST = await get('/v2/messaging/bots'); }
-  catch (e) { if (load === MESSAGING_LOAD) $('#msg-detail').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  try { if (!MESSAGING_LIST) MESSAGING_LIST = await get<MessagingList>('/v2/messaging/bots'); }
+  catch (e) { if (load === MESSAGING_LOAD) $('#msg-detail')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MESSAGING_LOAD) return;
+  const list = MESSAGING_LIST!;
+  const detailBox = $('#msg-detail')!;
   let state = messagingParams();
-  if (!state.bot && MESSAGING_LIST.bots.length) { messagingGo({bot: MESSAGING_LIST.bots[0].bot}); return; }
-  if (state.bot && !MESSAGING_LIST.bots.some(b => b.bot === state.bot)) { messagingGo({bot: MESSAGING_LIST.bots[0]?.bot || '', source: ''}); return; }
-  if (!state.bot) { $('#msg-detail').innerHTML = '<div class="empty">No bots are assigned to a visible messaging source.</div>'; return; }
-  $('#msg-detail').innerHTML = '<div class="empty">Loading bot activity…</div>';
+  if (!state.bot && list.bots.length) { messagingGo({bot: list.bots[0]!.bot}); return; }
+  if (state.bot && !list.bots.some(b => b.bot === state.bot)) { messagingGo({bot: MESSAGING_LIST!.bots[0]?.bot || '', source: ''}); return; }
+  if (!state.bot) { detailBox.innerHTML = '<div class="empty">No bots are assigned to a visible messaging source.</div>'; return; }
+  detailBox.innerHTML = '<div class="empty">Loading bot activity…</div>';
   try {
     const query = state.source ? `?source=${encodeURIComponent(state.source)}` : '';
-    const detail = await get(`/v2/messaging/bots/${encodeURIComponent(state.bot)}${query}`);
+    const detail = await get<MessagingDetail>(`/v2/messaging/bots/${encodeURIComponent(state.bot)}${query}`);
     if (load !== MESSAGING_LOAD) return;
     messagingDetail(detail);
   } catch (e) {
-    if (load === MESSAGING_LOAD) $('#msg-detail').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    if (load === MESSAGING_LOAD) $('#msg-detail')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
   }
 }

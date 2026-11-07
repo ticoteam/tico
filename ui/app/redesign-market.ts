@@ -56,7 +56,7 @@ const rdqTile = (label, big, small) => `<div class="mkt-tile-k"><div class="mkt-
 function rdqTilesHtml(data, revenue) {
   if (!mktSized(data)) return '';
   const total = Number(data.total?.spend_usd) || 0, out = [];
-  const tops = mktTree(data).drawn.map(g => g.seg).filter(s => s.size?.spend_usd != null && Number.isFinite(s.size.growth_pct));
+  const tops = mktGrowthPts(mktTree(data)).map(g => g.seg);
   const weight = tops.reduce((a, s) => a + s.size.spend_usd, 0);
   const growth = weight ? tops.reduce((a, s) => a + s.size.spend_usd * s.size.growth_pct, 0) / weight : null;
   if (total) out.push(rdqTile('Yearly spend', mktMoney(total), `${growth == null ? '' : rdqGrowth(growth) + ' a year '}${mktSureHtml(data)}`));

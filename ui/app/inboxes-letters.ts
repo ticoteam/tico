@@ -5,7 +5,7 @@
    its letters (sender, summary, scan, task). Scan and forward requests are not offered: Tico Gateway does not take
    them. Ordering, the intake inbox, a retry, Read grants and legal-mail routing are an owner's or admin's; everyone
    else reads. An address's Who can use it gives Read on that address. On Tools › Settings › Letters in: Addresses
-   (Get an address), Bring your own, Who can use it (Read on all addresses) and Legal mail. Registry: ui/app/inboxes.js.
+   (Get an address), Bring your own, Who can use it (Read on all addresses) and Legal mail. Registry: ui/app/inboxes.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
