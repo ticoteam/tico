@@ -159,7 +159,7 @@ def test_a_merge_makes_spend_and_budgets_one_vendor_and_unmerge_restores_exactly
             c,
             OWNER,
             "budget_create",
-            {"name": "Ads", "account_id": account(c, "6100"), "amount": 100_000, "at_limit": "decline", "vendor": ads},
+            {"name": "Ads", "account_id": account(c, "6100"), "amount": 100_000, "at_limit": "warn", "vendor": ads},
         )
         assert budget.status == "committed", budget.reason
         bid = str(budget.result["budget_id"])
