@@ -128,7 +128,7 @@ async function shot(page, name) {
         tag + ': two parts, then a +n chip for the rest');
       assert.equal(await cellOf(page, 'feed:f3', 5).locator('.fin-chip-muted').count(), 0, tag + ': a whole split shows no unattributed chip');
       assert.equal((await cellOf(page, 'feed:f2', 5).innerText()).trim(), 'Rental Marketing Manager', tag + ': a row without a split reads its tag');
-      assert.equal(await cellOf(page, 'feed:f3', 5).getAttribute('title'), 'Rental Google Ad Owner 25% · Consumer Google Ad Owner 25% · Rental 25% · Consumer 25%',
+      assert.equal(await cellOf(page, 'feed:f3', 5).locator('.fin-chips').getAttribute('title'), 'Rental Google Ad Owner 25% · Consumer Google Ad Owner 25% · Rental 25% · Consumer 25%',
         tag + ': the full split is in the title');
 
       await page.locator('tr[data-fin-tx="feed:f1"] td').first().click();

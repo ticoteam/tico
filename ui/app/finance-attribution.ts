@@ -133,7 +133,7 @@ async function finShareRailLoad(key: string, lines: {line_id: string; account?: 
   const box = document.getElementById('fin-tx-share');
   if (!box || !lines.length) return;
   const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}/attribution${finAs('?')}`, {fresh: true})
-    .then((r: any) => r || null, () => null)));
+    .then((r: any) => r && Array.isArray(r.splits) && Array.isArray(r.history) ? r : null, () => null)));
   if (FIN?.tx?.sel !== key || document.getElementById('fin-tx-share') !== box) return;
   const found = reads.map((a, i) => a ? {line: lines[i], a} : null).filter(Boolean) as {line: {line_id: string; account?: string}; a: FinAttribution}[];
   if (!found.length) { box.innerHTML = ''; return; }
