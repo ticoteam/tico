@@ -1935,7 +1935,7 @@ def install_github_app(app, settings, store):
                     raise Problem(
                         "github_repo",
                         f"'{value}' is not a repository in {row['org']}; extra repositories "
-                        "must be in the connected organization",
+                        "must be in the connected account or organization",
                         422,
                     )
                 if (own or "").lower() != repo.lower() and repo.lower() not in [w.lower() for w in wanted]:
@@ -1997,7 +1997,9 @@ def install_github_app(app, settings, store):
                 and body.template.split("/")[0].lower() != row["org"].lower()
             ):
                 raise Problem(
-                    "forbidden", "Bots generate from the default template or one in the connected organization", 403
+                    "forbidden",
+                    "Bots generate from the default template or one in the connected account or organization",
+                    403,
                 )
         template = body.template or DEFAULT_TEMPLATE
         if body.empty and body.template:
