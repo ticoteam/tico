@@ -42,6 +42,8 @@ READER_PATHS = [
     "/data.json",
     "/feed.xml",
     "/assets/*",
+    "/favicon.ico",
+    "/apple-touch-icon.png",
     "/auth/callback",
     "/sign-in",
     "/sign-out",
