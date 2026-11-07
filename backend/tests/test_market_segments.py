@@ -61,7 +61,7 @@ def test_compare_reads_money_roll_up_growth_and_share_from_the_stored_rows(api, 
     assert rows[first] == {
         "id": first,
         "name": "Screening",
-        "color": None,
+        "color": "blue",  # Screening became ours first, so core stamped it rank 0 and blue
         "money": 4 * B,
         "yearly_spend": 4 * B,
         "growth": 12.5,
@@ -87,6 +87,24 @@ def test_compare_lists_the_newest_briefing_items_tagged_with_their_segment(api, 
     assert view["changed"] == [{**item, "segment_id": first, "week": WEEK, "bets": []}]
 
 
+def test_compare_and_page_list_ranked_segments_in_rank_order_and_colour_them_from_core(api, tmp_path):
+    _seed(api, tmp_path)
+    first, second, _ = defined(api)
+    ours(api, first, second)
+    # Screening is ranked first, though Payments sorts first by name.
+    post(api, "segments/order", {"ids": [first, second]})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE market_entities SET properties=json_remove(properties, '$.color') WHERE id=?", (first,))
+        c.execute("UPDATE market_entities SET properties=json_set(properties, '$.color', 'red') WHERE id=?", (second,))
+
+    listed = get(api, "market/segments/compare")["segments"]
+    assert [s["id"] for s in listed] == [first, second]
+    # First has no stored colour, so it gets its place's colour (place 0); second keeps its own.
+    assert [s["color"] for s in listed] == ["blue", "red"]
+    page = get(api, f"market/segments/{second}/page")
+    assert (page["segment"]["rank"], page["segment"]["color"]) == (1, "red")
+
+
 def test_a_segment_page_has_its_answers_sizes_players_and_what_changed(api, tmp_path):
     _seed(api, tmp_path)
     first, second, sub = defined(api)
@@ -98,7 +116,8 @@ def test_a_segment_page_has_its_answers_sizes_players_and_what_changed(api, tmp_
 
     page = get(api, f"market/segments/{first}/page")
     assert page["segment"]["id"] == first and page["segment"]["name"] == "Screening"
-    assert page["segment"]["color"] is None and page["segment"]["rank"] is None
+    # Screening became ours first, so core stamped it rank 0 and blue.
+    assert (page["segment"]["color"], page["segment"]["rank"]) == ("blue", 0)
     assert page["answers"] == {"changed": "Rivals cut prices.", "money": "The low end shrinks."}
     assert page["briefing"]["segment_id"] == first and page["briefing"]["week"] == WEEK
     assert page["sizes"]["chosen"]["spend_usd"] == 4 * B and page["sizes"]["chosen"]["accepted"] is True
