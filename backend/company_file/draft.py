@@ -136,6 +136,18 @@ def slugify(text):
     return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", str(text).lower())) or "x"
 
 
+def clean(text: str) -> str:
+    """`text` with each run of ASCII whitespace (space, tab, line feed, carriage return, form feed, vertical tab) as one
+    space, and no space at either end. The one normalization the chart formula and the company file share; the site's
+    JS port does the same (chart_formula.py has the cross-language rules)."""
+    return re.sub(r"[ \t\n\r\f\v]+", " ", text).strip(" ")
+
+
+def fold(text: str) -> str:
+    """The text names are matched by: `clean`, then lower() (not casefold(), so a JS toLowerCase matches it)."""
+    return clean(text).lower()
+
+
 # ---------------------------------------------------------------------------------------------------- the chart
 def owner(draft):
     return next((p for p in draft["people"] if p["owner"]), draft["people"][0] if draft["people"] else None)
@@ -426,25 +438,31 @@ def _day(value, field):
 
 
 def channel_keys(value, field):
-    """The channels a strategy picks (`strategy.channels`): 0..11 keys from the vocabulary's channel list, a repeat
-    dropped, the order kept. A key that is not on the list is refused, as an unknown signal is."""
-    out = []
-    for item in _list(value, field, LIMITS["channels"]):
+    """The channels a strategy picks (`strategy.channels`): the vocabulary's channel keys, a repeat dropped, the order
+    kept. A key that is not on the list is refused, as an unknown signal is. The cap of 11 counts the keys after the
+    repeats are dropped, so a list that repeats one key is valid."""
+    if not isinstance(value, list):
+        raise DraftError("%s must be a list" % field)
+    out: list[str] = []
+    for item in value:
         if not isinstance(item, str) or item not in CHANNELS:
             raise DraftError("%s has an unknown channel" % field)
         if item not in out:
             out.append(item)
-    return out
+    return _list(out, field, LIMITS["channels"])
 
 
-def _trimmed(value, field, limit):
-    """A bet's short name or segment: the trimmed text, "" when absent or blank, refused when longer than `limit`."""
+def _trimmed(value, field, limit, drop_long=False):
+    """A bet's short name or segment: the trimmed text, "" when absent or blank. Longer than `limit` is refused, or, with
+    `drop_long`, let go as "" (a segment too long to be any segment's name is dropped, as an unknown one is)."""
     if value is None:
         return ""
     if not isinstance(value, str):
         raise DraftError("%s must be text" % field)
     text = re.sub("[\ud800-\udfff\x00]", "", value).strip()
     if len(text) > limit:
+        if drop_long:
+            return ""
         raise DraftError("%s is longer than %d characters" % (field, limit))
     return text
 
@@ -462,7 +480,7 @@ def _bet_row(raw, at):
     name = _trimmed(raw.get("name"), field + ".name", LIMITS["bet_name"])
     if name:
         out["name"] = name
-    segment = _trimmed(raw.get("segment"), field + ".segment", LIMITS["bet_segment"])
+    segment = _trimmed(raw.get("segment"), field + ".segment", LIMITS["bet_segment"], drop_long=True)
     if segment:
         out["segment"] = segment
     return out
@@ -546,7 +564,8 @@ def _post(raw, at):
 def _strategy(raw):
     """The strategy block (the setup page's Strategy step), every part present: a part not drafted yet is empty. Two
     quiet repairs, like a goal's gone parent: a segment's parent that is not among the segments (or would make a loop)
-    is let go, and so is a player's segment that is gone. A bet's segment that is no segment's name is let go too."""
+    is let go, and so is a player's segment that is gone. A bet's segment that is no segment's name is let go too,
+    matched ignoring case and spacing; one longer than a segment name can be is dropped the same way."""
     _keys(raw, "strategy", (), ("summary", "vision", "sections", "bets", "market", "listening", "channels"))
     sections = _keys(raw.get("sections") or {}, "strategy.sections", (), SECTIONS)
     market = _keys(raw.get("market") or {}, "strategy.market", (), ("definition", "segments", "players"))
@@ -604,14 +623,15 @@ def _strategy(raw):
             at = parents[at]
         if segment["parent"] is not None and (segment["parent"] not in parents or at is not None and at in seen):
             segment["parent"] = parents[segment["key"]] = None
-    named = {}
+    named: dict[str, str] = {}
     for segment in segments:
-        if segment["name"]:
-            named.setdefault(segment["name"].casefold(), segment["name"])
+        if fold(segment["name"]):
+            named.setdefault(fold(segment["name"]), segment["name"])
     for bet in out["bets"]:
         if "segment" in bet:
-            if bet["segment"].casefold() in named:
-                bet["segment"] = named[bet["segment"].casefold()]  # the segment's own name, whatever case was sent
+            if fold(bet["segment"]) in named:
+                # the segment's own name, whatever case or spacing was sent
+                bet["segment"] = named[fold(bet["segment"])]
             else:
                 del bet["segment"]
     for player in out["market"]["players"]:

@@ -1,5 +1,6 @@
 {
-  "about": "The org chart formula's data: the teams in output order, each seat's title, template, department, reason and manager, the channel list, the default channels and the limits. chart_formula.py builds the chart from this file and holds the rules; nothing here is logic. A seat with `per` is made once for each picked segment (`segment`), picked channel (`channel`), initiative (`initiative`) or industry Owner (`industry`). Placeholders are filled in by chart_formula.py: {label} is a segment's or initiative's short label, {initiatives} the initiatives a product owner's segment owns, {title} and {topic} an industry Owner's title and its topic.",
+  "about": "The org chart formula's data: the teams in output order, each seat's title, template, department, reason and manager, the channel list, the default channels, the phrases the reasons are made of and the limits. chart_formula.py builds the chart from this file and holds the rules; nothing here is logic. A seat with `per` is made once for each picked segment (`segment`), picked channel (`channel`), initiative (`initiative`) or industry Owner (`industry`). Placeholders are filled in by chart_formula.py, in one pass: {label} is a segment's or initiative's short label, {initiatives} the initiatives a product owner's segment owns, {ref} the bet id an initiative Owner's reason names, {statement} the bet's statement, {title} and {topic} an industry Owner's title and its topic.",
+  "rules": "Cross-language rules: the JS port must match the chart byte for byte. A length counts Unicode code points (JS [...s].length). Whitespace is the ASCII set space, tab, line feed, carriage return, form feed and vertical tab: each run becomes one space, and none is kept at either end. Names are compared by lower() (JS toLowerCase), never casefold(), and only to tell names apart. An id is a slug of a-z and 0-9: every other run of characters becomes one '-', none at either end, and 'x' when nothing is left. Placeholders are filled in one pass, so a name that contains braces is only text. A reason quotes a label with curly quotes.",
   "version": 1,
   "label_length": 40,
   "title_length": 80,
@@ -10,7 +11,9 @@
     "many": " and the {names} initiatives",
     "count": " and {count} initiatives",
     "join": ", ",
-    "last": " and "
+    "last": " and ",
+    "ref": " ({ids})",
+    "statement": ": “{statement}”"
   },
   "channels": [
     {"key": "cro", "title": "Conversion Rate Optimization Owner", "template": "cro", "department": "marketing", "reason": "Owns conversion: turning visitors into customers."},
@@ -65,7 +68,7 @@
     {
       "team": "Initiatives",
       "seats": [
-        {"key": "initiative", "per": "initiative", "title": "{label} Owner", "template": "initiative-owner", "department": "leadership", "reports_to": null, "reason": "Owns the '{label}' initiative."}
+        {"key": "initiative", "per": "initiative", "title": "{label} Owner", "template": "initiative-owner", "department": "leadership", "reports_to": null, "reason": "Owns the “{label}” initiative{ref}{statement}."}
       ]
     },
     {
@@ -92,6 +95,9 @@
   "coverage": [
     {"seat": "sales-lead", "name": "Sales"},
     {"seat": "engineering-manager", "name": "Engineering"},
+    {"seat": "security-owner", "name": "Security"},
+    {"seat": "infrastructure-owner", "name": "Infrastructure"},
+    {"seat": "pipeline-owner", "name": "Pipeline"},
     {"seat": "support-lead", "name": "Support"},
     {"seat": "finance-lead", "name": "Finance"},
     {"seat": "general-counsel", "name": "Legal"},

@@ -1,6 +1,6 @@
-"""The org chart formula (backend/company_file/chart_formula): the golden cases, the rules the golden cannot show, the
-rows read back through the company file reader, and the contract additions the formula reads: a strategy's channels
-and a bet's name and segment, in draft.py and yamlfile.py."""
+"""The org chart formula (backend/company_file/chart_formula): the golden cases (tests/fixtures/chart_formula_golden.json),
+the rules the golden cannot show, the rows read back through the company file reader, and the contract additions the
+formula reads: a strategy's channels and a bet's name and segment, in draft.py and yamlfile.py."""
 
 import copy
 import json
@@ -15,12 +15,14 @@ from backend.company_file import chart_formula as F
 from backend.company_file import draft as D
 from backend.company_file import yamlfile
 
-GOLDEN = json.loads((Path(F.__file__).parent / "chart_formula_golden.json").read_text())
+FIXTURE = Path(__file__).parent / "fixtures" / "chart_formula_golden.json"
+GOLDEN = json.loads(FIXTURE.read_text())
 CASES = {case["name"]: case for case in GOLDEN["cases"]}
 HOTMIC = CASES["hotmic"]["inputs"]
 CARDS = {role["slug"]: role["department"] for role in D.ROLES}
 # The six cards step 1a makes. Until they are in roles.json the formula names them, and the company file reader refuses
-# them, so the read-back test stands in an existing card for each one.
+# them, so the read-back stands in an existing card for each one. test_the_stand_ins_go_once_the_six_cards_are_in_roles_json
+# fails once all six exist, and then STAND_IN is deleted.
 NEW_TEMPLATES = {"cro", "app-store", "affiliates", "lead-generation", "initiative-owner", "pipeline"}
 STAND_IN = {
     "cro": "paid-media",
@@ -40,41 +42,33 @@ def by_title(result, title):
     return next(seat for seat in result["employees"] if seat["title"] == title)
 
 
-def segment(name):
-    return {
-        "key": name.lower(),
-        "name": name,
-        "parent": None,
-        "usd": None,
-        "method": "top_down",
-        "arithmetic": "",
-        "evidence": [],
-        "ours": True,
-        "next": False,
+def named_bet(number, name, segment=""):
+    return {"id": "b%d" % number, "statement": "Work on %s" % name.lower(), "name": name, "segment": segment}
+
+
+def readback(case):
+    """The case's chart written as a company file and read back: its rows, and the draft the reader makes of them. A
+    template with no card in roles.json yet is read as its stand-in."""
+    rows = [
+        dict(
+            seat,
+            template=seat["template"]
+            if seat["template"] in CARDS
+            else STAND_IN.get(seat["template"], seat["template"]),
+        )
+        for seat in F.build(case["inputs"], case.get("removed", ()))["employees"]
+    ]
+    doc = {
+        "version": "0.3",
+        "created": "2026-11-07T00:00:00.000Z",
+        "company": {"name": "Company", "about": "", "signals": []},
+        "people": [{"id": "chris", "name": "Chris", "role": "Owner", "owner": True}],
+        "employees": rows,
+        "goals": [],
+        "rules": {"mode": "defaults", "never_without_a_person": [], "review": "one"},
+        "tools": {"mode": "defaults", "connect": []},
     }
-
-
-def market(*segments):
-    return {**D.blank_strategy()["market"], "segments": list(segments)}
-
-
-def bet(number, statement, **extra):
-    return {
-        "id": "b%d" % number,
-        "statement": statement,
-        "why": "",
-        "rules_out": "",
-        "wrong_if": "",
-        "check_by": "",
-        **extra,
-    }
-
-
-def strategy_draft(**fields):
-    """A valid draft whose strategy holds `fields`; the rest of the strategy is blank."""
-    draft = D.blank()
-    draft["strategy"] = {**D.blank_strategy(), **fields}
-    return D.check(draft)
+    return rows, yamlfile.from_yaml(yaml.safe_dump(doc, sort_keys=False))
 
 
 # ---------------------------------------------------------------------------------------------- the golden cases
@@ -82,6 +76,11 @@ def strategy_draft(**fields):
 def test_each_golden_case_builds_its_expected_chart(name):
     case = CASES[name]
     assert F.build(case["inputs"], case.get("removed", ())) == case["expected"]
+
+
+def test_the_golden_fixture_is_a_test_fixture_not_part_of_the_install_bundle():
+    assert FIXTURE.exists()
+    assert not (Path(F.__file__).parent / "chart_formula_golden.json").exists()
 
 
 def test_hotmic_is_the_spec_chart_with_twenty_six_seats_and_nothing_uncovered():
@@ -117,7 +116,7 @@ def test_a_seat_row_has_the_company_file_employee_shape():
 def test_titles_and_ids_are_unique_within_their_limits_and_are_slugs():
     for case in CASES.values():
         seats = F.build(case["inputs"], case.get("removed", ()))["employees"]
-        assert len({seat["title"].casefold() for seat in seats}) == len(seats)
+        assert len({D.fold(seat["title"]) for seat in seats}) == len(seats)
         assert len({seat["id"] for seat in seats}) == len(seats)
         assert all(len(seat["title"]) <= D.LIMITS["title"] for seat in seats)
         assert all(len(seat["id"]) <= D.LIMITS["id"] for seat in seats)
@@ -155,12 +154,42 @@ def test_a_long_title_is_cut_so_its_number_still_fits():
     assert titles[0] != titles[1] and titles[1].endswith(" 2")
 
 
+def test_fixed_seats_claim_their_titles_and_ids_before_initiatives_and_industry_owners():
+    bets = [named_bet(1, "Support"), named_bet(2, "Finance"), named_bet(3, "SEO")]
+    industry = [{"title": "Support Owner", "template": "billing"}]
+    result = F.build({"segments": [], "channels": [], "initiatives": bets, "industry": industry})
+    seat = {row["title"]: row for row in result["employees"]}
+    assert (seat["Support Owner"]["id"], seat["Support Owner"]["team"]) == ("support-owner", "Support")
+    assert seat["Finance Owner"]["id"] == "finance-owner"
+    assert seat["SEO Owner"]["id"] == "seo-owner"
+    assert (seat["Support Owner 2"]["id"], seat["Support Owner 2"]["team"]) == ("support-owner-2", "Initiatives")
+    assert seat["Finance Owner 2"]["id"] == "finance-owner-2"
+    assert seat["SEO Owner 2"]["id"] == "seo-owner-2"
+    assert seat["Support Owner 3"]["team"] == "Operations"  # the industry Owner clashes last, so it is the third
+    teams = [row["team"] for row in result["employees"]]
+    assert teams.index("Initiatives") < teams.index("Corporate") < teams.index("Support") < teams.index("Operations")
+
+
+def test_a_name_with_no_ascii_letter_or_digit_gets_a_fallback_id():
+    ids = {seat["title"]: seat["id"] for seat in F.build(CASES["unicode_and_emoji_names"]["inputs"])["employees"]}
+    assert ids["Straße Händler Product Owner"] == "stra-e-h-ndler-product-owner"
+    assert ids["🚀" * 40 + " Product Owner"] == "segment-2-product-owner"
+    assert ids["🚀" * 40 + " Marketing Owner"] == "segment-2-marketing-owner"
+    assert ids["🚀🚀 Owner"] == "initiative-b1-owner"
+
+
+def test_lengths_are_counted_in_code_points_as_a_js_port_counts_them():
+    assert len("🚀" * 41) == 41
+    assert F.cut("🚀" * 41) == "🚀" * 40
+    assert F.cut("Straße Händler") == "Straße Händler"
+
+
 # ---------------------------------------------------------------------------------------------- initiatives
 def test_a_bet_tagged_to_a_picked_segment_belongs_to_its_product_owner_and_an_untagged_one_gets_a_seat():
     result = F.build(HOTMIC)
     assert "Live rooms Owner" not in titles_of(result)
     assert "Photos are the input Owner" in titles_of(result)
-    assert "'Live rooms' initiative" in by_title(result, "Creators Product Owner")["reason"]
+    assert "“Live rooms” initiative (b1)" in by_title(result, "Creators Product Owner")["reason"]
 
 
 def test_a_bet_tagged_to_a_segment_that_is_not_picked_is_untagged():
@@ -173,6 +202,36 @@ def test_a_bet_tagged_to_a_segment_that_is_not_picked_is_untagged():
     assert "Teach the teachers Owner" in titles_of(F.build(inputs))
 
 
+def test_a_bet_is_tagged_to_a_segment_ignoring_case_and_spacing():
+    inputs = {
+        "segments": ["Creators "],
+        "channels": [],
+        "initiatives": [{"id": "b1", "statement": "Run live rooms", "name": "Live rooms", "segment": " creators"}],
+        "industry": [],
+    }
+    result = F.build(inputs)
+    assert "Live rooms Owner" not in titles_of(result)
+    assert "“Live rooms” initiative (b1)" in by_title(result, "Creators Product Owner")["reason"]
+
+
+def test_an_initiative_owner_reason_names_its_bet_and_its_statement():
+    seat = by_title(F.build(HOTMIC), "Photos are the input Owner")
+    assert seat["reason"] == "Owns the “Photos are the input” initiative (b3): “Photos are the input”."
+
+
+def test_a_long_bet_statement_keeps_its_owner_reason_within_the_reason_limit():
+    statement = "word " * 60
+    inputs = {
+        "segments": [],
+        "channels": [],
+        "initiatives": [{"id": "b5", "statement": statement, "name": "", "segment": ""}],
+        "industry": [],
+    }
+    seat = next(row for row in F.build(inputs)["employees"] if row["team"] == "Initiatives")
+    assert seat["reason"].startswith("Owns the “") and "(b5)" in seat["reason"]
+    assert len(seat["reason"]) <= D.LIMITS["reason"]
+
+
 def test_a_label_is_cut_at_a_word_boundary_within_forty_characters():
     words = " ".join(["A" + "a" * 8, "B" + "b" * 8, "C" + "c" * 8, "D" + "d" * 9])
     assert len(words) == 40
@@ -180,6 +239,7 @@ def test_a_label_is_cut_at_a_word_boundary_within_forty_characters():
     assert F.cut(words + " Eeee") == words
     assert F.cut("Photos are the input.") == "Photos are the input"
     assert F.cut("Photos are the input. Every clip starts there") == "Photos are the input. Every clip starts"
+    assert F.cut("Become the default dental clinic here — then expand") == "Become the default dental clinic here"
     assert F.cut("x" * 50) == "x" * 40
     assert F.cut("  many   words\nand\tbreaks ") == "many words and breaks"
 
@@ -197,11 +257,23 @@ def test_a_long_product_reason_names_its_initiatives_or_counts_them_when_they_wo
     ]
     four = F.build({"segments": [segment_name], "channels": [], "initiatives": initiatives[:4], "industry": []})
     reason = by_title(four, "%s Product Owner" % segment_name)["reason"]
-    assert "'Initiative 1 " in reason and len(reason) <= D.LIMITS["reason"]
+    assert "“Initiative 1 " in reason and len(reason) <= D.LIMITS["reason"]
     five = F.build({"segments": [segment_name], "channels": [], "initiatives": initiatives, "industry": []})
     reason = by_title(five, "%s Product Owner" % segment_name)["reason"]
-    assert reason == "Owns the %s segment's product and 5 initiatives." % segment_name
+    assert reason == "Owns the %s segment's product and 5 initiatives (b1, b2, b3, b4, b5)." % segment_name
     assert len(reason) <= D.LIMITS["reason"]
+
+
+def test_a_product_reason_quotes_its_labels_curly_and_names_a_repeated_label_once():
+    bets = [
+        {"id": "b1", "statement": "Run live rooms", "name": "Live rooms", "segment": "Creators"},
+        {"id": "b2", "statement": "Host live rooms weekly", "name": "Live rooms", "segment": "Creators"},
+        {"id": "b3", "statement": "Start fan clubs", "name": "Fan clubs", "segment": "Creators"},
+    ]
+    result = F.build({"segments": ["Creators"], "channels": [], "initiatives": bets, "industry": []})
+    assert by_title(result, "Creators Product Owner")["reason"] == (
+        "Owns the Creators segment's product and the “Live rooms” and “Fan clubs” initiatives (b1, b2, b3)."
+    )
 
 
 # ---------------------------------------------------------------------------------------------- channels
@@ -244,6 +316,19 @@ def test_a_removed_marketing_owner_leaves_only_its_segment_uncovered():
     assert F.build(HOTMIC, ["creators-marketing-owner"])["uncovered"] == ["Creators marketing"]
 
 
+@pytest.mark.parametrize(
+    "seat, name",
+    [("security-owner", "Security"), ("infrastructure-owner", "Infrastructure"), ("pipeline-owner", "Pipeline")],
+)
+def test_a_removed_factory_owner_leaves_its_area_uncovered(seat, name):
+    assert F.build(HOTMIC, [seat])["uncovered"] == [name]
+
+
+def test_removed_is_a_list_of_seat_ids_and_a_string_is_refused():
+    with pytest.raises(TypeError):
+        F.build(HOTMIC, "creators-product-owner")
+
+
 # ---------------------------------------------------------------------------------------------- industry
 def test_industry_owners_are_kept_up_to_three_and_their_topic_reads_in_the_reason():
     industry = [
@@ -264,6 +349,15 @@ def test_industry_owners_are_kept_up_to_three_and_their_topic_reads_in_the_reaso
     assert [seat["department"] for seat in operations] == ["operations", "finance", "hr"]
 
 
+def test_an_industry_owner_takes_no_built_in_card():
+    built_in = {role["slug"] for role in D.ROLES if role["core"]}
+    assert {"coo", "botops", "goal-manager", "librarian"} <= built_in
+    assert not (F.INDUSTRY_TEMPLATES & built_in)
+    industry = [{"title": "%s Owner" % slug.title(), "template": slug} for slug in sorted(built_in)]
+    seats = F.build({"segments": [], "channels": [], "initiatives": [], "industry": industry})["employees"]
+    assert [seat for seat in seats if seat["team"] == "Operations"] == []
+
+
 # ---------------------------------------------------------------------------------------------- vocabulary and cards
 def test_the_formula_channels_are_the_vocabulary_channels_in_the_same_order():
     assert D.CHANNELS == tuple(channel["key"] for channel in F.FORMULA["channels"])
@@ -274,6 +368,11 @@ def test_every_template_is_a_card_or_one_of_the_six_new_ones():
     used |= {channel["template"] for channel in F.FORMULA["channels"]}
     assert used - set(CARDS) <= NEW_TEMPLATES
     assert NEW_TEMPLATES <= used
+
+
+def test_the_stand_ins_go_once_the_six_cards_are_in_roles_json():
+    assert set(STAND_IN) <= NEW_TEMPLATES
+    assert not (NEW_TEMPLATES <= set(CARDS) and STAND_IN), "all six new cards exist in roles.json: delete STAND_IN"
 
 
 def test_a_seat_on_a_card_carries_the_cards_department():
@@ -310,22 +409,11 @@ def test_a_blank_draft_is_the_default_channels_and_no_segment_or_bet_seats():
 
 
 # ---------------------------------------------------------------------------------------------- read back
-def test_the_formula_rows_read_back_through_the_company_file_reader():
-    rows = [
-        dict(seat, template=STAND_IN.get(seat["template"], seat["template"])) for seat in F.build(HOTMIC)["employees"]
-    ]
-    doc = {
-        "version": "0.3",
-        "created": "2026-11-07T00:00:00.000Z",
-        "company": {"name": "HotMic", "about": "Live fan rooms.", "signals": []},
-        "people": [{"id": "chris", "name": "Chris", "role": "Owner", "owner": True}],
-        "employees": rows,
-        "goals": [],
-        "rules": {"mode": "defaults", "never_without_a_person": [], "review": "one"},
-        "tools": {"mode": "defaults", "connect": []},
-    }
-    draft = yamlfile.from_yaml(yaml.safe_dump(doc, sort_keys=False))
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_the_rows_read_back_through_the_company_file_reader(name):
+    rows, draft = readback(CASES[name])
     assert [bot["id"] for bot in draft["bots"]] == [row["id"] for row in rows]
+    bots = {bot["id"]: bot for bot in draft["bots"]}
     for bot, row in zip(draft["bots"], rows):
         assert (bot["title"], bot["team"], bot["dept"], bot["reason"]) == (
             row["title"],
@@ -334,14 +422,29 @@ def test_the_formula_rows_read_back_through_the_company_file_reader():
             row["reason"],
         )
         assert bot["template"] == row["template"] and bot["start"] is True
+        # The setup draft allows one first job, so an initiative Owner names its bet in its reason instead.
+        assert "first_job" not in bot
         if row["reports_to"]:
-            assert D.manager_of(draft, bot) == row["reports_to"]
+            assert D.manager_of(draft, bot) == row["reports_to"], row["title"]
         else:
-            assert not bot.get("reports_to")  # no manager in the chart, so the file names none
-    # A seat with no manager in the chart takes the app's default: the department's lead, else the owner.
-    manager = {row["title"]: D.manager_of(draft, bot) for bot, row in zip(draft["bots"], rows)}
-    assert manager["Partnerships Owner"] == "sales-manager"  # the sales department's lead
-    assert manager["Finance Owner"] == "chris"  # the finance department has no lead
+            # No manager in the chart: the company file names none, and the app gives the seat its default manager.
+            assert not bot.get("reports_to")
+            manager = D.manager_of(draft, bot)
+            assert manager == "chris" or bots[manager]["dept"] == bot["dept"], row["title"]
+
+
+def test_the_read_back_gives_each_seat_without_a_manager_the_app_default():
+    _, draft = readback(CASES["hotmic"])
+    managers = {bot["title"]: D.manager_of(draft, bot) for bot in draft["bots"]}
+    assert managers["Partnerships Owner"] == "sales-manager"  # the sales department's lead
+    assert managers["Finance Owner"] == "chris"  # the finance department has no lead in the chart
+
+
+def test_an_industry_seat_with_no_manager_lands_under_its_department_lead_or_the_owner():
+    _, draft = readback(CASES["dental_clinic"])
+    managers = {bot["title"]: D.manager_of(draft, bot) for bot in draft["bots"]}
+    assert managers["Scheduling Owner"] == "chris"  # operations has no lead in the chart, so the owner
+    assert managers["Insurance Billing Owner"] == "finance-owner"  # the finance department's lead
 
 
 # ---------------------------------------------------------------------------------------------- the contract
@@ -350,11 +453,13 @@ def test_channels_are_kept_in_order_without_repeats_and_absent_when_none_is_pick
     assert "channels" not in strategy_draft(channels=[])["strategy"]
 
 
-def test_a_channel_must_be_on_the_list_and_there_are_at_most_eleven():
+def test_a_channel_must_be_on_the_list_and_a_repeat_does_not_count_toward_the_cap():
     with pytest.raises(D.DraftError, match="channel"):
         strategy_draft(channels=["seo", "billboards"])
-    with pytest.raises(D.DraftError):
-        strategy_draft(channels=["cro"] * 12)
+    with pytest.raises(D.DraftError, match="list"):
+        strategy_draft(channels="seo")
+    assert strategy_draft(channels=["cro"] * 12)["strategy"]["channels"] == ["cro"]
+    assert strategy_draft(channels=list(D.CHANNELS))["strategy"]["channels"] == list(D.CHANNELS)
 
 
 def test_a_bet_name_is_trimmed_blank_is_absent_and_longer_than_forty_is_refused():
@@ -368,15 +473,23 @@ def test_a_bet_name_is_trimmed_blank_is_absent_and_longer_than_forty_is_refused(
         strategy_draft(bets=[bet(1, "Run live rooms", name="a" * 41)])
 
 
-def test_a_bet_segment_matches_a_segment_name_ignoring_case_and_a_stranger_is_dropped():
+def test_a_bet_segment_matches_a_segment_name_ignoring_case_and_spacing_and_a_stranger_is_dropped():
     draft = strategy_draft(
-        market=market(segment("Creators"), segment("Fans")),
-        bets=[bet(1, "Run live rooms", segment="creators"), bet(2, "Photos are the input", segment="Teachers")],
+        market=market({**segment("Creators"), "name": "Creators "}, segment("Fans")),
+        bets=[bet(1, "Run live rooms", segment="  creators "), bet(2, "Photos are the input", segment="Teachers")],
     )
-    assert draft["strategy"]["bets"][0]["segment"] == "Creators"
+    assert draft["strategy"]["bets"][0]["segment"] == "Creators "
     assert "segment" not in draft["strategy"]["bets"][1]
-    with pytest.raises(D.DraftError, match="segment"):
-        strategy_draft(bets=[bet(1, "Run", segment="a" * 61)])
+
+
+def test_a_bet_segment_longer_than_a_segment_name_can_be_is_dropped_not_refused():
+    name = "a" * 80  # the longest a segment's name can be
+    draft = strategy_draft(
+        market=market({**segment("Long"), "name": name}),
+        bets=[bet(1, "Run", segment=name), bet(2, "Run", segment=name + "a")],
+    )
+    assert draft["strategy"]["bets"][0]["segment"] == name
+    assert "segment" not in draft["strategy"]["bets"][1]
 
 
 def test_the_new_keys_round_trip_through_the_company_file():
@@ -411,3 +524,41 @@ def test_the_reader_refuses_a_channel_the_list_does_not_have():
     text = yamlfile.to_yaml(strategy_draft(channels=["seo"]))
     with pytest.raises(D.DraftError):
         yamlfile.from_yaml(text.replace("channels: [seo]", "channels: [billboards]"))
+
+
+# ---------------------------------------------------------------------------------------------- helpers for the contract
+def segment(name):
+    return {
+        "key": name.lower(),
+        "name": name,
+        "parent": None,
+        "usd": None,
+        "method": "top_down",
+        "arithmetic": "",
+        "evidence": [],
+        "ours": True,
+        "next": False,
+    }
+
+
+def market(*segments):
+    return {**D.blank_strategy()["market"], "segments": list(segments)}
+
+
+def bet(number, statement, **extra):
+    return {
+        "id": "b%d" % number,
+        "statement": statement,
+        "why": "",
+        "rules_out": "",
+        "wrong_if": "",
+        "check_by": "",
+        **extra,
+    }
+
+
+def strategy_draft(**fields):
+    """A valid draft whose strategy holds `fields`; the rest of the strategy is blank."""
+    draft = D.blank()
+    draft["strategy"] = {**D.blank_strategy(), **fields}
+    return D.check(draft)
