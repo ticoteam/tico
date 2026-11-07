@@ -8,6 +8,7 @@ from typing import Any
 
 from .banking import LIVE_PAYMENT, like
 from ..core.ledger import name_key
+from ..core.merchant import merchant_key
 from .ledger import new_id, tagset
 
 TABLES = frozenset(
@@ -295,6 +296,16 @@ def alias_delete(c: sqlite3.Connection, book_id: str, name_key: str) -> None:
     c.execute("DELETE FROM fin_vendor_aliases WHERE book_id=? AND name_key=?", (book_id, name_key))
 
 
+def active_vendor_alias(c: sqlite3.Connection, book_id: str, name_key: str) -> str:
+    """The active vendor contact a name key is an alias of, or ""."""
+    row = c.execute(
+        "SELECT a.contact_id FROM fin_vendor_aliases a JOIN fin_contacts k ON k.id=a.contact_id WHERE "
+        "a.book_id=? AND a.name_key=? AND k.active=1 AND k.kind IN ('vendor','both')",
+        (book_id, name_key),
+    ).fetchone()
+    return str(row[0]) if row is not None else ""
+
+
 def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
     """The vendor a new line posts under (spec §3: one key per vendor): a contact's id stays; a name that is an active
     vendor contact's alias becomes its id; any other name stays as written, for posting.post to key (L.name_key) and
@@ -338,7 +349,10 @@ def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
     vendor = vendor_resolved(c, book_id, key)
     if not vendor:
         return []
-    names = aliases_of(c, vendor) if is_contact(c, vendor) else [vendor]
+    if is_contact(c, vendor):
+        names = aliases_of(c, vendor)
+    else:  # a plain name also carries its merchant key: lines the bank posted under that key before the name
+        names = [merchant_key(vendor)]
     return list(dict.fromkeys([vendor, *names]))
 
 

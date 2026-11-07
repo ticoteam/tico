@@ -241,3 +241,78 @@ def test_vendor_merge_and_unmerge_are_live_kinds_that_need_the_book_right():
         assert kind in KD.ALL and kind in KD.LIVE and kind in KD.SHAPES and kind in KD.WORDS
         assert KD.NEEDS[kind] == R.BOOK
     assert set(VN.PLANNERS) == {"vendor_merge", "vendor_unmerge"}
+
+
+def _spend_rows(c, by: str) -> list[dict[str, object]]:
+    return FR.spend_by(c, OWNER, by, "2026-10-01", "2026-10-31", top_n=50, at=AT)["rows"]
+
+
+def _synced_google(books, fake=None) -> FakeMercury:
+    fake = fake or FakeMercury()
+    connect(books, fake)
+    fake.txns["g1"] = _txn("g1", -120.0, "GOOGLE *ADS8812", "2026-10-02")
+    sync_once(books, fake)
+    return fake
+
+
+def test_a_bank_row_posts_under_its_merchant_key_with_its_text_as_the_label(books):
+    _synced_google(books)
+    with books.transaction() as c:
+        row = next(r for r in _spend_rows(c, "vendor") if int(r["amount"]) == 12_000)
+        assert row["key"] == "google ads" and row["label"] == "GOOGLE *ADS8812"
+        charges = FR._charges(c, OWNER, AT)
+        assert [ch.payee for ch in charges if ch.amount == 12_000] == ["google ads"]
+
+
+def test_a_bank_row_posts_under_an_existing_contact_its_text_is_an_alias_of(books):
+    with books.transaction() as c:
+        ads = str(act(c, OWNER, "contact_create", {"name": "Google Ads", "kind": "vendor"}).result["contact_id"])
+        assert act(c, OWNER, "vendor_merge", {"into": ads, "merge": ["GOOGLE ADS"]}).status == "committed"
+    _synced_google(books)
+    with books.transaction() as c:
+        row = next(r for r in _spend_rows(c, "vendor") if int(r["amount"]) == 12_000)
+        assert row["key"] == ads and row["label"] == "Google Ads"
+        assert [ch.payee for ch in FR._charges(c, OWNER, AT) if ch.amount == 12_000] == [ads]
+
+
+def test_a_budget_on_the_old_name_key_counts_the_new_bank_line_once(books):
+    _synced_google(books)
+    with books.transaction() as c:
+        made = act(
+            c,
+            OWNER,
+            "budget_create",
+            {"name": "Google", "amount": 100_000, "at_limit": "warn", "vendor": "google *ads8812"},
+        )
+        assert made.status == "committed", made.reason
+        assert FA.budget_state(c, str(made.result["budget_id"]), AT).actual == 12_000
+
+
+def test_a_vendor_attribution_rule_on_the_contact_applies_to_the_bank_line(books):
+    with books.transaction() as c:
+        ads = str(act(c, OWNER, "contact_create", {"name": "Google Ads", "kind": "vendor"}).result["contact_id"])
+        assert act(c, OWNER, "vendor_merge", {"into": ads, "merge": ["GOOGLE ADS"]}).status == "committed"
+        rule = act(
+            c,
+            OWNER,
+            "attribution_rule_set",
+            {
+                "name": "Ads",
+                "match": {"kind": "vendor", "id": ads},
+                "splits": [{"teammate": "human:dan", "share_bps": 10_000}],
+            },
+        )
+        assert rule.status == "committed", rule.reason
+    _synced_google(books)
+    with books.transaction() as c:
+        mates = {str(r["key"]): int(r["amount"]) for r in _spend_rows(c, "teammate")}
+        assert mates.get("human:dan") == 12_000
+
+
+def test_a_stripe_style_line_keeps_its_name_key(books):
+    """Posting a raw name without the bank's merchant key (what stripe_post sends through vendor_lines) keys the name."""
+    with books.transaction() as c:
+        assert SAP.vendor_key(c, _books_id(c), "GOOGLE *ADS8812") == "GOOGLE *ADS8812"
+        spend(c, "6100", 5_000, day="2026-10-10", vendor="GOOGLE *ADS8812")
+        row = next(r for r in _spend_rows(c, "vendor") if int(r["amount"]) == 5_000)
+        assert row["key"] == "google *ads8812" and row["label"] == "GOOGLE *ADS8812"
