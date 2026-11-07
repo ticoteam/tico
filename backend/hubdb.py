@@ -7949,6 +7949,14 @@ def task_update(
         and not verdict_set
         and all(v is None for v in (visibility, public_title, public_summary, size, check_back_at, check_back_note))
     ):
+        # Nothing to write, but a waiting task's Blocked reason still follows its holds: clearing the wait on nothing
+        # tracked (waiting_on "") recomputes it here, in this same write, and a bot's task goes back to open
+        # (task_holds.refresh). An early return skipped that before.
+        if row and row.get("status") == "waiting":
+            from . import task_holds
+
+            task_holds.refresh(conn, task_id, task_holds.WAIT_CLEARED if waiting_on == "" else None)
+            return task(conn, task_id) or row
         return row
     # A person finishing it is news for every bot on it; the bots that asked them open questions are read
     # before the status write supersedes those questions.

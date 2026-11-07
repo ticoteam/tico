@@ -33,7 +33,8 @@ tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and th
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
-there.
+there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
+the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
 ## Before you push
 

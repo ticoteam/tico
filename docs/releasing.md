@@ -368,8 +368,7 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 Run tests on your computer while you work, and run the test files your change touches with `scripts/remote.py` before
 you mark the PR ready for review. A push to a pull request runs the cheap checks on free GitHub-hosted runners:
 lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
-the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on
-RunsOn with the queue's labels; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
+the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
 only. The merge queue runs the tests again: once per queue group,
 it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
@@ -387,15 +386,14 @@ crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. 
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
-(`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
-so they start cold. A pull request's superseded run is canceled; a queue group is never canceled.
+(`pr-cache.yml`) keeps the main-branch GitHub caches that PR and queue runs restore from fresh. The repository's caches share 10 GB, and an entry unused for seven days is evicted. A pull request's superseded run is canceled; a queue group is never canceled.
 
-**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `pr-checks.yml`, `pr-cache.yml`, `ci.yml` and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), so restores start cold more often, and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
+**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `ci.yml` (release validation) and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default there. `pr-checks.yml` and `pr-cache.yml` always run on GitHub-hosted runners and never read the variable. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU RunsOn Spot VMs in Tico's own AWS account (x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged); PR pushes run on GitHub-hosted runners. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
@@ -434,13 +432,13 @@ checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
   gate. A draft runs nothing.
-- **A ready pull request from this repository** (RunsOn Spot, the queue's labels): the selected Python and browser tests and
+- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
   the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
   pull request runs none of them.
-- **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
   browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
   recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
-- **The factory simulation** (RunsOn Spot, one 4-vCPU VM per group): seed 1 of every scenario, in a queue group or on a ready
+- **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
   check fails the group. Release validation runs seeds 1-3 as before.

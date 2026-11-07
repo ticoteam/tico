@@ -10796,8 +10796,8 @@ def gateway_video(api, args):
         raise ValueError(
             "seconds is 3 to 15, resolution is " + ", ".join(VIDEO_RESOLUTIONS) + ", aspect is 16:9 or 9:16"
         )
+    # No model here: the Gateway route sets it, and refuses any field its body model does not declare (a 422).
     body = {
-        "model": "tico-video",
         "prompt": str(args["prompt"]),
         "seconds": seconds,
         "resolution": resolution,

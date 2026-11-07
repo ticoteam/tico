@@ -23,6 +23,13 @@ UI_MAP = {
     "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
     "ui/github-connect.js": ["github-personal", "settings-forms"],
 }
+
+
+def ui_map_key(name):
+    """The UI_MAP key for a ui/ file. A script converted to TypeScript (ui/app/x.ts) keeps the entry its .js name has."""
+    return name[:-3] + ".js" if name.startswith("ui/") and name.endswith(".ts") else name
+
+
 CONFORMANCE = "runner_support/tests/test_conformance.py"
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
@@ -1055,12 +1062,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             uncertain.append(f"rule 3: unknown {name}: smoke set")
     if unknown:
         notes.append("rule 3: unknown files")
-    unmapped = [n for n in live if n not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
+    unmapped = [n for n in live if ui_map_key(n) not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
     seeds -= set(unmapped)
     for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
-        if name in UI_MAP:
-            missing = [s for s in UI_MAP[name] if not (root / "ui/tests" / f"{s}.cjs").is_file()]
-            browser |= set(UI_MAP[name]) - set(missing)
+        if ui_map_key(name) in UI_MAP:
+            scripts = UI_MAP[ui_map_key(name)]
+            missing = [s for s in scripts if not (root / "ui/tests" / f"{s}.cjs").is_file()]
+            browser |= set(scripts) - set(missing)
             if missing:
                 smoke_browser = True
                 uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
