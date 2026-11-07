@@ -16,6 +16,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     account,
     act,
     books,
+    finance_template,
     spend,
     store,
 )
