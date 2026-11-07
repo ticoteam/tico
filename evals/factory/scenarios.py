@@ -46,7 +46,10 @@ def never_blocked_after_merge(run):
 def no_stale_turns(run):
     stale = [r for r in run.turns() if r["stale"]]
     kinds = Counter(r["news"] for r in stale)
-    return not stale, f"{len(stale)} turns on stale notices: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common())
+    named = "; ".join(f"{r['bot']} {r['at']:%H:%M} {r['news']}: {r.get('stale_why') or 'stale'}" for r in stale[:3])
+    return not stale, f"{len(stale)} turns on stale notices: " + ", ".join(
+        f"{k} {n}" for k, n in kinds.most_common()
+    ) + (f" [{named}]" if named else "")
 
 
 def noise_under(share):
@@ -140,19 +143,24 @@ def board_keeps_moving(since, waits=(), fallback=False):
     is a stall whatever its reason, and that reason is printed with the round (sim.Run.reasons). `waits` are (from, to)
     windows of the scenario's clock in which a team-wide or group-wide cap holds every login: a round inside one is not
     judged. `fallback` also requires a judged round in which a bot started on a fallback login, for a scenario whose
-    point is that fallback. A run with no judged round fails, since nothing then shows the board moved."""
+    point is that fallback. A round whose every ready bot is held by a usage cap the records show reached (sim.Run.cap_holds)
+    is not judged either: the server holds those bots by design, and the count of such rounds is printed. Any other hold
+    is judged. A run with no judged round fails, since nothing then shows the board moved."""
 
     def check(run):
         if not run.marks:
             return False, "no runner claim rounds: this check needs runner-style claims"
         start = START + since
         windows = [(START + lo, START + hi) for lo, hi in waits]
-        judged, short, waived, on_fallback = 0, [], 0, 0
+        judged, short, waived, on_fallback, capped = 0, [], 0, 0, []
         for m in run.marks:
             if m["at"] < start or not m["free"] or not m["ready"]:
                 continue
             if any(lo <= m["at"] < hi for lo, hi in windows):
                 waived += 1
+                continue
+            if m["started_at"] < min(m["free"], len(m["ready"])) and _held_by_reached_caps(m):
+                capped.append(m)
                 continue
             judged += 1
             on_fallback += bool(m["fallback"])
@@ -173,12 +181,32 @@ def board_keeps_moving(since, waits=(), fallback=False):
                 "scenario is about was never tested"
             )
         note = f"; {waived} rounds inside declared waits were not judged" if waived else ""
+        if capped:
+            holds = sorted(
+                {
+                    f"{h['scope']} {h['period']} ${h['limit']:g} reached at ${h['spent']:.2f}"
+                    for m in capped
+                    for h in m["cap_held"].values()
+                }
+            )
+            note += (
+                f"; {len(capped)} rounds where every ready bot was held by a usage cap the records show reached "
+                f"were not judged ({'; '.join(holds[:3])})"
+            )
         return True, (
             f"all {judged} claim rounds with a free slot and a ready bot started the smaller of the two; "
             f"{on_fallback} of them started a bot on a fallback login{note}"
         )
 
     return check
+
+
+def _held_by_reached_caps(m):
+    """Whether every ready bot a round did not start is held by a usage cap the records show reached (sim.Run.cap_holds):
+    the server keeps a bot on a limit only when its window's spend has met the cap, so such a round is not a stall."""
+    held = m.get("cap_held") or {}
+    unstarted = [bot for bot in m["ready"] if bot not in (m.get("started_bots") or [])]
+    return bool(unstarted) and all(bot in held for bot in unstarted)
 
 
 def _round_line(m):

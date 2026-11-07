@@ -102,13 +102,15 @@ class Bot:
         message = attempt.get("message") or {}
         refs = message.get("refs") or {}
         task = attempt.get("task")
+        why = self.stale_why(task, message)
         self.record = {
             "at": w.now(),
             "bot": self.slug,
             "news": refs.get("handoff") or refs.get("news") or refs.get("rule") or message.get("kind"),
             "task": task and task["id"],
             "kind": "noise",
-            "stale": self.stale(task, message),
+            "stale": bool(why),
+            "stale_why": why,
             "action": None,
             "text": str(message.get("body") or "").replace("\n", " "),
             "runtime": self.runtime,
@@ -351,21 +353,26 @@ class Bot:
             }
         w.post(f"attempts/{attempt['id']}/complete", body, token=w.runner["token"])
 
-    def stale(self, task, message):
-        """Whether Tico's notice was out of date when the bot read it: its task had already finished, its CI news was
-        for a head the PR has moved past, or it had moved to another step after the notice was written."""
+    def stale_why(self, task, message):
+        """Why Tico's notice was out of date when the bot read it, or "" when it was not: its task had already finished
+        (the claim's view of it), its CI news was for a head the PR has moved past, or it had moved to another step after
+        the notice was written. A turn's record keeps the reason, so a failing check can name it."""
         if not task or message.get("sender_id") not in (None, "keeper"):
-            return False  # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
+            return ""  # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
         if message.get("id") in self.unfinished:
-            return False  # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
+            return ""  # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
         if task["status"] in ("done", "closed", "declined"):
-            return True
+            return f"its task was {task['status']} at the claim"
         head = (message.get("refs") or {}).get("pr_head")
         if head:  # CI news is about a head, not a step: it is out of date once the PR moved on
             pr = self.world.pr_of(task["id"])
-            return bool(pr) and self.world.prs[pr]["head"] != head
+            if pr and self.world.prs[pr]["head"] != head:
+                return f"its CI news was for head {head[:7]}, the PR is at {self.world.prs[pr]['head'][:7]}"
+            return ""
         moved = self.world.step_entered_at(task["id"], claimed_by="bot:" + self.slug)
-        return bool(moved and message.get("created_at") and message["created_at"] < moved)
+        if moved and message.get("created_at") and message["created_at"] < moved:
+            return "its task moved to another step after the notice was written"
+        return ""
 
     # ------------------------------------------------------------------ role behaviour
     def act(self, task, message):

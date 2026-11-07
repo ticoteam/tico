@@ -255,7 +255,11 @@ class Run:
             "slugs": candidates,
             "ready": ready,
             "blocked": blocked,
+            "started_bots": list(started_bots),
+            "cap_held": {},
         }
+        if free and ready and started < min(free, len(ready)):
+            mark["cap_held"] = self.cap_holds(w, [b for b in ready if b not in started_bots])
         if free and ready and started < min(free, len(ready)) and self.short_rounds < SHORT_ROUNDS:
             self.short_rounds += 1
             gone = [job for job in before if job not in queued and job not in started_jobs]
@@ -267,6 +271,43 @@ class Run:
             )
             mark["why"] = " | ".join(lines)
         self.marks.append(mark)
+
+    def cap_holds(self, w, bots):
+        """The bots a usage cap holds that the records show reached: {bot: {scope, period, limit, spent}}. The server holds
+        a bot on a limit (usage_limits.over) only when its window's spend has reached the limit; this reads that spend
+        again from the runs' own records (attempts, the rows the caps are counted from), and keeps a bot only when the
+        spend is at or over the limit. A hold the records do not show is not kept, so its round stays judged."""
+        from backend import usage_limits
+
+        held = {}
+        if not bots:
+            return held
+        now = usage_limits.clock().strftime("%Y-%m-%dT%H:%M:%S")
+        with w.store.read() as c:
+            for bot in bots:
+                found = usage_limits.over(c, bot)
+                if not found or found.get("scope") == "budget" or not found.get("limit"):
+                    continue
+                scope, period = found["scope"], found["period"]
+                _, start, end = usage_limits.bounds(None)[period]
+                sql = (
+                    "SELECT coalesce(sum(est_cost_usd), 0) FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) "
+                    "AND created_at >= ? AND created_at < ? AND settled_at IS NOT NULL AND settled_at < ?"
+                )
+                params = [start, end, now]
+                if scope == "bot":
+                    sql += " AND bot_id = ?"
+                    params.append(bot)
+                elif scope != usage_limits.COMPANY:
+                    members = sorted(usage_limits.members(c, scope))
+                    if not members:
+                        continue
+                    sql += " AND bot_id IN (" + ",".join("?" * len(members)) + ")"
+                    params += members
+                amount = float(c.execute(sql, params).fetchone()[0] or 0.0)
+                if amount + 1e-9 >= found["limit"]:
+                    held[bot] = {"scope": scope, "period": period, "limit": found["limit"], "spent": round(amount, 2)}
+        return held
 
     def places_used(self, team):
         """The computer's places in use: its running turns, less the parked ones, which hold no place."""
