@@ -209,8 +209,9 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.equal(await page.locator('[data-seg-link="budget"]').getAttribute('href'), '#/finance/budgets?segment=segment%2Fchecks', tag + ': Budget is Finance Budgets for the segment');
       assert.equal(await page.locator('[data-seg-link="pnl"]').getAttribute('href'), '#/finance/pnl?segment=segment%2Fchecks', tag + ': P&L is Finance P&L for the segment');
       // The market's company share is the server's our_share (4.2 in the fixture), not a figure worked out from revenue.
-      await page.waitForFunction(() => /\bshare\b[\s\S]*\d/.test(document.querySelector('#seg-market')?.innerText || ''));
-      assert.match(await page.locator('#seg-market').innerText(), /\bshare\b[\s\S]*4\.2%/, tag + ': the company share is the server\'s our_share');
+      // The tile label is uppercase by CSS (.mkt-lab), and innerText reads it so, hence the case-blind match.
+      await page.waitForFunction(() => /share[\s\S]*4\.2%/i.test(document.querySelector('#seg-market')?.innerText || ''), null, {timeout: 15000})
+        .catch(async () => { throw new Error(tag + ': no company share tile; the market reads ' + JSON.stringify((await page.locator('#seg-market').innerText()).slice(0, 300))); });
       assert.equal(await page.locator('[data-seg-field]').count(), 8, tag + ': all eight strategy fields');
       await snap(page, 'segment-page-desktop-top');
       const serve = page.locator('[data-seg-field="serve"]'), sell = page.locator('[data-seg-field="sell"]');
