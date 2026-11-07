@@ -76,12 +76,10 @@ def served_file(ui, name):
 
 
 def test_typescript_files_are_served_compiled_at_their_urls(api):
-    # The service worker is registered at /sw.js, and the separate-files mode names each script by its own URL: both
-    # send the compiled output the bundle is cut from.
+    # The separate-files mode names each script by its own URL, and each one sends the compiled output the bundle is cut from.
     ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
     ui_build.prepare(ui)
     for url, name in (
-        ("/sw.js", "sw.ts"),
         ("/tico/ui/theme.ts", "theme.ts"),
         ("/tico/ui/overview/bridge.ts", "overview/bridge.ts"),
     ):

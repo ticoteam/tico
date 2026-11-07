@@ -3,6 +3,7 @@
 'use strict';
 
 // ---- chat over messages, with the reply streamed from the keeper's turn ----
+// biome-ignore lint/suspicious/noExplicitAny: JS typed this null-started global as any; the strict burn-down gives it a type
 let V2C: any = null;                                   // the live v2 chat; one per visit
 // "every switch is slow... bring down switching to less than 1s". Each bot's
 // last chat (its conversation and messages) and tasks stay in memory for this page load, so going

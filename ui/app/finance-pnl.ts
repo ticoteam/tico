@@ -12,6 +12,7 @@
 'use strict';
 
 // The P&L's controls, kept for the visit.
+// biome-ignore lint/suspicious/noExplicitAny: JS typed this null-started global as any; the strict burn-down gives it a type
 const FIN_PNL: any = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: '', picked: false, compare: '', teams: [], mates: [],
   who: 'both', unattributed: false, sel: null, budgetCol: -1, last: null};
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];

@@ -14,7 +14,7 @@ const NON_RENDERING = [
 ];
 
 const SHARED = [
-  'ui/index.html', 'ui/theme.ts', 'ui/sw.ts', 'ui/manifest.webmanifest', 'ui/observability*.js',
+  'ui/index.html', 'ui/theme.ts', 'ui/sw.js', 'ui/manifest.webmanifest', 'ui/observability*.ts',
   'ui/styles/tokens.css', 'ui/styles/base.css', 'ui/styles/layout.css', 'ui/styles/components.css',
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
@@ -32,10 +32,10 @@ const SHARED = [
 // Files of features no PAGES entry shows. A change to one says so in the reason instead of shooting every page. A
 // page's own `ui` globs win over this list: a file both name belongs to the page.
 const UNSHOWN = [
-  'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/vault.js', 'ui/app/catalog.ts', 'ui/app/cloud-*.js', 'ui/app/team-add.ts',
+  'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.js', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
   'ui/app/integrations.ts', 'ui/app/mail.ts', 'ui/app/email-preview.ts', 'ui/app/messaging.ts', 'ui/app/sql.ts',
-  'ui/app/assistant-page.ts', 'ui/app/skills*.js', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
-  'ui/app/computer-*.js', 'ui/app/dashboard.ts', 'ui/app/overview*.js', 'ui/app/pages.ts', 'ui/app/replay.ts',
+  'ui/app/assistant-page.ts', 'ui/app/skills*.ts', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
+  'ui/app/computer-*.ts', 'ui/app/dashboard.ts', 'ui/app/overview*.ts', 'ui/app/pages.ts', 'ui/app/replay.ts',
   'ui/app/person-page.ts', 'ui/app/shared-edit.ts', 'ui/overview/**', 'ui/replay-player.js', 'ui/first-run.ts',
   'ui/changelog.ts', 'ui/lenses-page.ts', 'ui/org-builder.ts', 'ui/connect-agent.js', 'ui/credential-card.ts',
   'ui/directory-sync.ts', 'ui/github-connect.ts', 'ui/google-connect.ts', 'ui/model-login.ts',
@@ -45,7 +45,7 @@ const UNSHOWN = [
   'ui/styles/replay.css', 'ui/styles/roadmaps.css', 'ui/styles/tags.css', 'ui/styles/first-run.css',
   'ui/styles/lenses.css', 'ui/styles/credentials.css', 'ui/styles/cloud-agents.css', 'ui/styles/team-add.css',
   // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
-  'ui/app/inboxes*.js', 'ui/app/tools*.js', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
+  'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
 ];
 

@@ -21,7 +21,7 @@ NAV_DATASET = re.compile(r"\.dataset\.nav\s*=\s*['\"]([a-z-]+)['\"]")  # rows ad
 
 def nav_pages():
     pages = set(NAV_LINK.findall((UI / "index.html").read_text()))
-    for source in (UI / "app").glob("*.ts"):
+    for source in sorted([*(UI / "app").glob("*.js"), *(UI / "app").glob("*.ts")]):
         text = source.read_text()
         pages.update(NAV_ROW.findall(text))
         pages.update(NAV_DATASET.findall(text))
