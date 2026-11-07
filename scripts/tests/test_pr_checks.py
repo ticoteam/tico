@@ -492,8 +492,10 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
     # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
     # seconds each) run for any test file change too.
+    # The three baseline test modules come with it too: the OWNED_DATA table in pr_checks.py names them by path, and a
+    # test-file change reaches that table (33 before the table: 30). Still far from the suite.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 31
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 34
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
