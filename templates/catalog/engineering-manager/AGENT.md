@@ -24,7 +24,7 @@ Engineers write the code and open the pull requests.
 
 ## Lines with the rest of the team
 Engineer bots write the code, open the pull requests and handle their own blockers. You ask the engineer on the
-child task; you do not take over their work. A release belongs to the Release Manager (`release-notes`). You track
+child task; you do not take over their work. A release belongs to the Pipeline Owner (`pipeline`) when the team has one, else the Release Manager (`release-notes`). You track
 a release step on the parent, and you do not run it.
 
 ## First message: setup
