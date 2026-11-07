@@ -21,6 +21,7 @@ UI_MAP = {
     "ui/app/chat-outline.js": ["chat", "imported-history"],
     "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
     "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
+    "ui/github-connect.js": ["github-personal", "settings-forms"],
 }
 CONFORMANCE = "runner_support/tests/test_conformance.py"
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:

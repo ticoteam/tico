@@ -1,4 +1,4 @@
-/* Tools > GitHub: connect the team's GitHub organization through a GitHub App the
+/* Tools > GitHub: connect the team's GitHub account or organization through a GitHub App the
    owner creates there (docs/github-app.md). The private key never reaches the browser. */
 'use strict';
 const LOST_KEY_CONFIRM = 'The key for the saved GitHub App and directory sync secrets is lost, so they cannot be opened. Replace them? Any saved GitHub App and all directory sync credentials are removed, and you enter them again.';
@@ -11,16 +11,22 @@ window.mountGithubConnect = async function (host) {
   catch (error) { host.innerHTML = `<div class="empty">${text(error.message)}</div>`; return; }
   if (!host.isConnected) return;
   if (state.connected) {
-    host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
-      <span data-gh-install>${state.installed ? 'Installed on the organization.' : 'Not installed yet.'}</span></p>
-      ${state.administration ? '<p class="muted">Tico can create bot repositories.</p>' : `<div data-gh-repo-fix>
+    // A personal account has no Administration fix here yet: Tico does not create its repositories, so a person does.
+    const personal = state.account_type === 'User';
+    const waiting = (state.waiting || []).length ? `<p class="muted">Waiting for a repository: ${(state.waiting || []).map((w, i) => `${text(w.bot)} (<a data-gh-create="${i}" target="_blank" rel="noopener">create ${text(w.repository)} yourself</a>)`).join(', ')}.</p>` : '';
+    const repos = state.administration ? '<p class="muted">Tico can create bot repositories.</p>'
+      : personal ? `<p class="muted">New bots wait for you to create their repository on GitHub.</p>${waiting}`
+      : `<div data-gh-repo-fix>
         <p><strong>Tico can't create bot repositories.</strong> The app was set up without Administration, so every new bot waits for a person.</p>
         <p>Fix it once: <a class="primary" role="button" data-gh-permissions target="_blank" rel="noopener">Let Tico create repositories</a>
         On that page set <strong>Administration</strong> to <strong>Read and write</strong> and save, accept the new permission for ${text(state.org)} when GitHub asks, then
         <button type="button" class="ghost" data-gh-recheck>Check again</button></p>
-        ${(state.waiting || []).length ? `<p class="muted">Waiting for a repository: ${(state.waiting || []).map((w, i) => `${text(w.bot)} (<a data-gh-create="${i}" target="_blank" rel="noopener">create ${text(w.repository)} yourself</a>)`).join(', ')}.</p>` : ''}
-      </div>`}
-      <p class="muted">Connected before release tracking? In <a href="https://github.com/organizations/${encodeURIComponent(state.org || '')}/settings/apps/${encodeURIComponent(state.slug || '')}/permissions" target="_blank" rel="noopener">the app's events on GitHub</a>, tick <strong>Release</strong>. Pushed tags work without it.</p>
+        ${waiting}
+      </div>`;
+    host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
+      <span data-gh-install>${state.installed ? `Installed on the ${personal ? 'account' : 'organization'}.` : 'Not installed yet.'}</span></p>
+      ${repos}
+      <p class="muted">Connected before release tracking? In <a data-gh-events target="_blank" rel="noopener">the app's events on GitHub</a>, tick <strong>Release</strong>. Pushed tags work without it.</p>
       ${state.installed ? '' : `<p class="muted">Choose <strong>All repositories</strong> when GitHub asks. Each bot's token still covers only its own repository.</p>`}
       <div class="row">${state.installed ? '' : `<a class="primary" role="button" href="${text(state.install_url)}" target="_blank" rel="noopener">Install on ${text(state.org)}</a>`}
       <button type="button" class="ghost" data-gh-disconnect>Disconnect</button>
@@ -30,6 +36,7 @@ window.mountGithubConnect = async function (host) {
     // The server's GitHub links are set as properties, and only when they point at GitHub over https.
     const link = (node, url) => { if (node && /^https:\/\/github\.com\//.test(url || '')) node.href = url; };
     link(host.querySelector('[data-gh-permissions]'), state.permissions_url);
+    link(host.querySelector('[data-gh-events]'), state.permissions_url);
     host.querySelectorAll('[data-gh-create]').forEach(node => link(node, (state.waiting || [])[Number(node.dataset.ghCreate)]?.create_url));
     const recheck = host.querySelector('[data-gh-recheck]');
     if (recheck) recheck.onclick = async () => {
@@ -50,8 +57,8 @@ window.mountGithubConnect = async function (host) {
     return;
   }
   host.innerHTML = `<form data-gh-form style="display:grid;gap:10px;max-width:460px">
-      <p class="muted">When GitHub asks where to install, choose <strong>All repositories</strong>. Each bot's token still covers only its own repository. For sensitive code, use a separate organization.</p>
-      <label>Organization<input name="org" type="text" required maxlength="39" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9-]*" placeholder="your-org"></label>
+      <p class="muted">When GitHub asks where to install, choose <strong>All repositories</strong>. Each bot's token still covers only its own repository. For sensitive code, use a separate account or organization.</p>
+      <label>GitHub account or organization<input name="org" type="text" required maxlength="39" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9-]*" placeholder="your-name or your-org"></label>
       <label>App name<input name="name" type="text" maxlength="34" autocomplete="off" placeholder="Acme Tico"></label>
       <label><input type="checkbox" name="administration" checked> Let Tico create bot repositories (recommended; without it a person creates each new bot's repository)</label>
       <button class="primary" type="submit">Connect GitHub</button>
