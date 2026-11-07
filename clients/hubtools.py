@@ -4075,8 +4075,8 @@ def _segment_path(segment_id):
 
 @tool(
     "hub_segment_list",
-    "The segments the company plays in, in list order: each one's id, name, who it is for, color, rank, faces (the "
-    "dedicated teammates, highest on the chart first) and teammates (how many are dedicated).",
+    "The company's segments in list order: id, name, who, color, rank, faces (dedicated teammates) and teammates "
+    "(how many).",
     {},
 )
 def segment_list(api, args):
@@ -4085,9 +4085,9 @@ def segment_list(api, args):
 
 @tool(
     "hub_segment_show",
-    "One segment: its leads, its strategy fields (the summary and the seven sections, each with the text the segment "
-    "reads, the company's text and whether it changed; the owner reads the draft and its revision), and its live bets.",
-    {"id": _s("The segment's id, segment/<slug>")},
+    "One segment: leads, strategy fields (text, the company's text, changed; the owner reads the draft and its "
+    "revision) and live bets.",
+    {"id": _s("segment/<slug>")},
     ("id",),
 )
 def segment_show(api, args):
@@ -4197,8 +4197,8 @@ def segment_strategy(api, args):
 
 @tool(
     "hub_segment_members",
-    "The teammates tagged with a segment (the company's, or `all`), highest on the chart first: each one's member "
-    "ref (bot:<id> or person:<id>) and its segments. `truncated` says the list was cut.",
+    "Teammates tagged with a segment (or all): member (bot:<id> or person:<id>) and segments. truncated says the list "
+    "was cut.",
     {},
 )
 def segment_members(api, args):
