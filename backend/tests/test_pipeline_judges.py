@@ -225,3 +225,54 @@ def test_a_bot_then_person_requirement_sends_an_unsure_answer_to_its_person(tmp_
         row = dict(conn.execute("SELECT verdict, route_next_to FROM stage_decisions").fetchone())
     assert row == {"verdict": "unsure", "route_next_to": BEN}
     assert P.tick(store) == 0  # routed to a person: the bot does not judge it again
+
+
+def test_a_tick_over_the_decide_cap_records_unsure_and_never_asks_the_model(tmp_path, monkeypatch):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    req = R.add(
+        c,
+        ANA,
+        step_id(c, dev["id"], "Review"),
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "Ok",
+        },
+    )
+    task = H.task_create(c, ANA, "Ship", "", ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task["id"],
+        req["id"],
+        {"source": "link", "url": "https://x.example"},
+    )
+    c.close()
+    asked = []
+
+    def ask(model, state, questions, label):
+        asked.append(model)
+        return {"p": 1.0}
+
+    monkeypatch.setattr(backend_judge, "over_spend_cap", lambda conn, settings, *a, **k: (12.0, 10.0))
+    monkeypatch.setattr(P, "ENGINE", ask)
+    store = Store(_settings(path))
+
+    assert P.tick(store) == 1
+    with store.read() as conn:
+        verdicts = [r[0] for r in conn.execute("SELECT verdict FROM stage_decisions")]
+    assert asked == [] and verdicts == ["unsure"]  # over the cap: recorded as unsure, nothing passed
+
+
+def test_the_decide_models_go_through_the_engine_seam_and_the_ids_are_the_gateways():
+    assert P.MODELS == {"haiku-5.5": "tico-low", "jev": "tico-decide-low", "sonnet": "tico-decide-medium"}
+    assert P.DEFAULT_MODEL == "haiku-5.5"
+    assert (P.MET_AT, P.NOT_MET_AT) == (0.8, 0.2)

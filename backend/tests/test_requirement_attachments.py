@@ -75,3 +75,62 @@ def test_an_attachment_on_a_requirement_of_another_stage_is_refused(tmp_path):
             c, Auth(), SimpleNamespace(actor=ANA), task["id"], req["id"], {"source": "link", "url": "https://x.example"}
         )
     assert refused.value.status == 409
+
+
+def _person_reviewed(c, stage, reviewer):
+    return R.add(
+        c,
+        ANA,
+        stage,
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "person",
+            "reviewer_id": reviewer,
+        },
+    )
+
+
+def test_an_attachment_the_requirements_reviewer_cannot_read_is_refused(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    _, stage, task = _ticket(c)
+    c.execute("UPDATE tasks SET private=1, owner_id=?, requester_id=?, readers=NULL WHERE id=?", (ANA, ANA, task["id"]))
+    req = _person_reviewed(c, stage, "human:ben")
+    body = {"source": "link", "url": "https://x.example"}
+
+    with pytest.raises(Problem) as refused:
+        A.attach(c, Auth(), SimpleNamespace(actor=ANA), task["id"], req["id"], body)
+    assert refused.value.status == 403
+    assert c.execute("SELECT COUNT(*) FROM requirement_attachments").fetchone()[0] == 0
+
+    # Once the reviewer can read the ticket, the same attach goes through.
+    c.execute("UPDATE tasks SET readers=? WHERE id=?", ('["human:ben"]', task["id"]))
+    assert A.attach(c, Auth(), SimpleNamespace(actor=ANA), task["id"], req["id"], body)["attached_by"] == ANA
+
+
+def test_a_bot_cannot_attach_to_a_requirement_on_a_ticket_it_cannot_edit(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    _, stage, task = _ticket(c)
+    req = R.add(
+        c,
+        ANA,
+        stage,
+        {"name": "Live link", "kind": "attachment", "needs": {"formats": ["link"]}, "reviewed_by": "nobody"},
+    )
+    body = {"source": "link", "url": "https://x.example"}
+
+    class NoAccess(Auth):
+        def task(self, conn, who, task_id):
+            raise Problem("not_found", "No such task", 404)
+
+    with pytest.raises(Problem) as hidden:  # a ticket the bot cannot read is a 404, as for every other route
+        A.attach(c, NoAccess(), SimpleNamespace(actor="bot:ghost"), task["id"], req["id"], body)
+    assert hidden.value.status == 404
+    with pytest.raises(H.Refused):  # a bot hubdb does not know cannot write at all
+        A.attach(c, Auth(), SimpleNamespace(actor="bot:ghost"), task["id"], req["id"], body)
+    assert c.execute("SELECT COUNT(*) FROM requirement_attachments").fetchone()[0] == 0
