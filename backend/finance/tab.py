@@ -438,7 +438,9 @@ def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[st
                         "tags": dict(line.tags),
                     }
                 )
-    names = vendor_labels(ctx, view, [str(x["vendor"]) for xs in out.values() for x in xs])
+    # A vendor on a line the viewer sees shows its name (visible.py): every key here is on a visible line.
+    keys = [str(x["vendor"]) for xs in out.values() for x in xs]
+    names = vendor_labels(ctx, view, keys, shown={k: True for k in keys})
     for xs in out.values():
         for x in xs:
             x["vendor_name"] = names.get(str(x["vendor"]), "")
@@ -560,7 +562,13 @@ def transactions(
         cut = private_feed(ctx, view, rows)
         rows = [r for r in rows if str(r["id"]) not in cut]
         lines = _visible_lines(ctx, view, [str(r["entry_id"]) for r in rows if r["entry_id"]])
-        vendors = VN.feed_vendors(c, ctx.book.id, rows, lambda kind: sees_contact_kind(ctx, view, kind))
+        vendors = VN.feed_vendors(
+            c,
+            ctx.book.id,
+            rows,
+            lambda kind: sees_contact_kind(ctx, view, kind),
+            lines_shown=lambda r: bool(lines.get(str(r["entry_id"] or ""))),
+        )
         out: list[tuple[tuple[str, str], Row]] = []
         for r in rows:
             mine = lines.get(str(r["entry_id"] or ""), [])

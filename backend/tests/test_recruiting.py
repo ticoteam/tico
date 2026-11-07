@@ -257,12 +257,12 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
         ("Product Security Engineer", "security-engineer"),
         ("Product Security Engineer II", "security-engineer"),
         ("Product Security Engineers", "security-engineer"),
+        ("Affiliate Marketing Manager", "affiliates"),
     ):
         assert (recruiting._best_card(cards, title) or {}).get("template") == template, title
     for title in (
         "Influencer Marketing Manager",
         "Partner Marketing Manager",
-        "Affiliate Marketing Manager",
         "Marketing Coordinator",
         "Digital Marketing Manager",
         "Brand Designer",  # the Brand Owner is built in, so no card is hired for it
