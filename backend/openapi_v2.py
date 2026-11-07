@@ -4891,6 +4891,24 @@ STABLE.extend(
             "FinanceRules",
         ),
         (
+            "/api/v2/finance/attribution-rules",
+            "get",
+            "Finance",
+            "listFinanceAttributionRules",
+            "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and "
+            "apply_from); needs the finance.attribution right or admin",
+            "FinanceAttributionRules",
+        ),
+        (
+            "/api/v2/finance/lines/{line_id}/attribution",
+            "get",
+            "Finance",
+            "getFinanceLineAttribution",
+            "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and "
+            "the line's history newest first, as far as the caller sees the line",
+            "FinanceLineAttribution",
+        ),
+        (
             "/api/v2/finance/bills",
             "get",
             "Finance",
@@ -5433,6 +5451,7 @@ SCHEMAS.update(
                             "default_team": "n",
                             "grants": items({"type": "object", "additionalProperties": True}),
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                            "attribute": {"type": ["boolean", "null"]},
                             "may_grant": "b",
                             "budgets": "i",
                         }
@@ -5674,6 +5693,52 @@ SCHEMAS.update(
                         required=["id", "name", "when", "outcome"],
                     )
                 )
+            }
+        ),
+        "FinanceLineAttribution": obj(
+            {
+                "line_id": "s",
+                "source": "s",
+                "rule_id": "n",
+                "rule_name": "n",
+                "set_by": "n",
+                "set_at": "n",
+                "can_change": "b",
+                "tags": "o",
+                "amount": "i",
+                "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i", "amount": "i"})),
+                "history": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "source": "s",
+                            "rule_id": "n",
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                            "set_by": "s",
+                            "set_at": "s",
+                            "superseded_at": "n",
+                        }
+                    )
+                ),
+            }
+        ),
+        "FinanceAttributionRules": obj(
+            {
+                "rules": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "match": obj({"kind": "s", "id": "s", "label": "s"}),
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                            "enabled": "b",
+                            "apply_from": "n",
+                            "created_by": "s",
+                            "updated_at": "s",
+                        }
+                    )
+                ),
+                "can_change": "b",
             }
         ),
         "FinanceMercuryUsers": obj(

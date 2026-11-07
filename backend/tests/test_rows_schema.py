@@ -116,6 +116,9 @@ UNTYPED = frozenset(
         "fin_purchase_orders",
         "items",
         "locations",
+        # Finance attribution (migration 20261106230500): read only through backend/finance/store/attribution.py.
+        "fin_attribution_rules",
+        "fin_attributions",
         # Finance's combined build (migration 0037): prepaid postings and invoice reminders.
         "fin_invoice_reminders",
         "fin_prepaid_postings",
