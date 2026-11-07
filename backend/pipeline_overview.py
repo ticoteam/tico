@@ -278,10 +278,11 @@ def _sccs(nodes: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:
     return out
 
 
-def _laps(seq: list[Row]) -> list[float]:
-    """Completed laps in one card's move handoffs, in time order: a lap starts where the card leaves a pipeline and ends
-    when it comes back to that pipeline. A hop that does not follow on from the card's last one starts a new lap."""
-    out: list[float] = []
+def _laps(seq: list[Row]) -> list[tuple[float, Any]]:
+    """Completed laps in one card's hops, in time order, as (minutes, the time the lap ended): a lap starts where the card
+    leaves a pipeline and ends when it comes back to that pipeline. A hop that does not follow on from the card's last one
+    starts a new lap."""
+    out: list[tuple[float, Any]] = []
     pos: str | None = None
     first = ""
     began: Any = None
@@ -293,14 +294,16 @@ def _laps(seq: list[Row]) -> list[float]:
         pos = str(h["b"])
         ended = H.parse_ts(h["at"])
         if pos == first and began and ended:
-            out.append(max(0.0, (ended - began).total_seconds() / 60))
+            out.append((max(0.0, (ended - began).total_seconds() / 60), ended))
             pos = None
     return out
 
 
 def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: str, since: str) -> list[Row]:
-    """Cycles in the links the reader sees, with their completed laps (move handoffs of one card round a cycle). The
-    median lap time shows only from LOOP_MEDIAN_LAPS laps."""
+    """Cycles in the links the reader sees, with their completed laps in the period. A lap is one card's hops round a cycle
+    (move handoffs, and a spawned subtask's hops count under its parent, so the subtask's return ends the parent's lap). The
+    hops of a card that came back in the period are loaded whole, so a lap that left before the period still counts when it
+    returns in it. The median lap time shows only from LOOP_MEDIAN_LAPS laps."""
     groups = _sccs(ordered, [(str(r["from_pipeline_id"]), str(r["to_pipeline_id"])) for r in links])
     if not groups or not _columns(c, "pipeline_handoffs"):
         return []
@@ -308,23 +311,34 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
     m = _marks(members)
     hops = _rows(
         c,
-        "SELECT h.target_task_id AS task, l.from_pipeline_id AS a, l.to_pipeline_id AS b, h.created_at AS at "
-        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
-        f"WHERE l.mode='move' AND l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
-        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
-        "ORDER BY h.target_task_id, h.created_at",
+        "SELECT h.source_task_id AS source, h.target_task_id AS task, l.mode AS mode, l.from_pipeline_id AS a, "
+        "l.to_pipeline_id AS b, h.created_at AS at FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
+        f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        "AND h.returned_at IS NULL AND h.target_task_id IN (SELECT target_task_id FROM pipeline_handoffs "
+        "WHERE created_at>=? AND returned_at IS NULL) "
+        f"AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen}))) "
+        "ORDER BY h.created_at, h.id",
         [*members, *members, since],
     )
+    # A spawned subtask's hops belong to its parent's lap.
+    parent_of = {str(h["task"]): str(h["source"]) for h in hops if h["mode"] == "spawn"}
     by_card: dict[str, list[Row]] = defaultdict(list)
     for h in hops:
-        by_card[str(h["task"])].append(h)
+        key = str(h["source"]) if h["mode"] == "spawn" else parent_of.get(str(h["task"]), str(h["task"]))
+        by_card[key].append(h)
+    since_at = H.parse_ts(since)
     rank = {pid: i for i, pid in enumerate(ordered)}
     out: list[Row] = []
     for group in sorted(groups, key=lambda g: min(rank.get(p, 0) for p in g)):
         inside = set(group)
         laps: list[float] = []
         for seq in by_card.values():
-            laps.extend(_laps([h for h in seq if str(h["a"]) in inside and str(h["b"]) in inside]))
+            laps.extend(
+                minutes
+                for minutes, ended in _laps([h for h in seq if str(h["a"]) in inside and str(h["b"]) in inside])
+                if ended >= since_at
+            )
         out.append(
             {
                 "pipelines": sorted(group, key=lambda p: rank.get(p, 0)),

@@ -341,3 +341,31 @@ def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(a
         migration.up(c)
         stored = c.execute("SELECT output_stage_id FROM factories WHERE id=?", (growth,)).fetchone()[0]
     assert stored == e_steps["Done"]
+
+
+def test_a_lap_that_left_before_the_period_counts_when_it_returns_in_it(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    forward = link(api, prod, p_steps["Doing"], eng)
+    back = link(api, eng, e_steps["Doing"], prod)
+    rider = card(api, prod, p_steps["Doing"])
+    handoff(api, forward, rider["id"], ago(days=8))  # left eight days ago
+    handoff(api, back, rider["id"], ago(days=6))  # came back six days ago: one lap in the last seven days
+    (week,) = overview(api, "7d")["loops"]
+    assert week["laps"] == 1
+    assert overview(api, "1d")["loops"][0]["laps"] == 0
+
+
+def test_a_spawned_subtask_returning_ends_its_parents_lap(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    spawn = link(api, prod, p_steps["Doing"], eng, mode="spawn")
+    back = link(api, eng, e_steps["Doing"], prod)
+    parent = card(api, prod, p_steps["Doing"])
+    subtask = card(api, eng, e_steps["Doing"])
+    handoff(api, spawn, subtask["id"], ago(hours=5), source=parent["id"])
+    handoff(api, back, subtask["id"], ago(hours=1))
+    (loop,) = overview(api)["loops"]
+    assert loop["laps"] == 1
