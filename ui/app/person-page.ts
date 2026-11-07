@@ -272,7 +272,7 @@ function pagePerson(id, tab) {
 }
 // The human's tasks: what they own, active first, finished behind a toggle. The rows are
 // the same as a keeper bot's (v2TaskRow), opening the shared task detail.
-let PERSON_TASKS = null;
+/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let PERSON_TASKS = null;
 // Shown only to whoever manages this person: the read is refused to everyone else.
 async function personAccessLoad(p) {
   const data = await teammateAccessRead('human', p.id), card = $('#person-access');

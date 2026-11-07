@@ -1,6 +1,6 @@
 /* The campus receives only visible identities, readable assignments and read-permitted status. */
 'use strict';
-let OVERVIEW_PAGE = null;
+/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let OVERVIEW_PAGE = null;
 function overviewModel() {
   const groups = [], machines = new Map(), humans = new Map(), placed = new Set();
   const fresh = S.overviewRosterFresh !== false && S.status !== null && S.v2.on;

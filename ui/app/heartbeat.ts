@@ -7,15 +7,21 @@
 // never here. The dot is coloured by the worst line: red when bots are not running, amber while the connection is lost.
 const ACCOUNT_HEALTH = '<a class="ghost" href="#/settings" data-gs-tab="health" title="Open Health in Settings">Fix</a>';
 // The issues Settings asks a person to act on (ui/app/settings.ts). Diagnostics that need nobody stay in Health.
-const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
+const needsPerson = (issue: {needs_person?: unknown; action?: unknown; restart?: unknown}): boolean =>
+  issue.needs_person === true && !!(issue.action || issue.restart);
 // With no computer online, no bot can run, so it is red like a stopped scheduler. Health lists the computers for owners
 // and admins; for anyone else there is no list, and this state is not shown.
-const noComputerOnline = () => {
-  const computers = window.hlComputers?.();
-  return Array.isArray(computers) && !computers.some(computer => computer.online);
+const noComputerOnline = (): boolean => {
+  const computers: unknown = window.hlComputers?.();
+  return Array.isArray(computers) && !computers.some((computer: {online?: unknown}) => computer.online);
 };
-function accountStatusLines() {
-  const st = S.status, lines = [];
+interface AccountLine {
+  level: 'bad' | 'warn';
+  text: string;
+  fix: string;
+}
+function accountStatusLines(): AccountLine[] {
+  const st = S.status, lines: AccountLine[] = [];
   if (!st) {
     // A lost connection comes back by itself, so it is a warning, never red.
     if (!S.statusPending) lines.push({level: 'warn', text: "Can't reach Tico. Trying again", fix: '<button class="ghost" type="button" data-account-retry>Retry</button>'});
@@ -26,96 +32,116 @@ function accountStatusLines() {
   }
   return lines;
 }
-function renderAccountStatus() {
-  const hb = $('#heartbeat');
+function renderAccountStatus(): void {
+  const hb: HTMLElement | null = $('#heartbeat');
   if (!hb) return;
   const st = S.status, lines = accountStatusLines();
   const level = lines.some(line => line.level === 'bad') ? 'bad' : lines.length ? 'warn' : '';
-  const label = lines.length === 1 ? lines[0].text : lines.length ? `${lines.length} things to look at`
+  const only = lines.length === 1 ? lines[0] : undefined;
+  const label = only ? only.text : lines.length ? `${lines.length} things to look at`
     : !st ? 'Connecting' : st.cloud ? 'Cloud backend connected' : 'Computer running';
   hb.title = label;
   hb.setAttribute('aria-label', label);
   hb.dataset.level = level;
   hb.hidden = !level;
   const html = lines.map(line => `<li class="account-status-line ${line.level}" data-level="${line.level}"><span class="account-status-text" title="${esc(line.text)}">${esc(line.text)}</span>${line.fix}</li>`).join('');
-  for (const box of [$('#account-status'), $('#account-status-pop')]) {
+  const boxes: (HTMLElement | null)[] = [$('#account-status'), $('#account-status-pop')];
+  for (const box of boxes) {
     if (!box) continue;
     patchLiveHTML(box, html ? `<ul>${html}</ul>` : '');
     if (!html) box.hidden = true;
     else if (box.id === 'account-status') box.hidden = false;
   }
 }
-function renderHeartbeat() {
+function renderHeartbeat(): void {
   renderAccountStatus();
 }
 // Desktop: hovering the dot shows the lines without opening the menu. A tap opens the menu, which starts with them.
 (() => {
-  const wrap = $('.account-wrap'), pop = $('#account-status-pop');
+  const wrap: HTMLElement | null = $('.account-wrap');
+  const pop: HTMLElement | null = $('#account-status-pop');
   if (!wrap || !pop) return;
   let hide = 0;
-  const canHover = () => window.matchMedia('(hover: hover)').matches;
+  const canHover = (): boolean => window.matchMedia('(hover: hover)').matches;
   wrap.addEventListener('mouseover', ev => {
-    if (!canHover() || !ev.target.closest('#heartbeat, #account-status-pop') || !$('#account-menu').hidden || !pop.innerHTML) return;
+    const menu: HTMLElement | null = $('#account-menu');
+    if (!canHover() || !eventElement(ev)?.closest('#heartbeat, #account-status-pop') || !menu || !menu.hidden || !pop.innerHTML) return;
     clearTimeout(hide); pop.hidden = false;
   });
   wrap.addEventListener('mouseout', ev => {
-    if (ev.relatedTarget?.closest?.('#heartbeat, #account-status-pop')) return;
+    const related = ev.relatedTarget;
+    if (related instanceof Element && related.closest('#heartbeat, #account-status-pop')) return;
     clearTimeout(hide); hide = setTimeout(() => { pop.hidden = true; }, 200);
   });
   wrap.addEventListener('click', () => { pop.hidden = true; });
 })();
 document.addEventListener('click', ev => {
-  if (ev.target.closest('[data-account-retry]')) { void refresh(false); return; }
-  const restart = ev.target.closest('[data-runner-restart]');
-  if (restart) { void restartComputer(restart); return; }
+  const target = eventElement(ev);
+  if (target?.closest('[data-account-retry]')) { void refresh(false); return; }
+  const restart = target?.closest('[data-runner-restart]');
+  if (restart instanceof HTMLButtonElement) void restartComputer(restart);
 });
 // A computer with a Tico update restarts from here. The runner takes main when
 // that is safe and restarts once nothing is running, so the line can say nothing is interrupted.
-const runnerRestartButton = issue => issue.restart && issue.machine
+const runnerRestartButton = (issue: {restart?: unknown; machine?: unknown}): string => issue.restart && issue.machine
   ? `<button class="primary" type="button" data-runner-restart="${esc(issue.machine)}">Restart</button>` : '';
 // Sends the restart from any Restart button (the status line, the Settings checks) and says what it did on the
 // line the button sits in, if there is one.
-async function restartComputer(button) {
+async function restartComputer(button: HTMLButtonElement): Promise<void> {
   button.disabled = true; button.textContent = 'Restarting…';
-  const line = button.closest('.settings-issue')?.querySelector('p');
+  const line = button.closest('.settings-issue')?.querySelector('p') ?? null;
   try {
-    const r = await post(`/v2/computers/${encodeURIComponent(button.dataset.runnerRestart)}/restart`, {});
+    const r: {running?: number} = await post(`/v2/computers/${encodeURIComponent(button.dataset.runnerRestart ?? '')}/restart`, {});
     if (line) line.textContent = r.running
       ? `Restarting after ${r.running} run${r.running === 1 ? ' finishes' : 's finish'}.`
       : 'Restarting now. Nothing is running, so nothing will be interrupted.';
     button.textContent = 'Restarting';
-  } catch (e) { button.disabled = false; button.textContent = 'Restart'; toast(e.message, true); }
+  } catch (e) { button.disabled = false; button.textContent = 'Restart'; toast(errorMessage(e, ''), true); }
 }
-function renderAccount() {
-  const el = $('#account'), me = S.me;
+function renderAccount(): void {
+  const el: HTMLElement | null = $('#account'), me = S.me;
   if (!el) return;
-  if (!me) { el.querySelector('.account-email').textContent = 'Not signed in'; return; }
+  const email = el.querySelector<HTMLElement>('.account-email');
+  if (!me) { if (email) email.textContent = 'Not signed in'; return; }
   el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
-  el.querySelector('.account-email').textContent = me.email || 'Not signed in';
+  if (email) email.textContent = me.email || 'Not signed in';
   renderAccountStatus();
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();
   nativeOrgSync();
   // Only a session an identity proxy vouches for has anything to end; a bearer or the local app does not.
-  $('#sign-out').hidden = !me.proxy_session;
+  const signOut: HTMLElement | null = $('#sign-out');
+  if (signOut) signOut.hidden = !me.proxy_session;
 }
 // The company app gets a browser nudge; a generic build is only a manual-setup option in
 // the account menu. Neither appears inside the app. Dismissal hides the nudge for a week.
-const visitorOS = () => /Win/.test(navigator.platform) ? 'windows' : /Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent) ? 'linux' : /Mac/.test(navigator.platform) ? 'mac' : '';
-const OS_WORDS = {mac: 'Mac', windows: 'Windows', linux: 'Linux'};
+const visitorOS = (): string => /Win/.test(navigator.platform) ? 'windows' : /Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent) ? 'linux' : /Mac/.test(navigator.platform) ? 'mac' : '';
+const OS_WORDS: Record<string, string> = {mac: 'Mac', windows: 'Windows', linux: 'Linux'};
+interface DownloadInfo {
+  available?: boolean;
+  url?: unknown;
+  version?: string;
+  size_mb?: number;
+  app_kind?: string;
+  notarized?: boolean;
+}
 let downloadRequest = 0;
-async function renderDownloadLink() {
+async function renderDownloadLink(): Promise<void> {
   const request = ++downloadRequest;
-  const a = $('#download-app'), nudge = $('#app-nudge');
+  const a: HTMLAnchorElement | null = $('#download-app');
+  const nudge: HTMLElement | null = $('#app-nudge');
+  const nudgeGet = nudge?.querySelector<HTMLAnchorElement>('.app-nudge-get') ?? null;
+  const nudgeText = nudge?.querySelector<HTMLElement>('.app-nudge-text') ?? null;
+  const nudgeClose = nudge?.querySelector<HTMLElement>('.app-nudge-close') ?? null;
   const os = visitorOS();
-  const eligible = () => !S.me?.local && os && visitorOS() === os && !document.body.classList.contains('native');
+  const eligible = (): boolean => !S.me?.local && !!os && visitorOS() === os && !document.body.classList.contains('native');
   if (a) { a.hidden = true; a.removeAttribute('href'); }
-  if (nudge) { nudge.hidden = true; nudge.querySelector('.app-nudge-get').removeAttribute('href'); }
+  if (nudge) { nudge.hidden = true; nudgeGet?.removeAttribute('href'); }
   if (!a || !eligible()) return;
   try {
     const r = await fetch('/api/download/' + os, {credentials: 'same-origin'});
-    const d = r.ok ? await r.json() : null;
+    const d: DownloadInfo | null = r.ok ? await r.json() : null;
     if (request !== downloadRequest || !eligible() || !d?.available || typeof d.url !== 'string' || !d.url.trim()) return;
     // The API validates the installer source. Use that exact version, without selecting a
     // manifest again, and never turn a non-web URL into an executable link.
@@ -132,10 +158,9 @@ async function renderDownloadLink() {
     let snoozed = 0;
     try { snoozed = Number(localStorage.getItem('hub.app-nudge.until') || 0); } catch {}
     if (snoozed > Date.now()) { nudge.hidden = true; return; }
-    nudge.querySelector('.app-nudge-text').textContent = `Tico for ${companyName()} opens your company directly, with no server setup.`;
-    const get = nudge.querySelector('.app-nudge-get');
-    get.href = d.url; get.textContent = label;
-    nudge.querySelector('.app-nudge-close').onclick = () => { nudge.hidden = true; try { localStorage.setItem('hub.app-nudge.until', String(Date.now() + 7 * 86400e3)); } catch {} };
+    if (nudgeText) nudgeText.textContent = `Tico for ${companyName()} opens your company directly, with no server setup.`;
+    if (nudgeGet) { nudgeGet.href = d.url; nudgeGet.textContent = label; }
+    if (nudgeClose) nudgeClose.onclick = () => { nudge.hidden = true; try { localStorage.setItem('hub.app-nudge.until', String(Date.now() + 7 * 86400e3)); } catch {} };
     nudge.hidden = false;
   } catch { if (request === downloadRequest) { a.hidden = true; if (nudge) nudge.hidden = true; } }
 }

@@ -304,7 +304,7 @@ document.addEventListener('visibilitychange', () => {
   configAt = Date.now(); void refreshConfig();
 });
 // The main assistant is shown under the environment's assistant name, never its slug.
-// The built-in assistant reads as what it is (assistantName, ui/app/state.js).
+// The built-in assistant reads as what it is (assistantName, ui/app/state.ts).
 const assistantShownName = () => assistantName();
 // The Strategy Bot's old name never shows (state.js `strategyBotName`), wherever the roster is read.
 // Each row carries its bot's `id` (the key every route, API call and comparison uses) and its `slug` (the label people

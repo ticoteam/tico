@@ -45,7 +45,7 @@ MAX_ALTERNATIVES = 64
 MAX_DEPTH = 24
 
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
-# Helpers that take a path relative to /api (ui/app/api.js), and the method they send.
+# Helpers that take a path relative to /api (ui/app/api.ts), and the method they send.
 RELATIVE_HELPERS = {
     "get": "GET",
     "v2Get": "GET",

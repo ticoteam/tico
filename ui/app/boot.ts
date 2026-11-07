@@ -7,7 +7,7 @@ if (/TicoHub/.test(navigator.userAgent)) document.body.classList.add('native');
 // installable app: the server maps /manifest.webmanifest and /sw.js at the root like /assets/. Reading
 // navigator.serviceWorker throws in a sandboxed document (no allow-same-origin), where no worker can register, so the
 // read is guarded: it gives null there, as it does where the API is missing.
-function serviceWorkerContainer() {
+function serviceWorkerContainer(): ServiceWorkerContainer | null {
   try { return navigator.serviceWorker || null; } catch { return null; }
 }
 window.addEventListener('load', () => {
@@ -33,7 +33,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   const employees = get('/employees'), meRead = get('/me');
   // A roster or /me that never answers (a stalled connection, a hub that hangs) ends in the error card below, with
   // Try again, rather than a page that waits for ever.
-  const late = new Promise((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
+  const late = new Promise<never>((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
     {timedOut: true})), BOOT_ROSTER_WAIT_MS));
   const roster = Promise.race([Promise.all([employees, meRead, get('/humans').catch(() => ({people: []}))]), late]);
   bootSnapShow(meRead);              // the last screen, as soon as /me says it is this person's (boot-snap.js)
@@ -47,7 +47,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
       // The page opens on this config now. Only trust for visual frames waits for the desktop app's answer: until
       // it, a visual is a file chip or an Open card (visual-cards.js), and an accepted answer applies the config
-      // again and redraws the open threads with it (state.js applyAuthenticatedConfig, nativeVisualRepaint).
+      // again and redraws the open threads with it (state.ts applyAuthenticatedConfig, nativeVisualRepaint).
       applyConfig(me.config);
       bootSnapWho(me);
       void applyAuthenticatedConfig(me.config, configVersion).then(done => { if (done) bootMark('native-ack'); });
@@ -70,12 +70,13 @@ const BOOT_ROSTER_WAIT_MS = 10000;
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
     bootSnapHandOff(); bootSnapRelease();
     askSync();                         // no one to ask for: Ask's row, there from the first paint, goes (ask-panel.js)
-    if (e.timedOut) {
-      $('#main').innerHTML = `<section class="card"><h2>Couldn't load Tico</h2><p class="err">${esc(e.message)}</p><button type="button" data-boot-retry>Try again</button></section>`;
+    // The timed-out roster is the error Object.assign made above (timedOut: true); any other thrown value is not one.
+    if ((e as {timedOut?: unknown}).timedOut) {
+      $('#main').innerHTML = `<section class="card"><h2>Couldn't load Tico</h2><p class="err">${esc(errorMessage(e, ''))}</p><button type="button" data-boot-retry>Try again</button></section>`;
       $('#main [data-boot-retry]').onclick = () => location.reload();
       return;
     }
-    $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico-computer server start</code> in the Tico repo, or install it with <code>scripts/tico-computer server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
+    $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico-computer server start</code> in the Tico repo, or install it with <code>scripts/tico-computer server install</code> so it runs at login.</p><p class="err">${esc(errorMessage(e, ''))}</p></section>`;
     return;
   }
   if (S.me?.cloud) {

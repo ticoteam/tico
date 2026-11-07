@@ -43,7 +43,7 @@ def _gzip(data):
 
 # The reads every open page repeats on its refresh (ui/app/refresh.ts, health.js, notices.js) and that carry no tag of
 # their own. Their answer is tagged by its bytes: one asked again with that tag and unchanged is a 304 with no body,
-# and the page reads its kept copy (ui/app/api.js). Only a few paths: the page keeps a few dozen tagged answers.
+# and the page reads its kept copy (ui/app/api.ts). Only a few paths: the page keeps a few dozen tagged answers.
 TAGGED = frozenset(
     {
         "/api/employees",

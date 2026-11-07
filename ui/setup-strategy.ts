@@ -125,7 +125,7 @@ const ssSource = (job: SsJob | null): string => {
   if (!job?.url) return 'your description';
   try { return new URL(job.url).hostname.replace(/^www\./, ''); } catch { return job.url; }
 };
-// The HTTP status of a failed answer (apiFailure, ui/app/api.js), or undefined for any other thrown value.
+// The HTTP status of a failed answer (apiFailure, ui/app/api.ts), or undefined for any other thrown value.
 const ssStatus = (error: unknown): unknown => (typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined);
 const ssOnStep = (state: SsWizard): boolean => ssOpen() === state && state.steps[state.step] === 'bets' && !!document.querySelector('#ss');
 // Why the step cannot be left yet, in the Strategy page's words for Publish, or ''.

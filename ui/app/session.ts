@@ -40,7 +40,7 @@ function sessionCheck(r, j) {
 // within a few seconds counts as offline: the stream goes on reconnecting meanwhile (live.js liveAfterProbe) and a
 // write waits for it, so it never hangs on a stalled connection; and a late answer never clears a newer question.
 const SESSION_PROBE_MS = 5000;
-function sessionProbe() {
+function sessionProbe(): Promise<boolean> {
   if (SESSION.out) return Promise.resolve(true);
   if (SESSION.probe) return SESSION.probe;
   if (navigator.onLine === false || Date.now() - SESSION.probedAt < 3000) return Promise.resolve(false);

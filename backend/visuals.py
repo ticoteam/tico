@@ -723,7 +723,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
 def elsewhere(base, message, task=None):
     """The one line a message with visuals carries where it leaves Tico (Slack today; an email or push outlet later),
     as {"count", "label", "url"}, or None when it has none. Nothing visual is rendered there (Visual replies, choice 4).
-    The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.js turns it into the
+    The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.ts turns it into the
     route): a message on a task (`task`, as hubdb.message_task_id finds it) opens the task, a plain chat reply that
     bot's chat in the room the reply is in, each at the message. It names ids only; whether the reader may open them
     is checked when they do."""

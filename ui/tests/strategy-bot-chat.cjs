@@ -1,4 +1,4 @@
-// The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.js myChatBot): the
+// The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.ts myChatBot): the
 // page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
 // Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
@@ -38,7 +38,7 @@ async function open(browser, me, view, strategyName) {
     if (p === '/api/v2/conversations') return json({conversations: []});
     for (const answer of helpers.map(h => h(p, url, route.request().method()))) if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(view);
-    // A send: words as JSON, files as a form, like any bot chat (ui/app/api.js cloudCompose).
+    // A send: words as JSON, files as a form, like any bot chat (ui/app/api.ts cloudCompose).
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
       const request = route.request(), form = !p.includes('/uploads/');
       sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer().toString('latin1')});

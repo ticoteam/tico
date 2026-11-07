@@ -5,6 +5,8 @@
 interface Window {
   TicoObservability?: {
     response(status: number): void;
+    route(hash: string): void;
+    start(): Promise<unknown>;
     run<T>(path: string, operation: () => Promise<T>): Promise<T>;
   };
   supportOn?: (known?: boolean) => boolean;

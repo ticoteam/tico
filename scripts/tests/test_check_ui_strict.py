@@ -82,7 +82,7 @@ def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept
         strict,
         "js_on_disk",
         lambda: [
-            "ui/app/api.js",
+            "ui/app/finance.js",
             "ui/app/new.js",
             "ui/assets/observability-vendors.js",
             "ui/tests/x.cjs",
