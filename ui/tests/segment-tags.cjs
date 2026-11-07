@@ -291,6 +291,12 @@ async function openOrgMenu(page, ref) {
       assert.equal(await page.locator('.rdo-card[data-rdo-ref="person:cara"] .seg-card').getAttribute('title'), 'Consumer', tag + ': a tagged card shows its segment');
       assert.equal(await page.locator('.rdo-card[data-rdo-ref="bot:builder"] .seg-card').getAttribute('title'), 'Rental', tag + ': a bot card too');
       assert.equal(await page.locator('.rdo-card[data-rdo-ref="person:ben"] .seg-card').count(), 0, tag + ': an untagged card has no mark');
+      // Only the hovered card's button shows: the chart's outer wrapper must not reveal every card's.
+      await page.locator('.rdo-card[data-rdo-ref="person:ben"]').hover();
+      const shown = () => page.evaluate(() => [...document.querySelectorAll('.rdo-seg-btn')]
+        .filter(b => getComputedStyle(b).opacity !== '0').map(b => b.getAttribute('data-rdo-seg')));
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-rdo-seg="person:ben"]')).opacity === '1');
+      assert.deepEqual(await shown(), ['person:ben'], tag + ': only the hovered card shows its Segments button');
       await openOrgMenu(page, 'person:ben');
       assert.equal(await page.locator('.seg-menu').getAttribute('aria-label'), 'Segments for Ben Ortiz', tag + ': the menu names the teammate');
       await page.locator('.seg-menu [data-pick="all"]').click();
