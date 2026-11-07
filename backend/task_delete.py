@@ -427,6 +427,13 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
                 "SELECT task_id, blob_id FROM task_assets WHERE task_id=?",
                 (tid,),
             )
+        if _has(c, "requirement_attachments", "task_id"):
+            # Evidence a stage requirement counts is the ticket's too: the trash keeps its bytes past a purge.
+            c.execute(
+                "INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
+                "SELECT task_id, blob_id FROM requirement_attachments WHERE task_id=? AND blob_id IS NOT NULL",
+                (tid,),
+            )
         for table in TASK_ROWS:
             column, where = _task_key(table)
             _delete(c, table, column, [tid], where)
