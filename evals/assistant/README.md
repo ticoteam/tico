@@ -127,7 +127,8 @@ keeping as a guard.
 - `cases/live.yaml`: asks from the owner's real chat that went wrong: a model change across every bot, a short
   follow-up answer, an ambiguous reply that must not answer an open question for them, a routing change for one bot's
   tasks with a rule, and "those" read as the items just listed (not the page they are on); a close-all ask that keeps five
-  and closes the rest, a five-item list one line each, and a self-picked target that must not close bot work in progress.
+  and closes the rest, a five-item list one line each, a self-picked target that keeps the decisions and answers routine
+  bot questions with the decline note (bot work in progress stays), and a decision asked in the reply, not filed as a task.
 - `cases/goals.yaml`: where the person stands on their goals, what to do today (at most three, the red goal first), a
   suggestion they turned down, work a bot can do (a task for the bot), the keep-going offer in a chat and when it stops, an
   ordinary chore with no offer, a non-owner's own area, and the morning message (one send, none on a quiet day, no retry
