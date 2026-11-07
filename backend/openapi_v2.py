@@ -3164,6 +3164,10 @@ SCHEMAS = {
             "task": ref("Task"),
             "events": "a",
             "children": "a",
+            # The parent ticket (null: none, or the reader may not read it), with its label and stage
+            "parent": {
+                "oneOf": [obj({"id": "s", "title": "s", "label": "n", "step": "n"}), {"type": "null"}],
+            },
             "comments": items(ref("Message")),
             "messages": items(ref("Message")),
             "has_more": "b",

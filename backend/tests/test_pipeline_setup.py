@@ -58,7 +58,10 @@ def test_a_second_run_changes_nothing(tmp_path):
 def test_existing_dev_and_product_types_are_renamed_not_duplicated(tmp_path):
     c = fresh(tmp_path)
     before = {r["id"]: r for r in rows(c, "SELECT id, name, role FROM task_types WHERE role IS NOT NULL")}
-    steps = rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap') ORDER BY id")
+    steps = {
+        r["id"]: r["name"]
+        for r in rows(c, "SELECT id, name FROM task_steps WHERE type_id IN ('engineering','product-roadmap')")
+    }
     out = S.apply_factory_setup(c, ANA)
     assert out["pipelines"]["Engineering"] == "engineering" and out["pipelines"]["Product"] == "product-roadmap"
     assert {r["id"]: r["name"] for r in rows(c, "SELECT id, name FROM task_types WHERE role IS NOT NULL")} == {
@@ -66,7 +69,9 @@ def test_existing_dev_and_product_types_are_renamed_not_duplicated(tmp_path):
         "product-roadmap": "Product",
     }
     assert before["engineering"]["role"] == "engineering"
-    assert rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap') ORDER BY id") == steps
+    after = {r["id"] for r in rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap')")}
+    # Stages are renamed in place, never recreated; only the retired Approved stage goes.
+    assert {i for i, name in steps.items() if name != "Approved"} <= after
     assert len(rows(c, "SELECT id FROM task_types WHERE name='Engineering'")) == 1
 
 

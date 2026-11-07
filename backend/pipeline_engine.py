@@ -230,6 +230,8 @@ class _Facts:
     decisions: dict[tuple[str, str], Row]
     attachments: dict[tuple[str, str], Row]
     links: dict[str, list[Row]]
+    children: dict[str, list[Row]]  # a ticket's subtasks: id, status, type_id
+    spawns: dict[str, set[str]]  # a pipeline id -> the pipelines its spawn links file tickets into
 
 
 def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[str], kinds: set[str]) -> _Facts:
@@ -240,7 +242,9 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
     links: dict[str, list[Row]] = {}
     for part in _chunks(task_ids):
         marks = _marks(part)
-        for record in _rows(conn, f"SELECT id, work_revision, owner_id, due_at FROM tasks WHERE id IN ({marks})", part):
+        for record in _rows(
+            conn, f"SELECT id, work_revision, owner_id, due_at, type_id FROM tasks WHERE id IN ({marks})", part
+        ):
             tasks[str(record["id"])] = record
         for record in _rows(
             conn,
@@ -276,12 +280,45 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
                 part,
             ):
                 links.setdefault(str(record["task_id"]), []).append(record)
-    return _Facts(tasks, labels, decisions, attachments, links)
+    children: dict[str, list[Row]] = {}
+    spawns: dict[str, set[str]] = {}
+    if "run" in kinds:
+        for part in _chunks(task_ids):
+            for record in _rows(
+                conn,
+                "SELECT r.to_task AS parent, c.id AS id, c.status AS status, c.type_id AS type_id "
+                "FROM task_relations r JOIN tasks c ON c.id = r.from_task "
+                f"WHERE r.kind = 'parent' AND r.to_task IN ({_marks(part)}) ORDER BY c.created_at, c.id",
+                part,
+            ):
+                children.setdefault(str(record["parent"]), []).append(record)
+        for record in _rows(
+            conn,
+            "SELECT from_pipeline_id, to_pipeline_id FROM pipeline_links WHERE mode = 'spawn' AND retired_at IS NULL",
+        ):
+            spawns.setdefault(str(record["from_pipeline_id"]), set()).add(str(record["to_pipeline_id"]))
+    return _Facts(tasks, labels, decisions, attachments, links, children, spawns)
+
+
+def _subtasks_state(task_id: str, facts: _Facts) -> str:
+    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into, every one of them is
+    finished (done, closed or declined), and at least one is done. A closed-only set is failed, never passed; no subtask
+    is none. More subtasks count as they are added."""
+    card = facts.tasks.get(task_id) or {}
+    wanted = facts.spawns.get(str(card.get("type_id") or ""), set())
+    kids = [child for child in facts.children.get(task_id, []) if str(child["type_id"]) in wanted]
+    if not kids:
+        return "none"
+    if any(str(child["status"]) not in DONE for child in kids):
+        return "waiting"
+    return "met" if any(child["status"] == "done" for child in kids) else "failed"
 
 
 def _run_state(task_id: str, requirement: Row, facts: _Facts, conn: sqlite3.Connection) -> str:
     """The state a run requirement's source gives the work as it is now."""
     source = requirement["needs"].get("source")
+    if source == "subtasks":
+        return _subtasks_state(task_id, facts)
     prs = [link for link in facts.links.get(task_id, []) if link["state"] != "closed"]
     if not prs:
         return "none"
@@ -517,6 +554,8 @@ def on_step_change(
     old_type: str | None = row.get("type_id")
     old_step: str | None = row.get("step_id")
     current = open_visit(conn, task_id)
+    _leave_spawn_stage(conn, row, type_id, step_id, current, ts)
+    _settle_parent(conn, task_id)
     if current is None and not (has_requirements(conn, old_type) or has_requirements(conn, type_id)):
         return
     if current is None and old_type and old_step:
@@ -543,6 +582,48 @@ def on_step_change(
     _open_visit_at(conn, task_id, type_id, step_id, ts, direction=direction, came_from=old_step, actor=actor)
     if direction == "back" and has_requirements(conn, type_id):
         H._task_event(conn, task_id, actor, "stage_move_back", old_step, step_id, "")  # pyright: ignore[reportPrivateUsage]
+
+
+def _leave_spawn_stage(
+    conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None, current: Row | None, ts: str
+) -> None:
+    """A card that moves forward out of a stage with a spawn link files its spawned ticket (pipeline_links.spawn), once
+    per stage visit. A move back, a move into a closing stage or a move to another pipeline files nothing."""
+    old_step = row.get("step_id")
+    if not old_step or not step_id or not type_id or step_id == old_step:
+        return
+    from . import pipeline_links
+
+    link = pipeline_links.link_for_stage(conn, str(old_step))
+    if link is None or link["mode"] != "spawn":
+        return
+    before, after = stage(conn, str(old_step)), stage(conn, step_id)
+    if before is None or after is None or after["type_id"] != before["type_id"]:
+        return
+    if after["position"] <= before["position"] or after["status"] in CLOSED:
+        return
+    since = str(current["entered_at"]) if current is not None else ts
+    pipeline_links.spawn(conn, link, str(row.get("id")), since)
+
+
+def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
+    """A subtask changed stage: a parent whose stage waits on its subtasks (a run from `subtasks`) is checked now. When
+    every requirement of that stage is met the parent moves on, as Tico (the rule decides; nobody passes it). A parent
+    with a requirement not met stays where it is, and the pipeline manager sees the failed or waiting standing."""
+    parent_id = H.TR.parent_of(conn, child_id)
+    if not parent_id:
+        return
+    parent = _one(conn, "SELECT id, type_id, step_id FROM tasks WHERE id = ?", (parent_id,))
+    if parent is None or not parent["step_id"]:
+        return
+    by_stage = _requirements(conn, [str(parent["type_id"])])
+    stage_id = str(parent["step_id"])
+    waiting = by_stage.get(stage_id, [])
+    if not any(r["kind"] == "run" and r["needs"].get("source") == "subtasks" for r in waiting):
+        return
+    found = _evaluate(conn, {str(parent_id): {stage_id: None}}, by_stage).get(str(parent_id), [])
+    if found and all(s.state == "met" for s in found):
+        advance(conn, H.KEEPER, str(parent_id))
 
 
 # ---------------------------------------------------------------------------------------------- the move gate

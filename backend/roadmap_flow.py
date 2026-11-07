@@ -227,6 +227,10 @@ def sync(c, task_id):
     row = H.task(c, task_id)
     if not row or row.get('type_id') != role_type(c, PRODUCT):
         return
+    from . import pipeline_engine
+
+    if pipeline_engine.has_requirements(c, row['type_id']):
+        return  # a pipeline with stage requirements moves its cards by their requirements, never by this sync
     typ = H.type_get(c, row['type_id'])
     current = next((s['name'] for s in typ['steps'] if s['id'] == row['step_id']), None)
     if current not in FLOW:
