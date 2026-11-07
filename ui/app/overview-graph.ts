@@ -106,31 +106,42 @@ function ogTree(): OgTree {
   return ogLayout({nodes, kids});
 }
 const ogNodeH = (node: OgNode): number => node.kind === 'group' ? OG_GH : OG_H;
+// The node a walk or layout added under this key. A missing one is a bug in the walk, so it throws a named error.
+const ogNodeOf = (nodes: Map<string, OgNode>, k: string): OgNode => {
+  const n = nodes.get(k);
+  if (!n) throw new Error(`og: no node for ${k}`);
+  return n;
+};
 // Subtree boxes, then places. Leaves under one parent stack in a column (two past eight) instead of a long row, so a
 // manager with many reports stays narrow; anything with reports of its own lays out in a row.
-// Every key here is a node the walk added (so nodes.get(key)! holds), and box[key] is read only for a key measure() has
-// already boxed: measure() boxes a key's children before the key, and place() runs after it, so each `box[...]!` holds.
+// Every key here is a node the walk added (so ogNodeOf finds it), and boxOf(key) reads only a key measure() has already
+// boxed: measure() boxes a key's children before the key, and place() runs after it, so each boxOf read finds its box.
 function ogLayout(tree: { nodes: Map<string, OgNode>; kids: Record<string, string[]> }): OgTree {
   const {nodes, kids} = tree, box: Record<string, OgBox> = {};
+  const boxOf = (k: string): OgBox => {
+    const b = box[k];
+    if (!b) throw new Error(`og layout: no box for ${k}`);
+    return b;
+  };
   const leaf = (k: string): boolean => !(kids[k] || []).length;
   const measure = (k: string): OgBox => {
-    const list = kids[k] || [], self = k ? ogNodeH(nodes.get(k)!) : 0, gap = k ? OG_GY : 0;   // `!`: k is a child walk() gave a node
+    const list = kids[k] || [], self = k ? ogNodeH(ogNodeOf(nodes, k)) : 0, gap = k ? OG_GY : 0;
     list.forEach(measure);
     if (!list.length) { const b: OgBox = {w: OG_W, h: self, stack: 0}; box[k] = b; return b; }
     if (list.length > 3 && list.every(leaf) && k) {
       const cols = list.length > 8 ? 2 : 1, rows = Math.ceil(list.length / cols);
-      const h = list.reduce((m, c) => Math.max(m, ogNodeH(nodes.get(c)!)), 0);   // `!`: c is a child walk() gave a node
+      const h = list.reduce((m, c) => Math.max(m, ogNodeH(ogNodeOf(nodes, c))), 0);
       const b: OgBox = {w: Math.max(OG_W, cols * OG_W + (cols - 1) * OG_GX + (cols === 1 ? 24 : 0)), h: self + gap + rows * h + (rows - 1) * OG_SY, stack: cols, rowH: h};
       box[k] = b; return b;
     }
-    const w = list.reduce((t, c) => t + box[c]!.w, 0) + (list.length - 1) * OG_GX;   // `!`: measure() boxed every child above
-    const b: OgBox = {w: Math.max(k ? OG_W : 0, w), h: self + gap + Math.max(...list.map(c => box[c]!.h)), stack: 0};   // `!`: measure() boxed every child above
+    const w = list.reduce((t, c) => t + boxOf(c).w, 0) + (list.length - 1) * OG_GX;
+    const b: OgBox = {w: Math.max(k ? OG_W : 0, w), h: self + gap + Math.max(...list.map(c => boxOf(c).h)), stack: 0};
     box[k] = b; return b;
   };
   measure('');
   const edges: string[] = [];
   const place = (k: string, x: number, y: number): void => {
-    const b = box[k]!, list = kids[k] || [];   // `!`: measure("") boxed k before placing
+    const b = boxOf(k), list = kids[k] || [];
     const node = k ? nodes.get(k) : null, self = node ? ogNodeH(node) : 0;
     if (node) Object.assign(node, {x: x + (b.w - OG_W) / 2, y, w: OG_W, h: self});
     const top = y + self + (node ? OG_GY : 0), cx = x + b.w / 2;
@@ -142,26 +153,27 @@ function ogLayout(tree: { nodes: Map<string, OgNode>; kids: Record<string, strin
         // A stacked box always has its row height (rowH is set where stack is).
         const cy = top + row * (b.rowH! + OG_SY);
         place(c, left + col * (OG_W + OG_GX), cy);
-        const cn = nodes.get(c)!, mid = cy + cn.h / 2, end = col === 0 && cols === 2 ? cn.x + OG_W : cn.x;   // `!`: a stacked leaf is a node walk() gave
+        const cn = ogNodeOf(nodes, c), mid = cy + cn.h / 2, end = col === 0 && cols === 2 ? cn.x + OG_W : cn.x;
         edges.push(`M${spine} ${mid}H${end}`);
       });
       // A stacked column has more than three leaves, so list[list.length - 1] exists.
-      const last = nodes.get(list[list.length - 1]!)!, mid = last.y + last.h / 2;
+      const last = ogNodeOf(nodes, list[list.length - 1] ?? ''), mid = last.y + last.h / 2;
       edges.push(`M${cx} ${y + self}V${y + self + OG_GY / 2}H${spine}V${mid}`);
       return;
     }
-    let at = x + (b.w - (list.reduce((t, c) => t + box[c]!.w, 0) + (list.length - 1) * OG_GX)) / 2;   // `!`: measure() boxed every child above
+    let at = x + (b.w - (list.reduce((t, c) => t + boxOf(c).w, 0) + (list.length - 1) * OG_GX)) / 2;
     for (const c of list) {
       place(c, at, top);
       if (node) {
-        const ccx = at + box[c]!.w / 2, midY = y + self + OG_GY / 2;   // `!`: measure() boxed every child above
+        const ccx = at + boxOf(c).w / 2, midY = y + self + OG_GY / 2;
         edges.push(`M${cx} ${y + self}V${midY}H${ccx}V${top}`);
       }
-      at += box[c]!.w + OG_GX;   // `!`: measure() boxed every child above
+      at += boxOf(c).w + OG_GX;
     }
   };
   place('', 0, 0);
-  return {...tree, edges, w: box['']!.w, h: box['']!.h};   // `!`: measure("") boxed the root
+  const root = boxOf('');
+  return {...tree, edges, w: root.w, h: root.h};
 }
 
 // ----------------------------------------------------------------- what each node carries
@@ -294,7 +306,7 @@ function ogMarks(): void {
   }
   if (OG.view === 'goals') lines = ogGoalLinks().map(([a, b]) => ({a, b, cls: 'og-gl' + (ogNow().sel && (a === ogNow().sel || b === ogNow().sel) ? ' on' : ogNow().sel ? ' dim' : '')}));
   // a and b are each checked with nodes.has() where their line is pushed above, so the nodes exist.
-  links.innerHTML = lines.map(({a, b, cls}) => `<path class="${cls}" data-a="${esc(a)}" data-b="${esc(b)}" d="${ogLinkPath(nodes.get(a)!, nodes.get(b)!).d}"${cls.startsWith('og-gl') ? ' marker-end="url(#og-arrow)"' : ''}/>`).join('');
+  links.innerHTML = lines.map(({a, b, cls}) => `<path class="${cls}" data-a="${esc(a)}" data-b="${esc(b)}" d="${ogLinkPath(ogNodeOf(nodes, a), ogNodeOf(nodes, b)).d}"${cls.startsWith('og-gl') ? ' marker-end="url(#og-arrow)"' : ''}/>`).join('');
   const reach = who.size || withs.size;
   for (const el of cv.querySelectorAll<HTMLElement>('[data-og]')) {
     const k = el.dataset.og ?? '';
@@ -505,8 +517,9 @@ function ogPanelDraw(): void {
   panel.querySelector<HTMLElement>('.og-pb')!.scrollTop = keepScroll;
 }
 function ogSelect(key: string, {focus = false}: {focus?: boolean} = {}): void {
-  // has(key) is checked first in the same condition, so the node exists for get(key).
-  if (!OG?.tree.nodes.has(key) || OG.tree.nodes.get(key)!.kind === 'group') return;
+  if (!OG) return;
+  const node = OG.tree.nodes.get(key);
+  if (!node || node.kind === 'group') return;
   if (OG.sel !== key) OG.rule = null;
   OG.sel = key;
   ogPanelDraw(); ogMarks();
