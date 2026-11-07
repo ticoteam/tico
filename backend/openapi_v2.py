@@ -7102,6 +7102,125 @@ STABLE.extend(
     ]
 )
 
+TAGS["Market"] = (
+    "The Market page by segment (docs/market-briefing.md): the company's segments side by side, one segment's market, "
+    "and the Librarian's research for one segment. Anyone signed in reads them; asking for research takes a person, or "
+    "a bot the bot-contact rules admit."
+)
+SCHEMAS.update(
+    {
+        "MarketSegmentCompare": obj(
+            {"segments": items(ref("MarketSegmentRow")), "changed": items(ref("MarketChange"))}
+        ),
+        "MarketSegmentRow": obj(
+            {
+                "id": "s",
+                "name": "s",
+                "color": "s",
+                "money": NUM_N,
+                "yearly_spend": NUM_N,
+                "growth": NUM_N,
+                "our_share": NUM_N,
+                "briefing_week": "n",
+            }
+        ),
+        "MarketChange": obj(
+            {"segment_id": "s", "week": "s", "text": "s", "kind": "s", "entity_ids": "a", "bets": "a"},
+            required=["segment_id", "week", "text", "bets"],
+        ),
+        "MarketSegmentPage": obj(
+            {
+                "segment": ref("MarketSegmentHead"),
+                "answers": "o",
+                "briefing": ref("MarketBriefing"),
+                "sizes": ref("MarketSegmentSizes"),
+                "players": items(ref("MarketSegmentPlayer")),
+                "what_changed": items(ref("MarketEventRow")),
+            }
+        ),
+        "MarketSegmentHead": obj({"id": "s", "name": "s", "who": "n", "color": "s", "rank": "i"}),
+        "MarketBriefing": {
+            **obj(
+                {
+                    "segment_id": "s",
+                    "week": "s",
+                    "title": "n",
+                    "items": items({"type": "object"}),
+                    "bets": "a",
+                    "answers": "o",
+                    "touched": "a",
+                },
+                required=["segment_id", "week", "items", "bets", "answers", "touched"],
+            ),
+            "type": ["object", "null"],
+        },
+        "MarketSegmentSizes": obj(
+            {
+                "year": "i",
+                "dimension": "s",
+                "basis": "s",
+                "chosen": {
+                    **obj({"spend_usd": NUM_N, "accepted": "b"}, required=["accepted"]),
+                    "type": ["object", "null"],
+                },
+                "rolled_usd": {**obj({"spend_usd": NUM_N}, required=[]), "type": ["object", "null"]},
+                "estimates": items({"type": "object"}),
+                "disagree": "b",
+                "bases": items({"type": "string"}),
+            }
+        ),
+        "MarketSegmentPlayer": obj({"entity_id": "s", "name": "s", "figures": items(ref("MarketFigure"))}),
+        "MarketFigure": obj({"metric": "s", "value": NUM_N}, required=["metric", "value"]),
+        "MarketEventRow": obj(
+            {
+                "id": "s",
+                "subject_kind": "s",
+                "subject_id": "s",
+                "created_at": "s",
+                "actor": "n",
+                "field": "n",
+                "old": "n",
+                "new": "n",
+                "insight_id": "n",
+                "note": "n",
+            },
+            required=["id", "subject_kind", "subject_id", "created_at"],
+        ),
+        "MarketSegmentResearch": obj({"task_id": "s", "created": "b"}),
+    }
+)
+STABLE.extend(
+    [
+        (
+            "/api/v2/market/segments/compare",
+            "get",
+            "Market",
+            "compareMarketSegments",
+            "Every segment the company plays in, in list order, side by side: money, yearly spend, growth, our share and "
+            "its newest briefing, and the newest changes across the market and them, each tagged with its segment",
+            "MarketSegmentCompare",
+        ),
+        (
+            "/api/v2/market/segments/{segment_id}/page",
+            "get",
+            "Market",
+            "getMarketSegmentPage",
+            "One segment's market: its five answers and newest briefing, its sizes, its players and what changed. An id "
+            "that is not one of the company's segments is a 404",
+            "MarketSegmentPage",
+        ),
+        (
+            "/api/v2/market/segments/{segment_id}/research",
+            "post",
+            "Market",
+            "requestMarketSegmentResearch",
+            "Ask the Librarian for one segment's five answers and sizes. While its task is open, the open task comes back "
+            "with created false",
+            "MarketSegmentResearch",
+        ),
+    ]
+)
+
 TAGS['Inbound'] = 'Shared company inbound email and SMS for people and agents; reads never consume messages.'
 STABLE.extend(
     [

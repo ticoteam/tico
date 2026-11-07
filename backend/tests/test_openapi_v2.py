@@ -489,3 +489,39 @@ def test_every_thread_route_the_server_serves_is_documented(api):
         "served, not documented": sorted(served - documented),
         "documented, not served": sorted(documented - served),
     }
+
+
+def test_the_market_segment_answers_match_the_live_ones(api, tmp_path):
+    from backend.tests.test_market import _librarian, _seed
+    from backend.tests.test_market_segments import figure, ours, write_briefing
+    from backend.tests.test_market_spend import defined, evidence, size
+
+    _seed(api, tmp_path)
+    _librarian(api)
+    first, second, _ = defined(api)
+    ours(api, first, second)
+    size(api, first, spend=4_000_000_000, accept=True)
+    figure(api, "company/harborly", first, "arr", 12_000_000, evidence(api))
+    item = {"text": "Rival cut prices.", "kind": "change", "entity_ids": ["company/harborly"]}
+    write_briefing(api, first, items=[item], answers={"money": "The low end shrinks."})
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def call(operation, method, path, **kw):
+        response = getattr(api, method)(path, headers=headers(), **kw)
+        assert response.status_code == 200, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (
+            operation,
+            conforms(response.json(), schema, document),
+            response.text[:400],
+        )
+        return response.json()
+
+    compare = call("compareMarketSegments", "get", "/api/v2/market/segments/compare")
+    assert {s["id"] for s in compare["segments"]} == {first, second}
+    assert compare["changed"][0]["text"] == "Rival cut prices."
+    page = call("getMarketSegmentPage", "get", f"/api/v2/market/segments/{first}/page")
+    assert page["briefing"] is not None and page["players"]
+    asked = call("requestMarketSegmentResearch", "post", f"/api/v2/market/segments/{first}/research", json={"note": ""})
+    assert asked["created"] is True
