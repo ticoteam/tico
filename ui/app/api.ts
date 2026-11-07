@@ -106,12 +106,14 @@ const get = async <T = UntypedJson>(p: string, {fresh = false}: {fresh?: boolean
     res = await raw;
   }
   const {r, text, kept} = res;
-  if (r.status === 304 && kept) return JSON.parse(kept.text) as T;
+  if (r.status === 304 && kept) return JSON.parse(kept.text);
   // The parsed body is the server's JSON: signInRedirect and apiFailure read its fields with checks, so it is cast here.
   let j: unknown; try { j = JSON.parse(text); } catch { j = {}; }
-  if (!r.ok) { signInRedirect(r, j as ApiFailureBody); throw apiFailure(j as ApiFailureBody, r); }
+  if (!r.ok) { const failure = failureBody(j); signInRedirect(r, failure); throw apiFailure(failure, r); }
   return j as T;
 };
+// The one cast to a failure body: the answers read through it are checked by apiError, apiFailure and signInRedirect.
+const failureBody = (value: unknown): ApiFailureBody => value as ApiFailureBody;
 const pendingWrites = new Map<string, string>();
 const newRequestId = (): string => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
   const n = globalThis.crypto?.getRandomValues?.(new Uint8Array(1))[0] ?? Math.floor(Math.random() * 256);
@@ -147,7 +149,7 @@ const writeRequestOnce = async (method: string, p: string, body: unknown = {}, o
       window.TicoObservability?.response(r.status);
       if (r.ok) SESSION.seen = true;
       // The JSON answer: apiError and signInRedirect read its fields with checks, so it is cast to a failure body here.
-      const j = (await r.json().catch((error: unknown) => { if (abort.signal.aborted) throw error; return {}; })) as ApiFailureBody;
+      const j = failureBody(await r.json().catch((error: unknown) => { if (abort.signal.aborted) throw error; return {}; }));
       if ([429,502,503,504].includes(r.status)) throw new TypeError(apiError(j, r));
       pendingWrites.delete(signature);
       if (!r.ok) { signInRedirect(r, j); throw apiFailure(j, r); }
@@ -287,7 +289,7 @@ async function cloudCompose(path: string, body: Record<string, unknown>, files: 
   files.forEach(file => { fd.append('files', file, file.name); });
   const response = await formFetch(API + path.replace('/v2/', '/v2/uploads/'), fd, {onRetry: opts.onRetry, onResponse: opts.onResponse});
   // The JSON answer: apiFailure reads its fields with checks, so it is cast to a failure body here.
-  const result = (await response.json().catch(() => ({}))) as ApiFailureBody;
+  const result = failureBody(await response.json().catch(() => ({})));
   if (!response.ok) {
     const error = apiFailure(result, response);
     error.message ||= 'The server did not confirm this upload.';

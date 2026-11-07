@@ -235,7 +235,9 @@ document.addEventListener('pointerdown', e => {
   ROUTE_PRESS = el; e.stopImmediatePropagation();
   routeMouse('pointerdown', e, el);
 }, true);
-for (const type of ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu'] as const) document.addEventListener(type, e => {
+type ClickType = 'mousedown' | 'click' | 'auxclick' | 'dblclick' | 'contextmenu';
+const CLICK_TYPES: ClickType[] = ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu'];
+for (const type of CLICK_TYPES) document.addEventListener(type, e => {
   const el = ROUTE_PRESS;
   if (!el || !e.isTrusted || e.target !== document.documentElement) return;
   if (type !== 'mousedown') ROUTE_PRESS = null;
@@ -250,7 +252,9 @@ for (const type of ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu']
 }, true);
 // A scroll during the fade ends it too, so the page under the pointer scrolls, not the window.
 document.addEventListener('wheel', e => { if (ROUTE_FADE && e.target === document.documentElement) ROUTE_FADE.skipTransition(); }, {capture: true, passive: true});
-for (const type of ['pointermove', 'mousemove'] as const) document.addEventListener(type, e => {
+type MoveType = 'pointermove' | 'mousemove';
+const MOVE_TYPES: MoveType[] = ['pointermove', 'mousemove'];
+for (const type of MOVE_TYPES) document.addEventListener(type, e => {
   if (ROUTE_FADE && e.isTrusted && e.target === document.documentElement) ROUTE_MOVE = e;
 }, true);
 window.addEventListener('hashchange', routeChanged);

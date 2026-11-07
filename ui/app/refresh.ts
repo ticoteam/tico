@@ -56,12 +56,15 @@ async function refresh(force = false): Promise<void> {
 // heartbeat, the paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once
 // per burst.
 // The same JSON value, whatever order its keys come in (a live event's copy of a task is built apart from the list's).
+// A JSON object read by key: sameData checks it is one before it reads a key.
+const fieldsOf = (v: object): Record<string, unknown> => v as Record<string, unknown>;
 function sameData(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Object.keys(a);
   if (ka.length !== Object.keys(b).length) return false;
-  return ka.every(k => Object.hasOwn(b, k) && sameData((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  const fa = fieldsOf(a), fb = fieldsOf(b);
+  return ka.every(k => Object.hasOwn(b, k) && sameData(fa[k], fb[k]));
 }
 // What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
 // changes only that, once a minute per tree.
@@ -78,6 +81,8 @@ interface LiveTaskEvent {
 interface LiveTaskRow { id?: unknown; [key: string]: unknown; }
 /** The list a live change applies to, the open one or the kept one (S.lastRead.tasks), with its rows and cursor. */
 interface KeptTaskList { tasks: LiveTaskRow[]; since?: unknown; }
+// The kept list S.lastRead.tasks: LastRead types its tasks key as unknown, so this is the one place it is cast.
+const keptTasks = (): KeptTaskList | undefined => S.lastRead.tasks as KeptTaskList | undefined;
 function liveTasksApply(events: LiveTaskEvent[]): void {
   events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
   if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
@@ -94,7 +99,7 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   // The open list, or away from it the list kept for the next visit (S.lastRead.tasks): kept current the same way, so a
   // return paints what is true now. A bulk change drops the kept list; the next visit reads it.
   if (bulk && !state) S.lastRead.tasks = null;
-  const kept = S.lastRead.tasks as KeptTaskList | undefined;   // LastRead types its tasks as unknown until the page types it
+  const kept = keptTasks();
   const list: KeptTaskList | null = state && isTasksRoute(S.route) && state.tasks ? state : !state ? kept ?? null : null;
   if (list) {
     const known = new Map<string, number>(list.tasks.map((t, i): [string, number] => [String(t.id), i]));
@@ -167,7 +172,7 @@ function liveWire(): void {
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
   for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; const keptList = S.lastRead.tasks as KeptTaskList | undefined; if (keptList) keptList.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; const keptList = keptTasks(); if (keptList) keptList.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
