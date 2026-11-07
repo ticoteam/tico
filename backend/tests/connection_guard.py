@@ -4,7 +4,11 @@ A connection a test checks out from a Store and never returns is closed later by
 test happens to run then, and warnings-as-errors fails that other test. This module makes the failure land on the test
 that caused it. Every pooled connection opened while a test runs is recorded with a short stack. At the test's teardown
 the stores it made are closed, the threads it started get a short join, and a connection still open fails the test,
-naming where it was opened and the threads still alive. The failing connections are then closed.
+naming where it was opened and the threads still alive. The failing connections are closed only when no thread the
+test started is still alive: a thread using a connection that is closed under it crashes the process.
+
+The guard is set up before the other autouse fixtures in conftest.py (they take it as a parameter), so it tears down
+after them, once their threads have been joined.
 """
 
 import sqlite3
@@ -41,7 +45,10 @@ def _recording_connect(self, factory=None, check_same_thread=True):
     c = _store_connect(self, factory=factory, check_same_thread=check_same_thread)
     # The pool passes its own factory. A caller's connection without one is outside the pool's lifetime rules.
     if factory is not None:
-        c._opened_at = (threading.current_thread().name, traceback.extract_stack(limit=STACK_FRAMES))
+        # Without source lines: linecache checks each file's mtime on every lookup, which cost seconds per shard. The
+        # lines are read only when a leak is reported.
+        stack = traceback.StackSummary.extract(traceback.walk_stack(None), limit=STACK_FRAMES, lookup_lines=False)
+        c._opened_at = (threading.current_thread().name, stack)
         OPENED.add(c)
     COST["seconds"] += time.perf_counter() - started
     return c
@@ -111,13 +118,18 @@ def pooled_connections_closed(request):
             lines.append(f"Opened on thread {thread} at:\n" + "".join(traceback.format_list(stack)).rstrip())
         alive = [t.name for t in started_here if t.is_alive()]
         if alive:
-            lines.append("Threads this test started, still alive: " + ", ".join(alive))
+            lines.append(
+                "Threads this test started, still alive: "
+                + ", ".join(alive)
+                + ". Their connections stay open, and each is returned when its thread ends."
+            )
         report = "\n".join(lines)
-        for c in leaked:
-            try:
-                c.close()
-            except sqlite3.Error:
-                pass
+        if not alive:
+            for c in leaked:
+                try:
+                    c.close()
+                except sqlite3.Error:
+                    pass
     COST["seconds"] += time.perf_counter() - started
     # The teardown report carries this test's share to the process that prints the summary (conftest.py).
     request.node.user_properties.append(("pooled-connection-seconds", round(COST["seconds"] - seconds, 4)))
