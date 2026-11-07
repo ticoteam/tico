@@ -54,9 +54,11 @@ conflicting; without it git merges that file as text. The lint and type baseline
 findings are one file under `baselines/ruff/` and `baselines/pyright/`, so two branches that fix different files change
 different files and merge as text. (GitHub's "Update branch" button and the merge queue merge as text too; the merge
 queue runs no drivers at all, which is why the baselines are split.) `ruff-baseline.toml` and `.basedpyright/baseline.json`
-are generated from those files and git-ignored: `scripts/lint.sh` and `scripts/check_types.sh` write them, and
-`python3 scripts/lint_baseline.py --generate` writes the ruff one for editors and a bare `uvx ruff`, since `ruff.toml`
-extends it. A branch from before the split tracks the old single files: rebase it, then run
+are generated from those files and git-ignored: `scripts/lint.sh` and `scripts/check_types.sh` write them. The gate runs
+ruff against `ruff-baseline.toml`, which extends `ruff.toml`; `ruff.toml` never refers to it. A bare
+`uvx ruff@0.15.9 check` (an editor, or a plain run) reads `ruff.toml` alone and reports every finding, baselined or not,
+and `uvx ruff@0.15.9 format` needs no generated file. A branch from before the split tracks the old single files: rebase
+it, then run
 `python3 scripts/lint_baseline.py --migrate` and `python3 scripts/pyright_baseline.py --migrate` on its own counts and
 entries, and commit. The generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see

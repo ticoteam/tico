@@ -213,13 +213,30 @@ def test_a_file_with_no_findings_loses_its_piece(tmp_path, monkeypatch):
     assert (tmp_path / "baselines" / "ruff" / "backend" / "b.py.json").exists()
 
 
-def test_generate_lists_every_pair_of_the_pieces_in_the_ruff_toml(tmp_path, monkeypatch):
+def test_generate_extends_ruff_toml_and_lists_every_pair_of_the_pieces(tmp_path, monkeypatch):
     monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
     write_text(tmp_path / "ruff.toml", '[lint]\nselect = ["F", "B"]\n')
     lint_baseline.write_counts({("backend/b.py", "F401"): 1, ("backend/a.py", "BLE001"): 2})
     assert lint_baseline.generate() == {("backend/b.py", "F401"): 1, ("backend/a.py", "BLE001"): 2}
     text = (tmp_path / "ruff-baseline.toml").read_text(encoding="utf-8")
+    assert text.startswith('extend = "ruff.toml"\n')
     assert text.endswith('[lint.per-file-ignores]\n"backend/a.py" = ["BLE001"]\n"backend/b.py" = ["F401"]\n')
+
+
+def test_ruff_toml_never_mentions_the_baseline():
+    # ruff.toml is what a bare `ruff check` and `ruff format` read: a fresh checkout must work without generating anything.
+    repo = Path(__file__).resolve().parents[2]
+    assert "baseline" not in (repo / "ruff.toml").read_text(encoding="utf-8").lower()
+
+
+def test_the_gate_names_the_baseline_and_the_raw_run_names_ruff_toml_alone():
+    gate = lint_baseline.ruff_command(["--output-format", "concise"])
+    assert gate[gate.index("--config") + 1] == "ruff-baseline.toml"
+    assert "lint.per-file-ignores = {}" not in gate
+    raw = lint_baseline.ruff_command([], raw=True)
+    assert raw[raw.index("--config") + 1] == "ruff.toml"
+    assert "ruff-baseline.toml" not in raw
+    assert "lint.per-file-ignores = {}" in raw
 
 
 def test_a_piece_with_two_files_or_at_the_wrong_path_is_a_layout_problem(tmp_path, monkeypatch):

@@ -41,9 +41,6 @@ format_changed() {
     echo "format_rebase: no Python files to format"
     return 0
   fi
-  # ruff reads ruff.toml, which extends the generated ruff-baseline.toml: it must exist. A branch from before the split
-  # tracks that file, and then it is already there; a fresh checkout generates it from the pieces.
-  [ -f ruff-baseline.toml ] || python3 scripts/lint_baseline.py --generate
   "${RUFF[@]}" format --no-cache --force-exclude -- "${files[@]}"
   git add -- "${files[@]}"
   if git diff --cached --quiet; then

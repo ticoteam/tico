@@ -1,8 +1,9 @@
 """Ratchet for the Python lint: the findings of each (file, rule) pair are counted, and the counts only go down.
 
 Each source file's counts live in its own piece, baselines/ruff/<path>.json: how many findings each of its rules may
-have. Counts are per (file, rule), never per line, so reformatting or moving code leaves them alone. ruff.toml extends
-ruff-baseline.toml, whose `[lint.per-file-ignores]` lists every pair that has a finding today, so ruff passes on it.
+have. Counts are per (file, rule), never per line, so reformatting or moving code leaves them alone. The gate reads
+ruff-baseline.toml, which extends ruff.toml and whose `[lint.per-file-ignores]` lists every pair that has a finding today,
+so ruff passes on it. ruff.toml itself never mentions the baseline: a bare `ruff check` reports every finding.
 ruff-baseline.toml is generated from the pieces and git-ignored: two PRs that change different files' counts change
 different pieces, so a plain git merge has no conflict and no merge driver is needed.
 
@@ -12,17 +13,17 @@ different pieces, so a plain git merge has no conflict and no merge driver is ne
     python3 scripts/lint_baseline.py --check --base origin/main
                                                       also fail when a count grew, a suppression was added for a rule
                                                       that the ref already selects, or a rule was dropped from select
-    python3 scripts/lint_baseline.py --generate       regenerate ruff-baseline.toml from the pieces (editors need it too)
+    python3 scripts/lint_baseline.py --generate       regenerate ruff-baseline.toml from the pieces (the gate reads it)
     python3 scripts/lint_baseline.py --migrate        turn ruff-baseline-counts.json of before the split into pieces
 
 A rule that the --base ref does not select yet may bring its own baseline: that is how a rule is introduced, and its
 findings become its starting counts. Only rules the ref already selects are held to "no growth". --write does not refuse
 a higher count; the --base check does. --base reads the baseline of either layout, so a ref from before the split works.
 
-Findings are read with the baseline switched off (`--config "lint.per-file-ignores = {}"`), so the comparison sees every
-real finding, and a `# noqa` that suppresses one counts as used. With the baseline on, ruff reads a `# noqa` for a
-baselined rule as unused, so the baseline-on run ignores RUF100; the raw run still checks it. Test files keep their own
-minimal rule set in ruff.toml and are not part of the baseline.
+The raw run reads ruff.toml alone, with every per-file ignore switched off (`--config "lint.per-file-ignores = {}"`), so
+the comparison sees every real finding, and a `# noqa` that suppresses one counts as used. The gate reads the baseline,
+where ruff reads a `# noqa` for a baselined rule as unused, so the gate ignores RUF100; the raw run still checks it. Test
+files keep their own minimal rule set in ruff.toml and are not part of the baseline.
 """
 
 import argparse
@@ -39,10 +40,11 @@ import baseline_files
 
 ROOT = Path(__file__).resolve().parent.parent
 RUFF = ["uvx", "ruff@0.15.9"]
-BASELINE_NAME = "ruff-baseline.toml"  # generated from the pieces, git-ignored
+RULES_NAME = "ruff.toml"  # the rules; ruff.toml never refers to the baseline
+BASELINE_NAME = "ruff-baseline.toml"  # generated from the pieces, git-ignored; extends ruff.toml
 LAYOUT = "baselines/ruff"
 OLD_COUNTS_NAME = "ruff-baseline-counts.json"  # the single counts file of before the split
-RAW = ["--config", "lint.per-file-ignores = {}"]
+RAW = ["--config", "lint.per-file-ignores = {}"]  # the raw run also switches off every per-file ignore
 GATED_EXTRA = ["--extend-ignore", "RUF100"]
 OWNER = "engineering"
 # Never baselined: a blanket noqa comment (PGH004) must be fixed in the code.
@@ -50,16 +52,22 @@ NEVER_BASELINED = {"PGH004"}
 
 
 def config_file():
-    return ROOT / "ruff.toml"
+    return ROOT / RULES_NAME
 
 
 def baseline_file():
     return ROOT / BASELINE_NAME
 
 
+def ruff_command(args, raw=False):
+    """The `ruff check` command line, with its config named. A bare `ruff check` reads ruff.toml alone and reports every
+    finding. The raw run reads ruff.toml with every per-file ignore off; the gate reads the generated baseline on top."""
+    config = ["--config", RULES_NAME, *RAW] if raw else ["--config", BASELINE_NAME]
+    return [*RUFF, "check", "--no-cache", *config, *args]
+
+
 def ruff(args, raw=False):
-    cmd = [*RUFF, "check", "--no-cache", *args, *(RAW if raw else [])]
-    return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run(ruff_command(args, raw), cwd=ROOT, capture_output=True, text=True)
 
 
 def relpath(filename):
@@ -143,8 +151,10 @@ def render_toml(pairs):
     for path, code in sorted(pairs):
         per_file[path].append(code)
     lines = [
+        f'extend = "{RULES_NAME}"',
+        "",
         "# Ruff baseline: findings that already exist, by file and rule. Generated and git-ignored from the pieces in",
-        f"# {LAYOUT}/ by `python3 scripts/lint_baseline.py --generate`; do not edit it.",
+        f"# {LAYOUT}/ by `python3 scripts/lint_baseline.py --generate`; do not edit it. The rules are in {RULES_NAME}.",
         f"# Owner of every rule listed here: {OWNER}. Fix findings, then re-run --write to lower their counts.",
         "# A count may only go down: `--check` fails on a finding past its count, and on a count that fell without --write.",
         "",
@@ -167,7 +177,7 @@ def require_split():
 
 
 def generate():
-    """Write ruff-baseline.toml from the pieces; returns the counts. Ruff reads that file, so every ruff run calls this."""
+    """Write ruff-baseline.toml from the pieces; returns the counts. The gate's ruff run reads that file, so it calls this."""
     require_split()
     counts = read_counts()
     baseline_file().write_text(render_toml(counts), encoding="utf-8")
@@ -433,7 +443,7 @@ def check_growth(ref):
 
 
 def write():
-    generate()  # ruff reads ruff-baseline.toml first; the rewrite below regenerates it from the new counts
+    generate()  # refuses a checkout that still tracks the single files of before the split; the rewrite below regenerates
     found, _ = raw_findings()
     counts = counts_of(found)
     blocked = sorted(pair for pair in counts if pair[1] in NEVER_BASELINED)
@@ -463,7 +473,7 @@ def write():
 
 
 def check(base_ref):
-    declared = generate()  # ruff reads ruff-baseline.toml, so it is written from the pieces before any ruff run
+    declared = generate()  # the gate's ruff run reads ruff-baseline.toml, so it is written from the pieces first
     problems = layout_problems()
     found, invalid = raw_findings()
     actual = counts_of(found)

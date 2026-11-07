@@ -2,9 +2,10 @@
 """The basedpyright baseline, one piece per Python file: baselines/pyright/<path>.json holds that file's entries.
 
 basedpyright reads .basedpyright/baseline.json, its default baseline path. That file is generated from the pieces and
-git-ignored, so the pieces are the only baseline git tracks. Two PRs that change the entries of different Python files
-change different pieces, and git merges them with no conflict (GitHub's merge queue runs no merge drivers, so the layout
-is what keeps the merge clean).
+git-ignored, so the pieces are the only baseline git tracks. Without the file (a fresh checkout), a plain basedpyright run
+is not an error: it reports every finding, baselined or not. pyrightconfig.json does not name the baseline. Two PRs that
+change the entries of different Python files change different pieces, and git merges them with no conflict (GitHub's
+merge queue runs no merge drivers, so the layout is what keeps the merge clean).
 
     python3 scripts/pyright_baseline.py --generate   write .basedpyright/baseline.json from the pieces (check_types.sh runs it)
     python3 scripts/pyright_baseline.py --split      write the pieces from .basedpyright/baseline.json, which
