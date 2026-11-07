@@ -4212,7 +4212,12 @@ SCHEMAS = {
                         "kpi_id": {"type": "string"},
                         "kpi_name": {"type": ["string", "null"]},
                         "reason": {"type": "string"},
-                        "freshness": {"type": "string"},
+                        "kpis": {
+                            "type": "array",
+                            "description": "kind kpi_stale: each of the person's measures whose reading is out of "
+                            "date, in the one ask: {kpi_id, kpi_name, freshness, reason}",
+                            "items": {"type": "object"},
+                        },
                         "proposal": {"type": "object"},
                         "task": {
                             "type": "object",

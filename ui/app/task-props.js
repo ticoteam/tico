@@ -45,16 +45,17 @@ function taskPropsHTML(t, opts = {}) {
     const v = o.edit
       ? `<button type="button" class="prop-v${o.empty ? ' empty' : ''}" data-prop="${key}" aria-haspopup="${o.popup || 'menu'}" aria-label="${esc(label)}: ${esc(words)}">${value}</button>`
       : `<span class="prop-v ro${o.empty ? ' empty' : ''}" aria-label="${esc(label)}: ${esc(words)}">${value}</span>`;
-    return `<div class="prop" data-prop-row="${key}"><span class="prop-k" aria-hidden="true">${esc(label)}</span><span class="prop-vwrap">${v}${o.extra || ''}</span></div>`;
+    return `<div class="prop" data-prop-row="${key}"><span class="prop-k" aria-hidden="true"${o.title ? ` title="${esc(o.title)}"` : ''}>${esc(label)}</span><span class="prop-vwrap">${v}${o.extra || ''}</span></div>`;
   };
   const txt = s => `<span class="prop-txt">${esc(s)}</span>`;
   const rows = [];
-  // Status: the shared icon and the status's name (a typed task's status follows its steps)
-  const statusName = STATUS_WORD[t.status] || String(t.status || '');
+  // Status: the shared icon and the status's name. A blocked hold reads Blocked (the header no longer says so); a typed
+  // task's step is its own row.
+  const statusName = taskBlockedHold(t) ? 'Blocked' : STATUS_WORD[t.status] || String(t.status || '');
   rows.push(row('status', 'Status', txt(statusName), {edit: r.edit || (!r.live && r.reopen), words: statusName}));
-  // Owner and who asked
+  // Owner and who asked. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
-    extra: t.private ? '<small>Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.</small>' : ''}));
+    title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
   const asker = taskRequester(t);
   rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
   if (t.roles && (typed || Object.keys(t.roles).length)) rows.push(taskPeopleRowHTML(t, r));
@@ -460,7 +461,7 @@ function taskPropsBind(d, task, change) {
       : {text: 'Snooze…', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     const stepsOnly = pipelineStepsOnly(task);
     if (!r.live && r.reopen && !stepsOnly) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
-    if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
+    if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('status', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;

@@ -1,4 +1,4 @@
-// The Lenses tab (ui/lenses-page.js) against a stand-in for /api/v2/lenses and the strategy it reads (fixtures only, the
+// The Lenses tab (ui/lenses-page.ts) against a stand-in for /api/v2/lenses and the strategy it reads (fixtures only, the
 // Acme example): the owner sees the listed lenses in Strategy and Market groups with Run, a member the same rows without
 // it; a run asks the steps one at a time (a list adds rows on Enter, the scores grid is built from the earlier answers,
 // Back keeps what was typed, a skipped step is left out of the answers) and goes to the run page, which polls until done and

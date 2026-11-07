@@ -1200,6 +1200,10 @@ function goalNeedSay(it) {
   }
   if (it.kind === 'vision') return 'Say what this company is for';
   if (it.kind === 'why') return (it.goals || []).length === 1 ? 'A goal needs a Why line' : `${(it.goals || []).length} goals need a Why line`;
+  if (it.kind === 'kpi_stale') {
+    const kpis = it.kpis || [];
+    return kpis.length === 1 ? `${kpis[0].kpi_name} needs a number` : `${kpis.length} measures need a number`;
+  }
   return it.kind === 'kpi_red' ? `${it.kpi_name} is off track` : `${it.kpi_name}: ${it.reason || 'needs a reading'}`;
 }
 function goalNeedsLineHtml(items) {
@@ -1258,6 +1262,10 @@ function goalNeedsHtml(items) {
       const goals = it.goals || [];
       return `<li class="need-row" data-need-why="${esc(goals[0]?.goal_id || '')}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>These goals need a Why line</b><span class="muted">: </span>${goals.map(g =>
         `<button class="linkish" type="button" data-need-why-goal="${esc(g.goal_id)}">${esc(g.goal_title)}</button>`).join('<span class="muted">, </span>')}</span>${needTaskLink(it)}</li>`;
+    }
+    // A person's measures out of date are one ask (one task, on the first row): each measure is a row that opens its panel.
+    if (it.kind === 'kpi_stale') {
+      return (it.kpis || []).map((k, n) => `<li class="need-row" data-kpi="${esc(k.kpi_id)}" tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>${esc(k.kpi_name)}</b><span class="muted">: ${esc(k.reason)}</span></span>${n ? '' : needTaskLink(it)}</li>`).join('');
     }
     const red = it.kind === 'kpi_red';
     return `<li class="need-row" data-kpi="${esc(it.kpi_id)}" tabindex="0" role="button">${gdot(red ? 'red' : 'gray')}<span class="need-text"><b>${esc(it.kpi_name)}</b>${red ? ` on ${esc(it.goal_title)}` : ''}<span class="muted">: ${esc(it.reason)}</span></span>${needTaskLink(it)}</li>`;

@@ -17,18 +17,18 @@ included, run `npm ci && npx playwright install chromium` and install `backend/r
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
-workflow runs only the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners; `checks` is the one required check. The merge queue runs the tests, once per
-queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
+workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs its selected tests and factory sim on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+checks only. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
 CHANGELOG.md or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
 and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
-Release validation tests each candidate. Agents run the tests they touched with `scripts/remote.py` before marking a PR
-ready. A newer push cancels a pull request's superseded run; a queue group is never canceled. Hosted PR runs cannot read
-RunsOn's cache, so they start cold. Python and browser groups are sized from the latest successful Release validation
+Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
+ready. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test or factory-sim leg cancels its whole run, so a failing pull request or
+queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 5 minutes
 (`TICO_CI_JOB_SECONDS`, 300), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
 downloads on warm queue runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check
@@ -38,9 +38,9 @@ default run (pytest plus core UI) in about 2 minutes; `python scripts/release_ch
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
 `scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cjs` and pytest in a
 bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
-"waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Better still, run them off the
+"waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Release checks run off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
-`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code. At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
+`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code: 75 when it never dispatched the run, 76 when the run ended without a result, and 2 for a bad command line (`--help` lists them). At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
 turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
 The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
@@ -60,12 +60,13 @@ never ship around a known failure. If a test may fail, it shouldn't exist.
 Run scripts/check.sh before pushing; `git config core.hooksPath .githooks` runs it on every push.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The author marks the PR ready for
-review once the tests they touched pass with `scripts/remote.py`. Once it is reviewed, enqueue it with
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: work in draft and run the tests you touched locally, run
+`gh pr ready` when done, wait for green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
+After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
-PR checks on each push are lint only. A red release candidate caused by your merge is your top priority. Releases ship from
+PR checks on each push run lint, and a ready PR's selected tests. A red release candidate caused by your merge is your top priority. Releases ship from
 release windows (weekdays 07:30, 11:00, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
 docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
 major production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors.

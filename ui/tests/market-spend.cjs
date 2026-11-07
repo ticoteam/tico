@@ -1,4 +1,4 @@
-// Market's money, players and value chain (ui/app/redesign-market.js, ui/market-spend.js, ui/market-page.js) against a
+// Market's money, players and value chain (ui/app/redesign-market.js, ui/market-spend.ts, ui/market-page.js) against a
 // stand-in for GET /api/v2/market/spend and /market/value-chain and their writes (fixtures only, the Acme example): the
 // tiles; treemap areas follow the sizes; the segment panel shows each estimate with its params, and the owner's param
 // edit posts and reads again while a member sees no edit, research or cite; the Offering/Buyer and basis switches ask

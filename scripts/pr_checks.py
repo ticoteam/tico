@@ -22,6 +22,13 @@ UI_MAP = {
     "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
     "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
 }
+
+
+def ui_map_key(name):
+    """The UI_MAP key for a ui/ file. A script converted to TypeScript (ui/app/x.ts) keeps the entry its .js name has."""
+    return name[:-3] + ".js" if name.startswith("ui/") and name.endswith(".ts") else name
+
+
 CONFORMANCE = "runner_support/tests/test_conformance.py"
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
@@ -1054,12 +1061,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             uncertain.append(f"rule 3: unknown {name}: smoke set")
     if unknown:
         notes.append("rule 3: unknown files")
-    unmapped = [n for n in live if n not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
+    unmapped = [n for n in live if ui_map_key(n) not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
     seeds -= set(unmapped)
     for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
-        if name in UI_MAP:
-            missing = [s for s in UI_MAP[name] if not (root / "ui/tests" / f"{s}.cjs").is_file()]
-            browser |= set(UI_MAP[name]) - set(missing)
+        if ui_map_key(name) in UI_MAP:
+            scripts = UI_MAP[ui_map_key(name)]
+            missing = [s for s in scripts if not (root / "ui/tests" / f"{s}.cjs").is_file()]
+            browser |= set(scripts) - set(missing)
             if missing:
                 smoke_browser = True
                 uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
@@ -1320,10 +1328,10 @@ def factory_shards():
 
 
 def factory_plan(event, changed):
-    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. Only a merge queue group runs it,
-    so a pull request's plan never packs the sim."""
+    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. A merge queue group and a pull
+    request both run it on RunsOn, one VM per group, so both pack it; the workflow decides which pull requests get it."""
     reason = factory_reason(changed)
-    shards = factory_shards() if reason and event == "merge_group" else ["1/1"]
+    shards = factory_shards() if reason and event in ("merge_group", "pull_request") else ["1/1"]
     return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
 
 

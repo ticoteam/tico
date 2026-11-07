@@ -14,7 +14,7 @@ with their dates.
 | Better Business Bureau | | not applicable | yes, answer each complaint | no | yes | Unanswered complaints cost the grade; answered ones do not |
 | Capterra / G2 / GetApp | | yes, incentives allowed with the platform's disclosure | yes | yes | no | For software; the buyer of a software product looks here |
 | Trustpilot | | yes, every customer | yes | yes | no | Inviting a subset is what the platform penalises |
-| Apple App Store / Google Play | | in-app prompt only | yes | yes, guideline violations | no | Two apps may mean two listings each |
+| Apple App Store / Google Play | | in-app prompt only | yes | yes, guideline violations | no | Two apps may mean two listings each. Replies belong to the App Store Owner (`app-store`) when the team has one |
 | Glassdoor / Indeed | | not applicable | yes | yes | no | Employer reviews; contractors often post here |
 | Sitejabber and others | | as the surface says | as the surface says | | | Added when a search finds one |
 
