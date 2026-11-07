@@ -331,6 +331,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "redesign_cutover",
         "release-history",
         "repositories-access-migrated",
+        "roadmap_measured_step",
         "roadmap_ready_to_ship_step",
         "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text",

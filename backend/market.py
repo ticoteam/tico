@@ -2470,7 +2470,7 @@ def install(app, store, auth, mutate):
                     raise Problem("merge", "Say which entity this one merges into", 422)
                 from . import strategy_market as SM  # one of the company's segments merges on the owner's click only
 
-                SM.merge_guard(c, who, entity_id)
+                SM.merge_guard(c, who, entity_id, body.into)
                 return {"entity": merge_entities(c, who.actor, entity_id, body.into, body.insight_id)}
             if action == "retire":
                 from . import strategy_market as SM
