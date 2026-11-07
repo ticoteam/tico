@@ -327,8 +327,33 @@ def _open_for(toks, j):
     return -1
 
 
+TYPE_ARG_OPS = frozenset({".", ",", "[", "]", "(", ")", "{", "}", ":", "|", "&", "=>", "<", ">"})
+
+
+def _type_args_open(toks, j):
+    """The index of the `<` that opens the type-argument list closing at toks[j] (a `>`), or -1. The `<` must follow a
+    name, and the list may hold only type-like tokens: `a < b && c > (d)` is an expression, not a list."""
+    depth = 0
+    for k in range(j, max(-1, j - 60), -1):
+        t = toks[k]
+        if t.kind == "op":
+            if t.v == ">":
+                depth += 1
+            elif t.v == "<":
+                depth -= 1
+                if depth == 0:
+                    named = k > 0 and toks[k - 1].kind == "word" and toks[k - 1].v not in KEYWORDS
+                    return k if named else -1
+            elif t.v not in TYPE_ARG_OPS:
+                return -1
+        elif t.kind not in ("word", "str", "num"):
+            return -1
+    return -1
+
+
 def _operand(toks, i):
-    """The text of the expression that ends just before toks[i]: a name, a member chain, a call or an index."""
+    """The text of the expression that ends just before toks[i]: a name, a member chain, a call or an index. A call's
+    type arguments are part of it, so `a.f<T>(x)` and `b.f<T>(x)` are two different expressions."""
     start, j = i, i - 1
     while j >= 0:
         t = toks[j]
@@ -337,6 +362,10 @@ def _operand(toks, i):
             if k < 0:
                 break
             start, j = k, k - 1
+            if toks[k].v == "(" and j >= 0 and toks[j].kind == "op" and toks[j].v == ">":
+                m = _type_args_open(toks, j)
+                if m >= 0:
+                    start, j = m, m - 1
         elif (t.kind in ("word", "num", "str", "tpl") and t.v not in KEYWORDS) or (
             t.kind == "op" and t.v in (".", "?.")
         ):

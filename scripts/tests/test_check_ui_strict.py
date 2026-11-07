@@ -133,6 +133,32 @@ def test_import_and_export_aliases_and_as_const_are_not_casts():
     assert strict.shift_left_hits(text) == []
 
 
+def test_type_arguments_are_part_of_the_operand_so_two_elements_are_not_one_repeat():
+    # Two different receivers with the same selector are two elements: no hit.
+    pair = (
+        "host.querySelector<HTMLElement>('[data-company-status]')!;\n"
+        "form.querySelector<HTMLElement>('[data-company-status]')!;\n"
+    )
+    assert strict.shift_left_hits(pair) == []
+    # The same receiver and selector twice is a repeat, and the key carries the type arguments.
+    same = "host.querySelector<HTMLElement>('[x]')!;\nhost.querySelector<HTMLElement>('[x]')!;\n"
+    hits = strict.shift_left_hits(same)
+    assert [line for line, _ in hits] == [1, 2]
+    assert all("host . querySelector < HTMLElement > ( '[x]' )!" in message for _, message in hits)
+
+
+def test_a_repeated_cast_of_a_call_with_type_arguments_is_a_hit():
+    hits = strict.shift_left_hits("const a = b.f<T>(x) as Y;\nconst c = b.f<T>(x) as Y;\n")
+    assert [line for line, _ in hits] == [1, 2]
+    assert all("repeated cast `b . f < T > ( x ) as Y`" in message for _, message in hits)
+
+
+def test_a_comparison_before_a_parenthesis_is_not_read_as_type_arguments():
+    hits = strict.shift_left_hits("if (a < b && c > (d)!) {}\nif (a < b && c > (d)!) {}\n")
+    assert [line for line, _ in hits] == [1, 2]
+    assert all("repeated non-null assertion `( d )!`" in message for _, message in hits)
+
+
 def test_shift_left_reads_only_the_strict_files_without_a_piece(monkeypatch):
     texts = {
         "ui/app/clean.ts": "const a = (x as Foo);\n",
