@@ -107,12 +107,4 @@ def dedicated(c: sqlite3.Connection, actor: str) -> frozenset[str]:
 def lead_map(c: sqlite3.Connection) -> dict[str, frozenset[str]]:
     """Which segments each actor leads, as the segment core decides it (backend/segments.py leads). Only the segments
     somebody is tagged with are asked, so an install with no segment members reads no org chart."""
-    ours = SEG.ours_ids(c)
-    if not ours:
-        return {}
-    tagged = {r[0] for r in c.execute("SELECT DISTINCT segment_id FROM segment_members")}
-    out: dict[str, set[str]] = {}
-    for sid in sorted(ours & tagged):
-        for ref in SEG.leads(c, sid):
-            out.setdefault(actor_of(ref), set()).add(sid)
-    return {actor: frozenset(found) for actor, found in out.items()}
+    return {actor_of(ref): frozenset(sids) for ref, sids in SEG.lead_map(c).items()}

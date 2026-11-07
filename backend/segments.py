@@ -16,8 +16,8 @@ A segment is a market graph `segment` entity (backend/market.py) the company pla
   field by field against the company's text;
 - the segment text a dedicated bot's run is handed (`run_text`, backend/learned.py).
 
-Writes are the owner's, on their own click (goal_routes.company_editor; a confirmed Assistant card counts), teammate
-tags included: a bot admin cannot tag a teammate. Reads are for everyone signed in.
+Writes are the owner's, on their own click (goal_routes.company_editor; a confirmed Assistant or BotOps card counts),
+teammate tags included: a bot admin cannot tag a teammate. Reads are for everyone signed in.
 A segment that stops being one of the company's loses its tags (strategy_market.untag): a tag names one of the
 company's segments, or `all`, and nothing else.
 """
@@ -616,6 +616,21 @@ def led_by(c: sqlite3.Connection, ref: str) -> set[str]:
     chart = _chart(c)
     managers = _managers(c)
     return {sid for sid, refs in _tagged(c).items() if ref in refs and ref in _leads(refs, managers, chart)}
+
+
+def lead_map(c: sqlite3.Connection) -> dict[str, set[str]]:
+    """Each teammate ref → the company's segments it leads (the same rule as `leads` and `led_by`), from one read of the
+    chart and the managers. Nobody tagged: nothing is read."""
+    tagged = _tagged(c)
+    if not tagged:
+        return {}
+    chart = _chart(c)
+    managers = _managers(c)
+    out: dict[str, set[str]] = {}
+    for sid, refs in tagged.items():
+        for ref in _leads(refs, managers, chart):
+            out.setdefault(ref, set()).add(sid)
+    return out
 
 
 def members(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None) -> Row:
