@@ -17,6 +17,7 @@ from backend import org_rule_check as K
 from backend import thread_attention
 from backend import approval_expiry
 from backend import threads
+from backend.tests.test_question_tasks import keep_asking
 from backend import updates
 from backend.auth import Identity
 from backend.store import H
@@ -534,7 +535,8 @@ def test_a_held_write_nobody_decides_for_a_day_is_kept_unsent_and_its_bot_is_tol
     assert (row["state"], row["decided_by"]) == ("kept", H.KEEPER)
     assert ben_needs_you(api) == []
     assert bodies(api, "gold") == []  # the held text is written nowhere
-    told = sql(api, "SELECT body FROM notes WHERE to_actor='ana' AND from_actor=?", (H.KEEPER,))
+    # The bot that wrote it is told, not the person it was for.
+    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.KEEPER,))
     assert len(told) == 1 and "was not sent" in told[0]["body"] and "24 hours" in told[0]["body"]
     assert sweep_holds(api) == []  # decided once
 
@@ -2031,6 +2033,7 @@ def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled
 def test_a_task_questions_options_and_card_lines_are_judged_with_it(ruled):
     api, judge = ruled
     color_rule(api)
+    keep_asking(api)
     options = [
         {"label": "Ship", "description": "Our favorite color is blue.", "then": "Ops ships it today"},
         {"label": "Wait", "then": "Ops waits a week"},
