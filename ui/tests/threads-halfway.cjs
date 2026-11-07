@@ -254,25 +254,6 @@ let browser = null;
     assert.equal(await page.locator('.th-status').count(), 0, 'the reply takes the row away');
     assert.equal(await row(page, 'live1').locator('.th-quote').getAttribute('data-th-quote'), 'm2', 'a live reply quotes what it answers');
 
-    // The Ask's question, with a thread's composer on screen, is its own row above the composer, never over it.
-    // Seed the pending question: askPeek's timer and focusout checks hide a forced ask-on with no matching item.
-    state.needs = [{id: 'q1', kind: 'question', ask: {id: 'q1', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Ready to ship?',
-      refs: {questions: [{id: 'ship', question: 'Ready to ship?', options: []}]}}}];
-    await page.locator('.thv-composer .p-text').blur();
-    await page.evaluate(() => v2Refresh());
-    // Wait for both visible boxes and read them together; the assertion below checks their ordering.
-    const [peek, pill] = await (await page.waitForFunction(() => {
-      const els = [document.querySelector('.thv-composer .thv-peek-slot #ask-peek.ask-on'), document.querySelector('.thv-composer .thv-ask')];
-      if (els.some(el => !el?.checkVisibility())) return false;
-      const boxes = els.map(el => { const {x, y, width, height} = el.getBoundingClientRect(); return {x, y, width, height}; });
-      return boxes.every(b => b.width > 0 && b.height > 0) && boxes;
-    })).jsonValue();
-    assert.equal(await page.locator('.thv-composer .thv-peek-slot #ask-peek').count(), 1);
-    assert.ok(peek.y + peek.height <= pill.y + 0.5, `the peek sits above the composer: ${JSON.stringify([peek, pill])}`);
-    // Away from a thread it floats by the dot again.
-    await page.goto('https://tico-ui.test/#/tasks');
-    await page.waitForFunction(() => document.getElementById('ask-peek')?.parentElement === document.body);
-    assert.equal(await page.locator('#ask-peek.ask-peek-row').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
   }

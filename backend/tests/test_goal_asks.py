@@ -62,38 +62,115 @@ def needs_tasks(api, token):
     return {str(i["id"]) for i in page["items"] + page["older"]}
 
 
+def stale_asks(api, owner="human:ana"):
+    return [a for a in asks(api, owner) if a["kind"] == "kpi_stale"]
+
+
 def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     goal_manager(api, level=2)
     kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]  # above Passive the vision is asked too
-    assert (task["kind"], task["ref"], task["status"]) == ("kpi_stale", kpi["id"], "open")
-    assert task["title"] == "Log the first Unreported measure reading"
-    assert task["body"].startswith(task["title"])
+    [task] = stale_asks(api)
+    assert (task["kind"], task["ref"], task["status"]) == ("kpi_stale", GA.KPIS_REF, "open")
+    assert task["title"] == "Add a number for Unreported measure"
+    assert task["body"].startswith(task["title"]) and "- Unreported measure: has no reading yet" in task["body"]
     # In Tasks and Decide (the person's Needs you), and on the Goals page with the task named.
     assert task["id"] in needs_tasks(api, "ana-test")
-    [item] = [i for i in get(api, "goals/needs-you")["items"] if i.get("kpi_id") == kpi["id"]]
-    assert item["kind"] == "kpi_stale" and item["task"]["id"] == task["id"]
-    assert (item["id"], item["subject"], item["actions"]) == (
-        f"kpi_stale:{kpi['id']}",
-        {"type": "kpi", "id": kpi["id"]},
-        ["add_reading"],
-    )
+    [item] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
+    assert item["task"]["id"] == task["id"] and [k["kpi_id"] for k in item["kpis"]] == [kpi["id"]]
+    assert (item["id"], item["subject"], item["actions"]) == ("kpi_stale:kpis", None, ["open"])
     assert item["title"] and "ref" not in item and item["created_at"]
-    # Another write and the hourly pass ask nothing twice.
-    post(api, "kpis", {"name": "Second measure", "owner": "me", "cadence": "weekly"})
+    # Another pass asks nothing twice.
     sync(api)
-    assert [a["ref"] for a in asks(api, "human:ana")].count(kpi["id"]) == 1
+    assert [a["id"] for a in stale_asks(api)] == [task["id"]]
     # A fresh reading closes it at once, as the Strategy Bot.
     log(api, kpi["id"], 12, period_end=H.now())
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
     assert (row["status"], row["closed_by_id"]) == ("closed", MANAGER)
-    assert all(i.get("kpi_id") != kpi["id"] for i in get(api, "goals/needs-you")["items"])
+    assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
     # Time passing makes it stale again: the hourly pass asks again, in a new task.
     later = datetime.now(timezone.utc) + timedelta(days=20)
     made = sync(api, later)["created"]
-    [again] = [a for a in asks(api, "human:ana") if a["ref"] == kpi["id"]]
+    [again] = stale_asks(api)
     assert again["status"] == "open" and again["id"] != task["id"] and again["id"] in made
+
+
+def test_several_stale_measures_for_one_person_are_one_task_listing_them_all(api):
+    goal_manager(api, level=2)
+    names = ["Calls made", "Demos booked", "Trials started"]
+    kpis = [post(api, "kpis", {"name": name, "owner": "me", "cadence": "weekly"})["kpi"] for name in names]
+    [task] = stale_asks(api)
+    assert task["title"] == "Add numbers for 3 measures"
+    assert all(f"- {name}: has no reading yet" in task["body"] for name in names)
+    [item] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
+    assert {k["kpi_id"] for k in item["kpis"]} == {k["id"] for k in kpis}
+    # Another pass, or another write, files no second task: the one task lists them.
+    post(api, "kpis", {"name": "Refunds issued", "owner": "me", "cadence": "weekly"})
+    sync(api)
+    [same] = stale_asks(api)
+    assert same["id"] == task["id"] and same["title"] == "Add numbers for 4 measures"
+
+
+def test_a_measure_that_gets_a_number_leaves_the_list_and_the_last_one_closes_the_ask(api):
+    goal_manager(api, level=2)
+    kpis = [
+        post(api, "kpis", {"name": name, "owner": "me", "cadence": "weekly"})["kpi"]
+        for name in ("Calls made", "Demos booked")
+    ]
+    [task] = stale_asks(api)
+    log(api, kpis[0]["id"], 12, period_end=H.now())
+    # Still open, now for the one measure still waiting.
+    [still] = stale_asks(api)
+    assert (still["id"], still["status"], still["title"]) == (task["id"], "open", "Add a number for Demos booked")
+    assert "Calls made" not in still["body"]
+    log(api, kpis[1]["id"], 7, period_end=H.now())
+    with api.app.state.store.read() as c:
+        row = H.task(c, task["id"])
+    assert (row["status"], row["closed_by_id"]) == ("closed", MANAGER)
+    assert stale_asks(api) == []
+
+
+def test_a_measure_ask_from_before_the_bundle_is_folded_into_the_one_ask(api):
+    """An install from before the bundle has one ask per measure. Those close as folded into the one ask, which
+    lists the measures still waiting, and their close note never says a reading was logged."""
+    goal_manager(api, level=2)
+    kpis = [
+        post(api, "kpis", {"name": name, "owner": "me", "cadence": "weekly"})["kpi"]
+        for name in ("Calls made", "Demos booked")
+    ]
+    [bundle] = stale_asks(api)
+    old = []
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "human:ana", bundle["id"], status="declined", note="Replaced by the old asks")
+        c.execute("DELETE FROM goal_asks WHERE kind='kpi_stale'")
+        for kpi in kpis:
+            made = H.task_create(
+                c, MANAGER, f"Log the first {kpi['name']} reading", "Log it.", "human:ana", lint=False, lane="company"
+            )
+            c.execute(
+                "INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES ('kpi_stale', ?, 'human:ana', ?, ?)",
+                (kpi["id"], made["id"], H.now()),
+            )
+            old.append(made["id"])
+    sync(api)
+    with api.app.state.store.read() as c:
+        rows = [H.task(c, t) for t in old]
+    assert [(r["status"], r["note"]) for r in rows] == [("closed", "Folded into one ask for all measures.")] * 2
+    [folded] = stale_asks(api)
+    assert folded["ref"] == GA.KPIS_REF and folded["status"] == "open"
+    assert all(f"- {name}: has no reading yet" in folded["body"] for name in ("Calls made", "Demos booked"))
+
+
+def test_a_bundled_ask_that_closes_does_not_say_it_went_to_another_person(api):
+    goal_manager(api, level=2)
+    mine = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
+    goal_with_kpi(api, token="ben-test", owner="ben")  # Ben's own out-of-date measure: his ask, not Ana's
+    [ana_task] = stale_asks(api, "human:ana")
+    assert stale_asks(api, "human:ben")
+    log(api, mine["id"], 12, period_end=H.now())
+    with api.app.state.store.read() as c:
+        row = H.task(c, ana_task["id"])
+    assert row["status"] == "closed" and "Now asked of" not in row["note"]
 
 
 def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
@@ -144,13 +221,13 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
 
 def test_a_task_the_person_closed_is_not_asked_again_while_the_cause_stands(api):
     goal_manager(api, level=2)
-    kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    [task] = stale_asks(api)
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", task["id"], status="declined", note="Not tracking this one")
     sync(api)
-    assert [a["id"] for a in asks(api) if a["ref"] == kpi["id"]] == [task["id"]]
-    assert all(i.get("kpi_id") != kpi["id"] for i in get(api, "goals/needs-you")["items"])
+    assert [a["id"] for a in stale_asks(api)] == [task["id"]]
+    assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
 
 
 def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_filed(api):
@@ -172,12 +249,12 @@ def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_fil
 
 def test_a_task_marked_done_while_the_cause_stands_is_asked_again(api):
     goal_manager(api, level=2)
-    kpi = post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})["kpi"]
-    [task] = [a for a in asks(api, "human:ana") if a["kind"] != "vision"]
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    [task] = stale_asks(api)
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", task["id"], status="done", note="Done")
     sync(api)
-    [again] = [a for a in asks(api) if a["ref"] == kpi["id"]]
+    [again] = stale_asks(api)
     assert again["id"] != task["id"] and again["status"] == "open"
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "closed"

@@ -17,10 +17,12 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
    list only shrinks: a file leaves it once it is clean, a count only goes down, and no file is added to it.
 3. A strict .ts file carries no // @ts-nocheck or // @ts-ignore. // @ts-expect-error, with its reason, is allowed: it
    fails once the error it covers goes away.
-4. A file added since REF has no entry in ui/types-baseline.json or ui/lint-baseline.json. A new file has no findings;
+4. A file added since REF has no baseline file under ui/baselines/ (scripts/ui_baseline.py). A new file has no findings;
    it is not baselined.
 5. ui/tsconfig.strict.json keeps every strict flag on, and its include and exclude lists stay as they are: a loosened
    config would silently skip files.
+6. ui/index.html has a blank line between two <script src> tags. Two tags on adjacent lines conflict in a git merge
+   when two PRs each edit one of them, so each pair of tags keeps one line between them.
 
 Runs in about two seconds: one tsc pass over the UI. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
 """
@@ -33,10 +35,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import ui_baseline  # the per-file baseline paths and the script-tag rule, shared with the ratchets
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "ui/tsconfig.strict.json"
 LEGACY = "ui/strict-legacy.json"
-BASELINES = ("ui/types-baseline.json", "ui/lint-baseline.json")
 TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", CONFIG, "--pretty", "false"]
 TSC_LINE = re.compile(r"^(?P<file>[^()\n]+)\((?P<line>\d+),(?P<col>\d+)\): error (?P<code>TS\d+): (?P<msg>.*)$")
 TSC_GLOBAL = re.compile(r"^error (?P<code>TS\d+): (?P<msg>.*)$")
@@ -91,12 +94,13 @@ def fields(listing):
 
 
 def added_files(base):
-    """Files new since `base` (a pure add; a rename is a move, not a new file), plus files git does not know yet."""
+    """Files new since `base` (a pure add; a rename is a move, not a new file), plus files git does not know yet.
+    The baseline files are data about the UI, not UI code, so they are left out."""
     found = set()
     if base:
         found.update(fields(git("diff", "--name-only", "-z", "-M", "--diff-filter=A", base, "--", "ui").stdout))
     found.update(fields(git("ls-files", "--others", "--exclude-standard", "-z", "--", "ui").stdout))
-    return sorted(found)
+    return sorted(path for path in found if not path.startswith(ui_baseline.LAYOUT + "/"))
 
 
 def renames_since(base):
@@ -170,15 +174,10 @@ def check_new_files(new):
 
 
 def check_new_entries(new, legacy):
-    entries = set()
-    for rel in BASELINES:
-        path = ROOT / rel
-        if path.exists():
-            entries.update(json.loads(path.read_text(encoding="utf-8")).get("files", {}))
     problems = [
-        f"{rel} is new and has a baseline entry: a new file has no findings, so fix them instead of baselining"
+        f"{rel} is new and has a baseline file: a new file has no findings, so fix them instead of baselining"
         for rel in new
-        if rel in entries
+        if any(ui_baseline.baseline_path(tool, rel).is_file() for tool in ui_baseline.TOOLS)
     ]
     problems += [
         f"{rel} is new and on the legacy list: a file may not be added to {LEGACY}; make it strict"
@@ -186,6 +185,15 @@ def check_new_entries(new, legacy):
         if rel in legacy
     ]
     return problems
+
+
+def check_script_tags():
+    text = (ROOT / "ui/index.html").read_text(encoding="utf-8")
+    return [
+        f"ui/index.html:{number}: a <script src> directly after another; leave a blank line between them "
+        "(python3 scripts/ui_baseline.py migrate adds it)"
+        for number in ui_baseline.adjacent_script_lines(text)
+    ]
 
 
 def check_directives(legacy):
@@ -289,6 +297,7 @@ def main(argv=None):
     problems += check_new_entries(new, legacy)
     problems += check_strict(by_file, legacy, on_disk)
     problems += check_directives(legacy)
+    problems += check_script_tags()
     if args.base:
         problems += check_growth(legacy, args.base)
 

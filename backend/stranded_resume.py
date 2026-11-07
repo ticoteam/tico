@@ -7,7 +7,7 @@ work, and a bot whose profile does not pull its own work (a reviewer) never star
 
 Every SWEEP_MINUTES the scheduler calls `sweep`. A task is stranded when:
 - it is `doing`, owned by an active bot that is not paused, held or draining, whose computer was seen in the last few
-  minutes (check_pools.online), and which has no run queued or going;
+  minutes (check_pools.online), and which has no resume of its own queued or going;
 - the bot reads it (H.bot_reads_task), and it is not a roadmap item;
 - no job for it is queued, held, leased, running, waiting for input or uncertain, and no run is live on it;
 - nothing is recorded to wait on: no hold (a move to Blocked, a snooze, a task quarantine), no follow-up time, deferral
@@ -21,6 +21,10 @@ result it wakes a bot whatever its profile says about other news, a reviewer inc
 the task's history. One sweep wakes at most SWEEP_CAP tasks, oldest first, at most one per bot and PER_COMPUTER per
 computer, so a backlog drains over hours without crowding one computer.
 
+A resume still queued when its task moves on (a step, status or owner change, or progress by its owner) is dropped at
+claim like any other out-of-date keeper notice (obsolete_sql). A task that is still stranded gets a new one at a later
+sweep.
+
 Progress on a task is a status, step or owner change by anyone; a note, comment or other change its owner bot made; a
 message the bot wrote in its room (other than its reply to a resume); or a subtask filed under it. After
 NO_PROGRESS_LIMIT resumes in a row with no progress the task is not resumed again until something moves it: a
@@ -30,9 +34,11 @@ bot that reads the task, else the owner itself. A person is never told. A task r
 waits for the next day, whatever it did.
 """
 
+import json
 import sqlite3
 from typing import Any, cast
 
+from . import bot_settings as BS
 from . import hubdb
 
 # hubdb is untyped: each of its functions is partially unknown, and a cast cannot clear that on the attribute.
@@ -139,7 +145,9 @@ def act(c: sqlite3.Connection, task_id: str, at: str) -> str | None:
     if found is None:
         return None
     if found["stop"]:
-        H._task_event(c, task_id, H.KEEPER, STOPPED, None, hears(c, row), STOP_NOTE)
+        told = hears(c, row)
+        H._task_event(c, task_id, H.KEEPER, STOPPED, None, told, STOP_NOTE)
+        _nudge(c, row, told)
         return "stopped"
     if not _bot_ready(c, cast(str, H.actor_id(row["owner_id"]))):
         return None
@@ -160,6 +168,38 @@ def act(c: sqlite3.Connection, task_id: str, at: str) -> str | None:
         return None
     H._task_event(c, task_id, H.KEEPER, RESUMED, None, str(n), f"Automatic resume {n} of {NO_PROGRESS_LIMIT}")
     return "resumed"
+
+
+def _nudge(c: sqlite3.Connection, row: dict[str, Any], told: str) -> None:
+    """A stop that reaches a manager gives it one ticket to act on at once: the task, the builder that ran it
+    NO_PROGRESS_LIMIT times with no progress, and that it may reassign the task once, to someone other than that builder.
+    A stop that reaches the builder itself (no manager reads the task) makes no ticket."""
+    owner = row["owner_id"]
+    if not told or told == owner or not cast(bool, H.is_bot(told)):
+        return
+    slug = cast(str, H.actor_id(owner))
+    label = f"Ticket {row['number']}" if row["number"] else row["title"]
+    body = (
+        f"{row['title']}\n\nBuilder {slug} ran this task {NO_PROGRESS_LIMIT} times and it made no progress on any of them, "
+        "so Tico has stopped resuming it. You may reassign it once, to a builder other than "
+        f"{slug}, or take it yourself. Tico resumes it again only when something moves it."
+    )
+    try:
+        made = H.task_create(
+            c,
+            H.KEEPER,
+            f"{label}: builder {slug} made no progress in {NO_PROGRESS_LIMIT} runs"[:150],
+            body,
+            told,
+            deduplicate=False,
+            lint=False,
+        )
+        # needs_action makes the wake immediate. Without it a lead's catch-all digest row batches this notice (its job
+        # is held as a "rule" batch), and the manager reads the ticket only at the daily digest.
+        refs = {"wake": "nudge", "task": row["id"], "needs_action": True}
+        H._wake(c, H.task(c, made["id"]), told, body, refs, trigger="stall_check")
+    except H.Refused:
+        return
 
 
 def state(c: sqlite3.Connection, row: dict[str, Any], at: str) -> dict[str, Any] | None:
@@ -266,8 +306,12 @@ def hears(c: sqlite3.Connection, row: dict[str, Any]) -> str:
     """Who hears that resumes stopped: the owner's manager on the org chart when that is another active bot that reads
     the task, else the owner itself. Never a person."""
     owner = row["owner_id"]
-    found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (cast(str, H.actor_id(owner)),)).fetchone()
-    target: str = (found[0] if found else "") or ""
+    found = c.execute(
+        f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
+        (cast(str, H.actor_id(owner)),),
+    ).fetchone()
+    declared: dict[str, Any] = json.loads(found[1]) if found and found[1] else {}
+    target: str = cast(str, (found[0] if found else "") or declared.get("reports_to") or "")
     target = target if not target or cast(str | None, H.actor_kind(target)) else cast(str, H.bot_actor(target))
     if (
         target
@@ -305,6 +349,29 @@ def told(c: sqlite3.Connection, at: str) -> set[str]:
         )
         if r[0]
     }
+
+
+def obsolete_sql() -> str:
+    """The condition, for execution.obsolete_notices_sql (m: the notice's message, j: its queued job, t: its task), that
+    a queued stranded resume is out of date: its task is no longer in progress, its owner changed, or it moved on since
+    the notice was written by _progress's signal (a step, status or owner change, a note or message its owner wrote, a
+    subtask filed under it). The claim cancels it, as it cancels any other out-of-date keeper notice. A resume whose turn
+    already started is the rest of that turn, so it is never obsolete. Binds no parameters: the claim's queries bind
+    theirs by position."""
+    kinds = ",".join(f"'{kind}'" for kind in BOOKKEEPING)
+    return (
+        "json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 "
+        "AND NOT EXISTS (SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL) "
+        "AND (t.status<>'doing' OR t.owner_id<>'bot:'||j.bot_id "
+        "OR EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND e.created_at>m.created_at AND (e.kind IN ('status','step','owner') "
+        f"OR (e.actor_id=t.owner_id AND e.kind NOT IN ({kinds})))) "
+        "OR EXISTS (SELECT 1 FROM messages s WHERE s.conversation_id=t.conversation_id AND s.sender_id=t.owner_id "
+        "AND s.deleted_at IS NULL AND s.created_at>m.created_at "
+        f"AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.id=s.in_reply_to AND n.sender_id='{H.KEEPER}' "
+        "AND json_extract(n.refs,'$.stranded')=1)) "
+        "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at))"
+    )
 
 
 def _progress(c: sqlite3.Connection, row: dict[str, Any]) -> str:
@@ -346,8 +413,9 @@ def _live(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
 
 
 def _bot_ready(c: sqlite3.Connection, slug: str) -> bool:
-    """Whether the bot can take a resume now: online and not held (check_pools.online), not draining, and with no run of
-    its own queued or going (a busy bot gets its resume once that work is done)."""
+    """Whether the bot can take a resume now: online and not held (check_pools.online), not draining, and with no resume
+    of its own still queued or going. Its other work does not hold a resume back: the wake waits in line behind that
+    work, so a bot that is never idle still gets its resumes (one at a time)."""
     from . import check_pools as _check_pools
 
     check_pools: Any = _check_pools
@@ -358,8 +426,9 @@ def _bot_ready(c: sqlite3.Connection, slug: str) -> bool:
         return False
     return (
         c.execute(
-            f"SELECT 1 FROM jobs j WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {cast(str, H.unheld_sql())} "
-            "LIMIT 1",
+            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+            f"WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {cast(str, H.unheld_sql())} "
+            "AND json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 LIMIT 1",
             (slug,),
         ).fetchone()
         is None
