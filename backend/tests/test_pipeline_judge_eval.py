@@ -75,3 +75,78 @@ def test_no_gateway_key_means_no_engine_for_any_model_and_nothing_is_sent():
         assert adapter.build_engine(name, {}) is None
     with pytest.raises(ValueError):
         adapter.build_engine("anthropic-direct", {"TICO_GATEWAY_KEY": "x"})
+
+
+def _synthetic(n, expected="met"):
+    return [{"id": f"c{i}", "domain": "dev" if i % 2 else "marketing", "expected": expected} for i in range(n)]
+
+
+def _answering(answers, ms=5):
+    """A fake judge that answers each case id with a verdict (met, not_met or unsure) at the probability the bar maps back."""
+    p_of = {"met": 0.95, "not_met": 0.05, "unsure": 0.5}
+    return lambda case: (p_of[answers[case["id"]]], 0.0, ms)
+
+
+def test_the_bar_accuracy_gate_is_exactly_ninety_percent():
+    cases = _synthetic(10)
+    nine = {c["id"]: "met" for c in cases} | {"c9": "not_met"}
+    eight = nine | {"c8": "not_met"}
+    assert run.score("nine", _answering(nine), cases)["passes_bar"]
+    eight_result = run.score("eight", _answering(eight), cases)
+    assert not eight_result["passes_bar"]
+    assert any(f.startswith("accuracy 80%") for f in eight_result["bar_failures"])
+
+
+def test_the_bar_refuses_any_false_met_even_at_high_accuracy():
+    cases = _synthetic(10, expected="not_met")
+    answers = {c["id"]: "not_met" for c in cases} | {"c0": "met"}
+    result = run.score("one-false-met", _answering(answers), cases)
+    assert result["accuracy"] == 0.9 and result["false_met"] == 1 and not result["passes_bar"]
+    assert any("false met" in f for f in result["bar_failures"])
+
+
+def test_the_bar_p95_gate_is_under_thirty_seconds():
+    cases = _synthetic(10)
+    answers = {c["id"]: "met" for c in cases}
+    assert run.score("just-under", _answering(answers, ms=29_999), cases)["passes_bar"]
+    slow = run.score("at-limit", _answering(answers, ms=30_000), cases)
+    assert not slow["passes_bar"] and any("p95" in f for f in slow["bar_failures"])
+
+
+def test_the_bar_refuses_an_empty_case_set():
+    result = run.score("none", _answering({}), [])
+    assert not result["passes_bar"] and "no cases" in result["bar_failures"]
+
+
+def test_an_always_unsure_judge_fails_the_real_cases_on_accuracy():
+    cases = run.load()
+    result = run.score("always-unsure", lambda case: (0.5, 0.0, 5), cases)
+    assert not result["passes_bar"] and result["unsure_rate"] == 1.0
+    assert result["accuracy"] < run.ACCURACY_BAR
+
+
+def test_a_perfect_judge_that_takes_sixty_seconds_fails_the_real_cases():
+    cases = run.load()
+    perfect = {c["id"]: c["expected"] for c in cases}
+    assert run.score("perfect", _answering(perfect), cases)["passes_bar"]
+    slow = run.score("perfect-slow", _answering(perfect, ms=60_000), cases)
+    assert not slow["passes_bar"] and slow["accuracy"] == 1.0
+
+
+def test_a_run_with_a_skipped_model_is_incomplete_and_sends_nothing(monkeypatch, tmp_path, capsys):
+    built = []
+
+    def build(name, env=None):
+        built.append(name)
+        return None if name == "sonnet" else (lambda *a: (0.95, 0.0, 5))
+
+    monkeypatch.setattr(adapter, "build_engine", build)
+    assert run.main(["--models", "jev,sonnet", "--out", str(tmp_path)], env={}) == 2
+    assert "INCOMPLETE RUN" in capsys.readouterr().err and not list(tmp_path.iterdir())
+    assert built == ["jev", "sonnet"]
+
+
+def test_the_default_judges_all_go_through_the_gateway_key_only():
+    engines = {name: adapter.build_engine(name, {"TICO_GATEWAY_KEY": "k"}) for name in adapter.MODELS}
+    assert all(callable(engine) for engine in engines.values())
+    assert adapter.build_engine("jev", {"ANTHROPIC_API_KEY": "direct"}) is None
