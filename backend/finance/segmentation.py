@@ -1,6 +1,6 @@
 """Segments in Finance (spec: Money). The company's segments are market graph entities (backend/segments.py); this module
 says which segment a line counts toward, which columns a segment P&L shows, who is dedicated to a segment and who leads
-it. Teammate tags and leads come from backend/segments.py (provisional until track A lands them).
+it. Teammate tags and leads come from backend/segments.py.
 
 A line counts toward a segment in this order: its explicit `segment` tag; else the segment of the budget its spend
 counts against (the deepest budget that matches it, its parent's segment when it has none); else, for revenue, the
@@ -16,7 +16,6 @@ from typing import Any
 from .. import hubdb as H
 from .. import segments as SEG
 from .core.errors import FinanceError, NOT_FOUND
-from .store import tico as ST
 
 UNALLOCATED = "unallocated"  # the column for lines that count toward no segment
 TOTAL = "total"  # the column every line counts toward
@@ -103,20 +102,14 @@ def dedicated(c: sqlite3.Connection, actor: str) -> frozenset[str]:
 
 
 def lead_map(c: sqlite3.Connection) -> dict[str, frozenset[str]]:
-    """Which segments each actor leads: a teammate tagged with a segment leads it, unless their manager is tagged with it
-    too, so the manager leads and the people under them do not. The org chart is read once, and only when some segment
-    has a teammate tagged with it, so an install with no segment members reads nothing."""
+    """Which segments each actor leads, as the segment core decides it (backend/segments.py leads). Only the segments
+    somebody is tagged with are asked, so an install with no segment members reads no org chart."""
+    ours = SEG.ours_ids(c)
+    if not ours:
+        return {}
+    tagged = {r[0] for r in c.execute("SELECT DISTINCT segment_id FROM segment_members")}
     out: dict[str, set[str]] = {}
-    managers: Mapping[str, str] | None = None
-    for sid in sorted(SEG.ours_ids(c)):
-        refs = SEG.leads(c, sid)
-        if not refs:
-            continue
-        if managers is None:
-            managers = ST.org(c, "").reports_to
-        tagged = {actor_of(ref) for ref in refs}
-        for ref in refs:
-            actor = actor_of(ref)
-            if managers.get(actor, "") not in tagged:
-                out.setdefault(actor, set()).add(sid)
+    for sid in sorted(ours & tagged):
+        for ref in SEG.leads(c, sid):
+            out.setdefault(actor_of(ref), set()).add(sid)
     return {actor: frozenset(found) for actor, found in out.items()}
