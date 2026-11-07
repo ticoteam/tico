@@ -22,6 +22,8 @@ const FLUSH_MS = 2000;
 const SERVED = /^\/tico\/ui\/((?!app\.bundle)[^?#]+\.(?:js|ts))$/;
 // The files this hook measures when it is preloaded: a browser script, or the boot baseline.
 const MEASURED = /[\\/](?:ui[\\/]tests[\\/][^\\/]+\.cjs|scripts[\\/]ui-boot-baseline\.cjs)$/;
+// The boot baseline's record is named boot (scripts/ui_test_map.py reads coverage/boot.json), not after its file.
+const BOOT_SCRIPT = /[\\/]scripts[\\/]ui-boot-baseline\.cjs$/;
 
 // Adds one reading (the scripts of Profiler.takePreciseCoverage) to files: a Map from "ui/app/chat" to a Map from each
 // function's key to the calls it has had. A key is the function's source range, the same in every page of the file.
@@ -58,7 +60,8 @@ function record(name, files, pages, loads) {
 function install() {
   const folder = process.env.TICO_UI_COVERAGE;
   const {chromium} = require('playwright');
-  const name = path.basename(process.argv[1], '.cjs');
+  const script = path.resolve(process.argv[1]);
+  const name = BOOT_SCRIPT.test(script) ? 'boot' : path.basename(script, '.cjs');
   const files = new Map();
   const pages = new Map(); // page -> {session, ready, queue}
   let attached = 0;
