@@ -321,12 +321,11 @@ declare var DocsEditor: DocsEditorApi;
       <p class="err" data-error role="alert" hidden></p>
       <div class="gs-card-actions"><button class="primary" type="submit">Start research</button>
         <button class="ghost" type="button" data-close>Cancel</button></div></form>`, {label: 'Research'});
-    const form = drawn(box.querySelector<DocsResearchForm>('form'), 'the research form');
+    const form = drawn(box.querySelector<DocsResearchForm>('form'), 'the research form'), line = box.querySelector<HTMLElement>('[data-error]')!; // `!`: drawn above
     form.elements.instructions.focus();
     form.onsubmit = async event => {
       event.preventDefault();
       const instructions = form.elements.instructions.value.trim();
-      const line = drawn(box.querySelector<HTMLElement>('[data-error]'), 'the error line');
       if (!instructions) { line.textContent = 'Say what to find.'; line.hidden = false; return; }
       const submit = drawn(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button');
       submit.disabled = true; line.hidden = true;
