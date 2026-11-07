@@ -826,15 +826,19 @@ class Lead(Bot):
             # settles its own ticket about the stop, the one Tico made for it ("<title>: builder ... made no progress in
             # ..."), as it closes its sweep ticket: done, with what it did.
             told = self.reassign_once(refs["task"])
+            # Tico's ticket about the stop is not a Dev ticket, so it is found by its title (tickets() lists Dev tickets only).
             stopped = next((t for t in self.world.tickets() if t["id"] == refs["task"]), None)
-            for nudge in self.world.tickets() if stopped else []:
-                if (
-                    nudge["owner_id"] == "bot:" + self.slug
-                    and nudge["status"] not in FINISHED
-                    and nudge["title"].startswith(stopped["title"] + ":")
-                    and "made no progress in" in nudge["title"]
-                ):
-                    self.world.update(nudge["id"], token=self.token, status="done", note=told)
+            notes = (
+                self.world.sql(
+                    "SELECT id,title,status FROM tasks WHERE owner_id=? AND title LIKE ?",
+                    ("bot:" + self.slug, stopped["title"] + ":%"),
+                )
+                if stopped
+                else []
+            )
+            for note in notes:
+                if note["status"] not in FINISHED and "made no progress in" in note["title"]:
+                    self.world.update(note["id"], token=self.token, status="done", note=told)
             return told
         if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
             self.world.post(

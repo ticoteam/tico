@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 from evals.factory.board import dev_board
-from evals.factory.scenarios import STUCK_HOURS, Scenario, standard, tickets
+from evals.factory.scenarios import REPORT, STUCK_HOURS, Scenario, standard, tickets
 
 GAP = "#2875"
 
@@ -170,6 +170,24 @@ def stop_nudged(run):
     )
 
 
+def stop_no_manager(run):
+    """A stop whose owner has no manager to tell: the stop is told to the owner itself, so nobody else hears of it and
+    nothing moves the task until something does. A product gap, reported here for a person to read and never failed:
+    the board's owner is the target (#2917's product follow-ups)."""
+    from backend import hubdb as H
+    from backend import stranded_resume as SR
+
+    listed = []
+    with run.w.store.read() as c:
+        for task_id, told in c.execute(
+            "SELECT subject_id, new FROM history_events WHERE subject_type='task' AND kind=?", (SR.STOPPED,)
+        ).fetchall():
+            row = H.task(c, task_id)
+            if row is not None and told == row["owner_id"]:
+                listed.append(run.w.title(task_id))
+    return True, f"{len(listed)} stops told to their own owner (no manager): " + ", ".join(listed[:6])
+
+
 SCENARIOS = [
     Scenario(
         "stranded_doing",
@@ -181,6 +199,7 @@ SCENARIOS = [
             ("every ticket a turn left in progress is picked up within the late hours", GAP, stranded_resumed),
             ("a stop of resumes is told to the owner's manager", "the manager nudge", stop_told_manager),
             ("a stop of resumes gives its manager a ticket at once", "the manager nudge", stop_nudged),
+            ("a stop whose owner has no manager is listed (a product gap, never failed)", REPORT, stop_no_manager),
         ),
     ),
 ]
