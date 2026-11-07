@@ -152,4 +152,6 @@ def test_a_merge_proposes_a_moved_size_the_target_already_has_accepted(api):
     status = {e["id"]: e["status"] for e in estimates}
     assert status[moved["id"]] == "proposed"
     assert status[kept["id"]] == "accepted"
-    assert status[buyers["id"]] == "accepted"
+    buyer_view = get(api, "market/spend?dimension=buyer")["segments"]
+    buyer_estimates = next(s for s in buyer_view if s["id"] == second)["estimates"]
+    assert {e["id"]: e["status"] for e in buyer_estimates}[buyers["id"]] == "accepted"

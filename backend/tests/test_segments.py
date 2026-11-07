@@ -168,7 +168,7 @@ def test_a_bet_names_one_of_the_companys_segments_or_none(api):
     assert cleared["segment_id"] is None
 
 
-def test_teammates_are_tagged_with_the_companys_segments_by_the_owner_or_a_bot_admin(api):
+def test_teammates_are_tagged_with_the_companys_segments_by_the_owner_only(api):
     first, second, _ = defined(api)
     segment(api, "Screening")
     _, _, bot = setup_attempt(api, "ops")
@@ -177,7 +177,8 @@ def test_teammates_are_tagged_with_the_companys_segments_by_the_owner_or_a_bot_a
     post(api, "segments/members", {"member": "bot:ops", "segments": [first, "all"]}, expected=422)  # all stands alone
     tagged = post(api, "segments/members", {"member": "bot:ops", "segments": [first]})
     assert tagged == {"member": "bot:ops", "segments": [first]}
-    post(api, "segments/members", {"member": "person:cara", "segments": [first]}, token="ben-test")
+    post(api, "segments/members", {"member": "person:cara", "segments": [first]}, token="ben-test", expected=403)
+    post(api, "segments/members", {"member": "person:cara", "segments": [first]})
     post(api, "segments/members", {"member": "person:cara", "segments": [first]}, token="cara-test", expected=403)
     post(api, "segments/members", {"member": "bot:ops", "segments": []}, token=bot["token"], expected=403)
     listed = get(api, "segments/members")
@@ -620,7 +621,11 @@ def test_a_segment_strategy_write_names_the_draft_revision_it_read(api):
     first, _, _ = defined(api)
     segment(api, "Screening")
     put(api, "segments/strategy", {"id": first, "sections": {"serve": "Landlords with 1-20 units."}}, expected=422)
-    assert write_segment(api, first, {"serve": "Landlords with 1-20 units."})["strategy"]["id"] == first
+    read = draft_revision(api)
+    out = write_segment(api, first, {"serve": "Landlords with 1-20 units."}, revision=read)
+    assert out["strategy"]["revision"] == read + 1
+    assert [f["text"] for f in out["strategy"]["fields"] if f["key"] == "serve"] == ["Landlords with 1-20 units."]
+    write_segment(api, first, {"serve": "Stale."}, revision=read, expected=409)
 
 
 def test_a_merge_moves_the_latest_published_text_of_a_segment_too(api):
