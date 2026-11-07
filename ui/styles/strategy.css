@@ -80,14 +80,12 @@
 .strat-card-head,.strat-sec-head{display:flex;align-items:center;gap:8px;min-height:24px;margin:0}
 .strat-card-head .strat-k,.strat-sec-head .strat-k{margin:0}
 .strat-card-head .strat-add{margin-left:auto}
-.strat-hint{margin-left:auto;color:var(--muted);font-size:var(--t-xs)}
 .strat-row{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
 @media (min-width:1100px){.strat-row{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}}
 .strat-secs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
 .strat-secs:empty{display:none}
 .strat-add-sec:empty{display:none}
 .strat-none-s{margin:0;color:var(--muted);font-size:var(--t-base)}
-.strat-cap{margin:0;color:var(--muted);font-size:var(--t-sm)}
 /* Text that is its own field: a border on hover and focus. */
 .strat-ed{display:block;width:calc(100% + 12px);margin:-3px -6px;padding:3px 6px;resize:none;overflow:hidden;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:var(--lh)}
 .strat-ed:hover{border-color:var(--line)}
@@ -100,7 +98,7 @@
 .strat-x svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .strat-x:hover{background:var(--fail-bg);color:var(--fail)}
 .strat-x:focus-visible{opacity:1}
-:is(.strat-bets-card .strat-bet,.strat-chip,.strat-tm):hover .strat-x,:is(.strat-bets-card .strat-bet,.strat-chip):focus-within .strat-x{opacity:1}
+:is(.strat-bets-card .strat-bet,.strat-chip):hover .strat-x,:is(.strat-bets-card .strat-bet,.strat-chip):focus-within .strat-x{opacity:1}
 @media (hover:none){.strat-x{opacity:1}}
 .strat-add{flex:none;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;line-height:var(--lh-tight);cursor:pointer;white-space:nowrap}
 .strat-add:hover{border-color:var(--muted);color:var(--ink)}
@@ -130,28 +128,6 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-retired-list{list-style:none;margin:0;padding:0}
 .strat-retired-list li{display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line);color:var(--g7);font-size:var(--t-base)}
 .strat-retired-list li>span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
-
-/* Where we play: a treemap, each tile a button that cycles Us, Next, neither. */
-.strat-map{position:relative;aspect-ratio:2/1;width:100%;border-radius:6px;overflow:hidden}
-.strat-tm,.strat-tm-group{position:absolute;box-sizing:border-box}
-.strat-tm{display:block;padding:5px 7px;border:2px solid var(--surface);border-radius:5px;background:var(--surface2);color:var(--g7);font-size:var(--t-xs);line-height:var(--lh-tight);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.strat-tm b{font-weight:600;color:var(--ink)}
-.strat-tm span{color:var(--muted)}
-.strat-tm em{margin-right:6px;font-style:normal;font-weight:700}
-.strat-tm.ours{background:var(--accent);color:var(--accent-ink)}
-.strat-tm.ours :is(b,span){color:var(--accent-ink)}
-.strat-tm.next{background:var(--surface);border:2px dashed var(--accent);color:var(--accent)}
-.strat-tm.next b{color:var(--accent)}
-.strat-tm-group{z-index:1;border:1.5px solid var(--g5);border-radius:6px;pointer-events:none}
-.strat-tm.pick{cursor:pointer;padding-right:22px}
-.strat-tm.pick:hover{border-color:var(--g5)}
-.strat-tm.pick:focus-visible{outline:var(--focus-ring);outline-offset:-2px}
-.strat-tm .strat-x{position:absolute;top:2px;right:2px;width:18px;height:18px;color:inherit}
-.strat-tm-plain{display:flex;flex-wrap:wrap;gap:4px}
-.strat-tm-plain .strat-tm{position:relative;border:1px solid var(--line);padding:5px 8px;max-width:100%}
-.strat-tm-plain .strat-tm.pick{padding-right:24px}
-.strat-tm-plain .strat-tm.ours{border-color:var(--accent)}
-.strat-tm-plain .strat-tm.next{border:1px dashed var(--accent)}
 
 /* Competitors: chips that link out. */
 .strat-chips{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:0;padding:0}
@@ -216,7 +192,6 @@ button.strat-pill:hover{filter:brightness(1.1)}
   .strat-wrong-by{max-width:none}
   .strat-ed,.strat-addrow input{font-size:16px}
   .strat-memo section.card.strat-card{padding:12px}
-  .strat-map{aspect-ratio:1.4/1}
   .strat-addrow input{height:40px}
   .strat-add{padding:6px 12px}
 }

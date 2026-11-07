@@ -1,13 +1,13 @@
 /* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
-   then Where we play beside the bets, the competitors beside related news, then seven fixed sections and any the owner
-   adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
-   published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
+   then the segment list (ui/app/segment-pages.ts), the bets, the competitors beside related news, then seven fixed sections
+   and any the owner adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else
+   reads the latest published version. Competitors are the market graph's own rows (backend/strategy_market.py), and
    Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
    other tabs. */
 'use strict';
 let STRAT = null;          // the open page: {data, kpis, load, adding, editSection, addSection, publishing}
 let STRAT_LOAD = 0;
-// The market cards' reads, each undefined while it loads and null when it could not be read: {spend, rivals, news}.
+// The market cards' reads, each undefined while it loads and null when it could not be read: {segments, rivals, news, growth}.
 let STRAT_MKT = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
@@ -60,7 +60,7 @@ window.pageStrategy = async function pageStrategy() {
     if (row) { row.scrollIntoView({block: 'center'}); row.classList.add('strat-flash'); }
   };
   if (kept) open(kept.data);
-  for (const key of ['spend', 'rivals', 'news', 'growth']) void strategyMarketRead(key, load);
+  for (const key of ['segments', 'rivals', 'news', 'growth']) void strategyMarketRead(key, load);
   let data;
   try { data = await get('/v2/strategy'); }
   catch (error) {
@@ -121,7 +121,9 @@ function strategyPublishRefusal(data, view) {
   return '';
 }
 
-// Whether the draft says anything the latest published version does not: its words, its sections, or its bets.
+// Whether the draft says anything the latest published version does not: its words, its sections, or its bets. A
+// segment's own text (sections.segments) is not compared: Publish is for the company's words, and a segment's change
+// is live in the draft as it is written.
 function strategyDiffers(data) {
   const a = data.draft, b = data.current;
   if (!b) return !strategyBlank(a, data.bets || []);
@@ -297,51 +299,13 @@ function strategyRetiredHtml(view) {
         <button type="button" class="ghost strat-mini" data-bet-restore>Restore</button></li>`).join('')}</ul></details>`;
 }
 
-// ---------------------------------------------------------------- Where we play
-// The market's segments by spend (GET /v2/market/spend), a sized segment inside its sized parent, the rest as plain
-// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither. Several may be Us or Next.
+// ---------------------------------------------------------------- the add rows
+// A one-field add row (a competitor): the name, and Add.
 function strategyAddRowHtml(kind, placeholder) {
   return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
       <button type="submit" class="strat-add">Add</button></form>`;
 }
 const stratSk = () => skelRows(3, {dot: false});
-function strategyWhereHtml(owner) {
-  const spend = STRAT_MKT.spend;
-  const segs = spend?.segments || [];
-  const hint = owner && segs.length ? '<span class="strat-hint">Click to target</span>' : '';
-  const head = `<div class="strat-card-head"><h2 class="strat-k">Where we play</h2>${hint}</div>`;
-  if (spend === undefined) return head + stratSk();
-  const add = owner ? strategyAddRowHtml('seg', 'Add a segment') : '';
-  if (!segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
-  const {drawn} = mktTree(spend);
-  const W = 200, H = 100, shown = new Set();
-  const pos = r => `left:${(r.x / W * 100).toFixed(3)}%;top:${(r.y / H * 100).toFixed(3)}%;width:${(r.w / W * 100).toFixed(3)}%;height:${(r.h / H * 100).toFixed(3)}%`;
-  const tile = (seg, r, value) => {
-    shown.add(seg.id);
-    const mark = seg.self ? 'Us' : seg.next ? 'Next' : '';
-    const title = `${seg.name}${value ? `: ${mktMoney(value)} a year, an estimate` : ''}`;
-    return `<div class="strat-tm${seg.self ? ' ours' : seg.next ? ' next' : ''}${owner ? ' pick' : ''}" data-seg="${esc(seg.id)}"${r ? ` style="${pos(r)}"` : ''}${owner
-      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}<b>${esc(seg.name)}</b>${value ? ` <span>${mktMoney(value)}</span>` : ''}${owner
-      ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button>` : ''}</div>`;
-  };
-  // One sized segment is not a map: then every segment is a plain tile.
-  const mapped = drawn.length >= 2 ? drawn : [];
-  const tiles = mktSquarify(mapped.map(g => ({g, value: g.value})), 0, 0, W, H).map(r => {
-    const g = r.g;
-    if (!g.kids.length) return tile(g.seg, r, g.value);
-    // The parent's own share holds its name and whole size; its sized parts sit under it, inside it, as full-width bands.
-    const sum = g.kids.reduce((a, k) => a + k.value, 0), own = g.value - sum;
-    const bands = [...(own > 0 ? [{seg: g.seg, value: own, whole: g.value}] : []), ...g.kids.slice().sort((a, b) => b.value - a.value)];
-    const total = bands.reduce((a, b) => a + b.value, 0);
-    let y = r.y;
-    const inner = bands.map(b => { const h = b.value / total * r.h, out = tile(b.seg, {x: r.x, y, w: r.w, h}, b.whole || b.value); y += h; return out; }).join('');
-    return `<div class="strat-tm-group" style="${pos(r)}"></div>${inner}`;
-  }).join('');
-  const plain = segs.filter(s => !shown.has(s.id));
-  const total = Number(spend.total?.spend_usd) || 0;
-  return `${head}${tiles ? `<div class="strat-map">${tiles}</div>` : ''}${plain.length ? `<div class="strat-tm-plain">${plain.map(s => tile(s, null, mapped.length ? 0 : Number(s.rolled_usd?.spend_usd) || 0)).join('')}</div>` : ''}
-    ${tiles && total ? `<p class="strat-cap">About ${mktMoney(total)} a year</p>` : ''}${add}`;
-}
 
 // ---------------------------------------------------------------- Competitors and Related news
 function strategyRivalsHtml(owner) {
@@ -382,7 +346,7 @@ async function strategyMarketRead(key, load, fresh = false) {
   const opts = fresh ? {fresh: true} : undefined;
   let value = null;
   try {
-    if (key === 'spend') value = await get('/v2/market/spend', opts);
+    if (key === 'segments') value = (await get('/v2/segments', opts))?.segments || [];
     else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
     else if (key === 'growth') {
       // The Brand strip (ui/app/brand-page.js).
@@ -408,10 +372,15 @@ function strategyPaintMarket(key) {
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
     return;
   }
-  const box = {spend: '#strat-where', rivals: '#strat-rivals', news: '#strat-news'}[key];
+  if (key === 'segments') {
+    const el = $('#strat-segs');
+    if (el) segmentListPaint(el, STRAT_MKT.segments, owner, () => void strategyMarketRead('segments', STRAT_LOAD, true));
+    return;
+  }
+  const box = {rivals: '#strat-rivals', news: '#strat-news'}[key];
   const el = $(box);
   if (!el) return;
-  patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
+  patchHTML(el, key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());
 }
 
 // ---------------------------------------------------------------- the sections
@@ -454,7 +423,8 @@ function strategySectionsHtml(view) {
 const STRAT_FRAME = `<div id="strat-pub"></div>
   <div class="strat-memo" id="strat-doc">
     <section class="card strat-card strat-top strat-summary" id="strat-top"></section>
-    <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
+    <section class="card strat-card strat-segs" id="strat-segs"></section>
+    <section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section>
     <div class="strat-setup" id="strat-setup"></div>
     <div class="strat-brand" id="strat-brand"></div>
     <div class="strat-row"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div>
@@ -485,7 +455,7 @@ function strategyRender() {
   const ol = $('#strat-bets-ol');
   patchHTML(ol, strategyBetRowsHtml(data, view));
   if (!ol.children.length) patchHTML(ol, `<li class="strat-bet strat-none-row"><span class="muted strat-empty">None yet</span></li>`);
-  for (const k of ['spend', 'rivals', 'news', 'growth']) strategyPaintMarket(k);
+  for (const k of ['segments', 'rivals', 'news', 'growth']) strategyPaintMarket(k);
   patchHTML($('#strat-secs'), strategySectionsHtml(view));
   patchHTML($('#strat-add-sec'), view.owner && !STRAT.addSection ? '<button class="ghost strat-mini" type="button" data-section-add>Add a section</button>' : '');
   for (const [k, value] of typed) {
@@ -744,47 +714,8 @@ async function strategyReorder(state, order) {
 // ---------------------------------------------------------------- the market cards' writes
 // Each change draws at once and then saves; a refused one reads its card again.
 function strategyBindMarket(state, body) {
-  const spend = () => STRAT_MKT.spend;
   const again = key => strategyMarketRead(key, STRAT_LOAD, true);
   const failed = (key, error) => { toast(error?.message || 'Could not save', true); void again(key); };
-  const where = body.querySelector('#strat-where');
-  if (where) {
-    const cycle = tile => {
-      const seg = (spend()?.segments || []).find(s => s.id === tile.dataset.seg);
-      if (!seg) return;
-      // Us or none: one flag. A segment the company meant to enter next is one of its own now, so there is no Next here.
-      const to = seg.self ? 'none' : 'ours';
-      seg.self = to === 'ours'; seg.next = false;
-      strategyPaintMarket('spend');
-      $(`#strat-where [data-seg="${CSS.escape(seg.id)}"]`)?.focus();
-      post('/v2/market/segments/target', {id: seg.id, target: to}).catch(error => failed('spend', error));
-    };
-    where.onclick = ev => {
-      if (!STRAT || STRAT !== state) return;
-      const x = ev.target.closest('[data-seg-x]'), tile = ev.target.closest('[data-seg]');
-      if (x && tile) {
-        const id = tile.dataset.seg, all = spend()?.segments || [], seg = all.find(s => s.id === id);
-        if (!seg) return;
-        if (seg.self) {
-          // One of the company's: it stops being one (the segments remove route), and the market keeps it, so the tile stays.
-          post('/v2/segments/remove', {id}).then(() => again('spend')).catch(error => failed('spend', error));
-          return;
-        }
-        // Not the company's: the market's cleanup retires it, and its sub-segments move up to its parent, as the server does.
-        spend().segments = all.filter(s => s !== seg).map(s => (s.parent === id ? {...s, parent: seg.parent, depth: Math.max(1, (s.depth || 2) - 1)} : s));
-        strategyPaintMarket('spend');
-        post('/v2/market/segments/remove', {id}).then(() => again('spend')).catch(error => failed('spend', error));
-        return;
-      }
-      if (tile) cycle(tile);
-    };
-    where.onkeydown = ev => {
-      const tile = ev.target.closest?.('[data-seg]');
-      if (!tile || ev.target !== tile || (ev.key !== 'Enter' && ev.key !== ' ')) return;
-      ev.preventDefault();
-      cycle(tile);
-    };
-  }
   const rivals = body.querySelector('#strat-rivals');
   if (rivals) rivals.onclick = ev => {
     const x = ev.target.closest('[data-rival-x]'), chip = x?.closest('[data-rival]');
@@ -794,33 +725,26 @@ function strategyBindMarket(state, body) {
     strategyPaintMarket('rivals');
     post('/v2/market/competitors/remove', {id}).catch(error => failed('rivals', error));
   };
-  // The add rows sit in cards that are patched; a submit is caught on the card.
-  for (const [box, kind] of [['#strat-where', 'seg'], ['#strat-rivals', 'rival']]) {
-    const card = body.querySelector(box);
-    if (card) card.onsubmit = async ev => {
-      const f = ev.target.closest(`[data-add="${kind}"]`);
-      if (!f) return;
-      ev.preventDefault();
-      const name = f.elements.name.value.replace(/\s+/g, ' ').trim();
-      if (!name) { f.elements.name.focus(); return; }
-      f.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
-      try {
-        if (kind === 'seg') {
-          if (!spend()?.definition) await put('/v2/market/definition', {root_name: `${companyName() || 'Our'} market`});
-          await post('/v2/market/segments', {name});
-        } else await post('/v2/market/competitors', {name});
-      } catch (error) {
-        toast(error?.status === 409 ? 'Already there' : error?.message || 'Could not add it', error?.status !== 409);
-        f.querySelectorAll('input, button').forEach(el => { el.disabled = false; });
-        f.elements.name.focus();
-        return;
-      }
-      await again(kind === 'seg' ? 'spend' : 'rivals');
-      // The row may be the same node as before (its markup did not change): emptied and on again, for the next one.
-      const row = $(`${box} [data-add="${kind}"]`);
-      if (row) { row.querySelectorAll('input, button').forEach(el => { el.disabled = false; }); row.elements.name.value = ''; row.elements.name.focus(); }
-    };
-  }
+  // The add row sits in a card that is patched; a submit is caught on the card.
+  if (rivals) rivals.onsubmit = async ev => {
+    const f = ev.target.closest('[data-add="rival"]');
+    if (!f) return;
+    ev.preventDefault();
+    const name = f.elements.name.value.replace(/\s+/g, ' ').trim();
+    if (!name) { f.elements.name.focus(); return; }
+    f.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
+    try { await post('/v2/market/competitors', {name}); }
+    catch (error) {
+      toast(error?.status === 409 ? 'Already there' : error?.message || 'Could not add it', error?.status !== 409);
+      f.querySelectorAll('input, button').forEach(el => { el.disabled = false; });
+      f.elements.name.focus();
+      return;
+    }
+    await again('rivals');
+    // The row may be the same node as before (its markup did not change): emptied and on again, for the next one.
+    const row = $('#strat-rivals [data-add="rival"]');
+    if (row) { row.querySelectorAll('input, button').forEach(el => { el.disabled = false; }); row.elements.name.value = ''; row.elements.name.focus(); }
+  };
 }
 
 // ---------------------------------------------------------------- versions

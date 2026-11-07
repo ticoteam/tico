@@ -1,0 +1,87 @@
+/* ui/styles/segment-pages.css — Segments in the Strategy section (ui/app/segment-pages.ts): the segment list on the Strategy
+   page (ui/strategy-page.js), the segment page at #/strategy/segment/<id>, and the Market tab's compare view and chips.
+   The cascade runs in the order index.html links these files; keep rules in order. */
+
+/* A segment's colour is one of the app's tokens: the eight names map to the status and Market hues, and teal is the
+   midpoint of blue and green. The Market hues are on the root (ui/styles/market-spend.css). */
+.seg-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none;background:var(--idle)}
+.seg-dot[data-seg-color="blue"]{background:var(--run)}
+.seg-dot[data-seg-color="green"]{background:var(--ok)}
+.seg-dot[data-seg-color="amber"]{background:var(--wait)}
+.seg-dot[data-seg-color="red"]{background:var(--fail)}
+.seg-dot[data-seg-color="purple"]{background:var(--mkt-c2)}
+.seg-dot[data-seg-color="teal"]{background:color-mix(in srgb,var(--run),var(--ok))}
+.seg-dot[data-seg-color="pink"]{background:var(--mkt-c5)}
+.seg-dot[data-seg-color="gray"]{background:var(--idle)}
+
+/* The list: one row a segment, its dot, name and who, its faces, and the row's actions on hover (always, on touch). */
+.seg-list{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.seg-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 6px;border-radius:8px;position:relative}
+.seg-row:hover,.seg-row:focus-within{background:var(--surface2)}
+.seg-main{flex:1;min-width:0;display:flex;flex-direction:column;color:var(--ink);text-decoration:none}
+.seg-main b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg-who{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg-faces{display:inline-flex;align-items:center;flex:none}
+.seg-face{display:inline-flex;margin-left:-6px}
+.seg-face:first-child{margin-left:0}
+.seg-face>*{box-shadow:0 0 0 2px var(--surface)}
+.seg-more{margin-left:6px;color:var(--muted);font-size:12px}
+.seg-acts{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
+.seg-row:hover .seg-acts,.seg-row:focus-within .seg-acts,.seg-editing .seg-acts{opacity:1}
+@media (hover:none){.seg-acts{opacity:1}}
+.seg-act{width:30px;height:30px;display:inline-grid;place-items:center;border:0;background:none;color:var(--muted);border-radius:6px;cursor:pointer;font:inherit;font-size:16px;line-height:1}
+.seg-act:hover,.seg-act:focus-visible{color:var(--ink);background:var(--surface)}
+.seg-act svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.seg-more-wrap{position:relative}
+.seg-menu{position:absolute;right:0;top:100%;z-index:5;display:grid;min-width:150px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 16%,transparent)}
+.seg-menu[hidden]{display:none}
+.seg-menu button{background:none;border:0;text-align:left;padding:8px 10px;border-radius:6px;color:var(--ink);cursor:pointer;font:inherit}
+.seg-menu button:hover:not(:disabled),.seg-menu button:focus-visible{background:var(--surface2)}
+.seg-menu button:disabled{color:var(--muted);cursor:default}
+.seg-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%}
+.seg-form input[type="text"]{flex:1 1 160px;min-width:0}
+.seg-form-acts{display:flex;gap:6px}
+.seg-new{padding:6px 0}
+.seg-editing{align-items:flex-start;background:var(--surface2)}
+
+/* The segment page: one scroll. The header, the strategy fields, the bets, then the segment's market. */
+.seg-page{display:flex;flex-direction:column;gap:14px;max-width:920px;margin:0 auto;padding:18px 16px 40px;min-width:0;width:100%;box-sizing:border-box}
+.seg-head{display:grid;gap:6px}
+.seg-title{display:flex;align-items:center;gap:10px;min-width:0}
+.seg-title h2{margin:0;font-size:24px;overflow-wrap:anywhere}
+.seg-who-l{margin:0;color:var(--muted)}
+.seg-meta{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.seg-links{display:flex;flex-wrap:wrap;gap:6px}
+.seg-links a{padding:5px 11px;border:1px solid var(--line);border-radius:999px;color:var(--ink);text-decoration:none;font-size:13px;white-space:nowrap}
+.seg-links a:hover{background:var(--surface2)}
+.seg-field{padding:12px 0;border-top:1px solid var(--line)}
+.seg-field:first-of-type{border-top:0;padding-top:0}
+.seg-field-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.seg-field-h h3{margin:0}
+.seg-from{font-size:12px;color:var(--muted)}
+.seg-from.own{color:var(--ink)}
+.seg-company{color:var(--muted)}
+.seg-ed-form textarea{width:100%;box-sizing:border-box}
+.seg-bet-list{margin:0;padding:0 0 0 18px;display:grid;gap:8px}
+.seg-bet-list li{display:flex;align-items:flex-start;gap:10px;justify-content:space-between}
+.seg-bet-list a{color:var(--ink);text-decoration:none;min-width:0;overflow-wrap:anywhere}
+.seg-mkt-host{padding:0;overflow:visible;flex:none;background:none}
+.seg-mkt-host .mkt-pg{padding:0}
+
+/* The Market tab's segment chips: one row that scrolls sideways, never wraps. */
+.seg-chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0 10px;margin:0}
+.seg-chips::-webkit-scrollbar{display:none}
+.seg-chip{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 12px;border:1px solid var(--line);border-radius:999px;color:var(--ink);text-decoration:none;font-size:14px;flex:none}
+.seg-chip:hover{background:var(--surface2)}
+.seg-chip.cur{background:var(--surface2);border-color:var(--ink);font-weight:600}
+.seg-cmp td,.seg-cmp th{white-space:nowrap}
+.seg-name{display:inline-flex;align-items:center;gap:8px;color:var(--ink);text-decoration:none;font-weight:600}
+.seg-tag{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap;margin-right:8px}
+.seg-money{margin-bottom:8px}
+
+@media (max-width:760px){
+  .seg-opt{display:none}
+  .seg-acts{opacity:1}
+  .seg-page{padding:14px 16px 40px}
+  .seg-title h2{font-size:20px}
+}
