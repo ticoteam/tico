@@ -162,7 +162,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
   // The task's own model sits beside the task in the detail (GET /v2/tasks/{id} `run_model`), as its children do, with
   // whether this reader may set it (`can_set_run_model`).
-  const full = {...detail.task, children: detail.children || [], ...('run_model' in detail
+  const full = {...detail.task, children: detail.children || [], parent: detail.parent || null, ...('run_model' in detail
     ? {run_model: detail.run_model, can_set_run_model: detail.can_set_run_model} : {})};
   // the redraw keeps the focus where it was (a header button, the title, a property)
   const a = d.contains(document.activeElement) ? document.activeElement : null;

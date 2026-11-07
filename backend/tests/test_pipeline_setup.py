@@ -40,9 +40,14 @@ def test_setup_makes_the_factories_pipelines_links_and_goals(tmp_path):
     assert [
         s["name"]
         for s in rows(c, "SELECT name FROM task_steps WHERE type_id=? ORDER BY position", by_name["Sales"]["id"])
-    ] == ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost"]
-    won = step_id(c, by_name["Sales"]["id"], "Won")
-    assert L.link_for_stage(c, won)["to_pipeline_id"] == by_name["Success"]["id"]
+    ] == ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost", "Closed"]  # the Closed stage holds closed cards
+    # Leads and customers live in the CRM, so no revenue link crosses Marketing, Sales and Success (only Product spawns).
+    crossed = rows(
+        c,
+        "SELECT f.name AS f, t.name AS t FROM pipeline_links l JOIN task_types f ON f.id = l.from_pipeline_id "
+        "JOIN task_types t ON t.id = l.to_pipeline_id WHERE l.retired_at IS NULL",
+    )
+    assert [(r["f"], r["t"]) for r in crossed] == [("Product", "Engineering")]
     assert all(by_name[n]["manager"] is None for n in out["pipelines"] if n not in ("Product", "Engineering"))
 
 
@@ -58,7 +63,10 @@ def test_a_second_run_changes_nothing(tmp_path):
 def test_existing_dev_and_product_types_are_renamed_not_duplicated(tmp_path):
     c = fresh(tmp_path)
     before = {r["id"]: r for r in rows(c, "SELECT id, name, role FROM task_types WHERE role IS NOT NULL")}
-    steps = rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap') ORDER BY id")
+    steps = {
+        r["id"]: r["name"]
+        for r in rows(c, "SELECT id, name FROM task_steps WHERE type_id IN ('engineering','product-roadmap')")
+    }
     out = S.apply_factory_setup(c, ANA)
     assert out["pipelines"]["Engineering"] == "engineering" and out["pipelines"]["Product"] == "product-roadmap"
     assert {r["id"]: r["name"] for r in rows(c, "SELECT id, name FROM task_types WHERE role IS NOT NULL")} == {
@@ -66,7 +74,9 @@ def test_existing_dev_and_product_types_are_renamed_not_duplicated(tmp_path):
         "product-roadmap": "Product",
     }
     assert before["engineering"]["role"] == "engineering"
-    assert rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap') ORDER BY id") == steps
+    after = {r["id"] for r in rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap')")}
+    # Stages are renamed in place, never recreated; only the retired Approved stage goes.
+    assert {i for i, name in steps.items() if name != "Approved"} <= after
     assert len(rows(c, "SELECT id FROM task_types WHERE name='Engineering'")) == 1
 
 
@@ -80,7 +90,7 @@ def test_a_manager_bot_with_a_matching_name_is_set_and_no_other(tmp_path):
     assert managers["Sales"] == "sales-manager" and managers["Marketing"] is None
 
 
-def test_replace_clears_open_cards_only_when_asked(tmp_path):
+def test_replace_moves_an_open_card_on_a_removed_stage_to_the_first_stage_and_keeps_it_open(tmp_path):
     c = fresh(tmp_path)
     old = H.type_create(
         c,
@@ -97,14 +107,14 @@ def test_replace_clears_open_cards_only_when_asked(tmp_path):
     S.apply_factory_setup(c, ANA)
     assert rows(c, "SELECT status FROM tasks WHERE id=?", task["id"])[0]["status"] == "open"
     out = S.apply_factory_setup(c, ANA, replace=True)
-    assert "cleared Sales" in out["changes"]
-    assert rows(c, "SELECT status FROM tasks WHERE id=?", task["id"])[0]["status"] == "closed"
+    assert "moved 1 cards off removed stages of Sales" in out["changes"]
+    now = rows(c, "SELECT k.status, s.name FROM tasks k JOIN task_steps s ON s.id = k.step_id WHERE k.id=?", task["id"])
+    assert now == [{"status": "open", "name": "Lead"}]
 
 
 def test_replace_on_a_booted_hub_makes_every_declared_link_and_a_second_run_changes_nothing(tmp_path):
     c = fresh(tmp_path)
-    # The booted Marketing type has no Qualified stage, so the preset's Qualified -> Sales link is named, not made.
-    assert S.apply_factory_setup(c, ANA)["unresolved"] == ["Marketing Qualified to Sales"]
+    assert S.apply_factory_setup(c, ANA)["unresolved"] == []
     out = S.apply_factory_setup(c, ANA, replace=True)
     assert out["unresolved"] == []
     ids = {r["name"]: r["id"] for r in rows(c, "SELECT id, name FROM task_types")}
@@ -151,7 +161,7 @@ def test_the_setup_and_requirements_routes(tmp_path):
         assert "Sales" in done.json()["pipelines"]
         assert post("ana-test", "/api/v2/pipelines/setup").json()["changes"] == []
         links = client.get("/api/v2/pipeline-links", headers={"Authorization": "Bearer ana-test"}).json()["links"]
-        assert len(links) == 2
+        assert len(links) == 1  # the Product to Engineering spawn only
         retired = post("ana-test", f"/api/v2/pipeline-links/{links[0]['id']}/retire")
         assert retired.status_code == 200, retired.text
         with app.state.store.transaction() as c:
@@ -219,3 +229,78 @@ def test_task_types_say_each_steps_warn_time_and_who_may_edit_rules(tmp_path, mo
         view = shown.json().get("task", shown.json())
         assert view["step"]["name"] == "Drafting" and view["step"]["limit_minutes"] == 2880
         assert "check_pool" not in view["step"] and "flow" not in view["step"]
+
+
+def test_two_replace_runs_in_a_row_change_nothing_the_second_time(tmp_path):
+    """Replace is idempotent: the stages a pipeline is created with are the ones a replace makes, so the replace that
+    follows the one that made the pipelines keeps every stage id, moves no card and writes no event."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+    before = snapshot(c)
+    events = rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"]
+    cards = rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id")
+    again = S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+    assert again["changes"] == [] and again["unresolved"] == []
+    assert snapshot(c) == before
+    assert rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"] == events
+    assert rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id") == cards
+
+
+def test_replace_keeps_cards_on_kept_stages_and_moves_only_cards_on_removed_stages(tmp_path):
+    """A replace rewrites no finished history: a card on a stage the preset keeps stays put with its status. On a removed
+    stage an open card goes to the first stage, a done or closed one goes to Closed with its status kept, and each move
+    is a step event."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, "tico_default")
+    won = H.task_create(c, ANA, "Acme deal", "", ANA, type=_type(c, "Sales"), step="Won", lint=False)["id"]
+    working = H.task_create(c, ANA, "Spring push", "", ANA, type=_type(c, "Marketing"), step="Working", lint=False)[
+        "id"
+    ]
+    dropped = H.task_create(c, ANA, "Old list", "", ANA, type=_type(c, "Marketing"), step="Dropped", lint=False)["id"]
+    from backend import pipeline_engine
+
+    assert pipeline_engine.ensure_visit(c, working) is not None  # its Late clock runs on Working
+    c.commit()
+    before = {t: rows(c, "SELECT step_id, status FROM tasks WHERE id=?", t)[0] for t in (won, working, dropped)}
+    S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+    # The visit follows the card: it is open at Targets now, and no open visit sits on a stage the replace removed.
+    targets = rows(c, "SELECT step_id FROM tasks WHERE id=?", working)[0]["step_id"]
+    assert rows(c, "SELECT pipeline_stage_id AS s FROM stage_visits WHERE task_id=? AND left_at IS NULL", working) == [
+        {"s": targets}
+    ]
+    assert (
+        rows(
+            c,
+            "SELECT v.id FROM stage_visits v LEFT JOIN task_steps s ON s.id = v.pipeline_stage_id "
+            "WHERE v.left_at IS NULL AND s.id IS NULL",
+        )
+        == []
+    )
+
+    def now(task):
+        return rows(c, "SELECT k.status, s.name FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", task)[0]
+
+    assert now(won) == {"status": before[won]["status"], "name": "Won"}
+    assert now(working)["name"] == "Targets" and now(working)["status"] == before[working]["status"] == "doing"
+    assert now(dropped) == {"status": "closed", "name": "Closed"}
+    moved = rows(
+        c,
+        "SELECT subject_id FROM history_events WHERE subject_type='task' AND kind='step' AND subject_id IN (?,?)",
+        working,
+        dropped,
+    )
+    assert {r["subject_id"] for r in moved} == {working, dropped}
+
+
+def _type(c, name):
+    return rows(c, "SELECT id FROM task_types WHERE name=? COLLATE NOCASE", name)[0]["id"]
+
+
+def test_visitor_suggestions_land_on_the_product_first_stage_before_and_after_setup(tmp_path):
+    """Public suggestions are filed at the Product roadmap's first stage: Suggested until the setup renames it to Ideas."""
+    from backend import public_roadmaps
+
+    c = fresh(tmp_path)
+    assert public_roadmaps._ideas_step(c) == "Suggested"
+    S.apply_factory_setup(c, ANA)
+    assert public_roadmaps._ideas_step(c) == "Ideas"

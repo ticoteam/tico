@@ -1015,6 +1015,60 @@ def send_back(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id:
     return {"decision_id": decision["id"], "verdict": "sent_back"}
 
 
+def _back_stage(c: "sqlite3.Connection", stage_id: str) -> Row | None:
+    """The live stage just before this one in its pipeline (Validate goes back to In development)."""
+    here = _one(c, "SELECT type_id, position FROM task_steps WHERE id=?", (stage_id,))
+    if here is None:
+        return None
+    return _one(
+        c,
+        "SELECT id, name FROM task_steps WHERE type_id=? AND position<? AND status NOT IN ('closed','declined') "
+        "ORDER BY position DESC, id LIMIT 1",
+        (here["type_id"], here["position"]),
+    )
+
+
+def not_validated(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, reason: str) -> Row:
+    """Validate's "Not validated" (D64), a person's call on the validation requirement. The spec's measures did not hold:
+    the card goes back to the stage before Validate (In development, which then waits on the new subtask), and one
+    follow-up Engineering subtask is filed under it, with the reason and the source's links. The follow-up is a second
+    spawn on purpose, so it is its own handoff. Person only, at Validate, on an item the person is waiting on."""
+    text = _clip(reason)
+    if text is None:
+        raise Declined("reason_required", "Say what did not validate", 422)
+    with _atomic(c):
+        task, requirement = _guard_item(c, actor, task_id, requirement_id)
+        _check_claim(c, actor, task, requirement)
+        if requirement_state(c, task, requirement) == "met":
+            raise Declined("already_met", "This requirement is already met", 409)
+        back = _back_stage(c, str(requirement["pipeline_stage_id"]))
+        spawn_link = _one(
+            c,
+            "SELECT l.* FROM pipeline_links l JOIN task_steps s ON s.id = l.from_pipeline_stage_id "
+            "WHERE s.type_id = ? AND l.mode = 'spawn' AND l.retired_at IS NULL ORDER BY s.position, l.id LIMIT 1",
+            (task["type_id"],),
+        )
+        if back is None or spawn_link is None:
+            raise Declined("no_follow_up", "This pipeline has no stage to return to or no Engineering link", 409)
+        current = _current_attachment(c, task_id, requirement_id)
+        decision = _decide(c, actor, task, requirement, "failed", text, current)
+        _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
+        child = pipeline_links.spawn(c, spawn_link, task_id, again=True, note=text)
+        if child is None:
+            raise Declined("not_filed", "The follow-up ticket could not be filed", 409)
+        c.execute(
+            "UPDATE stage_decisions SET outcome=?, outcome_at=? WHERE id=?",
+            (json.dumps({"moved_back": str(back["id"]), "follow_up": child}), _now(), decision["id"]),
+        )
+        _release_in(c, actor, task_id, requirement_id)
+    return {
+        "decision_id": decision["id"],
+        "verdict": "failed",
+        "moved_back_to": back["name"],
+        "follow_up": child,
+    }
+
+
 def message_manager(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, text: str) -> Row:
     """Writes to the pipeline's manager bot about this item, with its context."""
     body = (text or "").strip()
@@ -1160,6 +1214,11 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
     def review_send_back(request: Request, tid: str, rid: str, body: ReviewNote) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Send the work back to its assignee with a note."""
         return write(request, tid, body, lambda c, actor: send_back(c, actor, tid, rid, body.note))
+
+    @app.post(base + "/not-validated")
+    def review_not_validated(request: Request, tid: str, rid: str, body: ReviewNote) -> Row:  # pyright: ignore[reportUnusedFunction]
+        """Validate's "Not validated": back to In development, with one follow-up Engineering ticket."""
+        return write(request, tid, body, lambda c, actor: not_validated(c, actor, tid, rid, body.note))
 
     @app.post(base + "/message-manager")
     def review_message_manager(request: Request, tid: str, rid: str, body: ReviewMessage) -> Row:  # pyright: ignore[reportUnusedFunction]

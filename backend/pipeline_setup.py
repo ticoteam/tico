@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 Row = dict[str, Any]
 CLOSING = ("closed", "declined")
-OPEN_STATUSES = "('open','doing','waiting','review','ready')"
+OPEN_STATUSES = ("open", "doing", "waiting", "review", "ready")
 
 
 def _stages(*pairs: tuple[str, str]) -> list[dict[str, str]]:
@@ -51,9 +51,41 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Ideas", "open"),
                     ("Specifying", "doing"),
                     ("Review", "review"),
-                    ("Approved", "done"),
+                    ("In development", "doing"),
+                    ("Validate", "review"),
+                    ("Done", "done"),
                     ("Declined", "closed"),
                 ),
+                # Every hub boots with the roadmap seed (roadmap_flow.ensure). Its stages take the preset's names in place,
+                # so their cards stay; Approved is retired into In development and goes once it is empty.
+                "adopt": {
+                    "renamed": {
+                        "Suggested": "Ideas",
+                        "Exploring": "Specifying",
+                        "Spec": "Review",
+                        "Building": "In development",
+                        "Shipped": "Done",
+                    },
+                    "retired": {"Approved": "In development"},
+                },
+                "requirements": [
+                    {"stage": "Review", "name": "Spec approved", "kind": "approval", "reviewed_by": "person"},
+                    {
+                        "stage": "In development",
+                        "name": "Engineering shipped",
+                        "kind": "run",
+                        "needs": {"source": "subtasks"},
+                        "reviewed_by": "nobody",
+                    },
+                    {
+                        "stage": "Validate",
+                        "name": "Validated",
+                        "kind": "attachment",
+                        "needs": {"formats": ["page", "link"]},
+                        "reviewed_by": "bot_then_person",
+                        "rubric": "The page says whether the spec's 'how we'll know' measures held, each with its number.",
+                    },
+                ],
                 "manager": ["Product Manager", "Product Factory Manager"],
             },
             {
@@ -128,9 +160,7 @@ PRESETS: dict[str, dict[str, Any]] = {
             },
         ],
         "links": [
-            {"from": "Product", "stage": "Approved", "to": "Engineering", "mode": "spawn"},
-            {"from": "Marketing", "stage": "Qualified", "to": "Sales", "mode": "move"},
-            {"from": "Sales", "stage": "Won", "to": "Success", "mode": "move"},
+            {"from": "Product", "stage": "Review", "to": "Engineering", "mode": "spawn"},
         ],
     }
 }
@@ -194,38 +224,60 @@ def _manager(conn: sqlite3.Connection, names: list[str]) -> str | None:
     return None
 
 
-def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[str, str]], made: list[str]) -> None:
-    """replace=True on a type with no role: its open cards are closed, and its stages become the preset's, in its order. A
-    "Closed" stage is added last when the preset has no stage of that name, to hold the closed cards. The cards move to
-    that holding stage before any other stage is removed, so no removed stage is in use. Writes nothing when the stages
-    already match. Never done to a type that holds a role (Engineering, Product): its stages carry rules and flows."""
-    want = [dict(s) for s in stages]
-    if not any(str(s["name"]).lower() == "closed" for s in want):
+def _pipeline_stages(spec: Row) -> list[dict[str, str]]:
+    """The one stage list a pipeline is made with and replaced to. A pipeline without a role gets a "Closed" stage last
+    when its preset names none, to hold closed cards. A role's stages are the preset's as written: their flows own them."""
+    want = [dict(s) for s in spec["stages"]]
+    if not spec.get("role") and not any(str(s["name"]).lower() == "closed" for s in want):
         want.append({"name": "Closed", "status": "closed"})
+    return want
+
+
+def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[str, str]], made: list[str]) -> None:
+    """replace=True on a type with no role: its stages become `stages` (from _pipeline_stages, the list it was made with),
+    in that order. A stage the list keeps (same name) keeps its id, and its cards stay where they are with their status.
+    Only cards on a removed stage move: an open one to the first stage, a done or closed one to Closed, its status kept.
+    Each move is a step event. Writes nothing when the stages already match. Never done to a type that holds a role."""
+    from . import pipeline_engine
+
+    want = [dict(s) for s in stages]
 
     def shape(steps: list[Row]) -> list[tuple[str, str]]:
         return [(str(s["name"]).lower(), str(s["status"])) for s in steps]
 
-    current = _rows(
-        conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position, id", (row["id"],)
-    )
-    if shape(current) == shape(want):
-        return
-    open_cards = _rows(conn, f"SELECT id FROM tasks WHERE type_id = ? AND status IN {OPEN_STATUSES}", (row["id"],))
-    for task in open_cards:
-        H.task_close(conn, actor, task["id"], note="Closed by pipeline setup (replace)")
-    if open_cards:
-        made.append(f"cleared {row['name']}")
-    cards = _one(conn, "SELECT id FROM tasks WHERE type_id = ? LIMIT 1", (row["id"],)) is not None
-    if cards and not any(str(s["name"]).lower() == "closed" for s in current):
-        keep = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in current]
-        H.type_update(conn, actor, row["id"], steps=[*keep, {"name": "Closed", "status": "closed"}], mover=True)
-        current = _rows(
+    def read() -> list[Row]:
+        return _rows(
             conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position, id", (row["id"],)
         )
+
+    current = read()
+    if shape(current) == shape(want):
+        return
+    have = {str(s["name"]).lower() for s in current}
+    missing = [s for s in want if str(s["name"]).lower() not in have]
+    if missing:  # the new stages exist first, so cards have somewhere to go before a removed stage is dropped
+        keep = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in current]
+        H.type_update(conn, actor, row["id"], steps=[*keep, *missing], mover=True)
+        current = read()
     by_name = {str(s["name"]).lower(): s for s in current}
-    if cards:
-        conn.execute("UPDATE tasks SET step_id = ? WHERE type_id = ?", (by_name["closed"]["id"], row["id"]))
+    kept = {str(s["name"]).lower() for s in want}
+    moved = 0
+    for step in [s for s in current if str(s["name"]).lower() not in kept]:
+        for card in _rows(
+            conn, "SELECT id, status, type_id, step_id, created_at FROM tasks WHERE step_id = ?", (step["id"],)
+        ):
+            dest = by_name[str(want[0]["name"]).lower()] if card["status"] in OPEN_STATUSES else by_name["closed"]
+            ts = H.now()
+            conn.execute("UPDATE tasks SET step_id = ?, updated_at = ? WHERE id = ?", (dest["id"], ts, card["id"]))
+            H._task_event(  # pyright: ignore[reportPrivateUsage]
+                conn, card["id"], actor, "step", step["id"], dest["id"], "Moved by pipeline setup (replace)"
+            )
+            # The status stays as it was (so no task_update), but the stage visit follows the card: a visit left open on
+            # a stage this replace removes would keep its Late clock and review items on a stage that is gone.
+            pipeline_engine.on_step_change(conn, actor, card, row["id"], dest["id"], ts)
+            moved += 1
+    if moved:
+        made.append(f"moved {moved} cards off removed stages of {row['name']}")
     final: list[dict[str, Any]] = []
     for s in want:
         old = by_name.get(str(s["name"]).lower())
@@ -234,22 +286,118 @@ def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[s
     made.append(f"set up the stages of {row['name']}")
 
 
+def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list[str]) -> None:
+    """An existing pipeline takes the preset's stage names. A renamed stage keeps its id, so its cards stay. A retired
+    stage's links and requirements retire, its cards move to the stage that replaces it, and it goes once it is empty
+    (a stage the move refuses stays, and the refusal stands for the whole setup). Preset stages the pipeline lacks are
+    added in the preset's order; stages the preset does not name are kept at the end."""
+    from . import pipeline_links
+
+    steps = _rows(conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position", (row["id"],))
+    adopt: dict[str, Any] = spec.get("adopt") or {}
+    renamed: dict[str, str] = adopt.get("renamed", {})
+    retired: dict[str, str] = adopt.get("retired", {})
+    stages: list[dict[str, str]] = spec["stages"]
+    touched = False
+    for old, new in renamed.items():
+        has = [s for s in steps if str(s["name"]).lower() == old.lower()]
+        if has and not any(str(s["name"]).lower() == new.lower() for s in steps):
+            has[0]["name"] = new
+            touched = True
+            made.append(f"renamed {old} to {new}")
+    ordered: list[Row] = []
+    for stage in stages:
+        found = next((s for s in steps if str(s["name"]).lower() == stage["name"].lower()), None)
+        ordered.append(found if found is not None else {"name": stage["name"], "status": stage["status"]})
+    placed = {str(s["id"]) for s in ordered if "id" in s}
+    ordered += [s for s in steps if str(s["id"]) not in placed]
+    if (
+        touched
+        or any("id" not in s for s in ordered)
+        or [str(s["id"]) for s in ordered] != [str(s["id"]) for s in steps]
+    ):
+        H.type_update(conn, actor, row["id"], steps=ordered, mover=True)
+        made.append(f"set up stages of {spec['name']}")
+    for old, target in retired.items():
+        gone = _one(conn, "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (row["id"], old))
+        into = _one(
+            conn, "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (row["id"], target)
+        )
+        if gone is None or into is None:
+            continue
+        link = pipeline_links.link_for_stage(conn, str(gone["id"]))
+        if link is not None:
+            pipeline_links.retire_link(conn, actor, str(link["id"]))
+        cards = _rows(conn, "SELECT id FROM tasks WHERE step_id = ?", (gone["id"],))
+        for card in cards:
+            H.task_update(conn, actor, str(card["id"]), step=str(into["id"]), mover=True)
+        if cards:
+            made.append(f"moved {len(cards)} {old} cards to {target}")
+        conn.execute(
+            "UPDATE stage_requirements SET retired_at = ? WHERE pipeline_stage_id = ? AND retired_at IS NULL",
+            (H.now(), gone["id"]),
+        )
+        conn.execute("SAVEPOINT pipeline_adopt_drop")
+        try:
+            fresh = _rows(
+                conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position", (row["id"],)
+            )
+            left = [s for s in fresh if str(s["id"]) != str(gone["id"])]
+            H.type_update(conn, actor, row["id"], steps=left, mover=True)
+        except H.Refused:
+            conn.execute("ROLLBACK TO pipeline_adopt_drop")
+            conn.execute("RELEASE pipeline_adopt_drop")
+            made.append(f"kept {old} (it is still in use)")
+            continue
+        conn.execute("RELEASE pipeline_adopt_drop")
+        made.append(f"removed {old}")
+
+
+def _requirement(conn: sqlite3.Connection, actor: str, pipeline_id: str, spec: Row, made: list[str]) -> None:
+    """A preset requirement on its stage, once. A person signs off a spec, so only a person's setup names reviewers."""
+    from . import pipeline_requirements
+
+    if not actor.startswith("human:"):
+        return
+    stage = _one(
+        conn, "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (pipeline_id, spec["stage"])
+    )
+    if stage is None or _one(
+        conn,
+        "SELECT id FROM stage_requirements WHERE pipeline_stage_id = ? AND name = ? AND retired_at IS NULL",
+        (stage["id"], spec["name"]),
+    ):
+        return
+    body = {
+        "name": spec["name"],
+        "kind": spec["kind"],
+        "needs": spec.get("needs", {}),
+        "reviewed_by": spec["reviewed_by"],
+        "reviewer_id": actor if "person" in spec["reviewed_by"] else None,
+        "rubric": spec.get("rubric"),
+    }
+    pipeline_requirements.add(conn, actor, str(stage["id"]), body)
+    made.append(f"requirement {spec['name']} on {spec['stage']}")
+
+
 def _pipeline(
     conn: sqlite3.Connection, actor: str, spec: Row, factories: dict[str, str], replace: bool, made: list[str]
 ) -> str:
     existing = _existing(conn, spec)
     if existing is None:
-        row = H.type_create(conn, actor, spec["name"], spec["stages"], mover=True, numbered=True)
+        row = H.type_create(conn, actor, spec["name"], _pipeline_stages(spec), mover=True, numbered=True)
         made.append(f"pipeline {spec['name']}")
     else:
         row = existing
         if replace and not existing.get("role"):
-            _restage(conn, actor, existing, spec["stages"], made)
+            _restage(conn, actor, existing, _pipeline_stages(spec), made)
         if str(row["name"]).lower() != str(spec["name"]).lower():
             H.type_update(conn, actor, row["id"], name=spec["name"], mover=True)
             made.append(f"renamed {row['name']} to {spec['name']}")
         if not row.get("numbered"):
             H.type_update(conn, actor, row["id"], numbered=True, mover=True)
+    if existing is not None and spec.get("adopt"):
+        _adopt(conn, actor, row, spec, made)
     ident = str(row["id"])
     current = (
         _one(
@@ -346,6 +494,9 @@ def apply_factory_setup(
                     "UPDATE factories SET output_stage_id = COALESCE(output_stage_id, ?) WHERE id = ?",
                     (done[0], factories[f["name"]]),
                 )
+        for pipe in spec["pipelines"]:
+            for req in pipe.get("requirements", []):
+                _requirement(c, actor, pipelines[pipe["name"]], req, made)
         if unresolved and replace:
             raise Problem(
                 "unresolved",

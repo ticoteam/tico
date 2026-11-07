@@ -5913,6 +5913,28 @@ def pr_state(links):
     )
 
 
+def ticket_refs(conn, ids):
+    """Each task's ticket label (its type's prefix and number, D41) and its stage's name, for many ids in one query:
+    {id: {"label": str|None, "step": str|None}}. A task with no number, no prefix or no stage has None for that."""
+    ids = list(ids)
+    refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "step": None} for ident in ids}
+    if not ids:
+        return refs
+    marks = ",".join("?" * len(ids))
+    for row in _rows(
+        conn.execute(
+            "SELECT k.id, k.number, t.prefix, s.name AS step FROM tasks k "
+            "LEFT JOIN task_types t ON t.id = k.type_id LEFT JOIN task_steps s ON s.id = k.step_id "
+            f"WHERE k.id IN ({marks})",
+            ids,
+        )
+    ):
+        if row["prefix"] and row["number"]:
+            refs[row["id"]]["label"] = f"{row['prefix']}{row['number']}"
+        refs[row["id"]]["step"] = row["step"]
+    return refs
+
+
 def task_tree(conn, task_id, visible_ids=None):
     rows = descendants(conn, task_id)
     # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.js).
@@ -5934,9 +5956,10 @@ def task_tree(conn, task_id, visible_ids=None):
             )
         ):
             links.setdefault(link["task_id"], []).append(link)
+    refs = ticket_refs(conn, nodes)
     for row in rows:
         node = nodes[row["id"]]
-        node.update(pr_state=pr_state(links.get(row["id"], [])), children=[])
+        node.update(pr_state=pr_state(links.get(row["id"], [])), children=[], **refs[row["id"]])
     roots = []
     for row in rows:
         (nodes[row["parent_id"]]["children"] if row["parent_id"] in nodes else roots).append(nodes[row["id"]])

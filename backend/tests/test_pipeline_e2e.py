@@ -26,6 +26,7 @@ from backend import (
     pipeline_overview,
     pipeline_review,
     pipeline_setup,
+    task_relations as TR,
 )
 from backend.config import Settings
 from backend.store import Store
@@ -37,7 +38,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 # The booted stage names (the preset's own names are overridden by the seed that a booted hub already has).
 STAGES = {
-    "Product": ["Suggested", "Exploring", "Spec", "Approved", "Building", "Ready to ship", "Shipped", "Declined"],
+    "Product": ["Ideas", "Specifying", "Review", "In development", "Validate", "Done", "Declined"],
     "Engineering": ["Todo", "Doing", "In review", "Ready to ship", "Done"],
     "Marketing": ["On deck", "In development", "Live", "Working", "Paused", "Review", "Ready", "Done", "Closed"],
     "Sales": ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost"],
@@ -157,14 +158,14 @@ class Company:
         pipeline_engine.work_changed(self.c, task_id)
         self.c.commit()
 
-    def attach(self, task_id, req_id, by=BUILDER, digest="sha-1"):
+    def attach(self, task_id, req_id, by=BUILDER, digest="sha-1", url="https://example.test/shot.png"):
         self.insert(
             "requirement_attachments",
             id=f"att-{task_id[-6:]}-{req_id[-8:]}-{digest}",
             task_id=task_id,
             stage_requirement_id=req_id,
             source="link",
-            url="https://example.test/shot.png",
+            url=url,
             digest=digest,
             work_version=pipeline_engine.work_version(self.c, task_id),
             attached_by=by,
@@ -190,6 +191,25 @@ class Company:
             reason=reason,
             created_at=stamp(),
         )
+        self.c.commit()
+
+    def requirement(self, pipeline, stage, name):
+        """The id of a live requirement on a stage (the preset seeds its own)."""
+        found = self.c.execute(
+            "SELECT id FROM stage_requirements WHERE pipeline_stage_id=? AND name=? AND retired_at IS NULL",
+            (self.stage(pipeline, stage), name),
+        ).fetchone()
+        assert found is not None, f"{pipeline} {stage} has no requirement {name!r}"
+        return found[0]
+
+    def set_status(self, task_id, status, actor=ANA):
+        row = H.task_update(self.c, actor, task_id, status=status)
+        self.c.commit()
+        return row
+
+    def close(self, task_id, actor=BUILDER):
+        """Close a task as its requester (a closed status is set by close, never by a status write)."""
+        H.task_close(self.c, actor, task_id, note="Closed in test")
         self.c.commit()
 
     def count(self, table, where="1=1", *args):
@@ -234,7 +254,7 @@ class Company:
 
 
 @pytest.fixture
-def co(tmp_path):
+def hub(tmp_path):
     path = tmp_path / "hub.sqlite"
     store = Store(Settings(db_path=path, registry_dir=FIXTURES / "registry"))
     store.initialize(seed_market=False)
@@ -250,8 +270,14 @@ def co(tmp_path):
             ]
         },
     )
-    yield Company(store, c)
+    yield store, c
     c.close()
+
+
+@pytest.fixture
+def co(hub):
+    store, c = hub
+    yield Company(store, c)
 
 
 # ----------------------------------------------------------------------------- the company
@@ -285,16 +311,274 @@ def test_the_company_is_laid_out_as_the_plan_describes(co):
 
 
 # ----------------------------------------------------------------------------- handoffs
-def test_an_approved_spec_is_stored_as_a_spawn_and_does_not_create_engineering_in_v1(co):
-    """Plan section 2: the Product Approved -> Engineering link is stored as a spawn, and v1 does not run it. Approving
-    the spec moves the card on inside Product; no Engineering ticket appears."""
-    spec_ok = co.require("Product", "Approved", "Spec approved", kind="approval")
-    task = co.ticket("Product", "Approved", "Dark mode")
-    assert co.count("pipeline_links", "from_pipeline_stage_id=? AND mode='spawn'", co.stage("Product", "Approved")) == 1
-    engineering_before = co.count("tasks", "type_id=?", co.type["Engineering"])
-    co.approve(task, spec_ok)
-    assert co.where(task)[0] == "Product"
-    assert co.count("tasks", "type_id=?", co.type["Engineering"]) == engineering_before
+SPEC = "https://tico.example/specs/dark-mode"
+VALIDATION = "https://tico.example/pages/dark-mode-validation"
+
+
+def subtasks(co, parent):
+    """The Engineering subtasks a ticket has, oldest first."""
+    return [
+        r[0]
+        for r in co.c.execute(
+            "SELECT r.from_task FROM task_relations r JOIN tasks k ON k.id = r.from_task "
+            "WHERE r.to_task = ? AND r.kind = 'parent' ORDER BY k.created_at, k.id",
+            (parent,),
+        )
+    ]
+
+
+def session_links(co, task_id):
+    return co.c.execute(
+        "SELECT id, url, detail FROM task_links WHERE task_id = ? AND kind = 'session' ORDER BY id", (task_id,)
+    ).fetchall()
+
+
+def primary_session(co, task_id):
+    """The owning bot's primary task session, as its first turn on the task records it."""
+    co.insert(
+        "task_links",
+        id=f"sess-{task_id[-8:]}",
+        task_id=task_id,
+        kind="session",
+        url="session:builder/thread-1",
+        title="builder",
+        added_by=BUILDER,
+        created_at=stamp(),
+        detail=json.dumps({"primary": True, "bot": "builder", "harness": "claude"}),
+        updated_at=stamp(),
+    )
+    co.c.commit()
+
+
+def owner_and_session(co, card):
+    """What must not change across the stages: the owner, the primary session link and the session root."""
+    return (H.task(co.c, card)["owner_id"], session_links(co, card), H.session_root(co.c, "builder", card))
+
+
+def review_card(co, title="Dark mode"):
+    """A Product card in Review with its spec page attached, waiting for the person's approval."""
+    card = co.ticket("Product", "Review", title)
+    co.attach(card, co.requirement("Product", "Review", "Spec approved"), url=SPEC)
+    return card
+
+
+def approve_spec(co, card):
+    """The person approves the spec. Approving the last requirement of Review moves the card on, so this files the
+    Engineering subtask too."""
+    co.approve(card, co.requirement("Product", "Review", "Spec approved"))
+
+
+def test_an_approved_spec_files_one_engineering_subtask_with_its_spec_and_moves_on(co):
+    """Plan M: P12 is approved in Review and moves to In development. The Product to Engineering spawn files D41 as a
+    subtask of P12, in Engineering's first stage, requested by P12's owner, with the spec page carried over and one
+    handoff row. P12 keeps its owner and its primary session."""
+    card = review_card(co)
+    primary_session(co, card)
+    before = owner_and_session(co, card)
+    approve_spec(co, card)
+    assert co.where(card) == ("Product", "In development")
+    (d41,) = subtasks(co, card)
+    assert co.where(d41) == ("Engineering", "Todo")
+    prefix = co.c.execute("SELECT prefix FROM task_types WHERE id = ?", (co.type["Engineering"],)).fetchone()[0]
+    assert prefix == "D"
+    assert H.task(co.c, d41)["requester_id"] == BUILDER
+    assert co.count("task_links", "task_id = ? AND url = ?", d41, SPEC) == 1
+    assert co.count("pipeline_handoffs", "source_task_id = ? AND target_task_id = ?", card, d41) == 1
+    assert owner_and_session(co, card) == before
+
+
+def test_the_subtask_tree_names_each_ticket_as_its_pipeline_does(co):
+    """The Subtasks rail reads the tree: D41 is named by its pipeline's prefix and number, with its stage, and its parent
+    is the Product card P12."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.c.execute("UPDATE tasks SET number = 41 WHERE id = ?", (d41,))  # a fresh hub numbers it D2; the plan says D41
+    co.c.commit()
+    (node,) = H.task_tree(co.c, card)
+    assert (node["label"], node["step"]) == ("D41", "Todo")
+    assert TR.parent_of(co.c, d41) == card
+
+
+def test_the_full_loop_validates_and_is_done_when_both_subtasks_ship(co, monkeypatch):
+    """P12 goes In development with D41. D42 is added by hand. Both ship (done), so P12 moves to Validate by its own
+    wake, in its own session. A validation page the bot and then the person approve takes it to Done. The owner and
+    the primary session do not change at any stage, and the wake that reaches Validate targets P12 for the same bot."""
+    wakes = []
+    real_wake = H._wake
+
+    def spy(conn, task_row, target, body, refs=None, **kw):
+        wakes.append((str(task_row["id"]), target, body))
+        return real_wake(conn, task_row, target, body, refs=refs, **kw)
+
+    monkeypatch.setattr(H, "_wake", spy)
+    card = review_card(co)
+    primary_session(co, card)
+    at_review = owner_and_session(co, card)
+    approve_spec(co, card)
+    assert owner_and_session(co, card) == at_review  # at Specifying-or-later the owner and session are unchanged
+    d41 = subtasks(co, card)[0]
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    assert subtasks(co, card) == [d41, d42]
+
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    assert co.where(card) == ("Product", "In development")  # d42 is still open
+    assert co.dots(card)["Engineering shipped"]["state"] == "waiting"
+
+    wakes.clear()
+    co.set_status(d42, "done")
+    assert co.where(card) == ("Product", "Validate")
+    reached = [w for w in wakes if w[2].startswith("All subtasks done")]
+    assert reached and all(task == card and target == BUILDER for task, target, _ in reached)
+    assert not [w for w in wakes if w[0] in (d41, d42) and w[1] == BUILDER]  # no child-row wake reaches the bot
+    assert H.session_root(co.c, "builder", card) == card
+    assert owner_and_session(co, card) == at_review
+
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    co.decide(card, checked, verdict="unsure", judge="llm", actor=PM)  # the bot flags the page for a person
+    co.approve(card, checked)
+    assert co.where(card) == ("Product", "Done")
+    assert owner_and_session(co, card) == at_review
+
+
+def test_leaving_review_twice_files_one_subtask_until_the_handoff_is_returned(co):
+    """The handoff key is the card and the link: while its handoff is live a second leave files nothing. An undone
+    (returned) handoff allows a new spawn."""
+    card = review_card(co)
+    approve_spec(co, card)
+    link = pipeline_links.link_for_stage(co.c, co.stage("Product", "Review"))
+    assert pipeline_links.spawn(co.c, link, card) is None
+    assert len(subtasks(co, card)) == 1
+    (d41,) = subtasks(co, card)
+    co.close(d41)  # an open ticket with the same title is a duplicate the rules refuse; a closed one is not
+    co.c.execute("UPDATE pipeline_handoffs SET returned_at = ? WHERE source_task_id = ?", (stamp(), card))
+    co.c.commit()
+    assert pipeline_links.spawn(co.c, link, card) is not None
+    assert len(subtasks(co, card)) == 2
+    assert pipeline_links.spawn(co.c, link, card) is None  # the new handoff is live again
+
+
+def test_not_validated_files_a_follow_up_and_returns_the_card_to_development(co):
+    """Validate's "Not validated" (a person's call): P12 goes back to In development, one follow-up Engineering ticket is
+    filed under it with "Follow-up: <reason>" in its body, and that stage waits on the new ticket until it ships. Only a
+    person can make the call, and it is its own handoff."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    assert co.where(card) == ("Product", "Validate")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+
+    with pytest.raises(pipeline_review.Declined):
+        pipeline_review.not_validated(co.c, PM, card, checked, "The measures did not hold")  # a bot cannot make it
+    co.c.rollback()
+
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert result["verdict"] == "failed" and result["moved_back_to"] == "In development"
+    assert co.where(card) == ("Product", "In development")
+    d43 = subtasks(co, card)[-1]
+    assert d43 != d41 and co.where(d43) == ("Engineering", "Todo")
+    assert H.task(co.c, d43)["body"].startswith("Follow-up: Load time stayed over 4 s. ")
+    assert co.count("pipeline_handoffs", "source_task_id = ? AND target_task_id = ?", card, d43) == 1
+    assert co.count("stage_decisions", "task_id = ? AND verdict = 'failed'", card) == 1
+    assert co.dots(card)["Engineering shipped"]["state"] == "waiting"  # D43 is open: not met yet
+
+    co.move(d43, "Doing", actor=ANA)
+    co.set_status(d43, "done")
+    assert co.where(card) == ("Product", "Validate")
+
+
+def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_ones(co):
+    """The generic close cascade (hubdb._finish_children) reaches the spawned subtasks: the open one closes with the card,
+    the one already done stays done."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    co.close(card, actor=ANA)
+    assert H.task(co.c, card)["status"] == "closed"
+    assert H.task(co.c, d41)["status"] == "done"
+    assert H.task(co.c, d42)["status"] == "closed"
+    assert H.task(co.c, d42)["note"] == f"Closed with #{H.task(co.c, card)['number']}"  # the generic cascade's note
+
+
+def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.close(d41)
+    assert co.where(card) == ("Product", "In development")
+    assert co.dots(card)["Engineering shipped"]["state"] == "failed"
+    assert co.advance(card, actor=ANA)["moved"] is False
+
+
+def test_a_subtask_starting_work_does_not_move_its_product_card(co):
+    """The legacy roadmap sync (roadmap_flow.sync) never moves a card in a pipeline with requirements."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    assert co.where(card) == ("Product", "In development")
+
+
+def test_an_engineering_ticket_with_no_product_parent_ships_as_it_does_today(co):
+    products = co.count("tasks", "type_id = ?", co.type["Product"])
+    ticket = co.ticket("Engineering", "Todo", "Hotfix login")
+    for stage in ("Doing", "In review", "Ready to ship"):
+        co.move(ticket, stage, actor=ANA)
+    co.set_status(ticket, "done")
+    co.move(ticket, "Done", actor=ANA)
+    assert co.where(ticket) == ("Engineering", "Done")
+    assert co.count("tasks", "type_id = ?", co.type["Product"]) == products
+    assert co.count("pipeline_handoffs", "source_task_id = ?", ticket) == 0
+    assert H.TR.parent_of(co.c, ticket) is None
+
+
+def test_setup_moves_a_card_out_of_the_old_approved_stage_into_in_development(hub):
+    """A hub that booted the roadmap seed has an Approved stage with cards in it. Setup retires that stage into In
+    development and keeps the card."""
+    store, c = hub
+    product = c.execute("SELECT id FROM task_types WHERE role = 'product-roadmap'").fetchone()[0]
+    approved = c.execute("SELECT id FROM task_steps WHERE type_id = ? AND name = 'Approved'", (product,)).fetchone()[0]
+    card = H.task_create(c, ANA, "Old card", "", BUILDER, type=product, step=approved, lint=False)["id"]
+    c.commit()
+    pipeline_setup.apply_factory_setup(c, ANA)
+    c.commit()
+    names = {r[0] for r in c.execute("SELECT name FROM task_steps WHERE type_id = ?", (product,))}
+    assert "Approved" not in names and "In development" in names
+    step = c.execute(
+        "SELECT s.name FROM tasks k JOIN task_steps s ON s.id = k.step_id WHERE k.id = ?", (card,)
+    ).fetchone()
+    assert step[0] == "In development"
 
 
 def test_a_shipped_ticket_goes_back_to_product_through_its_move_link(co):
@@ -309,7 +593,7 @@ def test_a_shipped_ticket_goes_back_to_product_through_its_move_link(co):
     co.move(task, "Ready to ship", actor=ANA)
     result = co.advance(task, actor=ANA)
     assert result["moved"] is True
-    assert co.where(task) == ("Product", "Suggested")
+    assert co.where(task) == ("Product", "Ideas")
     assert co.count("pipeline_handoffs", "source_task_id=? AND target_task_id=?", task, task) == 1
     assert co.count("stage_visits", "task_id=? AND direction='handoff'", task) == 1
 

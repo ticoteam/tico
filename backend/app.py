@@ -3105,19 +3105,38 @@ def create_app(settings=None):
             # A bot task now lives in the bot's chat room. Only this task's messages
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
-            children = [
-                {"id": t["id"], "title": t["title"], "status": t["status"], "owner_id": t["owner_id"]}
-                for t in H._rows(
-                    c.execute(
-                        "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
-                        + TR.CHILD_IDS
-                        + ") AND ("
-                        + auth.task_sql(c, who)
-                        + ") ORDER BY (rank IS NULL), rank, created_at",
-                        (tid,),
-                    )
+            child_rows = H._rows(
+                c.execute(
+                    "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
+                    + TR.CHILD_IDS
+                    + ") AND ("
+                    + auth.task_sql(c, who)
+                    + ") ORDER BY (rank IS NULL), rank, created_at",
+                    (tid,),
                 )
+            )
+            child_refs = H.ticket_refs(c, [t["id"] for t in child_rows])
+            children = [
+                {
+                    "id": t["id"],
+                    "title": t["title"],
+                    "status": t["status"],
+                    "owner_id": t["owner_id"],
+                    **child_refs[t["id"]],
+                }
+                for t in child_rows
             ]
+            # The parent ticket, when there is one. Its title is given only when the reader may read it: auth.task
+            # refuses a task the reader cannot see, and then the parent is null.
+            parent = None
+            parent_id = TR.parent_of(c, tid)
+            if parent_id:
+                try:
+                    parent_row = auth.task(c, who, parent_id)
+                except Problem:
+                    parent_row = None
+                if parent_row:
+                    parent = {"id": parent_id, "title": parent_row["title"], **H.ticket_refs(c, [parent_id])[parent_id]}
             from .task_review import comment_rights
             from .views import task_wait
 
@@ -3140,6 +3159,7 @@ def create_app(settings=None):
                 "events": history,
                 "can_comment": can_comment,
                 "children": children,
+                "parent": parent,
                 # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
                 # the steps one click away) and `execution` is the run it follows while it works: the owner's,
                 # or the one for a person's message, whichever bot that went to. `comment_to` is who the reader's

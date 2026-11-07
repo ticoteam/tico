@@ -160,6 +160,107 @@ def record_handoff(conn: sqlite3.Connection, link_id: str, source_task_id: str, 
     return ident
 
 
+MAX_CARRIED = 10  # the source's links carried to a spawned ticket, the spec page first
+
+
+def _label(conn: sqlite3.Connection, task_id: str) -> str:
+    """The ticket's id as people read it (prefix and number, D41), else its id."""
+    found = _rows(
+        conn,
+        "SELECT k.number AS number, t.prefix AS prefix FROM tasks k JOIN task_types t ON t.id = k.type_id WHERE k.id = ?",
+        (task_id,),
+    )
+    if found and found[0]["prefix"] and found[0]["number"]:
+        return f"{found[0]['prefix']}{found[0]['number']}"
+    return task_id
+
+
+def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
+    """Who owns a spawned ticket: the target pipeline's manager when it is on the roster. A pipeline with no manager, or
+    a manager name the roster does not know, leaves the filer as owner: tasks always have one, and a refusal would file
+    nothing at all."""
+    found = _rows(conn, "SELECT manager FROM task_types WHERE id = ?", (pipeline_id,))
+    slug = str(found[0]["manager"] or "") if found else ""
+    if not slug:
+        return filer
+    candidate = slug if slug.startswith(("bot:", "human:")) else f"bot:{slug}"
+    return candidate if H.resolve_actor(conn, candidate) else filer
+
+
+def _carry_attachments(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str) -> None:
+    """The source's attached links (its spec page among them) become links of the spawned ticket. A link the rules refuse
+    is skipped; the spawn stands."""
+    found = _rows(
+        conn,
+        "SELECT url FROM requirement_attachments WHERE task_id = ? AND removed_at IS NULL AND url IS NOT NULL "
+        "GROUP BY url ORDER BY MIN(created_at), MIN(rowid) LIMIT ?",
+        (source_id, MAX_CARRIED),
+    )
+    for record in found:
+        conn.execute("SAVEPOINT pipeline_spawn_link")
+        try:
+            H.task_link(conn, filer, child_id, str(record["url"]))
+        except H.Refused:
+            conn.execute("ROLLBACK TO pipeline_spawn_link")
+        conn.execute("RELEASE pipeline_spawn_link")
+
+
+def spawn(
+    conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False, note: str | None = None
+) -> str | None:
+    """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the
+    target pipeline's first stage, titled as the source, with a line pointing back at it and the source's links carried
+    over. It is filed as the source's owner (so the owner is the requester). Once per (link, source ticket): while a
+    handoff for that pair is live (not returned), nothing is filed again. A returned (undone) handoff allows a new one.
+    `again=True` is a deliberate second spawn (Validate's "Not validated"), which skips that check and is recorded as its
+    own handoff; `note` leads its body as "Follow-up: <note>". A refusal by the rules is logged on the source, and the
+    source moves on alone. Returns the new ticket's id, or None when nothing was filed."""
+    if link["mode"] != "spawn":
+        return None
+    if not again:
+        filed = _rows(
+            conn,
+            "SELECT id FROM pipeline_handoffs WHERE pipeline_link_id = ? AND source_task_id = ? "
+            "AND returned_at IS NULL LIMIT 1",
+            (link["id"], source_id),
+        )
+        if filed:
+            return None
+    target = str(link["to_pipeline_id"])
+    first = pipeline_engine.first_stage(conn, target)
+    source = H.task(conn, source_id)
+    if first is None or source is None:
+        return None
+    filer = str(source["owner_id"])
+    lead = f"Follow-up: {note}. " if note else ""
+    body = f"{lead}Made from {_label(conn, source_id)}: {source['title']}. Its links are attached."
+    conn.execute("SAVEPOINT pipeline_spawn")
+    try:
+        child = H.task_create(
+            conn,
+            filer,
+            str(source["title"]),
+            body,
+            _owner_for(conn, target, filer),
+            parent_id=source_id,
+            type=target,
+            step=str(first["id"]),
+            lint=False,
+            deduplicate=False,
+            mover=True,
+        )
+    except H.Refused as exc:
+        conn.execute("ROLLBACK TO pipeline_spawn")
+        conn.execute("RELEASE pipeline_spawn")
+        H._task_event(conn, source_id, H.KEEPER, "spawn_not_filed", None, target, str(exc.detail or exc)[:500])  # pyright: ignore[reportPrivateUsage]
+        return None
+    conn.execute("RELEASE pipeline_spawn")
+    child_id = str(child["id"])
+    _carry_attachments(conn, filer, source_id, child_id)
+    record_handoff(conn, str(link["id"]), source_id, child_id)
+    return child_id
+
+
 def handoffs(conn: sqlite3.Connection, link_id: str) -> list[Row]:
     return _rows(
         conn,
