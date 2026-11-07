@@ -143,7 +143,10 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grc-chip:hover{background:var(--hover);text-decoration:none}
 .grc-chip-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @container (max-width:560px){
-  .grc-ch .grc-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  /* The head is hidden but still laid out: as blocks, its labels stack inside its 1px box, so none runs past the screen's edge. */
+  .grc-ch .grc-table thead{display:block;position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .grc-ch .grc-table thead tr{display:block}
+  .grc-ch .grc-table thead th{display:inline;padding:0;white-space:normal}
   .grc-ch .grc-table,.grc-ch tbody{display:block}
   .grc-ch tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:4px 10px;padding:8px 0;border-top:1px solid var(--line)}
   .grc-ch tbody tr:first-child{border-top:0;padding-top:0}
