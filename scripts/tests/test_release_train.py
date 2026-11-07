@@ -1327,3 +1327,113 @@ def test_failed_hotfix_validation_stops_before_tagging(installs, tmp_path, monke
     assert rt.cmd_hotfix(gh, ENV, "", "Tasks vanish from the board after an update", True) == 1
     assert gh.tagged == [] and installs["updated"] == []
     assert open_issues(gh) and "Release validation ended failure" in filed(gh)[0]["body"]
+
+
+# ---- the release shots: a shipped candidate's pictures on its approval issue, and the window's outputs for them ----
+
+
+def window_outputs(path):
+    return dict(line.split("=", 1) for line in path.read_text().splitlines())
+
+
+def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    # The base is the release stable runs: what the approver reads the changes since, and the pictures compare with.
+    assert window_outputs(tmp_path / "out") == {
+        "reported": "true",
+        "shipped": "true",
+        "version": "v0.5.201",
+        "sha": C,
+        "base": "v0.5.199",
+    }
+
+
+def test_a_window_whose_canary_rolls_back_hands_no_candidate_to_the_shots(installs, tmp_path, monkeypatch):
+    installs["outcome"] = "rolled_back"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+    assert rt.cmd_window(gh, ENV, False, NOW) == 1
+    assert window_outputs(tmp_path / "out") == {"reported": "true", "shipped": "false"}
+
+
+def test_without_stable_the_pictures_compare_with_the_previous_release(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+    no_stable = {key: value for key, value in ENV.items() if not key.startswith("STABLE")}
+    assert rt.cmd_window(gh, no_stable, False, NOW) == 0
+    assert installs["updated"] == [("canary", "0.5.201")]
+    assert window_outputs(tmp_path / "out")["base"] == "v0.5.200"
+
+
+def test_the_base_is_stables_release_and_an_unreachable_stable_falls_back_to_the_previous_tag(installs):
+    assert rt.release_base(ENV, "v0.5.200") == "v0.5.199"
+    installs["down"] = {"stable"}
+    assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
+
+
+def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(installs, monkeypatch):
+    def unreadable(target):
+        raise rt.Fail("stable is down")
+
+    monkeypatch.setattr(rt, "running", unreadable)
+    assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
+    assert any("stable's release cannot be read (stable is down)" in line for line in rt.LOG)
+
+
+def test_an_approval_says_the_pictures_are_on_their_way_until_they_arrive():
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    assert rt.SHOTS_HEADING in issue["body"] and rt.SHOTS_PENDING in issue["body"]
+    assert issue["body"].index(rt.SHOTS_START) < issue["body"].index("NOTES v0.5.199")
+
+
+def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_change_nothing(tmp_path, monkeypatch):
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    body = issue["body"]
+    assert rt.SHOTS_PENDING not in body and "| before | after |" in body
+    assert body.count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in body and rt.APPROVE_FOOTER in body
+    edits = []
+    monkeypatch.setattr(gh, "edit", lambda number, text, state: edits.append(number))
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    assert edits == []
+
+
+def test_missing_pictures_put_the_failure_and_the_run_that_tried_on_the_issue(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ticoteam/tico")
+    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "missing.md")) == 0
+    assert "could not be made" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
+    assert "https://github.example/ticoteam/tico/actions/runs/4242" in issue["body"]
+    assert any("not made: see the run" in line for line in rt.LOG)
+    # An empty file is no pictures either, and the failure is not put on the issue twice.
+    (tmp_path / "empty.md").write_text("  \n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "empty.md")) == 0
+    assert issue["body"].count("could not be made") == 1
+
+
+def test_a_closed_approval_keeps_its_state_when_its_pictures_go_in(tmp_path):
+    gh = FakeGitHub()
+    issue = approval_for(gh, "v0.5.201")
+    gh.close(issue["number"])
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\npictures of the change\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    assert issue["state"] == "closed" and "pictures of the change" in issue["body"]
+
+
+def test_pictures_without_an_approval_record_fail_loudly(tmp_path):
+    gh = FakeGitHub()
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\npictures\n")
+    with pytest.raises(rt.Fail, match="no approval record for v0.5.201"):
+        rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots))
+    assert gh.comments == [] and gh.created == []

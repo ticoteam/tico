@@ -10,6 +10,9 @@ automatically. Stable (TIDY) takes a canary release only after someone approves 
                                                 [--override-hold true|false]
     python3 scripts/release_train.py status             the window, what canary and stable run, the approvals, the next step
     python3 scripts/release_train.py notes BASE HEAD    the release notes for HEAD since BASE (read-only)
+    python3 scripts/release_train.py shots-into-approval VERSION FILE
+                                                        put the pictures (release-shots' markdown FILE, or the failure
+                                                        of its run) in the approval issue's section (idempotent)
 
 The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
 
@@ -99,6 +102,12 @@ APPROVE_FOOTER = (
     "Stable (TIDY) takes an approved release at the next window or backstop run (every 20 minutes), unless it is held or a"
     " health check fails."
 )
+SHOTS_HEADING = "## What it looks like"
+SHOTS_START, SHOTS_END = "<!-- release-shots:start -->", "<!-- release-shots:end -->"
+SHOTS_PENDING = (
+    "The before and after pictures are on their way; the release shots job adds them here when they are made."
+)
+SHOTS_SECTION = re.compile(re.escape(SHOTS_START) + r".*?" + re.escape(SHOTS_END), re.DOTALL)
 RELEASE_WAIT = 90 * 60
 VALIDATION_WAIT = 150 * 60
 DISPATCH_WAIT = 120
@@ -663,10 +672,12 @@ def unpublished(gh, now, tag, plan):
     sha = gh.tag_commit(tag)
     if not sha:
         raise Fail("%s: the tag is gone" % tag)
+    earlier = [name for name in gh.tags() if parse_version(name) and parse_version(name) < parse_version(tag)]
     plan.update(
         action="ship",
         version=tag,
         sha=sha,
+        previous=newest_stable(earlier) or "",
         republish=True,
         why=("%s is tagged at %s but not published (%s): starting its Release workflow again" % (tag, sha[:12], links)),
     )
@@ -682,7 +693,8 @@ def plan_step(gh, now, finished=None, manual=False):
     if not newest:
         raise Fail("no vX.Y.Z tag to release after")
     start = window_start(now)
-    plan = {"action": "none", "newest": newest, "start": start, "red": None, "stuck": None}
+    # previous: the release a candidate is compared with (the newest tag, unless the candidate is a tag being published again)
+    plan = {"action": "none", "newest": newest, "previous": newest, "start": start, "red": None, "stuck": None}
     published = gh.release(newest)
     if not published or published.get("draft"):
         return unpublished(gh, now, newest, plan)
@@ -924,9 +936,25 @@ def pending_approval(gh):
     return None
 
 
+def shots_block(section):
+    """The pictures section between the markers with_shots replaces. `section` is markdown that starts with its heading."""
+    return "\n".join([SHOTS_START, section.strip(), SHOTS_END])
+
+
 def approval_body(version, sha, notes, validated):
     head = "Candidate %s at %s (validated: %s)" % (version, sha[:12], validated or "not recorded")
-    return "\n".join([head, "", notes.rstrip(), "", APPROVE_FOOTER]) + "\n"
+    pending = shots_block("%s\n\n%s" % (SHOTS_HEADING, SHOTS_PENDING))
+    return "\n".join([head, "", pending, "", notes.rstrip(), "", APPROVE_FOOTER]) + "\n"
+
+
+def with_shots(body, section):
+    """The approval body with its pictures section: the section between the markers is replaced, or, in a body without
+    them, goes under the candidate line. The same section twice gives the same body."""
+    block = shots_block(section)
+    if SHOTS_SECTION.search(body):
+        return SHOTS_SECTION.sub(lambda _found: block, body, count=1)
+    head, _, rest = body.partition("\n")
+    return head + "\n\n" + block + "\n" + rest
 
 
 def open_approval(gh, version, sha, notes, validated=""):
@@ -959,20 +987,59 @@ def drop_approval(gh, issue, reason):
     gh.close(issue["number"])
 
 
-def release_notes_for(gh, env, head, previous):
-    """The notes for head: the changes since the last stable release, which is what stable runs (the previous tag when
-    stable's release cannot be read), so an approver sees everything stable would take."""
-    base = previous
+def release_base(env, previous):
+    """What a candidate is compared with: the release stable (TIDY) runs now, which is what its approver reads the changes
+    since and what its release shots compare. The previous tag when stable's release cannot be read or stable is not
+    configured."""
     stable = install("STABLE", env)
-    if stable:
-        try:
-            release = as_tag(running(stable))
-        except Fail as exc:
-            note("Notes: stable's release cannot be read (%s); the notes start at %s" % (exc, previous))
-            release = ""
-        if parse_version(release):
-            base = release
-    return release_notes.build(gh, base, head)
+    if not stable:
+        return previous
+    try:
+        release = as_tag(running(stable))
+    except Fail as exc:
+        note("Base: stable's release cannot be read (%s); compared with %s" % (exc, previous))
+        return previous
+    return release if parse_version(release) else previous
+
+
+def release_notes_for(gh, env, head, previous):
+    """The notes for head since release_base, so an approver sees everything stable would take."""
+    return release_notes.build(gh, release_base(env, previous), head)
+
+
+# ---- the release shots: the pictures on a candidate's approval issue ----
+
+
+def shots_section(markdown, url):
+    """The section for the approval issue: the markdown release-shots wrote, or, when the shots left none, that the
+    pictures could not be made, with the run that tried."""
+    text = (markdown or "").strip()
+    if not text:
+        failed = (
+            "The before and after pictures could not be made: the release shots job did not finish. Its run: " + url
+        )
+        return SHOTS_HEADING + "\n\n" + failed
+    return text if text.startswith(SHOTS_HEADING) else SHOTS_HEADING + "\n\n" + text
+
+
+def cmd_shots_into_approval(gh, version, path):
+    """Puts a candidate's pictures in its approval issue: release-shots' markdown at path, or the failure with this run when
+    there is none. The section replaces the one it put before, so running it again changes nothing."""
+    try:
+        markdown = Path(path).read_text()
+    except OSError:
+        markdown = ""
+    found = find_approval(gh, version, state="all")
+    if not found:
+        raise Fail("no approval record for %s to put its pictures in" % version)
+    body = found.get("body") or ""
+    updated = with_shots(body, shots_section(markdown, run_url()))
+    if updated == body:
+        note("The pictures on #%s are already current" % found["number"])
+        return 0
+    gh.edit(found["number"], updated, found["state"])  # the issue keeps its state: a closed record stays closed
+    note("Put the pictures on #%s (%s)" % (found["number"], "made" if markdown.strip() else "not made: see the run"))
+    return 0
 
 
 def approval_waits(approval, approver, held):
@@ -1104,7 +1171,7 @@ def cmd_window(gh, env, opening, now=None):
     """The release job: at a window's open, or at the backstop, promote the approved canary release first; then ship the
     first green candidate, or validate main's head. Reports a failure, or a completed window, on the release-train issue."""
     now = now or datetime.now(timezone.utc)
-    failures, promoted, shipped = [], False, False
+    failures, promoted, shipment = [], False, None
 
     def step(name, action):
         try:
@@ -1135,13 +1202,13 @@ def cmd_window(gh, env, opening, now=None):
                 step("promote", lambda: promote(gh, env))
 
             def ship():
-                nonlocal shipped, record
+                nonlocal shipment, record
                 canary = install("CANARY", env)
                 if not canary:
                     raise Fail("ship: %s; nothing tagged" % missing("CANARY"))
-                notes = release_notes_for(gh, env, plan["sha"], plan["newest"])
+                base = release_base(env, plan["previous"])
+                notes = release_notes.build(gh, base, plan["sha"])
                 publish(gh, plan["sha"], plan["version"])
-                shipped = True
                 # The approval record exists before the canary moves, so an approval of the candidate is never lost.
                 approval = open_approval(
                     gh, plan["version"], plan["sha"], notes, plan.get("run", {}).get("html_url", "")
@@ -1151,6 +1218,8 @@ def cmd_window(gh, env, opening, now=None):
                 except Exception as exc:
                     drop_approval(gh, approval, str(exc))
                     raise
+                # The canary runs it and its approval record is open: its release shots may run (train.yml).
+                shipment = {"version": plan["version"], "sha": plan["sha"], "base": base}
                 retire_approvals(
                     gh,
                     plan["version"],
@@ -1165,14 +1234,15 @@ def cmd_window(gh, env, opening, now=None):
             step("validate", lambda: dispatch_candidate(gh, plan["sha"], plan["version"], plan["newest"]))
     if failures:
         report(gh, False, list(LOG), key=failures)
-    elif shipped:
+    elif shipment:
         report(
             gh,
             True,
             list(LOG),
             close_title=record or ("Release %s republished" % plan["version"] if plan.get("republish") else None),
         )
-    output(reported="true")
+    # train.yml's shots job runs for a shipped candidate, from these (the release stable runs is its base).
+    output(reported="true", shipped=str(shipment is not None).lower(), **(shipment or {}))
     return 1 if failures else 0
 
 
@@ -1346,8 +1416,10 @@ def main(argv=None, env=None, now=None):
     env = dict(os.environ if env is None else env)
     now = now or datetime.now(timezone.utc)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["guard", "window", "promote", "hotfix", "status", "notes"])
-    parser.add_argument("refs", nargs="*", help="notes: BASE HEAD")
+    parser.add_argument(
+        "command", choices=["guard", "window", "promote", "hotfix", "status", "notes", "shots-into-approval"]
+    )
+    parser.add_argument("refs", nargs="*", help="notes: BASE HEAD; shots-into-approval: VERSION FILE")
     parser.add_argument("--sha", default="")
     parser.add_argument("--reason", default="")
     parser.add_argument("--promote-stable", default="true")
@@ -1375,6 +1447,11 @@ def main(argv=None, env=None, now=None):
                 print("usage: release_train.py notes BASE HEAD", file=sys.stderr)
                 return 2
             return cmd_notes(gh, args.refs[0], args.refs[1])
+        if args.command == "shots-into-approval":
+            if len(args.refs) != 2:
+                print("usage: release_train.py shots-into-approval VERSION FILE", file=sys.stderr)
+                return 2
+            return cmd_shots_into_approval(gh, args.refs[0], args.refs[1])
         promote(gh, env)
         return 0
     except Fail as exc:
