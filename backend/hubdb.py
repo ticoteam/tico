@@ -71,7 +71,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from .batch_work import isolated
 from . import delivery
@@ -1789,9 +1789,10 @@ def migrate(conn, adopt_legacy=False):
     from .roadmaps import migrate as migrate_roadmaps
 
     migrate_roadmaps(conn)
-    from .roadmap_flow import ready_step as roadmap_ready_step
+    from .roadmap_flow import measured_step as roadmap_measured_step, ready_step as roadmap_ready_step
 
     roadmap_ready_step(conn)
+    roadmap_measured_step(conn)
     # Won't do is no longer a board step (`_task_state`): move its tasks off, then delete it.
     retire_held_steps(conn)
     task_blocked.stamp_builds(conn)
@@ -2117,7 +2118,7 @@ def writing_refusal(rule, detail):
     )
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""
@@ -6804,6 +6805,7 @@ def task_create(
     top=False,
     lint=True,
     goal_id=None,
+    segment_id=None,
     next_run=False,
     type=None,
     step=None,
@@ -6882,6 +6884,9 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
+    # A subtask is for its parent's segment unless the caller names one; "" names none and keeps it off.
+    if segment_id is None and parent:
+        segment_id = parent.get("segment_id")
     from . import review_gate
 
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
@@ -7073,6 +7078,7 @@ def task_create(
         "lane": lane,
         "rank": _queue_end(conn, target, top),
         "goal_id": goal_id or None,
+        "segment_id": segment_id or None,
         "next_run": 1 if next_run else 0,
         "number": number,
         "private": int(private),
@@ -7083,10 +7089,10 @@ def task_create(
     conn.execute(
         "INSERT INTO tasks (id, title, body, requester_id, owner_id, due_at, "
         "conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, lane, rank, "
-        "goal_id, next_run, number, private, occurrence, occurrence_step, rule_due_id) VALUES "
+        "goal_id, segment_id, next_run, number, private, occurrence, occurrence_step, rule_due_id) VALUES "
         "(:id, :title, :body, :requester_id, :owner_id, :due_at, "
         ":conversation_id, :created_at, :updated_at, :done_at, :closed_at, :closed_by_id, :note, "
-        ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence, :occurrence_step, :rule_due_id)",
+        ":lane, :rank, :goal_id, :segment_id, :next_run, :number, :private, :occurrence, :occurrence_step, :rule_due_id)",
         row,
     )
     _building(conn, row["id"])  # its first status and step are part of task.created, not changes (_task_changed)
@@ -7138,6 +7144,8 @@ def task_create(
             )
     if goal_id:
         _task_event(conn, row["id"], actor, "goal_id", None, goal_id, "")
+    if segment_id:
+        _task_event(conn, row["id"], actor, "segment_id", None, segment_id, "")
     if plain:
         # warn mode: the problem is on the record, the task still exists (the refuse week follows)
         _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
@@ -7349,6 +7357,7 @@ def task_update(
     rank=None,
     mover=None,
     goal_id=None,
+    segment_id=None,
     quiet=False,
     type=None,
     step=None,
@@ -7386,6 +7395,8 @@ def task_update(
     `rank` is the position in the owner's queue: a participant may rank its own tasks.
     `step_rank` is its place within its step, lower first, set the same way.
     `goal_id` names the goal the task serves; "" takes it off (backend/goals.py).
+    `segment_id` names the segment it is for; "" takes it off (backend/segment_tags.py). A subtask created without one
+    takes its parent's; that inheritance is at create only, and a later change to either task is its own.
     `number` gives a task that has none its number (a mover's, as on create); it never changes.
     `title` renames it, checked as a new task's title would be (`_retitle`).
     `waiting_on` names the person a `waiting` task waits on: it files them a question task with no options under it,
@@ -7440,6 +7451,7 @@ def task_update(
                 ("body", body),
                 ("due", due),
                 ("goal", goal_id),
+                ("segment", segment_id),
                 ("step rank", step_rank),
                 ("private", private),
                 ("roles", roles),
@@ -7479,6 +7491,7 @@ def task_update(
                 lane,
                 rank,
                 goal_id,
+                segment_id,
                 type,
                 step,
                 step_rank,
@@ -7918,6 +7931,11 @@ def task_update(
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
+    before = row.get("segment_id") if row else None
+    if segment_id is not None and (segment_id or None) != before:
+        sets.append("segment_id=:segment_id")
+        args["segment_id"] = segment_id or None
+        _task_event(conn, task_id, actor, "segment_id", before, segment_id or None, note or "")
     # A task keeps only the times of the state it is in: one moved out of closed loses its close time (the close
     # rule reads closed_at IS NULL, so a done task that kept it would never close again), one out of done its done time.
     if status == "done":
@@ -11177,6 +11195,16 @@ def labels_in_use(conn, visible="1"):
 STEP_POSITION = "(SELECT position FROM task_steps WHERE task_steps.id=tasks.step_id)"
 
 
+SEGMENT_NONE = "none"  # the segment filter's value for the rows that have no segment
+
+
+def segment_where(segment, column="segment_id"):
+    """The SQL and its arguments that keep the rows of one segment id, or with `none` the rows that have none."""
+    if segment == SEGMENT_NONE:
+        return f"coalesce({column},'')=''", []
+    return f"{column}=?", [segment]
+
+
 def tasks(
     conn,
     owner=None,
@@ -11198,6 +11226,7 @@ def tasks(
     ids=None,
     snoozed=None,
     q=None,
+    segment=None,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `order="step"` is
@@ -11239,6 +11268,10 @@ def tasks(
     if number is not None:
         where.append("number=?")
         args.append(number)
+    if segment:
+        sql_segment, segment_args = segment_where(segment)
+        where.append(sql_segment)
+        args += segment_args
     if updated_since:
         where.append("updated_at>?")
         args.append(updated_since)

@@ -92,7 +92,7 @@ _CLICK_FIELDS = {
     "vision": "vision",
 }
 KINDS = ("goal_create", "goal_update", "measure_add", "target_set", "measure_remove", "suggestion")
-GOAL_FIELDS = ("title", "owner", "parent_id", "bet_id", "why")
+GOAL_FIELDS = ("title", "owner", "parent_id", "bet_id", "segment_id", "why")
 MEASURE_FIELDS = ("kpi_id", "name", "definition", "unit", "direction", "cadence", "source_note", "owner")
 TARGET_FIELDS = ("kind", "baseline", "baseline_at", "target", "deadline", "min", "max")
 SUGGESTIONS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why")

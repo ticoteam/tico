@@ -149,10 +149,13 @@ def ensure(c):
 
 # The roadmap steps a linked Dev ticket moves an item between, in order. Ready to ship is optional: a type without it
 # goes from Building straight to Shipped.
-FLOW = ('Approved', 'Building', 'Ready to ship', 'Shipped')
+FLOW = ('Approved', 'Building', 'Ready to ship', 'Shipped', 'Measured')
 READY_STEP = 'Ready to ship'
 READY_FROM = 'pending release'  # a Dev tickets step: it and every step after it are "ready to ship"
 READY_MARKER = 'roadmap_ready_to_ship_step'
+# Shipped, read later: a done step after Shipped, public as Shipped (measured_step).
+MEASURED_STEP = 'Measured'
+MEASURED_MARKER = 'roadmap_measured_step'
 
 
 def tickets(c, task_id):
@@ -237,7 +240,8 @@ def sync(c, task_id):
     if goal == READY_STEP and goal not in names:
         goal = 'Building'
     step = next((s for s in typ['steps'] if s['name'] == goal), None)
-    if not step or current == goal:
+    # A Measured item stays Measured while its tickets are shipped; a reopened ticket still takes it back.
+    if not step or current == goal or current == MEASURED_STEP and goal == 'Shipped':
         return
     H._set_status(c, H.KEEPER, row, step=step['id'])
     version = ',version=version+1' if 'version' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')} else ''
@@ -297,6 +301,47 @@ def ready_step(c):
         raise
     finally:
         c.execute('RELEASE roadmap_ready_step')
+
+
+def measured_step(c):
+    """Give the Product roadmap a Measured step right after Shipped, once: status done, and Shipped's public name, so a
+    measured item still reads as shipped publicly. It is added on every install here, not by ensure: roadmaps.migrate
+    copies each step's name into its public name, which would publish it as Measured. Later steps move down one.
+    Nothing is renamed, and a team that deletes the step does not get it back. Runs after ready_step. Without a
+    Shipped step (renamed, or gone) the first done step is the anchor; with neither, nothing is added, and the marker
+    is still set."""
+    from . import hubdb as H
+
+    if c.execute('SELECT 1 FROM registry_metadata WHERE key=?', (MEASURED_MARKER,)).fetchone():
+        return
+    type_id = role_type(c, PRODUCT)
+    if not type_id:
+        return
+    steps = c.execute(
+        'SELECT id,name,position,status,public_name FROM task_steps WHERE type_id=? ORDER BY position', (type_id,)
+    ).fetchall()
+    shipped = next((s for s in steps if s[1] == 'Shipped'), None) or next((s for s in steps if s[3] == 'done'), None)
+    c.execute('SAVEPOINT roadmap_measured_step')
+    try:
+        if shipped and not any((s[1] or '').strip().lower() == MEASURED_STEP.lower() for s in steps):
+            ident, n = type_id + '-measured', 1
+            while c.execute('SELECT 1 FROM task_steps WHERE id=?', (ident,)).fetchone():
+                n += 1
+                ident = f'{type_id}-measured-{n}'
+            # Highest first: a type may keep positions unique.
+            for later in sorted((s for s in steps if s[2] > shipped[2]), key=lambda s: -s[2]):
+                c.execute('UPDATE task_steps SET position=position+1 WHERE id=?', (later[0],))
+            c.execute(
+                'INSERT INTO task_steps(id,type_id,name,position,status,public_name) VALUES(?,?,?,?,?,?)',
+                (ident, type_id, MEASURED_STEP, shipped[2] + 1, 'done', shipped[4]),
+            )
+            c.execute('UPDATE task_types SET updated_at=? WHERE id=?', (H.now(), type_id))
+        c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?)', (MEASURED_MARKER, '{"done": true}'))
+    except BaseException:
+        c.execute('ROLLBACK TO roadmap_measured_step')
+        raise
+    finally:
+        c.execute('RELEASE roadmap_measured_step')
 
 
 def changed(c, task_id, itself=True):

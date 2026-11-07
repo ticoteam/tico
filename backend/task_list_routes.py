@@ -38,6 +38,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         ids: str | None = None,
         snoozed: str | None = None,
         q: str = "",
+        segment: str | None = None,
     ):
         from . import task_reads as reads
 
@@ -64,6 +65,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 member=member,
                 role=role,
                 snoozed=snoozed,
+                segment=segment,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
@@ -106,6 +108,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "done_at",
                             "closed_at",
                             "closed_by_id",
+                            "segment_id",
                         ):
                             if row.get(field) is None:
                                 row.pop(field, None)

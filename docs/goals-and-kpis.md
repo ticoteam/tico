@@ -13,6 +13,9 @@ optional strategy bet it serves (`bet_id`, shown as **Bet** in the goal editor n
 [Strategy](strategy.md)), a colour and a note. Team goals are visible to everyone; a bot's own goals are visible to whoever may Read the bot
 ([permissions](permissions.md)). A goal with no bet is shown as "not tied to a bet", a filter on the Strategy page, never a nag; a
 retired bet keeps its goals. A bet's health comes only from its goals that have a KPI: a goal without one leaves the bet gray.
+A goal can also name the company's segment it is for (`segment_id`, or none); the goal list and the tree take `segment=<id>`
+or `segment=none`. A filter by an id that is not one of the company's segments matches no goal. The tree keeps the goals
+above a kept one as context, flagged `context`, so none is left without its parent.
 
 When the **Bet** picker shows **Retired or unpublished**, the goal's linked bet is not visible to you.
 Saving another field keeps that link. Choose **None** to remove it, or choose an active bet to replace it.

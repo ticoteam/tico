@@ -231,6 +231,9 @@ class TaskCreate(Contract):
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
+    segment_id: str | None = Field(
+        default=None, max_length=200
+    )  # the segment it is for (backend/segment_tags.py); unset takes the parent's, "" none
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
     labels: list[str] = Field(default_factory=list, max_length=20)
@@ -315,6 +318,7 @@ class TaskUpdate(Contract):
     due: str | None = None
     body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)  # "" takes the goal off
+    segment_id: str | None = Field(default=None, max_length=200)  # "" takes the segment off
     close: bool = False
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
@@ -359,6 +363,7 @@ class TaskFilter(Contract):
     member: ID | None = None
     role: str | None = Field(default=None, max_length=100)
     snoozed: Literal["hide", "only", "all"] | None = None
+    segment: str | None = Field(default=None, max_length=200)  # a segment id, or `none` for the tasks with none
     ids: list[ID] | None = Field(default=None, min_length=1, max_length=100)
 
 
@@ -689,6 +694,7 @@ class GoalCreate(Contract):
     body: str = Field(default="", max_length=100_000)
     top: bool = False
     bet_id: ID | None = None  # the strategy bet this goal serves (backend/strategy.py)
+    segment_id: str | None = Field(default=None, max_length=200)  # the company's segment this goal is for; "" none
 
 
 class GoalStatus(Contract):
@@ -710,6 +716,7 @@ class GoalUpdate(Contract):
     rank: int | None = None
     top: bool = False
     bet_id: str | None = Field(default=None, max_length=200)  # "" unlinks it from its strategy bet
+    segment_id: str | None = Field(default=None, max_length=200)  # "" unlinks it from its segment
 
 
 class GoalRefresh(Contract):

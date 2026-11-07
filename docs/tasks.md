@@ -3,7 +3,7 @@
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
 pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
-each standard status except waiting and declined (below).
+each standard status except waiting and declined (below). One built-in type comes with every team: Marketing ([growth](growth.md)).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. The Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
@@ -958,7 +958,7 @@ hub task bulk status open --where-label q4 --where-status closed
 ```
 
 `POST /api/v2/task-bulk` takes a `filter` with the filters of `GET /api/v2/tasks` (`owner`, `requester`, `status`,
-`lane`, `label`, `type`, `step`, `number`, `updated_since`, `member`, `role`, `snoozed`, and `ids`, a list of up to
+`lane`, `label`, `type`, `step`, `number`, `updated_since`, `member`, `role`, `snoozed`, `segment`, and `ids`, a list of up to
 100 task ids or numbers), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
 optional `note` and `dry_run`. `hub_task_bulk` takes the same. The filter must name something: an empty one, or an
 owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
@@ -1142,6 +1142,11 @@ when the task was created. `GET /api/v2/tasks?type=Dev%20ticket&sort=step` is a 
 in order. Add `updated_since=<ISO-8601 time with timezone>` to poll only changed tasks; `brief=true`
 leaves out bodies and acceptance criteria. `hub task list` and `hub_task_list` accept the same filters,
 including with `--all`/`all`, and support `number` lookup.
+
+A task names the company's segment it is for with `segment_id`, or `""` for none; create and update take it, and a
+subtask created without one takes its parent's. `GET /api/v2/tasks?segment=<id>` (or `segment=none`) and `hub task
+list --segment` narrow the list. A filter by an id that is not one of the company's segments, a former one for
+example, matches no task, and the task keeps its tag; a write with such an id is refused (404).
 
 `GET /api/v2/pipeline` (`hub pipeline`, `hub_pipeline`) is a board's numbers in one read, counted over the same
 tickets the board shows the caller: per working step the count, how many are snoozed, the oldest and median time

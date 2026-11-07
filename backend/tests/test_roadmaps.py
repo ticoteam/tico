@@ -399,6 +399,89 @@ def test_closed_hand_moved_and_blocked_by_tickets_move_the_roadmap_item_only_as_
     _an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticket_moves(api, dev)
 
 
+def test_measured_is_added_once_after_shipped_on_an_existing_roadmap(api):
+    from backend import roadmap_flow as F
+
+    def steps(c):
+        return [
+            tuple(r)
+            for r in c.execute(
+                "SELECT name,status,public_name FROM task_steps WHERE type_id=? ORDER BY position",
+                (F.role_type(c, F.PRODUCT),),
+            )
+        ]
+
+    with api.app.state.store.transaction() as c:
+        type_id = F.role_type(c, F.PRODUCT)
+        # A roadmap from before Measured: no such step, and the marker unset.
+        c.execute("DELETE FROM task_steps WHERE type_id=? AND name='Measured'", (type_id,))
+        c.execute("UPDATE task_steps SET position=position-1 WHERE type_id=? AND name='Declined'", (type_id,))
+        c.execute('DELETE FROM registry_metadata WHERE key=?', (F.MEASURED_MARKER,))
+        F.measured_step(c)
+        assert steps(c)[-3:] == [
+            ('Shipped', 'done', 'Shipped'),
+            ('Measured', 'done', 'Shipped'),
+            ('Declined', 'declined', 'Declined'),
+        ]
+        # Once: a later start adds nothing.
+        F.measured_step(c)
+        assert [s[0] for s in steps(c)].count('Measured') == 1
+        # A team that takes the step off keeps it off.
+        c.execute("DELETE FROM task_steps WHERE type_id=? AND name='Measured'", (type_id,))
+        F.measured_step(c)
+        assert 'Measured' not in [s[0] for s in steps(c)]
+        # A team that renamed Shipped keeps its name: Measured follows the done step, with that step's public name.
+        c.execute(
+            "UPDATE task_steps SET name='Launched', public_name='Launched' WHERE type_id=? AND name='Shipped'",
+            (type_id,),
+        )
+        c.execute('DELETE FROM registry_metadata WHERE key=?', (F.MEASURED_MARKER,))
+        F.measured_step(c)
+        assert steps(c)[-3:] == [
+            ('Launched', 'done', 'Launched'),
+            ('Measured', 'done', 'Launched'),
+            ('Declined', 'declined', 'Declined'),
+        ]
+
+
+def test_a_measured_item_reads_as_shipped_on_the_public_roadmap(api):
+    task = public_setup(api)
+    _step(api, task, 'Measured')
+    response = api.get('/public/roadmaps/roadmap/tasks/' + task['id'], headers=ORIGIN)
+    assert response.status_code == 200, response.text
+    assert response.json()['task']['step'] == 'Shipped'
+
+
+def test_a_measured_item_stays_measured_until_a_ticket_reopens(api):
+    from backend import roadmap_flow as F
+
+    dev = _dev_tickets(api)
+    item, (child,) = _building(api, dev, 'Measured exports', tickets=1)
+    _step(api, child, 'Done')
+    assert _roadmap_step(api, item) == 'Shipped'
+    _step(api, item, 'Measured')
+    with api.app.state.store.transaction() as c:
+        F.changed(c, child['id'])  # the ticket is still done: nothing moves
+    assert _roadmap_step(api, item) == 'Measured'
+    _step(api, child, 'In Progress')  # reopened: the item goes back to Building
+    assert _roadmap_step(api, item) == 'Building'
+
+
+def test_a_plain_close_clears_a_roadmap_item_step_as_before_and_never_lands_on_measured(api):
+    # A person's plain close on a steps-only type has no closed step to land on, so the step goes, as on main.
+    item = _item(api, 'Plain close', step='Approved')
+    closed = post(api, 'tasks/' + item['id'], {'version': item['version'], 'status': 'closed'})
+    assert closed['status'] == 'closed' and closed['step'] is None
+    measured = _item(api, 'Plain close after measuring', step='Approved')
+    _step(api, measured, 'Measured')
+    closed = post(
+        api,
+        'tasks/' + measured['id'],
+        {'version': get(api, 'tasks/' + measured['id'])['task']['version'], 'status': 'closed'},
+    )
+    assert closed['status'] == 'closed' and closed['step'] is None
+
+
 def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
     from backend import roadmap_flow as F
 
@@ -421,6 +504,7 @@ def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
             'Building',
             'Ready to ship',
             'Shipped',
+            'Measured',
             'Declined',
         ]
         building, ready = steps(c)[4:6]
@@ -431,7 +515,8 @@ def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
         type_id = F.role_type(c, F.PRODUCT)
         c.execute("DELETE FROM task_steps WHERE type_id=? AND name='Ready to ship'", (type_id,))
         c.execute(
-            "UPDATE task_steps SET position=position-1 WHERE type_id=? AND name IN ('Shipped','Declined')", (type_id,)
+            "UPDATE task_steps SET position=position-1 WHERE type_id=? AND name IN ('Shipped','Measured','Declined')",
+            (type_id,),
         )
         c.execute("UPDATE task_steps SET public_name='In progress' WHERE type_id=? AND name='Building'", (type_id,))
         c.execute('DELETE FROM registry_metadata WHERE key=?', (F.READY_MARKER,))
@@ -440,9 +525,10 @@ def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
             ('Building', 'doing', 'In progress'),
             ('Ready to ship', 'doing', 'In progress'),
             ('Shipped', 'done', 'Shipped'),
+            ('Measured', 'done', 'Shipped'),
             ('Declined', 'declined', 'Declined'),
         ]
-        assert len({r[0] for r in c.execute('SELECT position FROM task_steps WHERE type_id=?', (type_id,))}) == 8
+        assert len({r[0] for r in c.execute('SELECT position FROM task_steps WHERE type_id=?', (type_id,))}) == 9
         # A team that takes it off again keeps it off.
         c.execute("DELETE FROM task_steps WHERE type_id=? AND name='Ready to ship'", (type_id,))
         F.ready_step(c)
