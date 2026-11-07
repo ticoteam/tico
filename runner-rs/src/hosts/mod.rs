@@ -956,6 +956,7 @@ const HUB_PATHS: &[&str] = &[
     "fleet-check",
     "gateway",
     "gateway catalog",
+    "gateway digest",
     "gateway fetch",
     "gateway image",
     "gateway search",
