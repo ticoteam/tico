@@ -33,7 +33,6 @@ Row = dict[str, Any]
 
 DIMENSION = "offering"  # the market page's defaults, so these numbers match its first view
 BASIS = "product"
-COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")  # core's color_of falls back on these
 CHANGED_MAX = 30
 WHAT_CHANGED_MAX = 30
 NOTE_MAX = 1000
