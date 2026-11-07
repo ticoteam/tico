@@ -304,3 +304,27 @@ def test_visitor_suggestions_land_on_the_product_first_stage_before_and_after_se
     assert public_roadmaps._ideas_step(c) == "Suggested"
     S.apply_factory_setup(c, ANA)
     assert public_roadmaps._ideas_step(c) == "Ideas"
+
+
+def test_replace_relocating_a_card_off_a_spawn_stage_files_no_linked_work(tmp_path):
+    """Replace moves cards off removed stages without running the step hook: a removed stage with a spawn link files
+    nothing when its card is relocated, and the card's visit still follows it."""
+    from backend import pipeline_engine
+
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, "tico_default")
+    working = step_id(c, _type(c, "Marketing"), "Working")
+    L.create_link(c, ANA, working, _type(c, "Engineering"), "spawn")
+    card = H.task_create(c, ANA, "Spring push", "", ANA, type=_type(c, "Marketing"), step="Working", lint=False)["id"]
+    assert pipeline_engine.ensure_visit(c, card) is not None
+    c.commit()
+    engineering = rows(c, "SELECT COUNT(*) AS n FROM tasks WHERE type_id=?", _type(c, "Engineering"))[0]["n"]
+
+    S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+
+    assert rows(c, "SELECT COUNT(*) AS n FROM tasks WHERE type_id=?", _type(c, "Engineering"))[0]["n"] == engineering
+    assert rows(c, "SELECT COUNT(*) AS n FROM pipeline_handoffs WHERE source_task_id=?", card)[0]["n"] == 0
+    now = rows(c, "SELECT step_id FROM tasks WHERE id=?", card)[0]["step_id"]
+    assert rows(c, "SELECT pipeline_stage_id AS s FROM stage_visits WHERE task_id=? AND left_at IS NULL", card) == [
+        {"s": now}
+    ]

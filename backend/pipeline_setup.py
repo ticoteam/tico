@@ -273,8 +273,14 @@ def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[s
                 conn, card["id"], actor, "step", step["id"], dest["id"], "Moved by pipeline setup (replace)"
             )
             # The status stays as it was (so no task_update), but the stage visit follows the card: a visit left open on
-            # a stage this replace removes would keep its Late clock and review items on a stage that is gone.
-            pipeline_engine.on_step_change(conn, actor, card, row["id"], dest["id"], ts)
+            # a stage this replace removes would keep its Late clock and review items on a stage that is gone. Only the
+            # visit moves: no step hook runs, so a relocation never spawns linked work or settles a parent.
+            visit = pipeline_engine.open_visit(conn, card["id"])
+            if visit is not None:
+                conn.execute("UPDATE stage_visits SET left_at = ? WHERE id = ?", (ts, visit["id"]))
+                pipeline_engine._open_visit_at(  # pyright: ignore[reportPrivateUsage]
+                    conn, card["id"], row["id"], dest["id"], ts, direction="initial", came_from=step["id"], actor=actor
+                )
             moved += 1
     if moved:
         made.append(f"moved {moved} cards off removed stages of {row['name']}")
