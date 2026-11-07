@@ -133,7 +133,9 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
 
 def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_too(tmp_path):
     # A new tool, response field or command reference can change the contract without a Python import edge.
-    graph = SimpleNamespace(files=[], unparsed=set(), affected=lambda *args: set())
+    graph = SimpleNamespace(
+        files=[], unparsed=set(), tracked=set(), run_by={}, affected=lambda *args: set(), readers=lambda *args: set()
+    )
     for name in (
         "backend/routes/tasks.py",
         "clients/hubtools.py",
@@ -1001,6 +1003,7 @@ def test_slow_collection_counts_each_files_tests_and_reads_no_match_as_none(monk
     monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=out, stderr=""))
     assert checks.collect_slow(["x"]) == Counter({"backend/tests/test_a.py": 2, "backend/tests/test_b.py": 1})
     assert checks.collect_slow([]) == Counter()
+    assert checks.collect_tests([]) == Counter()
     monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=5, stdout="", stderr=""))
     assert checks.collect_slow(["x"]) == Counter()
 
@@ -1059,9 +1062,24 @@ def test_one_serial_vm_keeps_the_nearest_slow_files_that_fit_its_budget_and_defe
     names = ["a.py", "b.py", "c.py", "d.py"]
     counts = Counter(dict.fromkeys(names, 1))
     timings = {"a.py": 110.0, "b.py": 150.0, "c.py": 90.0, "d.py": 5.0}
-    kept, deferred, seconds = checks.slow_fit(names, counts, timings)
+    kept, deferred, seconds = checks.slow_fit(names, counts, timings, counts)  # every test slow: the whole file's time
     assert kept == ["a.py", "c.py", "d.py"] and deferred == ["b.py"]
     assert seconds == 205.0 and seconds <= budget
+
+
+def test_a_slow_file_is_budgeted_at_its_slow_share_of_its_measured_time():
+    # The measured time is the whole file's, default and slow tests together: one slow test in fifty is one fiftieth.
+    counts = Counter({"big.py": 1, "half.py": 2, "new.py": 3})
+    totals = Counter({"big.py": 50, "half.py": 4})
+    timings = {"big.py": 287.5, "half.py": 200.0}
+    seconds = checks.slow_seconds(counts, totals, timings)
+    assert seconds["big.py"] == 5.75 and seconds["half.py"] == 100.0
+    # A file with no timing takes the seconds per slow test that the timed files show (105.75 over 3 tests).
+    assert round(seconds["new.py"], 2) == 105.75
+    # Without the share, big.py alone (287.5 s) would not fit the budget; its slow share keeps it.
+    kept, deferred, total = checks.slow_fit(["big.py", "half.py"], counts, timings, totals)
+    assert kept == ["big.py", "half.py"] and deferred == [] and round(total, 2) == 105.75
+    assert checks.slow_fit(["big.py"], counts, {"big.py": 287.5}, Counter({"big.py": 1}))[1] == ["big.py"]
 
 
 def test_slow_selection_is_empty_on_main_and_docs_and_uncertain_changes_keep_only_their_changed_tests(mapped):
@@ -1098,6 +1116,7 @@ def test_the_plan_confirms_slow_files_by_collection_drops_exempt_ones_and_shards
         "collect_slow",
         lambda files=None, root=ROOT: collected.append(files) or Counter({scheduler: 2, exempt_file: 1}),
     )
+    monkeypatch.setattr(checks, "collect_tests", lambda files, root=ROOT: Counter({scheduler: 2}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
     target = tmp_path / "plan.json"
@@ -1127,6 +1146,7 @@ def test_the_queue_runs_at_most_one_slow_vm_and_names_the_slow_files_it_defers_i
     monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
     monkeypatch.setattr(checks, "slow_exempt", lambda root=ROOT: {})
     monkeypatch.setattr(checks, "collect_slow", lambda files=None, root=ROOT: Counter({nearest: 1, second: 1}))
+    monkeypatch.setattr(checks, "collect_tests", lambda files, root=ROOT: Counter({nearest: 1, second: 1}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
     durations = tmp_path / "durations.json"

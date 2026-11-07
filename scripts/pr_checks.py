@@ -758,13 +758,14 @@ SMOKE_SCRIPT = "sign-in-redirect"
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
 UI_RUNNER = "scripts/ui-tests.cjs"
-# Slow tests (marked `slow`: absent from the default run, and run by the release gate) that a merge queue group runs on one
-# serial VM. A slow test is a candidate only when it directly imports or reads a changed file (slow_candidates: depth one
-# of the map, never through a conftest or a fixture). Collection keeps the candidates that hold a slow test, the exempt
-# list drops the ones a group cannot run, and the budget (slow_fit) keeps the nearest that fit; the rest are deferred to
-# release validation. SLOW_EXEMPT (scripts/pr_slow_exempt.json) names each exempt file with its reason: Docker, a binary
-# or the network the queue lacks, a skip that would hide a gap, or a job that already runs the file for the same change.
-# check_slow_exempt keeps that list honest on every push.
+# Slow tests (marked `slow`: absent from the default run, and run by the release gate) that a merge queue group runs
+# on one serial VM. A slow test is a candidate only when it directly imports or reads a changed file (slow_candidates:
+# depth one of the map, never through a conftest or a fixture). Collection keeps the candidates that hold a slow test,
+# the exempt list drops the ones a group cannot run, and the budget (slow_fit: each file at its slow share of its
+# measured time) keeps the nearest that fit; the rest are deferred to release validation. SLOW_EXEMPT
+# (scripts/pr_slow_exempt.json) names each exempt file with its reason: Docker, a binary or the network the queue
+# lacks, a skip that would hide a gap, or a job that already runs the file for the same change. check_slow_exempt
+# keeps that list honest on every push.
 SLOW_EXEMPT = "scripts/pr_slow_exempt.json"
 
 
@@ -804,28 +805,54 @@ def check_slow_exempt(root=ROOT):
     return problems
 
 
-def collect_slow(files=None, root=ROOT):
-    """Slow test counts per file as pytest collects them: `-m slow` over these files (None: the whole suite)."""
+def collect_counts(files, marker, root=ROOT):
+    """Test counts per file as pytest collects them under `-m marker`, over these files (None: the whole suite)."""
     if files is not None and not files:
         return Counter()
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", "-m", "slow", *(files or [])],
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", "-m", marker, *(files or [])],
         cwd=root,
         capture_output=True,
         text=True,
         check=False,
     )
-    if result.returncode not in (0, 5):  # 5: none of these files holds a slow test
-        raise RuntimeError("Slow collection failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
+    if result.returncode not in (0, 5):  # 5: none of these files holds a test under the marker
+        raise RuntimeError(f"Collection with -m {marker!r} failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
     return Counter(
         line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
     )
 
 
-def slow_fit(nearest, counts, timings):
+def collect_slow(files=None, root=ROOT):
+    """Slow test counts per file as pytest collects them: `-m slow` over these files (None: the whole suite)."""
+    return collect_counts(files, "slow", root)
+
+
+def collect_tests(files, root=ROOT):
+    """All test counts per file, slow and default together, as pytest collects them: the denominator of a file's slow
+    share (slow_seconds)."""
+    return collect_counts(files, "slow or not slow", root)
+
+
+def slow_seconds(counts, totals, timings):
+    """Estimated seconds of each file's slow tests on one serial VM: the file's measured time times its slow share, the
+    slow tests over all its tests (`counts` slow, `totals` all, both collected). The timings are per file (the release
+    run's measured time for the whole file, default and slow tests together) and keep no per-test seconds, so the share
+    assumes the file's tests take equal time: a heavy slow test in a file of light ones is underestimated, and a light
+    slow test in a heavy file is overestimated. A file with no total counts as all slow. A file with no timing takes the
+    seconds per slow test that weights() observes in the timed files."""
+    adjusted = {
+        name: timings[name] * counts[name] / max(totals.get(name, counts[name]), counts[name], 1)
+        for name in counts
+        if name in timings and isinstance(timings[name], (int, float)) and math.isfinite(timings[name])
+    }
+    return weights(counts, adjusted)
+
+
+def slow_fit(nearest, counts, timings, totals):
     """The nearest slow files that fit one serial VM within the job's budget, and the rest, deferred to release
-    validation: (kept, deferred, seconds). A file's seconds are its measured time (its estimate when it has none)."""
-    seconds = weights({name: counts[name] for name in nearest}, timings)
+    validation: (kept, deferred, seconds). A file's seconds are its slow share of its measured time (slow_seconds)."""
+    seconds = slow_seconds({name: counts[name] for name in nearest}, totals, timings)
     budget = JOB_SECONDS - SETUP_SECONDS["slow"]
     kept, deferred, total = [], [], 0.0
     for name in nearest:
@@ -1137,7 +1164,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         exempt = slow_exempt()
         slow_reached = sorted(name for name in reached if name in exempt)
         nearest = [name for name in picked["slow"] if name in reached and name not in exempt]
-        kept, slow_deferred, seconds = slow_fit(nearest, reached, timings)
+        kept, slow_deferred, seconds = slow_fit(nearest, reached, timings, collect_tests(nearest))
         picked["slow"] = sorted(kept)
         if kept:
             jobs.append({"suite": "slow-1", "files": sorted(kept)})
@@ -1161,7 +1188,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
             stream.write(
                 f"### Slow tests deferred to release validation ({len(slow_deferred)})\n\n"
-                f"One slow VM runs {len(picked['slow'])} file(s), about {sum(slow_loads):.0f} s of tests, "
+                f"One slow VM runs {len(picked['slow'])} file(s), about {sum(slow_loads):.0f} s of slow tests "
+                f"(each file's measured time times its slow share), "
                 f"nearest first within {JOB_SECONDS - SETUP_SECONDS['slow']:.0f} s. Not run here:\n\n"
             )
             stream.writelines(f"- `{name}`\n" for name in slow_deferred)
