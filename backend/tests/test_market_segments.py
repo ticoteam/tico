@@ -104,7 +104,9 @@ def test_a_segment_page_has_its_answers_sizes_players_and_what_changed(api, tmp_
 
     empty = get(api, f"market/segments/{sub}/page")
     assert empty["answers"] == {} and empty["briefing"] is None
-    assert empty["sizes"]["chosen"] is None and empty["players"] == []
+    # The players are the market page's for the segment: with no figures, the company is listed as its operator.
+    assert empty["sizes"]["chosen"] is None
+    assert [(p["entity_id"], p["figures"]) for p in empty["players"]] == [("company/self", [])]
 
 
 def test_a_segment_that_is_not_ours_is_a_404_on_the_page_and_on_research(api, tmp_path):
