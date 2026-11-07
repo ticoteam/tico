@@ -235,7 +235,7 @@ def spend_under(cap_usd, since, until, scope="company"):
             if spent >= limit:
                 late.append(f"{r['started_at'][11:16]} (${spent:.2f})")
         if late:
-            return False, f"{len(late)} turns started past the ${limit:g} window cap: " + ", ".join(late[:4])
+            return False, f"{len(late)} turns started past the ${limit:g} half-hour cap: " + ", ".join(late[:4])
         return True, f"no turn started past the ${limit:g} half-hour cap (from an ${cap_usd:g} hourly limit)"
 
     return check
