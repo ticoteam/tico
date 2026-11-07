@@ -2,7 +2,7 @@
    then Where we play beside the bets, the competitors beside related news, then seven fixed sections and any the owner
    adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
    published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
-   Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
+   Related news is what Listening found. Lenses (ui/lenses-page.ts) and Market (ui/market-page.js) are the section's
    other tabs. */
 'use strict';
 let STRAT = null;          // the open page: {data, kpis, load, adding, editSection, addSection, publishing}
