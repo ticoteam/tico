@@ -46,8 +46,10 @@ function actorAvatar(a, size = 22) {
   if (pid) return personAvatar((S.people || []).find(p => p.id === pid) || {id: pid, name: personDisplay(pid)}, size);
   return personCircle(actorName(a), size);
 }
-// A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from before threads read as
-// "BotOps"); a group chat by the name it was given, else by its people; any other thread by its title.
+// The one name a thread shows. A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from
+// before threads read as "BotOps"). Any other thread is its title, else the `name` the server gives it (the people in
+// it, viewer left out, "You" when alone: backend `_thread_name`), so every surface agrees. Only a server with no `name`
+// gets the people from the thread's members here. Nothing is stored.
 // `messages`: what is loaded of it, which names a DM the server sends with no title and no people (a notice thread).
 function threadTitle(t, messages) {
   if (!t) return '';
@@ -59,12 +61,13 @@ function threadTitle(t, messages) {
   if (threadIsDm(t) && !t.parent_id && people && !(total >= 2 && own && !/^(chat with|private\b)/i.test(own))) return people;
   if (own) return own;
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
+  if (t.name && !threadIsDm(t)) return t.name;
   if (people) return people;
   if (threadIsDm(t) && !t.parent_id) {
     const authors = [...new Set((messages || []).map(m => m?.sender_id).filter(a => a && a !== myActor()))];
     if (authors.length) return authors.slice(0, 3).map(actorName).join(', ') + (authors.length > 3 ? ` +${authors.length - 3}` : '');
   }
-  return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
+  return t.name || 'Thread';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
 const threadRowHref = t => !t?.new_at?.thread_id ? threadHref(t)
