@@ -105,6 +105,24 @@ def test_compare_and_page_list_ranked_segments_in_rank_order_and_colour_them_fro
     assert (page["segment"]["rank"], page["segment"]["color"]) == (1, "red")
 
 
+def test_the_segment_page_shows_the_same_our_share_as_the_comparison(api, tmp_path):
+    _seed(api, tmp_path)
+    first, second, _ = defined(api)
+    invoices = post(api, "market/segments", {"name": "Invoices", "parent_id": second})["segment"]["id"]
+    ours(api, first, second)
+    size(api, first, spend=4 * B, accept=True)
+    size(api, invoices, spend=2 * B, accept=True)  # second has no accepted size of its own: its roll-up is 2B
+    proof = evidence(api)
+    figure(api, "company/self", first, "revenue", B, proof)  # 1 of 4
+    figure(api, "company/self", first, "revenue", 3 * B, proof, as_of="2025-06")  # another year: not counted
+    figure(api, "company/self", second, "arr", B, proof)  # 1 of 2
+
+    rows = {s["id"]: s for s in get(api, "market/segments/compare")["segments"]}
+    assert (rows[first]["our_share"], rows[second]["our_share"]) == (25.0, 50.0)
+    for sid in (first, second):
+        assert get(api, f"market/segments/{sid}/page")["our_share"] == rows[sid]["our_share"]
+
+
 def test_a_segment_page_has_its_answers_sizes_players_and_what_changed(api, tmp_path):
     _seed(api, tmp_path)
     first, second, sub = defined(api)

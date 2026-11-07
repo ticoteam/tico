@@ -7131,6 +7131,7 @@ SCHEMAS.update(
         "MarketSegmentPage": obj(
             {
                 "segment": ref("MarketSegmentHead"),
+                "our_share": NUM_N,
                 "answers": "o",
                 "briefing": ref("MarketBriefing"),
                 "sizes": ref("MarketSegmentSizes"),

@@ -67649,6 +67649,12 @@
           "segment": {
             "$ref": "#/components/schemas/MarketSegmentHead"
           },
+          "our_share": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "answers": {
             "type": "object"
           },
@@ -67674,6 +67680,7 @@
         "required": [
           "answers",
           "briefing",
+          "our_share",
           "players",
           "segment",
           "sizes",
