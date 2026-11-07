@@ -4,6 +4,7 @@ const {chromium} = require('playwright');
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const {uiFile} = require('./support/page.cjs');
 const root = path.resolve(__dirname, '..');
 
 (async () => {
@@ -32,7 +33,7 @@ const root = path.resolve(__dirname, '..');
         const post = async (p,b) => {writes.push({p,b,method:'POST'}); return {};};
         const ctx = {admin:true,once:(k,f)=>f(),live:()=>true,refresh:()=>refreshes++};
       `});
-      await page.addScriptTag({path: path.join(root, 'app/email-preview.js')});
+      await page.addScriptTag({path: uiFile('app/email-preview.ts')});
       await page.addScriptTag({path: path.join(root, 'app/inboxes-sending.js')});
       await page.evaluate(() => specs['email.sending'].render(document.querySelector('#settings'), ctx));
       const form = page.locator('#settings [data-send-form]');

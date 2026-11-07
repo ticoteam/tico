@@ -77,7 +77,7 @@
 @media(max-width:760px){.ib-send-bots th:first-child,.ib-send-bots td:first-child{width:35%}.ib-send-pending button{flex-shrink:0}}
 
 
-/* Alerts (ui/app/inboxes-alerts.js) */
+/* Alerts (ui/app/inboxes-alerts.ts) */
 #inboxes-alerts{min-width:0}
 #inboxes-alerts .ib-alert-price{margin:0 0 12px;font-size:var(--t-sm);color:var(--muted)}
 .ib-alert-phone,.ib-alert-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 8px}
@@ -102,7 +102,7 @@
   .ib-alert-confirm .ib-alert-input{flex:1 1 130px}
 }
 
-/* Letters out (ui/app/inboxes-outbox.js) */
+/* Letters out (ui/app/inboxes-outbox.ts) */
 .lo-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(220px,1fr);gap:20px;align-items:start}
 .lo-layout>div,.lo-layout>aside{min-width:0}
 .lo-layout .card{margin-bottom:20px}

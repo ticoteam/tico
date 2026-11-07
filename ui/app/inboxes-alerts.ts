@@ -1,26 +1,39 @@
-/* ui/app/inboxes-alerts.js — Personal phone alerts: Settings › General › Notifications (settings.js draws it into
+/* ui/app/inboxes-alerts.ts — Personal phone alerts: Settings › General › Notifications (settings.js draws it into
    #settings-notifications with a ctx of its own). The pills and card come from ui/app/inboxes.js. */
 'use strict';
 
-const IB_ALERT_EVENTS = [
+// The alert events a person can ask for, in the order the card draws them.
+type IbAlertEvent = 'urgent_needs' | 'legal_mail' | 'bot_stuck';
+// GET /v2/alerts/me, as this card reads it (ui/types/api.d.ts).
+type IbAlertState = import('../types/api').PersonalAlerts;
+type IbAlertPrefs = Partial<IbAlertState['preferences']>;
+// The Notifications host; settingsNotificationsRender keeps the latest draw's number on it.
+type IbAlertsHost = HTMLElement & { _alertsRun?: number };
+
+const IB_ALERT_EVENTS: [IbAlertEvent, string][] = [
   ['urgent_needs', 'An overdue task needs me'],
   ['legal_mail', 'Legal mail arrives'],
   ['bot_stuck', 'A bot I manage has a stalled task'],
 ];
-const IB_ALERT_STATUS = {
+const IB_ALERT_STATUS: Record<string, [string, string]> = {
   none: ['off', 'No phone'], code_sent: ['pending', 'Verify your phone'], verified: ['ok', 'Verified'],
   opted_out: ['attention', 'Opted out'], unverified: ['attention', 'Verification removed'],
   removal_pending: ['attention', 'Removal pending'], unavailable: ['attention', 'Unavailable'],
 };
 
-function inboxesAlertsCheck(name, title, checked, disabled = false) {
+function inboxesAlertsCheck(name: string, title: string, checked: boolean | null | undefined, disabled = false): string {
   return `<label class="ib-alert-check"><input type="checkbox" name="${name}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}><span>${title}</span></label>`;
 }
 
-async function inboxesAlerts(host, ctx) {
-  const current = await get('/v2/alerts/me', {fresh: true});
+// A named control of a form this card draws (form.elements.NAME in the old code): each name is on one control.
+function alertsField(form: HTMLFormElement, name: string): HTMLInputElement {
+  return form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+}
+
+async function inboxesAlerts(host: Element | null, ctx: Pick<InboxCtx, 'admin' | 'me' | 'live'>): Promise<void> {
+  const current = await get<IbAlertState>('/v2/alerts/me', {fresh: true});
   if (!ctx.live() || !host?.isConnected) return;
-  const p = current.preferences || {}, [tone, status] = IB_ALERT_STATUS[current.status] || ['attention', 'Unavailable'];
+  const p: IbAlertPrefs = current.preferences || {}, [tone, status] = IB_ALERT_STATUS[current.status] || ['attention', 'Unavailable'];
   const verified = current.status === 'verified', hasPhone = !!current.phone;
   const pending = current.status === 'code_sent', removing = current.status === 'removal_pending';
   const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -76,51 +89,51 @@ async function inboxesAlerts(host, ctx) {
     </div></div>
     ${recent.length ? `<details class="ib-alert-history"><summary>Recent alerts</summary><ul>${recent.map(r => `<li><span>${esc(IB_ALERT_EVENTS.find(([k]) => k === r.kind)?.[1] || 'Test alert')}</span><span>${esc(r.state)}${r.error ? ' · ' + esc(String(r.error).replaceAll('_', ' ')) : ''}</span></li>`).join('')}</ul></details>` : ''}
     <p class="err" role="alert" data-alert-error></p>`);
-  const card = host.querySelector('#inboxes-alerts');
+  const card = host.querySelector('#inboxes-alerts')!; // the card just drawn above
   const redraw = async () => { if (ctx.live() && host.isConnected) await inboxesAlerts(host, ctx); };
-  const work = async (form, run) => {
+  const work = async (form: Element, run: () => Promise<void>) => {
     const buttons = [...form.querySelectorAll('button')];
     buttons.forEach(b => { b.disabled = true; });
-    card.querySelector('[data-alert-error]').textContent = '';
+    card.querySelector('[data-alert-error]')!.textContent = '';
     try { await run(); }
-    catch (e) { if (ctx.live() && card.isConnected) card.querySelector('[data-alert-error]').textContent = e.message || 'Try again'; }
+    catch (e) { if (ctx.live() && card.isConnected) card.querySelector('[data-alert-error]')!.textContent = errorMessage(e, 'Try again'); }
     finally { buttons.forEach(b => { b.disabled = false; }); }
   };
-  const add = card.querySelector('[data-alert-add]');
+  const add = card.querySelector<HTMLFormElement>('[data-alert-add]');
   if (add) {
-    const sms = add.elements.sms_consent, button = add.querySelector('[data-alert-send-code]');
+    const sms = alertsField(add, 'sms_consent'), button = add.querySelector<HTMLButtonElement>('[data-alert-send-code]')!;
     button.disabled = !sms.checked;
     sms.onchange = () => { button.disabled = !sms.checked; };
     add.onsubmit = e => { e.preventDefault(); if (!add.reportValidity() || !sms.checked) return;
       void work(add, async () => {
-        await post('/v2/alerts/me/phone', {phone: add.elements.phone.value, sms_consent: true, call_consent: add.elements.call_consent.checked});
+        await post('/v2/alerts/me/phone', {phone: alertsField(add, 'phone').value, sms_consent: true, call_consent: alertsField(add, 'call_consent').checked});
         if (!ctx.live()) return;
         await redraw();
       });
     };
   }
-  const confirm = card.querySelector('[data-alert-confirm]');
+  const confirm = card.querySelector<HTMLFormElement>('[data-alert-confirm]');
   if (confirm) confirm.onsubmit = e => { e.preventDefault(); if (!confirm.reportValidity()) return;
-    void work(confirm, async () => { await post('/v2/alerts/me/phone/confirm', {code: confirm.elements.code.value}); if (ctx.live()) await redraw(); });
+    void work(confirm, async () => { await post('/v2/alerts/me/phone/confirm', {code: alertsField(confirm, 'code').value}); if (ctx.live()) await redraw(); });
   };
-  const pref = card.querySelector('[data-alert-preferences]');
-  pref.elements.quiet.onchange = () => { for (const key of ['quiet_start', 'quiet_end']) pref.elements[key].disabled = !pref.elements.quiet.checked; };
+  const pref = card.querySelector<HTMLFormElement>('[data-alert-preferences]')!;
+  alertsField(pref, 'quiet').onchange = () => { for (const key of ['quiet_start', 'quiet_end']) alertsField(pref, key).disabled = !alertsField(pref, 'quiet').checked; };
   pref.onsubmit = e => { e.preventDefault(); if (!pref.reportValidity()) return;
-    const values = Object.fromEntries([...IB_ALERT_EVENTS.map(([k]) => k), 'urgent_calls', 'emergency_exception'].map(k => [k, !pref.elements[k].disabled && pref.elements[k].checked]));
-    Object.assign(values, {timezone: pref.elements.timezone.value, monthly_cap: Number(pref.elements.monthly_cap.value),
-      quiet_start: pref.elements.quiet.checked ? pref.elements.quiet_start.value : '', quiet_end: pref.elements.quiet.checked ? pref.elements.quiet_end.value : ''});
+    const values: Record<string, unknown> = Object.fromEntries([...IB_ALERT_EVENTS.map(([k]) => k), 'urgent_calls', 'emergency_exception'].map((k): [string, boolean] => [k, !alertsField(pref, k).disabled && alertsField(pref, k).checked]));
+    Object.assign(values, {timezone: alertsField(pref, 'timezone').value, monthly_cap: Number(alertsField(pref, 'monthly_cap').value),
+      quiet_start: alertsField(pref, 'quiet').checked ? alertsField(pref, 'quiet_start').value : '', quiet_end: alertsField(pref, 'quiet').checked ? alertsField(pref, 'quiet_end').value : ''});
     void work(pref, async () => { await put('/v2/alerts/me', values); if (ctx.live()) { await redraw(); toast('Alert preferences saved'); } });
   };
-  const company = card.querySelector('[data-alert-company]');
+  const company = card.querySelector<HTMLFormElement>('[data-alert-company]');
   if (company) company.onsubmit = e => { e.preventDefault(); if (!company.reportValidity()) return;
-    void work(company, async () => { await put('/v2/alerts/company', {monthly_cap: Number(company.elements.monthly_cap.value)}); if (ctx.live()) await redraw(); });
+    void work(company, async () => { await put('/v2/alerts/company', {monthly_cap: Number(alertsField(company, 'monthly_cap').value)}); if (ctx.live()) await redraw(); });
   };
   // Settings renders several cards together; each Alerts action submits only its own form, including Enter.
   for (const form of card.querySelectorAll('form')) {
-    const button = form.querySelector('button');
+    const button = form.querySelector<HTMLButtonElement>('button')!;
     button.onclick = () => form.requestSubmit();
     form.onkeydown = e => {
-      if (e.key === 'Enter' && !e.isComposing && e.target.matches('input:not([type=checkbox])')) {
+      if (e.key === 'Enter' && !e.isComposing && eventElement(e)!.matches('input:not([type=checkbox])')) {
         e.preventDefault();
         if (!button.disabled) form.requestSubmit();
       }
@@ -138,14 +151,14 @@ async function inboxesAlerts(host, ctx) {
   });
   card.querySelector('[data-alert-test]')?.addEventListener('click', async () => {
     const person = ctx.me?.actor || ctx.me?.id || 'me', storageKey = 'tico.alert-test.' + person;
-    let operation;
+    let operation: string | null | undefined;
     try { operation = sessionStorage.getItem(storageKey); } catch { /* A blocked storage still uses API retry keys. */ }
     if (!operation && !await settingsConfirm({title: 'Send a test alert?', text: 'Your company pays $1 if this test alert is accepted. Monthly caps apply.', ok: 'Send test · $1', danger: false})) return;
     if (!ctx.live()) return;
     operation ||= newRequestId();
     try { sessionStorage.setItem(storageKey, operation); } catch { /* The API also keeps an uncertain request's id. */ }
     void work(card, async () => {
-      const result = await post('/v2/alerts/me/test', {accept_charge: true}, operation);
+      const result: import('../types/api').TestMyAlertsResponse = await post('/v2/alerts/me/test', {accept_charge: true}, operation);
       if (!ctx.live()) return;
       if (result.status !== 'sending') { try { sessionStorage.removeItem(storageKey); } catch { /* Not stored. */ } }
       await redraw();
@@ -157,11 +170,11 @@ async function inboxesAlerts(host, ctx) {
 
 // Settings › Notifications: drawn when General is shown, with a ctx that lives while its host is on the page.
 function settingsNotificationsRender() {
-  const host = $('#settings-notifications');
+  const host = $('#settings-notifications') as IbAlertsHost | null;
   if (!host) return;
   const run = (host._alertsRun || 0) + 1;
   host._alertsRun = run;
   const ctx = {admin: settingsIsAdmin(), me: S.me, live: () => host.isConnected && host._alertsRun === run,
-    once: (name, load) => load(), refresh: settingsNotificationsRender};
-  return inboxesAlerts(host, ctx).catch(e => { if (host.isConnected) host.innerHTML = `<section class="card"><p class="err">${esc(e.message)}</p></section>`; });
+    once: (_name: string, load: () => unknown) => load(), refresh: settingsNotificationsRender};
+  return inboxesAlerts(host, ctx).catch(e => { if (host.isConnected) host.innerHTML = `<section class="card"><p class="err">${esc(errorMessage(e, ''))}</p></section>`; });
 }
