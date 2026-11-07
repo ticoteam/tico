@@ -366,7 +366,7 @@ function finTxDraw() {
     const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status === 'ignored' && FIN_TX_GONE[r.provider_status] || r.status) : r.reversed ? 'reversed' : 'posted';
     return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.date))}</td>
       <td><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut">${account ? esc(account) : '<span class="muted">—</span>'}</td><td>${finTxLineCell(r)}</td>
-      <td class="fin-n">${finCents(r.amount)}</td><td>${tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td class="fin-cut">${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>
+      <td class="fin-n">${finCents(r.amount)}</td><td>${r.split?.length ? finShareChips(r.split) : tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td class="fin-cut">${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>
       <td><span class="pill ${{posted: 'ok', matched: 'ok', pending: 'waiting', new: 'waiting', ignored: 'idle', reversed: 'idle'}[status] || 'idle'}">${esc(status)}</span></td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
 }
@@ -444,6 +444,7 @@ function finTxRail() {
     ${r.kind === 'feed' ? finKv('Account', esc(`${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}`)) + (r.description && r.description !== title ? finKv('Description', esc(r.description)) : '') : finKv('Source', esc(r.source || ''))}
     ${r.memo ? finKv('Memo', esc(r.memo)) : ''}
     ${lines.length && !(cat && lines.length === 1) ? `<h3 class="fin-h">Lines</h3>${lines.map(l => finKv(l.account || '', finCents(l.amount))).join('')}` : ''}
+    <div id="fin-tx-share"></div>
     <div id="fin-tx-match"></div>
     ${cat ? '<form class="fin-form fin-rail-form fin-cat" data-fin-cat novalidate></form>' : may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', shown.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), shown.teammate)).join('')}</select></label>
       <label>Team<select name="team">${mixed('team')}${opt('', '—', shown.team)}${(acc.teams || []).map(t => opt(t.id, t.name, shown.team)).join('')}</select></label>
@@ -451,6 +452,7 @@ function finTxRail() {
       <div class="fin-foot"><button type="submit" class="primary"${state.busy ? ' disabled' : ''}>Save</button></div></form>` : ''}`);
   if (cat) finTxCatDraw(r);
   void finTxExpected(r);
+  void finShareRailLoad(finTxKey(r), lines);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
   if (form) form.onchange = () => { if (!state.busy) form.querySelector('[type=submit]').disabled = false; };

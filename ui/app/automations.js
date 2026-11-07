@@ -8,6 +8,7 @@
 'use strict';
 
 const AUTOMATIONS = '#/automations';
+/** @param {string} r @returns {boolean} */
 function isAutomationsRoute(r) { return r === AUTOMATIONS || r.startsWith(AUTOMATIONS + '/') || r.startsWith(AUTOMATIONS + '?'); }
 const AU_BOT = 'botops';                             // builds automations for the Assistant; not offered as a step's bot
 const auPhone = () => matchMedia('(max-width:760px)').matches;

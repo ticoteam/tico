@@ -111,6 +111,7 @@ function safeLink(el, options) {
 // The same text drawn the same way gives the same markup: a chat redraws every message for each streamed snapshot, so
 // the recent ones are kept (by text and options, newest last; a long document is drawn each time).
 const SAFE_MD_SEEN = new Map(), SAFE_MD_KEEP = 400, SAFE_MD_LONG = 20000;
+/** @param {unknown} s @returns {string} */
 function safeMd(s, options = {}) {
   const text = String(s ?? '');
   if (text.length > SAFE_MD_LONG) return safeMdDraw(text, options);

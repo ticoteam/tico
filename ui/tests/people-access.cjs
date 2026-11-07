@@ -1,6 +1,6 @@
 // Offline browser regression for Settings -> People: one choice between adding people by hand and syncing a
 // directory, an inline add row, and one compact row per person whose role (owner only), sign-in and menu
-// (what a member may do, mark as left, make owner, the owner's own sign-in email) save as they change. Domain sign-in maps onto the allow
+// (what a member may do, remove, make owner, the owner's own sign-in email) save as they change. Who can join maps onto the allow
 // list with the revision it was read at; the bot limit shows 25 by default. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -37,7 +37,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       }),
       allowed: allowedPeople, allowed_domains: allowedDomains, admins: [], bot_admins: [], member_bot_limit: limit, rules: {assistant_direct: true, botops_direct: true, botops_manages_bots: true, admin_credentials: true, members_store_credentials: true, admin_sql: true, member_tokens: true, ...rules},
       company_domains: ['acme.example'], company_domain_source: 'owner', revision, proxy: 'cloudflare',
-      home_domain: 'acme.example', domain_sign_in: allowedDomains.includes('acme.example'), directory: directory.source,
+      home_domain: 'acme.example', domain_sign_in: allowedDomains.includes('acme.example'),
+      join: allowedDomains.includes('acme.example') ? 'domain' : 'admin', directory: directory.source,
       recorders: {ben: {version: '0.2.0', last_seen_at: new Date(Date.now() - 3 * 86400e3).toISOString(), update_available: true}}});
     let me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', credential_access: false, config: CONFIG};
     await context.route('**/*', async route => {
@@ -191,7 +192,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     });
     await page.waitForFunction(() => document.querySelector('.people-row[data-person=cy] [data-person-signin]')?.checked === false);
 
-    // The menu: what a member may do, and Mark as left behind its confirm; Restore brings them back.
+    // The menu: what a member may do, and Remove behind its confirm; Restore brings them back.
     await repainted(async () => {
       await menuAct('cy', 'create_bots');
       assert.deepEqual(await next(), ['edit', 'cy', {create_bots: false}]);
@@ -221,13 +222,15 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     });
     assert.equal(await row('dee').count(), 0);
 
-    // Domain sign-in is the company domain on the allow list; anything else listed stays, shown as a chip.
+    // Who can join: "Added by an admin" until the company domain is on the allow list; anything else listed stays as a chip.
+    assert.equal(await page.locator('#people-admin').isChecked(), true);
     assert.equal(await page.locator('#people-domain').isChecked(), false);
+    assert.match(await page.locator('.people-join-who').textContent(), /Anyone with a acme\.example Google login/);
     await page.locator('#people-domain').check();
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'old@partner.example', 'cy@acme.example'],
       allowed_domains: ['acme.example'], expected_revision: 3}]);
     await page.waitForFunction(() => document.querySelector('#people-domain')?.checked === true);
-    await page.locator('#people-domain').click();
+    await page.locator('#people-admin').check();
     await ask.locator('[data-confirm-ok]').click();
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'old@partner.example', 'cy@acme.example'],
       allowed_domains: [], expected_revision: 4}]);
@@ -235,6 +238,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     await ask.locator('[data-confirm-ok]').click();
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'cy@acme.example'], allowed_domains: [], expected_revision: 5}]);
     await page.waitForFunction(() => !document.querySelector('[data-allow="old@partner.example"]'));
+    await page.waitForFunction(() => document.querySelector('#people-admin')?.checked === true);
 
     await page.locator('#member-bot-limit').fill('30');
     await page.locator('#member-bot-limit').press('Enter');

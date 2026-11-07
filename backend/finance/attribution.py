@@ -2,7 +2,8 @@
 
 A line's own tags say who it counts for. An attribution replaces that for a share of the line (core/attribution.py has
 the split math: basis points, largest-remainder cents, the unattributed rest). Precedence for a line: a person's or
-bot's override > a matching rule (store/attribution.py) > the line's tags.
+bot's override > a matching rule (store/attribution.py) > an ad platform's share (platform_share.py: a charge split by
+the platform's own spend per bot, re-judged after each ad import and as charges post) > the line's tags.
 
 Actions (all need finance.attribution, which the owner and finance admins have; none asks for approval, bots included):
 - attribute {line_id, splits}: put shares on a line. splits [] clears the override.
@@ -20,6 +21,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from typing import Any
 
+from . import platform_share as PS
 from . import posting
 from .context import Ctx
 from .core import attribution as CA
@@ -155,23 +157,80 @@ def _set_line(ctx: Ctx, who: str, line_id: str, splits: Sequence[CA.Split], sour
 
 
 def _refresh(ctx: Ctx, who: str, line_id: str, rules: Sequence[Any]) -> bool:
-    """Bring a line in line with the book's rules: a person's or bot's override stays; otherwise the rule that now
-    matches it (judged across every live rule, by precedence) is in force, or a rule's old effect is cleared."""
+    """Bring a line in line with the book's attribution: a person's or bot's override stays; otherwise the rule that now
+    matches it (judged across every live rule, by precedence), else the ad platform's share of it, is in force; with
+    neither, a rule's or a platform share's old effect is cleared (the line counts as its tags again)."""
     if line_id in ATT.lines_owned_by_people(ctx.c, [line_id]):
         return False
     facts = ATT.facts_of_line(ctx.c, ctx.book.id, line_id)
     claim = ATT.claim_for(rules, facts) if facts is not None else None
+    if claim is None and facts is not None:
+        claim = PS.claim_for_line(ctx, line_id)
     if claim is not None:
-        return _set_line(ctx, who, line_id, claim.splits, "rule", claim.rule_id)
+        return _set_line(ctx, who, line_id, claim.splits, claim.source, claim.rule_id)
     source, rule_id, _ = ATT.in_force_source(ctx.c, line_id)
-    if source == "rule":
-        return _set_line(ctx, who, line_id, (), "rule", rule_id)
+    if source in ("rule", "platform"):
+        return _set_line(ctx, who, line_id, (), source, rule_id)
     return False
 
 
 def _refresh_all(ctx: Ctx, who: str, line_ids: Iterable[str]) -> int:
     rules = ATT.rules(ctx.c, ctx.book.id)
     return sum(1 for line_id in dict.fromkeys(line_ids) if _refresh(ctx, who, line_id, rules))
+
+
+# ------------------------------------------------------------------------------------------------ platform shares
+def refresh_platform(ctx: Ctx, who: str, platform: str, first: str, last: str) -> int:
+    """After an ad import replaced the platform's spend on the days [first, last]: re-judge each of the platform's
+    charges whose window overlaps them. Only a charge with no attribution in force, or a platform share, is touched
+    (a rule or a person's or bot's override never is). Returns the lines whose attribution changed."""
+    keys = PS.contact_keys(ctx, platform)
+    if not keys:
+        return 0
+    rules = ATT.rules(ctx.c, ctx.book.id)
+    changed = 0
+    for line_id, day, rid in PS.charges_from(ctx, keys, first):
+        lo, hi = PS.window(ctx, keys, day, rid)
+        if hi < first or lo > last:
+            continue
+        if ATT.in_force_source(ctx.c, line_id)[0] not in ("", "platform"):
+            continue
+        changed += _refresh(ctx, who, line_id, rules)
+    return changed
+
+
+def refresh_successor(ctx: Ctx, who: str, keys: Sequence[str], day: str, rid: int | None = None) -> None:
+    """The charge after (day, rowid) on these keys has a new window when a charge before it posts or is reversed:
+    re-judge it."""
+    nxt = PS.successor(ctx, keys, day, rid)
+    if nxt:
+        _refresh(ctx, who, nxt, ATT.rules(ctx.c, ctx.book.id))
+
+
+def after_post(ctx: Ctx, lines: Sequence[L.Line], day: str, who: str) -> None:
+    """Entry lines just posted on `day`: each P&L charge of an ad platform's contact changes the window of the charge
+    after it on the same vendor."""
+    for x in lines:
+        account = ctx.accounts.get(x.account_id)
+        if account is None or account.type not in L.PNL_TYPES or not x.contact_id:
+            continue
+        keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, x.contact_id)
+        if PS.platform_of(ctx, keys):
+            refresh_successor(ctx, who, keys, day)
+
+
+def after_reversal(ctx: Ctx, entry_id: str, who: str) -> None:
+    """A reversed entry's charges leave the windows: the charge after each of them on its vendor is re-judged."""
+    rows = ctx.c.execute(
+        "SELECT rowid, account_id, contact_id, entry_date FROM fin_lines WHERE entry_id=?", (entry_id,)
+    ).fetchall()
+    for rid, account_id, contact_id, day in rows:
+        account = ctx.accounts.get(str(account_id))
+        if account is None or account.type not in L.PNL_TYPES or not contact_id:
+            continue
+        keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, str(contact_id))
+        if PS.platform_of(ctx, keys):
+            refresh_successor(ctx, who, keys, str(day), int(rid))
 
 
 # ------------------------------------------------------------------------------------------------ lines

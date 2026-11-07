@@ -4,7 +4,9 @@
 
 let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
 // The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
+/** @param {string | undefined} h @returns {string} */
 const routePage = h => { const p = String(h || '').split('?')[0]; return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
+/** @param {string} [hash] */
 function route(hash = location.hash) {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
