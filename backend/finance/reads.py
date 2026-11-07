@@ -2749,12 +2749,7 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
             vendor = cast(Row, row.get("vendor") or {})
             payee = str(vendor.get("id") or "")
             amount = int(cast(int, row.get("amount") or 0))
-            if (
-                or row.get("pending")
-                or row.get("status") == "ignored"
-                or amount >= 0
-                or not payee
-            ):
+            if row.get("pending") or row.get("status") == "ignored" or amount >= 0 or not payee:
                 continue
             out.append(
                 W.Charge(
