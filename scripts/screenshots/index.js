@@ -285,7 +285,7 @@ async function capture() {
         // The market page's second graph fetch (the note's focus, fill=false) replaces the layout's starting positions, so
         // where the first layout had got to when it arrived decided the picture. That fetch waits until the first layout
         // has stopped drawing: three reads 100 ms apart with the same count of draws (and at least one).
-        await page.route(url => url.pathname === '/v2/market/graph', async route => {
+        await page.route(url => url.pathname.endsWith('/v2/market/graph'), async route => {
           if (new URL(route.request().url()).searchParams.get('fill') !== 'false') return route.fallback();
           for (let last = -1, still = 0, tries = 0; still < 3 && tries < 100; tries++) {
             await page.waitForTimeout(100);
