@@ -278,15 +278,28 @@ def test_a_bank_row_posts_under_an_existing_contact_its_text_is_an_alias_of(book
 def test_a_budget_on_the_old_name_key_counts_the_new_bank_line_once(books):
     _synced_google(books)
     with books.transaction() as c:
+        root = act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": "Other",
+                "account_id": account(c, "6900"),
+                "amount": 200_000,
+                "at_limit": "warn",
+            },  # where a bank debit posts
+        )
+        assert root.status == "committed", root.reason
         made = act(
             c,
             OWNER,
             "budget_create",
             {
                 "name": "Google",
-                "account_id": account(c, "6900"),  # where an unmatched bank debit posts
+                "account_id": account(c, "6900"),
                 "amount": 100_000,
                 "at_limit": "warn",
+                "parent_id": str(root.result["budget_id"]),
                 "vendor": "google *ads8812",
             },
         )
