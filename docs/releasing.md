@@ -586,6 +586,15 @@ script does what the installer does after its preflight (checksummed bundle, `.e
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
 
+**Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
+demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
+`scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
+shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
+changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
+looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
+(`TICO_DEMO_NOW` sets the demo's "now"), so a ref compared with itself shoots no changed pair. The release train does
+not call the workflow yet.
+
 ### Behaviour replay
 
 > **Beta**: behaviour replay and the computer Performance page work today and may still change. See [Beta features](support.md#beta-features).
