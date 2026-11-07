@@ -265,6 +265,9 @@ class Settings:
     cognito_logout_url: str = ""
     # TICO_AUTH_PROXY=owner-link: the sha256 of the owner's first sign-in link, from the installer (backend/owner_link.py).
     owner_link_hash: str = ""
+    # The sha256 of the one-time secret the installer hands the owner's coding agent for a personal token before the owner
+    # has signed in (backend/setup_handoff.py). Only the hash is here; the installer reads the secret from TICO_SETUP_HANDOFF.
+    setup_handoff_hash: str = ""
     # Built-in sign-in (TICO_AUTH_PROXY=oidc, backend/oidc.py). The secret is read from its file
     # when one is named; the session secret defaults to a generated file beside the database.
     oidc_issuer: str = ""
@@ -464,6 +467,10 @@ class Settings:
         identity_proxy.check(self)
         self.runner_url = (self.runner_url or self.public_url).rstrip("/")
         self.owner_email = (self.owner_email or self._roster_owner()).strip().lower()
+        if self.setup_handoff_hash:
+            from . import setup_handoff
+
+            setup_handoff.check(self)
         # Unless the server names its credential administrators, they are whoever owns the environment now and its
         # Admins (backend/auth.py sync_access follows a transfer and the Admins list).
         self.credential_admins_follow_owner = not _emails(",".join(self.credential_admins))
@@ -594,6 +601,7 @@ class Settings:
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
             hosted=os.environ.get("TICO_HOSTED", ""),
             owner_link_hash=os.environ.get("TICO_OWNER_LINK_HASH", "").strip().lower(),
+            setup_handoff_hash=os.environ.get("TICO_SETUP_HANDOFF_HASH", "").strip().lower(),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
             screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
             screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),

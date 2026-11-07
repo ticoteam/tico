@@ -357,6 +357,13 @@ class Auth:
                 owner_link.place_first(self.settings, self.store)
             except Exception:
                 logging.getLogger("tico.auth").exception("the owner sign-in link could not be put in place")
+        if self.settings.setup_handoff_hash:
+            from . import setup_handoff
+
+            try:
+                setup_handoff.place_first(self.settings, self.store)
+            except Exception:
+                logging.getLogger("tico.auth").exception("the setup handoff could not be put in place")
         try:
             if self.proxy:
                 self.proxy.warm()

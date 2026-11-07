@@ -199,6 +199,7 @@
  "hub_settings_ask": "404 not_found",
  "hub_settings_set": "404 not_found",
  "hub_settings_show": "404 not_found",
+ "hub_setup_invite": "404 not_found",
  "hub_slack_channel_add": "422 slack_channel",
  "hub_slack_channel_import": "404 not_found",
  "hub_slack_channel_remove": "422 slack_channel",

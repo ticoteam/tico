@@ -472,6 +472,9 @@ def run(args, who=None):
         "seat create",
         "seat update",
         "seat close",
+        "setup show",
+        "setup complete",
+        "setup invite",
     ):
         return via_tool(client, args)
     if fn == "run export":

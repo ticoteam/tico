@@ -6540,6 +6540,55 @@ def people_list(api, args):
 
 
 @tool(
+    "hub_setup_show",
+    "Where Finish setup stands, for the owner or an admin: whether the welcome wizard is finished (`completed`, "
+    "`needed`), its saved answers and picks, the people the company file from setup names (`company_import.people`: "
+    "`id` is the key `hub_setup_invite` takes, `person` is set once they are on the roster, `invited_at` once Tico "
+    "mailed them), a company file that could not be imported (`company_import_failed`), and the getting-started "
+    "checklist (`getting_started.items`: `done`, `optional`, `skipped`).",
+    {},
+)
+def setup_show(api, args):
+    setup = api.get("setup")
+    started = api.get("getting-started")
+    return {**setup, "getting_started": {k: started.get(k) for k in ("items", "done", "total", "complete")}}
+
+
+@tool(
+    "hub_setup_complete",
+    "Finish the welcome wizard with the answers and picks it has saved (`hub_setup_show`), as the owner: the built-in "
+    "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
+    "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
+    "`hub_api` PUT /api/v2/setup, or come from the company file or sample company the install was given.",
+    {},
+    writes=True,
+)
+def setup_complete(api, args):
+    return api.post("setup/complete", {}, key=_key(args))
+
+
+@tool(
+    "hub_setup_invite",
+    "Invite one person the company file from setup names, as the owner: they go on the roster and the sign-in list "
+    "with this email, the seats that waited with the owner now report to them, and Tico mails the invitation. "
+    "Inviting again sends again. Take `person_key` from `hub_setup_show` (`company_import.people[].id`). Answers with "
+    "the setup record.",
+    {
+        "person_key": _s("The person's id in the company file (`company_import.people[].id` from hub_setup_show)"),
+        "email": _s("Their email address; leave out to use the one they were added with"),
+    },
+    required=("person_key",),
+    writes=True,
+)
+def setup_invite(api, args):
+    return api.post(
+        f"setup/company/people/{quote(str(args['person_key']), safe='')}/invite",
+        {"email": args.get("email") or ""},
+        key=_key(args),
+    )
+
+
+@tool(
     "hub_group_list",
     "The groups: sub-teams of the team, each with its id, name, parent group (groups nest), the "
     "humans in it (ids) and the bots in it (slugs) you may see. A teammate, human or bot, is in one group at a time.",
@@ -12963,6 +13012,11 @@ AUDIENCE = {
     "hub_message_redact": BOTOPS,
     "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    # Finish setup (backend/onboarding.py): the owner finishes it, and an admin reads it. A person's own agent, handed over
+    # from setup (docs/connect-an-agent.md), uses these with their personal token.
+    "hub_setup_show": ("owner", "admin"),
+    "hub_setup_complete": ("owner",),
+    "hub_setup_invite": ("owner",),
     "hub_skill_submit": PEOPLE + BOTS,  # any person or bot proposes; an admin approves (backend/skills.py)
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)

@@ -281,6 +281,9 @@ NEVER = [
         # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and
         # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
         ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
+        # The setup handoff makes the owner's personal token from a one-time secret, and its switch revokes that token
+        # (backend/setup_handoff.py): a token's issue and its end, so the person's, never a chat's.
+        ("POST", r"/api/v2/setup/handoff(/off)?"),
         ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
         # A person's skills helper token (backend/skill_devices.py): connecting, revoking and its reporting are the person's.
         (None, r"/api/v2/skills/devices(/.*)?"),

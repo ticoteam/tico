@@ -29,7 +29,7 @@ from . import teammate_access
 from . import task_followers
 from . import sources as SRC
 from . import start_places
-from . import ask_ingest, delivery, strategy_bot, invites, owner_link
+from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
 from . import org_rule_check
 from . import bot_home_merge
 from .roadmaps import exact_approval
@@ -792,6 +792,9 @@ def create_app(settings=None):
             if request.url.path == owner_link.LINK_PATH and request.method in ("GET", "POST"):
                 return await call_next(request)
             if request.url.path == owner_link.SCRIPT_PATH and request.method == "GET":
+                return await call_next(request)
+            # The setup handoff's one trade: the owner's agent holds a one-time secret and no token yet (backend/setup_handoff.py).
+            if request.url.path == setup_handoff.PATH and request.method == "POST":
                 return await call_next(request)
             # A frontend's one-time sign-in code, exchanged with its PKCE verifier (backend/oidc.py).
             if request.url.path == oidc.TOKEN_PATH and request.method == "POST":

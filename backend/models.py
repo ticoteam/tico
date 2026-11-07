@@ -3349,6 +3349,13 @@ class PersonalTokenCreate(Contract):
     expires_in_days: int = Field(default=90, ge=1, le=365)
 
 
+class SetupHandoff(Contract):
+    """The one-time secret of the setup handoff (backend/setup_handoff.py). It is checked against the pattern a secret
+    has in the handler, so a wrong one is refused like a spent one, and no validation message repeats it."""
+
+    secret: str = Field(default="", max_length=512, repr=False)
+
+
 class ServiceKeyCreate(Contract):
     """A service key (backend/service_keys.py): the label names the system that holds it, on every
     task it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."""
