@@ -1,4 +1,4 @@
-// Setup's first two steps (ui/setup-strategy.js, ui/app/welcome.js) against a stand-in for the setup record, the
+// Setup's first two steps (ui/setup-strategy.ts, ui/app/welcome.js) against a stand-in for the setup record, the
 // research job (POST /api/v2/strategy/draft-from, polled) and the strategy draft (fixtures only, the Acme example).
 // What are you building saves the website and the line, then starts the research once (Back and Next again starts no
 // second one). Your bets polls it, then shows the proposed bets as claims: Keep makes one active (Rules out and Wrong

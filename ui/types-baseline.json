@@ -167,7 +167,6 @@
     "ui/overview/bridge.js": 4,
     "ui/overview/building.js": 106,
     "ui/overview/replay.js": 6,
-    "ui/setup-strategy.js": 6,
     "ui/strategy-page.js": 18,
     "ui/support.js": 135,
     "ui/sw.js": 7,
