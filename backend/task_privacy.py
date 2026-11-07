@@ -453,7 +453,7 @@ def readable(c, actor, ids, who=None):
     from . import review_blind
 
     # A bot's open later check is blind to the earlier reviews of its ticket, wherever they are named (backend/review_blind.py).
-    if any(review_blind.hidden_from(c, principals, tid) for tid in ids):
+    if review_blind.has_open_checks(c, principals) and any(review_blind.hidden_from(c, principals, tid) for tid in ids):
         return False
     # Every permission is current in this snapshot. Tags and wide task bodies
     # contribute nothing to the decision, and shared provenance needs one lookup.
@@ -1357,9 +1357,12 @@ def content_readable(c, actor, payload):
 
 def content_readable_rows(c, actor, rows):
     """The rows content_readable passes, with the tasks they name looked up together first."""
+    from . import review_blind
+
     rows = list(rows)
     prime_references(c, rows)
-    return [row for row in rows if content_readable(c, actor, row)]
+    # A task's history row marked with a review step is withheld from a bot whose open check on the task is later than it.
+    return [row for row in rows if not review_blind.hides_event(c, actor, row) and content_readable(c, actor, row)]
 
 
 # What a private meeting's bot turn may write besides its own meeting's chat (guard_write): reads that go over POST, the

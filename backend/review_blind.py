@@ -165,12 +165,32 @@ def hidden_task_ids(c: sqlite3.Connection, who: str | tuple[str, ...] | list[str
     return out
 
 
+def has_open_checks(c: sqlite3.Connection, who: str | tuple[str, ...] | list[str]) -> bool:
+    """Whether a bot in `who` holds an open check at all: the cheap gate a read asks before the per-task checks. A person
+    never holds one, so a person's read runs no query here."""
+    return any(_is_bot(a) and bool(_open_checks(c, a)) for a in _principals(who))
+
+
+def step_marks(step: Row | None) -> dict[str, Any]:
+    """The ref a message or history event about a review step carries: the step's id when it is a review, else none."""
+    return {REVIEW_STEP: step["id"]} if step and _check_kind(step) == "review" else {}
+
+
 def marks(c: sqlite3.Connection, check: Row | None, ticket: Row | None, step: Row | None = None) -> dict[str, Any]:
     """The refs a message carrying `check`'s findings on `ticket` is written with: its review step when the check is a
     review, so a later check on the ticket is blind to it and the message is filterable without reading its text."""
     if step is None and check and ticket:
         step = _child_check(c, check, ticket)
-    return {REVIEW_STEP: step["id"]} if step and _check_kind(step) == "review" else {}
+    return step_marks(step)
+
+
+def hides_event(c: sqlite3.Connection, who: str | tuple[str, ...] | list[str], event: Row) -> bool:
+    """Whether a bot in `who` may not read this history row of a task: its provenance is marked with a review step the
+    task blinds (a verdict's move, wait or skipped round, which name the verdict in their note)."""
+    if not has_open_checks(c, who):
+        return False
+    task_id = event.get("task_id")
+    return bool(task_id) and hidden_from(c, who, task_id, refs=_refs_of(event.get("data")))
 
 
 def blinds(c: sqlite3.Connection, step: Row) -> bool:

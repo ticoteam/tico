@@ -173,10 +173,11 @@ def _verdict(check):
     return value or (NO_VERDICT if check.get("status") == "done" else "")
 
 
-def move(c, row, target, why, *, sources=()):
+def move(c, row, target, why, *, sources=(), review_step=None):
     """Move the ticket to step `target` (a step row or id) as Tico. True when it moved. A refusal (the review gate)
     undoes only this move, tells the builder what clears it, and is remembered so Tico retries it then
-    (backend/move_retry.py), as the notice promises."""
+    (backend/move_retry.py), as the notice promises. `review_step` is the review whose verdict moves the ticket: its
+    move's note names the verdict, so the event carries that review's mark (backend/review_blind.py)."""
     target = target if isinstance(target, dict) else F.step(c, target)
     if not target or target["type_id"] != row.get("type_id") or row.get("step_id") == target["id"]:
         return False
@@ -184,6 +185,9 @@ def move(c, row, target, why, *, sources=()):
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
         H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), strict=False)
+        from . import review_blind
+
+        marks = review_blind.step_marks(review_step)
         H._task_event(
             c,
             row["id"],
@@ -192,6 +196,7 @@ def move(c, row, target, why, *, sources=()):
             json.dumps({"source_tasks": list(sources)}) if sources else None,
             target["name"],
             why,
+            data=json.dumps(marks) if marks else None,
         )
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
@@ -223,6 +228,7 @@ def after_verdict(c, check):
     head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
     if (
         not verdict
+        or not ticket
         or not step
         or not review_gate.can_copy_prs(c, ticket, check)
         or (not step.get("detached") and ticket.get("step_id") != step["id"])
@@ -249,7 +255,19 @@ def after_verdict(c, check):
         or H._json(existing["new"], {}).get("attempt_id") != attempt_id
         or H._json(existing["new"], {}).get("head") != head
     ):
-        H._task_event(c, ticket["id"], H.KEEPER, "verdict_wait", None, json.dumps(pending, sort_keys=True), "")
+        from . import review_blind
+
+        marks = review_blind.step_marks(step)
+        H._task_event(
+            c,
+            ticket["id"],
+            H.KEEPER,
+            "verdict_wait",
+            None,
+            json.dumps(pending, sort_keys=True),
+            "",
+            data=json.dumps(marks) if marks else None,
+        )
     return {
         "moved": None,
         "handoff": None,
@@ -417,7 +435,9 @@ def _failed(c, ticket, step, verdict, head, passed=None, *, pr=None):
         if findings:
             said += f". {findings['note'][:4000]}"
             sources = list(dict.fromkeys([findings["id"], *sources]))
-    moved = bool(target) and move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}", sources=sources)
+    moved = bool(target) and move(
+        c, ticket, target, f"{name} gave {verdict} at {head[:12]}", sources=sources, review_step=step
+    )
     return {
         "moved": target["name"] if moved else None,
         "handoff": "verdict",
@@ -455,7 +475,7 @@ def _passed(c, ticket, step, why, *, sources=()):
     target = F.step(c, target) if target and not isinstance(target, dict) else target
     if not target:
         return {"moved": None, "handoff": None, "quiet": True, "say": f"{why}."}
-    moved = move(c, ticket, target, why, sources=sources)
+    moved = move(c, ticket, target, why, sources=sources, review_step=step)
     # A move to the next check needs nothing from the builder; a move back to the builder's own step is its cue.
     cue = moved and target["status"] in ("open", "doing")
     return {
@@ -940,6 +960,9 @@ def timeouts(c, at=None):
                 note = f"{step['name']}: {verdict} at head {head[:12]}; round closed after {hours:g} h"
             else:
                 note = f"{step['name']}: no usable verdict in {hours:g} h"
+            from . import review_blind
+
+            marks = review_blind.step_marks(step)
             H._task_event(
                 c,
                 ticket_id,
@@ -948,6 +971,7 @@ def timeouts(c, at=None):
                 json.dumps({"source_tasks": sources}) if sources else None,
                 f"{step['id']}:{head}",
                 note,
+                data=json.dumps(marks) if marks else None,
             )
             if verdict and verdict not in GOOD:
                 out = _failed(c, H.task(c, ticket_id), step, verdict, head)
@@ -960,6 +984,7 @@ def timeouts(c, at=None):
                 )
                 out = _passed(c, H.task(c, ticket_id), step, why, sources=sources)
                 refs = {HANDOFF: out["handoff"]}
+            refs.update(review_blind.step_marks(step))
             if out.get("handoff"):
                 forward(
                     c,

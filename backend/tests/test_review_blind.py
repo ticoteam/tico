@@ -3,6 +3,8 @@
 import json
 
 from backend import hubdb as H
+from backend import review_blind
+from backend import step_flow as F
 from backend import task_relations as TR
 from backend.auth import Identity
 from backend.store import Problem
@@ -102,3 +104,31 @@ def test_the_blindness_ends_when_review_2_closes(api):
 def test_the_check_request_says_it_reviews_independently(api):
     _, _, second, _ = review_1_judged(api)
     assert "Review independently" in second["body"]
+
+
+def test_a_verdict_move_that_names_review_1_is_withheld_from_review_2_in_the_history(api):
+    """The move a Review 1 verdict makes names the verdict in its note, with no subtask to reference; its write-time
+    mark (verdict_moves.move) is what hides it from Review 2, while the builder and a person still read it."""
+    task, first, _, _ = review_1_judged(api)
+    verdict = f"Review 1 gave approve at {HEAD[:12]}"
+    with api.app.state.store.transaction() as c:
+        step = F.child_check(c, H.task(c, first["id"]), H.task(c, task["id"]))
+        H._task_event(
+            c,
+            task["id"],
+            H.KEEPER,
+            "verdict_move",
+            None,
+            "Review 2",
+            verdict,
+            data=json.dumps(review_blind.step_marks(step)),
+        )
+        H._task_event(c, task["id"], H.KEEPER, "step", None, "Review 2", "Review 2 is filed")
+    rev_b = read(api, bot_token(api, "rev-b"), f"tasks/{task['id']}")
+    assert rev_b.status_code == 200
+    notes = [e.get("note") for e in rev_b.json()["events"]]
+    assert "Review 2 is filed" in notes, "a history row with no review mark stays readable"
+    assert verdict not in notes, "Review 2 does not read Review 1's verdict in the ticket history"
+    for token in (bot_token(api, "cpo"), PERSON):
+        events = read(api, token, f"tasks/{task['id']}").json()["events"]
+        assert verdict in [e.get("note") for e in events]
