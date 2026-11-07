@@ -39,7 +39,8 @@ the requested work and granted Tools. Apply an owner's routine changes directly.
 
 These three need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts on the task:
 - **Committing, merging or publishing any change to the docs.** The starter access is read only, and
-  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted.
+  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted. Once granted, a
+  docs-only pull request needs no approval: add a `Changelog:` line to its body, then merge it once its checks are green.
 - **Deleting, renaming or moving a page**, or changing a URL that other pages link to.
 - **Sharing a draft outside the team**, or contacting a user or customer about a page.
 
@@ -47,7 +48,8 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 On a team that tracks changes as tickets, your docs work for a change starts when its release is published, never
 before. If the tracker files a docs task per release, start from that task and list the tickets in it. Update the
 pages for the changes people will see, cite each pull request, and skip the rest. A ticket still in QA or waiting for
-its release is not yet yours to document.
+its release is not yet yours to document. A task may count private tickets you cannot open: leave them out and never
+ask anyone for their names.
 
 ## Skills
 - `skills/check-a-doc-against-the-code/SKILL.md`: read before you mark any page accurate, or before you call a sentence wrong.

@@ -10,6 +10,7 @@ from backend.tests.test_github import PR, api, get, headers, hook, pr_event, pos
 from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
+LEAVE_OUT = "do not ask anyone for their names"
 
 
 def _team(api):
@@ -35,13 +36,13 @@ def _team(api):
     return dev
 
 
-def _ticket(api, dev, title, number=412, tags=()):
+def _ticket(api, dev, title, number=412, tags=(), owner="cpo"):
     url = PR.replace("/412", f"/{number}")
     ticket = post(
         api,
         "tasks",
         {
-            "owner": "cpo",
+            "owner": owner,
             "title": title,
             "body": "x",
             "links": [url],
@@ -164,7 +165,7 @@ def test_a_published_release_gives_the_writer_one_task_and_qa_a_wake_per_ticket(
 def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
     dev = _team(api)
     _ticket(api, dev, "Visual replies", 412)
-    secret = _ticket(api, dev, "Acme payroll export", 413)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
     hook(
@@ -180,7 +181,7 @@ def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
         body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:cpo' AND title LIKE 'Docs for%'").fetchone()[
             "body"
         ]
-    assert "Visual replies" in body and "1 private ticket. Skip them: their owners handle any docs." in body
+    assert "Visual replies" in body and LEAVE_OUT in body
     assert "Acme payroll" not in body and "/413" not in body
 
 
@@ -296,18 +297,124 @@ def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_
         assert H.approval(c, older["id"])["decision"] == "withdrawn"
 
 
-def test_only_the_docs_task_tells_its_reader_to_skip_private_tickets(api):
+def test_the_release_and_docs_tasks_leave_private_tickets_out_and_never_ask_for_names(api):
     dev = _team(api)
     visible = _ticket(api, dev, "Visual replies", 412)
-    secret = _ticket(api, dev, "Acme payroll export", 413)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
-        c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         tickets = RF.pending(c)
         release = RF.request(c, "human:ana", source="release_now")
         body = H.task(c, release["task"])["body"]
-        assert "1 private ticket" in body and "Skip them" not in body
+        assert release["tickets"] == 2, "the Release Manager's count is the whole release"
+        assert "1 private ticket with no public title" in body and LEAVE_OUT in body and "Skip them" not in body
         assert secret["title"] not in body and "/413" not in body
         assert visible["title"] in body and "Cut one release for them" in body
         docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
-        assert "1 private ticket. Skip them: their owners handle any docs." in H.task(c, docs)["body"]
+        docs_body = H.task(c, docs)["body"]
+        assert LEAVE_OUT in docs_body and secret["title"] not in docs_body
+
+
+def test_a_private_ticket_with_a_public_title_is_named_by_it_and_its_summary(api):
+    dev = _team(api)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE tasks SET private=1, public_title=?, public_summary=? WHERE id=?",
+            ("Faster payroll exports", "Exports now finish in seconds.\n\nNo more timeouts.", secret["id"]),
+        )
+        docs = RF._docs_task(c, "cpo", "v1.2.3", RF.pending(c), RELEASE_URL)
+        body = H.task(c, docs)["body"]
+    assert "- Faster payroll exports" in body and "Exports now finish in seconds. No more timeouts." in body
+    assert "Acme payroll" not in body and "private ticket" not in body, "its count line is not needed"
+    assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
+
+
+def test_a_private_ticket_is_never_named_by_its_private_title_for_anyone(api):
+    dev = _team(api)
+    _ticket(api, dev, "Visual replies", 412)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+        tickets = RF.pending(c)
+        body = RF._listing(c, tickets, "x")
+        assert "Visual replies" in body and "Acme payroll" not in body
+        assert "...and 1 private ticket with no public title. " in body and LEAVE_OUT in body
+        c.execute("UPDATE tasks SET public_title=? WHERE id=?", ("Faster payroll exports", secret["id"]))
+        body = RF._listing(c, tickets, "x")
+        assert "- Faster payroll exports\n" in body + "\n" and "Acme payroll" not in body
+        assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
+        release = RF.request(c, "human:ana", source="release_now")
+        assert "Acme payroll export" not in H.task(c, release["task"])["body"]
+        docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
+        assert "Acme payroll export" not in H.task(c, docs)["body"]
+
+
+def _step_of(api, ticket):
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?", (ticket["id"],)
+        ).fetchone()[0]
+
+
+def _published(api, repo="ticoteam/tico", tag="v1.2.3"):
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": tag, "html_url": RELEASE_URL.replace("v1.2.3", tag)},
+            "repository": {"full_name": repo},
+        },
+    )
+
+
+def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
+    dev = _team(api)
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api)
+    assert _step_of(api, carried) == "Post Release QA"
+    with api.app.state.store.read() as c:
+        notes = [
+            r[0]
+            for r in c.execute(
+                "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (carried["id"],)
+            )
+        ]
+    assert any("Shipped in v1.2.3" in (n or "") for n in notes)
+    # a second delivery for the same tag changes nothing; a ticket moved on by hand is left where it is
+    _published(api)
+    assert _step_of(api, carried) == "Post Release QA"
+
+
+def test_a_ticket_without_a_merged_pull_request_in_the_repository_stays_at_pending_release(api):
+    dev = _team(api)
+    other = post(
+        api,
+        "tasks",
+        {"owner": "cpo", "title": "No PR", "body": "x", "type": dev["id"], "step": "Pending Release"},
+    )
+    _published(api)
+    assert _step_of(api, other) == "Pending Release"
+
+
+def test_the_repository_name_is_compared_without_case(api):
+    dev = _team(api)
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api, repo="TicoTeam/Tico")
+    assert _step_of(api, carried) == "Post Release QA"
+    assert RF.norm_repo("https://github.com/TicoTeam/Tico.git/") == "ticoteam/tico"
+
+
+def test_a_release_closes_the_schedule_filed_release_task_but_not_one_the_manager_made(api):
+    dev = _team(api)
+    store = api.app.state.store
+    _ticket(api, dev, "Visual replies", 412)
+    with store.transaction() as c:
+        assert RF.request(c, H.KEEPER, source="release_schedule")["sent"] is True
+        mine = H.task_create(c, "bot:cmo", "Release: notes for the team", "x", "bot:cmo", deduplicate=False)
+    _published(api)
+    with store.read() as c:
+        rows = {r["title"]: r["status"] for r in c.execute("SELECT title, status FROM tasks WHERE owner_id='bot:cmo'")}
+    assert rows["Release: 1 ticket at Pending Release"] in ("closed", "done")
+    assert rows["Release: notes for the team"] not in ("closed", "done") and mine

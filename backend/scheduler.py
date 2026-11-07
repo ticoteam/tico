@@ -554,7 +554,7 @@ def step_stall_checks(ctx):
 
 
 def step_approval_expiry(ctx):
-    # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
+    # Every hour: approvals, asks and held messages nobody will act on leave Needs you (backend/approval_expiry.py).
     from . import approval_expiry
 
     with ctx.store.transaction() as c:
@@ -564,6 +564,7 @@ def step_approval_expiry(ctx):
         "approvals expired": ended.get("stale") or [],
         "approvals closed with their task": ended.get("ended") or [],
         "asked cards expired": ended.get("cards") or [],
+        "held messages kept unsent": ended.get("held") or [],
     }
     return SR.words_of(acted, none="Nothing expired"), not any(acted.values())
 
@@ -576,6 +577,7 @@ class Scheduler:
         self.onboarding, self.auth = onboarding, auth  # the Bookkeeper is built the tick Finance is set up
         self.swept = None
         self.stranded = None
+        self.resumed = None
         self.asks_checked = None
         self.goals_checked = None
         self.gateway_checked = None
@@ -948,6 +950,21 @@ class Scheduler:
                 thread_rank.tick(self.store, stamp(at))
             except Exception as exc:
                 failures.append({"thread_rank": type(exc).__name__})
+        from . import stranded_resume
+
+        if self.resumed is None or at - self.resumed >= timedelta(minutes=stranded_resume.SWEEP_MINUTES):
+            # A bot's task left in progress with no run and nothing to wait on gets one resume wake, a few per pass
+            # (backend/stranded_resume.py).
+            self.resumed = at
+            with SR.recording(self.store, "stranded_resume", failures) as run:
+                done = stranded_resume.sweep(self.store, stamp(at))
+                run.did(
+                    SR.words_of(
+                        {"stranded tasks resumed": done["resumed"], "stopped after no progress": done["stopped"]},
+                        none="Nothing stranded",
+                    ),
+                    quiet=not any(done.values()),
+                )
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):
             # Every hour: a bot's task waiting on nothing tracked goes back to open after a grace (task_holds.unstrand).
             self.stranded = at

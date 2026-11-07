@@ -28,7 +28,7 @@ def test_private_matrix_and_all_dry_runs_expose_only_hashes(monkeypatch, capsys)
     monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     assert matrix(parse(json.dumps([ENTRY]))) == {"include": [{"company": key(ENTRY)}]}
-    for action in ("matrix", "configure", "build", "pack", "unpack", "publish"):
+    for action in ("matrix", "icon", "configure", "build", "pack", "unpack", "publish"):
         assert main([action, "--dry-run", "--company", key(ENTRY)]) == 0
         out = capsys.readouterr()
         assert key(ENTRY) in out.out
@@ -275,6 +275,101 @@ def test_icon_failure_reports_safe_category_without_private_response(
     assert not (tmp_path / "app/company-config.json").exists()
 
 
+def test_icon_server_outage_retries_then_skips_company_with_warning(tmp_path, monkeypatch, capsys):
+    from urllib.error import HTTPError
+    from scripts import company_apps
+
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    private = "private-response-and-credentials"
+    attempts, delays = [], []
+
+    class Opener:
+        def open(self, request, timeout):
+            attempts.append(request.full_url)
+            raise HTTPError(request.full_url, 503, private, {}, None)
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    assert main(["icon", "--company", key(ENTRY)]) == 0
+    assert len(attempts) == 8
+    assert delays == [30, 60, 90, 120, 120, 120, 120]
+    assert (tmp_path / "output").read_text() == "available=false\n"
+    output = capsys.readouterr()
+    assert "::warning::Company app icon unavailable (HTTP 503" in output.err
+    assert private not in output.out + output.err
+    summary = (tmp_path / "summary").read_text()
+    assert summary.startswith("Company app skipped: icon unavailable (HTTP 503")
+    assert "The installed app stays on its current version." in summary
+    assert all(value not in output.out + output.err + summary for value in ENTRY.values())
+
+
+def test_icon_tls_certificate_failure_is_not_retried_and_skips_company(tmp_path, monkeypatch, capsys):
+    import ssl
+    from urllib.error import URLError
+    from scripts import company_apps
+
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    private = "private-certificate-details"
+    attempts = []
+
+    class Opener:
+        def open(self, request, timeout):
+            attempts.append(request.full_url)
+            raise URLError(ssl.SSLCertVerificationError(1, private))
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    monkeypatch.setattr(company_apps.time, "sleep", lambda *args: pytest.fail("Certificate failures must not retry"))
+    assert main(["icon", "--company", key(ENTRY)]) == 0
+    assert len(attempts) == 1
+    assert (tmp_path / "output").read_text() == "available=false\n"
+    output = capsys.readouterr()
+    assert "::warning::Company app icon unavailable (TLS certificate verification failed)" in output.err
+    summary = (tmp_path / "summary").read_text()
+    assert summary == (
+        "Company app skipped: icon unavailable (TLS certificate verification failed). "
+        "The installed app stays on its current version.\n"
+    )
+    assert private not in output.out + output.err + summary
+    assert all(value not in output.out + output.err + summary for value in ENTRY.values())
+
+
+@pytest.mark.parametrize("body,available", [(b"\x89PNG\r\n\x1a\nlogo", True), (b"<html>not a logo</html>", None)])
+def test_icon_check_reports_availability_and_still_fails_an_invalid_png(body, available, tmp_path, monkeypatch, capsys):
+    from scripts import company_apps
+
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+
+    class Body:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self, size):
+            return body
+
+    class Opener:
+        def open(self, request, timeout):
+            return Body()
+
+    monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
+    if available:
+        assert main(["icon", "--company", key(ENTRY)]) == 0
+        assert (tmp_path / "output").read_text() == "available=true\n"
+    else:
+        assert main(["icon", "--company", key(ENTRY)]) == 1
+        assert not (tmp_path / "output").exists()
+        assert "must serve a PNG" in capsys.readouterr().err
+
+
 def test_missing_configuration_item_is_named_without_its_values(monkeypatch, capsys):
     entry = {**ENTRY, "icon_url": ""}
     monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([entry]))
@@ -401,6 +496,18 @@ def test_public_workflow_and_company_ciphertext_artifact_boundary():
     assert "release" in release["jobs"]["macos-assets"]["needs"]
     assert "release" in release["jobs"]["desktop-assets"]["needs"]
     assert release["jobs"]["companies"]["strategy"]["fail-fast"] is False
+
+
+def test_company_build_and_publish_wait_for_the_icon_check():
+    from pathlib import Path
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    jobs = yaml.safe_load((root / ".github/workflows/company-app.yml").read_text())["jobs"]
+    assert jobs["build"]["needs"] == "icon"
+    assert jobs["build"]["if"] == "needs.icon.outputs.available == 'true'"
+    assert set(jobs["publish"]["needs"]) == {"icon", "build"}
+    assert "needs.icon.outputs.available == 'true'" in jobs["publish"]["if"]
 
 
 def test_optional_release_branches_start_after_core_publication():

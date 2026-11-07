@@ -32,6 +32,7 @@ function route(hash = location.hash) {
   const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
   const botHere = botOf(S.route);
   document.body.classList.toggle('bot-page', !!botHere);   // a phone gives the bot page the whole screen
+  if (!botHere) pageTitle();
   window.TicoObservability?.route(S.route);
   document.body.classList.remove('mobile-composer-focus');
   // Every page starts from a bare #main: a layout class left behind (the bot page's bot-split-layout made #main a

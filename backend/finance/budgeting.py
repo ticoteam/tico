@@ -5,17 +5,20 @@ the second sees the first.
 Live ad spend (the Google Ads and Meta Ads imports, ad_import.py). The platforms report spend daily; what they charge
 posts days or weeks later, by card, ACH, bill or order, and is the expense of record in the books and the P&L, which
 this never touches. A budget tracks a bot's usage, so it moves with the daily spend and never counts both. An ad budget
-is one whose vendor is an ad platform (budget_platform: the contact the import makes, "Google Ads" or "Meta", or a
-tight descriptor such as GOOGLE *ADS or FACEBK *; store/ads.py). A read (`live=True`: the budgets list, the budget
-metrics, budget vs actual) takes each calendar month of an ad budget's window on its own:
-- a month the platform's import covers (import_covers: on, its last run OK, reading from that month's start, its last
-  success after the month or, for one still running, within STALE) and whose scope it covers (an assigned ad account in
-  scope, all in the book's currency) reads the platform's daily spend for those accounts in place of every books line
-  of the budget's vendor in that month and every hold at that platform (card, payment, bill and order alike). Closed
-  or open, and whenever the charge posts: a December 2 charge for November's spend comes out of December, which the
-  platform's December figure stands for;
+is one whose vendor is an ad platform (budget_platform: the platform's contact, which the import makes in native books
+and finds in mirrored ones, or a tight descriptor such as GOOGLE *ADS or FACEBK *; store/ads.py). A read (`live=True`:
+the budgets list, the budget metrics, budget vs actual) takes each calendar month of an ad budget's window on its own:
+- a month the platform's imports cover (import_covers, for the import of every ad account in scope: on, its last run
+  OK, reading from that month's start, its last success after the month or, for one still running, within STALE) and
+  whose scope they cover (an assigned ad account in scope, all in the book's currency) reads the platform's daily spend
+  for those accounts in place of every books line of the budget's vendor in that month and every hold at that platform
+  (card, payment, bill and order alike). Closed or open, and whenever the charge posts: a December 2 charge for
+  November's spend comes out of December, which the platform's December figure stands for;
 - any other month reads the books, as before. Nothing comes out unless the platform's figure goes in, so a stale import,
   one to reconnect or one turned off never makes a charge vanish.
+One count per dollar: the swap happens only when the budget's vendor is the platform's own contact (swaps), so the lines
+cut are exactly the platform's. A budget on an agency, a bill's vendor, a lookalike name or a bare descriptor keeps its
+books lines and nets nothing; the platform's figure for its covered months comes back beside it as `reported`.
 `spent_from` says which: books, platform or mixed. An ad account is in a budget's scope when its import's books line is
 under the budget's line, the budget's teammate is the account's bot (or the budget names none), and its team holds that
 bot (or it names none). An ad budget only warns (warn_only): decide, a card's cutoff, a payment's hold and a pause never
@@ -545,7 +548,7 @@ def state(
     st = B.state(b, period, _amount(ctx, b, versions, period, at, read), spent, holds, reserve)
     st = replace(st, pace_end=pace_end(b, period, lv.as_of or ctx.at, st.spent))
     if live:
-        st = replace(st, spent_from=lv.spent_from, as_of=lv.as_of)
+        st = replace(st, spent_from=lv.spent_from, as_of=lv.as_of, reported=lv.reported)
     return st if read is None else replace(st, excluded=read.excluded)
 
 
@@ -575,10 +578,12 @@ STALE = timedelta(hours=12)  # an import whose last success is older stands for 
 
 @dataclass(frozen=True)
 class LiveAds:
-    """What a live read changes in an ad budget's window, over the months its platform's import covers: the books lines
+    """What a live read changes in an ad budget's window, over the months its platform's imports cover: the books lines
     taken out (`books_cut`), the holds at the platform taken out (`holds_cut`) and the platform's daily spend put in
     (`platform_spend`). `live_months` / `books_months`: how many months of the window read the platform / the books;
-    `platform`: the budget's platform; `as_of`: the import's last success, when any month reads it."""
+    `platform`: the budget's platform; `as_of`: the oldest last success of the imports read, when any month reads them.
+    `reported`: for an ad budget that does not swap (swaps), the platform's spend over the covered months, shown beside
+    the books' figure and never in it (None when it swaps or no month is covered)."""
 
     books_cut: int = 0
     holds_cut: int = 0
@@ -587,6 +592,7 @@ class LiveAds:
     books_months: int = 0
     platform: str = ""
     as_of: str | None = None
+    reported: int | None = None
 
     @property
     def spent_from(self) -> str:
@@ -605,8 +611,8 @@ def _memo(ctx: Ctx, key: str, make: Any) -> Any:
 
 
 def ad_imports(ctx: Ctx) -> dict[str, SAD.AdImport]:
-    """{platform: its enabled import}, read once per call."""
-    found: dict[str, SAD.AdImport] = _memo(ctx, "ads:imports", lambda: SAD.enabled_platforms(ctx.c))
+    """{import id: an enabled import}, read once per call."""
+    found: dict[str, SAD.AdImport] = _memo(ctx, "ads:imports", lambda: SAD.enabled_imports(ctx.c))
     return found
 
 
@@ -618,6 +624,16 @@ def ad_platform(ctx: Ctx, key: str) -> str:
     return known[key]
 
 
+def platform_contact(ctx: Ctx, platform: str) -> str:
+    """The platform's vendor contact (store/ads.platform_contact; a mirrored book's own), once per call."""
+    found: str = _memo(
+        ctx,
+        f"ads:contact:{platform}",
+        lambda: SAD.platform_contact(ctx.c, ctx.book.id, platform, mirror=ctx.book.mode == "mirror"),
+    )
+    return found
+
+
 def budget_platform(ctx: Ctx, b: B.Budget) -> str:
     """The ad platform a budget's vendor is ("" when it names no vendor or another one). Such a budget is an ad budget:
     it only warns (warn_only), whatever an import does."""
@@ -625,6 +641,15 @@ def budget_platform(ctx: Ctx, b: B.Budget) -> str:
         return ""
     keys = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor) or [b.vendor]
     return next((p for k in keys if (p := ad_platform(ctx, k))), "")
+
+
+def swaps(ctx: Ctx, b: B.Budget, platform: str) -> bool:
+    """Whether an ad budget's covered months take the platform's spend in place of its books lines: only when its
+    vendor is the platform's own contact (platform_contact), so every line it cuts is filed under that contact and
+    every dollar counts once. A budget on an agency, a bill's vendor, a lookalike name or a bare descriptor keeps its
+    books lines and reports the platform's figure beside them (LiveAds.reported)."""
+    contact = platform_contact(ctx, platform)
+    return bool(contact) and contact in SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor)
 
 
 def warn_only(ctx: Ctx, b: B.Budget) -> B.Budget:
@@ -698,25 +723,37 @@ def live_ads(
     tree: Sequence[str] = (),
 ) -> LiveAds:
     """What a live read changes in an ad budget's window [start, end], month by month (the module docstring). `tree`:
-    the budgets whose holds count in it (state passes the subtree; none for `actual`)."""
+    the budgets whose holds count in it (state passes the subtree; none for `actual`). A month is covered when every
+    import of the accounts in scope covers it; a budget that does not swap (swaps) only reports a covered month's spend."""
     platform = budget_platform(ctx, b)
     if not platform:
         return NO_ADS
-    imp = ad_imports(ctx).get(platform)
+    imports = ad_imports(ctx)
+    swap = swaps(ctx, b, platform)
     accounts = frozenset(scope_accounts(ctx, b))
     keys = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor) or [b.vendor]
     last = min(dates.day(end), horizon(ctx)).isoformat()
     books_cut = holds_cut = spend = live = books = 0
+    reported: int | None = None
+    read_from: set[str] = set()
     for lo, hi in _months(start, last):
         rows = [r for r in _month_spend(ctx, lo, hi) if ad_covers(ctx, b, r, accounts, teammate)]
-        if imp is None or not import_covers(ctx, imp, lo, hi) or not _replaced(ctx, rows):
+        used = {r.import_id for r in rows}
+        covered = all(i in imports and import_covers(ctx, imports[i], lo, hi) for i in used)
+        if not covered or not _replaced(ctx, rows):
             books += 1  # never cut without the platform's figure to put in its place
             continue
+        if not swap:
+            books += 1
+            reported = (reported or 0) + sum(r.amount for r in rows)
+            continue
         live += 1
+        read_from |= used
         spend += sum(r.amount for r in rows)
         books_cut += _posted(ctx, b, lo, hi, teammate, read, keys)
         if tree:
             holds_cut += sum(h.amount for h in SAD.holds_for(ctx.c, tree, lo, hi) if hold_platform(ctx, h) == platform)
+    stamps = [str(imports[i].last_import_at) for i in read_from if imports[i].last_import_at]
     return LiveAds(
         books_cut=books_cut,
         holds_cut=holds_cut,
@@ -724,7 +761,8 @@ def live_ads(
         live_months=live,
         books_months=books,
         platform=platform,
-        as_of=imp.last_import_at if live and imp else None,
+        as_of=min(stamps) if live and stamps else None,
+        reported=reported,
     )
 
 

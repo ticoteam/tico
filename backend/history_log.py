@@ -231,25 +231,44 @@ def _query(source, actors, first, last, before, limit, people, hidden=()):
 
 
 def install(app, store, auth):
-    def readable_credentials(c, who, ids):
-        """The names of the credentials among `ids` this reader's Credentials list shows them (backend/credentials.py)."""
+    def readable_credentials(c, who, ids, acted=frozenset()):
+        """The names of the credentials among `ids` this reader's Credentials list shows them (backend/credentials.py).
+        A key deleted since keeps the last name its `credential.deleted` event holds, for a reader who could see it: the
+        owner, a credential administrator, or whoever acted on it in these rows (`acted`); never a key of a tool they may
+        not see now, nor of an Only listed tool deleted since (that one the owner alone)."""
         from . import credentials as V
 
         vault = getattr(app.state, "vault", None)
         if not ids or vault is None or who.role not in ("human", "owner"):
             return {}
-        from .api_tools import hidden_keys
+        from .api_tools import hidden_keys, visible
 
         own = V.owned(c, who) - hidden_keys(c, who, vault.admins)  # never a key of a tool they may not see
-        return {
-            row["id"]: row["name"]
-            for row in c.execute(
-                f"SELECT id,substr(name,1,{TEXT_MAX + 1}) AS name FROM credentials WHERE id IN (%s)"
-                % ",".join("?" * len(ids)),
-                list(ids),
-            )
-            if row["id"] in own or V.permitted(c, who, row["id"], vault.admins)
+        marks = ",".join("?" * len(ids))
+        rows = c.execute(
+            f"SELECT id,substr(name,1,{TEXT_MAX + 1}) AS name FROM credentials WHERE id IN ({marks})", list(ids)
+        ).fetchall()
+        out = {
+            row["id"]: row["name"] for row in rows if row["id"] in own or V.permitted(c, who, row["id"], vault.admins)
         }
+        gone = set(ids) - {row["id"] for row in rows}
+        owner = who.role == "owner" and not getattr(who, "support", None)
+        admin = owner or V.administrator(c, who, vault.admins)
+        gone = {cid for cid in gone if admin or cid in acted}
+        if not gone:
+            return out
+        for row in c.execute(
+            f"SELECT target,detail FROM events WHERE action='credential.deleted' AND target IN ({','.join('?' * len(gone))}) "
+            "ORDER BY created_at,id",
+            list(gone),
+        ):
+            detail = json.loads(row["detail"] or "{}")
+            tid = detail.get("tool")
+            tool = c.execute("SELECT * FROM tools WHERE id=?", (tid,)).fetchone() if tid else None
+            hidden = bool(detail.get("private")) if tool is None else not visible(c, who, tool, vault.admins, auth)
+            if detail.get("name") and (owner or not hidden):
+                out[row["target"]] = str(detail["name"])[: TEXT_MAX + 1]
+        return out
 
     def read(c, who, kinds, actors, first, last, before, limit):
         """Up to `limit` rows newest first, and whether more were left (each source reads `limit + 1`)."""
@@ -283,15 +302,16 @@ def install(app, store, auth):
         """Each source row in the Log's one shape, and the names of everyone in them."""
         from . import automations
 
+        about_keys = [
+            r
+            for r in rows
+            if r["kind"] in ("credential.revealed",) or r.get("action") in ("credential.granted", "credential.revoked")
+        ]
         creds = readable_credentials(
             c,
             who,
-            {
-                r["target"]
-                for r in rows
-                if r["kind"] in ("credential.revealed",)
-                or r.get("action") in ("credential.granted", "credential.revoked")
-            },
+            {r["target"] for r in about_keys},
+            frozenset(r["target"] for r in about_keys if r["actor"] == who.actor),
         )
         autos = {r["target"] for r in rows if r["kind"] == "outbound.blocked"}
         autos = (

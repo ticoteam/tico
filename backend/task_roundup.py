@@ -11,6 +11,8 @@ A bot's list has these lines, in this order, MAX_LINES in all (the rest are coun
   listed once;
 - an assignment the bot has not started an hour after it was given (backend/assigned_start.py): "Assigned, not started", listed
   once, its ledger row written when it is sent;
+- a bot's task Tico stopped resuming after three runs with no progress (backend/stranded_resume.py), on the list of the bot
+  that stop names (the owner's manager bot, else the owner): listed once, whatever the bot's sweeps;
 - a Dev ticket late at its step, on its manager's list (backend/step_age.py): "Late in <step>: N days", relisted after
   RELIST_DAYS;
 - an engineering exception on a manager's list that reads the exceptions list (backend/pipeline_exceptions.py), relisted
@@ -36,7 +38,8 @@ checkpoints, its wake notices) never counts.
 
 A task is quiet when nothing has changed on it for a day, and nothing holds it: no
 live blocker holds it (an open question task to a person is one), nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask), and no follow-up
-time is still to come. A task left in `waiting` that waits on nothing is quiet like any other. A quiet task is listed when it
+time is still to come. A task left in `waiting` that waits on nothing is quiet like any other. A bot's task in progress that
+the resume sweep still has in hand (backend/stranded_resume.py `handles`) is left to it, not listed quiet. A quiet task is listed when it
 was never listed or was last listed 7 or more days ago.
 
 A follow-up time (tasks.check_back_at) is set only by a person or a bot: its check_back_explicit history row names the
@@ -95,7 +98,7 @@ DELIVERED_JOBS = (
     "completed",
 )  # a job that reached its bot: a turn on the task started
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, ASSIGNED, START, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(10)
+DUE, ASKS, ASSIGNED, START, STOPPED, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(11)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 # "waiting_on" is the stored wait before step 6b, still in older history.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
@@ -146,6 +149,9 @@ def _candidates(c, at, shared):
         )
     }
     actors |= {item["to"] for item in _shared(shared, "late", lambda: step_age.late_items(c, at))}
+    from . import stranded_resume
+
+    actors |= stranded_resume.told(c, at)
     actors |= {H.bot_actor(manager) for _, manager in _shared(shared, "types", lambda: _engineering_types(c))}
     actors |= {H.bot_actor(slug) for slug in _shared(shared, "blocked", lambda: _blocked_waits(c, at))}
     actors |= {
@@ -330,7 +336,7 @@ def _list(c, slug, at, shared, skip_tasks=(), *, allowed=None):
 
 def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
     """All eligible lines in list order, one per task, before the display cap."""
-    from . import rules, task_snooze as TS
+    from . import rules, stranded_resume, task_snooze as TS
 
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
@@ -379,6 +385,7 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
             H.parse_ts(quiet_since) <= cutoff
             and not _holds(c, row, at)
             and (listed is None or H.parse_ts(listed) <= relist)
+            and not stranded_resume.handles(c, row)
         ):
             span = _days(now - H.parse_ts(quiet_since))
             reason = (
@@ -399,7 +406,7 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
         if sweeping
         else []
     )
-    for group, sort, item in _asks_back(c, slug, actor, at) + sweep_lines:
+    for group, sort, item in _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines:
         groups[group].append((sort, item))
     ordered, seen = [], set()
     for group in range(QUIET + 1):
@@ -624,6 +631,28 @@ def _asks_back(c, slug, actor, at):
                 ),
             )
         )
+    return out
+
+
+def _resume_stops(c, slug, actor, at):
+    """A bot's task Tico stopped resuming after runs with no progress (backend/stranded_resume.py), listed once on the list
+    of the bot the stop names, whatever its sweeps. A task it cannot read, or one already being run, is named nowhere."""
+    from . import stranded_resume
+
+    out = []
+    for event_id, when, row in stranded_resume.stops_for(c, actor, at):
+        key = _key("resume_stop", slug, event_id)
+        if _mark(c, key) is not None or not H.bot_reads_task(c, actor, row) or _running(c, slug, row):
+            continue
+        private = H.task_private(c, row)
+        runs = stranded_resume.NO_PROGRESS_LIMIT
+        if row["owner_id"] == actor:
+            reason = f"No progress after {runs} automatic resumes: finish it, hand it on or record what it waits on"
+        else:
+            reason = (
+                f"{_who(c, row['owner_id'])} made no progress after {runs} automatic resumes: help it on or close it"
+            )
+        out.append((STOPPED, when, _item(row["id"], _line(row, reason, private), key)))
     return out
 
 

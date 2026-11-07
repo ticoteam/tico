@@ -425,6 +425,12 @@ and a computer is enrolled). Its routines start paused: the server arms the dail
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
 **Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
 
+The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
+team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
+like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
+keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
+`hub bot setup-done` at the end of its setup; one a person turned off stays off.
+
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
 Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its

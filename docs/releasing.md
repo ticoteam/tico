@@ -40,7 +40,9 @@ nothing is sent.
 pull request merged in the release repository; prereleases excepted). It wakes each ticket's QA owner (tickets
 tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
 Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
-Private tickets are counted but not named. The writer skips them; their owners handle any docs for changes people see.
+A private ticket the writer or the Release Manager may not open is named by its public title (and public summary) when
+it has one. Without one it is only counted: the task says to leave it out of the docs and release notes, and nobody is
+asked for its name. A ticket the reader may open is listed by its title as usual.
 The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
 (Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
 Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
@@ -780,8 +782,12 @@ The URL must be reachable without authentication from GitHub's build runners and
 of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
 (Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
 Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
-attempts, so a server restarting for the update can recover. Permanent HTTP errors and invalid or oversized PNGs fail
-immediately; retry logs contain no company URL or remote error text.
+attempts, so a server restarting for the update can recover. Permanent HTTP errors and TLS certificate verification
+failures are not retried, because waiting does not change them. Invalid or oversized PNGs fail the run at once. If the
+download still fails after the retries (network, DNS, timeout or HTTP status), or fails on a certificate, the `icon`
+check skips that company's build and publish with a `::warning::` and a job summary line, and the run stays green. The
+public release and other companies are unaffected. The company's bucket manifest is not replaced, so its installed app
+keeps its current version. Retry logs contain no company URL or remote error text.
 The UUID must remain stable across renames to preserve installed preferences and login state.
 
 Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
@@ -840,7 +846,10 @@ and icon fetching run before installing build dependencies. An icon download err
 status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
 signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
 icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
-Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong.
+Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong. A TLS error means the
+icon host's certificate fails verification from GitHub's runners (expired, incomplete chain or wrong name); fix the
+certificate on that host. The skip warning names the same category. After the fix, run the Release workflow from the
+current tag with `desktop` checked to build and publish that company again.
 Missing configuration fields and required environment variables are named explicitly. Icon generation,
 bundling, Apple certificate import, artifact encryption/decryption and publication have separate
 failure labels; private tool output and raw exception text remain suppressed. An old catch-all

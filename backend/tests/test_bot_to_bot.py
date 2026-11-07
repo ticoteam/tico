@@ -179,6 +179,45 @@ def test_a_bots_comment_flagged_needs_action_wakes_the_task_owner(api):
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 1
 
 
+def finish_turn(api, r, bot, text):
+    attempt = claim(api, r, bot)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0}, r["token"])
+    return attempt
+
+
+def replies(api, sender, to):
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT in_reply_to FROM messages WHERE sender_id=? AND recipient_id=? AND in_reply_to IS NOT NULL",
+            (sender, to),
+        ).fetchall()
+
+
+def test_guard_a_needs_action_task_comment_gets_no_reply_that_wakes_its_bot(api):
+    """A lead's nudge on a ticket wakes the owner; the owner's run text is not posted back, which would wake the lead
+    on every nudge (Dev 606, factory sim forgetful_builder)."""
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        H.task_comment(
+            c, "bot:ops", t["id"], "@cpo this ticket is late: what does it wait on?", extra_refs={"needs_action": True}
+        )
+    before = jobs(api, "ops")
+    finish_turn(api, r, "cpo", "Waiting on review; moved it on.")
+    assert replies(api, "bot:cpo", "bot:ops") == [] and jobs(api, "ops") == before
+
+
+def test_a_needs_action_dm_gets_the_runs_text_as_its_reply(api):
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        asked = H.say(c, "bot:ops", "bot:cpo", "Which release has the fix?", refs={"needs_action": True})
+    before = jobs(api, "ops")
+    finish_turn(api, r, "cpo", "v0.3.62")
+    assert [row[0] for row in replies(api, "bot:cpo", "bot:ops")] == [asked["id"]] and jobs(api, "ops") == before + 1
+
+
 def test_never_delayed_questions_gate_verdicts_approvals_and_awaited_replies(api):
     setup(api)
     sha = "a" * 40

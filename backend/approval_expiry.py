@@ -11,6 +11,8 @@ hubdb._set_status and hubdb.approval_request); this sweep catches the rest:
    expires: its request is declined and the asker told.
 5. A release's undecided publish approval at or below the newest release the hub knows shipped is withdrawn
    (backend/release_flow.py superseded_by_shipped). Approvals asked since then are withdrawn as each release publishes.
+6. An org rule's held message nobody decided within 24 hours is kept unsent, and its bot is told
+   (backend/org_rule_check.py expire_unreviewed). A held message is never sent by a sweep.
 """
 
 from . import hubdb as H
@@ -44,4 +46,13 @@ def sweep(conn, at=None):
     superseded = release_flow.superseded_by_shipped(conn)
     from . import settings_asks
 
-    return {"stale": stale, "ended": ended, "superseded": superseded, "cards": settings_asks.sweep(conn, at)}
+    from . import org_rule_check
+
+    held = org_rule_check.expire_unreviewed(conn, at)
+    return {
+        "stale": stale,
+        "ended": ended,
+        "superseded": superseded,
+        "cards": settings_asks.sweep(conn, at),
+        "held": held,
+    }
