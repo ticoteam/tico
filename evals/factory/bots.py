@@ -14,10 +14,14 @@ A bot's `style` is how its model behaves, as probabilities per turn that does re
   only skips it posts none; a receipt the gate refused it puts right on its next turn
 Every number is drawn from the scenario's seeded random generator, so a run repeats exactly."""
 
+import json
 import os
 from collections import Counter
 from .board import MERGE
 from .world import PRIMARY, Refusal
+
+# After world, which sets the sim's environment before backend loads. The product's resume limit before a stop.
+from backend.stranded_resume import NO_PROGRESS_LIMIT as NO_PROGRESS_RUNS
 
 TOKENS = {  # (cached input, uncached input, output) per kind of turn: a real team's averages over a week
     "work": (3_700_000, 90_000, 17_000),  # a Builder's run
@@ -824,35 +828,19 @@ class Architect(Bot):
 class Lead(Bot):
     """Head of Engineering: on its hourly sweep (a routine) it looks for stuck tickets and gets each moving the way a
     lead does: it tells the owner, with what it sees, flagged as needing action (a plain comment from one bot to another
-    waits for the owner's next run). It never moves a ticket itself. Any other wake is noise."""
+    waits for the owner's next run). A stop's ticket (Tico's "made no progress in 3 runs" ticket on its plate) is settled
+    on every turn that finds it open: the stuck task is retried once through its builder, reassigned once if it is still
+    stuck, and the ticket is done with one line. Any other wake is noise."""
 
     steers = True  # its runtime reads the notices folded into its turn: a stop's notice reaches the turn that is queued
 
+    def settle(self, task=None):
+        """The open stop tickets on the lead's plate, before the turn's own work, whatever woke the turn: a stop's notice
+        is read as the turn starts, and a ticket left open is the lead's to close."""
+        return ", ".join(self.settle_stop(ticket) for ticket in self.stop_tickets()) or None
+
     def act(self, task, message):
-        # A stop's notice can arrive while the claimed turn is queued: the runner folds it into that turn as an input,
-        # which the turn reads as it starts. The lead acts on that notice before the claimed one.
-        refs = next((m.get("refs") or {} for m in self.read if (m.get("refs") or {}).get("wake") == "nudge"), None) or (
-            message.get("refs") or {}
-        )
-        if refs.get("wake") == "nudge" and refs.get("task"):
-            # The notice's task ref names the stopped ticket, and that is the turn's task, so the lead moves it. The lead
-            # settles its own ticket about the stop, the one Tico made for it ("<title>: builder ... made no progress in
-            # ..."), as it closes its sweep ticket: done, with what it did.
-            told = self.reassign_once(refs["task"])
-            # Tico's ticket about the stop is not a Dev ticket, so it is found by its title (tickets() lists Dev tickets only).
-            stopped = next((t for t in self.world.tickets() if t["id"] == refs["task"]), None)
-            notes = (
-                self.world.sql(
-                    "SELECT id,title,status FROM tasks WHERE owner_id=? AND title LIKE ?",
-                    ("bot:" + self.slug, stopped["title"] + ":%"),
-                )
-                if stopped
-                else []
-            )
-            for note in notes:
-                if note["status"] not in FINISHED and "made no progress in" in note["title"]:
-                    self.world.update(note["id"], token=self.token, status="done", note=told)
-            return told
+        refs = message.get("refs") or {}
         if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
             self.world.post(
                 f"tasks/{task['id']}/comments",
@@ -869,7 +857,7 @@ class Lead(Bot):
         if (
             task["owner_id"] == "bot:" + self.slug
             and task["status"] not in FINISHED
-            and "made no progress in" not in task["title"]  # a stop's ticket is the nudge branch's to settle
+            and "made no progress in" not in task["title"]  # a stop's ticket is settle()'s to close
             and not task["title"].startswith("Hourly board sweep")
         ):
             # A ticket given to the lead itself: the lead works it and closes it, as the owner of any ticket does.
@@ -885,22 +873,90 @@ class Lead(Bot):
         self.world.update(task["id"], token=self.token, status="done", note=told)
         return told
 
-    def reassign_once(self, task_id):
-        """A ticket Tico stopped resuming (three runs with no progress): the lead moves it once, to the least loaded peer of
-        its builder's kind, never back to that builder. No peer, no move: the lead says so."""
+    def stop_tickets(self):
+        """The open stop tickets on the lead's plate, oldest first."""
+        return self.world.sql(
+            "SELECT id,title,status,conversation_id FROM tasks WHERE owner_id=? AND title LIKE '%made no progress in%' "
+            "AND status NOT IN ('done','closed','declined') ORDER BY created_at, id",
+            ("bot:" + self.slug,),
+        )
+
+    def settle_stop(self, ticket):
+        """One stop ticket: its task is retried once through its builder; a task already retried and still stuck is
+        reassigned once. The ticket is done with the one line that says what was done."""
+        stuck = self.stopped_task(ticket)
+        if stuck is None or stuck["status"] in FINISHED:
+            line = "the stopped task is done or gone: nothing to move"
+        elif self.retried(stuck):
+            line = self.reassign_once(stuck)
+        else:
+            self.retry(stuck)
+            line = f"retried {stuck['title']} once through {stuck['owner_id'][4:]}"
+        self.world.update(ticket["id"], token=self.token, status="done", note=line)
+        return line
+
+    def stopped_task(self, ticket):
+        """The task a stop ticket is about: the task ref on the stop's notice, which Tico writes into the ticket's thread."""
         w = self.world
-        row = next((t for t in w.tickets() if t["id"] == task_id), None)
-        if row is None or row["status"] in FINISHED or not str(row["owner_id"]).startswith("bot:"):
-            return "the stopped ticket is gone"
-        owner = row["owner_id"]
-        role = next((r for r, slugs in w.roles.items() if owner[4:] in slugs), None)
-        peers = ["bot:" + slug for slug in w.roles.get(role, []) if "bot:" + slug != owner]
-        if not peers:
-            return f"noted the stop on {owner[4:]}: no other builder to move it to"
-        load = Counter(t["owner_id"] for t in w.tickets() if t["status"] not in FINISHED)
-        target = min(peers, key=lambda o: load[o])
-        w.update(task_id, token=self.token, owner=target)
-        return f"moved the stopped ticket from {owner[4:]} to {target[4:]}"
+        for row in w.sql(
+            "SELECT refs FROM messages WHERE conversation_id=? ORDER BY created_at", (ticket["conversation_id"],)
+        ):
+            refs = json.loads(row["refs"] or "{}")
+            if refs.get("wake") == "nudge" and refs.get("task"):
+                found = w.sql("SELECT id,title,owner_id,status,conversation_id FROM tasks WHERE id=?", (refs["task"],))
+                return found[0] if found else None
+        return None
+
+    def retried(self, stuck):
+        """Whether the lead has retried this task before: its own retry comment is in the task's thread."""
+        return bool(
+            self.world.sql(
+                "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND body LIKE '%Retry:%' LIMIT 1",
+                (stuck["conversation_id"], "bot:" + self.slug),
+            )
+        )
+
+    def retry(self, stuck):
+        """Hand the stuck task back to its builder with a short note: a comment that needs action wakes the builder."""
+        self.world.post(
+            f"tasks/{stuck['id']}/comments",
+            {
+                "text": f"@{stuck['owner_id'][4:]} Retry: {stuck['title']} made no progress in {NO_PROGRESS_RUNS} runs. "
+                "Carry on with it: finish it, hand it on, or record what it waits on.",
+                "needs_action": True,
+            },
+            token=self.token,
+        )
+
+    def open_tasks(self, slug):
+        """How many open or doing tasks a bot owns: its load when a task is reassigned."""
+        return self.world.sql(
+            "SELECT count(*) n FROM tasks WHERE owner_id=? AND status IN ('open','doing')", ("bot:" + slug,)
+        )[0]["n"]
+
+    def reassign_once(self, stuck):
+        """A task already retried and still stuck: the lead moves it once, to the least loaded builder of its owner's role
+        that has nothing in progress. No free builder: a one-line note for the person who owns the board, and it stays."""
+        w = self.world
+        slug = stuck["owner_id"][4:]
+        role = next((r for r, slugs in w.roles.items() if slug in slugs), None)
+        free = [
+            s
+            for s in w.roles.get(role, [])
+            if s != slug and not w.sql("SELECT 1 FROM tasks WHERE owner_id=? AND status='doing' LIMIT 1", ("bot:" + s,))
+        ]
+        if not free:
+            w.post(
+                f"tasks/{stuck['id']}/comments",
+                {
+                    "text": f"@ana {stuck['title']} made no progress after a retry, and no other builder is free to take it."
+                },
+                token=self.token,
+            )
+            return f"noted for ana: no free builder to take {stuck['title']}"
+        target = min(free, key=lambda s: (self.open_tasks(s), s))
+        w.update(stuck["id"], token=self.token, owner="bot:" + target)
+        return f"reassigned {stuck['title']} from {slug} to {target}"
 
     def spread(self, task):
         """A backlog at a step: hand the busiest bot owner's surplus there to the least loaded bot of the same kind.
