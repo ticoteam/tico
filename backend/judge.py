@@ -162,9 +162,18 @@ def tokens(usage):
 
 def cache_writes(usage):
     """Anthropic's cache-write tokens (`cache_creation_input_tokens`) from a provider's usage; 0 when it sends none."""
-    usage = usage if isinstance(usage, dict) else {}
-    value = usage.get("cache_creation_input_tokens")
-    return int(value) if _count(value) else 0
+    value = usage.get("cache_creation_input_tokens") if isinstance(usage, dict) else None
+    return int(value) if isinstance(value, int | float) and _count(value) else 0
+
+
+def _list_cost(model, fresh, cached, out, usage):
+    """The list-price USD of one call to a priced `model`, or None when it has no price. A model in
+    `providers.PER_REQUEST_LONG_TIER` is one request: its prompt is the uncached input, the cache writes and the cache
+    reads, and it pays the long tier when over the limit."""
+    if providers.per_request_long_tier(model):
+        prompt = fresh + cache_writes(usage)
+        return providers.estimate_cost(model, prompt, cached, out, [(prompt, cached, out)])
+    return providers.estimate_cost(model, fresh, cached, out)
 
 
 # The dearest list price in `providers.PRICES` (USD per 1M input, output tokens): what a call to a model with no known
@@ -200,13 +209,8 @@ def cost_usd(settings, model, usage):
         rate_in, rate_out = (listed[0], listed[2]) if listed else GATEWAY_USD_PER_MTOK
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
-    elif priced(settings, model):
-        if providers.per_request_long_tier(model):
-            # One request: its prompt pays the long-prompt tier when over it. The prompt is the uncached input, the cache
-            # writes (input, as providers.PRICES counts them) and the cache reads together; the threshold counts all three.
-            prompt = fresh + cache_writes(usage)
-            return round(providers.estimate_cost(model, prompt, cached, out, [(prompt, cached, out)]), 6)
-        return round(providers.estimate_cost(model, fresh, cached, out), 6)
+    elif priced(settings, model) and (listed := _list_cost(model, fresh, cached, out, usage)) is not None:
+        return round(listed, 6)
     else:
         rate_in, rate_out = CEILING
     return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
