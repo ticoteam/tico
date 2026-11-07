@@ -138,7 +138,6 @@
     "ui/app/usage.js": 16,
     "ui/app/vault.js": 1,
     "ui/app/viewer.js": 19,
-    "ui/app/viewport.js": 1,
     "ui/app/visual-cards.js": 14,
     "ui/app/visual-media.js": 4,
     "ui/app/visual-pictures.js": 30,
