@@ -342,5 +342,12 @@ def test_a_bot_repository_is_named_as_not_backed_up_until_github_is_connected(ap
 
     assert "not backed up" in repo_detail()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO github_app VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')")
+        # Connected but never installed: the App reaches no repository, so the bot's repository is still not backed up.
+        c.execute(
+            "INSERT INTO github_app(id, app_id, slug, client_id, org, administration, installation_id, html_url,"
+            " ciphertext, nonce, created_at, created_by) VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')"
+        )
+    assert "not backed up" in repo_detail()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE github_app SET installation_id=77")
     assert "not backed up" not in repo_detail()

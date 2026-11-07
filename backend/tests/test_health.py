@@ -1935,6 +1935,8 @@ def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_cle
     once the App is connected and installed."""
     api = environment()
     assert health_of(api)[1]["github"]["status"] == "info"
+    add_bot(api, H.COUNSEL)  # built in, added once a computer enrolls: not a bot the company made
+    assert health_of(api)[1]["github"]["status"] == "info"
     add_bot(api, "helper")
     check = health_of(api)[1]["github"]
     assert check["status"] == "warn"

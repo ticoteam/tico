@@ -3552,7 +3552,7 @@ def view(c, who, settings, auth, github, config):
                         f"{computer['label']}: GitHub sign-in failed ({computer['github_auth'].get('error') or 'HTTP 401'}). "
                         "Bots there cannot open pull requests. Check the GitHub connection.",
                         [
-                            _fix("Open GitHub settings", "#/settings", "cloud"),
+                            _fix("Open GitHub settings", "#/tools/github"),
                             _fix("Open Computers", "#/settings", "devices"),
                         ],
                     )
