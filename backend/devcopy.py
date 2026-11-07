@@ -190,6 +190,7 @@ EMPTY = (
     "slack_posts",
     "slack_events",
     "slack_threads",
+    # A rehearsal copy must not inherit source-install Health Monitor filing reservations.
     # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
     # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
     "google_workspaces",
@@ -202,6 +203,7 @@ EMPTY = (
     "meeting_importers",
     "live_meeting_bots",
     "support_tickets",
+    "support_file_attempts",
     "support_access",
     "support_access_log",
     # Agent inbox bodies/codes and delivery cursors never enter a rehearsal copy.

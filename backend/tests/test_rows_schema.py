@@ -497,6 +497,7 @@ UNTYPED = frozenset(
         "subscription_assignments",
         "support_access",
         "support_access_log",
+        "support_file_attempts",
         "support_tickets",
         "system_runs",
         "tags",

@@ -12,7 +12,9 @@ import dataclasses
 import importlib.util
 import json
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -289,6 +291,33 @@ def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)
         )
 
 
+def test_a_tico_bug_is_one_ticket_then_a_comment_when_it_comes_back_worse(environment, readers, code_findings, hq):
+    api, _ = built(environment)
+    store = api.app.state.store
+    now, sig = datetime.now(timezone.utc), MH.signature("queue_idle")
+    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
+    run(api, now)  # noisy: pending
+    first = file_due(api, run(api, now + timedelta(minutes=1)))[sig]
+    assert first["ticket"] and len(hq.tickets) == 1
+    with store.transaction() as c:  # a persisted first occurrence before the next check run
+        c.execute("UPDATE health_findings SET occurrences=1 WHERE signature=?", (sig,))
+        c.execute("UPDATE health_reports SET reported_occurrences=1 WHERE signature=?", (sig,))
+    again = file_due(api, run(api, now + timedelta(hours=25)))  # occurrence 2: a comment, not a ticket
+    assert again[sig]["comment"] is True and len(hq.tickets) == 1
+    (ticket,) = hq.tickets.values()
+    assert [m["body"].split(", last at", 1)[0] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
+    with store.transaction() as c:
+        c.execute("UPDATE health_findings SET occurrences=40 WHERE signature=?", (sig,))
+    forty = api.post("/api/v2/health/findings/queue_idle:bot-1/report", json={}, headers=signed_in())
+    assert forty.status_code == 200 and forty.json()["ticket"] == first["ticket"], forty.text
+    assert len(hq.tickets) == 1
+    assert [m["body"].split(", last at", 1)[0] for m in ticket["messages"]] == [
+        "[Health Monitor] Seen again (2 times)",
+        "[Health Monitor] Seen again (40 times)",
+    ]
+    assert sum(r.method == "POST" and r.url.path == "/v1/support" for r in hq.seen) == 1
+
+
 def test_a_setup_finding_is_never_reported_to_the_tico_team(environment, readers, code_findings, hq):
     api, _ = built(environment)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
@@ -341,6 +370,81 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM approvals WHERE kind='support'").fetchone()[0] == 0
+
+
+def test_a_kept_health_ticket_prevents_refiling_when_its_health_report_row_is_missing(
+    environment, readers, code_findings, hq, monkeypatch
+):
+    api, _ = built(environment)
+    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
+    sig = MH.signature("queue_idle")
+    run(api)
+    first = file_due(api, run(api))[sig]
+    assert first["ticket"] and len(hq.seen) == 1
+    monkeypatch.setattr(support, "PER_DAY", 0)
+    monkeypatch.setattr(MH, "REPORTS_PER_DAY", 0)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM health_reports WHERE signature=?", (sig,))
+    repeated = api.post("/api/v2/health/findings/queue_idle:bot-1/report", json={}, headers=signed_in())
+    assert repeated.status_code == 200 and repeated.json()["ticket"] == first["ticket"], repeated.text
+    assert len(hq.seen) == len(hq.tickets) == 1
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT ticket_id FROM health_reports WHERE signature=?", (sig,)).fetchone()
+    assert row["ticket_id"] == first["ticket"]
+    assert sum(r.method == "POST" and r.url.path == "/v1/support" for r in hq.seen) == 1
+
+
+def test_check_run_and_report_route_file_one_ticket_for_the_same_signature(environment, readers, code_findings, hq):
+    api, _ = built(environment)
+    store = api.app.state.store
+    code_findings[:] = [item("queue_idle", key="queue_idle:bot-1", kind=MH.BUG, title="Work waits with no turn")]
+    run(api)  # establish the noisy finding before the race
+    sig = MH.signature("queue_idle")
+    url = "/api/v2/health/findings/queue_idle:bot-1/report"
+    start = threading.Barrier(2)
+
+    def check_and_file():
+        start.wait()
+        result = run(api)
+        return file_due(api, result)[sig]
+
+    def report_route():
+        start.wait()
+        return api.post(url, json={}, headers=signed_in())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        checked = pool.submit(check_and_file)
+        reported = pool.submit(report_route)
+        check_result, route_result = checked.result(), reported.result()
+    assert route_result.status_code == 200, route_result.text
+    assert check_result.get("ticket") or check_result.get("pending") or check_result.get("again")
+    assert len(hq.tickets) == 1
+    assert sum(r.method == "POST" and r.url.path == "/v1/support" for r in hq.seen) == 1
+    with store.read() as c:
+        report = c.execute("SELECT ticket_id FROM health_reports WHERE signature=?", (sig,)).fetchone()
+    assert report["ticket_id"]
+
+
+@pytest.mark.parametrize(
+    "process,shown",
+    [
+        ("container:acme-tico-1", "a Tico container"),
+        ("container:acme-server-1", "the Tico server container"),
+        ("process:AcmePayroll", "a process"),
+        ("process:python3", "process python3"),
+    ],
+)
+def test_a_busy_process_is_reported_by_its_tico_name_only(environment, readers, hq, process, shown):
+    api, runner = built(environment)
+    with api.app.state.store.transaction() as c:
+        MH.record_idle(
+            c, runner["runner_id"], MH.IdleLoad(sampled_at=H.now(), busy=[MH.IdleEntry(name=process, cpu=90, mb=300)])
+        )
+    result = run(api)
+    assert result["details"]["filed"] == [f"local_busy:{runner['runner_id']}:{process}"]
+    file_due(api, result)
+    message = json.loads(hq.seen[0].content)["message"]
+    assert f"Process: {shown}\n" in message and "acme" not in message.lower()
 
 
 def test_the_idle_load_is_taken_from_a_computer_only(environment):
@@ -1883,7 +1987,13 @@ def _fresh(api, hq=None, comments=None):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET title='old: '||title, status='done' WHERE title LIKE 'Health:%'")
         c.execute("UPDATE messages SET body='old '||body WHERE body LIKE 'Health wake: %'")
-        for table in ("health_findings", "health_reports", "invariant_state", "support_tickets"):
+        for table in (
+            "health_findings",
+            "health_reports",
+            "invariant_state",
+            "support_tickets",
+            "support_file_attempts",
+        ):
             c.execute(f"DELETE FROM {table}")
         c.execute("DELETE FROM approvals WHERE kind='support'")
         c.execute("DELETE FROM registry_metadata WHERE key LIKE 'health-%'")
