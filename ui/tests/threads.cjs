@@ -680,7 +680,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
-    assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
+    assert.ok(tabs.includes('home') && !tabs.includes('dm'), 'one chat tab, Home; DM sits behind Incognito: ' + tabs);
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
