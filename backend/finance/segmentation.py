@@ -16,6 +16,7 @@ from typing import Any
 from .. import hubdb as H
 from .. import segments as SEG
 from .core.errors import FinanceError, NOT_FOUND
+from .store import tico as ST
 
 UNALLOCATED = "unallocated"  # the column for lines that count toward no segment
 TOTAL = "total"  # the column every line counts toward
@@ -102,9 +103,12 @@ def dedicated(c: sqlite3.Connection, actor: str) -> frozenset[str]:
 
 
 def lead_map(c: sqlite3.Connection) -> dict[str, frozenset[str]]:
-    """Which segments each actor leads, for every segment with a lead. Empty without company segments."""
+    """Which segments each actor leads, for every segment with a lead. Empty without company segments or segment
+    members; the org chart is read only when there are members to check."""
     out: dict[str, set[str]] = {}
-    for sid in sorted(SEG.ours_ids(c)):
-        for ref in SEG.leads(c, sid):
-            out.setdefault(actor_of(ref), set()).add(sid)
+    if SEG.has_members(c) and SEG.ours_ids(c):
+        managers = ST.org(c, "").reports_to
+        for sid in sorted(SEG.ours_ids(c)):
+            for ref in SEG.leads(c, sid, managers):
+                out.setdefault(actor_of(ref), set()).add(sid)
     return {actor: frozenset(found) for actor, found in out.items()}
