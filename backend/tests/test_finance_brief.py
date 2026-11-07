@@ -217,3 +217,19 @@ def test_an_on_demand_brief_does_not_use_up_the_turn_start_hand_off(books):
         assert asked["lines"]
         handed = BR.for_turn(c, "bot:coder", at=LATER)  # the turn start still gets them: nothing was handed yet
         assert handed is not None and handed["lines"] == asked["lines"]
+
+
+def test_an_install_without_finance_hands_no_lines_and_never_fails_a_turn(store):
+    with store.transaction() as c:
+        assert BR.compute(c, OWNER, AT) == []
+        assert BR.for_turn(c, "bot:coder", at=AT) is None
+
+
+def test_a_failing_read_hands_no_lines_instead_of_failing_the_turn(books, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("a finance read broke")
+
+    monkeypatch.setattr(BR, "compute", boom)
+    with books.transaction() as c:
+        assert BR.for_turn(c, OWNER, at=AT) is None
+        c.execute("SELECT 1").fetchone()  # the claim's transaction is still usable

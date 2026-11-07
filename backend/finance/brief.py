@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from datetime import date
@@ -31,7 +32,7 @@ from typing import Any, cast
 
 from .. import hubdb as H
 from . import reads as R
-from .context import Ctx, load
+from .context import Ctx, is_set_up, load
 from .core import dates
 from .core.errors import FinanceError
 from .core.view import View
@@ -41,6 +42,7 @@ from .store import ledger as SL
 MAX_LINES = 6  # a briefing is a few lines, not a report
 LINE_CHARS = 100  # one short line each; the page and the prompt never carry a paragraph
 Row = dict[str, Any]
+log = logging.getLogger(__name__)
 PACE = re.compile(r"[Pp]ace \$[\d,.]+k?")  # the pace figure, which moves with the clock (see fingerprint)
 
 
@@ -183,7 +185,10 @@ def _later_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
 
 
 def compute(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
-    """The lines this reader may see, read now: [] when they have no Finance view at all. Reads only."""
+    """The lines this reader may see, read now: [] when Finance is not set up or they have no Finance view at all.
+    Reads only."""
+    if not is_set_up(c):
+        return []
     ctx = load(c, at)
     view = ctx.view(reader)
     if not view.sees_anything():
@@ -246,7 +251,24 @@ def brief(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row:
 def for_turn(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row | None:
     """The turn-start hand-off (backend/execution.py): the lines this reader is handed now, or None. Lines are handed
     only when they differ from the fingerprint handed at this reader's last turn start. When they do not, this reads
-    and compares and writes nothing."""
+    and compares and writes nothing. It runs inside every bot's turn claim, so a failure here hands no lines (and is
+    logged) instead of failing the turn; its one write sits in a savepoint that a failure rolls back."""
+    try:
+        c.execute("SAVEPOINT finance_brief")
+        try:
+            got = _for_turn(c, reader, at)
+        except BaseException:
+            c.execute("ROLLBACK TO finance_brief")
+            raise
+        finally:
+            c.execute("RELEASE finance_brief")
+    except Exception:
+        log.exception("finance brief for %s failed; the turn goes on without it", reader)
+        return None
+    return got
+
+
+def _for_turn(c: sqlite3.Connection, reader: str, at: str | None) -> Row | None:
     now = at or H.now()
     lines = compute(c, reader, now)
     digest = fingerprint(lines)
