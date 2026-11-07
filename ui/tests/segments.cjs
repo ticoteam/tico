@@ -56,7 +56,10 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.ok(addBox.x + addBox.width <= sugBox.x + 1, tag + ': + Segment sits left of Ask Assistant to suggest');
       assert.ok(Math.abs(sugBox.x + sugBox.width - (headBox.x + headBox.width)) <= 2, tag + ': the pair sits at the right edge of the card head');
       assert.equal(await page.locator('#strat-segs .strat-card-head .strat-add').count(), 2, tag + ': the card head\'s two buttons share one style');
-      assert.equal(await page.locator('#strat-segs [data-seg-up]').first().isDisabled(), true, tag + ': the first row cannot move up');
+      // Move up and down sit in the ⋯ menu (a shared popover), not in the row.
+      await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
+      assert.equal(await page.locator('.seg-menu [data-seg-up]').isDisabled(), true, tag + ': the first row cannot move up');
+      await page.keyboard.press('Escape');
       assert.equal(await page.locator('#strat-where').count(), 0, tag + ': Where we play is gone');
       assert.equal(await page.locator('.strat-card-head', {hasText: 'Where we play'}).count(), 0, tag + ': no Where we play heading');
       assert.ok(await page.evaluate(() => document.querySelector('#strat-top').getBoundingClientRect().bottom <= document.querySelector('#strat-segs').getBoundingClientRect().top + 1), tag + ': after the summary');
@@ -90,7 +93,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.deepEqual(lastWrite(writes, '/api/v2/segments/' + CHECKS).body, {name: 'Release gates', who: 'Platform teams that ship several times a day'}, tag + ': the edit body');
       // Move the first row down: the whole order goes.
       await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
-      await page.locator('#strat-segs .seg-row').first().locator('[data-seg-down]').click();
+      await page.locator('.seg-menu [data-seg-down]').click();
       // The list is read again after the order is saved: wait for its first row, not for a name that was already there.
       await page.waitForFunction(() => document.querySelector('#strat-segs .seg-main b')?.textContent.trim() === 'Deploy pipelines');
       assert.deepEqual(lastWrite(writes, '/api/v2/segments/order').body, {ids: [DEPLOY, CHECKS, 'segment/mid-size-firms']}, tag + ': the order body');
@@ -145,7 +148,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
         refusals: {'POST /api/v2/segments/order': {status: 409, detail: 'The order changed elsewhere'}}});
       await page.locator('#strat-segs .seg-row').first().waitFor();
       await page.locator('#strat-segs .seg-row').first().locator('[data-seg-menu]').click();
-      await page.locator('#strat-segs .seg-row').first().locator('[data-seg-down]').click();
+      await page.locator('.seg-menu [data-seg-down]').click();
       await page.locator('.toast', {hasText: 'The order changed elsewhere'}).waitFor();
       assert.deepEqual(await texts(page, '#strat-segs .seg-main b'), ['Release checks', 'Deploy pipelines'], tag + ': the order stays');
       assert.deepEqual(errors, [], tag + ': no page errors');

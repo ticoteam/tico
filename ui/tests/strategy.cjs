@@ -349,6 +349,8 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
     {
       const {page, errors, sent} = await open(browser);
       const rivals = page.locator('#strat-rivals');
+      // The competitors are read after the page opens: wait for the first chip, not for whatever is there now.
+      await rivals.locator('.strat-chip').first().waitFor();
       assert.deepEqual(await rivals.locator('.strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle']);
       assert.equal(await rivals.locator('.strat-chip a').getAttribute('href'), 'https://cleanco.example');
       assert.equal(await rivals.locator('.strat-chip a').getAttribute('target'), '_blank');
