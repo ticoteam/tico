@@ -1,8 +1,12 @@
 """The measured Python test map: function scopes, drift hashes, the shard plan, the build's refusals, and staleness."""
 
 import ast
-from datetime import datetime, timedelta, timezone
+import importlib.util
 import json
+import os
+import sys
+import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -265,3 +269,45 @@ def test_links_reads_how_an_importer_reaches_a_module_and_what_it_re_exports():
     assert pm.links(relative, "backend/x.py", "backend.hub", {"LIMIT"}) == ({"hub"}, {}, set())
     plain = ast.parse("import backend.hub\n")
     assert pm.links(plain, "backend/x.py", "backend.hub", {"LIMIT"})[0] == {"backend.hub"}
+
+
+def test_the_hook_measures_a_process_only_while_the_run_names_its_test(tmp_path, monkeypatch):
+    config, context = tmp_path / "coverage.rc", tmp_path / "coverage-context.json"
+    pth = pm.install_hook(config, context, folder=tmp_path)
+    assert pth.read_text(encoding="utf-8") == pm.HOOK_LINE.format(config=str(config), context=str(context))
+    spec = importlib.util.spec_from_file_location("hook_under_test", tmp_path / "tico_py_test_map_coverage.py")
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+
+    started = []
+    fake = types.ModuleType("coverage")
+    fake.process_startup = lambda: started.append(True)
+    monkeypatch.setitem(sys.modules, "coverage", fake)
+    for name in ("COVERAGE_PROCESS_START", "COVERAGE_CORE", "TICO_TEST_CONTEXT", "TICO_COV_OUT"):
+        monkeypatch.setenv(name, "")  # recorded, so monkeypatch removes whatever start() sets
+        monkeypatch.delenv(name)
+
+    hook.start(str(config), str(context))  # no run: no rc file
+    assert started == []
+    config.write_text(pm.RC, encoding="utf-8")
+    hook.start(str(config), str(context))  # the rc file, but no test named yet
+    assert started == []
+
+    context.write_text(
+        json.dumps({"core": "sysmon", "test": "backend/tests/test_a.py", "out": str(tmp_path / "t0")}), encoding="utf-8"
+    )
+    hook.start(str(config), str(context))
+    assert started == [True]
+    assert os.environ["TICO_TEST_CONTEXT"] == "backend/tests/test_a.py"
+    assert os.environ["TICO_COV_OUT"] == str(tmp_path / "t0")
+    assert os.environ["COVERAGE_PROCESS_START"] == str(config)
+    assert os.environ["COVERAGE_CORE"] == "sysmon"
+
+    started.clear()
+    monkeypatch.delenv("COVERAGE_PROCESS_START")
+    monkeypatch.setenv(
+        "COVERAGE_PROCESS_START", str(config)
+    )  # a process that inherits the environment: measured as before
+    context.unlink()
+    hook.start(str(config), str(context))
+    assert started == [True]

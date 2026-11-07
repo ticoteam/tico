@@ -8,6 +8,8 @@ constants, class bodies, decorators, signatures) belong to "<module>", and a cha
 
 Each test file runs alone, so code that runs at import or in a session fixture is attributed to every file that runs it,
 not only to the first. A file whose process did not finish cleanly is "partial" and the selector treats it as unmeasured.
+A subprocess a test file starts is measured as that file too (install_hook): a child that keeps the environment, or that
+starts while the run has its rc file, takes the file from the run's context file.
 The map is data: the workflow publishes it as the only file on ci/py-test-map, and nothing edits it by hand.
 
     python3 scripts/py_test_map.py measure --shard I [--of N] --out DIR [--data DIR]   one shard -> DIR/partial-I.json
@@ -60,13 +62,37 @@ SHA = re.compile(r"[0-9a-f]{40}")
 TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 DIGEST = re.compile(r"[0-9a-f]{16}(?:\|[0-9a-f]{16})*")
 KEYS = {"version", "sha", "measured_at", "run", "tool", "tests", "partial", "files", "hashes"}
-# Installed into the measuring venv: a child Python process that inherits COVERAGE_PROCESS_START (set only for a test
-# file's process) starts coverage too, so a test's subprocess is measured under the same context. Other processes
-# do not import coverage.
-HOOK = (
-    r"""import os; exec("if 'COVERAGE_PROCESS_START' in os.environ: import coverage; coverage.process_startup()")"""
-    + "\n"
-)
+# The subprocess hook, written into the measuring venv by install_hook(). Every Python process there runs one .pth line
+# that imports this module and calls start() with the measuring run's two files: the coverage config (the rc file the
+# run writes into its data folder) and the context file (the test file and data folder of the run's current test,
+# rewritten before each test file). A process that inherits COVERAGE_PROCESS_START (a test file's process, and children
+# that keep the environment) is measured as before. A child started with its own environment, such as a CLI run with
+# a minimal env dict, is measured too while the run has its rc: it takes the test and data folder from the context file,
+# the same variables the rc reads. Any other process returns at once and imports no coverage.
+HOOK_MODULE = '''"""Starts coverage in a process of a measuring run (scripts/py_test_map.py). Written into the measuring venv only."""
+
+import json
+import os
+
+
+def start(config, context):
+    if "COVERAGE_PROCESS_START" not in os.environ:
+        if not os.path.exists(config):
+            return
+        try:
+            with open(context, encoding="utf-8") as stream:
+                info = json.load(stream)
+            os.environ["COVERAGE_CORE"] = info["core"]
+            os.environ["TICO_TEST_CONTEXT"] = info["test"]
+            os.environ["TICO_COV_OUT"] = info["out"]
+            os.environ["COVERAGE_PROCESS_START"] = config
+        except (OSError, ValueError, KeyError):
+            return  # between two test files, or the run is over: nothing to attribute
+    import coverage
+
+    coverage.process_startup()
+'''
+HOOK_LINE = "import tico_py_test_map_coverage as hook; hook.start({config!r}, {context!r})\n"
 # Data files go to TICO_COV_OUT, one per process (parallel), labelled with the test file in TICO_TEST_CONTEXT.
 # The driver runs from the repo root, as `python -m pytest` does, so the tests import `backend` the same way.
 DRIVER = "import sys; from scripts.py_test_map import run_pytest_one; raise SystemExit(run_pytest_one(sys.argv[1]))"
@@ -473,10 +499,15 @@ def coverage_lines(data_dir, test):
     return lines
 
 
-def install_hook():
-    """Install the subprocess hook into the running interpreter's site-packages (the measuring venv)."""
-    target = Path(sysconfig.get_paths()["purelib"]) / "tico_py_test_map_coverage.pth"
-    target.write_text(HOOK, encoding="utf-8")
+def install_hook(config, context, folder=None):
+    """Install the subprocess hook into the running interpreter's site-packages (the measuring venv), or into `folder`.
+
+    `config` and `context` are the paths start() reads, baked into the .pth line.
+    """
+    folder = Path(folder or sysconfig.get_paths()["purelib"])
+    (folder / "tico_py_test_map_coverage.py").write_text(HOOK_MODULE, encoding="utf-8")
+    target = folder / "tico_py_test_map_coverage.pth"
+    target.write_text(HOOK_LINE.format(config=str(config), context=str(context)), encoding="utf-8")
     return target
 
 
@@ -537,12 +568,13 @@ def assign(files, timings, shard, of):
 
 def measure(shard, of, out, data):
     """Measure one shard: each of its test files alone, under coverage. Writes out/partial-<shard>.json."""
-    install_hook()
     out.mkdir(parents=True, exist_ok=True)
     data.mkdir(parents=True, exist_ok=True)
     (data / "logs").mkdir(exist_ok=True)
     rc = data / "coverage.rc"
     rc.write_text(RC, encoding="utf-8")
+    context = data / "coverage-context.json"
+    install_hook(rc, context)
     collected = collect_default()
     mine = assign(collected, load_timings(), shard, of)
     sha = subprocess.run(
@@ -553,6 +585,7 @@ def measure(shard, of, out, data):
         run_dir = data / f"t{index}"
         run_dir.mkdir()
         log = data / "logs" / f"t{index}.log"
+        context.write_text(json.dumps({"core": CORE, "test": test, "out": str(run_dir)}), encoding="utf-8")
         started = time.monotonic()
         code = run_one(test, run_dir, rc, log)
         seconds = round(time.monotonic() - started, 1)
@@ -578,6 +611,8 @@ def measure(shard, of, out, data):
             tests[test]["partial"] = True
             tests[test]["tail"] = (tests[test].get("tail", "") + f"\ncoverage not attributed: {error}")[-1500:]
         shutil.rmtree(run_dir)
+    context.unlink(missing_ok=True)  # the run is over: a process that starts later in this venv is not measured
+    rc.unlink(missing_ok=True)
     payload = {
         "version": VERSION,
         "sha": sha,
@@ -663,13 +698,13 @@ def summary(data):
 
 def overhead(sample, out):
     """Wall-clock cost of coverage: a spread of default-suite files, each run plain and then under coverage."""
-    install_hook()
     files = collect_default()
     step = max(1, len(files) // sample)
     picked = files[::step][:sample]
     out.parent.mkdir(parents=True, exist_ok=True)
     scratch = out.parent / "overhead"
     scratch.mkdir(exist_ok=True)
+    install_hook(scratch / "coverage.rc", scratch / "coverage-context.json")  # no context file: nothing it measures
     rc = scratch / "coverage.rc"
     rc.write_text(RC, encoding="utf-8")
     rows = []
