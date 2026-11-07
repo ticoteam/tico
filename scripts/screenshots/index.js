@@ -82,7 +82,7 @@ const PAGES = [
   }},
   {name: 'settings-health', route: '#/settings/health', ready: 'Setup check',
     ui: [...SETTINGS_UI, 'ui/app/settings-storage.js', 'ui/app/settings-release.js', 'ui/app/settings-repositories.js',
-      'ui/app/settings-hosted.js', 'ui/health.js', 'ui/runner-updates.js']},
+      'ui/app/settings-hosted.ts', 'ui/health.js', 'ui/runner-updates.js']},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
     ui: [...SETTINGS_UI, 'ui/app/settings-devices.js', 'ui/app/computer-detail.js', 'ui/app/cloud-machines.js',
       'ui/app/subscriptions.js', 'ui/runner-updates.js']},

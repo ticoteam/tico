@@ -1,4 +1,4 @@
-// The Strategy Bot's own Settings tab (#/bot/goal-manager/settings, ui/app/settings-strategy-bot.js): the owner sees the regular checks, on, and the three levels with
+// The Strategy Bot's own Settings tab (#/bot/goal-manager/settings, ui/app/settings-strategy-bot.ts): the owner sees the regular checks, on, and the three levels with
 // their sentences, Suggests actions current (the level every install starts at); picking another shows its sentence
 // again and changes nothing until Confirm, and Cancel leaves it as it was. Turning the regular checks off saves at
 // once. Only the owner has the card: an admin or a member has none, and nobody has a tab or a chat for it. The card and

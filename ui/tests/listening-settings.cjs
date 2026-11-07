@@ -1,4 +1,4 @@
-// Strategy › Market › Listening's Settings fold (ui/app/settings-listening.js): the owner and admins read every
+// Strategy › Market › Listening's Settings fold (ui/app/settings-listening.ts): the owner and admins read every
 // destination (a file one is read-only, marked "From listening.yaml"); only the owner adds, edits and removes the ones
 // saved in Settings; the form sends the category, receiver, threshold, readers, optional skip rule and what; the
 // server's refusal shows in the form; Settings sits on What are buyers saying? for admins even before anything is heard,
