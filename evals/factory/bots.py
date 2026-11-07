@@ -88,6 +88,7 @@ class Bot:
     }
     # One turn in twenty runs long: a build of three or four hours, an hour-long review.
     TAIL = {"build": (180, 240), "fix": (60, 120), "review": (30, 60), "qa": (40, 60), "plan": (60, 120)}
+    steers = False  # reads the inputs queued for its turn as it starts (steer); a freeze case names the others
 
     def start(self, attempt):
         """Begin a claimed turn: read what woke the bot, then ask the server for a computer place before anything starts
@@ -95,6 +96,7 @@ class Bot:
         w = self.world
         self._token = attempt["token"]
         self.attempt = attempt
+        self.read = []  # the inputs the turn read as it started (steer): a wake that came while the claim was queued
         # Where the turn runs: its own login, or the fallback a hold sends it to (the runner's choice, made on the claim).
         self.runtime, self.held = w.turn_runtime(attempt.get("job_id"))
         message = attempt.get("message") or {}
@@ -163,7 +165,7 @@ class Bot:
             raise Refusal(status, str(reply))
         self.parked = False
         self.record["at"] = w.now()
-        if self.slug in w.steer_bots:
+        if self.slug in w.steer_bots or self.steers:
             self.steer()
         task = attempt.get(
             "task"
@@ -305,6 +307,7 @@ class Bot:
         if status >= 400:
             raise Refusal(status, str(reply))
         mids = [message["id"] for message in reply["messages"]]
+        self.read = reply["messages"]
         w.input_reads.append((w.now(), self.slug, attempt["id"], mids))
         for mid in mids:
             w.call("post", f"attempts/{attempt['id']}/inputs/{mid}/ack", {}, token=w.runner["token"])
@@ -809,8 +812,14 @@ class Lead(Bot):
     lead does: it tells the owner, with what it sees, flagged as needing action (a plain comment from one bot to another
     waits for the owner's next run). It never moves a ticket itself. Any other wake is noise."""
 
+    steers = True  # its runtime reads the notices folded into its turn: a stop's notice reaches the turn that is queued
+
     def act(self, task, message):
-        refs = message.get("refs") or {}
+        # A stop's notice can arrive while the claimed turn is queued: the runner folds it into that turn as an input,
+        # which the turn reads as it starts. The lead acts on that notice before the claimed one.
+        refs = next((m.get("refs") or {} for m in self.read if (m.get("refs") or {}).get("wake") == "nudge"), None) or (
+            message.get("refs") or {}
+        )
         if refs.get("wake") == "nudge" and refs.get("task"):
             # The lead settles its own ticket about the stop, as it closes its sweep ticket: done, with what it did.
             told = self.reassign_once(refs["task"])
@@ -830,6 +839,15 @@ class Lead(Bot):
             return "asked the owner of a late ticket"
         if refs.get("step_backlog"):
             return self.spread(task)
+        if (
+            task["owner_id"] == "bot:" + self.slug
+            and task["status"] not in FINISHED
+            and "made no progress in" not in task["title"]  # a stop's ticket is the nudge branch's to settle
+            and not task["title"].startswith("Hourly board sweep")
+        ):
+            # A ticket given to the lead itself: the lead works it and closes it, as the owner of any ticket does.
+            self.world.update(task["id"], token=self.token, status="done", note="Took it on and closed it.")
+            return "closed its own ticket"
         if (
             not task["title"].startswith("Hourly board sweep")
             or task["owner_id"] != "bot:" + self.slug
