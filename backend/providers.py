@@ -562,15 +562,18 @@ LONG_PROMPT = _Priced(
     gateway_tiers.long_prompt_for,
 )
 # The models whose long-prompt tier is billed per request in the judge calls: each call is one request,
-# and its prompt pays the tier when over the limit. Claude Haiku 5.5 is listed for its judge calls at the long-prompt
-# rate above, approved by Chris Hawkins on 2026-11-06 (decision 2c1be08a, recorded by the Engineering Lead). Its other
-# calls are priced request by request from the runner's counts, as before.
-PER_REQUEST_LONG_TIER = frozenset({"gpt-6.1-terra", "claude-haiku-5-5"})
+# and its prompt pays the tier when over the limit.
+PER_REQUEST_LONG_TIER = frozenset({"gpt-6.1-terra"})
+# Claude Haiku 5.5's long-prompt tier applies per request to its judge calls only (Chris Hawkins, 2026-11-06, decision
+# 2c1be08a). Its other calls, such as a draft, keep the standard rate.
+PER_REQUEST_JUDGE_LONG_TIER = frozenset({"claude-haiku-5-5"})
 
 
-def per_request_long_tier(model):
-    """Whether a judge call to `model` is priced as one request (PER_REQUEST_LONG_TIER)."""
-    return str(model or "").strip().lower() in PER_REQUEST_LONG_TIER
+def per_request_long_tier(model, judge=True):
+    """Whether a call to `model` is priced as one request at the long tier: always for PER_REQUEST_LONG_TIER, and for
+    PER_REQUEST_JUDGE_LONG_TIER only when the call is a judge call (`judge`)."""
+    name = str(model or "").strip().lower()
+    return name in PER_REQUEST_LONG_TIER or (judge and name in PER_REQUEST_JUDGE_LONG_TIER)
 
 
 def price_of(model):

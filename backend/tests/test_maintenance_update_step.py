@@ -591,6 +591,28 @@ def fake_answer(body, seen):
     return opener
 
 
+def test_a_haiku_draft_over_the_long_prompt_limit_is_charged_the_standard_rate(api):
+    """A draft is not a judge call: Claude Haiku 5.5 keeps the standard rate even over 100,000 prompt tokens."""
+    from backend import judge
+
+    store = api.app.state.store
+    user, system = "x" * 400_000, "a draft system prompt"  # about 133,000 input tokens once reserved
+
+    def write(system, user):
+        return "Shipped the pricing page"
+
+    write.model = "claude-haiku-5-5"
+    updates._draft_call(store, write, system, user)
+    with store.read() as c:
+        spent = c.execute("SELECT target, detail FROM events WHERE action='judge.spend'").fetchall()
+    assert [r["target"] for r in spent] == ["update-draft"]
+    charged = json.loads(spent[0]["detail"])["cost_usd"]
+    standard = judge.reservation(store.settings, ["claude-haiku-5-5"], user, system, judge=False)
+    long = judge.reservation(store.settings, ["claude-haiku-5-5"], user, system)
+    assert charged == pytest.approx(standard)
+    assert standard < long
+
+
 def test_a_draft_that_is_not_json_is_still_metered_as_unusable_spend_and_asked_again(api):
     store = api.app.state.store
     with store.transaction() as c:

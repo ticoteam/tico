@@ -105,9 +105,11 @@ def test_a_haiku_judge_call_over_100k_prompt_tokens_is_priced_at_the_long_tier(t
 
 
 def test_only_the_judge_path_takes_haiku_s_per_request_long_tier(tmp_path):
-    """The call-type selection: the judge path asks `per_request_long_tier`; every other Haiku call keeps its price."""
+    """The call-type selection: a judge call takes Haiku's per-request long tier; any other call keeps its price."""
     assert providers.per_request_long_tier("claude-haiku-5-5")
+    assert not providers.per_request_long_tier("claude-haiku-5-5", judge=False)
     assert providers.per_request_long_tier("gpt-6.1-terra")
+    assert providers.per_request_long_tier("gpt-6.1-terra", judge=False)
     assert not providers.per_request_long_tier("claude-sonnet-5-5")
     assert not providers.per_request_long_tier("claude-fable-5-1")
     # Off the judge path, Haiku is priced from its totals as before: 100,001 prompt tokens at the standard rate, and
@@ -120,6 +122,18 @@ def test_only_the_judge_path_takes_haiku_s_per_request_long_tier(tmp_path):
     settings = Settings(db_path=tmp_path / "hub.db")
     assert B.cost_usd(settings, "claude-sonnet-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == round(
         (100_001 * 2.0 + 1_000 * 10.0) / 1_000_000, 6
+    )
+
+
+def test_a_haiku_call_that_is_not_a_judge_call_keeps_the_standard_rate_over_100k_prompt_tokens(tmp_path):
+    settings = Settings(db_path=tmp_path / "hub.db")
+    usage = {"input_tokens": 100_001, "output_tokens": 1_000}
+    standard = round((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000, 6)
+    assert B.cost_usd(settings, "claude-haiku-5-5", usage, judge=False) == standard
+    # A reservation for a draft is counted the same way: a large prompt is still the standard rate off the judge path.
+    big = "x" * 400_000
+    assert B.reservation(settings, ["claude-haiku-5-5"], big, "system", judge=False) < B.reservation(
+        settings, ["claude-haiku-5-5"], big, "system"
     )
 
 

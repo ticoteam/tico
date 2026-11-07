@@ -14,7 +14,7 @@ regional premiums are not modelled. A model with no price keeps its tokens and s
 
 Some models charge more for a request with a long prompt (`providers.LONG_PROMPT`, dated by `LONG_PROMPT_AS_OF`; today Claude Haiku
 5.5 over 100,000 tokens, counting cache reads and writes). For those, the Claude runner sends each model request's tokens as `requests`
-and the server prices each request at its own rate. A Decide judge call is one request too, so its prompt pays the long tier for Claude Haiku 5.5 (approved 2026-11-06) and gpt-6.1-terra. Tokens no request accounts for (an older runner, another runtime, a run of more
+and the server prices each request at its own rate. A Decide judge call is one request too, so its prompt pays the long tier for Claude Haiku 5.5 (approved 2026-11-06) and gpt-6.1-terra. A Claude Haiku 5.5 draft is not a judge call and keeps the standard rate. Tokens no request accounts for (an older runner, another runtime, a run of more
 than 2,000 requests) are priced at the lower rate, and the run is counted in `low_estimate_runs`: the page says **estimate, may be
 low**. A runtime that reports no
 tokens (Grok today) shows runs and no tokens. When every API run lacks reported usage or a model price, the cost shows a dash; a measured zero remains $0.00.

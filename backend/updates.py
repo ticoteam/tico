@@ -1055,7 +1055,7 @@ def _draft_call(store, write, system, user):
     def call():
         return {"answers": True, "model": model, "answer": write(system, user)}
 
-    return judge.metered(store, [model], user, system, DRAFT_LABEL, call)["answer"]
+    return judge.metered(store, [model], user, system, DRAFT_LABEL, call, judge=False)["answer"]
 
 
 def _draft_failure(exc):
