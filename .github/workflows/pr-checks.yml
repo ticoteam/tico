@@ -316,6 +316,8 @@ jobs:
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
+      - name: UI source suffixes (each scanner of .js UI source also covers .ts; text only)
+        run: '"$RUNNER_TEMP/venv/bin/python" -m pytest -q -n 0 scripts/tests/test_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
       - name: Shell scripts (shellcheck, pinned)

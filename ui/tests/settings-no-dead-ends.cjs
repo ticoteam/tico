@@ -30,11 +30,12 @@ const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'sub
 // Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).
 const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
 
-// Every #/settings/<name> address written in the UI's sources.
+// Every #/settings/<name> address written in the UI's sources, .js or .ts (a script converted to TypeScript keeps its links).
 function settingsLinks() {
   const ui = path.join(__dirname, '..');
-  const files = [...fs.readdirSync(ui).filter(f => f.endsWith('.js')).map(f => path.join(ui, f)),
-    ...fs.readdirSync(path.join(ui, 'app')).filter(f => f.endsWith('.js')).map(f => path.join(ui, 'app', f))];
+  const source = f => f.endsWith('.js') || f.endsWith('.ts');
+  const files = [...fs.readdirSync(ui).filter(source).map(f => path.join(ui, f)),
+    ...fs.readdirSync(path.join(ui, 'app')).filter(source).map(f => path.join(ui, 'app', f))];
   const names = new Set();
   for (const file of files) for (const m of fs.readFileSync(file, 'utf8').matchAll(/#\/settings\/([a-z-]+)/g)) names.add(m[1]);
   return [...names].filter(n => !MOVED.includes(n)).sort();

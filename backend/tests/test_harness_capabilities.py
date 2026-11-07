@@ -40,17 +40,27 @@ ALLOWED_LINES = (
     re.compile(r"=> Host::"),
     re.compile(r"\bconst HOSTS\b"),
     re.compile(r"limitId"),
-    re.compile(r"\bCLI_SETTINGS\s*="),
-    re.compile(r"\bHARNESS_WORDS\s*="),
+    # An assignment, with or without a TypeScript annotation (`const X: Record<string, string> = {`).
+    re.compile(r"\bCLI_SETTINGS\b\s*(?::[^=;(){}]*)?="),
+    re.compile(r"\bHARNESS_WORDS\b\s*(?::[^=;(){}]*)?="),
     re.compile(r'"cursor": \{"type": "integer"'),
 )  # a page cursor in a tool's schema
 
 
 def sources():
-    for base, glob in (("backend", "*.py"), ("clients", "*.py"), ("ui/app", "*.js"), ("runner-rs/src", "**/*.rs")):
+    # Each UI folder is listed by its .js and its .ts files: a script converted to TypeScript is still UI source.
+    for base, glob in (
+        ("backend", "*.py"),
+        ("clients", "*.py"),
+        ("ui/app", "*.js"),
+        ("ui/app", "*.ts"),
+        ("runner-rs/src", "**/*.rs"),
+    ):
         for path in sorted((ROOT / base).glob(glob)):
             rel = path.relative_to(ROOT).as_posix()
-            if "/tests/" not in rel and not any(rel == a or rel.startswith(a + "/") for a in ALLOWED):
+            # An allowed .js file stays allowed as its .ts once converted (the allowance names the file, not its suffix).
+            allowed_as_js = re.sub(r"\.ts$", ".js", rel)
+            if "/tests/" not in rel and not any(a in (rel, allowed_as_js) or rel.startswith(a + "/") for a in ALLOWED):
                 yield rel, path
 
 
