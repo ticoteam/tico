@@ -85,6 +85,28 @@ const lineRead = (url, echo) => {
     by_team: [], by_teammate: [], entries: [], paid_by: [], next_month: null};
 };
 
+// The last page open() made, for a failing scenario's report.
+let LAST = null;
+// What a failing scenario left on screen, for the run's log: the address, the open dialog, the toasts, the last writes
+// and reads, the page's errors and console errors, and a screenshot in TICO_UI_SHOTS.
+async function report(what) {
+  if (!LAST) return '';
+  const {page, errors, hub, consoleLines} = LAST;
+  const seen = await page.evaluate(() => ({
+    hash: location.hash,
+    dialog: document.querySelector('dialog[open]')?.innerText.slice(0, 200) ?? null,
+    toasts: [...document.querySelectorAll('.toast')].map(t => t.textContent).slice(-3),
+    main: (document.querySelector('#main')?.innerText || '').slice(0, 200),
+  })).catch(e => ({unreadable: String(e.message).split('\n')[0]}));
+  const dir = process.env.TICO_UI_SHOTS;
+  if (dir) {
+    fs.mkdirSync(dir, {recursive: true});
+    await page.screenshot({path: path.join(dir, 'failed-' + what.replace(/[^a-z0-9]+/gi, '-').slice(0, 50) + '.png'), fullPage: true}).catch(() => {});
+  }
+  return ' | ' + JSON.stringify({seen, writes: hub.writes.slice(-3).map(w => `${w.method} ${w.path} ${JSON.stringify(w.body)}`),
+    reads: hub.reads.slice(-4), errors: errors.slice(0, 2), console: consoleLines.slice(-3)});
+}
+
 // One page on the fake hub. viewer: who is signed in (ana is the owner; cara a member). segmentsOk: false answers the
 // segment P&L probe with a 403. echo: false leaves the segment out of a line's answer.
 async function open(browser, {viewport = DESKTOP, viewer = 'ana', theme = 'dark', hash = '#/strategy/org', segmentsOk = true, echo = true} = {}) {
@@ -95,8 +117,10 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', theme = 'dark'
     goals: GOALS.map(g => ({...g}))};
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-  const errors = [];
+  const errors = [], consoleLines = [];
   page.on('pageerror', e => errors.push(e.message));
+  page.on('console', m => { if (m.type() === 'error') consoleLines.push(m.text().slice(0, 160)); });
+  LAST = {page, errors, hub, consoleLines};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (answer, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(answer)});
@@ -207,7 +231,10 @@ async function sizes(browser, name, hash, ready, opts = {}) {
   const browser = await chromium.launch();
   const failed = [];
   // A failing scenario is named in the list the run ends with; the others still run.
-  const run = async (what, fn) => { try { await fn(); } catch (e) { failed.push(`${what}: ${String(e.message).split('\n')[0]}`); } };
+  const run = async (what, fn) => {
+    LAST = null;
+    try { await fn(); } catch (e) { failed.push(`${what}: ${String(e.message).split('\n')[0]}${await report(what)}`); }
+  };
   try {
     // 1. The org chart: the owner tags a teammate from the sheet; the chips show on the card, the sheet and the teammate's page.
     await run('org: the owner tags a teammate', async () => {
@@ -291,7 +318,7 @@ async function sizes(browser, name, hash, ready, opts = {}) {
     // 4. Tasks: the Segment filter keeps that segment's rows and shows a chip; a task's Segment saves with its version.
     await run('tasks: the filter, its chip, and a task\'s segment saved', async () => {
       const tag = 'tasks';
-      const {page, errors, hub} = await open(browser, {hash: '#/tasks'});
+      const {page, errors, hub} = await open(browser, {hash: '#/tasks?view=list'});
       await page.locator('#task-body [data-task-key]').first().waitFor();
       await page.locator('#task-filter').click();
       await page.locator('[data-pick-field="segment"]').click();
@@ -435,7 +462,7 @@ async function sizes(browser, name, hash, ready, opts = {}) {
     await run('sizes: person', () => sizes(browser, 'person', '#/person/cara', p => p.locator('#person-segments [data-seg-chips]').waitFor()));
     await run('sizes: bot', () => sizes(browser, 'bot', '#/bot/sales-lead/more', p => p.locator('#bot-segments:not([hidden]) [data-seg-chips]').waitFor()));
     await run('sizes: goals', () => sizes(browser, 'goals', '#/strategy/goals', p => p.locator('#strat-actions [data-seg-filter]').waitFor()));
-    await run('sizes: tasks', () => sizes(browser, 'tasks', '#/tasks', p => p.locator('#task-body [data-task-key]').first().waitFor()));
+    await run('sizes: tasks', () => sizes(browser, 'tasks', '#/tasks?view=list',p => p.locator('#task-body [data-task-key]').first().waitFor()));
     await run('sizes: growth', () => sizes(browser, 'growth', '#/growth', p => p.locator('[data-gr-seg-slot] [data-seg-filter]').waitFor()));
     await run('sizes: budgets', () => sizes(browser, 'budgets', '#/finance/budgets', p => p.locator('tr[data-fin-bud="b-rental-g"]').waitFor()));
     await run('sizes: pnl', () => sizes(browser, 'pnl', '#/finance/pnl', p => p.locator('#fin-pl table.fin-pl').waitFor()));
