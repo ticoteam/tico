@@ -249,7 +249,13 @@ def test_the_readers_and_a_teammate_budget_follow_the_split(books):
             c,
             OWNER,
             "budget_create",
-            {"name": "Cara software", "parent_id": budget(c, "Software"), "amount": 200_000, "teammate": CARA},
+            {
+                "name": "Cara software",
+                "account_id": account(c, "6100"),
+                "parent_id": budget(c, "Software"),
+                "amount": 200_000,
+                "teammate": CARA,
+            },
         )
         assert made.status == "committed", made.reason
         assert act(c, OWNER, "attribute", {"line_id": line, "splits": _shares((CARA, 5000), (DAN, 3000))}).status == (
@@ -301,8 +307,7 @@ def test_the_line_read_says_who_can_change_its_source_and_history(books):
         assert act(c, OWNER, "right_grant", {"teammate": COLLEAGUE_BOT, "right": "finance.attribution"}).status == (
             "committed"
         )
-        assert act(c, OWNER, "right_grant", {"teammate": DAN, "right": "finance.attribution"}).status == "committed"
-        assert act(c, OWNER, "view_grant", {"subject": DAN, "what": "everything"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": DAN, "what": "everything"}).status == "committed"  # no right
         posted = spend(c, "6100", 4_000, day="2026-10-10", teammate=COLLEAGUE_BOT)
         line = _line(c, str(posted["entry_id"]), "6100")
         bot = act(c, COLLEAGUE_BOT, "attribute", {"line_id": line, "splits": _shares((CARA, 10000))})
