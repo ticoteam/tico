@@ -1,4 +1,4 @@
-/* Internal documents and external sources share Docs search. Ask opens the Ask panel (ui/app/ask-panel.js), which
+/* Internal documents and external sources share Docs search. Ask opens the Ask panel (ui/app/ask-panel.ts), which
    sees the page. */
 'use strict';
 
@@ -72,7 +72,7 @@ interface DocsSearchResult {
   results: DocsSearchHit[];
 }
 
-/** The page's entry point, which the router calls (ui/app/router.js). */
+/** The page's entry point, which the router calls (ui/app/router.ts). */
 declare var pageCompanyDocs: () => Promise<void>;
 
 let DOC_DATA: DocsPageData = {docs: [], linked: []};
@@ -230,7 +230,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   $('#docs-add-source').onclick = () => openLink(null);
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
-  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.js); what it sends carries this page.
+  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.ts); what it sends carries this page.
 
   const cacheKey = archived ? 'archived' : 'active';
   const fresh = docsLoadAll(archived);

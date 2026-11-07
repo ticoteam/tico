@@ -1,4 +1,4 @@
-// "What it has learned" (ui/app/learned.js): linked from the top of your chat; the owner sees the company layer and their
+// "What it has learned" (ui/app/learned.ts): linked from the top of your chat; the owner sees the company layer and their
 // own, everyone else only their own; edit and delete send exactly that entry's change and redraw without it. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');

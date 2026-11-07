@@ -1,4 +1,4 @@
-// Settings > Computers' model sign-out and key pop-ups, with every request intercepted (ui/model-login.js). What were
+// Settings > Computers' model sign-out and key pop-ups, with every request intercepted (ui/model-login.ts). What were
 // model-sign-out (Sign out and Switch account) and model-keys (Replace, Clear and Add key); each keeps its own header below
 // and names itself in a failure ("[keys] ..."). Split from model-login so each stays well inside the script timeout.
 const {chromium} = require('playwright');
@@ -8,7 +8,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 // ---- model-sign-out
-// Sign out and Switch account from the app (ui/model-login.js, backend/model_login.py). In a computer's pop-up on
+// Sign out and Switch account from the app (ui/model-login.ts, backend/model_login.py). In a computer's pop-up on
 // Settings > Computers each signed-in Codex, Claude Code or Muse Code connection, the computer's one login for that tool,
 // offers Switch account and Sign out to the computer's operator or an admin, only while the computer is online. Sign out first names the bots that
 // stop, then asks the computer and follows it to Signed out; a computer login someone signed out reads Signed out and
@@ -58,7 +58,7 @@ async function signOut(browser) {
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico'};
         // Sam is a member who operates the computer; Cara is a member who does not.
@@ -308,7 +308,7 @@ async function signOut(browser) {
 }
 
 // ---- model-keys
-// Replace key / Clear key / Add key from the app (ui/model-login.js, backend/computer_keys.py, backend/model_login.py).
+// Replace key / Clear key / Add key from the app (ui/model-login.ts, backend/computer_keys.py, backend/model_login.py).
 // In a computer's pop-up on Settings > Computers, a login a model key signs in shows whose key it is by its stored preview only (this
 // computer's, or the company's shared one) and offers Replace key and Clear key in place of Sign out; a signed-out key
 // runtime offers Add key in the Add connection pop-up (API key). Clear key names the bots that stop before it can go; for the shared key it first asks "this
@@ -357,7 +357,7 @@ async function keys(browser) {
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico'};
         // Sam is a member who operates the computer; Cara is a member who does not.

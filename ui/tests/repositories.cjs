@@ -93,7 +93,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     // The icon font, so the screenshots show icons rather than their names.
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json([bot]);
@@ -572,7 +572,7 @@ async function phone(browser) {
   await box.locator('.brepo-row').first().waitFor();
   await box.evaluate(el => el.scrollIntoView({block: 'start'}));
   // The bot's page replaced Settings: nothing of it is left under the editor to show through once the route's
-  // cross-fade (ui/app/router.js) has ended, so the screenshot waits for that.
+  // cross-fade (ui/app/router.ts) has ended, so the screenshot waits for that.
   await settled(page);
   assert.equal(await page.locator('#set-repos').count(), 0, 'Settings is gone from the page');
   await shot(page, 'bot-repositories-chosen-phone-dark.png');

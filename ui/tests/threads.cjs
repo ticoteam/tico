@@ -149,7 +149,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(bob ? {id: 'bob', name: 'Bob', role: 'member', registered: true} : {id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: bob ? {see: true, read: false, write: false} : {see: true, read: true, write: true}}]);

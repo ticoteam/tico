@@ -1,0 +1,146 @@
+"""scripts/check_ui_strict.py: the strict ratchet (entry, growth, lowering, the old layout at a ref), the JavaScript rule and
+the shift-left rules."""
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import check_ui_strict as strict  # noqa: E402
+import ui_baseline  # noqa: E402
+
+REF = "origin/main"
+
+
+def finding(file, line=1):
+    return strict.Finding(file, line, 1, "TS2339", "Property 'x' does not exist on type 'never'.")
+
+
+@pytest.fixture
+def renamed(monkeypatch):
+    """The .ts paths that are renames of a .js file at REF; a test adds to the set."""
+    names = set()
+    monkeypatch.setattr(strict, "is_rename_of_js", lambda ref, rel: rel in names)
+    return names
+
+
+def test_a_rename_of_a_js_file_may_carry_its_count(renamed):
+    renamed.add("ui/app/a.ts")
+    assert strict.check_growth({"ui/app/a.ts": 4}, {}, REF) == []
+
+
+def test_a_brand_new_ts_file_with_findings_is_refused(renamed):
+    problems = strict.check_growth({"ui/app/new.ts": 1}, {}, REF)
+    assert len(problems) == 1 and problems[0].startswith("NEW BASELINE ui/app/new.ts: 1 finding(s)")
+
+
+def test_a_brand_new_ts_file_with_findings_is_not_strict_either():
+    problems = strict.check_strict({"ui/app/new.ts": [finding("ui/app/new.ts")]}, {}, {"ui/app/new.ts"})
+    assert problems == [
+        "NOT STRICT ui/app/new.ts: 1 finding(s); a .ts file without a piece must pass",
+        "    ui/app/new.ts:1:1: TS2339 Property 'x' does not exist on type 'never'.",
+    ]
+
+
+def test_a_count_rising_against_the_ref_is_refused(renamed):
+    problems = strict.check_growth({"ui/app/a.ts": 3}, {"ui/app/a.ts": 2}, REF)
+    assert problems == ["GREW ui/app/a.ts: 2 -> 3 since origin/main; fix the findings instead"]
+
+
+def test_a_count_falling_without_write_is_refused():
+    findings = {"ui/app/a.ts": [finding("ui/app/a.ts")]}
+    problems = strict.check_strict(findings, {"ui/app/a.ts": 2}, {"ui/app/a.ts"})
+    assert problems == ["LOWER ui/app/a.ts: 1 finding(s), its piece says 2; run --write"]
+
+
+def test_write_lowers_a_count_and_refuses_to_raise_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(ui_baseline, "ROOT", tmp_path)
+    piece = tmp_path / "ui/baselines/strict/app/a.ts.json"
+    lower = {"ui/app/a.ts": [finding("ui/app/a.ts")]}
+    assert strict.write(lower, {"ui/app/a.ts": 2}, {"ui/app/a.ts"}) == 0
+    assert json.loads(piece.read_text()) == {"count": 1}
+    raise_it = {"ui/app/a.ts": [finding("ui/app/a.ts"), finding("ui/app/a.ts", 2)]}
+    assert strict.write(raise_it, {"ui/app/a.ts": 1}, {"ui/app/a.ts"}) == 1
+    assert json.loads(piece.read_text()) == {"count": 1}
+
+
+def test_the_old_single_file_layout_is_the_base_at_a_ref(monkeypatch):
+    legacy = json.dumps({"files": {"ui/app/a.ts": 5}})
+    monkeypatch.setattr(strict, "pieces_at", lambda ref: None)
+    monkeypatch.setattr(strict, "git_show", lambda ref, path: legacy if path == strict.LEGACY else None)
+    base = strict.base_counts(REF)
+    assert base == {"ui/app/a.ts": 5}
+    assert strict.check_growth({"ui/app/a.ts": 6}, base, REF) == [
+        "GREW ui/app/a.ts: 5 -> 6 since origin/main; fix the findings instead"
+    ]
+
+
+def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept_files(monkeypatch):
+    monkeypatch.setattr(
+        strict,
+        "js_on_disk",
+        lambda: [
+            "ui/app/api.js",
+            "ui/app/new.js",
+            "ui/assets/observability-vendors.js",
+            "ui/tests/x.cjs",
+            "ui/vendor/marked.js",
+        ],
+    )
+    assert strict.check_js() == [
+        "ui/app/new.js: JavaScript under ui/; write it as TypeScript (a strict .ts file) instead"
+    ]
+
+
+def test_every_kept_javascript_file_is_a_js_file_with_a_reason():
+    assert strict.KEPT_JS and all(rel.endswith(".js") and reason for rel, reason in strict.KEPT_JS.items())
+
+
+def test_a_repeated_cast_is_a_hit_and_a_single_cast_is_not():
+    assert strict.shift_left_hits("const a = (x as Foo);\n") == []
+    assert strict.shift_left_hits("const a = (x as Foo);\nconst b = (y as Foo);\n") == []
+    hits = strict.shift_left_hits("const a = (x as Foo);\nconst b = (x as Foo);\n")
+    assert [line for line, _ in hits] == [1, 2]
+    assert all("repeated cast `x as Foo`" in message for _, message in hits)
+
+
+def test_a_repeated_non_null_assertion_is_a_hit_and_a_single_one_is_not():
+    assert strict.shift_left_hits("a!.b();\n") == []
+    hits = strict.shift_left_hits("a!.b();\nc = a!.d;\n")
+    assert [line for line, _ in hits] == [1, 2]
+    assert all("repeated non-null assertion `a!`" in message for _, message in hits)
+
+
+def test_any_is_a_hit_wherever_it_is_written():
+    for text in ["let v: any = 1;", "const f = (x as any);", "const g = <any>x;", "function h(a, b: any) {}"]:
+        hits = strict.shift_left_hits(text)
+        assert len(hits) == 1 and "uses `any`" in hits[0][1], text
+
+
+def test_names_that_only_contain_any_or_are_members_are_not_hits():
+    assert strict.shift_left_hits("let anything: string = o.any;\nconst anyway = 1;\n") == []
+
+
+def test_comments_and_strings_are_not_read():
+    text = "// x as Foo\n/* y as Foo */\nconst s = 'z as Foo';\nconst t = `q as Foo`; // any\n"
+    assert strict.shift_left_hits(text) == []
+
+
+def test_import_and_export_aliases_and_as_const_are_not_casts():
+    text = "import { a as b } from 'x';\nexport { c as d };\nconst e = [1] as const;\nconst f = [2] as const;\n"
+    assert strict.shift_left_hits(text) == []
+
+
+def test_shift_left_reads_only_the_strict_files_without_a_piece(monkeypatch):
+    texts = {
+        "ui/app/clean.ts": "const a = (x as Foo);\n",
+        "ui/app/piece.ts": "const a = (x as Foo);\nconst b = (x as Foo);\n",
+        "ui/app/bad.ts": "let v: any;\n",
+    }
+    monkeypatch.setattr(strict, "ts_on_disk", lambda: sorted(texts))
+    monkeypatch.setattr(strict, "read", lambda rel: texts[rel])
+    problems = strict.check_shift_left({"ui/app/piece.ts": 2})
+    assert problems[0] == "SHIFT-LEFT ui/app/bad.ts: 1 hit(s)"
+    assert len(problems) == 2 and problems[1].startswith("    ui/app/bad.ts:1: uses `any`")

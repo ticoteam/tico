@@ -183,7 +183,7 @@ function recruitFor({department, briefing, share}) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
-    // The app is dark unless the browser saved another theme (ui/theme.js): screenshots take the one asked for.
+    // The app is dark unless the browser saved another theme (ui/theme.ts): screenshots take the one asked for.
     if (shots) await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
     let setupGets = 0;
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
@@ -308,7 +308,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], scheduler_enabled: true});
       if (p === '/api/v2/models') return json({models: [{id: 'gpt-6-sol', label: 'Sol', runtime: 'codex', efforts: ['high', 'xhigh'], default_effort: 'high'}], harnesses});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

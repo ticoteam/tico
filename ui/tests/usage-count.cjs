@@ -20,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.2.15', update: null, app_name: 'Tico', usage_count_notice: role === 'owner' && notice};
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});

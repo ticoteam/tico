@@ -1,4 +1,4 @@
-// The open Tasks list never drifts for long (ui/app/refresh.js, tasks-page.js, pull-refresh.ts). After one full read
+// The open Tasks list never drifts for long (ui/app/refresh.ts, tasks-page.js, pull-refresh.ts). After one full read
 // the page takes only what the change log names (a delta read from its cursor, live events), so a change it never
 // names stayed out until a reload, and an installed phone app has no reload button. The fixture's delta read misses
 // every change and its full read answers 304 to any tag the page holds, as the server does when the change log has
@@ -59,7 +59,7 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});

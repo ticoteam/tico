@@ -22,7 +22,7 @@ function vaultClose() {
   if (dialog.open) dialog.close();
   dialog.replaceChildren();
 }
-// Read the vault again after a change and let Tools redraw what it shows of it (ui/app/redesign-library.js).
+// Read the vault again after a change and let Tools redraw what it shows of it (ui/app/redesign-library.ts).
 async function vaultLoad() {
   try { await vaultFetch(); }
   catch (error) { toast(errorMessage(error, ''), true); }

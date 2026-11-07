@@ -1,4 +1,4 @@
-// Build a team (ui/app/team-build.js): the dialog asks the server for the roles a briefing needs, shows them as cards,
+// Build a team (ui/app/team-build.ts): the dialog asks the server for the roles a briefing needs, shows them as cards,
 // keeps what the person picked when the briefing changes, and hires the picks in one request. Run at a desktop (dark) and a
 // phone size (light). Fixtures only, no network. TB_SHOTS=<folder> also saves the screenshots.
 const {chromium} = require('playwright');

@@ -122,8 +122,12 @@ def main():
             api[name] = {'ms': round(statistics.median(times[1:]), 2), 'bytes': len(response.content)}
     data['api'] = api
     (out / 'fixtures.json').write_text(json.dumps(data))
-    before = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:ui/market-page.js'], cwd=ROOT, text=True)
-    (out / 'before.js').write_text(before)
+    # The page's TypeScript at the baseline, compiled the way `npm run build:ui` compiles it (the same esbuild and flags).
+    source = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:ui/market-page.ts'], cwd=ROOT)
+    before = subprocess.check_output(
+        [str(ROOT / 'node_modules' / '.bin' / 'esbuild'), '--loader=ts', '--target=esnext', '--charset=utf8'],
+        cwd=ROOT, input=source)
+    (out / 'before.js').write_bytes(before)
     result = {
         'entities': args.entities,
         'edges': args.edges,

@@ -46,11 +46,11 @@ def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_m
     assert checks.selection(["docs/missing.md"])["python"] is not None
     main = checks.selection(["backend/task_loops.py"], "push")
     assert main["python"] is None and main["browser"] is None and main["caddy"]
-    ui = checks.selection(["ui/app/chat.js"])
+    ui = checks.selection(["ui/app/chat.ts"])
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
     assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
     # A UI file the map does not list runs its linked scripts and the smoke browser scripts, never every script.
-    core = checks.selection(["ui/app/core.js"])
+    core = checks.selection(["ui/app/core.ts"])
     assert "--all" not in core["browser"] and set(checks.browser_scripts([])) <= set(core["browser"])
     assert checks.selection(["runner-rs/harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
@@ -58,8 +58,8 @@ def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_m
     # A removed mapped browser test runs the smoke browser scripts, even if its sibling remains.
     smoke_tree(tmp_path)
     (tmp_path / "ui/app").mkdir(parents=True)
-    (tmp_path / "ui/app/chat.js").touch()
-    missing = checks.selection(["ui/app/chat.js"], root=tmp_path)
+    (tmp_path / "ui/app/chat.ts").touch()
+    missing = checks.selection(["ui/app/chat.ts"], root=tmp_path)
     assert "--all" not in missing["browser"] and set(smoke_scripts) <= set(missing["browser"]) and missing["uncertain"]
 
 
@@ -240,7 +240,7 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
         for event in ("pull_request", "push"):
             plan = checks.selection(changed, event)
             assert plan["rust"] == crates and plan["conformance"], (changed, event)
-    for changed in (["backend/harness_actions.py"], ["backend/task_loops.py"], ["ui/app/chat.js"], []):
+    for changed in (["backend/harness_actions.py"], ["backend/task_loops.py"], ["ui/app/chat.ts"], []):
         assert checks.selection(changed)["rust"] == [] and checks.selection(changed, "push")["rust"] == []
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 1}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
@@ -683,7 +683,7 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
-        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.js"]
+        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.ts"]
     )
     monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     timings = tmp_path / "durations.json"
@@ -1305,8 +1305,8 @@ def test_pull_requests_and_queue_groups_never_run_the_full_suite_or_every_browse
         ["requirements.txt"],
         ["pytest.ini"],
         ["package-lock.json"],
-        ["ui/app/core.js"],
-        ["ui/app/chat.js"],
+        ["ui/app/core.ts"],
+        ["ui/app/chat.ts"],
         ["backend/missing.py"],
         ["docs/missing.md"],
         ["backend/tests/conftest.py"],

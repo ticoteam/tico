@@ -1,4 +1,4 @@
-// Cloud agents on Recruit (ui/app/cloud-agents.js, backend/cloud_agents.py): the agents grid is four across and two
+// Cloud agents on Recruit (ui/app/cloud-agents.ts, backend/cloud_agents.py): the agents grid is four across and two
 // across on a phone, a request files a seat and opens its Connecting page, the team builder's Request link opens the same
 // dialog for the team it names, the seat sits on the chart with a Connecting pill and its address opens its page in Recruit,
 // Add hires a supported agent as a bot in the seat or under the line it names, and the Connecting pulse moves opacity only

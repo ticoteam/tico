@@ -1,5 +1,5 @@
-// The viewer's own Granola account on the Meetings page (ui/app/meetings-granola.js), shown only in Sources
-// (ui/app/meetings-sources.js): Connect opens a dialog with a short code and an Open Granola link, polls the connect
+// The viewer's own Granola account on the Meetings page (ui/app/meetings-granola.ts), shown only in Sources
+// (ui/app/meetings-sources.ts): Connect opens a dialog with a short code and an Open Granola link, polls the connect
 // status every `interval` seconds until connected, expired or denied; a connected account syncs once when the page
 // opens and the list refreshes; Sync now and Remove (confirmed) sit on its row; a signed-out account offers
 // "Sign in again" and a dot on Sources; the API-key importer is a dialog link.

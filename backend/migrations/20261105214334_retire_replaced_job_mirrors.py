@@ -1,6 +1,6 @@
 """The read-only Automations mirrors of the system jobs the Maintenance run replaced (auto_dream, cleanup and
 stall_triage) are soft-deleted, and their unfinished runs skipped, as 0096 retires health_scan's mirror. Until now the
-Automations list hid them on the client (ui/app/automations-maintenance.js). Their runs stay as history, and running it
+Automations list hid them on the client (ui/app/automations-maintenance.ts). Their runs stay as history, and running it
 again changes nothing.
 
 Plain SQL: a migration never calls app code that may change later."""

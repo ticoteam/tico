@@ -1,6 +1,6 @@
-// The Meetings page (ui/app/meetings.js pageNotes, ui/meeting-importers.js): a header with search and one
+// The Meetings page (ui/app/meetings.ts pageNotes, ui/meeting-importers.ts): a header with search and one
 // "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
-// link (ui/app/meetings-sources.js) whose dialog lists every source with its status and error, Remove and Connect;
+// link (ui/app/meetings-sources.ts) whose dialog lists every source with its status and error, Remove and Connect;
 // filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
 // Fixtures only, no network.
 const {chromium} = require('playwright');

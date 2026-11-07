@@ -1852,7 +1852,7 @@ _NEED_CONNECT = re.compile(
     re.I,
 )
 _NEED_REVIEW = re.compile(r"\b(review|draft|proofread|read over|look over)\b", re.I)
-# The words that open a question asking for a yes or a no (ui/app/decide.js DEC_YES_NO says the same).
+# The words that open a question asking for a yes or a no (ui/app/decide.ts DEC_YES_NO says the same).
 _YES_NO = frozenset(
     "approve can could should shall may do does did is are was were will would ok okay send publish "
     "merge ship go sign confirm proceed accept allow agree have has want renew book buy pay launch post "
@@ -2338,7 +2338,7 @@ def holds_up(c, row, readable):
 
 
 def decide_tier(item, now=None, own=None):
-    """Where a card goes in Decide (ui/app/decide.js): 0 when it holds up something due, or it goes ahead on its
+    """Where a card goes in Decide (ui/app/decide.ts): 0 when it holds up something due, or it goes ahead on its
     own, within SOON_BUSINESS_DAYS working days; 1 when it holds up a roadmap item at Approved or Building; else 2,
     newest first. `own` is the card's task as a roadmap item (roadmap_entry) when it is one: the header never names
     it, but it counts here like the item it holds up. How old a card is never moves it up."""

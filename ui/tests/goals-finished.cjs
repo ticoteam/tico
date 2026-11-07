@@ -1,4 +1,4 @@
-// Finished goals on the Goals page (ui/app/goals.js goalFinishedMount): under an owner's live goals, "Finished (N)",
+// Finished goals on the Goals page (ui/app/goals.ts goalFinishedMount): under an owner's live goals, "Finished (N)",
 // closed until opened, newest first, the latest 20 until "Show all"; a row opens read only; Reopen only for whoever may set
 // the goal's colour; "Goal removed" offers Undo, which puts the colour back. Fixtures only, no network.
 const {chromium} = require('playwright');

@@ -97,7 +97,7 @@ function bootTimingSend(settled: boolean): void {
 }
 // After route(): marks the first frame whose #main has content and no skeleton, then reports. A hidden page has no
 // frames, so it looks again on a timer instead.
-// A page's own loading rows (skelRows, ui/app/core.js, and the updates feed's blocks). Other aria-busy marks are parts
+// A page's own loading rows (skelRows, ui/app/core.ts, and the updates feed's blocks). Other aria-busy marks are parts
 // that load by themselves after the page (a file's preview, a send button, a Decide card), and never hold the paint.
 const BOOT_SKELETONS = '.skel, .skel-block';
 function bootPaintWatch(): void {

@@ -122,6 +122,15 @@ def register(app, auth, settings):
             raise Problem("ui_not_built", str(exc), 503) from None
         return FileResponse(path, media_type="text/javascript; charset=utf-8")
 
+    # The service worker is registered at the root (ui/app/boot.ts), so it is served there, compiled, not from ui/.
+    @app.api_route("/sw.js", methods=["GET", "HEAD"], include_in_schema=False)
+    async def ui_service_worker(request: Request):
+        try:
+            path = ui_build.compiled(settings.ui_dir, "sw.ts")
+        except ui_build.StaleBuild as exc:
+            raise Problem("ui_not_built", str(exc), 503) from None
+        return FileResponse(path, media_type="text/javascript; charset=utf-8")
+
     # Its source map, which the compiled file's last line names relative to it (app/a.ts -> app/a.js.map), so a stack
     # trace and the developer tools show the .ts. Only for a file compiled from .ts, and only while current.
     @app.api_route("/tico/ui/{name:path}.js.map", methods=["GET", "HEAD"], include_in_schema=False)

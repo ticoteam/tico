@@ -123,7 +123,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/employees') return json([{name: 'designer', display_name: 'Designer', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.js), held open
+      if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.ts), held open
       if (p === '/api/v2/pages/' + refreshId) return json({page: {file_id: refreshId, title: 'Refreshed page',
         version: 1, updated_at: now, bot_id: 'designer', src: ++pageReads === 1 ? legacySrc : freshSrc}, pinned: []});
       if (p === '/api/v2/files/' + refreshId + '/versions') return json({versions: []});
@@ -487,7 +487,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-chart', 1]);
     await noSideways('task');
 
-    // ---- pinned pages are widgets (ui/app/pages.js pageCard): the page at its own height up to the size, with nothing
+    // ---- pinned pages are widgets (ui/app/pages.ts pageCard): the page at its own height up to the size, with nothing
     // scrolling inside, its frame told it is in a card at that size (the reporter sets data-tico-view from the
     // fragment), a fade only when the page runs on, and an expand icon that opens the full view
     await page.evaluate(() => $('#task-modal')?.close());

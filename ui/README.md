@@ -7,29 +7,30 @@ globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript o
                       The tags between the `<!-- bundle:css:start/end -->` and `<!-- bundle:js:start/end -->`
                       markers are the styles and app scripts; the server bundles them (below)
     styles/*.css      the stylesheet, one file per area, linked in cascade order
-    app/*.js, *.ts    the app: routing, state, sidebar and one file per page or feature
-    *.js              features that mount into a page through a small `window.*` API
-                      (docs-page.ts, goals-kpis.js, first-run.js, support.js, ...)
+    app/*.ts          the app: routing, state, sidebar and one file per page or feature
+    *.ts              features that mount into a page through a small `window.*` API
+                      (docs-page.ts, goals-kpis.ts, first-run.ts, support.ts, ...)
     assets/, vendor/  images, the text font (Inter) and the icon font, marked
     tests/*.cjs       browser tests (`npm run test:ui`)
-    sw.js             the service worker; it caches nothing (it lets the hashed bundle through to the browser cache)
+    sw.ts             the service worker, served as /sw.js; it caches nothing (it lets the hashed bundle through to the browser cache)
 
 ## One request each: the bundle
 
 The many files are for editing. The server (`backend/ui_bundle.py`) concatenates the files listed between the
 markers, in that order, into `/tico/ui/app.bundle.js` and `/tico/ui/app.bundle.css` (each file after a
-`// file: app/name.js` comment), cut between files into parts of at most 512 KB (`app.bundle.2.js`, ...: WebKit's
+`// file: app/name.ts` comment), cut between files into parts of at most 512 KB (`app.bundle.2.js`, ...: WebKit's
 disk cache keeps nothing larger than an eighth of its size), and serves index.html with each region replaced by the
 parts' tags, each `?v=<hash of the whole bundle>`. The bundles are immutable for that URL (`Cache-Control: public, max-age=31536000,
 immutable`, strong ETag, gzip when the browser accepts it); index.html is revalidated on every load. It
-rebuilds when a listed file changes, so editing a `.js` file needs no step. index.html is the only list: adding a file to it
+rebuilds when a listed file changes. Editing a `.ts` file needs a build first (`npm run watch:ui` while editing);
+the server refuses a stale build. index.html is the only list: adding a file to it
 adds it to the bundle.
 
 A file that is not strict cannot share the bundle's one script (the bundle opens with `'use strict'` once), so
-start every `app/` file and every feature file (`ui/*.js`) with it. `TICO_UI_BUNDLE=off` serves the files separately, as listed. The browser
+start every `app/` file and every feature file (`ui/*.ts`) with it. `TICO_UI_BUNDLE=off` serves the files separately, as listed. The browser
 tests run the real bundler and serve the bundle by default; `TICO_UI_BUNDLE=off npm run test:ui` runs them on
-the separate files. The feature files (`ui/*.js`) are in the bundle too, ahead of `app/`; only `theme.js` (in the head, before
-the first paint) and `vendor/` load on their own. The page names `theme.js` and `vendor/marked.min.js` with `?v=<content hash>` too, and the
+the separate files. The feature files (`ui/*.ts`) are in the bundle too, ahead of `app/`; only `theme.ts` (in the head, before
+the first paint) and `vendor/` load on their own. The page names `theme.ts` and `vendor/marked.min.js` with `?v=<content hash>` too, and the
 server keeps them for a year at that URL (`STANDALONE` in backend/ui_bundle.py), so opening the app revalidates neither.
 
 ## TypeScript
@@ -50,7 +51,7 @@ image compiles the UI in its own stage (Dockerfile `ui-build`) and ships only th
 Node. `bash scripts/check_ui_types.sh` type-checks the `.ts` files with the rest.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
-(`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.js` compares both with what the page loaded with, on the
+(`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.ts` compares both with what the page loaded with, on the
 config poll and when a hidden tab is shown, and shows "New version · Reload" (`#stale-banner`). It is empty when the files are served
 unbundled, so only the release is compared then.
 

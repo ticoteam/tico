@@ -29,7 +29,7 @@ async function check(engine) {
         };
         window.get = async () => ({...row});
       });
-      await page.addScriptTag({path: path.join(__dirname, '../model-login.js')});
+      await page.addScriptTag({path: path.join(__dirname, '../../build/ui/model-login.js')});
       for (const runtime of ['codex', 'claude']) {
         await page.setViewportSize(viewport);
         await page.evaluate(runtime => {

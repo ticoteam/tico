@@ -73,7 +73,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.3.0', app_name: 'Tico'};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -115,7 +115,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.match(stuck, /3 behind an interrupted run · 1 held on purpose$/);
     assert.doesNotMatch(stuck, /queued/, 'nothing that can start is called queued');
     // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad,
-    // yet BotOps reviews them, so ui/app/heartbeat.js never lists them.
+    // yet BotOps reviews them, so ui/app/heartbeat.ts never lists them.
     assert.equal(await page.locator('#hl-summary').innerText(), '2 issues to look at');
     const stoppedRow = page.locator('#hl-page [data-hl-check="stopped_runs"]'), quarantineRow = page.locator('#hl-page [data-hl-check="quarantine"]');
     assert.equal(await stoppedRow.getAttribute('data-status'), 'warn');

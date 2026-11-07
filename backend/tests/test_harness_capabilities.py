@@ -47,7 +47,7 @@ ALLOWED_LINES = (
 
 
 def sources():
-    for base, glob in (("backend", "*.py"), ("clients", "*.py"), ("ui/app", "*.js"), ("runner-rs/src", "**/*.rs")):
+    for base, glob in (("backend", "*.py"), ("clients", "*.py"), ("ui/app", "*.ts"), ("runner-rs/src", "**/*.rs")):
         for path in sorted((ROOT / base).glob(glob)):
             rel = path.relative_to(ROOT).as_posix()
             if "/tests/" not in rel and not any(rel == a or rel.startswith(a + "/") for a in ALLOWED):

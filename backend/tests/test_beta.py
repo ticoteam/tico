@@ -52,7 +52,7 @@ def _spots():
     used = {}
     for path in sorted(UI.rglob("*")):
         rel = path.relative_to(UI)
-        if path.suffix not in (".js", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.js":
+        if path.suffix not in (".ts", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.js":
             continue
         for match in SPOT.finditer(path.read_text()):
             used.setdefault(match.group(1) or match.group(2), []).append(rel.as_posix())

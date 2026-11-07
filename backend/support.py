@@ -419,8 +419,8 @@ class Support:
 
             ui = Path(__file__).resolve().parent.parent / "ui"
             files = (
-                {p.name for p in ui.glob("*.js")}
-                | {p.name for p in (ui / "app").glob("*.js")}
+                {p.name for p in ui.glob("*.ts")}
+                | {p.name for p in (ui / "app").glob("*.ts")}
                 | {"app.bundle.js"}
                 | {f"app.bundle.{n}.js" for n in range(2, 100)}
             )

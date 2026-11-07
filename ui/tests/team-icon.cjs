@@ -22,7 +22,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType:'font/woff2',body:fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
-      if (p.endsWith('.js')) return route.fulfill({contentType:'application/javascript',body:''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType:'application/javascript',body:''});
       if (p === '/') return route.fulfill({contentType:'text/html',body:html});
       if (p === '/api/v2/team/icon') {
         if (request.method() === 'GET') return route.fulfill({contentType:'image/png',body:logo});
@@ -97,7 +97,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.locator('#settings-tabs').waitFor();
     assert.equal(await page.locator('#settings-team').count(),0);
     // A local hub's owner gets the Team card without the team icon; the Stale ticket review and Topic changed switches
-    // live in Settings > System (ui/app/settings-recurring.js): no switch here, and no note saying they moved.
+    // live in Settings > System (ui/app/settings-recurring.ts): no switch here, and no note saying they moved.
     role = 'owner'; cloud = false;
     await page.reload();
     await page.locator('[data-settings-tab=general]').click();

@@ -46,7 +46,7 @@ def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
 
 
 def test_standalone_scripts_are_compressed_and_still_revalidate_privately(api):
-    path = "/tico/ui/health.js"
+    path = "/tico/ui/health.ts"
     plain = api.get(path, headers={**AUTH, "Accept-Encoding": "identity"})
     zipped = api.get(path, headers={**AUTH, "Accept-Encoding": "gzip"})
     assert zipped.content == plain.content
@@ -70,9 +70,25 @@ def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
     assert api.get(url.split("?")[0], headers=AUTH).headers["cache-control"] == "private, no-cache"
 
 
+def served_file(ui, name):
+    """The file the server sends for a standalone script: a TypeScript file's compiled output (backend/ui_build.py)."""
+    return ui_build.compiled(ui, name) if name.endswith(".ts") else ui / name
+
+
+def test_typescript_files_are_served_compiled_at_their_urls(api):
+    # The service worker is registered at /sw.js, and the separate-files mode names each script by its own URL: both
+    # send the compiled output the bundle is cut from.
+    ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
+    ui_build.prepare(ui)
+    for url, name in (("/sw.js", "sw.ts"), ("/tico/ui/theme.ts", "theme.ts"), ("/tico/ui/overview/bridge.ts", "overview/bridge.ts")):
+        r = api.get(url, headers=AUTH)
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript"), url
+        assert r.content == ui_build.compiled(ui, name).read_bytes(), url
+
+
 @served
 def test_the_standalone_scripts_are_named_by_content_and_kept_at_that_url(api):
-    # theme.js holds up the first paint and marked runs before the bundle: under the page's `?v=` neither needs a
+    # theme.ts holds up the first paint and marked runs before the bundle: under the page's `?v=` neither needs a
     # round trip to revalidate. Another `v` (a page from before an edit) and no `v` revalidate as before.
     import hashlib
 
@@ -80,15 +96,15 @@ def test_the_standalone_scripts_are_named_by_content_and_kept_at_that_url(api):
     ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
     for path, name in ui_bundle.STANDALONE.items():
         v = re.search(re.escape(path) + r'\?v=([0-9a-f]{16})"', page).group(1)
-        assert v == hashlib.sha256((ui / name).read_bytes()).hexdigest()[:16]
+        assert v == hashlib.sha256(served_file(ui, name).read_bytes()).hexdigest()[:16]
         kept = api.get(f"{path}?v={v}", headers=AUTH)
-        assert kept.status_code == 200 and kept.content == (ui / name).read_bytes()
+        assert kept.status_code == 200 and kept.content == served_file(ui, name).read_bytes()
         assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE
         assert api.get(f"{path}?v={v}", headers={**AUTH, "If-None-Match": kept.headers["etag"]}).status_code == 304
         assert api.get(f"{path}?v={'0' * 16}", headers=AUTH).headers["cache-control"] == "private, no-cache"
         assert api.get(path, headers=AUTH).headers["cache-control"] == "private, no-cache"
         assert api.get(f"{path}?v={v}").status_code == 401
-    # The bundle marks where its own run starts, after the one strict directive (ui/app/boot-timing.js).
+    # The bundle marks where its own run starts, after the one strict directive (ui/app/boot-timing.ts).
     js = api.get("/tico/ui/app.bundle.js", headers=AUTH).text
     assert js.startswith("'use strict';\n" + ui_bundle.BUNDLE_MARK)
 

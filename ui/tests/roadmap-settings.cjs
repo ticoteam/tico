@@ -33,7 +33,7 @@ const types = Array.from({length: 12}, (_, i) => ({id: 'type-' + i, name: 'Type 
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico', local: true};
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config, ...me});

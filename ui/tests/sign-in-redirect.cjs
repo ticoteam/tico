@@ -16,7 +16,7 @@ const {html, uiFile} = require('./support/page.cjs');
       // The page's own scripts and styles come from disk; every other script stubs out.
       const own=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if(own&&fs.existsSync(uiFile(own[1])))return route.fulfill({contentType:own[1].endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(own[1]),'utf8')});
-      if(p.endsWith('.js'))return route.fulfill({contentType:'application/javascript',body:''});
+      if(/\.(?:js|ts)$/.test(p))return route.fulfill({contentType:'application/javascript',body:''});
       if(p.startsWith('/api/'))return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:{code:'identity',detail:'Sign in',sign_in:'/auth/login'}})});
       return route.fulfill({contentType:'application/json',body:'{}'});
     });

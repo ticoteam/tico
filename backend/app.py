@@ -1281,8 +1281,8 @@ def create_app(settings=None):
                 and response.status_code in (200, 304)
                 and ui_bundle.versioned(settings.ui_dir, request.url.path, request.query_params.get("v"))
             ):
-                # theme.js and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
-                # year, so an open needs no round trip for them; theme.js holds up the first paint.
+                # theme.ts and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
+                # year, so an open needs no round trip for them; theme.ts holds up the first paint.
                 response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = (

@@ -103,7 +103,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
         calls.push(['owner', request.postDataJSON()]); owner = people.find(x => x.id === request.postDataJSON().person).email;
         return json({owner});
       }
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

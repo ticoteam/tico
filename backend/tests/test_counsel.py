@@ -1142,7 +1142,7 @@ def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch)
 
 
 def test_counsels_registries_list_it_as_a_hidden_helper():
-    text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.js").read_text()
+    text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.ts").read_text()
     assert "const COUNSEL_BOT = 'tico-counsel';" in text and "slug === COUNSEL_BOT" in text
     assert "ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', COUNSEL_BOT]" in text
 

@@ -1,4 +1,4 @@
-// One saved meeting (ui/app/meetings.js meetPaint): a header with faces and Team / Private, Share and ⋯ beside
+// One saved meeting (ui/app/meetings.ts meetPaint): a header with faces and Team / Private, Share and ⋯ beside
 // Close, one task list with each task once, Notes edited in place, and the transcript beside it (below on a phone).
 // Fixtures only, no network.
 const {chromium} = require('playwright');

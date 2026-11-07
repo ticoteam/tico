@@ -1,4 +1,4 @@
-// Settings > Computers' model sign-in pop-ups, with every request intercepted (ui/model-login.js; the harness capabilities
+// Settings > Computers' model sign-in pop-ups, with every request intercepted (ui/model-login.ts; the harness capabilities
 // come from runner-rs/harnesses/*.toml). What were model-login-hosted (hosted sign-in shows only the link and code) and
 // model-to-key (Switch to API key); each keeps its own header below and names itself in a failure ("[toKey] ...").
 const {chromium} = require('playwright');
@@ -8,7 +8,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 // ---- model-login-hosted
-// Sign in on a hosted Tico (config `hosted`, TICO_HOSTED; ui/model-login.js). The person has no terminal on the
+// Sign in on a hosted Tico (config `hosted`, TICO_HOSTED; ui/model-login.ts). The person has no terminal on the
 // computer, so Settings > Computers signs Claude Code and Codex in with the provider's link and code only: the dialog
 // starts the sign-in by itself, shows the link (and Codex's one-time code, or Claude's paste field), never what else
 // the CLI printed (a failure gives its message), never points to a terminal when the computer is slow to start, and
@@ -37,7 +37,7 @@ async function loginHosted(browser) {
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico', hosted};
         if (p === '/api/me') return json({id: 'sam', role: 'owner', name: 'Sam', email: 'sam@example.com', cloud: true, registered: true, config});
@@ -222,7 +222,7 @@ async function loginHosted(browser) {
 }
 
 // ---- model-to-key
-// Switch to API key from the app (ui/model-login.js, backend/model_login.py `to_key`, runner-rs/src/login.rs). In a
+// Switch to API key from the app (ui/model-login.ts, backend/model_login.py `to_key`, runner-rs/src/login.rs). In a
 // computer's pop-up on Settings > Computers, the computer's own login on a subscription offers Switch to API key next to
 // Switch account and Sign out, for a tool Tico keeps a key for, to the computer's operator while the computer is online.
 // The key is taken in a password field, posted once with `switch` and emptied from the page; the dialog says the
@@ -257,7 +257,7 @@ async function toKey(browser) {
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.1.0', app_name: 'Tico'};
         // Sam is a member who operates the computer; Cara is a member who does not.
