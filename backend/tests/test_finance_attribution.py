@@ -22,6 +22,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     account,
     act,
     books,
+    budget,
     finance_template,
     spend,
     store,
@@ -201,18 +202,37 @@ def test_every_attribution_kind_is_registered_live_and_needs_the_right():
 
 
 def test_the_cash_view_follows_the_split_and_undo_moves_it_back(books):
+    """An unpaid bill's expense is a cash correction (fin_cash_rollups) that holds the cash view out of its P&L until it
+    is paid. The correction takes the line's shares, so the cash view follows the attribution, and undo moves it back."""
     with books.transaction() as c:
-        posted = spend(c, "6100", 300_001, day="2026-10-10")
-        line = _line(c, str(posted["entry_id"]), "6100")
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"])
+        made = act(
+            c,
+            OWNER,
+            "bill_create",
+            {
+                "vendor_id": vendor,
+                "bill_date": "2026-10-10",
+                "lines": [{"account_id": account(c, "6100"), "amount": 300_001}],
+            },
+        )
+        assert made.status == "committed", made.reason
+        assert act(c, OWNER, "bill_approve", {"bill_id": str(made.result["bill_id"])}).status == "committed"
+        line = str(
+            c.execute(
+                "SELECT id FROM fin_lines WHERE account_id=? ORDER BY rowid DESC LIMIT 1", (account(c, "6100"),)
+            ).fetchone()[0]
+        )
+        assert _by_teammate(c, "6100", "fin_cash_rollups") == {"": -300_001}
         before = _by_teammate(c, "6100", "fin_cash_rollups")
         assert act(c, OWNER, "attribute", {"line_id": line, "splits": _shares((CARA, 5000), (DAN, 3000))}).status == (
             "committed"
         )
-        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: 150_001, DAN: 90_000, "": 60_000}
+        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: -150_001, DAN: -90_000, "": -60_000}
         assert act(c, OWNER, "attribute", {"line_id": line, "splits": _shares((CARA, 10000))}).status == "committed"
-        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: 300_001}
+        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: -300_001}
         assert act(c, OWNER, "attribute_undo", {"line_id": line}).status == "committed"
-        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: 150_001, DAN: 90_000, "": 60_000}
+        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: -150_001, DAN: -90_000, "": -60_000}
         assert act(c, OWNER, "attribute", {"line_id": line, "splits": []}).status == "committed"
         assert _by_teammate(c, "6100", "fin_cash_rollups") == before
 
@@ -221,11 +241,15 @@ def test_the_readers_and_a_teammate_budget_follow_the_split(books):
     with books.transaction() as c:
         posted = spend(c, "6100", 300_001, day="2026-10-10")
         line = _line(c, str(posted["entry_id"]), "6100")
+        parent = act(
+            c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 500_000}
+        )
+        assert parent.status == "committed", parent.reason
         made = act(
             c,
             OWNER,
             "budget_create",
-            {"name": "Cara software", "account_id": account(c, "6100"), "amount": 200_000, "teammate": CARA},
+            {"name": "Cara software", "parent_id": budget(c, "Software"), "amount": 200_000, "teammate": CARA},
         )
         assert made.status == "committed", made.reason
         assert act(c, OWNER, "attribute", {"line_id": line, "splits": _shares((CARA, 5000), (DAN, 3000))}).status == (
@@ -252,7 +276,6 @@ def test_a_mirror_book_attributes_without_writing_to_the_provider(books):
         assert done.status == "committed", done.reason
         assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == outbox
         assert _by_teammate(c, "6100") == {CARA: 300_001}
-        assert _by_teammate(c, "6100", "fin_cash_rollups") == {CARA: 300_001}
 
 
 def test_a_private_line_the_viewer_cannot_see_refuses_attribution(books):
@@ -280,7 +303,7 @@ def test_the_line_read_says_who_can_change_its_source_and_history(books):
         )
         assert act(c, OWNER, "right_grant", {"teammate": DAN, "right": "finance.attribution"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": DAN, "what": "everything"}).status == "committed"
-        posted = spend(c, "6100", 4_000, day="2026-10-10", teammate=BEN)
+        posted = spend(c, "6100", 4_000, day="2026-10-10", teammate=COLLEAGUE_BOT)
         line = _line(c, str(posted["entry_id"]), "6100")
         bot = act(c, COLLEAGUE_BOT, "attribute", {"line_id": line, "splits": _shares((CARA, 10000))})
         assert bot.status == "committed", bot.reason
