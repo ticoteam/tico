@@ -3,16 +3,22 @@
 
 A pass reads the pipeline's open tickets in SQL and lists the exceptions:
 
-- a stage requirement not met in the ticket's current visit: its reviewer is asked, once per visit (`ask`);
+- a stage requirement the engine does not count as met in the ticket's current visit (its current standing, stale ones
+  included): the assignee is asked when work is missing or out of date, the reviewer when work waits for a decision,
+  once per visit (`ask`);
 - a person reviewer's requirement with the card past the stage's Limit: the backup is asked, once per visit (`ask_backup`);
-- a card past the Limit ("Warn after"), read with the step_age clock, so time on hold does not count;
+- a requirement that failed twice in the same visit: the manager is woken once for a judgment, once per visit and
+  requirement (plain event dedupe; the budget);
+- a card past the Limit ("Warn after"), read with pipeline_manager.late_tickets, so time on hold does not count;
 - failed decisions in the visit (listed only).
 
 Allowed actions only (D44): ask, ask_backup, refile, hold, release_hold, open_botops, forward, propose_rule. This pass emits
-ask, ask_backup and open_botops. refile is wired with the check pools (M2), so it is not emitted here. No model is called:
-the manager is woken only for judgment (Message manager, Track C), so an empty exception list makes no model call.
+ask, ask_backup and open_botops. refile is wired with the check pools (M2), so it is not emitted here. No model is called
+in the pass: the manager is woken only for judgment (a wake, once per requirement and visit), so an empty exception list
+makes no model call.
 
-The watchdog: a manager whose passes stopped (MISSED_RUNS missed runs) opens one BotOps task per stall.
+The watchdog: a manager whose passes stopped (MISSED_RUNS missed runs) opens one BotOps task per stall. Only a pass that
+finished ok counts as healthy; run_due runs the watchdog before the pass, so a pass recorded after an outage cannot hide it.
 
 `run_due` is the one guarded dispatcher the scheduler calls: each step's failure is recorded and the others still run.
 Each pipeline's pass is its own transaction, and a pass that raised is recorded as its own failed run.
@@ -25,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import hubdb
+from . import pipeline_engine as E
 from . import step_age
 
 # hubdb is untyped: its functions are Any here (as in stranded_resume.py), not partially unknown.
@@ -43,12 +50,15 @@ LOG = logging.getLogger("tico.pipeline_manager")
 ALLOWED = ("ask", "ask_backup", "refile", "hold", "release_hold", "open_botops", "forward", "propose_rule")
 EMITTED = ("ask", "ask_backup", "open_botops")
 MISSED_RUNS = 3  # a manager that misses this many passes in a row gets one BotOps task
+REPEATED_FAILURES = 2  # a requirement that fails this often in one visit wakes the manager for a judgment
+RAIL_CAP = 100  # the most over-limit tickets the rail returns; the total is still counted
+JUDGMENT_EVENT = "pipeline_manager.judgment"
 BOTOPS = "bot:botops"
 WAKE = "pipeline_manager"
 DEFAULT_EVERY = 10
 REVIEWED = ("person", "bot", "bot_then_person")
 BACKUP_REVIEWED = ("person", "bot_then_person")
-SELECT_PIPELINE = "SELECT id, name, manager, manager_every_minutes, created_at FROM task_types"
+SELECT_PIPELINE = "SELECT id, name, manager, manager_every_minutes, goal, created_at FROM task_types"
 
 
 def when_of(at: Any) -> datetime:
@@ -83,10 +93,22 @@ def _every(pipeline: dict[str, Any]) -> int:
 
 
 def last_run(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
-    """The pipeline's newest pass (any status), or None."""
+    """The pipeline's newest pass (any status), or None. Scheduling reads it: a failed pass is retried on time."""
     rows = H._rows(
         c.execute(
             "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? ORDER BY started_at DESC, id DESC LIMIT 1",
+            (pipeline_id,),
+        )
+    )
+    return rows[0] if rows else None
+
+
+def last_ok_run(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
+    """The pipeline's newest pass that finished ok, or None. Health reads it: a failed pass is not a healthy one."""
+    rows = H._rows(
+        c.execute(
+            "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? AND status='ok' "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
             (pipeline_id,),
         )
     )
@@ -102,9 +124,9 @@ def _due(c: "sqlite3.Connection", pipeline: dict[str, Any], when: datetime) -> b
 
 
 def stalled(c: "sqlite3.Connection", pipeline: dict[str, Any], at: Any) -> int:
-    """How many passes this manager has missed: the whole intervals since its last pass started, less the one that is due."""
+    """How many passes this manager has missed: the whole intervals since its last ok pass started, less the one that is due."""
     when = when_of(at)
-    last = last_run(c, pipeline["id"])
+    last = last_ok_run(c, pipeline["id"])
     base = H.parse_ts(last["started_at"]) if last else H.parse_ts(pipeline.get("created_at") or "")
     if base is None:
         return 0
@@ -183,37 +205,55 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
 
 
 def over_limit(c: "sqlite3.Connection", pipeline_id: str, at: Any) -> list[dict[str, Any]]:
-    """The live tickets of a pipeline past their stage's Warn after, oldest first (late_tickets)."""
+    """The live tickets of a pipeline past their stage's Warn after, oldest first (late_tickets). Reads only the columns
+    the Late rule and the rail need, and the stage names in one query."""
     rows = H._rows(
         c.execute(
-            f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
+            "SELECT id, type_id, step_id, status, title, created_at FROM tasks WHERE type_id=? "
+            f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
             (pipeline_id, *H.ACTIVE_STATUSES),
         )
     )
-    by_id = {row["id"]: row for row in rows}
+    late = late_tickets(c, rows, at)
+    if not late:
+        return []
+    titles = {str(row["id"]): row for row in rows}
+    steps = [str(titles[ticket]["step_id"] or "") for ticket in late]
+    names = {
+        str(r["id"]): r["name"]
+        for r in H._rows(
+            c.execute(f"SELECT id, name FROM task_steps WHERE id IN ({','.join('?' * len(steps))})", steps)
+        )
+    }
     out = [
         {
             "task_id": ticket,
-            "title": by_id[ticket].get("title") or "",
-            "pipeline_stage_id": by_id[ticket].get("step_id") or "",
-            "stage": SA._step(c, by_id[ticket]),
+            "title": titles[ticket].get("title") or "",
+            "pipeline_stage_id": titles[ticket].get("step_id") or "",
+            "stage": names.get(str(titles[ticket].get("step_id") or ""), "its step"),
             **info,
         }
-        for ticket, info in late_tickets(c, rows, at).items()
+        for ticket, info in late.items()
     ]
     out.sort(key=lambda item: (item["since"], item["task_id"]))
     return out
 
 
-def _met(c: "sqlite3.Connection", visit_id: str, requirement_id: str) -> bool:
-    return (
-        c.execute(
-            "SELECT 1 FROM stage_decisions WHERE stage_visit_id=? AND stage_requirement_id=? "
-            "AND verdict IN ('met','override') AND undone_at IS NULL LIMIT 1",
-            (visit_id, requirement_id),
-        ).fetchone()
-        is not None
-    )
+def _task_rows(c: "sqlite3.Connection", task_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """The narrow task rows for these tickets, from one query."""
+    if not task_ids:
+        return {}
+    marks = ",".join("?" * len(task_ids))
+    return {
+        str(r["id"]): r
+        for r in H._rows(
+            c.execute(
+                "SELECT id, type_id, step_id, status, title, owner_id, work_revision, created_at, conversation_id "
+                f"FROM tasks WHERE id IN ({marks})",
+                task_ids,
+            )
+        )
+    }
 
 
 def _ask_once(
@@ -229,7 +269,9 @@ def _ask_once(
     text: str,
     at: str,
 ) -> bool:
-    """Ask `target` about one requirement of one visit, once. Returns whether it was asked now."""
+    """Ask `target` about one requirement of one visit, once. Returns whether it was asked now. The once-per-visit
+    key is written only when the ask reached its target: an undelivered ask (a target who cannot read the ticket) is
+    logged and tried again on a later pass."""
     if action not in EMITTED:
         raise ValueError(f"the pipeline manager may not {action}")
     done = c.execute(
@@ -238,17 +280,55 @@ def _ask_once(
     ).fetchone()
     if done is not None:
         return False
+    if H._wake(c, task, target, text, {"wake": WAKE}, trigger="schedule", source="pipeline_manager." + action) is None:
+        LOG.warning("pipeline manager %s on %s was not delivered to %s", action, task["id"], target)
+        return False
     c.execute(
         "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
         "stage_requirement_id, action, target_actor, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (new_id("pma"), pipeline_id, run_id, task["id"], visit_id, requirement_id, action, target, text, at),
     )
-    H._wake(c, task, target, text, {"wake": WAKE}, trigger="schedule", source="pipeline_manager." + action)
+    return True
+
+
+def _judgment_once(
+    c: "sqlite3.Connection",
+    *,
+    pipeline: dict[str, Any],
+    task: dict[str, Any],
+    visit_id: str,
+    requirement: dict[str, Any],
+    failures: int,
+) -> bool:
+    """Wake the pipeline's manager once for a requirement that keeps failing in one visit. The budget: one wake per visit
+    and requirement, kept as an event so a later pass does not repeat it. The wake carries the pipeline's goal (D58)."""
+    manager = pipeline.get("manager")
+    key = f"{visit_id}:{requirement['id']}"
+    if (
+        not manager
+        or c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (JUDGMENT_EVENT, key)).fetchone()
+    ):
+        return False
+    goal = f" Goal: {pipeline['goal']}" if pipeline.get("goal") else ""
+    text = (
+        f"{requirement['name']} failed {failures} times on {task['title']}. Judge whether it is met, "
+        f"or say what the card needs.{goal}"
+    )
+    if (
+        H._wake(
+            c, task, H.bot_actor(manager), text, {"wake": WAKE}, trigger="schedule", source="pipeline_manager.judgment"
+        )
+        is None
+    ):
+        return False
+    H.event(c, H.KEEPER, JUDGMENT_EVENT, key, {"pipeline": pipeline["id"], "task": task["id"], "failures": failures})
     return True
 
 
 def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> dict[str, int]:
-    """One pass over a pipeline, inside the caller's transaction: its run row, its actions and wakes."""
+    """One pass over a pipeline, inside the caller's transaction: its run row, its actions and wakes. What is unmet is the
+    engine's current standing of each requirement in the visit's stage (pipeline_engine.standings), not a record of
+    whether it was ever met."""
     pid = pipeline["id"]
     stamp = stamp_of(at)
     run_id = new_id("pmr")
@@ -260,22 +340,31 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
     over_ids = {item["task_id"] for item in over}
     exceptions: list[str] = [f"over:{item['task_id']}" for item in over]
     actions = 0
-    for visit in _visits(c, pid):
-        task = H.task(c, visit["task_id"])
+    visits = _visits(c, pid)
+    tasks = _task_rows(c, list({str(v["task_id"]) for v in visits}))
+    standing = E.standings(c, list(tasks.values())) if tasks else {}
+    for visit in visits:
+        task = tasks.get(str(visit["task_id"]))
         if task is None:
             continue
-        requirements = H._rows(
-            c.execute(
-                "SELECT id, name, reviewed_by, reviewer_id, backup_reviewer_id FROM stage_requirements "
-                "WHERE pipeline_stage_id=? AND retired_at IS NULL ORDER BY position, name",
-                (visit["pipeline_stage_id"],),
-            )
-        )
-        for req in requirements:
-            if _met(c, visit["visit_id"], req["id"]):
+        for found in standing.get(str(task["id"]), []):
+            req = found.requirement
+            if found.stage_id != str(visit["pipeline_stage_id"]) or found.state == "met":
                 continue
-            exceptions.append(f"missing:{visit['visit_id']}:{req['id']}")
-            if req["reviewer_id"] and req["reviewed_by"] in REVIEWED:
+            exceptions.append(f"missing:{visit['visit_id']}:{found.id}")
+            if found.state == "waiting":
+                # Work waits for a decision: its reviewer is asked. Nothing else is owed by the assignee.
+                target = req["reviewer_id"] if req["reviewed_by"] in REVIEWED else None
+                text = f"{req['name']} on {task['title']} is waiting for your decision."
+            elif found.state == "failed":
+                target = task.get("owner_id")
+                text = f"{req['name']} on {task['title']} was judged not met. Fix it or say why it should count."
+            else:  # none (missing) or out_of_date: the assignee owes the work
+                target = task.get("owner_id")
+                text = f"{req['name']} is still missing on {task['title']}. Add it or say why it is not there."
+                if found.state == "out_of_date":
+                    text = f"{req['name']} on {task['title']} is out of date. Add it again or say why it still holds."
+            if target:
                 actions += int(
                     _ask_once(
                         c,
@@ -283,10 +372,10 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
                         run_id=run_id,
                         task=task,
                         visit_id=visit["visit_id"],
-                        requirement_id=req["id"],
+                        requirement_id=found.id,
                         action="ask",
-                        target=req["reviewer_id"],
-                        text=f"{req['name']} is still missing on {task['title']}. Add it or say why it is not there.",
+                        target=str(target),
+                        text=text,
                         at=stamp,
                     )
                 )
@@ -298,7 +387,7 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
                         run_id=run_id,
                         task=task,
                         visit_id=visit["visit_id"],
-                        requirement_id=req["id"],
+                        requirement_id=found.id,
                         action="ask_backup",
                         target=req["backup_reviewer_id"],
                         text=f"{task['title']} is past its Limit on {req['name']}. You are the backup reviewer.",
@@ -307,13 +396,32 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
                 )
     for failed in H._rows(
         c.execute(
-            "SELECT d.stage_visit_id AS visit_id, d.stage_requirement_id AS requirement_id FROM stage_decisions d "
-            "JOIN stage_visits v ON v.id = d.stage_visit_id WHERE v.pipeline_id=? AND v.left_at IS NULL "
-            "AND d.verdict='failed' AND d.undone_at IS NULL",
+            "SELECT d.stage_visit_id AS visit_id, d.stage_requirement_id AS requirement_id, v.task_id AS task_id, "
+            "COUNT(*) AS failures FROM stage_decisions d JOIN stage_visits v ON v.id = d.stage_visit_id "
+            "WHERE v.pipeline_id=? AND v.left_at IS NULL AND d.verdict='failed' AND d.undone_at IS NULL "
+            "GROUP BY d.stage_visit_id, d.stage_requirement_id, v.task_id ORDER BY d.stage_visit_id, d.stage_requirement_id",
             (pid,),
         )
     ):
         exceptions.append(f"failed:{failed['visit_id']}:{failed['requirement_id']}")
+        if int(failed["failures"]) < REPEATED_FAILURES:
+            continue
+        task_row = tasks.get(str(failed["task_id"])) or H.task(c, failed["task_id"])
+        req_row = c.execute(
+            "SELECT id, name FROM stage_requirements WHERE id=?", (failed["requirement_id"],)
+        ).fetchone()
+        if task_row is None or req_row is None:
+            continue
+        actions += int(
+            _judgment_once(
+                c,
+                pipeline=pipeline,
+                task=task_row,
+                visit_id=failed["visit_id"],
+                requirement={"id": req_row[0], "name": req_row[1]},
+                failures=int(failed["failures"]),
+            )
+        )
     c.execute(
         "UPDATE pipeline_manager_runs SET finished_at=?, exceptions_count=?, actions_count=? WHERE id=?",
         (stamp_of(datetime.now(timezone.utc)), len(exceptions), actions, run_id),
@@ -359,7 +467,7 @@ def watchdog(store: Any, at: Any) -> None:
             missed = stalled(c, row, when)
             if missed < MISSED_RUNS:
                 continue
-            last = last_run(c, pid)
+            last = last_ok_run(c, pid)
             base = last["started_at"] if last else (row.get("created_at") or "")
             opened = c.execute(
                 "SELECT 1 FROM pipeline_manager_actions WHERE pipeline_id=? AND action='open_botops' AND created_at>? "
@@ -428,14 +536,18 @@ def rail(c: "sqlite3.Connection", pipeline_id: str, at: Any = None, who: str | N
     if who is not None:
         over = [item for item in over if _readable(c, who, item["task_id"])]
         actions = [item for item in actions if not item["task_id"] or _readable(c, who, item["task_id"])]
+    total = len(over)
+    over = over[:RAIL_CAP]  # the oldest first; the rail says how many more there are
     return {
         "pipeline_id": pipeline_id,
         "manager": row.get("manager"),
+        "goal": row.get("goal") or None,
         "every_minutes": _every(row),
         "missed_runs": stalled(c, row, at),
         "last_run": runs[0] if runs else None,
         "errors": [run for run in runs if run["status"] == "failed"],
         "over_limit": over,
+        "over_limit_total": total,
         "late": over,  # the coordinator's name for the over-limit list
         "log": [*[run for run in runs if run["status"] == "failed"], *actions],
         "actions": actions,
@@ -459,9 +571,11 @@ def run_due(store: Any, at: Any, failures: list[dict[str, str]] | None = None) -
     if last is not None and (when - last).total_seconds() < THROTTLE_SECONDS:
         return
     _LAST_RUN[store] = when
+    # The watchdog runs first: it judges the passes that were missed before this round records one (a pass recorded
+    # first would hide an outage from it).
     for name, step in (
-        ("pipeline_manager", tick),
         ("pipeline_manager_watchdog", watchdog),
+        ("pipeline_manager", tick),
         ("factory_manager", factory_manager.tick),
     ):
         try:
