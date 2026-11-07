@@ -263,10 +263,13 @@ async function capture() {
         // ui/theme.js is dark unless this browser saved a choice, so colorScheme alone shot dark for both themes: save the
         // theme before the page's scripts read it. colorScheme stays for the CSS that follows the system.
         await context.addInitScript(saved => { try { localStorage.setItem('tico.theme', saved); } catch { /* no storage */ } }, theme);
-        // The ask peek ("Got a quick question for you") shows a few seconds after load: it is not part of any page.
+        // The ask peek ("Got a quick question for you") shows a few seconds after load: it is not part of any page. And a
+        // panel still sliding or fading when a page measures itself (the rail's "More" fold) would be measured at a
+        // different size each run, so transitions and animations end at once.
         await context.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
           const style = document.createElement('style');
-          style.textContent = '#ask-peek { display: none !important; }';
+          style.textContent = '#ask-peek { display: none !important; }'
+            + ' *, *::before, *::after { transition: none !important; animation-duration: 0s !important; animation-delay: 0s !important; }';
           document.head.append(style);
         }));
         const page = await context.newPage();
