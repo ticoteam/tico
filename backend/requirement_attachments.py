@@ -86,7 +86,9 @@ def views(conn: "sqlite3.Connection", rows: list[dict[str, Any]]) -> list[dict[s
     """Each attachment row with what a reader needs to show it: `format` (image, video, page, file or link), `name` and
     `href`, the address of its content. A company file's href pins the version that was attached, so a later version
     never changes what was reviewed; a link's href is its URL. The media of all rows come from one query per kind."""
-    files = sorted({f"{r['file_id']}:{int(r['file_version'])}" for r in rows if r.get("file_id") and r.get("file_version")})
+    files = sorted(
+        {f"{r['file_id']}:{int(r['file_version'])}" for r in rows if r.get("file_id") and r.get("file_version")}
+    )
     blobs = sorted({str(r["blob_id"]) for r in rows if r.get("blob_id")})
     media: dict[str, tuple[str, str]] = {}
     if files:
