@@ -30,9 +30,11 @@ bot that reads the task, else the owner itself. A person is never told. A task r
 waits for the next day, whatever it did.
 """
 
+import json
 import sqlite3
 from typing import Any, cast
 
+from . import bot_settings as BS
 from . import hubdb
 
 # hubdb is untyped: each of its functions is partially unknown, and a cast cannot clear that on the attribute.
@@ -139,7 +141,9 @@ def act(c: sqlite3.Connection, task_id: str, at: str) -> str | None:
     if found is None:
         return None
     if found["stop"]:
-        H._task_event(c, task_id, H.KEEPER, STOPPED, None, hears(c, row), STOP_NOTE)
+        told = hears(c, row)
+        H._task_event(c, task_id, H.KEEPER, STOPPED, None, told, STOP_NOTE)
+        _nudge(c, row, told)
         return "stopped"
     if not _bot_ready(c, cast(str, H.actor_id(row["owner_id"]))):
         return None
@@ -160,6 +164,34 @@ def act(c: sqlite3.Connection, task_id: str, at: str) -> str | None:
         return None
     H._task_event(c, task_id, H.KEEPER, RESUMED, None, str(n), f"Automatic resume {n} of {NO_PROGRESS_LIMIT}")
     return "resumed"
+
+
+def _nudge(c: sqlite3.Connection, row: dict[str, Any], told: str) -> None:
+    """A stop that reaches a manager gives it one ticket to act on at once: the task, the builder that ran it
+    NO_PROGRESS_LIMIT times with no progress, and that it may reassign the task once, to someone other than that builder.
+    A stop that reaches the builder itself (no manager reads the task) makes no ticket."""
+    owner = row["owner_id"]
+    if not told or told == owner or not cast(bool, H.is_bot(told)):
+        return
+    slug = cast(str, H.actor_id(owner))
+    label = f"Ticket {row['number']}" if row["number"] else row["title"]
+    body = (
+        f"{row['title']}\n\nBuilder {slug} ran this task {NO_PROGRESS_LIMIT} times and it made no progress on any of them, "
+        "so Tico has stopped resuming it. You may reassign it once, to a builder other than "
+        f"{slug}, or take it yourself. Tico resumes it again only when something moves it."
+    )
+    try:
+        H.task_create(
+            c,
+            H.KEEPER,
+            f"{label}: builder {slug} made no progress in {NO_PROGRESS_LIMIT} runs"[:150],
+            body,
+            told,
+            deduplicate=False,
+            lint=False,
+        )
+    except H.Refused:
+        return
 
 
 def state(c: sqlite3.Connection, row: dict[str, Any], at: str) -> dict[str, Any] | None:
@@ -266,8 +298,12 @@ def hears(c: sqlite3.Connection, row: dict[str, Any]) -> str:
     """Who hears that resumes stopped: the owner's manager on the org chart when that is another active bot that reads
     the task, else the owner itself. Never a person."""
     owner = row["owner_id"]
-    found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (cast(str, H.actor_id(owner)),)).fetchone()
-    target: str = (found[0] if found else "") or ""
+    found = c.execute(
+        f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
+        (cast(str, H.actor_id(owner)),),
+    ).fetchone()
+    declared = json.loads(found[1]) if found and found[1] else {}
+    target: str = (found[0] if found else "") or (declared or {}).get("reports_to") or ""
     target = target if not target or cast(str | None, H.actor_kind(target)) else cast(str, H.bot_actor(target))
     if (
         target

@@ -250,6 +250,30 @@ def test_three_resumes_with_no_progress_stop_and_list_once_on_the_managers_round
         ), "no person is told"
 
 
+def test_a_stop_that_reaches_the_manager_gives_it_one_ticket_at_once(api):
+    online(api, "ops", "cpo")
+    tid = new_task(api, "Draft the notes")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
+        strand(c, tid)
+        at = H.now()
+        for _ in range(SR.NO_PROGRESS_LIMIT):
+            assert SR.run(c, at)["resumed"] == 1
+            finish(c, "ops")
+            at = H.shift(at, minutes=SR.QUIET_MINUTES + 1)
+        assert SR.run(c, at)["stopped"] == 1
+        made = c.execute(
+            "SELECT owner_id, title FROM tasks WHERE title LIKE ?", ("%made no progress in 3 runs%",)
+        ).fetchall()
+        assert len(made) == 1, "one ticket for the manager"
+        assert made[0][0] == "bot:cpo" and "builder ops" in made[0][1]
+        assert SR.run(c, H.shift(at, hours=2)) == {"resumed": 0, "stopped": 0}
+        assert (
+            c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", ("%made no progress in 3 runs%",)).fetchone()[0]
+            == 1
+        ), "a stop is made once"
+
+
 def test_a_bot_with_no_manager_bot_hears_of_its_own_stop(api):
     online(api, "ops")
     tid = new_task(api, "Draft the notes")
@@ -263,6 +287,9 @@ def test_a_bot_with_no_manager_bot_hears_of_its_own_stop(api):
             at = H.shift(at, minutes=SR.QUIET_MINUTES + 1)
         assert SR.run(c, at)["stopped"] == 1
         assert stops(c, tid) == [("bot:ops", SR.STOP_NOTE)]
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", ("%made no progress%",)).fetchone()[0] == 0, (
+            "a stop that reaches the builder itself makes no ticket"
+        )
 
 
 def test_progress_between_resumes_resets_the_count(api):
