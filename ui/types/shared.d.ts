@@ -172,6 +172,10 @@ interface Employee {
   my_access?: AccessLevel;
   machine?: BotMachine | null;
   agent?: BotAgent | null;
+  /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
+  online?: boolean;
+  ready?: boolean;
+  readiness?: { gateway?: string | null } | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
   /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
@@ -241,6 +245,9 @@ interface V2BotState {
   quarantine?: Quarantine | null;
   last_stop?: { text?: string; [key: string]: unknown } | null;
   open_tasks?: number;
+  /** The status tooltip's Needs humans row and Next run row (ui/app/tooltip.ts). */
+  needs_human?: number;
+  next_due_at?: string | null;
   [key: string]: unknown;
 }
 

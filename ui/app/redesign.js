@@ -45,7 +45,7 @@ function rdNavForget() {
   try { localStorage.setItem(RD_NAV_KEPT, JSON.stringify({epoch: RD_NAV_EPOCH})); } catch { /* nothing kept */ }
 }
 // The row and the mark on <html> together: the mark draws it before this file runs (styles/redesign.css), `hidden` after
-// (search.js lists only rows that are not hidden).
+// (search.ts lists only rows that are not hidden).
 function rdNavPaint(name, shown) {
   document.documentElement.classList.toggle(RD_NAV_ROWS[name], shown);
   const row = document.getElementById(RD_NAV_ROWS[name]);

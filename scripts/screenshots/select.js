@@ -22,10 +22,10 @@ const SHARED = [
   'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.js', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
   'ui/app/session.js', 'ui/app/notices.js', 'ui/app/sidebar.js', 'ui/app/drawer.ts', 'ui/app/viewport.js',
   'ui/app/refresh.ts', 'ui/app/boot.ts', 'ui/app/boot-snap.js', 'ui/app/boot-timing.js', 'ui/app/nav-events.js',
-  'ui/app/markdown.js', 'ui/app/tooltip.js', 'ui/app/avatars.js', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
+  'ui/app/markdown.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.js', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
   'ui/app/pill.js', 'ui/app/live.js', 'ui/app/motion.ts', 'ui/app/rails.ts', 'ui/app/stick-scroll.js',
   'ui/app/org-fan.js', 'ui/app/native.js', 'ui/app/ask-panel.js', 'ui/app/ask-rules.js', 'ui/assistant.js',
-  'ui/app/search.js', 'ui/app/viewer.js', 'ui/tool-icons.js', 'ui/assets/**', 'ui/vendor/fonts/**',
+  'ui/app/search.ts', 'ui/app/viewer.js', 'ui/tool-icons.js', 'ui/assets/**', 'ui/vendor/fonts/**',
   'ui/vendor/marked.min.js', 'ui/vendor/js-yaml.min.js', 'ui/vendor/livekit-client.umd.min.js',
 ];
 

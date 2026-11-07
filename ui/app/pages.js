@@ -539,7 +539,7 @@ function pagesStop(r) {
   if (!r.startsWith(PAGE_ROUTE)) PG = null;
   if (!rdUnder(r, RD_FILES)) LF = null;
 }
-// File hits for the search box (ui/app/search.js): best first, only what the reader may open.
+// File hits for the search box (ui/app/search.ts): best first, only what the reader may open.
 async function searchFileHits(q) {
   if (q.trim().length < 2) return [];
   const r = await get(`/v2/files/search?q=${encodeURIComponent(q.trim())}&limit=6`);
