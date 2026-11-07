@@ -1090,10 +1090,13 @@ def install(app, store, auth, mutate):
         teammates: Annotated[list[str] | None, Query()] = None,
         who: Literal["both", "bots", "people"] = "both",
         unattributed: bool = False,
+        segment: str | None = Query(None, max_length=80),
     ):
         """One line's spend by vendor, team and teammate, its entries and how they were paid, and its projection for
         next month, as far as the caller sees; `vendor` ("" for none) narrows all of it to one vendor, and teams,
-        teammates, who and unattributed filter it as the P&L's expenses view does."""
+        teammates, who and unattributed filter it as the P&L's expenses view does. `segment` keeps the entries that
+        count toward one company segment (`unallocated` for none): the lines that segment's column in the segment P&L
+        sums. Without the whole P&L, only a segment you lead can be named: any other is refused."""
         actor = as_viewer(request, view_as)
         return read(
             lambda c: finance_reads.line_detail(
@@ -1108,6 +1111,7 @@ def install(app, store, auth, mutate):
                 teams=teams or (),
                 teammates=teammates or (),
                 who=who,
+                segment=segment,
                 unattributed=unattributed,
             )
         )

@@ -545,6 +545,43 @@ def test_a_lead_sees_its_segment_and_its_teams_lines_and_a_dedicated_non_lead_is
             FR.pnl(c, "human:eve", *OCTOBER, "month", "accrual", segment=S1)
 
 
+def _drill(c, who: str, key: str) -> tuple[int, int]:
+    """(revenue, cost) a segment's drill-down lists: the entries of each revenue and cost line that count toward it."""
+    revenue = -int(FR.line_detail(c, who, account(c, "4000"), *OCTOBER, segment=key)["total"])
+    cost = sum(
+        int(FR.line_detail(c, who, account(c, code), *OCTOBER, segment=key)["total"])
+        for code in ("6100", "6510", "6530")
+    )
+    return revenue, cost
+
+
+def test_a_segment_column_equals_the_sum_of_its_drill_down_lines(books):  # noqa: F811
+    """A budget-attributed line (the hosting budget, and the creators budget with the web budget under it), a
+    customer-attributed one (Northwind's revenue) and an Unallocated one (a shared cost no budget takes): each column
+    sums exactly the lines its drill-down lists, for the whole P&L and for a segment's lead."""
+    with books.transaction() as c:
+        _month(c)
+        out = FR.pnl_by(c, OWNER, "segment", *OCTOBER, basis="accrual")
+        columns = {k: (_values(out, "income")[k], _values(out, "expense")[k]) for k in (S1, S2, SG.UNALLOCATED)}
+        assert columns == {S1: (10_000, 1_700), S2: (0, 5_000), SG.UNALLOCATED: (4_000, 500)}
+        for key, column in columns.items():
+            assert _drill(c, OWNER, key) == column
+            filtered = FR.pnl(c, OWNER, *OCTOBER, "month", "accrual", segment=key)
+            assert (sum(filtered["income"]), sum(filtered["expense"])) == column
+        assert FR.line_detail(c, OWNER, account(c, "4000"), *OCTOBER, segment=S1)["total"] == -10_000  # a customer
+        assert FR.line_detail(c, OWNER, account(c, "6510"), *OCTOBER, segment=S1)["total"] == 1_000  # a budget
+        assert FR.line_detail(c, OWNER, account(c, "6100"), *OCTOBER, segment=S2)["total"] == 5_000  # budgets, parent
+        assert FR.line_detail(c, OWNER, account(c, "6530"), *OCTOBER, segment=SG.UNALLOCATED)["total"] == 500
+        mine = FR.pnl_by(c, "human:cara", "segment", *OCTOBER, basis="accrual")
+        assert _columns(mine) == [S1]
+        assert (_values(mine, "income")[S1], _values(mine, "expense")[S1]) == columns[S1]
+        assert _drill(c, "human:cara", S1) == columns[S1]
+        with pytest.raises(FinanceError, match="segment P&L"):
+            FR.line_detail(c, "human:cara", account(c, "6100"), *OCTOBER, segment=S2)
+        with pytest.raises(FinanceError, match="segment P&L"):
+            FR.line_detail(c, "human:cara", account(c, "6530"), *OCTOBER, segment=SG.UNALLOCATED)
+
+
 def test_a_persons_explicit_none_takes_a_customer_off_the_review_list(books):  # noqa: F811
     with books.transaction() as c:
         _segments(c)
