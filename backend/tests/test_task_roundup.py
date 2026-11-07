@@ -925,7 +925,9 @@ def test_a_title_that_names_a_person_makes_no_mention_in_the_roundup_so_no_perso
         )
 
 
-def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_and_is_relisted_after_seven_days_first(api):
+def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_and_is_relisted_after_seven_days_first(
+    api,
+):
     store = api.app.state.store
     with store.transaction() as c:
         typ = dev_type(c)
