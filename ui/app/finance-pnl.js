@@ -19,7 +19,7 @@ const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['qua
 const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
 // Whether the segment P&L is open to this viewer (the By segment view, the Segment filter): probed once per visit with
 // the pnl_by read; a 403 (neither the whole P&L nor a segment's lead) hides both. Kept per viewing-as.
-const FIN_SEG = {as: null, ok: undefined, busy: false};
+const FIN_SEG = {as: /** @type {string | null} */ (null), ok: /** @type {boolean | undefined} */ (undefined), busy: false};
 
 // ----------------------------------------------------------------- periods
 // The window a period opens on: a few periods back and a few ahead of today.
