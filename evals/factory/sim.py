@@ -811,6 +811,18 @@ class Run:
         """Diagnostic only: the lost probe's posts, the readiness read after each returning bot's heartbeat, each
         limited bot's wait as the server holds it, and the probes that held a login."""
         out, w = [], self.w
+        # Diagnostic only: each nudge notice the lead was sent about a stop, with its job, and each lead turn that read one.
+        for m in w.sql(
+            "SELECT m.created_at, json_extract(m.refs,'$.task') AS task, (SELECT group_concat(j.state) FROM jobs j "
+            "WHERE j.message_id=m.id) AS states FROM messages m WHERE m.recipient_id='bot:engineering-lead' "
+            "AND json_extract(m.refs,'$.wake')='nudge'"
+        ):
+            out.append(
+                f"nudge notice {m['created_at'][11:16]} about {str(m['task'])[:8]}: jobs {m['states'] or 'none'}"
+            )
+        for r in self.turns():
+            if r.get("wake") == "nudge":
+                out.append(f"nudge turn {str(r['at'])[11:16]} task {str(r.get('task'))[:8]} -> {r.get('action')}")
         if self.lost_probe:
             lp = self.lost_probe
             posts = [p for p in w.attempt_posts if p[1].startswith(f"attempts/{lp['attempt']}/")]

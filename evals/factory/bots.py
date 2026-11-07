@@ -116,6 +116,7 @@ class Bot:
             # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
             # returns it, since no input row is written for it.
             "prompt": message.get("id"),
+            "wake": refs.get("wake"),
         }
         return self.ask_place() == "started"
 
