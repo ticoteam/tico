@@ -582,18 +582,22 @@ def test_the_first_green_candidate_of_the_window_ships():
     assert plan(FakeGitHub([run(B, at=OPENED - timedelta(hours=2))]))["action"] == "dispatch"
 
 
+HELD = "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to validate again"
+
+
 @pytest.mark.parametrize(
-    "runs",
+    "runs, action, mode",
     [
-        [run(D)],  # not on main
-        [run(C, "v0.5.201", "v0.5.199")],  # validated as an upgrade from another release
-        [run(C, "v0.5.202", "v0.5.201")],  # another version
-        [run(B, conclusion="cancelled")],  # an older commit cancelled: main's head is validated
+        ([run(D)], "wait", None),  # not on main: no anchor, but its full run is the day's one
+        ([run(C, "v0.5.201", "v0.5.199")], "dispatch", "incremental"),  # an upgrade from another release: an anchor
+        ([run(C, "v0.5.202", "v0.5.201")], "dispatch", "incremental"),  # another version: an anchor
+        ([run(B, conclusion="cancelled")], "wait", None),  # cancelled: no anchor, and the day's full run holds
     ],
     ids=["off-main", "other-previous", "other-version", "older-cancelled"],
 )
-def test_only_a_green_run_of_this_version_on_main_counts(runs):
-    assert plan(FakeGitHub(runs))["action"] == "dispatch"
+def test_only_a_green_run_of_main_anchors_a_candidate_and_any_full_run_holds_the_day(runs, action, mode):
+    picked = plan(FakeGitHub(runs))
+    assert (picked["action"], picked.get("mode")) == (action, mode)
 
 
 def test_one_validation_at_a_time():
@@ -614,9 +618,13 @@ def test_a_red_or_cancelled_head_waits_for_a_push_is_reported_and_a_manual_run_v
     assert forced["action"] == "dispatch" and rt.problems(forced) == []
 
 
-def test_a_red_head_waits_for_a_push_and_a_red_older_commit_validates_the_head():
+def test_a_red_head_waits_for_a_push_and_a_red_older_commit_holds_the_day_until_a_person_runs_it():
     assert plan(FakeGitHub([run(C, conclusion="failure")]))["action"] == "wait"
-    assert plan(FakeGitHub([run(B, conclusion="failure")]))["action"] == "dispatch"
+    # An older commit's red run naming no failure is no anchor, so its full run holds the day; a manual run validates.
+    older = plan(FakeGitHub([run(B, conclusion="failure")]))
+    assert (older["action"], older["held"]) == ("wait", HELD % ("https://github.example/run/1", "failure"))
+    forced = plan(FakeGitHub([run(B, conclusion="failure")]), manual=True)
+    assert (forced["action"], forced["mode"]) == ("dispatch", "full")
     # A window still red at the next open carries on, without validating the same head again.
     later = pt(2026, 11, 5, 14, 5)
     assert plan(FakeGitHub([run(C, conclusion="failure", at=OPENED)]), now=later)["action"] == "wait"
@@ -725,18 +733,24 @@ def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_
     assert ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
 
 
-def test_a_cancelled_full_is_no_anchor_so_the_next_candidate_is_a_full_validation():
+def test_a_cancelled_full_is_no_anchor_and_holds_the_day_so_the_window_waits_for_a_person():
     gh = FakeGitHub([run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1))], head=D)
     gh.order = [A, B, C, D]
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since=None, plan=PLAN_TEXT))
-    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "full", None)
+    assert (picked["action"], picked["held"]) == ("wait", HELD % ("https://github.example/run/3", "cancelled"))
+    assert gh.dispatched == [] and rt.problems(picked) == [picked["held"]]
 
 
-def test_a_red_full_naming_no_failure_is_no_anchor_so_the_next_candidate_is_a_full_validation():
+def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_again():
+    # (c): an unnamed red full is no anchor either, so it waits for a person; a manual run still dispatches in full.
     gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
     gh.order = [A, B, C, D]
-    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
-    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "full", None)
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["held"]) == ("wait", HELD % ("https://github.example/run/3", "failure"))
+    assert gh.dispatched == []
+    forced = rt.plan_step(gh, NOW, manual=True, checkout=checkout)
+    assert (forced["action"], forced["mode"], forced["anchor"]) == ("dispatch", "full", None)
 
 
 @pytest.mark.parametrize(
@@ -1361,7 +1375,7 @@ def test_window_validates_main_and_waits_until_the_run_is_listed(installs):
     assert rt.plan_step(gh, NOW)["action"] == "wait"
 
 
-def test_a_red_candidate_goes_on_the_issue_and_main_is_validated(installs):
+def test_a_red_candidate_goes_on_the_issue_and_holds_main_until_a_person_validates_it(installs):
     gh = publishes(FakeGitHub([run(B, conclusion="failure")]))
     env = dict(
         ENV,
@@ -1373,6 +1387,11 @@ def test_a_red_candidate_goes_on_the_issue_and_main_is_validated(installs):
     )
     assert rt.cmd_window(gh, env, False, NOW) == 1
     assert len(gh.created) == 1 and "run/red" in gh.created[0]["body"]
+    # Its full validation named no failure, so it holds the day: main's head is not validated automatically.
+    assert HELD % ("https://github.example/run/1", "failure") in gh.created[0]["body"]
+    assert gh.dispatched == [] and gh.tagged == []
+    # A person runs Release train by hand: main's head is validated.
+    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="workflow_dispatch"), False, NOW) == 0
     assert [d[0] for d in gh.dispatched] == ["ci.yml"] and gh.tagged == []
 
 

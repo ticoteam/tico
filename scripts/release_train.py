@@ -738,16 +738,26 @@ def unpublished(gh, now, tag, plan):
 def plan_step(gh, now, finished=None, manual=False, checkout=None):
     """What the open window does next, worked out from GitHub alone (and, for an incremental validation, the checkout's
     diff). Returns {"action": "none" | "wait" | "ship" | "dispatch", "why", ...}: "red" is a candidate of this window that
-    did not pass, and "stuck" a tag whose release did not publish, both to report. A manual run validates main's head
-    again even after a red or cancelled run. A dispatch is a full validation (mode "full") or an incremental one on the
-    anchor (mode "incremental", with its plan): docs/releasing.md#incremental-validation."""
+    did not pass, "stuck" a tag whose release did not publish, and "held" a full validation that a cancelled or unnamed-red
+    run in the last 24 hours holds back, all to report. A manual run validates main's head again even after a red or
+    cancelled run. A dispatch is a full validation (mode "full") or an incremental one on the anchor (mode "incremental",
+    with its plan): docs/releasing.md#incremental-validation. At most one full validation is dispatched automatically in
+    24 hours, whatever its outcome."""
     tags = gh.tags()
     newest = newest_stable(tags)
     if not newest:
         raise Fail("no vX.Y.Z tag to release after")
     start = window_start(now)
     # previous: the release a candidate is compared with (the newest tag, unless the candidate is a tag being published again)
-    plan = {"action": "none", "newest": newest, "previous": newest, "start": start, "red": None, "stuck": None}
+    plan = {
+        "action": "none",
+        "newest": newest,
+        "previous": newest,
+        "start": start,
+        "red": None,
+        "held": None,
+        "stuck": None,
+    }
     published = gh.release(newest)
     if not published or published.get("draft"):
         return unpublished(gh, now, newest, plan)
@@ -830,6 +840,16 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
                 plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
                 return plan
     if anchor is None:
+        # At most one full validation is dispatched automatically in 24 hours, whatever its outcome: a cancelled or
+        # unnamed-red one waits for a person (a manual run still dispatches).
+        held = increment.full_within_day(records, now)
+        if held is not None and not manual:
+            text = (
+                "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to "
+                "validate again" % (held["url"], held["conclusion"])
+            )
+            plan.update(action="wait", held=text, why="window open since %s; %s" % (hhmm(start), text))
+            return plan
         plan.update(
             action="dispatch",
             mode="full",
@@ -894,6 +914,8 @@ def problems(plan):
         lines.append(
             "Candidate %s at %s ended %s: %s" % (plan["version"], red["sha"][:12], red["conclusion"], red["url"])
         )
+    if plan.get("held"):
+        lines.append(plan["held"])
     if plan.get("stuck"):
         lines.append(plan["stuck"])
     return lines

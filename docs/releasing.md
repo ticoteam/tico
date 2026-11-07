@@ -109,13 +109,19 @@ workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
 A window validates a head in one of two ways. A **full** validation is the whole gate (`ci.yml`, as before). An
 **incremental** one runs the same gate on less, and says so in its run title (`... from vX.Y.Z (incremental on <anchor>)`).
 
-- **Anchor.** A full validation runs only when no full validation of the last 24 hours (by finish time) ran the suite to
-  an answer: a green one, or a red one that names its failed tests, of a commit main still contains. That run is the
-  anchor, whichever release it validated. Nothing else dispatches a full validation within 24 hours of an anchor: the
-  next candidate is incremental from it, and a plan too big to dispatch (or one that cannot be made) waits until the
-  anchor is a day old rather than running a second full validation. A cancelled run, and a red one whose failures no log
-  names (a build, a VM, a startup failure), is no anchor, so the candidate after it is a full validation again. Consecutive
-  unnamed reds therefore each take one more full run.
+- **One full validation a day.** At most one full validation is dispatched automatically in any 24 hours, whatever its
+  outcome (a cancelled one, and a red one with unnamed failures, count too). The window dispatches a full validation
+  only when no full validation finished in the last 24 hours (by finish time).
+- **Anchor.** The anchor is the newest full validation of the last 24 hours that ran the suite to an answer: a green
+  one, or a red one that names its failed tests, of a commit main still contains. It is the anchor whichever release it
+  validated, and the candidates after it are incremental from it. A plan too big to dispatch (or one that cannot be
+  made) waits until the anchor is a day old rather than running a second full validation.
+- **A cancelled or unnamed full run holds the day.** A cancelled full validation, and a red one whose failures no log
+  names (a build, a VM, a startup failure), is no anchor, and no second full validation follows it. The window waits
+  and says so on the release-train issue: `a full validation already ran in the last 24h (<run>, <conclusion>): a person
+  runs Release train by hand to validate again`. A person runs Release train by hand (a manual run), which validates
+  main's head in full as it does today. Once that run is a day old, the window may dispatch a full validation again on
+  its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
   merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
@@ -130,7 +136,8 @@ A window validates a head in one of two ways. A **full** validation is the whole
   when it is red and still open, together with the newest red run since it. While a red run is open, the window runs a
   later head only when a commit since that run selects one of its failed tests. Otherwise it waits, and the window's log
   says `the window waits` and why. A red run that names no failure, or whose diff cannot be read, is run again on the
-  next commit. A red run at main's head waits for a push.
+  next commit, incrementally from the anchor (a full validation waits for a person, see above). A red run at main's
+  head waits for a push.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane, and `alone` tests never do. A UI script runs when its own files change or a `UI_MAP` entry selects it:
   `ui/tests/task-code.cjs` has no entry for the UI files it covers, so a change to them does not select it. The measured

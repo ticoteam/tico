@@ -105,6 +105,24 @@ def test_a_cancelled_or_unnamed_red_full_is_no_anchor_so_an_older_one_is():
     assert ri.anchor_of(records, NOW, lambda sha: True, lambda item: {"x"})["id"] == 2
 
 
+def test_full_within_day_is_the_newest_full_run_of_the_last_day_whatever_its_outcome():
+    # The cap: a cancelled or unnamed-red full run counts too, so no second full run is dispatched on its account.
+    assert ri.full_within_day([], NOW) is None
+    records = [
+        record(4, C, conclusion="cancelled", hours=1),
+        record(3, B, conclusion="failure", hours=2),
+        record(2, A, hours=3, incremental=True),
+    ]
+    assert ri.full_within_day(records, NOW)["id"] == 4
+    assert ri.full_within_day([record(1, A, conclusion="failure", hours=23)], NOW)["id"] == 1
+
+
+def test_full_within_day_ignores_stale_running_and_incremental_runs():
+    assert ri.full_within_day([record(1, A, hours=25)], NOW) is None
+    assert ri.full_within_day([record(1, A, conclusion="cancelled", status="in_progress", hours=0)], NOW) is None
+    assert ri.full_within_day([record(1, A, hours=1, incremental=True)], NOW) is None
+
+
 def test_a_stale_red_running_or_uncontained_validation_is_no_anchor():
     assert ri.anchor_of([record(1, A, hours=25)], NOW, lambda sha: True, unnamed) is None
     assert ri.anchor_of([record(1, A, conclusion="failure")], NOW, lambda sha: True, unnamed) is None

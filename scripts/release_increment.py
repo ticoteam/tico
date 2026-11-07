@@ -1,15 +1,17 @@
 """Incremental release validation (docs/releasing.md#incremental-validation).
 
-A full Release validation (ci.yml's whole gate) runs only when no full validation finished in the last 24 hours ran
-the suite to an answer whose commit main still contains: a green one, or a red one naming its failures. That run is the
-anchor, whichever release it validated, so a day has one full run. Only a cancelled full run, or a red one with unnamed
-failures (a build, a VM, a startup failure), leaves no anchor: the next candidate is a full run again, so consecutive
-unnamed reds each take one. Nothing else dispatches a full run within 24 hours of an anchor. A candidate after the anchor runs only what its diff from the anchor
-selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set, the factory
-checks when their inputs changed, the product part (the upgrade journey and the Docker smoke checks) when its previous
-release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and the
-failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until a
-commit since it selects one of its failures; until then the window waits. A green validation after it (full or
+At most ONE full Release validation (ci.yml's whole gate) is dispatched automatically in any 24 hours, whatever its
+outcome (full_within_day). The anchor is the newest full validation of those 24 hours that ran the suite to an answer
+whose commit main still contains: a green one, or a red one naming its failures. It is the anchor whichever release it
+validated, and the day's other candidates run only what their diff from it selects. A cancelled full run, or a red one
+with unnamed failures (a build, a VM, a startup failure), is no anchor, and it allows no second full run: the window
+waits, and a person runs Release train by hand to validate again (a manual run dispatches as it does today). Once the
+full run is a day old, the window may dispatch one again. A candidate after the anchor runs only what its diff from the
+anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set,
+the factory checks when their inputs changed, the product part (the upgrade journey and the Docker smoke checks) when its
+previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
+the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
+a commit since it selects one of its failures; until then the window waits. A green validation after it (full or
 incremental, of a commit main still contains) supersedes it.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
@@ -75,9 +77,10 @@ def anchor_of(records, now, contained, named):
     """The anchor: the newest full validation that finished within the last 24 hours (by finish time), whose commit main
     still contains, and that ran the suite to an answer: green, or red naming its failures. `named(record)` gives a red
     record's failed tokens (a set; None when a failure cannot be named). A cancelled run, and a red one with unnamed
-    failures (a build, a VM, a startup failure), is no anchor, so one more full run may follow it. Returns the record with
-    its "failed" tokens (empty when green), or None. `records` are every release's validations (validation_record in
-    release_train): the anchor may have validated an earlier release."""
+    failures (a build, a VM, a startup failure), is no anchor; full_within_day still counts it, so no second full run is
+    dispatched on its account. Returns the record with its "failed" tokens (empty when green), or None. `records` are
+    every release's validations (validation_record in release_train): the anchor may have validated an earlier
+    release."""
     candidates = [
         record
         for record in records
@@ -97,6 +100,22 @@ def anchor_of(records, now, contained, named):
             if failed is not None:
                 return {**record, "failed": failed}
     return None
+
+
+def full_within_day(records, now):
+    """The newest full validation that finished within the last 24 hours, whatever its outcome (a cancelled one, or a red
+    one with unnamed failures, too), or None. While it exists the window dispatches no full validation automatically:
+    a person runs Release train by hand to validate again. `records` are every release's validations, as anchor_of
+    reads them."""
+    finished = [
+        record
+        for record in records
+        if not record["incremental"]
+        and record["status"] == "completed"
+        and record["finished"] is not None
+        and now - record["finished"] <= ANCHOR_AGE
+    ]
+    return max(finished, key=lambda item: item["finished"], default=None)
 
 
 def anchor_open(records, anchor, contained):
