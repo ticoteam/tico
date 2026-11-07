@@ -49,15 +49,24 @@ def card(api, typ, step, private=False, token="ana-test"):
     return post(api, "tasks", body, token)
 
 
-def link(api, a, stage, b):
+def link(api, a, stage, b, mode="move"):
     ident = "pl-" + uuid.uuid4().hex[:8]
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO pipeline_links(id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, created_at) "
-            "VALUES (?,?,?,?,'move',?)",
-            (ident, a, stage, b, ago()),
+            "VALUES (?,?,?,?,?,?)",
+            (ident, a, stage, b, mode, ago()),
         )
     return ident
+
+
+def visit(api, task, pipeline, stage, entered, direction="forward"):
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_by, entered_at) "
+            "VALUES (?,?,?,?,?,NULL,?)",
+            (H.new_id(), task, pipeline, stage, direction, entered),
+        )
 
 
 def handoff(api, link_id, target, created, returned=None):
@@ -87,17 +96,15 @@ def test_the_numbers_equal_direct_counts_and_follow_link_order(api):
     card(api, lone, lone_steps["Doing"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (marketing_steps["Doing"],))
-        c.execute("UPDATE tasks SET updated_at=?, labels='[\"ads\"]' WHERE id=?", (ago(hours=3), old["id"]))
-        # The late clock is the open stage visit: the old card has been in Doing for three hours.
-        c.execute(
-            "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_by, entered_at) "
-            "VALUES (?,?,?,?,'initial',NULL,?)",
-            (H.new_id(), old["id"], marketing, marketing_steps["Doing"], ago(hours=3)),
-        )
+        H._set_task_tags(c, "human:ana", old["id"], ["ads"])  # the tag a card is labelled by, through the tag writer
+        c.execute("UPDATE tasks SET updated_at=?, status='doing' WHERE id=?", (ago(hours=3), old["id"]))
         c.execute(
             "UPDATE tasks SET status='done', done_at=?, step_id=?, created_at=? WHERE id=?",
             (ago(hours=1), sales_steps["Done"], ago(days=3), done["id"]),
         )
+    # The late clock is the open stage visit: the old card has been in Doing for three hours.
+    visit(api, old["id"], marketing, marketing_steps["Doing"], ago(hours=3), "initial")
+    visit(api, done["id"], sales, sales_steps["Done"], ago(hours=1))  # the output stage of Gro: one done card
     handoff(api, lead, done["id"], ago(days=1))
     handoff(api, lead, done["id"], ago(days=20))  # outside 7 days
 
@@ -110,11 +117,12 @@ def test_the_numbers_equal_direct_counts_and_follow_link_order(api):
     assert by[lone]["factory_id"] is None
     assert [f["name"] for f in week["factories"]] == ["Gro"]
     assert week["factories"][0]["done"] == 1 and week["factories"][0]["overdue"] == 1
-    assert week["edges"] == [{"from": marketing, "to": sales, "count": 1, "median_age_minutes": 2880}]
+    assert week["edges"] == [{"from": marketing, "to": sales, "mode": "move", "count": 1, "median_age_minutes": 2880}]
     month = overview(api, "30d")["edges"][0]
     assert month["count"] == 2 and month["median_age_minutes"] == 1440  # 2 days and 0 (a handoff before the card)
     inputs = {i["label"]: i["count"] for i in week["inputs"] if i["to"] == marketing}
     assert inputs == {"Ads": 1, "Team ideas": 2}  # no source on a card: its first tag, else who made it
+    assert week["loops"] == []
     assert overview(api, "bad", expected=422)
 
 
@@ -154,3 +162,82 @@ def test_rights_say_who_may_edit_a_pipeline(api):
     assert get(api, f"pipelines/{pid}/rights", "ana-test") == {"may_edit_rules": True}
     assert isinstance(get(api, f"pipelines/{pid}/rights", "ben-test")["may_edit_rules"], bool)
     assert get(api, "pipelines/nope/rights", "ana-test") == {"may_edit_rules": False}
+
+
+def test_a_spawn_is_not_an_input_but_the_card_that_made_it_still_is(api):
+    growth = make_factory(api, "Gro")
+    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    sales, s_steps = make_type(api, "Sls", factory=growth)
+    spawn = link(api, marketing, m_steps["Doing"], sales, mode="spawn")
+    source = card(api, marketing, m_steps["Doing"])  # made by a person: an input
+    made = card(api, sales, s_steps["Doing"])  # the card the spawn makes
+    handoff(api, spawn, made["id"], ago(hours=2))
+    inputs = {i["label"]: i["count"] for i in overview(api)["inputs"] if i["to"] == marketing}
+    assert inputs == {"Team ideas": 1}  # the spawned card is excluded; its source is not
+    assert overview(api)["edges"][0]["mode"] == "spawn"
+    assert source["id"] != made["id"]
+
+
+def test_inputs_cap_labels_at_five_then_other_and_count_every_card(api):
+    growth = make_factory(api, "Gro")
+    marketing, steps = make_type(api, "Mkt", factory=growth)
+    for n in range(7):
+        made = card(api, marketing, steps["Doing"])
+        with api.app.state.store.transaction() as c:
+            H._set_task_tags(c, "human:ana", made["id"], [f"tag-{n}"])
+    rows = [i for i in overview(api)["inputs"] if i["to"] == marketing]
+    labels = {i["label"]: i["count"] for i in rows}
+    assert len(labels) == 6 and labels["Other"] == 2 and sum(labels.values()) == 7
+
+
+def test_a_reader_is_not_counted_a_review_on_a_card_they_may_not_open(api):
+    growth = make_factory(api, "Gro")
+    steps = [{"name": "Doing", "status": "doing"}, {"name": "Review", "status": "review"}, {"name": "Done", "status": "done"}]
+    typ, s = make_type(api, "Rvw", steps=steps, factory=growth)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, reviewed_by, reviewer_id, "
+            "created_at, updated_at) VALUES ('rq1',?,?,'Sign off','approval','person','human:ben',?,?)",
+            (typ, s["Review"], ago(), ago()),
+        )
+    card(api, typ, s["Review"])
+    card(api, typ, s["Review"], private=True)  # Ana's: Ben is the reviewer but may not open it
+    assert {p["name"]: p["for_you"] for p in overview(api, token="ben-test")["pipelines"]}["Rvw"] == 1
+
+
+def test_a_loop_counts_its_laps_and_shows_a_median_from_three(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    forward = link(api, prod, p_steps["Doing"], eng)
+    back = link(api, eng, e_steps["Doing"], prod)
+    rider = card(api, prod, p_steps["Doing"])
+
+    def lap(minutes_ago, span):
+        handoff(api, forward, rider["id"], ago(minutes=minutes_ago))
+        handoff(api, back, rider["id"], ago(minutes=minutes_ago - span))
+
+    lap(600, 60)
+    lap(500, 60)
+    (two,) = overview(api)["loops"]
+    assert two["pipelines"] == [prod, eng] and two["laps"] == 2 and two["median_lap_minutes"] is None
+    lap(400, 60)
+    (three,) = overview(api)["loops"]
+    assert three["laps"] == 3 and three["median_lap_minutes"] == 60
+
+
+def test_the_map_counts_each_window_the_same_as_direct_sql(api):
+    growth = make_factory(api, "Gro")
+    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    sales, _ = make_type(api, "Sls", factory=growth)
+    lead = link(api, marketing, m_steps["Doing"], sales)
+    cards = [card(api, marketing, m_steps["Doing"]) for _ in range(3)]
+    for c_, hours in zip(cards, (12, 3 * 24, 10 * 24), strict=True):
+        handoff(api, lead, c_["id"], ago(hours=hours))
+    for period, days in (("1d", 1), ("7d", 7), ("30d", 30)):
+        with api.app.state.store.transaction() as c:
+            direct = c.execute(
+                "SELECT COUNT(*) FROM pipeline_handoffs WHERE created_at>=? AND returned_at IS NULL", (ago(days=days),)
+            ).fetchone()[0]
+        (edge,) = overview(api, period)["edges"]
+        assert edge["count"] == direct, period
