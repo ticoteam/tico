@@ -90,8 +90,9 @@ def during(run, w, team, i):
     # 2. A push lands after she opened the second one.
     with w.store.transaction() as c:
         c.execute("UPDATE tasks SET work_revision=work_revision+1 WHERE id=?", (second,))
-    status, _ = w.request("post", path(second, "r-mockup", "approve"), body(seen[second]))
+    status, reply = w.request("post", path(second, "r-mockup", "approve"), body(seen[second]))
     run.pr["stale_status"] = status
+    run.pr["stale_code"] = (reply.get("error") or {}).get("code") if isinstance(reply, dict) else None
     run.pr["still_there"] = step_name(w, second) == "Review"
     # 3. Send the third back, then a new attachment arrives.
     w.post(path(third, "r-mockup", "send-back"), {"note": "The logo is too small"})
@@ -109,7 +110,12 @@ def decisions(w, task):
 
 
 def body(it):
-    return {"work_version": it["work_version"], "attachment_digest": it["attachment_digest"]}
+    """What the queue item tells the reviewer: the work, the attachment and the requirement version they saw."""
+    return {
+        "work_version": it["work_version"],
+        "attachment_digest": it["attachment_digest"],
+        "requirement_version": it["requirement_version"],
+    }
 
 
 def reviewed(run):
@@ -122,8 +128,10 @@ def approve_advances(run):
 
 
 def stale_refused(run):
-    ok = run.pr.get("stale_status") == 422 and run.pr.get("still_there")
-    return bool(ok), f"Approve after a push answered {run.pr.get('stale_status')}, ticket still at Review"
+    ok = run.pr.get("stale_status") == 422 and run.pr.get("stale_code") == "stale" and run.pr.get("still_there")
+    return bool(ok), (
+        f"Approve after a push answered {run.pr.get('stale_status')} {run.pr.get('stale_code')}, ticket still at Review"
+    )
 
 
 def send_back_returns(run):

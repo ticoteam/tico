@@ -4709,6 +4709,30 @@ def declared_hold(conn, actor, row, step, step_id):
     return is_human(actor)
 
 
+def try_auto_move(conn, actor, row, *, kind="auto_move_refused", **kw):
+    """An automatic step or status write (roadmap sync, a hold clearing, an auto start) run in a savepoint. A move the
+    rules refuse (a stage requirement, or a subtask the rules won't file) is undone alone: the card gets a history event
+    `kind` with the reason, and the caller's other changes stand. Returns True when the write landed, False when refused."""
+    from .store import Problem
+
+    conn.execute("SAVEPOINT auto_move")
+    try:
+        _set_status(conn, actor, row, **kw)
+    except (Refused, Problem) as exc:
+        conn.execute("ROLLBACK TO auto_move")
+        conn.execute("RELEASE auto_move")
+        if isinstance(exc, Problem) and not isinstance(exc, Refused) and exc.code != "spawn_refused":
+            raise
+        history_event(conn, "task", row["id"], actor, kind, note=exc.detail or str(exc))
+        return False
+    except BaseException:
+        conn.execute("ROLLBACK TO auto_move")
+        conn.execute("RELEASE auto_move")
+        raise
+    conn.execute("RELEASE auto_move")
+    return True
+
+
 def _set_status(
     conn,
     actor,
@@ -4728,8 +4752,9 @@ def _set_status(
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
-    if row is not None and step_id and step_id != row.get("step_id"):
+    if row is not None and step_id and step_id != row.get("step_id") and effective not in ("closed", "declined"):
         # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine).
+        # Cancelling (a close or a decline) is not forward progress: it is never held to exit requirements.
         from . import pipeline_engine
 
         pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
@@ -5327,7 +5352,7 @@ def _answered(conn, actor, task_id, card, told=None):
             task_blocked.reconcile(conn, row["id"])
             row = task(conn, row["id"])
         if row["status"] == "waiting":
-            _set_status(conn, KEEPER, row, "open", note=note)
+            try_auto_move(conn, KEEPER, row, status="open", note=note)  # a refused reopen leaves the hold in place
     conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
     _task_event(conn, row["id"], KEEPER, "note", row.get("note"), note, "")
     if row["owner_id"] != told or TR.parent_of(conn, card["id"]) != row["id"]:
