@@ -98,7 +98,7 @@ table,time,kbd,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[t
 .run-when,.rp-clock,.rp-when,.tl-age,.tmodal-age,.rail-age,.bcard-step-age,.chat-time,.side-rec-time,.sh-when,
 .docs-recent-when,.lens-past-when,.cat-when,.goal-fin-when,.code-num,
 .lrn-n,.lens-n,.lc-n,.upd-n,.meet-pending-n,.tl-bulk-n,.tl-mi-n,.strat-bet-n,.strat-sv-n,.rdo-n,.bl-n,
-.support-badge,.pr-badge,.tl-waiting,.tchip-blocked,.code-chip,[data-support-count]::after{font-variant-numeric:tabular-nums}
+.support-badge,.pr-badge,.tl-waiting,.code-chip,[data-support-count]::after{font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 /* Icon glyphs are ligatures ("dynamic_feed"): until the icon font is in, a glyph would read as that word. They hold

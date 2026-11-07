@@ -396,7 +396,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.locator('[data-open-task="tdev-held"]').click();
       await page.locator('#task-peek .task-wait').waitFor();
       assert.match(await page.locator('#task-peek .task-wait').innerText(), /Waiting for a test machine <script>.*since/);
-      assert.equal(await page.locator('#task-peek .tstatus').innerText(), 'Blocked');
+      assert.equal(await page.locator('#task-peek [data-prop-row="status"] .prop-txt').innerText(), 'Blocked');
       await page.locator('#task-peek [data-modal-close]').click();
       // The phone peek closes its history entry asynchronously before the next board action.
       if (width === 375) await page.waitForFunction(() => !history.state?.taskPeek && !PEEK_BACK);

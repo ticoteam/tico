@@ -52,7 +52,7 @@ a[class="ghost"]{display:inline-block;background:transparent;border:1px solid va
 button:disabled{opacity:.5;cursor:default}
 /* Window controls: the ✕ that closes a dialog, panel or meeting window, and the icon buttons beside it (…, back, open in
    its own window). Quiet, borderless and one size, so they read as the window's own controls and never as an action on
-   what is inside it. A labelled action in the same header (Close task, Done) keeps its border. */
+   what is inside it. A labelled action in the same header (Close, Done) keeps its border. */
 :where(button.tmodal-x,button.peek-btn,button.tf-x,:is(dialog .tmodal-head,dialog header,.notes-modal-close,.msg-message-head,.co-head,.doc-viewer-head)>button:is([aria-label^="Close"],[aria-label="Back"],[aria-label^="Open in"])):not([hidden]){display:inline-grid;place-items:center;flex:none;min-width:28px;height:28px;font-size:15px;line-height:var(--lh-none)}
 /* Its look outranks button.ghost; its size and display stay overridable (phones make them 40px, [hidden] still hides). */
 :is(button.tmodal-x,button.peek-btn,button.tf-x,:is(dialog .tmodal-head,dialog header,.notes-modal-close,.msg-message-head,.co-head,.doc-viewer-head)>button:is([aria-label^="Close"],[aria-label="Back"],[aria-label^="Open in"])):not(.primary,.tmodal-act){padding:0 6px;border-color:transparent;border-radius:6px;background:transparent;color:var(--muted)}
