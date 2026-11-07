@@ -535,6 +535,8 @@ def create_app(settings=None):
 
                 await asyncio.to_thread(ad_worker.stop)
             telemetry.close()
+            # Every task above has stopped, so no read is in flight: the store's idle connections close with the server.
+            store.close()
 
     app = FastAPI(
         title=settings.app_name + " API",
