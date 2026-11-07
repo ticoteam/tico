@@ -259,8 +259,9 @@ def test_a_non_member_who_owns_a_members_only_parent_sees_none_of_its_hidden_chi
     hidden_child = ticket(api, typ, "Ben's " + tag, owner="human:ben", requester="human:ana")
     own_child = ticket(api, typ, "Cara's " + tag, owner="human:cara", requester="human:ana")
     with api.app.state.store.transaction() as c:
-        TR._insert(c, "human:ana", hidden_child, parent, "parent", T)
-        TR._insert(c, "human:ana", own_child, parent, "parent", T)
+        # Re-parenting writes the parent's "subtask" history event, the one that could name a hidden child.
+        TR.set_parent(c, "human:ana", hidden_child, parent)
+        TR.set_parent(c, "human:ana", own_child, parent)
         TR._insert(c, "human:ana", parent, hidden_child, "blocks", T)
 
     detail = get(api, f"tasks/{parent}", "cara-test")
@@ -269,8 +270,11 @@ def test_a_non_member_who_owns_a_members_only_parent_sees_none_of_its_hidden_chi
     assert detail["task"]["parts"]["total"] == 1, detail["task"]["parts"]
     related = {ref["id"] for refs in detail["task"]["relations"].values() for ref in refs}
     assert hidden_child not in related
+    # The parent's history names no hidden child either (the subtask and relation events).
+    assert hidden_child not in str(detail["events"]) and own_child in str(detail["events"])
     everyone = get(api, f"tasks/{parent}", "ana-test")
     assert {child["id"] for child in everyone["children"]} == {hidden_child, own_child}
+    assert hidden_child in str(everyone["events"])
 
 
 def test_the_change_feed_reads_a_deleted_ticket_while_a_members_only_pipeline_exists(api):

@@ -2,10 +2,13 @@
 what changed and what left, never naming a task the reader could not have seen; a stale cursor
 resets; an unchanged full read is a 304."""
 
+import uuid
+
 from backend import events as E
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
+from backend.tests.test_pipeline_members_only import make_pipeline, ticket
 
 ACTIVE = "status=open,doing,waiting,review,ready,declined"
 
@@ -284,3 +287,68 @@ def test_a_task_list_leaves_its_connection_to_the_pool(api, monkeypatch):
     for token in ("ana-test", "ben-test"):
         get(api, "tasks", token=token)
     assert opened == []
+
+
+def test_a_deleted_untyped_ticket_with_no_trash_row_is_reported_gone_to_its_reader(api):
+    # Its type is unknown once deleted and its trash snapshot purged. With no members-only pipeline in the company the
+    # pipeline rule cannot hide it, so its reader is told it is gone.
+    made = post(
+        api, "tasks", {"owner": "ben", "title": "Order lunch", "body": "Please."}
+    )  # on the general type: no pipeline
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT type_id FROM tasks WHERE id=?", (made["id"],)).fetchone()[0] == "general"
+    cursor = tasks(api, ACTIVE)["cursor"]
+    post(api, "tasks/" + made["id"] + "/delete", {})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
+    assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
+
+
+def test_a_ticket_moved_out_of_a_members_only_pipeline_is_not_gone_to_a_non_member(api):
+    # Legal is members-only and the ticket is company-readable there, so a non-member cannot read it. It then moves to a
+    # public pipeline and goes private. Its earlier snapshot was on Legal, so the change feed must not report it gone to
+    # that non-member, though the current pipeline and privacy would let her read it.
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Legal" + tag, private=True)
+    public, _ = make_pipeline(api, "Sales" + tag)
+    moved = ticket(api, legal, "Move " + tag, owner="human:ben", requester="human:ana")
+    assert moved not in str(get(api, "tasks?limit=50", "cara-test"))
+    cursor = get(api, "tasks?limit=5", "cara-test")["cursor"]
+    version = get(api, "tasks/" + moved, "ana-test")["task"]["version"]
+    post(api, "tasks/" + moved, {"version": version, "type": public, "private": True})
+    feed = get(api, f"tasks?changed_after={cursor}", "cara-test")
+    assert not feed.get("reset")
+    assert moved not in feed["gone"] and moved not in str(feed)
+
+
+def test_a_never_moved_ticket_made_private_is_gone_while_a_members_only_pipeline_exists(api):
+    # It never changed pipeline, so it has no type history; the members-only pipeline elsewhere must not make its
+    # earlier snapshot unknown. The company reader who could see it is told it is gone.
+    make_pipeline(api, "Lg" + uuid.uuid4().hex[:8], private=True)
+    shared = post(api, "tasks", {"owner": "ben", "title": "Review the press kit", "body": "Please."})
+    cara = tasks(api, ACTIVE, token="cara-test")["cursor"]
+    post(api, "tasks/" + shared["id"], {"version": shared["version"], "private": True})
+    assert delta(api, ACTIVE, cara, token="cara-test")["gone"] == [shared["id"]]
+
+
+def test_a_hidden_only_edit_leaves_a_non_members_list_etag_as_it_was(api):
+    # A ticket on a members-only pipeline changes; a company reader who may not see it gets the same list, so the same
+    # ETag, and her If-None-Match still answers 304. A change she may read moves the ETag.
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Lgl" + tag, private=True)
+    post(api, "tasks", {"owner": "ben", "title": "Shown " + tag, "body": "Please."})
+    hidden = ticket(api, legal, "Hidden " + tag, owner="human:ben", requester="human:ana")
+
+    first = api.get("/api/v2/tasks?limit=50", headers=headers("cara-test"))
+    assert first.status_code == 200
+    etag = first.headers["ETag"]
+    version = get(api, "tasks/" + hidden, "ana-test")["task"]["version"]
+    post(api, "tasks/" + hidden, {"version": version, "title": "Hidden renamed " + tag})
+    again = api.get("/api/v2/tasks?limit=50", headers={**headers("cara-test"), "If-None-Match": etag})
+    assert (again.status_code, again.headers["ETag"]) == (304, etag)
+
+    shown = get(api, "tasks?limit=50", "cara-test")["tasks"]
+    edit = next(t for t in shown if t["title"].startswith("Shown"))
+    post(api, "tasks/" + edit["id"], {"version": edit["version"], "title": "Shown again " + tag})
+    moved = api.get("/api/v2/tasks?limit=50", headers={**headers("cara-test"), "If-None-Match": etag})
+    assert moved.status_code == 200 and moved.headers["ETag"] != etag

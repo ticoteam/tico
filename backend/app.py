@@ -3156,6 +3156,24 @@ def create_app(settings=None):
             except Problem:
                 can_comment = False
             history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            # An event that names a ticket the reader may not open (a hidden child, say) is no detail of this one: it goes.
+            named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
+            if named:
+                known = {
+                    r[0]
+                    for r in c.execute(
+                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(named),)
+                    )
+                }
+                readable = {
+                    r[0]
+                    for r in c.execute(
+                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND (" + related_sql + ")",
+                        (json.dumps(named),),
+                    )
+                }
+                hidden_refs = known - readable
+                history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden_refs)]
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out

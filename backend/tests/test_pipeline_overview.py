@@ -69,12 +69,12 @@ def visit(api, task, pipeline, stage, entered, direction="forward"):
         )
 
 
-def handoff(api, link_id, target, created, returned=None):
+def handoff(api, link_id, target, created, returned=None, source=None):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO pipeline_handoffs(id, pipeline_link_id, source_task_id, target_task_id, created_at, returned_at) "
             "VALUES (?,?,?,?,?,?)",
-            ("ph-" + uuid.uuid4().hex[:8], link_id, target, target, created, returned),
+            ("ph-" + uuid.uuid4().hex[:8], link_id, source or target, target, created, returned),
         )
 
 
@@ -99,12 +99,12 @@ def test_the_numbers_equal_direct_counts_and_follow_link_order(api):
         H._set_task_tags(c, "human:ana", old["id"], ["ads"])  # the tag a card is labelled by, through the tag writer
         c.execute("UPDATE tasks SET updated_at=?, status='doing' WHERE id=?", (ago(hours=3), old["id"]))
         c.execute(
-            "UPDATE tasks SET status='done', done_at=?, step_id=?, created_at=? WHERE id=?",
-            (ago(hours=1), sales_steps["Done"], ago(days=3), done["id"]),
+            "UPDATE tasks SET status='done', done_at=?, created_at=? WHERE id=?",
+            (ago(hours=1), ago(days=3), done["id"]),
         )
+    move(api, done["id"], step=sales_steps["Done"])  # a real move into the output stage: one done card
     # The late clock is the open stage visit: the old card has been in Doing for three hours.
     visit(api, old["id"], marketing, marketing_steps["Doing"], ago(hours=3), "initial")
-    visit(api, done["id"], sales, sales_steps["Done"], ago(hours=1))  # the output stage of Gro: one done card
     handoff(api, lead, done["id"], ago(days=1))
     handoff(api, lead, done["id"], ago(days=20))  # outside 7 days
 
@@ -165,17 +165,19 @@ def test_rights_say_who_may_edit_a_pipeline(api):
 
 
 def test_a_spawn_is_not_an_input_but_the_card_that_made_it_still_is(api):
-    growth = make_factory(api, "Gro")
-    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    # Sales is the first pipeline of Gro. Its subtask comes from Mkt, the first pipeline of another factory.
+    growth = make_factory(api, "Gro", position=0)
     sales, s_steps = make_type(api, "Sls", factory=growth)
+    other = make_factory(api, "Other", position=1)
+    marketing, m_steps = make_type(api, "Mkt", factory=other)
     spawn = link(api, marketing, m_steps["Doing"], sales, mode="spawn")
-    source = card(api, marketing, m_steps["Doing"])  # made by a person: an input
-    made = card(api, sales, s_steps["Doing"])  # the card the spawn makes
-    handoff(api, spawn, made["id"], ago(hours=2))
-    inputs = {i["label"]: i["count"] for i in overview(api)["inputs"] if i["to"] == marketing}
-    assert inputs == {"Team ideas": 1}  # the spawned card is excluded; its source is not
-    assert overview(api)["edges"][0]["mode"] == "spawn"
-    assert source["id"] != made["id"]
+    source = card(api, marketing, m_steps["Doing"])  # made by a person: an input to Mkt
+    made = card(api, sales, s_steps["Doing"])  # the subtask the spawn files in Sales: not an input
+    handoff(api, spawn, made["id"], ago(hours=2), source=source["id"])
+    week = overview(api)
+    assert {i["label"]: i["count"] for i in week["inputs"] if i["to"] == sales} == {}
+    assert {i["label"]: i["count"] for i in week["inputs"] if i["to"] == marketing} == {"Team ideas": 1}
+    assert [(e["mode"], e["count"]) for e in week["edges"]] == [("spawn", 1)]
 
 
 def test_inputs_cap_labels_at_five_then_other_and_count_every_card(api):
@@ -233,18 +235,41 @@ def test_a_loop_counts_its_laps_and_shows_a_median_from_three(api):
 def test_the_map_counts_each_window_the_same_as_direct_sql(api):
     growth = make_factory(api, "Gro")
     marketing, m_steps = make_type(api, "Mkt", factory=growth)
-    sales, _ = make_type(api, "Sls", factory=growth)
+    sales, s_steps = make_type(api, "Sls", factory=growth)
     lead = link(api, marketing, m_steps["Doing"], sales)
-    cards = [card(api, marketing, m_steps["Doing"]) for _ in range(3)]
-    for c_, hours in zip(cards, (12, 3 * 24, 10 * 24), strict=True):
-        handoff(api, lead, c_["id"], ago(hours=hours))
+    ages = (12, 3 * 24, 10 * 24)  # hours before now: inside 1 day, inside 7 days, inside 30 days only
+    arrived = [card(api, marketing, m_steps["Doing"]) for _ in ages]
+    finished = [card(api, sales, s_steps["Doing"]) for _ in ages]
+    for t in finished:
+        move(api, t["id"], step=s_steps["Done"])
+    with api.app.state.store.transaction() as c:
+        for t, hours in zip(arrived, ages, strict=True):
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(hours=hours), t["id"]))
+        for t, hours in zip(finished, ages, strict=True):
+            c.execute(
+                "UPDATE history_events SET created_at=? WHERE subject_type='task' AND kind='step' AND subject_id=?",
+                (ago(hours=hours), t["id"]),
+            )
+    for t, hours in zip(arrived, ages, strict=True):
+        handoff(api, lead, t["id"], ago(hours=hours))
     for period, days in (("1d", 1), ("7d", 7), ("30d", 30)):
-        with api.app.state.store.transaction() as c:
-            direct = c.execute(
-                "SELECT COUNT(*) FROM pipeline_handoffs WHERE created_at>=? AND returned_at IS NULL", (ago(days=days),)
+        since = ago(days=days)
+        with api.app.state.store.read() as c:
+            handoffs = c.execute(
+                "SELECT COUNT(*) FROM pipeline_handoffs WHERE created_at>=? AND returned_at IS NULL", (since,)
             ).fetchone()[0]
-        (edge,) = overview(api, period)["edges"]
-        assert edge["count"] == direct, period
+            arrivals = c.execute(
+                "SELECT COUNT(*) FROM tasks WHERE type_id=? AND created_at>=?", (marketing, since)
+            ).fetchone()[0]
+            done = c.execute(
+                "SELECT COUNT(DISTINCT subject_id) FROM history_events WHERE subject_type='task' AND kind='step' "
+                "AND new=? AND created_at>=?",
+                (s_steps["Done"], since),
+            ).fetchone()[0]
+        week = overview(api, period)
+        assert [e["count"] for e in week["edges"]] == [handoffs], period
+        assert sum(i["count"] for i in week["inputs"] if i["to"] == marketing) == arrivals, period
+        assert week["factories"][0]["done"] == done, period
 
 
 def test_a_factory_with_no_links_renders_cleanly(api):
@@ -260,3 +285,128 @@ def test_a_factory_with_no_links_renders_cleanly(api):
     assert {p["id"] for p in week["pipelines"]} >= {marketing, sales}
     assert [f["name"] for f in week["factories"]] == ["Gro"]
     assert week["factories"][0]["done"] == 0
+
+
+def move(api, task, token="ana-test", **fields):
+    """A real ticket update (POST /api/v2/tasks/{id}) with the version the ticket has now."""
+    version = get(api, "tasks/" + task, token)["task"]["version"]
+    return post(api, "tasks/" + task, {"version": version, **fields}, token)
+
+
+def test_a_ticket_moved_into_a_members_only_pipeline_stops_counting_for_a_non_member(api):
+    growth = make_factory(api, "Gro")
+    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    sales, _ = make_type(api, "Sls", factory=growth)
+    legal, _ = make_type(api, "Lgl", pipeline_visibility="members", pipeline_owner_id="human:ana")
+    lead = link(api, marketing, m_steps["Doing"], sales)
+    made = card(api, marketing, m_steps["Doing"])  # company-wide: Ben may read it
+    handoff(api, lead, made["id"], ago(hours=1))
+
+    def counted(token):
+        week = overview(api, token=token)
+        inputs = sum(i["count"] for i in week["inputs"] if i["to"] == marketing)
+        edges = sum(e["count"] for e in week["edges"] if e["from"] == marketing and e["to"] == sales)
+        return inputs, edges
+
+    assert counted("ben-test") == (1, 1)
+    move(api, made["id"], type=legal)  # now members-only: Ben may not open it
+    assert counted("ben-test") == (0, 0)
+    assert counted("ana-test") == (
+        0,
+        1,
+    )  # Ana may open it: its handoff counts; its card now starts in Legal, not Marketing
+
+
+def test_a_spawn_counts_only_when_the_reader_may_open_both_its_tickets(api):
+    growth = make_factory(api, "Gro")
+    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    sales, s_steps = make_type(api, "Sls", factory=growth)
+    spawn = link(api, marketing, m_steps["Doing"], sales, mode="spawn")
+    parent = card(api, marketing, m_steps["Doing"], private=True)  # Ana's: Ben may not open the parent
+    child = card(api, sales, s_steps["Doing"])  # Ben may read the subtask
+    handoff(api, spawn, child["id"], ago(hours=1), source=parent["id"])
+
+    assert [e["count"] for e in overview(api)["edges"]] == [1]
+    assert overview(api, token="ben-test")["edges"] == []
+
+
+def test_factory_done_counts_real_moves_into_the_output_stage_without_requirements(api):
+    # A pipeline with no stage requirements records no stage visits; its done count still comes from the moves.
+    growth = make_factory(api, "Gro")
+    sales, steps = make_type(api, "Sls", factory=growth)
+    first = card(api, sales, steps["Doing"])
+    second = card(api, sales, steps["Doing"])
+    card(api, sales, steps["Doing"])  # still open
+    move(api, first["id"], step=steps["Done"])
+    move(api, second["id"], step=steps["Done"])
+    move(api, second["id"], step=steps["Doing"])  # back out
+    move(api, second["id"], step=steps["Done"])  # and in again: one entry per card per period
+    assert overview(api)["factories"][0]["done"] == 2
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM stage_visits").fetchone()[0] == 0
+
+
+def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(api):
+    # Engineering was made first, but Product feeds it: the factory's output is Engineering's done stage.
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261107210000_factory_output_stage.py"
+    spec = importlib.util.spec_from_file_location("migration_factory_output_stage", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    growth = make_factory(api, "Gro")
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    link(api, prod, p_steps["Doing"], eng)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE factories SET output_stage_id=NULL WHERE id=?", (growth,))
+        migration.up(c)
+        stored = c.execute("SELECT output_stage_id FROM factories WHERE id=?", (growth,)).fetchone()[0]
+    assert stored == e_steps["Done"]
+
+
+def test_a_lap_that_left_before_the_period_counts_when_it_returns_in_it(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    forward = link(api, prod, p_steps["Doing"], eng)
+    back = link(api, eng, e_steps["Doing"], prod)
+    rider = card(api, prod, p_steps["Doing"])
+    handoff(api, forward, rider["id"], ago(days=8))  # left eight days ago
+    handoff(api, back, rider["id"], ago(days=6))  # came back six days ago: one lap in the last seven days
+    (week,) = overview(api, "7d")["loops"]
+    assert week["laps"] == 1
+    assert overview(api, "1d")["loops"][0]["laps"] == 0
+
+
+def test_a_spawned_subtask_returning_ends_its_parents_lap(api):
+    growth = make_factory(api, "Gro")
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    spawn = link(api, prod, p_steps["Doing"], eng, mode="spawn")
+    back = link(api, eng, e_steps["Doing"], prod)
+    parent = card(api, prod, p_steps["Doing"])
+    subtask = card(api, eng, e_steps["Doing"])
+    handoff(api, spawn, subtask["id"], ago(hours=5), source=parent["id"])
+    handoff(api, back, subtask["id"], ago(hours=1))
+    (loop,) = overview(api)["loops"]
+    assert loop["laps"] == 1
+
+
+def test_rights_answer_a_hidden_pipeline_the_same_as_a_missing_one(api):
+    # Ben is an Admin but not the company owner (Ana) and not on this members-only pipeline: he learns nothing from its
+    # rights, not even that it exists. A pipeline he may see answers as it should, so the Admin premise holds.
+    from backend.store import encode
+
+    visible, _ = make_type(api, "Vis", pipeline_owner_id="human:ana")
+    hidden, _ = make_type(api, "Hdn", pipeline_visibility="members", pipeline_owner_id="human:cara")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO registry_metadata VALUES('access',?)", (encode({"admins": ["ben@acme.example"]}),)
+        )
+    assert get(api, f"pipelines/{visible}/rights", "ben-test") == {"may_edit_rules": True}
+    assert get(api, f"pipelines/{hidden}/rights", "ben-test") == get(api, "pipelines/nope/rights", "ben-test")
+    assert get(api, f"pipelines/{hidden}/rights", "ben-test") == {"may_edit_rules": False}
