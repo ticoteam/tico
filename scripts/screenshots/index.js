@@ -122,7 +122,7 @@ const PAGES = [
       const canvas = page.locator('#market-canvas');
       await canvas.waitFor();
       let last = await canvas.screenshot();
-      for (let quiet = 0, tries = 0; quiet < 2 && tries < 40; tries++) {
+      for (let quiet = 0, tries = 0; quiet < 6 && tries < 60; tries++) {
         await page.waitForTimeout(250);
         const now = await canvas.screenshot();
         quiet = now.equals(last) ? quiet + 1 : 0;
@@ -307,8 +307,9 @@ async function capture() {
           }
           await page.getByText(spec.ready).first().waitFor({timeout: 20000}).catch(() => problems.push(`${label}: never showed "${spec.ready}"`));
           if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
-          // Items mark themselves read 700 to 900 ms after they show (ui/app/updates.js), so a shot waits past that.
-          await page.waitForTimeout(2000);
+          // Items mark themselves read 700 to 900 ms after they show (ui/app/updates.js), and side panels fill in as their
+          // lists arrive, so a shot waits 3 s after the page is ready.
+          await page.waitForTimeout(3000);
           // A click scrolls its target into view and a list that loads late moves the page again: every shot starts at the
           // top of the page and of each scroller (the tour keeps the scroll its steps asked for).
           if (spec.name !== 'tour') {
