@@ -553,10 +553,14 @@ def _unmet(found: list[Standing]) -> list[Standing]:
 
 def _forward_scope(conn: sqlite3.Connection, task_id: str, here: Row, target: Row | None) -> dict[str, str | None]:
     """The stages a forward move to `target` is held to: where the ticket is, the ones it passes through on the way, and
-    the ones it visited before the target (a stage it was moved back from, beyond the target, is not in the way)."""
+    the ones it visited before the target (a stage it was moved back from, beyond the target, is not in the way). A move
+    to a stage it has been in before is a loop (review sends it back to rework): only the stage it leaves counts."""
     scope: dict[str, str | None] = {}
     same = target is not None and target["type_id"] == here["type_id"]
-    for stage_id, left_at in _visited(conn, [task_id]).get(task_id, {}).items():
+    seen = _visited(conn, [task_id]).get(task_id, {})
+    if target is not None and str(target["id"]) in seen:
+        return {str(here["id"]): None}  # a loop back to a stage it has been in (rework): only what it leaves counts
+    for stage_id, left_at in seen.items():
         placed = stage(conn, stage_id)
         if placed is None or placed["type_id"] != here["type_id"]:
             continue

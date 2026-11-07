@@ -37,6 +37,7 @@ class Step:
     backlog: dict | None = None  # more than `over` tickets waiting here (per step or per owner): who hears of it
     merged: bool = False  # a ticket is here only once its change merged
     release: bool = False  # a release moves tickets from here to the next step
+    requirements: tuple = ()  # what a ticket must show to leave this step: ({"name", "kind", "needs", "reviewed_by"}, ...)
 
 
 MERGE = "<merge>"

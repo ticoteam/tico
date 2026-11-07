@@ -353,3 +353,15 @@ def test_a_queue_ejection_sends_the_card_back_a_stage_with_the_reason(tmp_path):
         "merge conflict"
     )
     assert not E.queue_ejected(c, task, "again")
+
+
+def test_a_loop_back_to_a_visited_stage_is_held_only_to_the_stage_it_leaves(tmp_path):
+    c, board = pipeline(tmp_path)
+    requirement(c, board, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
+    task = card(c, board)["id"]
+    c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
+    H.task_update(c, ANA, task, step="Review")
+    H.task_update(c, ANA, task, step="Approved")
+    H.task_update(c, ANA, task, step="Review")  # back to Review: a loop, an editor's move back
+    c.execute("UPDATE tasks SET due_at=NULL WHERE id=?", (task,))
+    H.task_update(c, ANA, task, step="Approved")  # Review was visited: Drafting's lapsed due date is not in the way
