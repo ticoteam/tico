@@ -40,6 +40,7 @@ class Ctx:
     memo: dict[str, Any] = field(default_factory=lambda: dict[str, Any]())  # per-call reads (budgeting's ad spend)
     deciding: bool = False  # set while an approval is rechecked: outcomes then use the true figures
     decider: str = ""  # the person whose decision an approved action commits on (approval_decided), or ""
+    caller: str = ""  # the actor who asked (the real caller, not the teammate an action is for), set by actions._plan
 
     @property
     def today(self) -> str:

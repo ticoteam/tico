@@ -20,7 +20,6 @@ from .store import tico as ST
 
 UNALLOCATED = "unallocated"  # the column for lines that count toward no segment
 TOTAL = "total"  # the column every line counts toward
-NO_RANK = 1_000_000  # a segment with no rank sorts after the ranked ones
 
 
 def _props(text: object) -> dict[str, Any]:
@@ -31,16 +30,17 @@ def _props(text: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _rank(props: Mapping[str, Any]) -> int:
+def _rank(props: Mapping[str, Any]) -> int | None:
+    """A segment's rank, or None when it has none (such a segment sorts last)."""
     try:
         return int(props.get("rank"))
     except (TypeError, ValueError):
-        return NO_RANK
+        return None
 
 
 def ours(c: sqlite3.Connection) -> list[dict[str, Any]]:
-    """The company's segments in the order a segment P&L shows them: by rank, then name. Each one's id, name, one line
-    (`who`) and color."""
+    """The company's segments in the order a segment P&L shows them: by rank, then name, with the unranked last. Each
+    one's id, name, one line (`who`), color and rank (None when unranked)."""
     ids = sorted(SEG.ours_ids(c))
     if not ids:
         return []
@@ -58,7 +58,7 @@ def ours(c: sqlite3.Connection) -> list[dict[str, Any]]:
                 "rank": _rank(props),
             }
         )
-    return sorted(out, key=lambda x: (x["rank"], x["name"], x["id"]))
+    return sorted(out, key=lambda x: (x["rank"] is None, x["rank"] or 0, x["name"], x["id"]))
 
 
 def checked(c: sqlite3.Connection, value: object) -> str:
@@ -103,12 +103,20 @@ def dedicated(c: sqlite3.Connection, actor: str) -> frozenset[str]:
 
 
 def lead_map(c: sqlite3.Connection) -> dict[str, frozenset[str]]:
-    """Which segments each actor leads, for every segment with a lead. Empty without company segments or segment
-    members; the org chart is read only when there are members to check."""
+    """Which segments each actor leads: a teammate tagged with a segment leads it, unless their manager is tagged with it
+    too, so the manager leads and the people under them do not. The org chart is read once, and only when some segment
+    has a teammate tagged with it, so an install with no segment members reads nothing."""
     out: dict[str, set[str]] = {}
-    if SEG.has_members(c) and SEG.ours_ids(c):
-        managers = ST.org(c, "").reports_to
-        for sid in sorted(SEG.ours_ids(c)):
-            for ref in SEG.leads(c, sid, managers):
-                out.setdefault(actor_of(ref), set()).add(sid)
+    managers: Mapping[str, str] | None = None
+    for sid in sorted(SEG.ours_ids(c)):
+        refs = SEG.leads(c, sid)
+        if not refs:
+            continue
+        if managers is None:
+            managers = ST.org(c, "").reports_to
+        tagged = {actor_of(ref) for ref in refs}
+        for ref in refs:
+            actor = actor_of(ref)
+            if managers.get(actor, "") not in tagged:
+                out.setdefault(actor, set()).add(sid)
     return {actor: frozenset(found) for actor, found in out.items()}

@@ -11831,6 +11831,7 @@ FIN_OTHER = " other"  # an "Other · n" row's key, as backend/finance/reads.py O
 FINANCE_MAX_CHARS = 64000  # about 16k tokens
 FINANCE_REPORTS = [
     "pnl",
+    "pnl_by",
     "balance_sheet",
     "cash_flow",
     "budget_vs_actual",
@@ -12148,7 +12149,8 @@ def finance_search(api, args):
 
 @tool(
     "hub_finance_report",
-    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
+    "One report cut to your view: pnl, pnl_by (the P&L by segment, with by=segment: one column per company segment, "
+    "then Unallocated and Total for someone who sees the whole P&L), balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
     "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
     "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
     {
@@ -12160,7 +12162,7 @@ def finance_search(api, args):
         "compare": _s("prior adds the window before", enum=["prior"]),
         "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
         "by": _s(
-            "spend_by: group by",
+            "spend_by: group by; pnl_by takes segment (the default)",
             enum=[
                 "department",
                 "team",
@@ -12175,6 +12177,7 @@ def finance_search(api, args):
                 "location_class",
                 "location_project",
                 "class_project",
+                "segment",
             ],
         ),
         "month": _s("close: the month, YYYY-MM"),
@@ -12274,6 +12277,47 @@ def finance_action(api, args):
 def finance_inbox(api, args):
     return _fin_paged(
         api, "finance/inbox", _fin_query(args, ("kind", "cursor", "limit")), "items", _fin_budget(args.get("limit"), 50)
+    )
+
+
+@tool(
+    "hub_finance_segment_review",
+    "The customers whose company segment no person has set (a bot's guess, or none yet), by name, a page at a time. "
+    "Set one with hub_finance_contact_segment.",
+    {
+        "cursor": _s("next_cursor from the last page"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Items per page (default 50)"},
+    },
+)
+def finance_segment_review(api, args):
+    return _fin_paged(
+        api,
+        "finance/contacts/segment-review",
+        _fin_query(args, ("cursor", "limit")),
+        "contacts",
+        _fin_budget(args.get("limit"), 50),
+    )
+
+
+@tool(
+    "hub_finance_contact_segment",
+    "Set a customer's company segment; an empty segment_id clears it. A person's choice is sure; yours, when you act "
+    "for a person, is a guess that never overwrites a sure one. Runs as the contact_segment action: committed, sent "
+    "for approval, denied or failed. Requires operation_id, which is the action's key.",
+    {
+        "contact_id": _s("The customer"),
+        "segment_id": _s("The company segment's id; empty for none"),
+    },
+    ("contact_id", "segment_id"),
+    writes=True,
+)
+def finance_contact_segment(api, args):
+    if not args.get("operation_id"):
+        raise APIError("validation", "Send an operation_id: it is the action's key, so a retry never acts twice")
+    return api.post(
+        "finance/contacts/" + quote(str(args["contact_id"]), safe="") + "/segment",
+        {"segment_id": str(args.get("segment_id") or "")},
+        key=_key(args),
     )
 
 

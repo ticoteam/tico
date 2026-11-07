@@ -89,6 +89,7 @@
  "hub_finance_metric": "404 not_found",
  "hub_finance_report": "404 not_found",
  "hub_finance_search": "404 not_found",
+ "hub_finance_segment_review": "404 not_found",
  "hub_gateway_digest": "409 gateway_not_connected",
  "hub_gateway_fetch": "422 validation",
  "hub_gateway_search": "409 gateway_not_connected",

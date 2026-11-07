@@ -355,7 +355,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("rollover?", "bool", ""),
         ("amount?", "minor", "none: tracked with no amount"),
         ("effective_from?", "day", ""),
-        ("segment?", "str", "a company segment; empty for none (a child with none reports under its parent's)"),
+        ("segment_id?", "str", "a company segment; empty for none (a child with none reports under its parent's)"),
     ),
     "budget_update": (
         ("budget_id", "str", ""),
@@ -367,7 +367,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("active?", "bool", ""),
         ("amount?", "minor", ""),
         ("effective_from?", "day", ""),
-        ("segment?", "str", "a company segment; empty to clear"),
+        ("segment_id?", "str", "a company segment; empty to clear"),
     ),
     "allocation_set": (
         ("budget_id", "str", ""),
@@ -409,7 +409,16 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "mirror_xero_location": (
         ("category_id", "str", "the Xero tracking category whose options are locations ('' for none)"),
     ),
-    "view_defaults_set": (("manager?", "str", ""), ("member?", "str", ""), ("manager_payroll?", "totals|hidden", "")),
+    "view_defaults_set": (
+        ("manager?", "str", ""),
+        ("member?", "str", ""),
+        ("manager_payroll?", "totals|hidden", ""),
+        (
+            "segment_lead?",
+            "lead|none",
+            "lead: a segment's lead sees its own P&L column; none: nobody but the whole P&L does",
+        ),
+    ),
     "right_grant": (
         ("teammate", "str", ""),
         ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),

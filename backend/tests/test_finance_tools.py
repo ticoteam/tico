@@ -3,11 +3,14 @@ results cut to the payload budget."""
 
 import json
 
+import pytest
+
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.tests.test_api import api, get, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 from clients import hubtools
+from clients.tico import APIError
 
 
 def as_bot(api, slug):
@@ -184,3 +187,46 @@ def test_inbox_pages_one_kind_through_the_cli_and_the_tool_passing_its_cursor(mo
     out = remotecli.via_tool(api, args)
     assert [r["id"] for r in out["items"]][0] == "fd_200" and len(out["items"]) == 50 and out["next_cursor"] is None
     assert api.calls == [("finance/inbox", {"kind": "uncategorized", "cursor": "200"})]
+
+
+class _Writes(_Api):
+    """A Finance route stand-in that also takes writes, recording each one."""
+
+    def __init__(self):
+        super().__init__([])
+        self.posts = []
+
+    def post(self, path, body, key=None):
+        self.posts.append((path, body, key))
+        return {"contact_id": "cust 1", "segment_id": None, "segment_sure": False}
+
+
+def test_setting_a_customers_segment_posts_it_under_the_operation_key():
+    api = _Writes()
+    out = hubtools.finance_contact_segment(api, {"contact_id": "cust 1", "segment_id": "", "operation_id": "seg-1"})
+    assert api.posts == [("finance/contacts/cust%201/segment", {"segment_id": ""}, "seg-1")]
+    assert out["segment_sure"] is False
+    with pytest.raises(APIError, match="operation_id"):
+        hubtools.finance_contact_segment(api, {"contact_id": "cust-1", "segment_id": "segment/creators"})
+    assert len(api.posts) == 1  # a write without a key is refused before it is sent
+
+
+def test_the_segment_review_pages_the_customers_nobody_has_set():
+    api = _Api([{"id": f"cust-{i}", "name": f"Customer {i}"} for i in range(3)], key="contacts")
+    out = hubtools.finance_segment_review(api, {"limit": 2})
+    assert api.calls == [("finance/contacts/segment-review", {"limit": 2})]
+    assert [r["id"] for r in out["contacts"]] == ["cust-0", "cust-1"] and out["next_cursor"] == "2"
+
+
+def test_the_report_tool_and_the_cli_reach_the_segment_pnl_and_the_review():
+    from clients import hubcli, remotecli
+
+    props = hubtools.BY_NAME["hub_finance_report"]["inputSchema"]["properties"]
+    assert "pnl_by" in hubtools.FINANCE_REPORTS and "segment" in props["by"]["enum"]
+    review = _Api([{"id": "cust-0", "name": "Customer 0"}], key="contacts")
+    remotecli.via_tool(review, hubcli.parser().parse_args(["finance", "segment-review", "--limit", "5"]))
+    assert review.calls == [("finance/contacts/segment-review", {"limit": 5})]
+    api = _Writes()
+    args = hubcli.parser().parse_args(["finance", "contact-segment", "cust-1", "", "--operation-id", "seg-1"])
+    remotecli.via_tool(api, args)
+    assert api.posts == [("finance/contacts/cust-1/segment", {"segment_id": ""}, "seg-1")]

@@ -15334,7 +15334,7 @@
     },
     "/api/v2/finance/budgets": {
       "get": {
-        "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents; segment keeps the budgets whose segment (their own, else their parent's) is that one. The owner may pass view_as",
+        "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents; segment keeps the budgets whose segment (their own, else their parent's) is that one, and a segment the company no longer runs matches nothing. The owner may pass view_as",
         "operationId": "listFinanceBudgets",
         "parameters": [
           {
@@ -15945,7 +15945,7 @@
     },
     "/api/v2/finance/contacts/segment-review": {
       "get": {
-        "summary": "Customers whose segment is unset or a guess (segment_sure 0), by name, paged by cursor: the list a person reviews. A person's choice makes a segment sure",
+        "summary": "Customers no person has set the segment of (segment_sure 0), by name, paged by cursor: the list a person reviews. A person's choice, even none, leaves the list",
         "operationId": "listFinanceSegmentReview",
         "parameters": [
           {
@@ -16159,8 +16159,7 @@
                 "project",
                 "location_class",
                 "location_project",
-                "class_project",
-                "segment"
+                "class_project"
               ],
               "type": "string",
               "default": "department",
@@ -56026,12 +56025,16 @@
               },
               "manager_payroll": {
                 "type": "string"
+              },
+              "segment_lead": {
+                "type": "string"
               }
             },
             "required": [
               "manager",
               "manager_payroll",
-              "member"
+              "member",
+              "segment_lead"
             ],
             "additionalProperties": true
           },
@@ -57021,13 +57024,13 @@
           "state": {
             "$ref": "#/components/schemas/FinanceBudgetState"
           },
-          "segment": {
+          "segment_id": {
             "type": [
               "string",
               "null"
             ]
           },
-          "segment_effective": {
+          "effective_segment_id": {
             "type": [
               "string",
               "null"
@@ -57035,11 +57038,11 @@
           }
         },
         "required": [
+          "effective_segment_id",
           "id",
           "name",
           "platform",
-          "segment",
-          "segment_effective",
+          "segment_id",
           "state"
         ],
         "additionalProperties": true

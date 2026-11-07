@@ -15,11 +15,15 @@ import pytest
 
 from backend import hubdb as H
 from backend import market as MK
+from backend.config import Settings
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance import segmentation as SG
+from backend.finance.core import org as O
 from backend.finance.core.errors import FinanceError
+from backend.finance.store import access as SA
 from backend.finance.store import ledger as SL
+from backend.store import Store
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT,
     OWNER,
@@ -143,7 +147,7 @@ def _month(c) -> dict[str, str]:
                     "account_id": account(c, "6100"),
                     "amount": 100_000,
                     "at_limit": "decline",
-                    "segment": S2,
+                    "segment_id": S2,
                 },
             )
         )["budget_id"]
@@ -176,7 +180,7 @@ def _month(c) -> dict[str, str]:
                     "account_id": account(c, "6510"),
                     "amount": 100_000,
                     "at_limit": "decline",
-                    "segment": S1,
+                    "segment_id": S1,
                 },
             )
         )["budget_id"]
@@ -219,7 +223,7 @@ def test_a_budget_takes_a_company_segment_and_refuses_any_other(books):  # noqa:
                 "account_id": account(c, "6100"),
                 "amount": 1_000,
                 "at_limit": "decline",
-                "segment": "segment/nobody",
+                "segment_id": "segment/nobody",
             },
         )
         small = str(
@@ -233,18 +237,18 @@ def test_a_budget_takes_a_company_segment_and_refuses_any_other(books):  # noqa:
                         "account_id": account(c, "6100"),
                         "amount": 1_000,
                         "at_limit": "decline",
-                        "segment": S1,
+                        "segment_id": S1,
                     },
                 )
             )["budget_id"]
         )
-        assert _budgets(c)["Small"]["segment"] == S1
-        _ok(act(c, OWNER, "budget_update", {"budget_id": small, "segment": S2}))
-        assert _budgets(c)["Small"]["segment"] == S2
+        assert _budgets(c)["Small"]["segment_id"] == S1
+        _ok(act(c, OWNER, "budget_update", {"budget_id": small, "segment_id": S2}))
+        assert _budgets(c)["Small"]["segment_id"] == S2
         assert "not one of the company's segments" in _refused(
-            c, OWNER, "budget_update", {"budget_id": small, "segment": "segment/nobody"}
+            c, OWNER, "budget_update", {"budget_id": small, "segment_id": "segment/nobody"}
         )
-        assert _budgets(c)["Small"]["segment"] == S2  # the refusal changed nothing
+        assert _budgets(c)["Small"]["segment_id"] == S2  # the refusal changed nothing
 
 
 def test_a_child_with_no_segment_reports_under_its_parent_and_the_filter_finds_it(books):  # noqa: F811
@@ -252,9 +256,9 @@ def test_a_child_with_no_segment_reports_under_its_parent_and_the_filter_finds_i
         ids = _month(c)
         under_creators = _budgets(c, segment=S2)
         assert {"Software creators", "Software web"} <= set(under_creators)
-        assert under_creators["Software web"]["segment"] is None
-        assert under_creators["Software web"]["segment_effective"] == S2
-        assert under_creators["Software creators"]["segment"] == S2
+        assert under_creators["Software web"]["segment_id"] is None
+        assert under_creators["Software web"]["effective_segment_id"] == S2
+        assert under_creators["Software creators"]["segment_id"] == S2
         assert "Hosting small" not in under_creators
         hosting = _budgets(c, segment=S1)
         assert "Hosting small" in hosting and "Software web" not in hosting
@@ -326,6 +330,7 @@ def test_the_segment_pnl_splits_each_line_once_and_its_total_is_the_pnl(books): 
         _month(c)
         out = FR.pnl_by(c, OWNER, "segment", *OCTOBER, basis="accrual")
         assert _columns(out) == ALL_COLUMNS
+        assert [x["rank"] for x in out["columns"]] == [1, 2, None, None, None]
         assert _values(out, "income") == {S1: 10_000, S2: 0, S3: 0, SG.UNALLOCATED: 4_000, SG.TOTAL: 14_000}
         assert _values(out, "expense") == {S1: 1_700, S2: 5_000, S3: 0, SG.UNALLOCATED: 500, SG.TOTAL: 7_200}
         assert _values(out, "contribution") == {S1: 8_300, S2: -5_000, S3: 0, SG.UNALLOCATED: 3_500, SG.TOTAL: 6_800}
@@ -346,8 +351,8 @@ def test_the_segment_filter_keeps_one_segments_lines(books):  # noqa: F811
             [4_000],
             [500],
         )
-        with pytest.raises(FinanceError, match="not one of the company's segments"):
-            FR.pnl(c, OWNER, *OCTOBER, "month", "accrual", segment="segment/nobody")
+        nobody = FR.pnl(c, OWNER, *OCTOBER, "month", "accrual", segment="segment/nobody")
+        assert (nobody["segment"], nobody["income"], nobody["expense"]) == ("segment/nobody", [0], [0])
 
 
 def test_the_owner_and_a_full_pnl_viewer_see_every_column(books):  # noqa: F811
@@ -446,3 +451,180 @@ def test_the_migration_widens_line_tags_keeping_rows_and_index_and_adds_the_segm
     assert conn.execute("SELECT version, reason FROM fin_view_versions").fetchone() == (5, "defaults")
     migration.up(conn)  # a second run changes nothing
     assert conn.execute("SELECT count(*) FROM fin_line_tags").fetchone() == (3,)
+
+
+PRE_CLEANUP = Path(__file__).resolve().parent / "fixtures" / "schema_pre_cleanup.sql"
+SEPT = "2026-09-15"
+# A database below cloud step 76: fin_line_tags has no `location` kind, so the migration must leave it to step 76.
+BELOW_STEP_76 = """
+CREATE TABLE fin_lines (id TEXT PRIMARY KEY);
+CREATE TABLE fin_line_tags (
+  line_id TEXT NOT NULL REFERENCES fin_lines(id),
+  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom')), value TEXT NOT NULL,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (line_id, kind));
+INSERT INTO fin_lines VALUES ('l1');
+INSERT INTO fin_line_tags VALUES ('l1', 'team', 'web', '2026-10-01', 'ana');
+"""
+
+
+def test_the_migration_leaves_a_table_below_location_to_cloud_step_76():
+    migration = _migration()
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(BELOW_STEP_76)
+    before = conn.execute("SELECT sql FROM sqlite_master WHERE name='fin_line_tags'").fetchone()[0]
+    migration.up(conn)  # must not raise: step 76 rebuilds the table from its current definition, which has `segment`
+    after = conn.execute("SELECT sql FROM sqlite_master WHERE name='fin_line_tags'").fetchone()[0]
+    assert after == before
+    assert conn.execute("SELECT kind, value FROM fin_line_tags").fetchall() == [("team", "web")]
+
+
+def test_a_schema_71_install_boots_and_its_line_tags_take_the_segment_kind(tmp_path):
+    """The pre-cleanup fixture boots through Store.initialize: the migration returns early on an install below step 76,
+    and cloud step 76 builds fin_line_tags from its current definition, which has `location` and `segment`."""
+    path = tmp_path / "hub.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(PRE_CLEANUP.read_text())
+    conn.close()
+    Store(Settings(db_path=path)).initialize()
+    conn = sqlite3.connect(path)
+    try:
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_line_tags'").fetchone()[0]
+    finally:
+        conn.close()
+    assert "'location'" in sql and "'segment'" in sql
+
+
+def _post_on(c, day: str, lines: list[dict[str, object]]) -> None:
+    FA.post_entry(c, {"date": day, "source": "usage", "source_id": f"seg-{next(_seq)}", "lines": lines}, at=AT)
+
+
+def test_a_segment_filter_shows_no_pay_run_that_a_subtraction_could_reveal(books):  # noqa: F811
+    with books.transaction() as c:
+        _segments(c)
+        _accounts(c)
+        pay = str(
+            _ok(
+                act(
+                    c,
+                    OWNER,
+                    "account_create",
+                    {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+                )
+            )["account_id"]
+        )
+        _ok(act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}))
+        _ok(act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "pnl", "whose": "company"}))
+        run = [
+            {"account_id": pay, "amount": 1_000, "tags": {"team": "web", "teammate": who}}
+            for who in ("human:ben", "human:cara", "human:dan", "human:eve")
+        ]
+        run[2]["tags"]["segment"] = S1  # one person's line carries a segment
+        _post_on(c, SEPT, [*run, {"account_id": account(c, "1000"), "amount": -4_000}])
+        _post_on(
+            c,
+            SEPT,
+            [{"account_id": account(c, "6530"), "amount": 500}, {"account_id": account(c, "1000"), "amount": -500}],
+        )
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        window = ("2026-09-01", "2026-09-30")
+        whole = FR.pnl(c, "human:ben", *window, "month", "accrual")
+        assert whole["expense"] == [4_500]  # the run shows as one cell, beside the shared cost
+        unallocated = FR.pnl(c, "human:ben", *window, "month", "accrual", segment=SG.UNALLOCATED)
+        # Filtered, the run shows nothing: a 3-person cell would reveal the fourth person's pay by subtraction.
+        assert unallocated["expense"] == [500]
+        assert FR.pnl(c, "human:ben", *window, "month", "accrual", segment=S1)["expense"] == [0]
+
+
+def test_a_lead_sees_only_their_own_lines_for_any_filter_and_a_dedicated_non_lead_is_refused(books):  # noqa: F811
+    with books.transaction() as c:
+        _month(c)  # cara leads S1; eve is dedicated to S1 and leads nothing
+        own = FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual")
+        assert (own["income"], own["expense"]) == ([10_000], [1_700])
+        assert FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=S1)["expense"] == [1_700]
+        other = FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=S2)
+        assert (other["income"], other["expense"]) == ([0], [0])
+        with pytest.raises(FinanceError, match="segment P&L"):
+            FR.pnl(c, "human:eve", *OCTOBER, "month", "accrual", segment=S1)
+
+
+def test_a_persons_explicit_none_takes_a_customer_off_the_review_list(books):  # noqa: F811
+    with books.transaction() as c:
+        _segments(c)
+        alpha = _customer(c, "Alpha Co")
+        assert alpha in [r["id"] for r in FR.contacts(c, OWNER, review=True)["contacts"]]
+        _ok(act(c, OWNER, "contact_segment", {"contact_id": alpha, "segment_id": ""}))
+        assert alpha not in [r["id"] for r in FR.contacts(c, OWNER, review=True)["contacts"]]
+
+
+def test_a_bot_acting_for_a_person_sets_a_guess_and_never_overwrites_a_choice(books):  # noqa: F811
+    with books.transaction() as c:
+        _segments(c)
+        fab = _customer(c, "Fabrikam")
+        as_bot = O.Principal(actor="bot:seller", for_actor=OWNER)
+        _ok(act(c, as_bot, "contact_segment", {"contact_id": fab, "segment_id": S1}))
+        assert (_contact(c, fab)["segment_id"], _contact(c, fab)["segment_sure"]) == (S1, False)
+        _ok(act(c, OWNER, "contact_segment", {"contact_id": fab, "segment_id": S2}))
+        assert (_contact(c, fab)["segment_id"], _contact(c, fab)["segment_sure"]) == (S2, True)
+        assert "a person set this customer's segment" in _refused(
+            c, as_bot, "contact_segment", {"contact_id": fab, "segment_id": S1}
+        )
+        assert (_contact(c, fab)["segment_id"], _contact(c, fab)["segment_sure"]) == (S2, True)
+
+
+def test_a_catch_all_budget_takes_no_segment_and_shared_costs_stay_unallocated(books):  # noqa: F811
+    with books.transaction() as c:
+        ids = _month(c)
+        assert "no segment" in _refused(
+            c, OWNER, "budget_create", {"name": "Everything else", "catch_all": True, "segment_id": S1}
+        )
+        catch_all = str(
+            _ok(act(c, OWNER, "budget_create", {"name": "Everything else", "catch_all": True}))["budget_id"]
+        )
+        assert "no segment" in _refused(c, OWNER, "budget_update", {"budget_id": catch_all, "segment_id": S1})
+        out = FR.pnl_by(c, OWNER, "segment", *OCTOBER, basis="accrual")
+        assert _values(out, "expense")[SG.UNALLOCATED] == 500  # the 6530 cost, on the catch-all, is Unallocated
+        assert _budgets(c)["Everything else"]["effective_segment_id"] is None
+        assert _budgets(c)["Software web"]["id"] == ids["web"]
+
+
+def test_a_stale_segment_counts_as_unallocated_and_its_filters_match_nothing(books):  # noqa: F811
+    with books.transaction() as c:
+        _month(c)
+        c.execute("UPDATE market_entities SET status='retired' WHERE id=?", (S2,))
+        out = FR.pnl_by(c, OWNER, "segment", *OCTOBER, basis="accrual")
+        assert _columns(out) == [S1, S3, SG.UNALLOCATED, SG.TOTAL]
+        assert _values(out, "expense") == {S1: 1_700, S3: 0, SG.UNALLOCATED: 5_500, SG.TOTAL: 7_200}
+        gone = FR.pnl(c, OWNER, *OCTOBER, "month", "accrual", segment=S2)
+        assert (gone["income"], gone["expense"]) == ([0], [0])
+        assert _budgets(c, segment=S2) == {}
+        assert _budgets(c)["Software creators"]["effective_segment_id"] is None
+
+
+def test_a_budgets_or_customers_segment_change_moves_the_view_version(books):  # noqa: F811
+    with books.transaction() as c:
+        _segments(c)
+        _accounts(c)
+        small = str(
+            _ok(
+                act(
+                    c,
+                    OWNER,
+                    "budget_create",
+                    {"name": "Small", "account_id": account(c, "6100"), "amount": 1_000, "at_limit": "decline"},
+                )
+            )["budget_id"]
+        )
+        before = SA.view_version(c)
+        _ok(act(c, OWNER, "budget_update", {"budget_id": small, "segment_id": S1}))
+        after_budget = SA.view_version(c)
+        assert after_budget > before
+        fab = _customer(c, "Fabrikam")
+        _ok(act(c, OWNER, "contact_segment", {"contact_id": fab, "segment_id": S2}))
+        assert SA.view_version(c) > after_budget
+
+
+def test_the_expenses_view_has_no_segment_grouping(books):  # noqa: F811
+    with books.transaction() as c:
+        _month(c)
+        with pytest.raises(FinanceError):
+            FR.expenses(c, OWNER, *OCTOBER, "segment")

@@ -10,11 +10,13 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 | Tool | Command | Input | Output |
 |---|---|---|---|
 | `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account; leave it out to search all but account), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
+| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, pnl_by, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by` (`segment` for pnl_by); `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
 | `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
 | `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
+| `hub_finance_segment_review` | `hub finance segment-review` | `cursor`, `limit` | `{contacts, next_cursor}`: the customers no person has set a segment for |
+| `hub_finance_contact_segment` | `hub finance contact-segment <contact-id> <segment-id>` | `contact_id`, `segment_id` (empty clears it), `operation_id` | the action's result, as `hub_finance_act` returns it |
 
 The Finance transactions list (its feed read) leaves out an `ignored` row that the bank has ended: its `provider_status`
 is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the list shows `cancelled` as "canceled" and
@@ -54,19 +56,21 @@ comes back as `{"error": "too_big", "chars", "cap"}`.
 ## Segments
 
 A company's segments are its market segments (`segment` entities the company operates in, backend/segments.py). Finance
-puts money by segment in three places, all through the Finance API (`/api/v2/finance/`). The hub tools and the `hub
-finance` commands do not expose these inputs yet.
+puts money by segment in three places: budgets, customers and lines. The Finance API is `/api/v2/finance/`; the hub
+tools and the `hub finance` commands take the same inputs.
 
-- **Budgets** take `segment` on `budget_create` and `budget_update`: one of the company's segment ids, or empty for
-  none. A child with no segment of its own reports under its nearest parent's; each budget row gives its own `segment`
-  and its `segment_effective`. `GET /api/v2/finance/budgets?segment=<id>` keeps the budgets whose spend reports under
-  that segment (`segment=unallocated` for none).
+- **Budgets** take `segment_id` on `budget_create` and `budget_update`: one of the company's segment ids, or empty for
+  none. A child with no segment of its own reports under its nearest parent's. Each budget row says its own
+  `segment_id` and its `effective_segment_id` (the segment its spend reports under; null for Unallocated). The catch-all
+  budget takes no segment: shared costs stay Unallocated. `GET /api/v2/finance/budgets?segment=<id>` keeps the budgets
+  whose spend reports under that segment (`segment=unallocated` for none).
 - **Customers** take a segment with `contact_segment` (`contact_id`, `segment_id`; empty clears it), or with
   `POST /api/v2/finance/contacts/{contact_id}/segment` and the body `{"segment_id": "<id or empty>"}`, which runs the same
   action (its `Idempotency-Key` header works as for `POST /actions`). Only customers take one. A person's choice is final
-  (`segment_sure` true). A bot's choice is a guess (`segment_sure` false): a bot's guess can replace another guess, and
-  never a person's choice. `GET /api/v2/finance/contacts/segment-review` lists the customers whose segment is unset or a
-  guess, by name, with `cursor` and `limit`, for a person to review.
+  (`segment_sure` true). A bot's choice is a guess (`segment_sure` false), and that is decided by the real caller: a bot
+  acting for a person still writes a guess. A guess can replace another guess, never a person's choice.
+  `GET /api/v2/finance/contacts/segment-review` lists the customers no person has set (`segment_sure` 0), by name, with
+  `cursor` and `limit`. A person's explicit choice, even none, leaves the list.
 - **Lines** take a `segment` tag through the existing line-tag path (`categorize`, and the banking and document tags).
   The tag must be one of the company's segments.
 
@@ -75,28 +79,42 @@ deepest budget that matches it, its parent's segment when it has none); else, fo
 else Unallocated. Shared costs (payroll, engineering, AI seats) have no budget and stay Unallocated. There are no split
 rules in v1.
 
+A segment the company no longer operates in counts as Unallocated wherever it was set. A filter on such an id is not an
+error: it matches nothing, so the result is empty.
+
 The segment is read when a P&L is read, not stored on the rollups: a budget's or a customer's segment can change, and
-a stored one would need every past rollup rewritten. Each read looks up a scope's budget and customer once.
+a stored one would need every past rollup rewritten. Each read finds the company's segments once, the book's customers
+that have a segment once, and skips the budget step when no budget names a segment. Changing a budget's segment, or a
+customer's, bumps the view version (`view_version`), so anything cached by it is read again.
 
 **P&L by segment** is `GET /api/v2/finance/reports/pnl_by?by=segment` (with `start`, `end`, `basis`). Its `columns` are
-the company's segments in rank, then name order, each with `key`, `label`, `color`, `who` and `rank`, then `unallocated`
-and `total`. Its `rows` are `income`, `expense` and `contribution` (revenue minus that column's own costs); each row's
-`values` is keyed by column key. Total equals the P&L's income, expense and net for the same window. Budgets and
-projections are not split by segment in this read. `GET /api/v2/finance/pnl?segment=<id|unallocated>` keeps the lines
-that count toward one segment; its budgets are cut to it, and its projections are left out.
+the company's segments in rank, then name order (an unranked segment last), each with `key`, `label`, `color`, `who` and
+`rank` (null when unranked), then `unallocated` and `total`. Its `rows` are `income`, `expense` and `contribution`
+(revenue minus that column's own costs); each row's `values` is keyed by column key. Total equals the P&L's income,
+expense and net for the same window. Budgets and projections are not split by segment in this read.
+`GET /api/v2/finance/pnl?segment=<id|unallocated>` keeps the lines that count toward one segment; its budgets are cut to
+it, and its projections are left out. A segment filter also narrows the lines enough that private payroll shows none of
+its cells, so a filtered P&L never shows what the rest of a pay run was paid. The expenses view (`/finance/expenses`)
+does not group by segment.
 
 Who sees what:
 
 - The owner, and anyone with the whole P&L (a company-wide `pnl` grant), sees every column, Unallocated and Total.
-- A segment's lead sees that segment's column only, with no Unallocated and no Total. A lead is a teammate dedicated to
-  the segment (tagged with it, not with All) whose manager is not. The view default `segment_lead` (`lead`, or `none` to
-  turn the lead view off for everyone) decides whether leads see their column.
+- A segment's lead sees that segment's column only, with no Unallocated and no Total. A lead is a teammate tagged with
+  the segment (not with All) whose manager is not tagged with it too. The view default `segment_lead` (`lead`, or
+  `none` to turn the lead view off for everyone) decides whether leads see their column.
 - A dedicated teammate who leads nothing gets no segment P&L, but reads the segment's budgets, read-only.
 - Anyone else is refused the segment P&L and sees none of the segment's budgets.
 - A bot follows the same rules by its ref (`bot:<id>`).
 
-Who is dedicated to a segment comes from the teammate tags (`segment_members`, owned by the segment build's
-teammates track). Until those tags exist, nobody is dedicated, so only the owner and full P&L viewers see segment columns.
+Who is tagged with a segment comes from `segment_members`, which the teammates track owns; Finance reads it through
+`backend/segments.py` (`leads`, `member_segments`). Until those tags exist, nobody is tagged, so only the owner and full
+P&L viewers see segment columns.
+
+**Hub tools and commands.** `hub_finance_report` takes `kind=pnl_by` with `by=segment`. `hub_finance_segment_review`
+(`cursor`, `limit`) reads the review list, and `hub_finance_contact_segment` (`contact_id`, `segment_id`, `operation_id`)
+sets a customer's segment. The CLI has the same: `hub finance report pnl_by --by segment`,
+`hub finance segment-review [--cursor C] [--limit N]`, and `hub finance contact-segment <contact-id> <segment-id|"">`.
 
 ## Tax
 

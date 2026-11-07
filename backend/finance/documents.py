@@ -38,6 +38,7 @@ from .core.tax import SALES_TAX, taxable_default
 from .usage import CREDIT
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
+from .store import access as SA
 from .store import actions as SX
 from .store import ap as SAP
 from .store import banking as SK
@@ -270,8 +271,10 @@ def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def contact_segment(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """A customer's segment (spec: Money). A person's choice is final (segment_sure 1). A bot's is the Finance Manager's
-    guess (segment_sure 0): it can be replaced by a bot's later guess, but never overwrites a person's choice."""
+    """A customer's segment (spec: Money). A person's choice is final (segment_sure 1). Whoever acts, only a person
+    themselves sets a choice: a bot acting for a person (who is that person) still writes a guess (segment_sure 0), and
+    a guess can be replaced by a later guess but never overwrites a person's choice. The caller is the real actor, not
+    the teammate the action is for."""
     V.only(p, ("contact_id", "segment_id"))
     old = SAP.get(ctx.c, "fin_contacts", V.text(p, "contact_id", 80))
     if old is None or str(old["book_id"]) != ctx.book.id:
@@ -281,7 +284,7 @@ def contact_segment(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     _need_contact_rights(ctx, who, str(old["kind"]))
     segment = segmentation.checked(ctx.c, V.opt_text(p, "segment_id", 80) or "")
     was = str(old["segment_id"] or "")
-    by_person = who.startswith("human:")
+    by_person = ctx.caller.startswith("human:")
     if not by_person and int(old["segment_sure"] or 0) == 1 and segment != was:
         raise denied("a person set this customer's segment; a bot cannot change it")
     sure = 1 if by_person else int(old["segment_sure"] or 0) if segment == was else 0
@@ -293,6 +296,8 @@ def contact_segment(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             str(old["id"]),
             {"segment_id": segment or None, "segment_sure": sure, "updated_at": ctx.at},
         )
+        if segment != was:
+            SA.bump_view(ctx.c, f"contact {old['id']} segment", ctx.at)  # the revenue it counts toward moves
         return {"contact_id": str(old["id"]), "segment_id": segment or None, "segment_sure": bool(sure)}
 
     return Plan(

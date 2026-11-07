@@ -25,6 +25,10 @@ def _widen_line_tags(conn):
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_line_tags'").fetchone()[0]
     if "'segment'" in sql:
         return
+    if "'location'" not in sql:
+        # An install below cloud step 76 has no `location` kind either. Step 76 rebuilds the table from its current
+        # definition, which already has `segment`, so there is nothing to widen here.
+        return
     if LEGACY_KINDS not in sql:
         raise RuntimeError("fin_line_tags has a kind CHECK this migration does not know: " + sql)
     head = "CREATE TABLE fin_line_tags"

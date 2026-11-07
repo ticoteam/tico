@@ -4732,7 +4732,8 @@ STABLE.extend(
             "listFinanceBudgets",
             "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
             "day (the version in effect then); amounts in cents; segment keeps the budgets whose segment (their own, "
-            "else their parent's) is that one. The owner may pass view_as",
+            "else their parent's) is that one, and a segment the company no longer runs matches nothing. The owner may "
+            "pass view_as",
             "FinanceBudgets",
         ),
         (
@@ -4940,8 +4941,8 @@ STABLE.extend(
             "get",
             "Finance",
             "listFinanceSegmentReview",
-            "Customers whose segment is unset or a guess (segment_sure 0), by name, paged by cursor: the list a "
-            "person reviews. A person's choice makes a segment sure",
+            "Customers no person has set the segment of (segment_sure 0), by name, paged by cursor: the list a person "
+            "reviews. A person's choice, even none, leaves the list",
             "FinanceContacts",
         ),
         (
@@ -5233,8 +5234,8 @@ SCHEMAS.update(
                 "name": "s",
                 "platform": "s",
                 "state": ref("FinanceBudgetState"),
-                "segment": {"type": ["string", "null"]},
-                "segment_effective": {"type": ["string", "null"]},
+                "segment_id": {"type": ["string", "null"]},
+                "effective_segment_id": {"type": ["string", "null"]},
             }
         ),
         "FinanceBudgets": obj(
@@ -5480,7 +5481,7 @@ SCHEMAS.update(
                         }
                     )
                 ),
-                "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
+                "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s", "segment_lead": "s"}),
                 "can_view_as": "b",
                 "can_edit_defaults": "b",
                 "view_version": "i",

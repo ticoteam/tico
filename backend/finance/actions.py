@@ -341,6 +341,7 @@ def _plan(
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
     # A mirrored book sends its documents to the provider first: the mirror's planner queues the write.
     planner = mirror.DOC_PLANNERS.get(kind) if ctx.book.mode == "mirror" else None
+    ctx.caller = p.actor  # a planner tells a person's own choice from a bot's (documents.contact_segment)
     plan = (planner or PLANNERS[kind])(ctx, p.who, payload)
     gate = by_right or plan.gate
     if by_right is not None:

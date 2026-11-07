@@ -48,7 +48,7 @@ class Budget:
     rollover: str = "none"
     active: bool = True
     created_at: str = ""
-    segment: str = ""  # the company segment its spend reports under ("" inherits its parent's, segment_of)
+    segment_id: str = ""  # the company segment its spend reports under ("" inherits its parent's, segment_of)
 
 
 @dataclass(frozen=True)
@@ -225,8 +225,8 @@ def segment_of(budgets: Mapping[str, Budget], b: Budget) -> str:
     node: Budget | None = b
     seen: set[str] = set()
     while node is not None and node.id not in seen:
-        if node.segment:
-            return node.segment
+        if node.segment_id:
+            return node.segment_id
         seen.add(node.id)
         node = budgets.get(node.parent_id) if node.parent_id else None
     return ""
@@ -342,6 +342,8 @@ def check(
     if new.catch_all:
         if new.account_id or new.team or new.teammate or new.vendor or new.parent_id:
             raise invalid("the catch-all budget has no line, team, teammate, vendor or parent")
+        if new.segment_id:
+            raise invalid("the catch-all budget has no segment: shared costs stay Unallocated")
         if any(b.catch_all and b.book_id == new.book_id for b in others.values()):
             raise invalid("there is already a catch-all budget")
         return

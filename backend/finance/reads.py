@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from .. import hubdb as H
+from .. import segments as SEG
 from ..records import reads as RR
 from . import budgeting, limits, segmentation as SG, tab, tab_ap, tab_hooks, tab_money, usage
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
@@ -64,6 +65,9 @@ class _Seen:
     private: dict[str, VW.PrivateLine]
     # the segment each scope's spend counts toward, read once per call (_segment)
     segments: dict[tuple[str, ...], str] = field(default_factory=dict)
+    company: frozenset[str] | None = None  # the company's segment ids, read once per call
+    budget_segments: bool | None = None  # whether any budget names a segment (if none, budgets are not read for it)
+    customers: dict[str, str] | None = None  # each customer that has a segment, by contact id, read once per call
 
 
 def _open(c: sqlite3.Connection, viewer: str, at: str | None) -> _Seen:
@@ -124,11 +128,21 @@ def _cells(
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
 
 
+def _company(s: _Seen) -> frozenset[str]:
+    if s.company is None:
+        s.company = frozenset(SEG.ours_ids(s.ctx.c))
+    return s.company
+
+
 def _segment(s: _Seen, account: Account, team: str, teammate: str, vendor: str, explicit: str) -> str:
     """The segment a row's spend counts toward (segmentation.py): its explicit tag; else the segment of the budget its
-    spend counts against; else, for revenue, its customer's segment; else "" (Unallocated). Read once per scope."""
+    spend counts against; else, for revenue, its customer's segment; else "" (Unallocated). A segment the company no
+    longer operates in counts as Unallocated, wherever it came from. Read once per scope."""
+    company = _company(s)
+    if not company:
+        return ""
     if explicit:
-        return explicit
+        return explicit if explicit in company else ""
     key = (account.id, team, teammate, vendor)
     if key not in s.segments:
         s.segments[key] = _counted_segment(s, account, team, teammate, vendor)
@@ -136,22 +150,50 @@ def _segment(s: _Seen, account: Account, team: str, teammate: str, vendor: str, 
 
 
 def _counted_segment(s: _Seen, account: Account, team: str, teammate: str, vendor: str) -> str:
-    b = budgeting.leaf(s.ctx, account.id, team, teammate, vendor)
-    seg = B.segment_of(s.ctx.budgets(), b) if b is not None else ""
-    if seg or account.type != "income" or not vendor:
-        return seg
-    row = SAP.get(s.ctx.c, "fin_contacts", vendor)  # a name that is no contact's id has no row: Unallocated
-    return str(row["segment_id"] or "") if row is not None else ""
+    """The segment a line counts toward without a tag. The vendor is already resolved to its contact (the rollup row's),
+    so the budget is found without a second lookup. The catch-all budget takes shared costs, which stay Unallocated."""
+    seg = ""
+    if _budgets_segmented(s):
+        b = budgeting.leaf_resolved(s.ctx, account.id, team, teammate, vendor)
+        if b is not None and not b.catch_all:
+            seg = B.segment_of(s.ctx.budgets(), b)
+    if not seg and account.type == "income" and vendor:
+        seg = _customer_segment(s, vendor)
+    return seg if seg in _company(s) else ""
 
 
-def _segment_filter(c: sqlite3.Connection, segment: str | None) -> str | None:
-    """A segment filter as a cell or budget carries it: None for no filter, "" for Unallocated, else the segment id
-    (checked against the company's segments)."""
+def _budgets_segmented(s: _Seen) -> bool:
+    if s.budget_segments is None:
+        s.budget_segments = any(b.segment_id for b in s.ctx.budgets().values())
+    return s.budget_segments
+
+
+def _customer_segment(s: _Seen, vendor: str) -> str:
+    """A customer's segment by contact id, one read for the book: a name that is no contact's id has none."""
+    if s.customers is None:
+        rows = s.ctx.c.execute(
+            "SELECT id, segment_id FROM fin_contacts WHERE book_id=? AND segment_id IS NOT NULL AND segment_id<>''",
+            (s.ctx.book.id,),
+        ).fetchall()
+        s.customers = {str(r[0]): str(r[1]) for r in rows}
+    return s.customers.get(vendor, "")
+
+
+def _budget_segment(s: _Seen, b: B.Budget) -> str:
+    """The segment a budget's spend reports under: its own, else its parent's; "" for none or for one the company no
+    longer operates in (the same answer _counted_segment gives a line)."""
+    seg = B.segment_of(s.ctx.budgets(), b)
+    return seg if seg in _company(s) else ""
+
+
+def _segment_filter(segment: str | None) -> str | None:
+    """A segment filter as a cell or budget carries it: None for no filter, "" for Unallocated, else the segment id as
+    given. An id that is no longer one of the company's segments matches nothing, so the result is empty."""
     if segment is None or segment == "":
         return None
     if segment == SG.UNALLOCATED:
         return ""
-    return SG.checked(c, segment)
+    return segment
 
 
 _Key = tuple[str, str, str, str, str, str, str, str, str]
@@ -464,10 +506,14 @@ def pnl(
     cells = _cells(s, a, z, pnl_ids, basis)
     if f.any:
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
-    want = _segment_filter(c, segment)
+    want = _segment_filter(segment)
+    if want is not None and not s.view.company_pnl() and not s.view.segments_led():
+        raise denied("the segment P&L is for people who see the whole P&L and for segment leads")
     if want is not None:
         cells = [x for x in cells if x.segment == want]
-    sup = _suppress(s, cells, f.narrow(s.ctx.org), a, z)
+    # A filter by segment narrows the cells, so private payroll shows none of its cells: a pay run cut down to one
+    # segment's people would show what the rest were paid, by subtraction from the whole P&L.
+    sup = _suppress(s, cells, f.narrow(s.ctx.org) or want is not None, a, z)
     actual: dict[str, list[int]] = {i: [0] * len(buckets) for i in pnl_ids}
     spent: dict[str, int] = {}
     for cell in sup.cells:
@@ -483,7 +529,7 @@ def pnl(
     budget_to_date: dict[str, list[int | None]] = {}  # the current bucket's budget up to today; None elsewhere (§4.4)
     tops = _filter_budgets(s, f)
     if want is not None:
-        tops = [b for b in tops if (B.segment_of(s.ctx.budgets(), b) or "") == want]
+        tops = [b for b in tops if _budget_segment(s, b) == want]
     versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
@@ -1500,8 +1546,8 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
 
 
 def _budget_row(b: B.Budget, effective: str) -> Row:
-    """`segment` is the budget's own; `segment_effective` is the segment its spend reports under (its parent's when it
-    has none, B.segment_of)."""
+    """`segment_id` is the budget's own; `effective_segment_id` is the segment its spend reports under (its parent's
+    when it has none; None when that is Unallocated)."""
     return {
         "id": b.id,
         "name": b.name,
@@ -1517,8 +1563,8 @@ def _budget_row(b: B.Budget, effective: str) -> Row:
         "at_limit": b.at_limit,
         "rollover": b.rollover,
         "active": b.active,
-        "segment": b.segment or None,
-        "segment_effective": effective or None,
+        "segment_id": b.segment_id or None,
+        "effective_segment_id": effective or None,
     }
 
 
@@ -1546,10 +1592,10 @@ def budgets(
     budgets whose spend reports under that segment (`unallocated` for none), inherited from a parent when they have none."""
     s = _open(c, viewer, at)
     day = dates.day(on) if on else dates.day(s.ctx.today)
-    want = _segment_filter(c, segment)
+    want = _segment_filter(segment)
     seen = _visible(s, include_inactive)
     if want is not None:
-        seen = [b for b in seen if (B.segment_of(s.ctx.budgets(), b) or "") == want]
+        seen = [b for b in seen if _budget_segment(s, b) == want]
     most = max(1, min(int(limit), 500))
     carded = SK.budgets_with_cards(c, [b.id for b in seen[:most]])
     rows: list[Row] = []
@@ -1560,7 +1606,7 @@ def budgets(
         netted = netted or bool(state_row["excluded"])
         rows.append(
             {
-                **_budget_row(b, B.segment_of(s.ctx.budgets(), b)),
+                **_budget_row(b, _budget_segment(s, b)),
                 "platform": budgeting.budget_platform(s.ctx, b),
                 "state": state_row,
                 "card_limits": b.id in carded,
@@ -1619,7 +1665,7 @@ def budget_vs_actual(
         spent = None if cut else [_spent(trees, b, p, q) for p, q in buckets]
         rows.append(
             {
-                **_budget_row(b, B.segment_of(s.ctx.budgets(), b)),
+                **_budget_row(b, _budget_segment(s, b)),
                 "platform": budgeting.budget_platform(s.ctx, b),
                 "budget": [B.in_window(b, versions[b.id], q, s.ctx.book.fiscal_year_start) for q in buckets],
                 "actual": None if spent is None else [amt for amt, _ in spent],

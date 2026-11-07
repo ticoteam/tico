@@ -2358,3 +2358,15 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
     assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
+
+
+def test_the_segment_commands_parse_their_arguments():
+    p = hubcli.parser()
+    blank = hubcli.parse(p, ["finance", "contact-segment", "cust-1", ""])
+    assert (blank.contact_id, blank.segment_id, blank.fn) == ("cust-1", "", "finance contact-segment")
+    keyed = hubcli.parse(p, ["finance", "contact-segment", "cust-1", "segment/creators", "--operation-id", "seg-1"])
+    assert (keyed.segment_id, keyed.operation_id) == ("segment/creators", "seg-1")
+    review = hubcli.parse(p, ["finance", "segment-review", "--limit", "5"])
+    assert (review.limit, review.cursor, review.fn) == (5, None, "finance segment-review")
+    by = hubcli.parse(p, ["finance", "report", "pnl_by", "--by", "segment"])
+    assert (by.kind, by.by, by.fn) == ("pnl_by", "segment", "finance report")

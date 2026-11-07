@@ -27,7 +27,7 @@ def _budget(r: Any) -> Budget:
         rollover=r["rollover"],
         active=bool(r["active"]),
         created_at=r["created_at"],
-        segment=r["segment_id"] or "",
+        segment_id=r["segment_id"] or "",
     )
 
 
@@ -70,7 +70,7 @@ def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
             at,
             by,
             at,
-            b.segment or None,
+            b.segment_id or None,
         ),
     )
 
@@ -79,7 +79,7 @@ def update_budget(c: sqlite3.Connection, b: Budget, at: str) -> None:
     c.execute(
         "UPDATE fin_budgets SET name=?, owner=?, warn_pct=?, at_limit=?, rollover=?, active=?, segment_id=?, "
         "updated_at=? WHERE id=?",
-        (b.name, b.owner, b.warn_pct, b.at_limit, b.rollover, int(b.active), b.segment or None, at, b.id),
+        (b.name, b.owner, b.warn_pct, b.at_limit, b.rollover, int(b.active), b.segment_id or None, at, b.id),
     )
 
 

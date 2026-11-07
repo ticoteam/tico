@@ -970,7 +970,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "amount",
             "effective_from",
             "raise_check",
-            "segment",
+            "segment_id",
         ),
     )
     new = _budget_fields(
@@ -988,7 +988,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             parent_id=V.opt_text(p, "parent_id", 80) or "",
             owner=who,
             created_at=ctx.at,
-            segment=segmentation.checked(ctx.c, V.opt_text(p, "segment", 80)),
+            segment_id=segmentation.checked(ctx.c, V.opt_text(p, "segment_id", 80)),
         ),
     )
     new = _ad_warns(ctx, p, new)
@@ -1017,6 +1017,8 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             SB.insert_version(ctx.c, made.id, effective, amount, ctx.book.base_currency, who, ctx.at)
         if route is not None:
             _raise_parent(ctx, route, effective, who)
+        if made.segment_id:
+            SA.bump_view(ctx.c, f"budget {made.id} segment", ctx.at)  # its spend now reports under a segment
         ctx.changed()
         return {"budget_id": made.id, "effective_from": effective if amount is not None else None}
 
@@ -1057,13 +1059,15 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "amount",
             "effective_from",
             "raise_check",
-            "segment",
+            "segment_id",
         ),
     )
     old = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, old)
-    segment = segmentation.checked(ctx.c, V.opt_text(p, "segment", 80)) if "segment" in p else old.segment
-    new = _ad_warns(ctx, p, replace(_budget_fields(p, old), active=V.flag(p, "active", old.active), segment=segment))
+    segment = segmentation.checked(ctx.c, V.opt_text(p, "segment_id", 80)) if "segment_id" in p else old.segment_id
+    new = _ad_warns(ctx, p, replace(_budget_fields(p, old), active=V.flag(p, "active", old.active), segment_id=segment))
+    if new.catch_all and new.segment_id:
+        raise invalid("the catch-all budget has no segment: shared costs stay Unallocated")
     if new.active:
         B.check(new, ctx.budgets(), ctx.accounts, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
     elif any(b.parent_id == old.id and b.active for b in ctx.budgets().values()):
@@ -1102,6 +1106,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         SB.update_budget(ctx.c, new, ctx.at)
+        if new.segment_id != old.segment_id:
+            SA.bump_view(ctx.c, f"budget {old.id} segment", ctx.at)
         version = (
             SB.insert_version(ctx.c, old.id, effective, amount, ctx.book.base_currency, who, ctx.at)
             if amount is not None

@@ -33,6 +33,23 @@ STATUS = {
     "period_closed": 409,
     "unbalanced": 422,
 }
+ExpenseGroup = Literal[
+    "department",
+    "team",
+    "teammate",
+    "bot",
+    "person",
+    "vendor",
+    "account",
+    "location",
+    "class",
+    "project",
+    "location_class",
+    "location_project",
+    "class_project",
+]
+# The reports route also takes the segment P&L (by=segment, pnl_by). The expenses route does not: it has no segment
+# grouping, so it does not advertise one.
 Group = Literal[
     "department",
     "team",
@@ -230,8 +247,9 @@ def install(app, store, auth, mutate):
     ):
         """The budgets the caller sees, each with where it stands today (amount, actual, held, remaining), or with
         `at` in the period holding that day: the amount of the version in effect then. `segment` keeps the budgets whose
-        spend reports under that company segment (`unallocated` for none); each row says its own `segment` and its
-        `segment_effective`, which a child inherits from its parent when it has none."""
+        spend reports under that company segment (`unallocated` for none), and a segment the company no longer runs
+        matches nothing; each row says its own `segment_id` and its `effective_segment_id`, which a child inherits from
+        its parent when it has none."""
         actor = as_viewer(request, view_as)
         return read(
             lambda c: finance_reads.budgets(
@@ -673,7 +691,8 @@ def install(app, store, auth, mutate):
         limit: int = Query(50, ge=1, le=200),
         view_as: str | None = None,
     ):
-        """The customers whose segment is unset or a guess (segment_sure 0), by name: the list a person reviews."""
+        """The customers no person has set the segment of (segment_sure 0), by name: the list a person reviews. A
+        person's explicit choice, even none, leaves the list."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.contacts(c, actor, cursor=cursor, limit=limit, review=True))
 
@@ -1041,7 +1060,7 @@ def install(app, store, auth, mutate):
         request: Request,
         start: str | None = None,
         end: str | None = None,
-        by: Group = "department",
+        by: ExpenseGroup = "department",
         account_id: str | None = None,
         team: str | None = None,
         teammate: str | None = None,
