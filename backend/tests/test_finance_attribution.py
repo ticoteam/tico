@@ -124,7 +124,7 @@ def test_a_rule_applies_to_lines_from_its_apply_from_day_and_deleting_it_gives_t
 
 def test_the_attribution_right_is_needed_and_a_bot_with_it_commits_without_approval(books):
     with books.transaction() as c:
-        posted = spend(c, "6100", 4_000, day="2026-10-10")
+        posted = spend(c, "6100", 4_000, day="2026-10-10", team="web")
         line = _line(c, str(posted["entry_id"]), "6100")
         denied = act(c, EVE, "attribute", {"line_id": line, "splits": _shares((CARA, 10000))})
         assert denied.code == DENIED

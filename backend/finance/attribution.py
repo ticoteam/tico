@@ -184,8 +184,8 @@ def attribute(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     source = _source_of(ctx, who)
 
     def apply(aid: str) -> Result:
-        now_source, _, now_splits = ATT.in_force_source(ctx.c, line_id)
-        if (now_source, now_splits) == (source, splits) or (not now_source and not splits):
+        now_source, _, was = ATT.in_force_source(ctx.c, line_id)
+        if (now_source, was) == (source, splits) or (not now_source and not splits):
             return _shown(line, splits, source, line_id)
         ATT.write(
             ctx.c,
@@ -197,7 +197,7 @@ def attribute(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             by=who,
             at=ctx.at,
         )
-        _reroll(ctx, who, row, line, ATT.in_force_splits(ctx.c, line_id), splits)
+        _reroll(ctx, who, row, line, was, splits)
         return _shown(line, splits, source, line_id)
 
     what = f"a {abs(line.amount) / 100:.2f} line"
@@ -224,6 +224,7 @@ def attribute_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     rule_id = str(prior["rule_id"] or "")
 
     def apply(aid: str) -> Result:
+        was = ATT.in_force_splits(ctx.c, line_id)
         ATT.write(
             ctx.c,
             book_id=ctx.book.id,
@@ -234,7 +235,7 @@ def attribute_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             by=who,
             at=ctx.at,
         )
-        _reroll(ctx, who, row, line, ATT.in_force_splits(ctx.c, line_id), target)
+        _reroll(ctx, who, row, line, was, target)
         return _shown(line, target, source, line_id)
 
     return Plan(
