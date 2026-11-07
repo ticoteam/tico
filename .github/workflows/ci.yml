@@ -578,7 +578,7 @@ jobs:
           name: test-timings
           path: |
             durations.json
-            slow-durations.json
+            slow-shares.json
           retention-days: 30
 
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.

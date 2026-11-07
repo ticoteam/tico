@@ -1082,7 +1082,7 @@ def test_a_slow_file_is_budgeted_at_its_slow_share_of_its_measured_time():
     assert checks.slow_fit(["big.py"], counts, {"big.py": 287.5}, Counter({"big.py": 1}))[1] == ["big.py"]
 
 
-def test_slow_durations_sums_only_the_slow_testcases_of_each_file(tmp_path):
+def test_slow_shares_store_each_files_slow_share_of_its_own_time(tmp_path):
     xml = tmp_path / "python-1-of-1.xml"
     xml.write_text(
         '<testsuites><testsuite>'
@@ -1092,34 +1092,57 @@ def test_slow_durations_sums_only_the_slow_testcases_of_each_file(tmp_path):
         '<testcase file="b.py" name="test_plain" time="4"/>'
         '</testsuite></testsuites>'
     )
-    assert checks.slow_durations([xml]) == {"a.py": 20.25}
+    # a.py: 20.25 s of slow tests out of 21.75 s of its own testcases. b.py has no slow test, so no share.
+    assert checks.slow_shares([xml]) == {"a.py": 20.25 / 21.75}
     assert checks.durations([xml]) == {"a.py": 21.75, "b.py": 4}
 
 
-def test_the_measured_slow_seconds_replace_the_share_estimate_where_they_exist():
+def test_a_stored_share_replaces_the_estimate_and_applies_to_the_current_seconds():
     counts = Counter({"big.py": 1, "half.py": 2, "new.py": 3})
     totals = Counter({"big.py": 50, "half.py": 4})
     timings = {"big.py": 287.5, "half.py": 200.0}
-    seconds = checks.slow_seconds(counts, totals, timings, {"big.py": 9.0})
-    assert seconds["big.py"] == 9.0  # measured: its slow tests alone, not the 5.75 share
-    assert seconds["half.py"] == 100.0  # not measured: the share
-    assert round(seconds["new.py"], 2) == 109.0  # untimed: seconds per slow test over the measured files, (9 + 100) / 3
-    # A non-finite measurement is no measurement: the share applies.
+    seconds = checks.slow_seconds(counts, totals, timings, {"big.py": 0.125})
+    assert seconds["big.py"] == 35.9375  # an eighth of its 287.5 s now, not the 5.75 s estimate
+    assert seconds["half.py"] == 100.0  # no stored share: the estimate
+    assert seconds["new.py"] == 135.9375  # untimed: seconds per slow test over the timed files, (35.9375 + 100) / 3
+    # A share that is not a fraction of the file's time is no share: the estimate applies.
     assert checks.slow_seconds(counts, totals, timings, {"big.py": float("nan")})["big.py"] == 5.75
-    kept, deferred, total = checks.slow_fit(["big.py", "half.py"], counts, timings, totals, {"big.py": 9.0})
-    assert kept == ["big.py", "half.py"] and deferred == [] and total == 109.0
+    assert checks.slow_seconds(counts, totals, timings, {"big.py": 1.5})["big.py"] == 5.75
+    kept, deferred, total = checks.slow_fit(["big.py", "half.py"], counts, timings, totals, {"big.py": 0.125})
+    assert kept == ["big.py", "half.py"] and deferred == [] and total == 135.9375
 
 
-def test_the_timings_artifact_carries_the_slow_seconds_beside_the_totals(tmp_path):
+def test_the_timings_artifact_carries_the_slow_shares_beside_the_totals(tmp_path):
     (tmp_path / "durations.json").write_text(json.dumps({"a.py": 21.75}))
-    (tmp_path / "slow-durations.json").write_text(json.dumps({"a.py": 20.25}))
-    both = ({"a.py": 21.75}, {"a.py": 20.25})
+    (tmp_path / "slow-shares.json").write_text(json.dumps({"a.py": 20.25 / 21.75}))
+    both = ({"a.py": 21.75}, {"a.py": 20.25 / 21.75})
     assert checks.read_timings(tmp_path / "durations.json") == both
     assert checks.read_timings(tmp_path) == both
-    # An artifact from before the slow seconds were stored: no slow seconds, so the share estimate applies.
-    (tmp_path / "slow-durations.json").unlink()
+    # An artifact from before the shares were stored: no shares, so the estimate applies.
+    (tmp_path / "slow-shares.json").unlink()
     assert checks.read_timings(tmp_path / "durations.json") == ({"a.py": 21.75}, {})
     assert checks.read_timings(None) == ({}, {})
+
+
+def test_the_conftest_hook_marks_each_slow_item_for_the_junit_report(request):
+    # Found through the plugin manager: pytest's importlib import mode does not register the root conftest under its name.
+    root = Path(__file__).resolve().parents[2]
+    hook = next(
+        plugin
+        for plugin in request.config.pluginmanager.get_plugins()
+        if getattr(plugin, "__file__", None) and Path(plugin.__file__).resolve() == root / "conftest.py"
+    )
+
+    class Item:
+        def __init__(self, slow):
+            self.slow, self.user_properties = slow, []
+
+        def get_closest_marker(self, name):
+            return object() if self.slow and name == "slow" else None
+
+    slow, fast = Item(True), Item(False)
+    hook.pytest_collection_modifyitems([slow, fast])
+    assert slow.user_properties == [("slow", "1")] and fast.user_properties == []
 
 
 def test_slow_selection_is_empty_on_main_and_docs_and_uncertain_changes_keep_only_their_changed_tests(mapped):

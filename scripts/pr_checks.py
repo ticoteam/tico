@@ -761,8 +761,9 @@ UI_RUNNER = "scripts/ui-tests.cjs"
 # Slow tests (marked `slow`: absent from the default run, and run by the release gate) that a merge queue group runs
 # on one serial VM. A slow test is a candidate only when it directly imports or reads a changed file (slow_candidates:
 # depth one of the map, never through a conftest or a fixture). Collection keeps the candidates that hold a slow test,
-# the exempt list drops the ones a group cannot run, and the budget (slow_fit: each file's measured slow seconds, or its
-# slow share of its measured time) keeps the nearest that fit; the rest are deferred to release validation. SLOW_EXEMPT
+# the exempt list drops the ones a group cannot run, and the budget (slow_fit: each file's stored slow share times its
+# current seconds, or its slow share estimate) keeps the nearest that fit; the rest are deferred to release validation.
+# SLOW_EXEMPT
 # (scripts/pr_slow_exempt.json) names each exempt file with its reason: Docker, a binary or the network the queue
 # lacks, a skip that would hide a gap, or a job that already runs the file for the same change. check_slow_exempt
 # keeps that list honest on every push.
@@ -838,29 +839,32 @@ def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def slow_seconds(counts, totals, timings, measured=None):
-    """Estimated seconds of each file's slow tests on one serial VM. A file the timings job summed the slow tests of
-    (`measured`: the junit testcases the conftest hook marks slow, per file) takes those seconds. Otherwise the file's
-    measured time (`timings`: the whole file, default and slow tests together) times its slow share, the slow tests over
-    all its tests (`counts` slow, `totals` all, both collected). The share assumes the file's tests take equal time: a
-    heavy slow test in a file of light ones is underestimated, and a light slow test in a heavy file is overestimated.
-    A file with no total counts as all slow. A file with no timing takes the seconds per slow test that weights()
-    observes in the timed files."""
-    measured = measured or {}
+def slow_seconds(counts, totals, timings, shares=None):
+    """Estimated seconds of each file's slow tests on one serial VM. A file with a stored slow share (`shares`: its slow
+    tests' seconds over all its testcase seconds in the release run that measured it) takes that share of its current
+    seconds (`timings`, from the same artifact). The share is a ratio within one run, so the run's machine speed is
+    left out of it, and the current seconds bring the speed back in. A file without one takes its slow share of its
+    measured time: the slow tests over all its tests (`counts` slow, `totals` all, both collected). That share assumes
+    the file's tests take equal time: a heavy slow test in a file of light ones is underestimated, and a light slow test
+    in a heavy file is overestimated. A file with no total counts as all slow. A file with no timing takes the seconds
+    per slow test that weights() observes in the timed files."""
+    shares = shares or {}
     adjusted = {}
     for name in counts:
-        if name in measured and finite(measured[name]):
-            adjusted[name] = float(measured[name])
-        elif name in timings and finite(timings[name]):
+        if name not in timings or not finite(timings[name]):
+            continue
+        if name in shares and finite(shares[name]) and 0 <= shares[name] <= 1:
+            adjusted[name] = shares[name] * timings[name]
+        else:
             adjusted[name] = timings[name] * counts[name] / max(totals.get(name, counts[name]), counts[name], 1)
     return weights(counts, adjusted)
 
 
-def slow_fit(nearest, counts, timings, totals, measured=None):
+def slow_fit(nearest, counts, timings, totals, shares=None):
     """The nearest slow files that fit one serial VM within the job's budget, and the rest, deferred to release
-    validation: (kept, deferred, seconds). A file's seconds are its measured slow seconds where the timings have them,
-    else its slow share of its measured time (slow_seconds)."""
-    seconds = slow_seconds({name: counts[name] for name in nearest}, totals, timings, measured)
+    validation: (kept, deferred, seconds). A file's seconds are its stored slow share times its current seconds where it
+    has a share, else its slow share estimate (slow_seconds)."""
+    seconds = slow_seconds({name: counts[name] for name in nearest}, totals, timings, shares)
     budget = JOB_SECONDS - SETUP_SECONDS["slow"]
     kept, deferred, total = [], [], 0.0
     for name in nearest:
@@ -1122,25 +1126,25 @@ def image_checks(changed, root=ROOT):
 
 
 def read_timings(timings_path):
-    """(timings, slow): the timings job's durations.json (per file, default and slow tests together) and its
-    slow-durations.json (per file, the slow tests alone). A directory is searched for both. A file path reads the
-    slow-durations.json beside it. An artifact from before the slow seconds were stored has none: slow is empty."""
-    timings, slow = {}, {}
+    """(timings, shares): the timings job's durations.json (each file's seconds, default and slow tests together) and its
+    slow-shares.json (each file's slow share of its own seconds in that run). A directory is searched for both. A file
+    path reads the slow-shares.json beside it. An artifact from before shares were stored has none: shares is empty."""
+    timings, shares = {}, {}
     if not timings_path:
-        return timings, slow
+        return timings, shares
     source = Path(timings_path)
     if source.is_dir():
         totals = sorted(source.rglob("durations.json"))
-        slow_paths = sorted(source.rglob("slow-durations.json"))
+        share_paths = sorted(source.rglob("slow-shares.json"))
     else:
         totals = [source] if source.is_file() else []
-        slow_paths = [source.with_name("slow-durations.json")]
+        share_paths = [source.with_name("slow-shares.json")]
     for path in totals:
         timings.update(json.loads(path.read_text()))
-    for path in slow_paths:
+    for path in share_paths:
         if path.is_file():
-            slow.update(json.loads(path.read_text()))
-    return timings, slow
+            shares.update(json.loads(path.read_text()))
+    return timings, shares
 
 
 def prepare(event, base, output, timings_path=None, head="HEAD"):
@@ -1160,7 +1164,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         # a test helper the map follows) has nothing to run here.
         counts = Counter({f: counts[f] for f in picked["python"] if f in counts})
         picked["python"] = sorted(counts)
-    timings, slow_measured = read_timings(timings_path)
+    timings, shares = read_timings(timings_path)
     split, loads = groups(counts, timings)
     if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * JOB_SECONDS:
         # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
@@ -1189,7 +1193,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         exempt = slow_exempt()
         slow_reached = sorted(name for name in reached if name in exempt)
         nearest = [name for name in picked["slow"] if name in reached and name not in exempt]
-        kept, slow_deferred, seconds = slow_fit(nearest, reached, timings, collect_tests(nearest), slow_measured)
+        kept, slow_deferred, seconds = slow_fit(nearest, reached, timings, collect_tests(nearest), shares)
         picked["slow"] = sorted(kept)
         if kept:
             jobs.append({"suite": "slow-1", "files": sorted(kept)})
@@ -1330,19 +1334,20 @@ def durations(paths, browser_paths=()):
     return dict(measured)
 
 
-def slow_durations(paths):
-    """{test file: seconds} of the testcases the conftest hook marked slow (a `slow` property in the junit report),
-    summed per file. The slow VM is charged for these alone, not for the file's whole time (slow_seconds)."""
-    measured = Counter()
+def slow_shares(paths):
+    """{test file: its slow share}: the seconds of the testcases the conftest hook marked slow (a `slow` property in the
+    junit report) over all the file's testcase seconds, in the same run. A file with no slow seconds has no share."""
+    slow, whole = Counter(), Counter()
     for path in paths:
         for test in ET.parse(path).iter("testcase"):
-            if test.find("properties/property[@name='slow']") is None:
-                continue
             name = test.get("file", "")
             seconds = float(test.get("time", "0"))
-            if name and math.isfinite(seconds) and seconds >= 0:
-                measured[name] += seconds
-    return dict(measured)
+            if not name or not math.isfinite(seconds) or seconds < 0:
+                continue
+            whole[name] += seconds
+            if test.find("properties/property[@name='slow']") is not None:
+                slow[name] += seconds
+    return {name: slow[name] / whole[name] for name in slow if slow[name] > 0 and whole[name] > 0}
 
 
 def receipt(jobs):
@@ -1436,8 +1441,8 @@ def main():
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
-        # Written even when empty (an artifact from a run with no slow tests): the plan reads it beside durations.json.
-        Path("slow-durations.json").write_text(json.dumps(slow_durations(reports), indent=2))
+        # Written even when empty (a run with no slow tests): the plan reads it beside durations.json.
+        Path("slow-shares.json").write_text(json.dumps(slow_shares(reports), indent=2))
     else:
         # gh --paginate --slurp emits one jobs response per page.
         jobs, incomplete = receipt_jobs(sys.stdin.buffer.read())
