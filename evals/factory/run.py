@@ -11,6 +11,7 @@ itself), one process per scenario: each has its own server, database and clock. 
 of the same packing, for a CI matrix."""
 
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -23,12 +24,94 @@ from multiprocessing import get_context
 from pathlib import Path
 
 TIMINGS = Path(__file__).with_name("timings.json")
+CALL_PATH = Path(__file__).with_name("call_path.json")
+REPO = Path(__file__).resolve().parents[2]
 TARGET_SECONDS = 180  # a VM's whole share; Spot VMs are reclaimed with two minutes' notice, rarely in a short run
 REMOTE_CPUS = 4
 DEFAULT_SECONDS = 60  # a scenario with no timing yet
+TRACE_TOOL = 4  # sys.monitoring's tool id for the recording; 0 to 2 and 5 belong to debuggers, coverage and profilers
+_recording = None  # the sets the audit hook fills while a recording runs
+_audit_installed = False
+
+
+def _audit(event, args):
+    recorded = _recording
+    if recorded is None:
+        return
+    root = str(REPO) + os.sep
+    if event == "open" and args and isinstance(args[0], str) and args[0].startswith(root):
+        mode = args[1] if len(args) > 1 and isinstance(args[1], str) else "r"
+        rel = args[0][len(root) :]
+        if not set(mode) & set("wax+") and not rel.endswith((".py", ".pyc")) and "__pycache__" not in rel:
+            recorded["data"].add(rel)
+    elif event in ("os.listdir", "os.scandir") and args and isinstance(args[0], str) and args[0].startswith(root):
+        rel = args[0][len(root) :].rstrip("/")
+        if rel and "__pycache__" not in rel:
+            recorded["folders"].add(rel + "/")
+
+
+def record_call_path():
+    """Start recording what this process runs and reads inside the repository; the returned function stops it and
+    returns {"code", "data", "folders"}, sorted and relative to the repository: the Python functions that ran at least
+    once (a module or class body runs on import, so it does not count), the non-Python files it opened for reading and
+    the folders it listed. call_path.json is the union of these over every scenario (--save-call-path). Recording does
+    not change a run. Before Python 3.12 there is no sys.monitoring, and nothing is recorded."""
+    global _recording, _audit_installed
+    recorded = {"code": set(), "data": set(), "folders": set()}
+    if not hasattr(sys, "monitoring"):
+        return lambda: {key: [] for key in recorded}
+    monitoring = sys.monitoring
+    try:
+        monitoring.use_tool_id(TRACE_TOOL, "factory-call-path")
+    except ValueError:  # another tool holds the id: run without a recording rather than break its run
+        return lambda: {key: [] for key in recorded}
+    root = str(REPO) + os.sep
+
+    def started(code, _offset):
+        # A function's code is optimized; module and class bodies are not, so they are not counted.
+        if code.co_flags & inspect.CO_OPTIMIZED and code.co_filename.startswith(root):
+            recorded["code"].add(code.co_filename[len(root) :])
+        return monitoring.DISABLE  # once per code object is enough
+
+    monitoring.register_callback(TRACE_TOOL, monitoring.events.PY_START, started)
+    monitoring.set_events(TRACE_TOOL, monitoring.events.PY_START)
+    if not _audit_installed:
+        sys.addaudithook(_audit)  # an audit hook cannot be removed, so one serves every recording
+        _audit_installed = True
+    _recording = recorded
+
+    def stop():
+        global _recording
+        _recording = None
+        monitoring.set_events(TRACE_TOOL, 0)
+        monitoring.register_callback(TRACE_TOOL, monitoring.events.PY_START, None)
+        monitoring.free_tool_id(TRACE_TOOL)
+        return {key: sorted(values) for key, values in recorded.items()}
+
+    return stop
+
+
+def merge_call_paths(results):
+    """The union of every result's call path, sorted, as call_path.json holds it."""
+    merged = {"code": set(), "data": set(), "folders": set()}
+    for result in results:
+        for key, values in (result.get("call_path") or {}).items():
+            merged[key].update(values)
+    return {key: sorted(values) for key, values in merged.items()}
 
 
 def one(name, seed, explain):
+    """Run one scenario in this process and record what it ran and read (see record_call_path)."""
+    stop = record_call_path()
+    try:
+        result = run_one(name, seed, explain)
+    finally:
+        call_path = stop()
+    result["call_path"] = call_path
+    return result
+
+
+def run_one(name, seed, explain):
     """Run one scenario in this process: (name, seconds, summary, check results, explain lines, trace). A run that
     raises is one failed check carrying its traceback: the other scenarios on the VM still report, and an exception
     never has to cross the process pool."""
@@ -213,11 +296,18 @@ def main(argv=None):
     parser.add_argument("--json", action="store_true", help="print one JSON object per scenario")
     parser.add_argument("--explain", action="store_true", help="say where each unfinished ticket stands")
     parser.add_argument("--save-timings", action="store_true", help="write this run's times to timings.json")
+    parser.add_argument(
+        "--save-call-path",
+        action="store_true",
+        help="write what the runs ran and read to call_path.json (every scenario; use --seeds 1-3)",
+    )
     args = parser.parse_args(argv)
     known = {s.name for s in SCENARIOS}
     unknown = set(args.names) - known
     if unknown:
         parser.error("unknown scenario: " + ", ".join(sorted(unknown)))
+    if args.save_call_path and (args.names or args.shard or args.pairs):
+        parser.error("--save-call-path records every scenario: drop the scenario names, --shard and --pairs")
     names = [s.name for s in SCENARIOS if not args.names or s.name in args.names]
     if args.pairs:
         pairs = [(name, int(seed)) for name, seed in (p.rsplit(":", 1) for p in args.pairs.split(","))]
@@ -242,6 +332,8 @@ def main(argv=None):
         for name in {r["scenario"] for r in results}:
             times[name] = max(r["seconds"] for r in results if r["scenario"] == name)
         TIMINGS.write_text(json.dumps(dict(sorted(times.items())), indent=1) + "\n")
+    if args.save_call_path and results:
+        CALL_PATH.write_text(json.dumps(merge_call_paths(results), indent=1) + "\n")
     failed = sum(not c["ok"] for r in results for c in r["checks"])
     if not args.json:
         print(
