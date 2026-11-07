@@ -168,7 +168,8 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - **company**: every person on the team. **team**: the people in one group, and the company owner. **members**: the people,
   bots and groups added to the thread. It is private by default.
 - **home**: a bot's or a person's Home, readable by its Read audience. **personal**: a DM, read by the people in it, with
-  no owner bypass. **task**: whoever may read the task. **meeting**: the people who may see the meeting.
+  no owner bypass. A personal chat with a bot may move into its Home with its messages. Everyone who can read the Home can read those messages ([PR #2349](https://github.com/ticoteam/tico/pull/2349), Nov. 4, 2026).
+  **task**: whoever may read the task. **meeting**: the people who may see the meeting.
 - The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
   needs **Write** on them. Removing someone needs the thread's owner or an admin.
 - Following a thread never gives access, and neither does a mention. A thread someone may not read answers 404.

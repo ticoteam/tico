@@ -63,7 +63,7 @@ The words Tico uses, and what each replaces.
 - **Decision**: the typed-question model that classifies and decides.
 - **Handoff**: delegating work by opening a child task and setting the parent to waiting.
 - **Session**: one model conversation a bot resumes (a Claude Code or Codex thread). A bot has several ([Sessions](sessions.md)).
-- **Home**: a bot's or a person's public thread, where a bot's open asks wait. A bot's Home is its main session's thread; it sees task work only as one-line reports.
+- **Home**: a bot's or a person's public thread, where a bot's open asks wait. A bot's Home is its main session's thread; it sees task work only as one-line reports. A personal chat with a bot may move into its Home with its messages. Everyone who can read the Home can read those messages ([PR #2349](https://github.com/ticoteam/tico/pull/2349), Nov. 4, 2026).
 - **Task session**: the session for one task a bot owns, with its own thread and worktree. Subtasks continue it by default.
 - **Checkpoint**: a task's last turn reply, which a fresh session on the task starts from.
 - **state.md**: a bot's own note of what it is doing and what to pick up next.
