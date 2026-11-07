@@ -1,7 +1,8 @@
 'use strict';
 
-/** @type {any[]} */
-let TASK_TYPES = [];
+// The task types the page has read (get /v2/task-types). The rail also reads who owns a pipeline (pipeline_owner_id).
+type PipelineTaskType = import('../types/api').TaskType & { pipeline_owner_id?: string | null };
+let TASK_TYPES: PipelineTaskType[] = [];
 let TASK_TYPES_LOADING = null;
 const PIPELINE_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
 // A step's status is one of these. Waiting is a tag on a task in its step, so a waiting step is a team's own column for
@@ -94,7 +95,7 @@ function taskPipelineBoard(items, state, head = '') {
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
+  const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns = [];
@@ -122,7 +123,7 @@ function taskPipelineBoard(items, state, head = '') {
 }
 // A phone's one stage: its name and "warn after" limit, with the compact ▶ N and select-all on the right, then its cards
 // full width. The column box and its header do not show; the stage chips above name the stage.
-function pipePhoneStageHTML(column, type) {
+function pipePhoneStageHTML(column: BoardColumn, type: import('../types/api').TaskType) {
   const limit = column.limit ? ` · warn after ${pipelineLimit(column.limit)}` : '';
   const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
   const all = column.items.length && tasksCanSelect()

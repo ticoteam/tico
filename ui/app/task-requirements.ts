@@ -216,13 +216,13 @@ function pipelineOverrideOffer(
   task: { id: string | number; type_id?: string },
   body: Record<string, unknown>,
   fields: Record<string, unknown>,
-  error: { message?: string; body?: { error?: { code?: string } } },
+  error: unknown,
 ): boolean {
-  if (error.body?.error?.code !== 'requirement' || body.override_requirements || !body.step || !pipelineMayEditRules(task.type_id)) return false;
+  if (errorCode(error) !== 'requirement' || body.override_requirements || !body.step || !pipelineMayEditRules(task.type_id)) return false;
   document.querySelector('.pipe-override')?.remove();
   const dialog = document.createElement('dialog');
   dialog.className = 'pipe-override';
-  dialog.innerHTML = `<form method="dialog"><p>${esc(error.message || 'Requirements are not met.')}</p>
+  dialog.innerHTML = `<form method="dialog"><p>${esc(errorMessage(error, 'Requirements are not met.'))}</p>
     <label>Why <input name="why" maxlength="500" autocomplete="off" required></label>
     <span class="task-req-err" role="status"></span>
     <div class="pipe-override-actions"><button type="button" class="ghost" data-override-cancel>Cancel</button><button type="submit" class="primary">Move anyway</button></div></form>`;

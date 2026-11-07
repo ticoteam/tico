@@ -13,15 +13,8 @@ const PIPELINE_RAIL_REFRESH_MS = 60000;
 
 type PipelineRailTab = 'log' | 'tasks' | 'learned';
 
-/** The part of the Tasks page's state this file reads and writes. */
-interface PipelineTasksState {
-  view: string;
-  tasks: { id: string | number; title?: string; owner_id?: string; type_id?: string; status?: string }[];
-  /** The stage chosen on a phone, by step id. */
-  pipeStage?: string;
-  /** Aborted when the Tasks page is left: the rail's timers and listeners stop with it. */
-  layoutAbort?: AbortController | null;
-}
+/** The Tasks page's state (TaskState in tasks.ts): this file reads and writes its phone stage and its tasks. */
+type PipelineTasksState = TaskState;
 
 interface PipelineRail {
   pipelineId: string;
@@ -31,7 +24,7 @@ interface PipelineRail {
   tab: PipelineRailTab;
   sheet: boolean;
   host: HTMLElement;
-  chat: unknown;
+  chat: ThvView | null;
   timer: number;
   /** What is drawn, so a repaint that changes nothing touches nothing. */
   drawn: string;
@@ -69,7 +62,7 @@ function pipelineLateClock(task: { id: string | number }): PipelineLateClock | n
     and that answer is read. Only when a server sends no such field does this guess the same rule from what the page knows;
     the server still decides. */
 function pipelineMayEditRules(typeId: string | null | undefined): boolean {
-  const type = (TASK_TYPES as { id: string; pipeline_owner_id?: string; can_edit_rules?: boolean }[]).find(item => item.id === typeId);
+  const type = TASK_TYPES.find(item => item.id === typeId);
   if (typeof type?.can_edit_rules === 'boolean') return type.can_edit_rules;
   const me = myActor();
   if (!me) return false;
@@ -216,7 +209,7 @@ function pipelineManagerActor(ref: string): string {
 }
 
 /** The manager's direct thread drawn into a host. The Tasks page's rail and the Factories rail both mount it here. */
-function pipelineManagerChatMount(host: HTMLElement, manager: string): unknown {
+function pipelineManagerChatMount(host: HTMLElement, manager: string): ThvView {
   return threadMount(host, { dm: pipelineManagerActor(manager), card: true, header: false });
 }
 
@@ -285,9 +278,9 @@ function pipelineLateFollow(pipelineId: string, signal?: AbortSignal): void {
 
 /** Called for each batch of live task events: when one touches the pipeline on screen, its Late list is read again,
     at most once per PIPELINE_LATE_MS. */
-function pipelineLateLive(events: { id?: string | number; bulk?: boolean; gone?: boolean; task?: { type_id?: string } | null }[]): void {
+function pipelineLateLive(events: { id?: unknown; bulk?: unknown; gone?: unknown; task?: { type_id?: unknown } | null }[]): void {
   if (!pipelineLateFor) return;
-  const cards = (TASKS_ST as unknown as { tasks: { id: string | number; type_id?: string }[] } | null)?.tasks ?? [];
+  const cards = TASKS_ST?.tasks ?? [];
   const touches = events.some(d => d.bulk || d.gone || d.task?.type_id === pipelineLateFor
     || cards.some(t => String(t.id) === String(d.id) && t.type_id === pipelineLateFor));
   if (!touches || pipelineLateTimer) return;
@@ -410,7 +403,7 @@ function pipelinePhoneBoard(state: PipelineTasksState, columns: PipelinePhoneCol
 }
 
 function pipelinePhoneShow(stageId: string): void {
-  const state = TASKS_ST as PipelineTasksState | null;
+  const state = TASKS_ST;
   if (!state || !stageId) return;
   state.pipeStage = stageId;
   tasksRender(state);
@@ -440,7 +433,7 @@ document.addEventListener('touchend', (event: TouchEvent) => {
 
 // A window that crosses the phone width draws the other layout.
 window.matchMedia(PIPELINE_PHONE_QUERY).addEventListener('change', () => {
-  const state = TASKS_ST as PipelineTasksState | null;
+  const state = TASKS_ST;
   if (!state || state.view !== 'board') return;
   if (pipelineRail) { pipelineRail.sheet = false; pipelineRail.drawn = ''; }
   tasksRender(state);

@@ -9,6 +9,8 @@ interface GithubWaitingBot { bot?: string; repository?: string; create_url?: str
 interface GithubAppState {
   connected?: boolean; org?: string; slug?: string; installed?: boolean; administration?: boolean;
   waiting?: GithubWaitingBot[]; permissions_url?: string | null; install_url?: string | null; uninstall_url?: string | null;
+  /** Why no check is posted on pull requests (backend/github_app.py CHECKS_WITHHELD), or null when Checks is accepted. */
+  checks_withheld?: string | null;
 }
 interface GithubManifestSetup { action: string; manifest: unknown; }
 interface Window {

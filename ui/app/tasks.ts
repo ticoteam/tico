@@ -32,6 +32,8 @@ interface BoardColumn {
   id: string; name: string; hint?: string; kind?: string; items: TaskItem[];
   drop?: string; fold?: string; foldable?: string; count?: number | string | null;
   scope?: {type: string; step: string} | null;
+  play?: string;
+  limit?: number | null | undefined;
 }
 // A refused move, kept on the row or card it was tried on until that task changes (taskRefusedSet).
 interface TaskRefusal { message: string; version: number; }
@@ -51,6 +53,8 @@ interface TaskState {
   layoutAbort?: AbortController;
   refused?: Map<string, TaskRefusal>;
   peekTimer?: number;
+  // The stage chosen on a phone, by step id (pipeline-rail.ts).
+  pipeStage?: string;
 }
 
 // ----------------------------------------------------------------- tasks (#/tasks)
@@ -429,7 +433,7 @@ function taskRelChip(t: TaskRow | null | undefined) {
 // A ticket says how long it has been at its step only once it is past the stage's limit (pipelineLateClock). Time spent
 // waiting is not counted: the server restarts the clock when it comes back (backend/step_age.py).
 // Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
-function taskBuilderActors(t: TaskRow | null | undefined) {
+function taskBuilderActors(t: TaskRow | null | undefined): string[] {
   if (!t || taskFinished(t) || t.status === 'declined' || pipelineType(t)?.role !== 'engineering') return [];
   return [...new Set([t.owner_id, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
 }

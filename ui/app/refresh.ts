@@ -75,7 +75,7 @@ interface LiveTaskEvent {
   task_id?: unknown;
   gone?: unknown;
   bulk?: unknown;
-  task?: {lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown} | null;
+  task?: {lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown; type_id?: unknown} | null;
 }
 /** A task row in a list: its id, and the rest of the row as the server sends it. */
 interface LiveTaskRow { id?: unknown; [key: string]: unknown; }

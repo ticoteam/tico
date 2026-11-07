@@ -436,7 +436,7 @@ async function pipelineAttachUpload(taskId: string, requirementId: string, file:
   form.append('name', file.name);
   const response = await formFetch(API + `/v2/tasks/${encodeURIComponent(taskId)}/files`, form);
   const body = await response.json().catch(() => ({})) as { file_id?: string; version?: number; error?: unknown };
-  if (!response.ok || !body.file_id) throw apiFailure(body as FailureBody, response);
+  if (!response.ok || !body.file_id) throw apiFailure(failureBody(body), response);
   await pipelineAttachFile(taskId, requirementId, body.file_id, body.version);
 }
 

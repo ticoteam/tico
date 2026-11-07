@@ -254,7 +254,7 @@ async function ofNewSave(form: HTMLFormElement, period: () => string): Promise<v
 let OF_CHAT_NODES: OfChatNode[] = [];
 let OF_CHAT_KEY = '';
 let OF_CHAT_ACTOR = '';
-let OF_CHAT_VIEW: unknown = null;
+let OF_CHAT_VIEW: ThvView | null = null;
 
 // Chips and chat icons say which node's manager is on show.
 function ofRailPaint(): void {
