@@ -51,6 +51,7 @@ SECTIONS = tuple(VOCAB["sections"][2:])  # serve, sell, know, not: the strategy'
 METHODS = tuple(VOCAB["methods"])  # how a segment was sized (tico backend/market_spend.py METHODS)
 POST_SOURCES = tuple(VOCAB["post_sources"])
 POST_TAGS = tuple(VOCAB["post_tags"])
+CHANNELS = tuple(VOCAB["channels"])  # the channels a strategy can pick; chart_formula.json has each one's seat
 
 ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -424,15 +425,46 @@ def _day(value, field):
     return "" if value in ("", None) else date(value, field)
 
 
+def channel_keys(value, field):
+    """The channels a strategy picks (`strategy.channels`): 0..11 keys from the vocabulary's channel list, a repeat
+    dropped, the order kept. A key that is not on the list is refused, as an unknown signal is."""
+    out = []
+    for item in _list(value, field, LIMITS["channels"]):
+        if not isinstance(item, str) or item not in CHANNELS:
+            raise DraftError("%s has an unknown channel" % field)
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _trimmed(value, field, limit):
+    """A bet's short name or segment: the trimmed text, "" when absent or blank, refused when longer than `limit`."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise DraftError("%s must be text" % field)
+    text = re.sub("[\ud800-\udfff\x00]", "", value).strip()
+    if len(text) > limit:
+        raise DraftError("%s is longer than %d characters" % (field, limit))
+    return text
+
+
 def _bet_row(raw, at):
     field = "strategy.bets[%d]" % at
-    _keys(raw, field, ("id",), ("statement", "why", "rules_out", "wrong_if", "check_by"))
+    _keys(raw, field, ("id",), ("statement", "why", "rules_out", "wrong_if", "check_by", "name", "segment"))
     if not isinstance(raw["id"], str) or not BET_ID.fullmatch(raw["id"]) or int(raw["id"][1:]) > LIMITS["bets"]:
         raise DraftError(field + ".id must be b1 to b%d" % LIMITS["bets"])
     out = {"id": raw["id"], "statement": _text(raw.get("statement", ""), field + ".statement", LIMITS["statement"])}
     for key in ("why", "rules_out", "wrong_if"):
         out[key] = _text(raw.get(key, ""), "%s.%s" % (field, key), LIMITS["bet_text"])
     out["check_by"] = _day(raw.get("check_by", ""), field + ".check_by")
+    # The short name the chart labels the bet's Owner with, and the segment the bet is for (matched in _strategy).
+    name = _trimmed(raw.get("name"), field + ".name", LIMITS["bet_name"])
+    if name:
+        out["name"] = name
+    segment = _trimmed(raw.get("segment"), field + ".segment", LIMITS["bet_segment"])
+    if segment:
+        out["segment"] = segment
     return out
 
 
@@ -514,8 +546,8 @@ def _post(raw, at):
 def _strategy(raw):
     """The strategy block (the setup page's Strategy step), every part present: a part not drafted yet is empty. Two
     quiet repairs, like a goal's gone parent: a segment's parent that is not among the segments (or would make a loop)
-    is let go, and so is a player's segment that is gone."""
-    _keys(raw, "strategy", (), ("summary", "vision", "sections", "bets", "market", "listening"))
+    is let go, and so is a player's segment that is gone. A bet's segment that is no segment's name is let go too."""
+    _keys(raw, "strategy", (), ("summary", "vision", "sections", "bets", "market", "listening", "channels"))
     sections = _keys(raw.get("sections") or {}, "strategy.sections", (), SECTIONS)
     market = _keys(raw.get("market") or {}, "strategy.market", (), ("definition", "segments", "players"))
     definition = _keys(market.get("definition") or {}, "strategy.market.definition", (), ("root", "in", "out", "year"))
@@ -555,6 +587,10 @@ def _strategy(raw):
             ],
         },
     }
+    if raw.get("channels") is not None:
+        picked = channel_keys(raw["channels"], "strategy.channels")
+        if picked:
+            out["channels"] = picked  # absent when none is picked
     _unique(out["bets"], "strategy.bets")
     segments = out["market"]["segments"]
     keys = [s["key"] for s in segments]
@@ -568,6 +604,16 @@ def _strategy(raw):
             at = parents[at]
         if segment["parent"] is not None and (segment["parent"] not in parents or at is not None and at in seen):
             segment["parent"] = parents[segment["key"]] = None
+    named = {}
+    for segment in segments:
+        if segment["name"]:
+            named.setdefault(segment["name"].casefold(), segment["name"])
+    for bet in out["bets"]:
+        if "segment" in bet:
+            if bet["segment"].casefold() in named:
+                bet["segment"] = named[bet["segment"].casefold()]  # the segment's own name, whatever case was sent
+            else:
+                del bet["segment"]
     for player in out["market"]["players"]:
         player["segments"] = [s for s in dict.fromkeys(player["segments"]) if s in parents]
     return out

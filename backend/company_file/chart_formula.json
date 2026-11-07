@@ -1,0 +1,100 @@
+{
+  "about": "The org chart formula's data: the teams in output order, each seat's title, template, department, reason and manager, the channel list, the default channels and the limits. chart_formula.py builds the chart from this file and holds the rules; nothing here is logic. A seat with `per` is made once for each picked segment (`segment`), picked channel (`channel`), initiative (`initiative`) or industry Owner (`industry`). Placeholders are filled in by chart_formula.py: {label} is a segment's or initiative's short label, {initiatives} the initiatives a product owner's segment owns, {title} and {topic} an industry Owner's title and its topic.",
+  "version": 1,
+  "label_length": 40,
+  "title_length": 80,
+  "industry_max": 3,
+  "channels_default": ["cro", "seo", "social-ads", "search-ads"],
+  "phrases": {
+    "one": " and the {names} initiative",
+    "many": " and the {names} initiatives",
+    "count": " and {count} initiatives",
+    "join": ", ",
+    "last": " and "
+  },
+  "channels": [
+    {"key": "cro", "title": "Conversion Rate Optimization Owner", "template": "cro", "department": "marketing", "reason": "Owns conversion: turning visitors into customers."},
+    {"key": "seo", "title": "SEO Owner", "template": "seo-visibility", "department": "marketing", "reason": "Owns search visibility: getting found in search results."},
+    {"key": "social-ads", "title": "Social Ads Owner", "template": "paid-media", "department": "marketing", "reason": "Owns paid ads on social networks."},
+    {"key": "search-ads", "title": "Search Ads Owner", "template": "paid-media", "department": "marketing", "reason": "Owns paid ads in search results."},
+    {"key": "email", "title": "Email Owner", "template": "email-marketing", "department": "marketing", "reason": "Owns email to customers and prospects."},
+    {"key": "content", "title": "Content Owner", "template": "content", "department": "marketing", "reason": "Owns articles, posts and pages."},
+    {"key": "community", "title": "Community Owner", "template": "community", "department": "marketing", "reason": "Owns the community and the people in it."},
+    {"key": "pr", "title": "PR Owner", "template": "pr", "department": "marketing", "reason": "Owns press and public relations."},
+    {"key": "app-store", "title": "App Store Owner", "template": "app-store", "department": "marketing", "reason": "Owns the app store listing, its updates and reviews."},
+    {"key": "affiliates", "title": "Affiliates Owner", "template": "affiliates", "department": "marketing", "reason": "Owns affiliate and referral partners."},
+    {"key": "events", "title": "Events Owner", "template": "events", "department": "marketing", "reason": "Owns events, webinars and trade shows."}
+  ],
+  "teams": [
+    {
+      "team": "Product",
+      "seats": [
+        {"key": "product-lead", "title": "Product Team Manager", "template": "product-lead", "department": "product", "reports_to": null, "reason": "Leads the product team and its owners."},
+        {"key": "segment-product", "per": "segment", "covers": "product", "title": "{label} Product Owner", "template": "product-manager", "department": "product", "reports_to": "product-lead", "reason": "Owns the {label} segment's product{initiatives}."}
+      ]
+    },
+    {
+      "team": "Marketing",
+      "seats": [
+        {"key": "marketing-lead", "title": "Marketing Team Manager", "template": "marketing-lead", "department": "marketing", "reports_to": null, "reason": "Leads the marketing team and its owners."},
+        {"key": "segment-marketing", "per": "segment", "covers": "marketing", "title": "{label} Marketing Owner", "template": "product-marketing", "department": "marketing", "reports_to": "marketing-lead", "reason": "Owns the {label} segment's marketing."},
+        {"key": "channel", "per": "channel", "reports_to": "marketing-lead"}
+      ]
+    },
+    {
+      "team": "Sales",
+      "seats": [
+        {"key": "sales-lead", "title": "Sales Manager", "template": "sales-lead", "department": "sales", "reports_to": null, "reason": "Leads sales and its owners."},
+        {"key": "lead-generation", "title": "Lead Generation Owner", "template": "lead-generation", "department": "sales", "reports_to": "sales-lead", "reason": "Owns finding new leads."},
+        {"key": "inbound-sales", "title": "Inbound Sales Owner", "template": "sales", "department": "sales", "reports_to": "sales-lead", "reason": "Owns inbound leads: answering, qualifying and closing them."},
+        {"key": "outbound-sales", "title": "Outbound Sales Owner", "template": "sdr-research", "department": "sales", "reports_to": "sales-lead", "reason": "Owns outbound prospecting: finding and reaching out to buyers."}
+      ]
+    },
+    {
+      "team": "Engineering",
+      "seats": [
+        {"key": "engineering-manager", "title": "Engineering Manager", "template": "engineering-manager", "department": "engineering", "reports_to": null, "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline."},
+        {"key": "builder", "title": "Builder", "template": "builder", "department": "engineering", "reports_to": "engineering-manager", "reason": "Builds the product: writes the code for each change."},
+        {"key": "reviewer-1", "title": "Reviewer 1", "template": "pr-reviewer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Reviews each code change before it ships, as the first reviewer."},
+        {"key": "reviewer-2", "title": "Reviewer 2", "template": "pr-reviewer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Reviews each code change before it ships, as the second reviewer."},
+        {"key": "security-owner", "title": "Security Owner", "template": "security-engineer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Owns security: keeping the product and its data safe."},
+        {"key": "infrastructure-owner", "title": "Infrastructure Owner", "template": "devops-engineer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Owns infrastructure: the servers and systems the product runs on."},
+        {"key": "pipeline-owner", "title": "Pipeline Owner", "template": "pipeline", "department": "engineering", "reports_to": "engineering-manager", "reason": "Owns the pipeline: how each change is tested and shipped."}
+      ]
+    },
+    {
+      "team": "Initiatives",
+      "seats": [
+        {"key": "initiative", "per": "initiative", "title": "{label} Owner", "template": "initiative-owner", "department": "leadership", "reports_to": null, "reason": "Owns the '{label}' initiative."}
+      ]
+    },
+    {
+      "team": "Corporate",
+      "seats": [
+        {"key": "general-counsel", "title": "General Counsel", "template": "general-counsel", "department": "legal", "reports_to": null, "reason": "Owns legal: contracts, terms and compliance."},
+        {"key": "finance-lead", "title": "Finance Owner", "template": "finance-lead", "department": "finance", "reports_to": null, "reason": "Owns finance: the books, budgets and money."},
+        {"key": "partnerships", "title": "Partnerships Owner", "template": "partnerships", "department": "sales", "reports_to": null, "reason": "Owns partnerships with other companies."}
+      ]
+    },
+    {
+      "team": "Support",
+      "seats": [
+        {"key": "support-lead", "title": "Support Owner", "template": "support-lead", "department": "support", "reports_to": null, "reason": "Owns customer support: answering and resolving customer issues."}
+      ]
+    },
+    {
+      "team": "Operations",
+      "seats": [
+        {"key": "industry", "per": "industry", "title": "{title}", "reports_to": null, "reason": "Owns {topic} for the company."}
+      ]
+    }
+  ],
+  "coverage": [
+    {"seat": "sales-lead", "name": "Sales"},
+    {"seat": "engineering-manager", "name": "Engineering"},
+    {"seat": "support-lead", "name": "Support"},
+    {"seat": "finance-lead", "name": "Finance"},
+    {"seat": "general-counsel", "name": "Legal"},
+    {"seat": "partnerships", "name": "Partnerships"}
+  ]
+}

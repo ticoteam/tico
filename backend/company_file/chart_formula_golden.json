@@ -1,0 +1,1516 @@
+{
+  "about": "The org chart formula's golden cases: inputs (the chart_formula inputs), removed (seat ids taken off the chart) and the expected employees and uncovered. The Tico and HQ builds and the site's JS port must all match these, byte for byte.",
+  "version": 1,
+  "cases": [
+    {
+      "name": "hotmic",
+      "inputs": {
+        "segments": [
+          "Creators",
+          "Fans"
+        ],
+        "channels": [],
+        "initiatives": [
+          {
+            "id": "b1",
+            "statement": "Run live rooms where creators meet fans in real time",
+            "name": "Live rooms",
+            "segment": "Creators"
+          },
+          {
+            "id": "b2",
+            "statement": "Launch paid fan clubs with monthly perks",
+            "name": "Fan clubs",
+            "segment": "Fans"
+          },
+          {
+            "id": "b3",
+            "statement": "Photos are the input.",
+            "name": "",
+            "segment": ""
+          }
+        ],
+        "industry": []
+      },
+      "expected": {
+        "employees": [
+          {
+            "id": "product-team-manager",
+            "template": "product-lead",
+            "title": "Product Team Manager",
+            "department": "product",
+            "reports_to": null,
+            "team": "Product",
+            "reason": "Leads the product team and its owners.",
+            "start": true
+          },
+          {
+            "id": "creators-product-owner",
+            "template": "product-manager",
+            "title": "Creators Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Creators segment's product and the 'Live rooms' initiative.",
+            "start": true
+          },
+          {
+            "id": "fans-product-owner",
+            "template": "product-manager",
+            "title": "Fans Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Fans segment's product and the 'Fan clubs' initiative.",
+            "start": true
+          },
+          {
+            "id": "marketing-team-manager",
+            "template": "marketing-lead",
+            "title": "Marketing Team Manager",
+            "department": "marketing",
+            "reports_to": null,
+            "team": "Marketing",
+            "reason": "Leads the marketing team and its owners.",
+            "start": true
+          },
+          {
+            "id": "creators-marketing-owner",
+            "template": "product-marketing",
+            "title": "Creators Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Creators segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "fans-marketing-owner",
+            "template": "product-marketing",
+            "title": "Fans Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Fans segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "conversion-rate-optimization-owner",
+            "template": "cro",
+            "title": "Conversion Rate Optimization Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns conversion: turning visitors into customers.",
+            "start": true
+          },
+          {
+            "id": "seo-owner",
+            "template": "seo-visibility",
+            "title": "SEO Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns search visibility: getting found in search results.",
+            "start": true
+          },
+          {
+            "id": "social-ads-owner",
+            "template": "paid-media",
+            "title": "Social Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads on social networks.",
+            "start": true
+          },
+          {
+            "id": "search-ads-owner",
+            "template": "paid-media",
+            "title": "Search Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads in search results.",
+            "start": true
+          },
+          {
+            "id": "sales-manager",
+            "template": "sales-lead",
+            "title": "Sales Manager",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Sales",
+            "reason": "Leads sales and its owners.",
+            "start": true
+          },
+          {
+            "id": "lead-generation-owner",
+            "template": "lead-generation",
+            "title": "Lead Generation Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns finding new leads.",
+            "start": true
+          },
+          {
+            "id": "inbound-sales-owner",
+            "template": "sales",
+            "title": "Inbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns inbound leads: answering, qualifying and closing them.",
+            "start": true
+          },
+          {
+            "id": "outbound-sales-owner",
+            "template": "sdr-research",
+            "title": "Outbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns outbound prospecting: finding and reaching out to buyers.",
+            "start": true
+          },
+          {
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
+            "department": "engineering",
+            "reports_to": null,
+            "team": "Engineering",
+            "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline.",
+            "start": true
+          },
+          {
+            "id": "builder",
+            "template": "builder",
+            "title": "Builder",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Builds the product: writes the code for each change.",
+            "start": true
+          },
+          {
+            "id": "reviewer-1",
+            "template": "pr-reviewer",
+            "title": "Reviewer 1",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the first reviewer.",
+            "start": true
+          },
+          {
+            "id": "reviewer-2",
+            "template": "pr-reviewer",
+            "title": "Reviewer 2",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the second reviewer.",
+            "start": true
+          },
+          {
+            "id": "security-owner",
+            "template": "security-engineer",
+            "title": "Security Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns security: keeping the product and its data safe.",
+            "start": true
+          },
+          {
+            "id": "infrastructure-owner",
+            "template": "devops-engineer",
+            "title": "Infrastructure Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns infrastructure: the servers and systems the product runs on.",
+            "start": true
+          },
+          {
+            "id": "pipeline-owner",
+            "template": "pipeline",
+            "title": "Pipeline Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns the pipeline: how each change is tested and shipped.",
+            "start": true
+          },
+          {
+            "id": "photos-are-the-input-owner",
+            "template": "initiative-owner",
+            "title": "Photos are the input Owner",
+            "department": "leadership",
+            "reports_to": null,
+            "team": "Initiatives",
+            "reason": "Owns the 'Photos are the input' initiative.",
+            "start": true
+          },
+          {
+            "id": "general-counsel",
+            "template": "general-counsel",
+            "title": "General Counsel",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns legal: contracts, terms and compliance.",
+            "start": true
+          },
+          {
+            "id": "finance-owner",
+            "template": "finance-lead",
+            "title": "Finance Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns finance: the books, budgets and money.",
+            "start": true
+          },
+          {
+            "id": "partnerships-owner",
+            "template": "partnerships",
+            "title": "Partnerships Owner",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns partnerships with other companies.",
+            "start": true
+          },
+          {
+            "id": "support-owner",
+            "template": "support-lead",
+            "title": "Support Owner",
+            "department": "support",
+            "reports_to": null,
+            "team": "Support",
+            "reason": "Owns customer support: answering and resolving customer issues.",
+            "start": true
+          }
+        ],
+        "uncovered": []
+      }
+    },
+    {
+      "name": "dental_clinic",
+      "inputs": {
+        "segments": [
+          "Families",
+          "Cosmetic patients"
+        ],
+        "channels": [
+          "events",
+          "search-ads",
+          "seo"
+        ],
+        "initiatives": [
+          {
+            "id": "b1",
+            "statement": "Open a second clinic on the east side of town",
+            "name": "East clinic",
+            "segment": ""
+          },
+          {
+            "id": "b2",
+            "statement": "Offer clear aligner packages to adults.",
+            "name": "",
+            "segment": "Cosmetic patients"
+          },
+          {
+            "id": "b3",
+            "statement": "Cut no-show rates by sending reminders to every patient",
+            "name": "",
+            "segment": ""
+          }
+        ],
+        "industry": [
+          {
+            "title": "Scheduling Owner",
+            "template": "scheduling-bookings"
+          },
+          {
+            "title": "Insurance Billing Owner",
+            "template": "billing"
+          }
+        ]
+      },
+      "expected": {
+        "employees": [
+          {
+            "id": "product-team-manager",
+            "template": "product-lead",
+            "title": "Product Team Manager",
+            "department": "product",
+            "reports_to": null,
+            "team": "Product",
+            "reason": "Leads the product team and its owners.",
+            "start": true
+          },
+          {
+            "id": "families-product-owner",
+            "template": "product-manager",
+            "title": "Families Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Families segment's product.",
+            "start": true
+          },
+          {
+            "id": "cosmetic-patients-product-owner",
+            "template": "product-manager",
+            "title": "Cosmetic patients Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Cosmetic patients segment's product and the 'Offer clear aligner packages to adults' initiative.",
+            "start": true
+          },
+          {
+            "id": "marketing-team-manager",
+            "template": "marketing-lead",
+            "title": "Marketing Team Manager",
+            "department": "marketing",
+            "reports_to": null,
+            "team": "Marketing",
+            "reason": "Leads the marketing team and its owners.",
+            "start": true
+          },
+          {
+            "id": "families-marketing-owner",
+            "template": "product-marketing",
+            "title": "Families Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Families segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "cosmetic-patients-marketing-owner",
+            "template": "product-marketing",
+            "title": "Cosmetic patients Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Cosmetic patients segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "seo-owner",
+            "template": "seo-visibility",
+            "title": "SEO Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns search visibility: getting found in search results.",
+            "start": true
+          },
+          {
+            "id": "search-ads-owner",
+            "template": "paid-media",
+            "title": "Search Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads in search results.",
+            "start": true
+          },
+          {
+            "id": "events-owner",
+            "template": "events",
+            "title": "Events Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns events, webinars and trade shows.",
+            "start": true
+          },
+          {
+            "id": "sales-manager",
+            "template": "sales-lead",
+            "title": "Sales Manager",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Sales",
+            "reason": "Leads sales and its owners.",
+            "start": true
+          },
+          {
+            "id": "lead-generation-owner",
+            "template": "lead-generation",
+            "title": "Lead Generation Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns finding new leads.",
+            "start": true
+          },
+          {
+            "id": "inbound-sales-owner",
+            "template": "sales",
+            "title": "Inbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns inbound leads: answering, qualifying and closing them.",
+            "start": true
+          },
+          {
+            "id": "outbound-sales-owner",
+            "template": "sdr-research",
+            "title": "Outbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns outbound prospecting: finding and reaching out to buyers.",
+            "start": true
+          },
+          {
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
+            "department": "engineering",
+            "reports_to": null,
+            "team": "Engineering",
+            "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline.",
+            "start": true
+          },
+          {
+            "id": "builder",
+            "template": "builder",
+            "title": "Builder",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Builds the product: writes the code for each change.",
+            "start": true
+          },
+          {
+            "id": "reviewer-1",
+            "template": "pr-reviewer",
+            "title": "Reviewer 1",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the first reviewer.",
+            "start": true
+          },
+          {
+            "id": "reviewer-2",
+            "template": "pr-reviewer",
+            "title": "Reviewer 2",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the second reviewer.",
+            "start": true
+          },
+          {
+            "id": "security-owner",
+            "template": "security-engineer",
+            "title": "Security Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns security: keeping the product and its data safe.",
+            "start": true
+          },
+          {
+            "id": "infrastructure-owner",
+            "template": "devops-engineer",
+            "title": "Infrastructure Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns infrastructure: the servers and systems the product runs on.",
+            "start": true
+          },
+          {
+            "id": "pipeline-owner",
+            "template": "pipeline",
+            "title": "Pipeline Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns the pipeline: how each change is tested and shipped.",
+            "start": true
+          },
+          {
+            "id": "east-clinic-owner",
+            "template": "initiative-owner",
+            "title": "East clinic Owner",
+            "department": "leadership",
+            "reports_to": null,
+            "team": "Initiatives",
+            "reason": "Owns the 'East clinic' initiative.",
+            "start": true
+          },
+          {
+            "id": "cut-no-show-rates-by-sending-reminders-owner",
+            "template": "initiative-owner",
+            "title": "Cut no-show rates by sending reminders Owner",
+            "department": "leadership",
+            "reports_to": null,
+            "team": "Initiatives",
+            "reason": "Owns the 'Cut no-show rates by sending reminders' initiative.",
+            "start": true
+          },
+          {
+            "id": "general-counsel",
+            "template": "general-counsel",
+            "title": "General Counsel",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns legal: contracts, terms and compliance.",
+            "start": true
+          },
+          {
+            "id": "finance-owner",
+            "template": "finance-lead",
+            "title": "Finance Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns finance: the books, budgets and money.",
+            "start": true
+          },
+          {
+            "id": "partnerships-owner",
+            "template": "partnerships",
+            "title": "Partnerships Owner",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns partnerships with other companies.",
+            "start": true
+          },
+          {
+            "id": "support-owner",
+            "template": "support-lead",
+            "title": "Support Owner",
+            "department": "support",
+            "reports_to": null,
+            "team": "Support",
+            "reason": "Owns customer support: answering and resolving customer issues.",
+            "start": true
+          },
+          {
+            "id": "scheduling-owner",
+            "template": "scheduling-bookings",
+            "title": "Scheduling Owner",
+            "department": "operations",
+            "reports_to": null,
+            "team": "Operations",
+            "reason": "Owns scheduling for the company.",
+            "start": true
+          },
+          {
+            "id": "insurance-billing-owner",
+            "template": "billing",
+            "title": "Insurance Billing Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Operations",
+            "reason": "Owns insurance billing for the company.",
+            "start": true
+          }
+        ],
+        "uncovered": []
+      }
+    },
+    {
+      "name": "law_firm",
+      "inputs": {
+        "segments": [
+          "Startups",
+          "Small businesses"
+        ],
+        "channels": [],
+        "initiatives": [
+          {
+            "id": "b1",
+            "statement": "Sign five startup retainer clients this year",
+            "name": "Startup retainers",
+            "segment": "Startups"
+          },
+          {
+            "id": "b2",
+            "statement": "Build a fixed-fee package for small business contracts",
+            "name": "",
+            "segment": "Small businesses"
+          },
+          {
+            "id": "b3",
+            "statement": "Win the trademark work for two beverage brands",
+            "name": "Beverage trademarks",
+            "segment": ""
+          }
+        ],
+        "industry": [
+          {
+            "title": "Contracts Owner",
+            "template": "legal-review"
+          },
+          {
+            "title": "Bogus Owner",
+            "template": "no-such-card"
+          },
+          {
+            "title": "Conflict Checks Owner",
+            "template": "compliance"
+          },
+          {
+            "title": "Trust Accounts Owner",
+            "template": "controller"
+          },
+          {
+            "title": "Court Filings Owner",
+            "template": "paralegal"
+          }
+        ]
+      },
+      "expected": {
+        "employees": [
+          {
+            "id": "product-team-manager",
+            "template": "product-lead",
+            "title": "Product Team Manager",
+            "department": "product",
+            "reports_to": null,
+            "team": "Product",
+            "reason": "Leads the product team and its owners.",
+            "start": true
+          },
+          {
+            "id": "startups-product-owner",
+            "template": "product-manager",
+            "title": "Startups Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Startups segment's product and the 'Startup retainers' initiative.",
+            "start": true
+          },
+          {
+            "id": "small-businesses-product-owner",
+            "template": "product-manager",
+            "title": "Small businesses Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Small businesses segment's product and the 'Build a fixed-fee package for small' initiative.",
+            "start": true
+          },
+          {
+            "id": "marketing-team-manager",
+            "template": "marketing-lead",
+            "title": "Marketing Team Manager",
+            "department": "marketing",
+            "reports_to": null,
+            "team": "Marketing",
+            "reason": "Leads the marketing team and its owners.",
+            "start": true
+          },
+          {
+            "id": "startups-marketing-owner",
+            "template": "product-marketing",
+            "title": "Startups Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Startups segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "small-businesses-marketing-owner",
+            "template": "product-marketing",
+            "title": "Small businesses Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Small businesses segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "conversion-rate-optimization-owner",
+            "template": "cro",
+            "title": "Conversion Rate Optimization Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns conversion: turning visitors into customers.",
+            "start": true
+          },
+          {
+            "id": "seo-owner",
+            "template": "seo-visibility",
+            "title": "SEO Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns search visibility: getting found in search results.",
+            "start": true
+          },
+          {
+            "id": "social-ads-owner",
+            "template": "paid-media",
+            "title": "Social Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads on social networks.",
+            "start": true
+          },
+          {
+            "id": "search-ads-owner",
+            "template": "paid-media",
+            "title": "Search Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads in search results.",
+            "start": true
+          },
+          {
+            "id": "sales-manager",
+            "template": "sales-lead",
+            "title": "Sales Manager",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Sales",
+            "reason": "Leads sales and its owners.",
+            "start": true
+          },
+          {
+            "id": "lead-generation-owner",
+            "template": "lead-generation",
+            "title": "Lead Generation Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns finding new leads.",
+            "start": true
+          },
+          {
+            "id": "inbound-sales-owner",
+            "template": "sales",
+            "title": "Inbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns inbound leads: answering, qualifying and closing them.",
+            "start": true
+          },
+          {
+            "id": "outbound-sales-owner",
+            "template": "sdr-research",
+            "title": "Outbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns outbound prospecting: finding and reaching out to buyers.",
+            "start": true
+          },
+          {
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
+            "department": "engineering",
+            "reports_to": null,
+            "team": "Engineering",
+            "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline.",
+            "start": true
+          },
+          {
+            "id": "builder",
+            "template": "builder",
+            "title": "Builder",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Builds the product: writes the code for each change.",
+            "start": true
+          },
+          {
+            "id": "reviewer-1",
+            "template": "pr-reviewer",
+            "title": "Reviewer 1",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the first reviewer.",
+            "start": true
+          },
+          {
+            "id": "reviewer-2",
+            "template": "pr-reviewer",
+            "title": "Reviewer 2",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the second reviewer.",
+            "start": true
+          },
+          {
+            "id": "security-owner",
+            "template": "security-engineer",
+            "title": "Security Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns security: keeping the product and its data safe.",
+            "start": true
+          },
+          {
+            "id": "infrastructure-owner",
+            "template": "devops-engineer",
+            "title": "Infrastructure Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns infrastructure: the servers and systems the product runs on.",
+            "start": true
+          },
+          {
+            "id": "pipeline-owner",
+            "template": "pipeline",
+            "title": "Pipeline Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns the pipeline: how each change is tested and shipped.",
+            "start": true
+          },
+          {
+            "id": "beverage-trademarks-owner",
+            "template": "initiative-owner",
+            "title": "Beverage trademarks Owner",
+            "department": "leadership",
+            "reports_to": null,
+            "team": "Initiatives",
+            "reason": "Owns the 'Beverage trademarks' initiative.",
+            "start": true
+          },
+          {
+            "id": "general-counsel",
+            "template": "general-counsel",
+            "title": "General Counsel",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns legal: contracts, terms and compliance.",
+            "start": true
+          },
+          {
+            "id": "finance-owner",
+            "template": "finance-lead",
+            "title": "Finance Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns finance: the books, budgets and money.",
+            "start": true
+          },
+          {
+            "id": "partnerships-owner",
+            "template": "partnerships",
+            "title": "Partnerships Owner",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns partnerships with other companies.",
+            "start": true
+          },
+          {
+            "id": "support-owner",
+            "template": "support-lead",
+            "title": "Support Owner",
+            "department": "support",
+            "reports_to": null,
+            "team": "Support",
+            "reason": "Owns customer support: answering and resolving customer issues.",
+            "start": true
+          },
+          {
+            "id": "contracts-owner",
+            "template": "legal-review",
+            "title": "Contracts Owner",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Operations",
+            "reason": "Owns contracts for the company.",
+            "start": true
+          },
+          {
+            "id": "conflict-checks-owner",
+            "template": "compliance",
+            "title": "Conflict Checks Owner",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Operations",
+            "reason": "Owns conflict checks for the company.",
+            "start": true
+          },
+          {
+            "id": "trust-accounts-owner",
+            "template": "controller",
+            "title": "Trust Accounts Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Operations",
+            "reason": "Owns trust accounts for the company.",
+            "start": true
+          }
+        ],
+        "uncovered": []
+      }
+    },
+    {
+      "name": "minimal",
+      "inputs": {
+        "segments": [
+          "Customers"
+        ],
+        "channels": [],
+        "initiatives": [],
+        "industry": []
+      },
+      "expected": {
+        "employees": [
+          {
+            "id": "product-team-manager",
+            "template": "product-lead",
+            "title": "Product Team Manager",
+            "department": "product",
+            "reports_to": null,
+            "team": "Product",
+            "reason": "Leads the product team and its owners.",
+            "start": true
+          },
+          {
+            "id": "customers-product-owner",
+            "template": "product-manager",
+            "title": "Customers Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Customers segment's product.",
+            "start": true
+          },
+          {
+            "id": "marketing-team-manager",
+            "template": "marketing-lead",
+            "title": "Marketing Team Manager",
+            "department": "marketing",
+            "reports_to": null,
+            "team": "Marketing",
+            "reason": "Leads the marketing team and its owners.",
+            "start": true
+          },
+          {
+            "id": "customers-marketing-owner",
+            "template": "product-marketing",
+            "title": "Customers Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Customers segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "conversion-rate-optimization-owner",
+            "template": "cro",
+            "title": "Conversion Rate Optimization Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns conversion: turning visitors into customers.",
+            "start": true
+          },
+          {
+            "id": "seo-owner",
+            "template": "seo-visibility",
+            "title": "SEO Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns search visibility: getting found in search results.",
+            "start": true
+          },
+          {
+            "id": "social-ads-owner",
+            "template": "paid-media",
+            "title": "Social Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads on social networks.",
+            "start": true
+          },
+          {
+            "id": "search-ads-owner",
+            "template": "paid-media",
+            "title": "Search Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads in search results.",
+            "start": true
+          },
+          {
+            "id": "sales-manager",
+            "template": "sales-lead",
+            "title": "Sales Manager",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Sales",
+            "reason": "Leads sales and its owners.",
+            "start": true
+          },
+          {
+            "id": "lead-generation-owner",
+            "template": "lead-generation",
+            "title": "Lead Generation Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns finding new leads.",
+            "start": true
+          },
+          {
+            "id": "inbound-sales-owner",
+            "template": "sales",
+            "title": "Inbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns inbound leads: answering, qualifying and closing them.",
+            "start": true
+          },
+          {
+            "id": "outbound-sales-owner",
+            "template": "sdr-research",
+            "title": "Outbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns outbound prospecting: finding and reaching out to buyers.",
+            "start": true
+          },
+          {
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
+            "department": "engineering",
+            "reports_to": null,
+            "team": "Engineering",
+            "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline.",
+            "start": true
+          },
+          {
+            "id": "builder",
+            "template": "builder",
+            "title": "Builder",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Builds the product: writes the code for each change.",
+            "start": true
+          },
+          {
+            "id": "reviewer-1",
+            "template": "pr-reviewer",
+            "title": "Reviewer 1",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the first reviewer.",
+            "start": true
+          },
+          {
+            "id": "reviewer-2",
+            "template": "pr-reviewer",
+            "title": "Reviewer 2",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the second reviewer.",
+            "start": true
+          },
+          {
+            "id": "security-owner",
+            "template": "security-engineer",
+            "title": "Security Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns security: keeping the product and its data safe.",
+            "start": true
+          },
+          {
+            "id": "infrastructure-owner",
+            "template": "devops-engineer",
+            "title": "Infrastructure Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns infrastructure: the servers and systems the product runs on.",
+            "start": true
+          },
+          {
+            "id": "pipeline-owner",
+            "template": "pipeline",
+            "title": "Pipeline Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns the pipeline: how each change is tested and shipped.",
+            "start": true
+          },
+          {
+            "id": "general-counsel",
+            "template": "general-counsel",
+            "title": "General Counsel",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns legal: contracts, terms and compliance.",
+            "start": true
+          },
+          {
+            "id": "finance-owner",
+            "template": "finance-lead",
+            "title": "Finance Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns finance: the books, budgets and money.",
+            "start": true
+          },
+          {
+            "id": "partnerships-owner",
+            "template": "partnerships",
+            "title": "Partnerships Owner",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns partnerships with other companies.",
+            "start": true
+          },
+          {
+            "id": "support-owner",
+            "template": "support-lead",
+            "title": "Support Owner",
+            "department": "support",
+            "reports_to": null,
+            "team": "Support",
+            "reason": "Owns customer support: answering and resolving customer issues.",
+            "start": true
+          }
+        ],
+        "uncovered": []
+      }
+    },
+    {
+      "name": "hotmic_without_creators_product_owner",
+      "inputs": {
+        "segments": [
+          "Creators",
+          "Fans"
+        ],
+        "channels": [],
+        "initiatives": [
+          {
+            "id": "b1",
+            "statement": "Run live rooms where creators meet fans in real time",
+            "name": "Live rooms",
+            "segment": "Creators"
+          },
+          {
+            "id": "b2",
+            "statement": "Launch paid fan clubs with monthly perks",
+            "name": "Fan clubs",
+            "segment": "Fans"
+          },
+          {
+            "id": "b3",
+            "statement": "Photos are the input.",
+            "name": "",
+            "segment": ""
+          }
+        ],
+        "industry": []
+      },
+      "removed": [
+        "creators-product-owner"
+      ],
+      "expected": {
+        "employees": [
+          {
+            "id": "product-team-manager",
+            "template": "product-lead",
+            "title": "Product Team Manager",
+            "department": "product",
+            "reports_to": null,
+            "team": "Product",
+            "reason": "Leads the product team and its owners.",
+            "start": true
+          },
+          {
+            "id": "fans-product-owner",
+            "template": "product-manager",
+            "title": "Fans Product Owner",
+            "department": "product",
+            "reports_to": "product-team-manager",
+            "team": "Product",
+            "reason": "Owns the Fans segment's product and the 'Fan clubs' initiative.",
+            "start": true
+          },
+          {
+            "id": "marketing-team-manager",
+            "template": "marketing-lead",
+            "title": "Marketing Team Manager",
+            "department": "marketing",
+            "reports_to": null,
+            "team": "Marketing",
+            "reason": "Leads the marketing team and its owners.",
+            "start": true
+          },
+          {
+            "id": "creators-marketing-owner",
+            "template": "product-marketing",
+            "title": "Creators Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Creators segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "fans-marketing-owner",
+            "template": "product-marketing",
+            "title": "Fans Marketing Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns the Fans segment's marketing.",
+            "start": true
+          },
+          {
+            "id": "conversion-rate-optimization-owner",
+            "template": "cro",
+            "title": "Conversion Rate Optimization Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns conversion: turning visitors into customers.",
+            "start": true
+          },
+          {
+            "id": "seo-owner",
+            "template": "seo-visibility",
+            "title": "SEO Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns search visibility: getting found in search results.",
+            "start": true
+          },
+          {
+            "id": "social-ads-owner",
+            "template": "paid-media",
+            "title": "Social Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads on social networks.",
+            "start": true
+          },
+          {
+            "id": "search-ads-owner",
+            "template": "paid-media",
+            "title": "Search Ads Owner",
+            "department": "marketing",
+            "reports_to": "marketing-team-manager",
+            "team": "Marketing",
+            "reason": "Owns paid ads in search results.",
+            "start": true
+          },
+          {
+            "id": "sales-manager",
+            "template": "sales-lead",
+            "title": "Sales Manager",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Sales",
+            "reason": "Leads sales and its owners.",
+            "start": true
+          },
+          {
+            "id": "lead-generation-owner",
+            "template": "lead-generation",
+            "title": "Lead Generation Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns finding new leads.",
+            "start": true
+          },
+          {
+            "id": "inbound-sales-owner",
+            "template": "sales",
+            "title": "Inbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns inbound leads: answering, qualifying and closing them.",
+            "start": true
+          },
+          {
+            "id": "outbound-sales-owner",
+            "template": "sdr-research",
+            "title": "Outbound Sales Owner",
+            "department": "sales",
+            "reports_to": "sales-manager",
+            "team": "Sales",
+            "reason": "Owns outbound prospecting: finding and reaching out to buyers.",
+            "start": true
+          },
+          {
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
+            "department": "engineering",
+            "reports_to": null,
+            "team": "Engineering",
+            "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline.",
+            "start": true
+          },
+          {
+            "id": "builder",
+            "template": "builder",
+            "title": "Builder",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Builds the product: writes the code for each change.",
+            "start": true
+          },
+          {
+            "id": "reviewer-1",
+            "template": "pr-reviewer",
+            "title": "Reviewer 1",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the first reviewer.",
+            "start": true
+          },
+          {
+            "id": "reviewer-2",
+            "template": "pr-reviewer",
+            "title": "Reviewer 2",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Reviews each code change before it ships, as the second reviewer.",
+            "start": true
+          },
+          {
+            "id": "security-owner",
+            "template": "security-engineer",
+            "title": "Security Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns security: keeping the product and its data safe.",
+            "start": true
+          },
+          {
+            "id": "infrastructure-owner",
+            "template": "devops-engineer",
+            "title": "Infrastructure Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns infrastructure: the servers and systems the product runs on.",
+            "start": true
+          },
+          {
+            "id": "pipeline-owner",
+            "template": "pipeline",
+            "title": "Pipeline Owner",
+            "department": "engineering",
+            "reports_to": "engineering-manager",
+            "team": "Engineering",
+            "reason": "Owns the pipeline: how each change is tested and shipped.",
+            "start": true
+          },
+          {
+            "id": "photos-are-the-input-owner",
+            "template": "initiative-owner",
+            "title": "Photos are the input Owner",
+            "department": "leadership",
+            "reports_to": null,
+            "team": "Initiatives",
+            "reason": "Owns the 'Photos are the input' initiative.",
+            "start": true
+          },
+          {
+            "id": "general-counsel",
+            "template": "general-counsel",
+            "title": "General Counsel",
+            "department": "legal",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns legal: contracts, terms and compliance.",
+            "start": true
+          },
+          {
+            "id": "finance-owner",
+            "template": "finance-lead",
+            "title": "Finance Owner",
+            "department": "finance",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns finance: the books, budgets and money.",
+            "start": true
+          },
+          {
+            "id": "partnerships-owner",
+            "template": "partnerships",
+            "title": "Partnerships Owner",
+            "department": "sales",
+            "reports_to": null,
+            "team": "Corporate",
+            "reason": "Owns partnerships with other companies.",
+            "start": true
+          },
+          {
+            "id": "support-owner",
+            "template": "support-lead",
+            "title": "Support Owner",
+            "department": "support",
+            "reports_to": null,
+            "team": "Support",
+            "reason": "Owns customer support: answering and resolving customer issues.",
+            "start": true
+          }
+        ],
+        "uncovered": [
+          "Creators product",
+          "Live rooms"
+        ]
+      }
+    }
+  ]
+}
