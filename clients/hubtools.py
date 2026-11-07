@@ -12162,7 +12162,7 @@ def finance_search(api, args):
         "compare": _s("prior adds the window before", enum=["prior"]),
         "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
         "by": _s(
-            "spend_by: group by; pnl_by takes segment (the default)",
+            "spend_by: group by; pnl_by: location (the default), or segment for the segment P&L",
             enum=[
                 "department",
                 "team",

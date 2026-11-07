@@ -480,7 +480,8 @@ def pnl(
     operating, other). Accrual counts bills and invoices when entered or sent; cash counts their lines on the
     dates and in the proportions they were paid, and leaves out accrual-only journals (card spend counts when
     charged on both). `segment` keeps the lines that count toward one segment (`unallocated` for none): its budgets
-    stay, and projections are left out, since they are kept by team and teammate and cannot be split by segment."""
+    stay, and projections are left out, since they are kept by team and teammate and cannot be split by segment. A
+    viewer without the whole P&L may name only a segment they lead; any other, Unallocated included, is refused."""
     s = _open(c, viewer, at)
     if basis not in ("cash", "accrual"):
         raise invalid("basis is cash|accrual")
@@ -493,6 +494,11 @@ def pnl(
     )
     if f.any and view != "expenses":
         raise invalid("a team or teammate filter is for the expenses view")
+    want = _segment_filter(segment)
+    if want is not None and not s.view.company_pnl() and want not in s.view.segments_led():
+        # Refused before any line is read: a viewer without the whole P&L filters only to a segment they lead, the
+        # column pnl_by shows them. Unallocated and every other segment are refused.
+        raise denied("a segment P&L is for people who see the whole P&L, and a segment's lead sees its own column")
     made_by = ""
     if budget_as_of:
         made_by = budget_as_of if "T" in budget_as_of else dates.day(budget_as_of).isoformat() + "T23:59:59.999999Z"
@@ -506,9 +512,6 @@ def pnl(
     cells = _cells(s, a, z, pnl_ids, basis)
     if f.any:
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
-    want = _segment_filter(segment)
-    if want is not None and not s.view.company_pnl() and not s.view.segments_led():
-        raise denied("the segment P&L is for people who see the whole P&L and for segment leads")
     if want is not None:
         cells = [x for x in cells if x.segment == want]
     # A filter by segment narrows the cells, so private payroll shows none of its cells: a pay run cut down to one

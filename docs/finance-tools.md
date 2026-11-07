@@ -93,14 +93,14 @@ the company's segments in rank, then name order (an unranked segment last), each
 (revenue minus that column's own costs); each row's `values` is keyed by column key. Total equals the P&L's income,
 expense and net for the same window. Budgets and projections are not split by segment in this read.
 `GET /api/v2/finance/pnl?segment=<id|unallocated>` keeps the lines that count toward one segment; its budgets are cut to
-it, and its projections are left out. A segment filter also narrows the lines enough that private payroll shows none of
+it, and its projections are left out. A viewer without the whole P&L may name only a segment they lead; any other segment, Unallocated included, is refused. A segment filter also narrows the lines enough that private payroll shows none of
 its cells, so a filtered P&L never shows what the rest of a pay run was paid. The expenses view (`/finance/expenses`)
 does not group by segment.
 
 Who sees what:
 
 - The owner, and anyone with the whole P&L (a company-wide `pnl` grant), sees every column, Unallocated and Total.
-- A segment's lead sees that segment's column only, with no Unallocated and no Total. A lead is a teammate tagged with
+- A segment's lead sees that segment's column only, with no Unallocated and no Total, and `pnl?segment=` names only that segment. A lead is a teammate tagged with
   the segment (not with All) whose manager is not tagged with it too. The view default `segment_lead` (`lead`, or
   `none` to turn the lead view off for everyone) decides whether leads see their column.
 - A dedicated teammate who leads nothing gets no segment P&L, but reads the segment's budgets, read-only.

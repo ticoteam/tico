@@ -278,7 +278,8 @@ def install(app, store, auth, mutate):
         """The P&L the caller sees: income and expense lines by period (past, current and projected columns), with
         budget and projection beside each actual; the expenses view filters by teams and teammates (several at once),
         bots, people or both, and Unattributed. `segment` keeps the lines that count toward one company segment
-        (`unallocated` for none); projections are left out with it."""
+        (`unallocated` for none); projections are left out with it. Without the whole P&L, only a segment the caller
+        leads can be named: any other segment, Unallocated included, is refused."""
         actor = as_viewer(request, view_as)
         return read(
             lambda c: finance_reads.pnl(

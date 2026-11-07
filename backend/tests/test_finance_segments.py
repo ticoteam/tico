@@ -541,8 +541,9 @@ def test_a_lead_sees_its_segment_and_its_teams_lines_and_a_dedicated_non_lead_is
         own = FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual")
         assert (own["income"], own["expense"]) == ([10_000], [3_700])
         assert FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=S1)["expense"] == [1_700]
-        other = FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=S2)
-        assert (other["income"], other["expense"]) == ([0], [2_000])  # only the web line she already sees
+        for outside in (S2, SG.UNALLOCATED, "segment/nobody"):  # a lead filters only to the segment she leads
+            with pytest.raises(FinanceError, match="segment P&L"):
+                FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=outside)
         with pytest.raises(FinanceError, match="segment P&L"):
             FR.pnl(c, "human:eve", *OCTOBER, "month", "accrual", segment=S1)
 

@@ -4744,7 +4744,8 @@ STABLE.extend(
             "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget "
             "and projection beside each actual; each row says its section. view=expenses filters by teams and teammates "
             "(several at once), who (bots, people or both) and unattributed; segment keeps one segment's lines "
-            "(segment=unallocated the lines in no segment). The owner may pass view_as",
+            "(segment=unallocated the lines in no segment); without the whole P&L only a segment you lead, else refused. "
+            "The owner may pass view_as",
             "FinancePnl",
         ),
         (
