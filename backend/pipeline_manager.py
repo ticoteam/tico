@@ -637,7 +637,7 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
 
     @app.get("/api/v2/pipelines/{pipeline_id}/late")
     def pipeline_late(request: Request, pipeline_id: str) -> dict[str, Any]:
-        """The Late list the board's cards read for their "Nh in step" time: every live ticket of the pipeline past its
+        """The Late list the pipeline's cards read for their "Nh in step" time: every live ticket of the pipeline past its
         Warn after (late_tickets), with no cap and no manager. Tickets the reader may not see are left out."""
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):

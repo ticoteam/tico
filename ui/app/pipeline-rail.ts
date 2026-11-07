@@ -41,14 +41,14 @@ let pipelineRail: PipelineRail | null = null;
 let pipelineRailHidden = false;
 /** Task ids past their stage's "Warn after", from the server's Late list: the cards that show "Nh in step". */
 const pipelineLateIds = new Set<string>();
-/** The pipeline on the board whose Late list is held, when it was last read, and the pending live reload. */
+/** The pipeline on screen whose Late list is held, when it was last read, and the pending live reload. */
 let pipelineLateFor = '';
 let pipelineLateAt = 0;
 let pipelineLateTimer = 0;
 let pipelineLatePoll = 0;
 /** A live reload waits at least this long after the last read; the poll keeps the times moving with no event. */
 const PIPELINE_LATE_MS = 30000;
-const PIPELINE_LATE_POLL_MS = 60000;
+const PIPELINE_LATE_POLL_MS = 300000;  // safety poll; live events do the rest
 /** The chip order of the phone's stages as last drawn, for swipes. */
 let pipelineStageOrder: string[] = [];
 
@@ -227,7 +227,7 @@ function pipelineRailChatEnsure(): void {
 
 // ---------------------------------------------------------------- loading and keeping it
 
-/** Reads the Late list of the pipeline on the board, rail open or not, and repaints the cards when it changed. */
+/** Reads the Late list of the pipeline on screen, rail open or not, and repaints the cards when it changed. */
 async function pipelineLateLoad(): Promise<void> {
   const pipelineId = pipelineLateFor;
   if (!pipelineId) return;
@@ -242,7 +242,7 @@ async function pipelineLateLoad(): Promise<void> {
   if (changed && TASKS_ST) tasksRender(TASKS_ST);
 }
 
-/** Follows the pipeline on the board: its Late list is read when the board shows it and again each minute, so a card's
+/** Follows the pipeline on screen: its Late list is read when it shows and again every 5 minutes, so a card's
     time moves on with no event. Another pipeline (or none) drops the old list. */
 function pipelineLateFollow(pipelineId: string): void {
   if (pipelineId === pipelineLateFor) return;
@@ -255,7 +255,7 @@ function pipelineLateFollow(pipelineId: string): void {
   void pipelineLateLoad();
 }
 
-/** Called for each batch of live task events: when one touches the pipeline on the board, its Late list is read again,
+/** Called for each batch of live task events: when one touches the pipeline on screen, its Late list is read again,
     at most once per PIPELINE_LATE_MS. */
 function pipelineLateLive(events: { id?: string | number; bulk?: boolean; gone?: boolean; task?: { type_id?: string } | null }[]): void {
   if (!pipelineLateFor) return;
