@@ -85,14 +85,16 @@ clicks too, and are refused the same way.
 
 A suggestion the Strategy Bot made that you confirm with a yes leaves **Needs you**, as it does when you confirm its
 card. A message from you that opens with a no, such as "no" or "no, too high", turns down the waiting Strategy Bot
-suggestion at once. It turns down only a card of the same kind, on the same goal, for the same KPI or measure. The kinds
-are a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no
-second yes. Your message is kept as the reason, unless it is only a no. Another measure's card on the same goal stays
-waiting. If two waiting cards of the same kind are about the same measure on the same goal, nothing is turned down, and
-the Assistant asks which one you mean. With no waiting card, the no is still stored as a turned-down suggestion. A reply
-that opens with "no" but means yes, such as "No problem", is not a no. Such a reply turns nothing down. "No problem,
-save it" saves nothing, because a read-back takes only the yes forms above. A "no" to a Why line stays a click on its
-card. Only the owner's Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
+suggestion at once. It turns down only a card of the same kind, on the same goal, for the same KPI or measure. A wording
+card names neither, so any other waiting wording card on the same goal counts as the same kind. The kinds are a goal's
+wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no second yes. Your
+message is kept as the reason, unless it is only a no. Another measure's card on the same goal stays waiting. If two
+waiting cards of the same kind are about the same measure on the same goal, nothing is turned down, and the Assistant
+asks which one you mean. With no waiting card, the no is still stored as a turned-down suggestion. A reply that opens
+with "no" but means yes, such as "No problem", is not a no and turns nothing down, unless it goes on to say to leave it,
+skip it, not or don't: "No problem, just leave it" is a no. A read-back takes only the yes forms above, so "No problem,
+save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
+in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
 
