@@ -111,6 +111,7 @@ async function chatGoalAct(action, objective, state = V2C) {
   const body = {action};
   if (objective != null) body.objective = objective;
   try {
+    if (!state.conv) throw new Error('this chat has no conversation');
     const r = await post(goalPath(state.conv.id), body);
     chatGoalApply(state, r.goal || null);
     return true;
