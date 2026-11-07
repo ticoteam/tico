@@ -6,6 +6,7 @@ step event happened (its creation time when it has none). The visit is 'initial'
 the event says so. A ticket that already has an open visit is skipped, so a second run adds nothing."""
 
 import uuid
+from datetime import datetime, timezone
 
 ACTIVE = ("open", "doing", "waiting", "review", "ready")
 TABLE = """CREATE TABLE IF NOT EXISTS stage_visits (
@@ -43,9 +44,11 @@ def up(conn):
     conn.execute(OPEN_INDEX)
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_events'").fetchone():
         return
+    # an old row may have no created_at: its visit starts now
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     for task_id, pipeline_id, stage_id, came_from, actor, entered_at in conn.execute(CURRENT, ACTIVE).fetchall():
         conn.execute(
             "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, entered_from_stage_id, direction, "
             "entered_by, entered_at, left_at) VALUES (?,?,?,?,?,'initial',?,?,NULL)",
-            (str(uuid.uuid4()), task_id, pipeline_id, stage_id, came_from, actor, entered_at),
+            (str(uuid.uuid4()), task_id, pipeline_id, stage_id, came_from, actor, entered_at or stamp),
         )
