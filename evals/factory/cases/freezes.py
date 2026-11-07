@@ -242,8 +242,8 @@ def spend_under(cap_usd, since, until, scope="company"):
 
 
 def hour_spent(run, when):
-    """The company's spend in the clock hour of `when`, from the turns that had finished by then: the figure a cap is
-    compared with, as usage_limits counts it."""
+    """The company's spend in the clock hour of `when`, from the turns that had finished by then. It is a detail for the
+    reader only: the server compares a limit with the UTC half hour it holds (spend_under)."""
     at = (START + when).strftime("%Y-%m-%dT%H:%M:%S")
     rows = [
         dict(r)
