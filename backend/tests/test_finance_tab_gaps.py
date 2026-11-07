@@ -765,8 +765,8 @@ def test_only_a_request_that_returns_a_private_line_leaves_a_row_and_only_one(ap
         ).fetchone()
     assert last[0] == private
     for path in ("/api/v2/finance/metrics/cash", "/api/v2/finance/search?kind=contact"):
-        r, added = eve("GET", path)
-        assert r.status_code == 200 and private not in r.text, (path, r.text[:300])
+        r, added = eve("GET", path)  # cash is the owner's unless granted: a 403 returns no line either
+        assert r.status_code in (200, 403) and private not in r.text, (path, r.text[:300])
         assert added == 0, path
     for method, path in (
         ("GET", "/api/v2/finance/search?kind=entry"),
