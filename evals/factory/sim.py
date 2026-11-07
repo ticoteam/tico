@@ -585,7 +585,10 @@ class Run:
                 "WHERE r.kind='parent' AND c.status IN ('open','doing','review')"
             )
         }
-        queued = {r["bot_id"] for r in w.sql("SELECT DISTINCT bot_id FROM jobs WHERE state='queued'")}
+        # A held job will not run, so it does not make its bot busy: the bot's other tasks still count as waiting.
+        queued = {
+            r["bot_id"] for r in w.sql("SELECT DISTINCT bot_id FROM jobs WHERE state='queued' AND coalesce(held,0)=0")
+        }
         bots = {b.slug: b for b in team.all}
         live = set()
         for row in w.sql(
