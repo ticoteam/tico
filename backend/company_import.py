@@ -119,11 +119,11 @@ def plan(onboarding, c, who, text):
             selected[slug] = M.OnboardingSelection(
                 template=card["template"], display_name=bot["title"], instructions=instructions, reports_to=parent
             )
+        # The places are sent only when the file names them: a file without them keeps the places already saved.
+        places = {"regions": draft["company"]["regions"]} if draft["company"].get("regions") else {}
         body = M.OnboardingDraft(
             names=names,
-            answers=M.OnboardingAnswers(
-                what_we_do=draft["company"]["about"], regions=draft["company"].get("regions") or []
-            ),
+            answers=M.OnboardingAnswers(what_we_do=draft["company"]["about"], **places),
             selected=selected,
         )
         seats = {}
@@ -406,16 +406,14 @@ def _market(c, actor, market, company, skipped):
 
         def made(segment=segment, parent=parent):
             # Forced past a name the tree already has: a segment named like the root is still the file's own. Its own
-            # places (`regions`) are kept on it, and say so in its summary, where a bot reads a segment.
+            # places (`regions`) are said in its summary, where a bot reads a segment.
             serves = segment.get("regions") or []
             properties: dict[str, object] = {"next": True} if segment["next"] else {}
-            if serves:
-                properties["regions"] = serves
             seg = MS._new_segment(
                 c,
                 actor,
                 segment["name"] or segment["key"],
-                summary=("Serves: " + ", ".join(serves) + ".") if serves else "",
+                summary=("Serves: " + "; ".join(serves) + ".") if serves else "",
                 evidence_ids=[evidence],
                 parent=parent,
                 entity_id=_segment_id(c, segment["key"]),

@@ -1222,11 +1222,12 @@ def research(conn, auth, who, description):
     from . import onboarding
 
     serves = onboarding.regions(conn)  # the sizes are for the places the company serves
+    where = "Serves: " + MK._for_task("; ".join(serves)) + ". Size the market for these places." if serves else ""
     text = "\n".join(
         [
             f"Define and size our market: {safe}",
             "",
-            *(["Serves: " + ", ".join(serves) + ". Size the market for these places.", ""] if serves else []),
+            *([where, ""] if where else []),
             f"Follow {PLAYBOOK}.",
         ]
     )

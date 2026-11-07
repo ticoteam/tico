@@ -23,6 +23,7 @@ from pydantic import Field
 
 from . import getting_started as GS
 from . import librarian as L
+from . import market as MK
 from . import models as M
 from .store import H, Problem, encode
 
@@ -211,7 +212,7 @@ def market_text(answers, serves=()):
     for key in QUESTIONS:
         lines += ["## " + HEADINGS[key], "", answers[key] or "(blank)", ""]
     if serves:  # where the company serves: the sizes are for these places
-        lines += ["Serves: " + ", ".join(serves) + ". Size the market for these places.", ""]
+        lines += ["Serves: " + MK._for_task("; ".join(serves)) + ". Size the market for these places.", ""]
     lines += [
         "What Market tracks: start the Coverage universe page with a section \"What Market tracks\": the "
         "competitors (core unless a source shows otherwise), the buyer segments, and the channels, topics, "

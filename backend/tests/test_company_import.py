@@ -1347,17 +1347,38 @@ def test_import_keeps_where_the_company_serves_and_each_segments_own_places(envi
     with api.app.state.store.read() as c:
         assert O.load(c)["answers"]["regions"] == ["Worldwide", "united states"]
     gc = rows(api, "SELECT properties, summary FROM market_entities WHERE id='segment/gc-suites'")[0]
-    assert json.loads(gc["properties"]) == {"regions": ["Texas"]}
     assert gc["summary"] == "Serves: Texas."
+    assert "regions" not in json.loads(gc["properties"] or "{}")
     bim = rows(api, "SELECT properties, summary FROM market_entities WHERE id='segment/bim'")[0]
-    assert "regions" not in json.loads(bim["properties"]) and bim["summary"] == ""
+    assert bim["summary"] == "" and "regions" not in json.loads(bim["properties"] or "{}")
+
+
+def test_an_import_that_names_no_places_keeps_the_places_already_saved(environment):
+    from backend import onboarding as O
+
+    api = environment()
+    saved = api.put(
+        "/api/v2/onboarding",
+        json={
+            "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"},
+            "answers": {"what_we_do": "Kits.", "regions": ["Worldwide", "Texas"]},
+            "selected": {},
+        },
+        headers=signed_in(),
+    )
+    assert saved.status_code == 200, saved.text
+    draft = strategy_draft()
+    draft["company"].pop("regions", None)
+    preview_and_import(api, C.to_yaml(draft))
+    with api.app.state.store.read() as c:
+        assert O.load(c)["answers"]["regions"] == ["Worldwide", "Texas"]
 
 
 def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_given():
     from backend import librarian_setup as LS
     from backend import onboarding as O
 
-    assert "- Serves: Worldwide, Texas" in O._answer_lines({"regions": ["Worldwide", "Texas"]})
+    assert "- Serves: Worldwide; Texas" in O._answer_lines({"regions": ["Worldwide", "Texas"]})
     assert not any("Serves" in line for line in O._answer_lines({"regions": []}))
     blank = {key: "" for key in LS.QUESTIONS}
     assert "Serves: Texas. Size the market for these places." in LS.market_text(blank, ["Texas"])

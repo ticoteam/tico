@@ -20,6 +20,8 @@ from pydantic import (
     model_validator,
 )
 
+from .company_file import draft as company_draft
+
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)]
@@ -2598,12 +2600,10 @@ class OnboardingNames(Contract):
     website: str = Field(default="", max_length=300)
 
 
-def _each_place_once(places):
-    """A repeat of a place, whatever its case, is dropped: the first spelling and the order are kept."""
-    first = {}
-    for place in places:
-        first.setdefault(place.casefold(), place)
-    return list(first.values())
+def _places_rule(places):
+    """Where the company serves, held to the company file's rule (draft.regions), so a place reads the same in a file,
+    on the setup page and here."""
+    return company_draft.regions(places, "regions")
 
 
 class OnboardingAnswers(Contract):
@@ -2630,9 +2630,7 @@ class OnboardingAnswers(Contract):
     departments: list[Department] = Field(default_factory=list, max_length=9)
     briefings: dict[Department, Annotated[str, Field(max_length=500)]] = Field(default_factory=dict, max_length=9)
     # Where the company serves (a company file's company.regions): free text, 0..12 places, each 1..60 characters.
-    regions: Annotated[list[Annotated[str, Field(min_length=1, max_length=60)]], AfterValidator(_each_place_once)] = (
-        Field(default_factory=list, max_length=12)
-    )
+    regions: Annotated[list[str], AfterValidator(_places_rule)] = Field(default_factory=list, max_length=12)
 
 
 class OnboardingSelection(Contract):

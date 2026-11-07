@@ -240,14 +240,16 @@ def _choices(value, field, allowed, limit=None):
 
 def regions(value, field):
     """Where a company serves (`company.regions`) or a segment does (`strategy.market.segments[].regions`): 0..12
-    places, free text ("Worldwide", "United States", "Texas"), each trimmed and 1..60 characters, a repeat (whatever its
-    case) dropped, the order kept. Absent is unknown; an empty list is the same as absent (see `check`)."""
+    places, free text ("Worldwide", "United States", "Texas"). Control characters (a newline, a tab) become one space,
+    then each place is trimmed and must be 1..60 characters; a repeat (whatever its case) is dropped, the order kept.
+    Absent is unknown; an empty list is the same as absent (see `check`)."""
     rows = _list(value, field, LIMITS["regions"])
     out, seen = [], set()
     for i, item in enumerate(rows):
         if not isinstance(item, str):
             raise DraftError("%s[%d] must be text" % (field, i))
-        text = re.sub("[\ud800-\udfff\x00]", "", item).strip()
+        text = re.sub("[\ud800-\udfff]", "", item)                # a lone surrogate from JSON is no text
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()     # newlines, tabs and other control characters: a space
         if not 1 <= len(text) <= LIMITS["region"]:
             raise DraftError("%s[%d] must be 1 to %d characters" % (field, i, LIMITS["region"]))
         if text.casefold() not in seen:

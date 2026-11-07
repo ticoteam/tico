@@ -454,7 +454,8 @@ def _answer_lines(answers):
         value = answers.get(key)
         if key == "regions" and not value:
             continue  # a team that names no places gets the setup text it always had
-        text = ", ".join(str(item) for item in value) if isinstance(value, list) else str(value or "")
+        joiner = "; " if key == "regions" else ", "  # places are free text, so they are split by a semicolon
+        text = joiner.join(str(item) for item in value) if isinstance(value, list) else str(value or "")
         lines.append("- " + label + ": " + (text or "not answered"))
     # What the owner said about each department in the org builder, so a bot starts from their own words.
     for department, text in (answers.get("briefings") or {}).items():

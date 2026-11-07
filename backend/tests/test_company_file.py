@@ -1576,6 +1576,7 @@ def test_regions_round_trip_through_the_company_file_and_an_unset_file_writes_no
     back = C.from_yaml(text)
     assert back["company"]["regions"] == ["Worldwide", "United States"]
     assert back["strategy"]["market"]["segments"][0]["regions"] == ["Texas"]
+    assert C.to_yaml(back, CREATED) == text  # write, read, write: the same text
     with pytest.raises(D.DraftError):
         C.from_yaml(text.replace('regions: ["Worldwide", "United States"]', 'regions: "Texas"'))
     plain = C.blank()
@@ -1583,6 +1584,22 @@ def test_regions_round_trip_through_the_company_file_and_an_unset_file_writes_no
     plain_text = C.to_yaml(plain, CREATED)
     assert "regions" not in plain_text
     assert "regions" not in C.from_yaml(plain_text)["company"]
+
+
+def test_a_control_character_in_a_place_is_a_space_and_a_blank_place_is_refused():
+    assert D.regions(["Texas\nOhio", "Worldwide\t", "Texas Ohio"], "company.regions") == ["Texas Ohio", "Worldwide"]
+    with pytest.raises(D.DraftError):
+        D.regions([" \n\t "], "company.regions")
+
+
+def test_a_number_in_a_regions_list_reads_as_its_text_and_a_bool_is_refused():
+    draft = C.blank()
+    draft["company"].update(name="Acme", about="Kits.", signals=["sells_products"], regions=["Texas"])
+    text = C.to_yaml(draft, CREATED)
+    assert '\n  regions: ["Texas"]\n' in text
+    assert C.from_yaml(text.replace('regions: ["Texas"]', "regions: [1, 2.5]"))["company"]["regions"] == ["1", "2.5"]
+    with pytest.raises(D.DraftError):
+        C.from_yaml(text.replace('regions: ["Texas"]', "regions: [true]"))
 
 
 def test_company_set_takes_where_the_company_serves_from_the_visitor():
