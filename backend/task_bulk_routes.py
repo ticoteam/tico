@@ -253,7 +253,7 @@ def register(
                 c.execute("RELEASE bulk_dry_run")
                 del c.after_commit[queued:]
             # Each task the caller can still read is named; one a change took out of their sight is only counted.
-            visible = auth.task_sql(c, caller)
+            visible = pipeline_rights.list_sql(c, caller.task_actor or caller.actor, auth.task_sql(c, caller))
             readable = {
                 r[0]
                 for r in c.execute(

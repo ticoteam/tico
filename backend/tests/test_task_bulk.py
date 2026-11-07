@@ -293,6 +293,11 @@ def test_a_non_member_bulk_change_touches_no_ticket_of_a_members_only_pipeline(a
     assert by_filter["changed"] == 0 and by_filter["matched"] == 0
     by_ids = bulk(api, {"ids": [t["id"] for t in hidden]}, "close", token="ben-test")
     assert by_ids["changed"] == 0 and by_ids["matched"] == 0
+    # Not named anywhere in the answer, a dry run included.
+    dry = bulk(api, {"owner": "cmo"}, "close", token="ben-test")
+    dry_run = bulk(api, {"ids": [t["id"] for t in hidden]}, "close", token="ben-test", dry_run=True)
+    for answer in (by_filter, by_ids, dry, dry_run):
+        assert not any(t["id"] in str(answer) for t in hidden)
     for t in hidden:
         assert get(api, "tasks/" + t["id"], "ana-test")["task"]["status"] == "open"
     mine = bulk(api, {"owner": "ben"}, "close", token="ben-test")
