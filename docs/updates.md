@@ -11,36 +11,34 @@ updated never drags its computers ahead of it.
 The sidebar's version row (above Tico Assistant, one row at a time) reads **Updated to v…** while product changes you have not
 acknowledged are unread, and **Update to v…** while a newer release is on offer (it then wins the row; its pop-up links
 **What's new**). Clicking **Updated to** opens **What's new**, which shows the product changes you have not acknowledged; **Changelog**
-in the account menu lists the same changes. **Since last look** includes every unread release and team announcement;
+in the account menu lists the same changes. **Since last look** includes every unread product change;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
-Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
+Search changes or expand an entry's remaining bullets. Opening the
 page marks the product entries it shows as read, and **Load older changes** does the same for the ones
 it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
-A new company starts caught up: when the owner completes Finish setup, every release shipped before then is marked
-read for them, so a fresh install shows no **Updated to** row. Later releases count as usual, everyone else keeps
+A new company starts caught up: when the owner completes Finish setup, every product update shipped before then is marked
+read for them, so a fresh install shows no **Updated to** row. Later updates count as usual, everyone else keeps
 their own read status, and completing setup a second time changes nothing.
 
-Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
-neither a Git checkout nor manual announcement posting. Unreleased notes and releases newer than
-the running server are excluded. The owner can still publish team product announcements.
+Product updates are the team announcements the owner publishes and the announcements packaged with the server's
+registry. They need no network call.
 
 The same history is available to signed-in users through the stable API and MCP:
 
 - `GET /api/v2/changelog`: `kind=product|activity|all` (default `all`), `unread=true`, `q` search,
-  `since_version=0.3.0` for releases newer than that version, and `limit` (1–250) / `offset` paging.
+  and `limit` (1–250) / `offset` paging.
   Each entry includes its `id`, `title`, `bullets`, `shipped_at` and `kind`; product entries include
-  `unread`, and releases add `version` and a full-notes `url`. The response also gives
+  `unread`. The response also gives
   `current_version`, `unread_count` and `next_offset` (`null` at the end). The unread count covers
   all product entries, independently of the current filter.
-- `POST /api/v2/changelog/read` with `{"ids":["release-0.3.0"]}` and an `Idempotency-Key`
+- `POST /api/v2/changelog/read` with the `id`s of the entries you saw and an `Idempotency-Key`
   acknowledges only those known product entries for the caller. Unknown or future ids are ignored.
 - MCP `hub_changelog_list` accepts the same filters and defaults to product changes;
   `hub_changelog_mark_read` accepts `ids` from that result. Listing does not mark anything read.
   For a catch-up request, list unread changes, show the user the summary, and acknowledge the
   entries shown when they ask to mark them read.
-- CLI: `hub changelog list --unread`, `hub changelog list --since-version 0.3.0`, and
-  `hub changelog mark-read release-0.3.0`.
+- CLI: `hub changelog list --unread` and `hub changelog mark-read <entry-id>`.
 
 ## Manual server update
 

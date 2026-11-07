@@ -48,7 +48,7 @@
     },
     {
       "name": "Changelog",
-      "description": "Shipped Tico releases, product announcements and the signed-in person's read state (docs/updates.md)."
+      "description": "Product announcements and the signed-in person's read state (docs/updates.md)."
     },
     {
       "name": "Needs you",
@@ -7597,7 +7597,7 @@
     },
     "/api/v2/changelog": {
       "get": {
-        "summary": "Shipped changes with your read state; kind=product|activity|all (default all), unread=true, q search, since_version for releases newer than a version, and limit/offset paging. Only installed releases or earlier appear. unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
+        "summary": "Product updates and agent activity, with your read state; kind=product|activity|all (default all), unread=true, q search, and limit/offset paging. unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
         "operationId": "listChangelog",
         "parameters": [
           {
@@ -7633,22 +7633,6 @@
               "type": "string",
               "default": "",
               "title": "Q"
-            }
-          },
-          {
-            "name": "since_version",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Since Version"
             }
           },
           {

@@ -22,8 +22,8 @@ pull request, on free GitHub-hosted runners. A ready pull request from this repo
 VMs below, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
 checks only. The merge queue runs the tests again, once per queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
-it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
-CHANGELOG.md or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
+it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it.
+Dependency pins, conftest, pytest.ini, deleted or unparsable files
 and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and

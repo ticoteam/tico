@@ -412,8 +412,7 @@ Tico applies **no request-rate limit** to the API: it will answer as fast as it 
 The path carries the version: `/api/v2/`. The rules are in [api.md](api.md#stable-and-internal); in short, what is in
 `openapi/v2.json` only grows within v2, everything else is internal, and unknown response fields are to be ignored.
 `info.version` in the spec is the API version (`2.0.0`), not the server's; `GET /api/v2/config` has the server's `version`.
-Pin your generated client to the spec you built against and watch [CHANGELOG.md](../CHANGELOG.md), where API additions
-are listed under "Added".
+Pin your generated client to the spec you built against, and check `openapi/v2.json` in each release for additions.
 
 To generate a typed client, feed `openapi/v2.json` to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
 are described loosely on purpose (`additionalProperties` is open), so treat the generated types as a floor.

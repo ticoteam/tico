@@ -1036,7 +1036,6 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         [],
         {
             'ui/app/refresh.js': code,
-            'CHANGELOG.md': '## [Unreleased]\n',
             'ui/app/pricing.js': 'price = 10\n',
             'app/flag.py': 'x=1\n',
             'app/loop.py': 'for item in items:\n    work(item)\ndone()\n',
@@ -1055,13 +1054,12 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         )
         return merges[n]
 
-    # 412 the live desks (product, test, notes); 413 kept; 414 a two-character edit; 415 indentation only;
+    # 412 the live desks (product and test); 413 kept; 414 a two-character edit; 415 indentation only;
     # 416 adds a line that already exists elsewhere in the file; 417 renames a file and edits it.
     last = merge(
         412,
         base,
         ui__app__refresh_dot_js=live,
-        CHANGELOG_dot_md='## [Unreleased]\n- Desks move live\n',
         ui__tests__overview_live_dot_cjs='assert desk moved at once\n',
     )
     last = merge(413, last, ui__app__pricing_dot_js='price = 12 per seat\n')
@@ -1077,13 +1075,12 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
     hook(
         api, 'pull_request', pr_event('closed', html_url=PR.replace('/412', '/417'), merged=True, merge_commit_sha=last)
     )
-    # The cut moves the notes and drops 416's pre-existing call, keeping the one 416 added.
+    # The cut drops 416's pre-existing call, keeping the one 416 added.
     cut = h.commit(
         'cut',
         [last],
         h.tree(
             last,
-            CHANGELOG_dot_md='## [0.3.55]\n- Desks move live\n',
             app__audit_dot_py=audit.replace('    audit_event()\n    return 1', '    return 1').replace(
                 '    return 2', '    audit_event()\n    return 2'
             ),
@@ -1095,7 +1092,6 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         h.tree(
             cut,
             ui__app__refresh_dot_js=code,
-            CHANGELOG_dot_md='## [0.3.55]\n',
             ui__tests__overview_live_dot_cjs=None,
             app__flag_dot_py='x=1\n',
             app__loop_dot_py='for item in items:\n    work(item)\ndone()\n',
