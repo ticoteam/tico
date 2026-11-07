@@ -438,6 +438,8 @@ def test_a_page_or_text_file_reaches_the_judge_cut_at_its_cap_and_an_image_has_n
     c = hub(path)
     settings = _settings(path)
     blobs = BL.Blobs(settings)
+    # Who may attach what is test_requirement_attachments' subject; here every company file is readable.
+    monkeypatch.setattr(A, "_file_readable", lambda *a, **k: True)
     dev = H.type_create(
         c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
     )
@@ -488,6 +490,7 @@ def test_a_page_or_text_file_reaches_the_judge_cut_at_its_cap_and_an_image_has_n
         req["id"],
         {"source": "blob", "blob_id": picture_blob["id"]},
     )
+    c.commit()  # blob_readable opens a read snapshot on this autocommit connection; a request's transaction commits it
     c.close()
 
     store = Store(settings)
