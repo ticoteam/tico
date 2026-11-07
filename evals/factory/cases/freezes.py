@@ -463,6 +463,7 @@ SCENARIOS = [
             at(0, 20),
             ("most turns after codex is held run on claude", None, most_turns_on("claude", at(1, 0))),
             ("no turn starts past the cap while it is lowered", None, spend_under(3, at(1, 30), at(1, 42))),
+            ("the board resumes within 15 minutes of the raise", None, resumes_within(at(1, 42), 15)),
             waits=LOWERED,
             fallback=True,
         ),
