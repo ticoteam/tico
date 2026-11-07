@@ -122,9 +122,6 @@ def test_a_manager_bot_sees_the_team_budget_its_over_pace_teammates_and_its_unat
         )
         assert web.status == "committed", web
         _coder_budget(c, str(web.result["budget_id"]), soft, team="web")  # nests under Web: no sibling overlap
-        _coder_budget(
-            c, parent, soft
-        )  # a teammate's budget sits under the company's, not under a team's (it is refused there)
         granted = act(
             c, OWNER, "view_grant", {"subject": COLLEAGUE, "what": "expenses", "whose": "team", "whose_team": "web"}
         )
