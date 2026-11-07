@@ -22,6 +22,9 @@ function finBudgetsPage(mine = false) {
   if (!B.month) B.month = finToday().slice(0, 7);
   if (mine) B.q = '';
   FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
+  const bud = FIN.bud;
+  // The Segment filter names its segment once the list is read (a direct visit has none yet).
+  if (!mine) void segTagsLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.bud === bud) old.outerHTML = segFilterButton(FIN_BUD.seg || ''); });
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><input type="month" data-fin-month value="${B.month}" aria-label="Month"></label>
       ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}
       ${mine ? '' : segFilterButton(FIN_BUD.seg || '')}<span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`

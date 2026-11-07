@@ -66,6 +66,9 @@ function finPnlPage() {
   // A range the person chose stays through a change of period; until then each period opens on its own window.
   if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
+  const page = FIN.pnl;
+  // The Segment filter names its segment once the list is read (a direct visit has none yet).
+  void segTagsLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.pnl === page) old.outerHTML = segFilterButton(p.seg); });
   const views = [...(caps.company ? [['company', 'Company']] : []), ...(bySeg ? [['segments', 'By segment']] : []), ['expenses', 'Expenses']];
   const filters = view === 'expenses' ? `<div class="fin-filters" id="fin-filters"></div>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('view', 'View', views, view)}${finSeg('period', 'Period', FIN_PERIODS, p.period)}
