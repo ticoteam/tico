@@ -42,7 +42,9 @@ def test_a_working_ticket_is_late_once_past_four_hours_at_its_step_and_its_manag
         assert (item["to"], item["step"]) == ("bot:coo", "In Progress")
 
 
-def test_time_away_from_work_restarts_the_clock(api):
+def test_time_away_from_work_is_not_counted_toward_the_limit(api):
+    """D40 (Fix V-15): the step is entered 6 h ago and the ticket waits from 5 h ago to 1 h ago. Only the hour before the
+    wait and the hour since count, so it is 2 h in: not late 1.5 h from now, late 2.5 h from now."""
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         for ts in c.execute(
@@ -50,12 +52,11 @@ def test_time_away_from_work_restarts_the_clock(api):
         ).fetchall():
             c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND id=?", (later(-6), ts[0]))
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (later(-6), row["id"]))
-        H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Held at the gate")
-        H.task_update(c, "bot:cpo", row["id"], status="doing")
-        back = SA.since_map(c, [H.task(c, row["id"])])[row["id"]]
-        assert back > later(-1)
-        assert late_ids(c, 1) == []
-        assert late_ids(c, 4.5) == [row["id"]]
+        c.execute("UPDATE stage_visits SET entered_at=? WHERE task_id=? AND left_at IS NULL", (later(-6), row["id"]))
+        H.history_event(c, "task", row["id"], "bot:cpo", "status", "doing", "waiting", created_at=later(-5))
+        H.history_event(c, "task", row["id"], "bot:cpo", "status", "waiting", "doing", created_at=later(-1))
+        assert late_ids(c, 1.5) == []
+        assert late_ids(c, 2.5) == [row["id"]]
 
 
 def test_a_late_ticket_with_no_manager_is_late_for_nobody_until_one_appears(api):
