@@ -76,13 +76,13 @@ def duplicate(
     """The open question task to `person` that already covers this one, or None. Checked over every bot's open
     questions to the person: the same parent task, the same question text, or nearly the same title or text. Two
     questions that name different topics on one task are two decisions, not one, and so are a keyed and an unkeyed one
-    (backend/question_tasks.py topics). A private question is never matched with a public one, nor a public with a
-    private one: either way the private words would reach the other card."""
+    (backend/question_tasks.py topics). A public question never covers a private one: the private words would be lost
+    to a card its readers cannot carry."""
     for row in QT.open_rows(c):
         if row["owner_id"] != person:
             continue
         card = cast(Callable[[sqlite3.Connection, str], dict[str, Any] | None], H.task)(c, row["id"])
-        if card is None or bool(card.get("private")) != private:
+        if card is None or private and not card.get("private"):
             continue
         theirs = cast(Callable[[object], str | None], H.question_topic)(card.get("question_topic"))
         if topic and theirs and topic != theirs:
