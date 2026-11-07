@@ -1082,6 +1082,46 @@ def test_a_slow_file_is_budgeted_at_its_slow_share_of_its_measured_time():
     assert checks.slow_fit(["big.py"], counts, {"big.py": 287.5}, Counter({"big.py": 1}))[1] == ["big.py"]
 
 
+def test_slow_durations_sums_only_the_slow_testcases_of_each_file(tmp_path):
+    xml = tmp_path / "python-1-of-1.xml"
+    xml.write_text(
+        '<testsuites><testsuite>'
+        '<testcase file="a.py" name="test_fast" time="1.5"/>'
+        '<testcase file="a.py" name="test_slow" time="20.25"><properties><property name="slow" value="1"/></properties>'
+        '</testcase>'
+        '<testcase file="b.py" name="test_plain" time="4"/>'
+        '</testsuite></testsuites>'
+    )
+    assert checks.slow_durations([xml]) == {"a.py": 20.25}
+    assert checks.durations([xml]) == {"a.py": 21.75, "b.py": 4}
+
+
+def test_the_measured_slow_seconds_replace_the_share_estimate_where_they_exist():
+    counts = Counter({"big.py": 1, "half.py": 2, "new.py": 3})
+    totals = Counter({"big.py": 50, "half.py": 4})
+    timings = {"big.py": 287.5, "half.py": 200.0}
+    seconds = checks.slow_seconds(counts, totals, timings, {"big.py": 9.0})
+    assert seconds["big.py"] == 9.0  # measured: its slow tests alone, not the 5.75 share
+    assert seconds["half.py"] == 100.0  # not measured: the share
+    assert round(seconds["new.py"], 2) == 109.0  # untimed: seconds per slow test over the measured files, (9 + 100) / 3
+    # A non-finite measurement is no measurement: the share applies.
+    assert checks.slow_seconds(counts, totals, timings, {"big.py": float("nan")})["big.py"] == 5.75
+    kept, deferred, total = checks.slow_fit(["big.py", "half.py"], counts, timings, totals, {"big.py": 9.0})
+    assert kept == ["big.py", "half.py"] and deferred == [] and total == 109.0
+
+
+def test_the_timings_artifact_carries_the_slow_seconds_beside_the_totals(tmp_path):
+    (tmp_path / "durations.json").write_text(json.dumps({"a.py": 21.75}))
+    (tmp_path / "slow-durations.json").write_text(json.dumps({"a.py": 20.25}))
+    both = ({"a.py": 21.75}, {"a.py": 20.25})
+    assert checks.read_timings(tmp_path / "durations.json") == both
+    assert checks.read_timings(tmp_path) == both
+    # An artifact from before the slow seconds were stored: no slow seconds, so the share estimate applies.
+    (tmp_path / "slow-durations.json").unlink()
+    assert checks.read_timings(tmp_path / "durations.json") == ({"a.py": 21.75}, {})
+    assert checks.read_timings(None) == ({}, {})
+
+
 def test_slow_selection_is_empty_on_main_and_docs_and_uncertain_changes_keep_only_their_changed_tests(mapped):
     assert checks.selection(["backend/scheduler.py"], "push")["slow"] == []
     assert checks.selection(["docs/images/none.png"])["slow"] == []
