@@ -9,7 +9,7 @@
 // Paths outside ui/ draw no page. A glob's `*` stays within one path segment; `**` crosses segments.
 
 const NON_RENDERING = [
-  'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json', 'ui/strict-legacy.json',
+  'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/baselines/**', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json', 'ui/strict-legacy.json',
   'ui/package.json', 'ui/package-lock.json', 'ui/**/LICENSE*', 'ui/**/AUTHORS',
 ];
 
@@ -19,7 +19,7 @@ const SHARED = [
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
   'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css',
-  'ui/app/router.js', 'ui/app/core.js', 'ui/app/errors.ts', 'ui/app/state.js', 'ui/app/format.js', 'ui/app/api.js',
+  'ui/app/router.js', 'ui/app/core.js', 'ui/app/state.js', 'ui/app/format.js', 'ui/app/api.js', 'ui/app/errors.ts', 'ui/app/dom.ts',
   'ui/app/session.js', 'ui/app/notices.js', 'ui/app/sidebar.js', 'ui/app/drawer.js', 'ui/app/viewport.js',
   'ui/app/refresh.js', 'ui/app/boot.js', 'ui/app/boot-snap.js', 'ui/app/boot-timing.js', 'ui/app/nav-events.js',
   'ui/app/markdown.js', 'ui/app/tooltip.js', 'ui/app/avatars.js', 'ui/app/liquid-dot.js', 'ui/app/heartbeat.js',
@@ -65,6 +65,9 @@ function globToRegExp(glob) {
       out += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
+  // A UI script is .js until it converts to TypeScript, so a glob ending in .js also matches the .ts of the same name:
+  // a conversion changes no table here.
+  if (out.endsWith('\\.js')) out = out.slice(0, -'\\.js'.length) + '\\.(?:js|ts)';
   return new RegExp('^' + out + '$');
 }
 

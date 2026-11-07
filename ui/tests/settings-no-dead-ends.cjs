@@ -25,16 +25,17 @@ const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'sub
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
 // the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
-// old addresses redirect to Tools (ui/app/tools.js toolsRoute; checked below), System's (Rules and Routines before it)
+// old addresses redirect to Tools (ui/app/tools.ts toolsRoute; checked below), System's (Rules and Routines before it)
 // leave for Automations (ui/app/settings.js settingsMovedOut; checked below), and Webhooks (once Triggers) went to
 // Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).
 const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
 
-// Every #/settings/<name> address written in the UI's sources.
+// Every #/settings/<name> address written in the UI's sources, .js or .ts (a script converted to TypeScript keeps its links).
 function settingsLinks() {
   const ui = path.join(__dirname, '..');
-  const files = [...fs.readdirSync(ui).filter(f => f.endsWith('.js')).map(f => path.join(ui, f)),
-    ...fs.readdirSync(path.join(ui, 'app')).filter(f => f.endsWith('.js')).map(f => path.join(ui, 'app', f))];
+  const source = f => f.endsWith('.js') || f.endsWith('.ts');
+  const files = [...fs.readdirSync(ui).filter(source).map(f => path.join(ui, f)),
+    ...fs.readdirSync(path.join(ui, 'app')).filter(source).map(f => path.join(ui, 'app', f))];
   const names = new Set();
   for (const file of files) for (const m of fs.readFileSync(file, 'utf8').matchAll(/#\/settings\/([a-z-]+)/g)) names.add(m[1]);
   return [...names].filter(n => !MOVED.includes(n)).sort();

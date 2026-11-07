@@ -4,8 +4,7 @@
 // its place beside the panel's name and lands there exactly, and flies back down on close; Tico's turns carry no dot.
 // The header has no +, no Show chat and nothing of Tico support (the Tico team has its own chat, ui/support.js); a
 // #/support link in a reply opens that chat over the page. A Confirm card BotOps
-// left in its own chat and bots' questions sit in the thread by when they were asked, answered here. A peek beside
-// the row says in six words at most that something waits (never who asked) and opens the chat on it. No BotOps or
+// left in its own chat and bots' questions sit in the thread by when they were asked, answered here. No BotOps or
 // Assistant rows in the rail. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -97,7 +96,6 @@ async function flight(page, dot, act) {
   assert.ok(off < 2, `the dot landed ${off.toFixed(1)}px off ${dot}: ${JSON.stringify({ghost, r})}`);
   return ghost;
 }
-const words = text => text.trim().split(/\s+/).length;
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -134,22 +132,8 @@ const words = text => text.trim().split(/\s+/).length;
     await page.locator('#search-modal[open]').waitFor();
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#search-modal').open);
-    // A peek: Tico, in a few words, that two questions wait; never who asked or the question. × puts both away.
-    const peek = page.locator('#ask-peek');
-    await peek.waitFor({timeout: 8000});
-    const said = await peek.locator('[data-peek-text]').innerText();
-    assert.equal(said, '2 questions are waiting on you');
-    // It comes out of the rail, level with the row.
-    const level = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(), p = b('#ask-peek'), r = b('#ask-row');
-      return {dy: Math.abs((p.top + p.bottom) / 2 - (r.top + r.bottom) / 2), gap: p.left - b('#side').right}; });
-    assert.ok(level.dy < 2 && level.gap > 0 && level.gap < 16, `the peek sits beside the row: ${JSON.stringify(level)}`);
-    assert.ok(words(said) <= 6 && !/asks/i.test(said), said);
-    assert.equal(await peek.locator('[data-peek-go]').innerText(), said, 'the line is the action');
-    // A team reply waits too: the support chat waits behind the peek, and opens by itself once the peek is dismissed.
-    assert.equal(await page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'the support chat waits behind the peek');
-    await peek.getByRole('button', {name: 'Dismiss'}).click();
-    assert.equal(await peek.isHidden(), true);
-    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
+    // Nothing speaks up beside the row: the questions wait in the panel. A team reply still opens its chat by itself.
+    assert.equal(await page.locator('#ask-peek').count(), 0, 'no Ask peek');
     await page.locator('#support-pop[open]').waitFor({timeout: 8000});
     await page.keyboard.press('Escape');
     await page.locator('#support-pop').waitFor({state: 'hidden'});
@@ -293,17 +277,11 @@ const words = text => text.trim().split(/\s+/).length;
     assert.ok(Math.abs(centre - 195) < 24, `the dot is in the middle of the tab bar (${centre})`);
     assert.equal(await page.locator('#ask-row').isVisible(), false, 'no Ask row on a phone');
     assert.equal(await tab.locator('[data-ask-dot]').getAttribute('data-state'), 'idle');
-    // A peek above the bar after a few seconds; tapping it opens the chat on the first question, the dot flying up to
-    // the sheet's header.
-    const peek2 = page.locator('#ask-peek');
-    await peek2.waitFor({timeout: 8000});
-    const said2 = await peek2.locator('[data-peek-text]').innerText();
-    assert.equal(said2, '2 questions are waiting on you');
-    assert.ok(words(said2) <= 6 && !/asks/i.test(said2), said2);
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await peek2.locator('[data-peek-go]').click(); await page.locator('#ask-panel').waitFor(); });
+    // No peek above the bar. Tapping the tab opens the chat, the dot flying up to the sheet's header.
+    assert.equal(await page.locator('#ask-peek').count(), 0, 'no Ask peek');
+    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor(); });
     await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').waitFor();
     assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').isVisible(), true);
-    assert.equal(await peek2.isHidden(), true, 'no peek while the chat is open');
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
     assert.ok(sheet.x === 0 && sheet.y === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a full page above the tab bar (${JSON.stringify([sheet, bar])})`);
     assert.equal(await page.locator('#ask-panel').evaluate(el => getComputedStyle(el).borderTopLeftRadius), '0px', 'square, like a page');
@@ -319,8 +297,6 @@ const words = text => text.trim().split(/\s+/).length;
     // Closing flies the dot back down into the tab bar.
     await flight(page, '#mobile-ask [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor({state: 'hidden'}); });
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
-    await page.waitForTimeout(300);
-    assert.equal(await peek2.isHidden(), true, 'the line spoke for both questions: no second peek');
     // A page of its own: tapping another tab, even the one already under it, leaves Ask.
     await tab.click();
     await page.locator('#ask-panel').waitFor();

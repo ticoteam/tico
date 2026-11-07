@@ -222,7 +222,6 @@
   <div id="app-nudge" hidden><span class="app-nudge-text"></span><a class="app-nudge-get" href="/download/mac">Download</a><button type="button" class="app-nudge-close" aria-label="Not now">✕</button></div>
 </div>
 <main id="main"></main>
-<div class="ask-peek" id="ask-peek"><button type="button" class="ask-peek-go" data-peek-go><span class="ask-peek-text" data-peek-text></span></button><button type="button" class="ask-peek-x" data-peek-x aria-label="Dismiss">✕</button></div>
 <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" inert>
   <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
     <span class="ask-sees" data-ask-sees><span data-ask-sees-name></span></span>
@@ -245,211 +244,425 @@
 <script src="/vendor/marked.min.js"></script>
 <!-- bundle:js:start -->
 <script src="/tico/ui/bot-files.js"></script>
+
 <script src="/tico/ui/tool-icons.js"></script>
-<script src="/tico/ui/connect-agent.js"></script>
-<script src="/tico/ui/bot-tools.js"></script>
+
+<script src="/tico/ui/connect-agent.ts"></script>
+
+<script src="/tico/ui/bot-tools.ts"></script>
+
 <script src="/tico/ui/docs-search.js"></script>
-<script src="/tico/ui/docs-editor.js"></script>
-<script src="/tico/ui/docs-page.js"></script>
+
+<script src="/tico/ui/app/dom.ts"></script>
+
+<script src="/tico/ui/docs-editor.ts"></script>
+
+<script src="/tico/ui/docs-page.ts"></script>
+
 <script src="/tico/ui/market-briefing.ts"></script>
+
 <script src="/tico/ui/market-page.js"></script>
-<script src="/tico/ui/market-spend.js"></script>
+
+<script src="/tico/ui/market-spend.ts"></script>
+
 <script src="/tico/ui/strategy-page.js"></script>
-<script src="/tico/ui/lenses-page.js"></script>
+
+<script src="/tico/ui/lenses-page.ts"></script>
+
 <script src="/tico/ui/changelog.js"></script>
+
 <script src="/tico/ui/observability.js"></script>
+
 <script src="/tico/ui/github-connect.js"></script>
+
 <script src="/tico/ui/google-connect.js"></script>
+
 <script src="/tico/ui/meeting-importers.js"></script>
+
 <script src="/tico/ui/slack-connect.js"></script>
+
 <script src="/tico/ui/slack-channels.js"></script>
+
 <script src="/tico/ui/directory-sync.js"></script>
+
 <script src="/tico/ui/model-login.js"></script>
+
 <script src="/tico/ui/getting-started.js"></script>
+
 <script src="/tico/ui/org-builder.js"></script>
+
 <script src="/tico/ui/first-run.js"></script>
-<script src="/tico/ui/setup-strategy.js"></script>
+
+<script src="/tico/ui/setup-strategy.ts"></script>
+
 <script src="/tico/ui/runner-updates.js"></script>
+
 <script src="/tico/ui/health.js"></script>
+
 <script src="/tico/ui/goals-kpis.js"></script>
+
 <script src="/tico/ui/assistant.js"></script>
+
 <script src="/tico/ui/credential-card.js"></script>
+
 <script src="/tico/ui/support.js"></script>
-<script src="/tico/ui/replay-player.js"></script>
+
+<script src="/tico/ui/replay-player.ts"></script>
+
 <script src="/tico/ui/app/rails.js"></script>
+
 <script src="/tico/ui/app/errors.ts"></script>
+
 <script src="/tico/ui/app/core.js"></script>
+
 <script src="/tico/ui/app/motion.js"></script>
-<script src="/tico/ui/app/stick-scroll.js"></script>
+
+<script src="/tico/ui/app/stick-scroll.ts"></script>
+
 <script src="/tico/ui/app/markdown.js"></script>
+
 <script src="/tico/ui/app/viewer.js"></script>
-<script src="/tico/ui/app/format.js"></script>
+
+<script src="/tico/ui/app/format.ts"></script>
+
 <script src="/tico/ui/app/session.js"></script>
+
 <script src="/tico/ui/app/api.js"></script>
+
 <script src="/tico/ui/app/live.js"></script>
+
 <script src="/tico/ui/app/state.js"></script>
+
 <script src="/tico/ui/app/notices.js"></script>
-<script src="/tico/ui/app/cloud-access.js"></script>
+
+<script src="/tico/ui/app/cloud-access.ts"></script>
+
 <script src="/tico/ui/app/avatars.js"></script>
+
 <script src="/tico/ui/app/liquid-dot.js"></script>
+
 <script src="/tico/ui/app/sidebar.js"></script>
+
 <script src="/tico/ui/app/heartbeat.js"></script>
+
 <script src="/tico/ui/app/issues.js"></script>
+
 <script src="/tico/ui/app/hub-v2.js"></script>
+
 <script src="/tico/ui/app/tooltip.js"></script>
-<script src="/tico/ui/app/email-preview.js"></script>
+
+<script src="/tico/ui/app/email-preview.ts"></script>
+
 <script src="/tico/ui/app/needs-you.js"></script>
+
 <script src="/tico/ui/app/bot-tasks.js"></script>
+
 <script src="/tico/ui/app/bot-sidebar.js"></script>
+
 <script src="/tico/ui/app/feedback.js"></script>
+
 <script src="/tico/ui/app/chat.js"></script>
+
 <script src="/tico/ui/app/pill.js"></script>
+
 <script src="/tico/ui/app/chat-goal.js"></script>
+
 <script src="/tico/ui/app/chat-outline.js"></script>
+
 <script src="/tico/ui/app/slash-commands.js"></script>
+
 <script src="/tico/ui/app/shared-edit.js"></script>
+
 <script src="/tico/ui/app/meetings.js"></script>
+
 <script src="/tico/ui/app/live-meetings.js"></script>
+
 <script src="/tico/ui/app/meetings-granola.js"></script>
+
 <script src="/tico/ui/app/meetings-sources.js"></script>
+
 <script src="/tico/ui/app/person-page.js"></script>
+
 <script src="/tico/ui/app/assistant-page.js"></script>
+
 <script src="/tico/ui/app/learned.js"></script>
+
 <script src="/tico/ui/app/bot-branches.js"></script>
+
 <script src="/tico/ui/app/bot-learnings.js"></script>
+
 <script src="/tico/ui/app/learnings.js"></script>
+
 <script src="/tico/ui/app/bot-page.js"></script>
+
+<script src="/tico/ui/app/bot-page-view.ts"></script>
+
 <script src="/tico/ui/app/bot-details.js"></script>
+
 <script src="/tico/ui/app/bot-conversation.js"></script>
+
 <script src="/tico/ui/app/threads.js"></script>
+
 <script src="/tico/ui/app/thread-view.js"></script>
+
 <script src="/tico/ui/app/threads-page.js"></script>
+
 <script src="/tico/ui/app/thread-rail.js"></script>
+
 <script src="/tico/ui/app/catch-up.js"></script>
+
 <script src="/tico/ui/app/thread-call.js"></script>
+
 <script src="/tico/ui/app/thread-connect.js"></script>
+
 <script src="/tico/ui/app/tags.js"></script>
+
 <script src="/tico/ui/app/tasks.js"></script>
+
 <script src="/tico/ui/app/task-pipelines.js"></script>
+
 <script src="/tico/ui/app/task-board.js"></script>
+
 <script src="/tico/ui/app/question-card.js"></script>
+
 <script src="/tico/ui/app/task-meetings.js"></script>
+
 <script src="/tico/ui/app/task-live.js"></script>
+
 <script src="/tico/ui/app/task-modal.js"></script>
+
 <script src="/tico/ui/app/org-rule-holds.js"></script>
+
 <script src="/tico/ui/app/roadmaps.js"></script>
+
 <script src="/tico/ui/app/task-files.js"></script>
+
 <script src="/tico/ui/app/visual-cards.js"></script>
+
 <script src="/tico/ui/app/visual-pictures.js"></script>
+
 <script src="/tico/ui/app/visual-media.js"></script>
+
 <script src="/tico/ui/app/pages.js"></script>
+
 <script src="/tico/ui/app/skills.js"></script>
+
 <script src="/tico/ui/app/task-code.js"></script>
+
 <script src="/tico/ui/app/task-runs.js"></script>
+
 <script src="/tico/ui/app/task-props.js"></script>
+
 <script src="/tico/ui/app/task-list.js"></script>
-<script src="/tico/ui/app/pull-refresh.js"></script>
+
+<script src="/tico/ui/app/pull-refresh.ts"></script>
+
 <script src="/tico/ui/app/tasks-page.js"></script>
+
 <script src="/tico/ui/app/decide.js"></script>
+
 <script src="/tico/ui/app/task-stats.js"></script>
-<script src="/tico/ui/app/mail.js"></script>
-<script src="/tico/ui/app/messaging.js"></script>
+
+<script src="/tico/ui/app/mail.ts"></script>
+
+<script src="/tico/ui/app/messaging.ts"></script>
+
 <script src="/tico/ui/app/sql.js"></script>
+
 <script src="/tico/ui/app/integrations.js"></script>
+
 <script src="/tico/ui/app/settings.js"></script>
+
 <script src="/tico/ui/app/settings-recurring.js"></script>
-<script src="/tico/ui/app/settings-tasks.js"></script>
-<script src="/tico/ui/app/settings-release.js"></script>
+
+<script src="/tico/ui/app/settings-tasks.ts"></script>
+
+<script src="/tico/ui/app/settings-release.ts"></script>
+
 <script src="/tico/ui/app/settings-webhooks.js"></script>
+
+<script src="/tico/ui/app/settings-webhooks-state.ts"></script>
+
 <script src="/tico/ui/app/settings-listening.js"></script>
-<script src="/tico/ui/app/vault.js"></script>
+
+<script src="/tico/ui/app/vault.ts"></script>
+
 <script src="/tico/ui/app/settings-devices.js"></script>
+
 <script src="/tico/ui/app/skills-connect.js"></script>
+
 <script src="/tico/ui/app/settings-bots.js"></script>
+
 <script src="/tico/ui/app/settings-access.js"></script>
+
 <script src="/tico/ui/app/settings-history.js"></script>
-<script src="/tico/ui/app/settings-storage.js"></script>
-<script src="/tico/ui/app/settings-company.js"></script>
+
+<script src="/tico/ui/app/settings-storage.ts"></script>
+
+<script src="/tico/ui/app/settings-company.ts"></script>
+
 <script src="/tico/ui/app/settings-billing.js"></script>
+
 <script src="/tico/ui/app/settings-gateway.js"></script>
-<script src="/tico/ui/app/inboxes.js"></script>
+
+<script src="/tico/ui/app/inboxes.ts"></script>
+
 <script src="/tico/ui/app/inboxes-email.js"></script>
+
 <script src="/tico/ui/app/inboxes-texts.js"></script>
+
 <script src="/tico/ui/app/inboxes-letters.js"></script>
-<script src="/tico/ui/app/inboxes-sending.js"></script>
-<script src="/tico/ui/app/inboxes-alerts.js"></script>
-<script src="/tico/ui/app/inboxes-outbox.js"></script>
-<script src="/tico/ui/app/tools.js"></script>
+
+<script src="/tico/ui/app/inboxes-sending.ts"></script>
+
+<script src="/tico/ui/app/inboxes-alerts.ts"></script>
+
+<script src="/tico/ui/app/inboxes-outbox.ts"></script>
+
+<script src="/tico/ui/app/tools.ts"></script>
+
 <script src="/tico/ui/app/tools-api.js"></script>
+
 <script src="/tico/ui/app/settings-hosted.js"></script>
+
 <script src="/tico/ui/app/settings-strategy-bot.js"></script>
+
 <script src="/tico/ui/app/settings-bot-editor.js"></script>
-<script src="/tico/ui/app/bot-budget.js"></script>
-<script src="/tico/ui/app/cloud-machines.js"></script>
+
+<script src="/tico/ui/app/bot-budget.ts"></script>
+
+<script src="/tico/ui/app/cloud-machines.ts"></script>
+
 <script src="/tico/ui/app/bot-profile.js"></script>
+
 <script src="/tico/ui/app/settings-repositories.js"></script>
+
 <script src="/tico/ui/app/subscriptions.js"></script>
+
 <script src="/tico/ui/app/computer-detail.js"></script>
+
 <script src="/tico/ui/app/refresh.js"></script>
+
 <script src="/tico/ui/app/native.js"></script>
+
 <script src="/tico/ui/app/catalog.js"></script>
+
 <script src="/tico/ui/app/recruit.js"></script>
+
 <script src="/tico/ui/app/team-build.js"></script>
-<script src="/tico/ui/app/settings-providers.js"></script>
+
+<script src="/tico/ui/app/settings-providers.ts"></script>
+
 <script src="/tico/ui/app/settings-people.js"></script>
+
 <script src="/tico/ui/app/welcome.js"></script>
+
 <script src="/tico/ui/app/updates.js"></script>
+
 <script src="/tico/ui/app/ask-rules.js"></script>
+
 <script src="/tico/ui/app/ask-panel.js"></script>
+
 <script src="/tico/ui/app/goals.js"></script>
+
 <script src="/tico/ui/app/goals-kpi-views.js"></script>
+
 <script src="/tico/ui/app/automations.js"></script>
+
+<script src="/tico/ui/app/automations-state.ts"></script>
+
 <script src="/tico/ui/app/automations-flow.js"></script>
+
 <script src="/tico/ui/app/automations-editors.js"></script>
-<script src="/tico/ui/app/automations-runs.js"></script>
+
+<script src="/tico/ui/app/automations-runs.ts"></script>
+
 <script src="/tico/ui/app/automations-overview.js"></script>
+
 <script src="/tico/ui/app/automations-maintenance.js"></script>
+
 <script src="/tico/ui/app/automations-heartbeat.js"></script>
+
 <script src="/tico/ui/app/automations-new.js"></script>
+
 <script src="/tico/ui/app/usage.js"></script>
+
 <script src="/tico/ui/app/replay.js"></script>
+
 <script src="/tico/ui/app/computer-screen.js"></script>
-<script src="/tico/ui/app/computer-performance.js"></script>
+
+<script src="/tico/ui/app/computer-performance.ts"></script>
+
 <script src="/tico/ui/app/overview.js"></script>
+
 <script src="/tico/ui/app/overview-hours.js"></script>
+
 <script src="/tico/ui/app/dashboard.js"></script>
+
 <script src="/tico/ui/app/overview-graph.js"></script>
+
 <script src="/tico/ui/app/redesign.js"></script>
+
 <script src="/tico/ui/app/strategy-budget.js"></script>
+
 <script src="/tico/ui/app/finance.js"></script>
+
 <script src="/tico/ui/app/finance-pnl.js"></script>
+
 <script src="/tico/ui/app/finance-budgets.js"></script>
+
 <script src="/tico/ui/app/finance-books.js"></script>
+
 <script src="/tico/ui/app/finance-docs.js"></script>
+
 <script src="/tico/ui/app/finance-admin.js"></script>
+
 <script src="/tico/ui/app/finance-tax.js"></script>
+
 <script src="/tico/ui/app/finance-attribution.ts"></script>
+
 <script src="/tico/ui/app/finance-brief.ts"></script>
+
 <script src="/tico/ui/app/company-page.js"></script>
+
 <script src="/tico/ui/app/redesign-org.js"></script>
+
 <script src="/tico/ui/app/redesign-market.js"></script>
+
 <script src="/tico/ui/app/growth-charts.ts"></script>
+
 <script src="/tico/ui/app/growth-page.js"></script>
+
 <script src="/tico/ui/app/brand-page.js"></script>
+
 <script src="/tico/ui/app/growth-channels.js"></script>
+
 <script src="/tico/ui/app/growth-sources.js"></script>
+
 <script src="/tico/ui/app/redesign-library.js"></script>
+
 <script src="/tico/ui/app/org-rules.js"></script>
+
 <script src="/tico/ui/app/router.js"></script>
+
 <script src="/tico/ui/app/drawer.js"></script>
+
 <script src="/tico/ui/app/team-add.js"></script>
+
 <script src="/tico/ui/app/cloud-agents.js"></script>
+
 <script src="/tico/ui/app/search.js"></script>
+
 <script src="/tico/ui/app/org-fan.js"></script>
+
 <script src="/tico/ui/app/nav-events.js"></script>
-<script src="/tico/ui/app/viewport.js"></script>
-<script src="/tico/ui/app/boot-timing.js"></script>
+
+<script src="/tico/ui/app/viewport.ts"></script>
+
+<script src="/tico/ui/app/boot-timing.ts"></script>
+
 <script src="/tico/ui/app/boot-snap.js"></script>
+
 <script src="/tico/ui/app/boot.js"></script>
 <!-- bundle:js:end -->
 </body>

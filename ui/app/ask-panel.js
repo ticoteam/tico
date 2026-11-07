@@ -11,14 +11,12 @@
 // Assistant page's cached copy when it sends.
 // What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
 // card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
-// answered here or by telling the Assistant. A peek beside the closed dot says, in Tico's words, that something waits.
-const ASK_PEEKS = 'tico.ask.peek';
+// answered here or by telling the Assistant.
 const ASK_MANAGE = "We'd like Tico to fully manage our company.";
 let ASK = null;
 const ASK_CARDS_MAX = 3;
 // The panel's name: "Tico Assistant", or the name a team gave its assistant.
 const askName = () => myChatName() === CONFIG_DEFAULTS.assistant_name ? 'Tico Assistant' : myChatName();
-const ASK_LOADED = Date.now();
 const askPhone = () => matchMedia('(max-width:760px)').matches;
 // The page the person is looking at: its heading, else the address.
 function askPage() {
@@ -32,7 +30,7 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.documentElement
 // attribute restyle the whole page (6-30 ms on a real hub), and a panel shown from display:none lays itself out cold
 // (11-45 ms). Closed, the panel keeps its box but draws nothing, is inert and is out of the accessibility tree
 // (ask.css). Nothing else on the way in or out writes a `hidden` (or text) it does not change (askSet); what shows
-// and goes with it (the peek, the page it sees) does so by a class, `ask-on` (askOn).
+// and goes with it (the page it sees) does so by a class, `ask-on` (askOn).
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
@@ -56,7 +54,6 @@ function askSync() {
   }
   for (const el of document.querySelectorAll('[data-ask-dot]')) ldotWatch(el);
   askDot();
-  askPeek();
   if (panel.getAttribute('aria-label') !== name) panel.setAttribute('aria-label', name);
   askSet(panel.querySelector('#ask-title'), 'textContent', name);
   if (!open) return;
@@ -192,84 +189,6 @@ async function askAnswer(card, {pick, text}) {
   }
 }
 
-// ---- Peeks (ask-rules.js askPeekFresh, askPeekLine): one short line beside the closed dot, Tico saying something waits
-// on the person: bots' questions, or a Confirm card once the chat has read them. Tapping it opens the chat at the first.
-const askPeekKey = () => ASK_PEEKS + '.' + (S.me?.id || 'me');
-function askPeekStore() {
-  try { const v = JSON.parse(localStorage.getItem(askPeekKey()) || '{}'); return askPeekTidy(v && typeof v === 'object' ? v : {}); }
-  catch { return askPeekTidy({}); }
-}
-function askPeekSave(store) {
-  try { localStorage.setItem(askPeekKey(), JSON.stringify(askPeekTidy(store))); } catch { /* this page only */ }
-}
-const askTypes = a => !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(a.type)));
-const askTyping = () => askTypes(document.activeElement);
-let ASK_PEEK_TIMER = 0;
-// On a computer the peek sits just past the rail, level with the Ask row (ask.css --ask-row-y). Measured only while a
-// peek shows, never on the way in or out of the panel.
-function askPeekPlace(el) {
-  if (el.classList.contains('ask-peek-row')) return;
-  const r = !askPhone() && $('#ask-row')?.getBoundingClientRect();
-  if (r?.height) el.style.setProperty('--ask-row-y', `${Math.round(innerHeight - r.bottom + r.height / 2)}px`);
-}
-// The peek's element, held here: docked above a thread's composer it sits inside the thread view, which a new page
-// replaces, so a lookup by id would lose it.
-let ASK_PEEK_EL = null;
-const askPeekEl = () => ASK_PEEK_EL ||= $('#ask-peek');
-// With a thread's composer on screen the peek is its own row above it, never over the words; elsewhere it floats by the dot.
-function askPeekDock() {
-  const el = askPeekEl(); if (!el) return;
-  const slot = [...document.querySelectorAll('#main .thv-peek-slot')].find(s => s.parentElement?.getClientRects().length);
-  const home = slot || document.body;
-  if (el.parentElement !== home) home.append(el);
-  el.classList.toggle('ask-peek-row', !!slot);
-}
-window.askPeekDock = askPeekDock;
-addEventListener('hashchange', () => setTimeout(askPeekDock, 0));
-function askPeek() {
-  const el = askPeekEl();
-  if (!el) return;
-  askPeekDock();
-  clearTimeout(ASK_PEEK_TIMER);
-  const now = Date.now(), open = !!ASK?.open, away = askAway() || !S.me;
-  const items = away ? [] : askQuestions().map(it => ({id: String(it.id)}))
-    .concat((ASK?.pending || []).map(a => ({id: 'confirm:' + a.id, confirm: true})));
-  const store = askPeekStore(), cur = el.dataset.item;
-  if (open || away) { askOn(el, false); delete el.dataset.item; return; }
-  if (cur && el.classList.contains('ask-on') && items.some(it => it.id === cur) && !store.dismissed.includes(cur)) { askPeekPlace(el); return; }
-  const {text, ids} = askPeekLine(askPeekFresh(items, {now, loadedAt: ASK_LOADED, typing: askTyping(), open, dismissed: store.dismissed, shown: store.shown}));
-  if (!text) {
-    askOn(el, false); delete el.dataset.item;
-    if (now - ASK_LOADED < ASK_PEEK_WAIT_MS) ASK_PEEK_TIMER = setTimeout(askPeek, ASK_PEEK_WAIT_MS - (now - ASK_LOADED) + 50);
-    return;
-  }
-  el.querySelector('[data-peek-text]').textContent = text;
-  el.querySelector('[data-peek-go]').setAttribute('aria-label', text + '. Open ' + askName());
-  el.dataset.item = ids[0];
-  el.dataset.items = ids.join(' ');
-  askPeekPlace(el);
-  askOn(el, true);
-  askPeekSave({...store, shown: {...store.shown, ...Object.fromEntries(ids.map(id => [id, now]))}});
-  ldotMove(askLiveDot(), 'hop');
-}
-// Dismissed or tapped, the line is done with every item it spoke for.
-function askPeekDone() {
-  const el = askPeekEl(), store = askPeekStore();
-  askPeekSave({...store, dismissed: [...store.dismissed, ...(el.dataset.items || '').split(' ').filter(Boolean)]});
-  askOn(el, false); delete el.dataset.item;
-}
-askPeekEl()?.addEventListener('click', ev => {
-  const el = askPeekEl(), id = el.dataset.item;
-  if (!id) return;
-  if (ev.target.closest('[data-peek-x]')) { askPeekDone(); return; }
-  if (!ev.target.closest('[data-peek-go]')) return;
-  askPeekDone();
-  ASK ||= {open: false, mounted: false};
-  ASK.focusQ = id;
-  askToggle(true, false);
-  ASK.draw?.();
-});
-
 async function askLoad(chat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
@@ -291,8 +210,7 @@ async function askLoad(chat) {
     // What waits on the person sits where it was asked, among the rest: Confirm cards left in other chats (BotOps'),
     // and bots' questions. One with no time comes last.
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
-    chat.pending = pending.filter(a => !here.has(a.id));   // the cards the thread shows, so a peek only points at those
-    const cards = chat.pending.map(a => ({at: a.created_at || late,
+    const cards = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
       .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
     const listed = new Set(asks.map(it => { const q = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
@@ -312,7 +230,7 @@ async function askLoad(chat) {
     else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
       `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
-    // Compared without the messages' "2m ago" (format.js agoStill): those move in place.
+    // Compared without the messages' "2m ago" (format.ts agoStill): those move in place.
     if (agoStill(html) === rendered) agoTick(thread);
     else {
       stickScroll(thread).update(() => {
@@ -326,10 +244,6 @@ async function askLoad(chat) {
     const wl = working && thread.querySelector('[data-ask-working]');
     if (wl) wl.textContent = working;
     chat.drawn = true;
-    // Opened from a peek: the card it spoke of, in view.
-    const fq = chat.focusQ || '', q = fq && thread.querySelector(fq.startsWith('confirm:')
-      ? `[data-action-host="${CSS.escape(fq.slice(8))}"]` : `[data-ask-q="${CSS.escape(fq)}"]`);
-    if (q) { chat.focusQ = ''; q.scrollIntoView({block: 'nearest'}); if (!askPhone()) q.querySelector('input, button, a')?.focus(); }
   };
   chat.draw = draw;
   // The whole chat again, with the Confirm cards waiting in other chats.
@@ -443,15 +357,10 @@ document.addEventListener('click', ev => {
   ev.preventDefault();
   if (a.getAttribute('href').includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
 }, true);
-// Typing anywhere holds a peek back; it may come once the box is left.
-document.addEventListener('focusout', ev => { if (askTypes(ev.target)) setTimeout(askPeek, 0); });
-liveOn('needs-list', () => { ASK?.draw?.(); askPeek(); });
+liveOn('needs-list', () => { ASK?.draw?.(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
 // On a phone Ask is a page of its own: another tab, even the one already under it, leaves it.
 document.addEventListener('click', ev => {
   if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
-// Its first check, a few seconds after load, is announced: a support reply waiting at load opens its chat only after it
-// (ui/support.js), so the chat never opens over a peek that is due.
-setTimeout(() => { askPeek(); document.dispatchEvent(new CustomEvent('tico:ask-peek-checked')); }, ASK_PEEK_WAIT_MS + 100);

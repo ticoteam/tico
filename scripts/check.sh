@@ -169,7 +169,7 @@ fi
 
 # 7. The UI's generated API types and the type-checked UI files. The types come from the whole API, so any backend route
 # or schema change reaches them.
-if [ "$ALL" = 1 ] || changed_matches '^ui/|^backend/.*\.py$|^scripts/(gen_ui_types\.py|check_ui_types\.sh)$'; then
+if [ "$ALL" = 1 ] || changed_matches '^ui/|^backend/.*\.py$|^scripts/(gen_ui_types\.py|check_ui_types\.sh|ui_baseline\.py)$'; then
   run "ui types (tsc, API types)" bash scripts/check_ui_types.sh
 else
   skip "ui types (tsc, API types)" "no UI or backend Python changed"
@@ -190,7 +190,7 @@ else
 fi
 
 # 7c. New UI code is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
-if [ "$ALL" = 1 ] || changed_matches '^ui/|^scripts/check_ui_strict\.py$'; then
+if [ "$ALL" = 1 ] || changed_matches '^ui/|^scripts/(check_ui_strict|ui_baseline)\.py$'; then
   if [ -n "$base" ]; then
     run "ui strict (new .ts, legacy list)" python3 scripts/check_ui_strict.py --base "$base"
   else

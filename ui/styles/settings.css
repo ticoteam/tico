@@ -232,7 +232,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .prov-preset .muted{grid-column:2}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
-/* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
+/* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.ts). */
 .prov-gateway{margin-top:var(--s5);padding-top:var(--s4);border-top:1px solid var(--line)}
 .prov-gateway-title{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .settings-bots-filters{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-width:0}
@@ -788,7 +788,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 /* Webhook dialogs' small section heads (ui/app/settings-webhooks.js) */
 .wr-sub{margin:8px 0 2px;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 /* A swappable field (input or step list) sits in the grid as its label would. */
-/* Releases and Task Manager cards (ui/app/settings-release.js) */
+/* Releases and Task Manager cards (ui/app/settings-release.ts) */
 .rel-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .rel-line input[type=time]{width:auto;max-width:100%}
 .rel-line input[type=text]{flex:1 1 140px;min-width:0}
@@ -920,7 +920,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .pm-letters .pm-where{grid-column:1/-1}
 }
 
-/* Settings > Models and the Computers table (ui/app/subscriptions.js, settings-providers.js, settings-devices.js). */
+/* Settings > Models and the Computers table (ui/app/subscriptions.js, settings-providers.ts, settings-devices.js). */
 section.card>header .settings-head-act{margin-left:auto}
 #settings-computers>header,#settings-subs>header{align-items:center}
 .subs-table td,.settings-machines td{padding-top:7px;padding-bottom:7px}

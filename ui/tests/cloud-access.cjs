@@ -1,4 +1,4 @@
-// Tico Cloud access (ui/app/cloud-access.js, backend/cloud_access.py) against a fake server. Off cloud nothing shows.
+// Tico Cloud access (ui/app/cloud-access.ts, backend/cloud_access.py) against a fake server. Off cloud nothing shows.
 // Frozen: a slim strip over every page, "Out of credit · Add credit" to the billing page, the page below shortened to
 // fit and still usable, on a desktop and a phone with no sideways scroll. Locked: the whole page is Pay to continue,
 // with Open billing and the owner's Download your files, shown at once by any 402 `locked`; open again reloads the page
