@@ -73,7 +73,7 @@ const DASH_BODY = {
   },
   needs_you: dashNeeds,
   needs_attention: dashNeeds,
-  unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(window.threadTitle ? window.threadTitle(t) : t.title || 'Untitled')}</a>
+  unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(threadTitle(t))}</a>
       <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated_at)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
   my_tasks: d => d.tasks.length ? `<a class="dash-big" href="${TASKS}?view=list"><strong>${dashNum(d.count)}</strong><span class="muted">open</span></a>
     <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due_at)}</li>`).join('')}</ul>`
