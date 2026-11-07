@@ -163,6 +163,24 @@ interface RrBox { x: number; y: number; w: number; h: number; }
 interface RrParty { party: string; name: string; kind: string; }
 /** A person on the roster as the Rules page reads them. */
 type RuPerson = NonNullable<AppState['people'][number]> & { archived?: boolean };
+/** A scope editor's segment: Everyone, Anyone, or the kind of id it adds (Departments, Bots, People). */
+type ScopeSeg = 'everyone' | 'anyone' | ScopeKind;
+/** A segment as a button or a chip names it: a segment, or Outside editions. */
+type SegKey = ScopeSeg | 'outside';
+/** A scope editor's state: the ids it holds and the segment it adds to. */
+type ScopeEdit = Required<ScopeIds> & { seg: ScopeSeg };
+/** The Rule panel's named controls (`form.elements`). */
+interface RuleEditControls { text: HTMLTextAreaElement; description: HTMLTextAreaElement; source: HTMLSelectElement; reviewer: HTMLSelectElement; }
+/** The Add rule dialog's named controls. */
+interface AddRuleControls { text: HTMLTextAreaElement; source: HTMLSelectElement; source_name: HTMLInputElement; source_kind: HTMLSelectElement; reviewer: HTMLSelectElement; }
+/** The Due date panel's named controls. */
+interface DueControls { rule: HTMLSelectElement; due: HTMLInputElement; repeats: HTMLSelectElement; owner: HTMLSelectElement; routine: HTMLSelectElement; task_days: HTMLInputElement; due_on: HTMLSelectElement; }
+/** The Add document dialog's named controls. */
+interface DocControls { find: HTMLInputElement; note: HTMLTextAreaElement; source: HTMLSelectElement; source_name: HTMLInputElement; }
+/** A file from Files as the Add document picker lists it. */
+interface DocFile { id: string; title?: string; name?: string; locator?: string; url?: string | null; library_kind?: string; archived?: boolean; [key: string]: unknown; }
+/** What POST /rules/read answers. */
+interface DocReadAnswer { task_id: string; screening?: string; existing?: boolean; truncated?: boolean; file?: { title?: string }; }
 let RU: RuState | null = null;   // the open Rules page; null off it
 /** The open Rules page's state. Off the page it throws, as reading a field of null did. */
 function ruOpen(): RuState {
@@ -182,6 +200,14 @@ function ruFind<E extends Element = HTMLElement>(selector: string, within: Paren
   return el;
 }
 
+/** The nearest ancestor that matches; throws, as reading a field of the missing element did, when there is none. */
+function ruClosest<E extends HTMLElement>(el: Element, selector: string): E {
+  const found = el.closest<E>(selector);
+  if (!found) throw new Error(`The Rules page has no ${selector} above it`);
+  return found;
+}
+/** A form's named controls, typed by the caller (a form's elements are read by their names). */
+function ruControls<T>(form: HTMLFormElement): T { return form.elements as unknown as T; }
 const ruPhone = () => matchMedia('(max-width:760px)').matches;
 const ruQuery = () => new URLSearchParams((S.route || '').split('?')[1] || '');
 const ruTabOf = (r: string): RuleTab => { const t = ((r || '').split('?')[0] ?? '').slice(RULES_ROUTE.length + 1); return RU_TABS.some(([k]) => k === t) ? t as RuleTab : 'internal'; };
@@ -437,7 +463,7 @@ const RR_DEFAULTS = {mode: 'nearby', chats_per_day: 999, tasks_per_day: 999, per
 const RR_MAX = 100000;
 const RR_MATCHES = 8;      // the header search's list
 const RR_ADD_MATCHES = 7;  // + Add exception's list
-const RR_MODES = [['open', 'Can reach anyone'], ['nearby', 'Nearby'], ['closed', "Only who's listed"]];
+const RR_MODES: [string, string][] = [['open', 'Can reach anyone'], ['nearby', 'Nearby'], ['closed', "Only who's listed"]];
 
 function rrNormal(d: ReachData | null | undefined): ReachNormal {
   return {defaults: {...RR_DEFAULTS, ...(d?.defaults || {})}, settings: d?.settings || [], effective: d?.effective || {},
@@ -599,7 +625,7 @@ function rrMapPaint() {
   // above, below or beside it; where nothing is clear it keeps the first spot that misses the chips.
   const cards = nodes.filter(n => n.offsetParent).map(n => rrBox(n, cv)), placed: RrBox[] = [];
   const over = (r: RrBox, x: number, y: number, w: number, h: number, pad: number) => Math.abs(r.x + r.w / 2 - x) < (r.w + w) / 2 + pad && Math.abs(r.y + r.h / 2 - y) < (r.h + h) / 2 + pad;
-  ([...chips.children] as HTMLElement[]).forEach((c, i) => {
+  chips.querySelectorAll<HTMLElement>(':scope > *').forEach((c, i) => {
     const w = c.offsetWidth, h = c.offsetHeight, [x1, y1, x2, y2] = spans[i] ?? [0, 0, 0, 0];
     const tries: [number, number][] = [];
     for (const t of [0.55, 0.45, 0.65, 0.35, 0.75, 0.5]) for (const dy of [0, h + 4, -(h + 4), 2 * (h + 4), -2 * (h + 4)])
@@ -673,7 +699,7 @@ function rrAddHTML(p: string) {
     <div class="rr-xres" role="listbox" aria-label="Matches">${rrAddMatches(p, '')}</div>
     <div class="rr-foot"><span class="spacer"></span><button class="ghost small" type="button" data-rr-cancel>Cancel</button></div></div>`;
 }
-function rrAddMatches(p: string, q: string) {
+function rrAddMatches(p: string | null, q: string) {
   const taken = new Set(rrLinesOf(p).map(x => x.other));
   return rrFind(q, {everyone: false}).filter(x => x.party !== p && !taken.has(x.party)).slice(0, RR_ADD_MATCHES)
     .map(x => rrOption(x).replace('data-rr-party=', 'data-rr-pick=')).join('') || '<p class="rr-none">Nothing matches.</p>';
@@ -704,7 +730,7 @@ function ruDrawInternal(filters: HTMLElement, list: HTMLElement) {
         <svg class="rr-lines" aria-hidden="true"></svg><div class="rr-chips"></div></div></div></div></div>
       <div class="rr-pick" role="listbox" aria-label="People, bots and teams"></div>
       <aside class="rr-side" aria-label="Reach"></aside></div>`;
-    rr = ruFind(':scope > .rr', list);
+    rr = ruFind<HTMLElement>(':scope > .rr', list);
     rr.querySelectorAll<HTMLElement>('.rr-cv [data-rdo-ref]').forEach(n => { n.dataset.rrParty = rrOfRef(n.dataset.rdoRef ?? ''); });
     const pane = ruFind('.rr-pane', rr);
     let queued = false;
@@ -729,7 +755,7 @@ function rrPick(p: string) {
   rrSearchPaint(); rrPanelDraw();
 }
 async function rrReload(note = '') {
-  const state = RU;
+  const state = ruOpen();
   try {
     const [d, rules] = await Promise.all([get<ReachData>('/v2/reach', {fresh: true}), ruAll('/v2/rules?kind=internal')]);
     if (RU !== state) return;
@@ -843,34 +869,35 @@ function rrClick(ev: Event) {
   }
   return false;
 }
-function rrInput(ev) {
-  const t = ev.target, R = ruOpen().reach;
-  if (t.matches('.rr-q')) { R.q = t.value.trim(); rrSearchPaint(); return true; }
-  if (t.matches('.rr-xq')) { ruOpen().root.querySelector('.rr-xres').innerHTML = rrAddMatches(R.party, t.value.trim()); return true; }
-  if (R.edit && t.closest('[data-rr-ed]')) { if (t.name === 'per_day') R.edit.per_day = t.value; if (t.name === 'rule') R.edit.rule = t.value; return true; }
+function rrInput(ev: Event) {
+  const t = eventElement(ev), R = ruOpen().reach;
+  if (!t) return false;
+  if (t instanceof HTMLInputElement && t.matches('.rr-q')) { R.q = t.value.trim(); rrSearchPaint(); return true; }
+  if (t instanceof HTMLInputElement && t.matches('.rr-xq')) { ruFind('.rr-xres').innerHTML = rrAddMatches(R.party, t.value.trim()); return true; }
+  if (R.edit && t.closest('[data-rr-ed]') && (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement)) { if (t.name === 'per_day') R.edit.per_day = t.value; if (t.name === 'rule') R.edit.rule = t.value; return true; }
   return false;
 }
-function rrChange(ev) {
-  const cap = ev.target.closest('[data-rr-cap]');
+function rrChange(ev: Event) {
+  const cap = eventElement(ev)?.closest<HTMLInputElement>('[data-rr-cap]');
   if (!cap) return false;
-  const v = cap.value.trim(), field = cap.dataset.rrCap;
+  const v = cap.value.trim(), field = cap.dataset.rrCap ?? '';
   // A box with an unsaved number fires change when a redraw removes it (a save finishing, another party picked).
   // Save it for the panel it was in, and after that redraw: drawing the panel again inside it throws.
-  const party = cap.closest('.rr-panel[data-party]')?.dataset.party || ruOpen().reach.party;
+  const party = cap.closest<HTMLElement>('.rr-panel[data-party]')?.dataset.party || ruOpen().reach.party || '';
   const save = () => { if (RU?.reach) void rrPut(party, field, v === '' ? null : Number(v)); };
   if (RR_DRAWING) setTimeout(save, 0); else save();
   return true;
 }
-function rrKey(ev) {
-  const t = ev.target;
-  if (!t.matches?.('.rr-q')) return;
+function rrKey(ev: KeyboardEvent) {
+  const t = eventElement(ev);
+  if (!(t instanceof HTMLInputElement) || !t.matches('.rr-q')) return;
   if (ev.key === 'Enter') { const first = rrFind(ruOpen().reach.q)[0]; if (ruOpen().reach.q && first) { ev.preventDefault(); rrPick(first.party); } }
   else if (ev.key === 'Escape' && t.value) { ev.preventDefault(); ev.stopPropagation(); t.value = ''; ruOpen().reach.q = ''; rrSearchPaint(); }
 }
 // A setting opens where it is changed; a fixed limit has no editor and no link. Spend limits and task caps are edited on
 // Strategy › Budget (a bot's node, or the company's or a group's pool, named by the descriptor's path); access and run
 // budgets on the bot's Settings tab, scrolled to their row; mail sending in its own dialog (ruSettingGo).
-function ruSettingTarget(s, bot) {
+function ruSettingTarget(s: BotSetting, bot: string) {
   const e = s.edit, slug = encodeURIComponent(bot), botSettings = '#/bot/' + slug + '/settings';
   if (!e) return null;
   if (e.page === 'strategy') {
@@ -883,15 +910,15 @@ function ruSettingTarget(s, bot) {
   if (e.anchor === 'turns') return {href: botSettings, kind: 'turns'};
   return {href: e.page === 'settings' ? '#/settings/' + encodeURIComponent(e.anchor || '') : botSettings, kind: ''};
 }
-function ruSettingLink(s, bot) {
+function ruSettingLink(s: BotSetting, bot: string) {
   const to = ruSettingTarget(s, bot);
   if (!to) return '<span class="ru-none">—</span>';
   return `<a class="ru-set" href="${esc(to.href)}" data-ru-setting="${to.kind}" data-bot="${esc(bot)}">Setting ›</a>`;
 }
 
-function ruDrawExternal(filters, list) {
+function ruDrawExternal(filters: HTMLElement, list: HTMLElement) {
   const all = ruOpen().rules.external, f = ruOpen().filter;
-  const from = new Map();
+  const from = new Map<string, {name: string; n: number}>();
   for (const r of all) if (r.source) { const was = from.get(r.source.id); from.set(r.source.id, {name: r.source.name, n: (was?.n || 0) + 1}); }
   const sorted = [...from].sort((a, b) => b[1].n - a[1].n || a[1].name.localeCompare(b[1].name));
   const shown = f.moreFrom ? sorted : sorted.slice(0, 5);
@@ -910,9 +937,9 @@ function ruDrawExternal(filters, list) {
   list.innerHTML = `<div class="ru-table ru-ext" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No external rules yet.'}</p>`}`;
 }
 
-function ruDrawDue(filters, list) {
+function ruDrawDue(filters: HTMLElement, list: HTMLElement) {
   const all = ruOpen().due, f = ruOpen().filter;
-  const by = k => all.filter(d => d.status === k).length;
+  const by = (k: string) => all.filter(d => d.status === k).length;
   filters.innerHTML = `<div class="ru-fh">Status</div>${Object.entries(RU_STATUS).map(([k, [label]]) => ruFacet('status', k, label, by(k), f.status === k)).join('')}
     <div class="ru-fh">Routine</div>${ruFacet('routine', 'on', 'Task', all.filter(d => d.task_days != null).length, f.routine === 'on')}${ruFacet('routine', 'none', 'None', all.filter(d => d.task_days == null).length, f.routine === 'none')}`;
   const rows = all.filter(d => (!f.status || d.status === f.status) && (!f.routine || (f.routine === 'on') === (d.task_days != null)));
@@ -925,21 +952,22 @@ function ruDrawDue(filters, list) {
       <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner)}</span><span class="ru-c">${ruPill(d.status)}</span></a>`).join('');
   list.innerHTML = `<div class="ru-table ru-duet" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No due dates yet.'}</p>`}`;
 }
-function ruOwnerHTML(actor) {
+function ruOwnerHTML(actor: string | undefined) {
   const [kind, id] = String(actor || '').split(/:(.*)/);
-  const face = kind === 'bot' ? avatar(id, 18) : personAvatar((S.people || []).find(p => p.id === id) || {id, name: id}, 18);
+  const face = kind === 'bot' ? avatar(id ?? '', 18) : personAvatar((S.people || []).find(p => p.id === id) || {id, name: id}, 18);
   return `${face}<span>${esc(ruActorName(actor))}</span>`;
 }
 
 // Suggested: grouped by From, each row the sentence, a Who picker, and Skip / Add. The sentence opens the rule's side
 // panel, where its quote is; the row names no document and shows no quote.
-function ruDrawSuggested(filters, list) {
+function ruDrawSuggested(filters: HTMLElement, list: HTMLElement) {
   filters.innerHTML = '';
-  const groups = new Map();
+  const groups = new Map<string, {name: string; rows: RuleRow[]}>();
   for (const r of ruOpen().suggested) {
     const key = r.source?.id || '', name = r.source?.name || 'Internal';
-    if (!groups.has(key)) groups.set(key, {name, rows: []});
-    groups.get(key).rows.push(r);
+    let group = groups.get(key);
+    if (!group) { group = {name, rows: []}; groups.set(key, group); }
+    group.rows.push(r);
   }
   // A suggestion with no Who yet (Counsel may leave it open) is added only once its picker names one; Add all adds the
   // rows that have one and leaves the rest waiting.
@@ -949,34 +977,34 @@ function ruDrawSuggested(filters, list) {
         <select class="ru-pwho" aria-label="Followed by" data-ru-who${r.can_edit ? '' : ' disabled'}><option value="">${esc(who || 'Pick who')}</option>${ruWhoOptions()}</select>
         <span class="ru-pacts">${r.can_edit ? `<button class="ghost small" type="button" data-ru-skip>Skip</button><button class="primary small" type="button" data-ru-accept${who ? '' : ' disabled'}>Add</button>` : ''}</span></div>`; }).join('')}</section>`)
     .join('') || '<p class="muted ru-pad">No suggestions.</p>';
-  list.querySelectorAll('.ru-sg').forEach(ruAddAllSync);
+  list.querySelectorAll<HTMLElement>('.ru-sg').forEach(ruAddAllSync);
 }
 // The rows of a group that can be added now: the viewer may, and a Who is set.
-const ruReady = group => [...group.querySelectorAll('.ru-prop')].filter(p => {
+const ruReady = (group: HTMLElement) => [...group.querySelectorAll<HTMLElement>('.ru-prop')].filter(p => {
   const add = p.querySelector('[data-ru-accept]');
-  return add && (p.hasAttribute('data-has-who') || p.querySelector('[data-ru-who]').value);
+  return add && (p.hasAttribute('data-has-who') || ruFind<HTMLSelectElement>('[data-ru-who]', p).value);
 });
-function ruAddAllSync(group) {
-  const n = ruReady(group).length, button = group.querySelector('[data-ru-add-all]');
+function ruAddAllSync(group: HTMLElement) {
+  const n = ruReady(group).length, button = ruFind<HTMLButtonElement>('[data-ru-add-all]', group);
   button.hidden = n < 2;
   button.textContent = `Add all ${n}`;
 }
 // A single Who, as the Suggested picker offers it.
 function ruWhoOptions() {
-  const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
+  const opt = (v: string, l: string) => `<option value="${esc(v)}">${esc(l)}</option>`;
   const groups = ruGroups(), bots = ruBots(), people = ruPeople();
   return (settingsIsAdmin() ? opt('everyone', 'Everyone') + opt('outside_editions', 'Outside editions') : '') + opt('all_bots', 'All bots')
     + (groups.length ? `<optgroup label="Departments">${groups.map(g => opt('groups:' + g.id, g.name || g.id)).join('')}</optgroup>` : '')
     + (bots.length ? `<optgroup label="Bots">${bots.map(b => opt('bots:' + b.id, b.name)).join('')}</optgroup>` : '')
     + (people.length ? `<optgroup label="People">${people.map(p => opt('people:' + p.id, p.name)).join('')}</optgroup>` : '');
 }
-function ruWhoFromOption(v) {
+function ruWhoFromOption(v: string) {
   if (!v) return null;
   if (v === 'everyone') return {everyone: true};
   if (v === 'all_bots') return {all_bots: true};
   if (v === 'outside_editions') return {outside_editions: true};
   const [kind, id] = v.split(/:(.*)/);
-  return {[kind]: [id]};
+  return {[kind ?? '']: [id]};
 }
 
 // ----------------------------------------------------------------- events
@@ -984,46 +1012,50 @@ function ruWire() {
   const root = ruOpen().root;
   root.addEventListener('input', ev => {
     if (ruOpen().tab === 'internal' && rrInput(ev)) return;
-    if (ev.target.matches('.ru-q')) {
-      ruOpen().filter.q = ev.target.value.trim();
+    const search = eventElement(ev);
+    if (search instanceof HTMLInputElement && search.matches('.ru-q')) {
+      ruOpen().filter.q = search.value.trim();
       ruDrawKeepSearch();
     }
   });
   root.addEventListener('keydown', ev => { if (ruOpen().tab === 'internal') rrKey(ev); });
   root.addEventListener('change', ev => {
     if (ruOpen().tab === 'internal' && rrChange(ev)) return;
-    const pick = ev.target.closest('.ru-prop [data-ru-who]');
+    const pick = eventElement(ev)?.closest<HTMLSelectElement>('.ru-prop [data-ru-who]');
     if (pick) {
-      const prop = pick.closest('.ru-prop'), add = prop.querySelector('[data-ru-accept]');
+      const prop = ruClosest<HTMLElement>(pick, '.ru-prop'), add = prop.querySelector<HTMLButtonElement>('[data-ru-accept]');
       if (add) add.disabled = !prop.hasAttribute('data-has-who') && !pick.value;
-      ruAddAllSync(prop.closest('.ru-sg'));
+      ruAddAllSync(ruClosest<HTMLElement>(prop, '.ru-sg'));
     }
   });
   root.addEventListener('click', ev => {
-    const t = ev.target;
+    const t = eventElement(ev);
+    if (!t) return;
     if (ruOpen().tab === 'internal' && !t.closest('#ru-side') && rrClick(ev)) return;
-    const facet = t.closest('[data-ru-f]');
+    const facet = t.closest<HTMLElement>('[data-ru-f]');
     if (facet) {
-      const key = facet.dataset.ruF, v = facet.dataset.v;
-      ruOpen().filter[key] = key === 'due' ? !ruOpen().filter.due : ruOpen().filter[key] === v ? '' : v;
+      const key = facet.dataset.ruF as 'who' | 'from' | 'status' | 'routine' | 'due', v = facet.dataset.v ?? '';
+      const f = ruOpen().filter;
+      if (key === 'due') f.due = !f.due;
+      else f[key] = f[key] === v ? '' : v;
       ruDraw(); return;
     }
     if (t.closest('[data-ru-more]')) { ruOpen().filter.moreFrom = true; ruDraw(); return; }
     if (t.closest('[data-ru-add]')) { ruAddOpen({kind: ruOpen().tab === 'external' ? 'external' : 'internal'}); return; }
     if (t.closest('[data-ru-add-due]')) { location.hash = ruHref('due', {due: 'new'}); return; }
     if (t.closest('[data-ru-add-doc]')) { void ruDocOpen(); return; }
-    const prop = t.closest('.ru-prop');
+    const prop = t.closest<HTMLElement>('.ru-prop');
     if (prop && t.closest('[data-ru-accept]')) { void ruAccept([prop]); return; }
     if (prop && t.closest('[data-ru-skip]')) { void ruSkip(prop); return; }
     const all = t.closest('[data-ru-add-all]');
-    if (all) { void ruAccept(ruReady(all.closest('.ru-sg'))); return; }
-    const set = t.closest('[data-ru-setting]');
+    if (all) { void ruAccept(ruReady(ruClosest<HTMLElement>(all, '.ru-sg'))); return; }
+    const set = t.closest<HTMLElement>('[data-ru-setting]');
     if (set) ruSettingGo(set, ev);
   });
 }
 // After a bot setting's link lands on the bot's Settings tab: its row in view, or (mail) its dialog open.
-function ruSettingGo(link, ev) {
-  const kind = link.dataset.ruSetting, slug = link.dataset.bot;
+function ruSettingGo(link: HTMLElement, ev: MouseEvent) {
+  const kind = link.dataset.ruSetting ?? '', slug = link.dataset.bot ?? '';
   if (ev.metaKey || ev.ctrlKey || !['access', 'turns', 'mail'].includes(kind)) return;
   const sel = kind === 'access' ? '#bot-access-card' : kind === 'turns' ? `[data-bot-budget="${CSS.escape(slug)}"]` : '';
   const started = Date.now();
@@ -1031,25 +1063,25 @@ function ruSettingGo(link, ev) {
   const look = () => {
     if (!location.hash.startsWith('#/bot/' + encodeURIComponent(slug) + '/settings')) return;
     if (kind === 'mail') { if (typeof settingsEditMail === 'function' && $('#bot-editor .sb-row')) { void settingsEditMail(slug); return; } }
-    else { const el = $(sel); if (el) { (el.closest('.sb-row,section') || el).scrollIntoView({block: 'center'}); return; } }
+    else { const el = $(sel) as HTMLElement | null; if (el) { (el.closest('.sb-row,section') || el).scrollIntoView({block: 'center'}); return; } }
     if (Date.now() - started < 5000) setTimeout(look, 150);
   };
   setTimeout(look, 150);
 }
-async function ruAccept(props) {
-  const written = [];
+async function ruAccept(props: HTMLElement[]) {
+  const written: string[] = [];
   for (const prop of props) {
     const r = ruOpen().suggested.find(x => x.id === prop.dataset.rule);
     if (!r) continue;
-    const who = ruWhoFromOption(prop.querySelector('[data-ru-who]').value);
-    prop.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    const who = ruWhoFromOption(ruFind<HTMLSelectElement>('[data-ru-who]', prop).value);
+    prop.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
     written.push(r.id);
     try { await post('/v2/rules/' + encodeURIComponent(r.id) + '/accept', {version: r.version, ...(who ? {who} : {})}); }
     catch (e) { toast(ruError(e), true); break; }
   }
   await ruReload(written);
 }
-async function ruSkip(prop) {
+async function ruSkip(prop: HTMLElement) {
   const r = ruOpen().suggested.find(x => x.id === prop.dataset.rule);
   if (!r) return;
   try { await post('/v2/rules/' + encodeURIComponent(r.id) + '/skip', {version: r.version}); }
@@ -1059,20 +1091,23 @@ async function ruSkip(prop) {
 // After a write: the open tab reads again; the other tabs read again when shown. `written` names rules
 // a list row wrote: when the open panel shows one of them, it reads that rule again, and on Suggested it closes once
 // the rule is no longer a suggestion (a row's Add, Skip or Add all leaves the panel's copy stale otherwise).
-async function ruReload(written = []) {
+async function ruReload(written: string[] = []) {
   if (!RU) return;
-  RU.loaded = new Set([RU.tab]);
-  if (!await ruLoad(RU.tab)) return;
-  const open = RU.tab === 'due' ? '' : ruQuery().get('rule'), side = $('#ru-side');
+  const tab = ruTab();
+  RU.loaded = new Set([tab]);
+  if (!await ruLoad(tab)) return;
+  const open = RU.tab === 'due' ? '' : ruQuery().get('rule'), side = ruSide();
   if (open && written.includes(open)) {
     if (side) side.dataset.open = '';
     if (RU.tab === 'suggested' && !RU.suggested.some(r => r.id === open)) { location.hash = ruBack(); return; }
   }
   ruDraw(); ruDrawPanel();
 }
+/** The Rules side panel, or null when it is not drawn. */
+function ruSide(): HTMLElement | null { return $('#ru-side') as HTMLElement | null; }
 document.addEventListener('keydown', ev => {
   if (ev.key !== 'Escape' || !RU || !document.body.contains(RU.root) || $('dialog[open]')) return;
-  const side = $('#ru-side');
+  const side = ruSide();
   if (side && !side.hidden) { ev.preventDefault(); location.hash = ruBack(); }
 });
 
@@ -1081,9 +1116,11 @@ document.addEventListener('keydown', ev => {
 // Anyone (With) clears it. Outside editions (Who, the owner's and admins' alone) stands apart from who else follows the
 // rule: it adds the Company page's editions, and Everyone doesn't include them. The state is
 // {everyone, all_bots, outside_editions, groups, bots, people, seg}, ids only.
-function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {}}) {
-  const s = {...ruScopeIds(scope)};
-  s.seg = s.everyone ? 'everyone' : s.all_bots || s.bots.length ? 'bots' : s.groups.length ? 'groups' : s.people.length ? 'people' : flags ? 'groups' : 'anyone';
+function ruScopeEditor(host: HTMLElement, scope: RuleScope | ScopeIds | null | undefined, {flags, disabled = false, onChange = () => {}}: {flags?: boolean; disabled?: boolean; onChange?: () => void}) {
+  const ids = ruScopeIds(scope);
+  // The ids held by the segment being added to; none for Everyone or Anyone, whose list is never read.
+  const listOf = (seg: ScopeSeg): string[] => seg === 'groups' || seg === 'bots' || seg === 'people' ? s[seg] : [];
+  const s: ScopeEdit = {...ids, seg: ids.everyone ? 'everyone' : ids.all_bots || ids.bots.length ? 'bots' : ids.groups.length ? 'groups' : ids.people.length ? 'people' : flags ? 'groups' : 'anyone'};
   const draw = () => {
     const segs = flags ? [['everyone', 'Everyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People'],
       ...(settingsIsAdmin() || s.outside_editions ? [['outside', 'Outside editions']] : [])]
@@ -1093,9 +1130,10 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
       ...(s.outside_editions ? [['outside_editions', '', 'Outside editions']] : []),
       ...s.groups.map(id => ['groups', id, ruGroupName(id)]), ...s.bots.map(id => ['bots', id, botDisplayName(id)]),
       ...s.people.map(id => ['people', id, ruPersonName(id)])];
-    const pool = {groups: ruGroups().map(g => ({id: g.id, name: g.name || g.id})), bots: ruBots(), people: ruPeople()}[s.seg] || [];
+    const pools: Partial<Record<ScopeSeg, {id: string; name: string}[]>> = {groups: ruGroups().map(g => ({id: g.id, name: g.name || g.id})), bots: ruBots(), people: ruPeople()};
+    const pool = pools[s.seg] || [];
     const options = [...(s.seg === 'bots' && flags && !s.all_bots ? [['all_bots', 'All bots']] : []),
-      ...pool.filter(x => !s[s.seg].includes(x.id)).map(x => [x.id, x.name])];
+      ...pool.filter(x => !listOf(s.seg).includes(x.id)).map(x => [x.id, x.name])];
     const adding = !disabled && !s.everyone && s.seg !== 'anyone' && options.length;
     host.innerHTML = `<div class="ru-seg" role="group">${segs.map(([k, label]) => {
         const on = k === 'everyone' ? s.everyone : k === 'outside' ? s.outside_editions : k === 'anyone' ? s.seg === 'anyone' : !s.everyone && s.seg === k;
@@ -1106,50 +1144,53 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
         ${adding ? `<select class="ru-addsel" aria-label="Add"><option value="">+ add</option>${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>` : ''}</div>`}`;
   };
   host.onclick = ev => {
-    const seg = ev.target.closest('[data-seg]');
+    const seg = eventElement(ev)?.closest<HTMLButtonElement>('[data-seg]');
     if (seg && !seg.disabled) {
-      const k = seg.dataset.seg;
+      const k = seg.dataset.seg as SegKey;
       if (k === 'outside') { s.outside_editions = !s.outside_editions; draw(); onChange(); return; }
       if (k === 'everyone') Object.assign(s, {everyone: true, all_bots: false, groups: [], bots: [], people: []});
       else if (k === 'anyone') Object.assign(s, {groups: [], bots: [], people: []});
       else s.everyone = false;
       s.seg = k; draw(); onChange(); return;
     }
-    const un = ev.target.closest('[data-unchip]');
+    const un = eventElement(ev)?.closest<HTMLElement>('[data-unchip]');
     if (un) {
-      if (un.dataset.unchip === 'all_bots') s.all_bots = false;
-      else if (un.dataset.unchip === 'outside_editions') s.outside_editions = false;
-      else s[un.dataset.unchip] = s[un.dataset.unchip].filter(x => x !== un.dataset.id);
+      const k = un.dataset.unchip as 'all_bots' | 'outside_editions' | ScopeKind;
+      if (k === 'all_bots') s.all_bots = false;
+      else if (k === 'outside_editions') s.outside_editions = false;
+      else s[k] = s[k].filter(x => x !== un.dataset.id);
       draw(); onChange();
     }
   };
   host.onchange = ev => {
-    if (!ev.target.matches('.ru-addsel') || !ev.target.value) return;
-    if (ev.target.value === 'all_bots') s.all_bots = true;
-    else s[s.seg].push(ev.target.value);
+    const sel = eventElement(ev);
+    if (!(sel instanceof HTMLSelectElement) || !sel.matches('.ru-addsel') || !sel.value) return;
+    if (sel.value === 'all_bots') s.all_bots = true;
+    else listOf(s.seg).push(sel.value);
     draw(); onChange();
-    host.querySelector('.ru-addsel')?.focus();
+    host.querySelector<HTMLSelectElement>('.ru-addsel')?.focus();
   };
   draw();
   return {value: () => flags ? {everyone: s.everyone, all_bots: s.all_bots, groups: s.groups, bots: s.bots, people: s.people, ...(s.outside_editions ? {outside_editions: true} : {})}
     : {groups: s.groups, bots: s.bots, people: s.people}};
 }
-const ruSegHTML = (name, options, value, disabled) => `<div class="ru-seg" role="group" data-ru-seg="${name}">${options.map(([k, label]) =>
+const ruSegHTML = (name: string, options: [string, string][], value: string | null | undefined, disabled?: boolean) => `<div class="ru-seg" role="group" data-ru-seg="${name}">${options.map(([k, label]) =>
   `<button type="button" data-v="${k}" aria-pressed="${k === value}"${disabled ? ' disabled' : ''}>${label}</button>`).join('')}</div>`;
-function ruSegWire(host, onChange = () => {}) {
+function ruSegWire(host: HTMLElement, onChange: (name: string, value: string) => void = () => {}) {
   host.addEventListener('click', ev => {
-    const b = ev.target.closest('[data-ru-seg] [data-v]');
-    if (!b || b.disabled) return;
-    b.parentElement.querySelectorAll('[data-v]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-    onChange(b.parentElement.dataset.ruSeg, b.dataset.v);
+    const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-ru-seg] [data-v]');
+    const group = b?.parentElement;
+    if (!b || !group || b.disabled) return;
+    group.querySelectorAll<HTMLElement>('[data-v]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    onChange(group.dataset.ruSeg ?? '', b.dataset.v ?? '');
   });
 }
-const ruSegValue = (host, name) => host.querySelector(`[data-ru-seg="${name}"] [aria-pressed="true"]`)?.dataset.v || '';
-const ruSourceOptions = (sources, value) => sources.map(s => `<option value="${esc(s.id)}"${s.id === value ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
+const ruSegValue = (host: HTMLElement, name: string) => host.querySelector<HTMLElement>(`[data-ru-seg="${name}"] [aria-pressed="true"]`)?.dataset.v || '';
+const ruSourceOptions = (sources: {id: string; name: string}[], value: string | null | undefined) => sources.map(s => `<option value="${esc(s.id)}"${s.id === value ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
 
 // ----------------------------------------------------------------- the side panels
 function ruDrawPanel() {
-  const side = $('#ru-side'), q = ruQuery();
+  const side = ruSide(), q = ruQuery();
   if (!side) return;
   const ruleId = ruOpen().tab === 'due' ? '' : q.get('rule'), dueId = ruOpen().tab === 'due' ? q.get('due') : '';
   const want = ruleId ? 'rule:' + ruleId : dueId ? 'due:' + dueId + ':' + (q.get('rule') || '') : '';
@@ -1159,20 +1200,20 @@ function ruDrawPanel() {
   if (side.dataset.open === want) return;
   side.dataset.open = want;
   // A note ("Saved", "Changed elsewhere") left for this panel shows in its status line, inside the sheet on a phone.
-  const key = ruleId ? 'rule:' + ruleId : 'due:' + dueId, note = ruOpen().note?.key === key ? ruOpen().note.text : '';
+  const key = ruleId ? 'rule:' + ruleId : 'due:' + dueId, pending = ruOpen().note, note = pending?.key === key ? pending.text : '';
   ruOpen().note = null;
   if (ruleId) void ruRulePanel(side, ruleId, note);
-  else void ruDuePanel(side, dueId, q.get('rule') || '', note);
+  else void ruDuePanel(side, String(dueId), q.get('rule') || '', note);
 }
 // Reload, then draw `key`'s panel again with `text` only if the address still names it.
-async function ruRedraw(side, key, text) {
+async function ruRedraw(side: HTMLElement, key: string, text: string) {
   ruOpen().note = {key, text};
   side.dataset.open = '';
   await ruReload();
 }
 // The cited section and quote, where the viewer may read its file (`hidden` otherwise: nothing shows). The section
 // opens that exact file version in the viewer (ui/app/viewer.ts reads /api/v2/files/<id>?v=<n> links).
-function ruQuoteHTML(cite) {
+function ruQuoteHTML(cite: RuleRow['cite']) {
   if (!cite || cite.hidden || !cite.quote) return '';
   const label = esc(cite.section || 'Document');
   const src = cite.file_id
@@ -1181,32 +1222,32 @@ function ruQuoteHTML(cite) {
   return `<blockquote class="ru-quote">${src} “${esc(cite.quote)}”</blockquote>`;
 }
 // Where closing a rule's panel goes: the tab, and on Internal the party it was opened from.
-const ruBack = () => ruHref(ruOpen().tab, ruOpen().tab === 'internal' ? {party: ruQuery().get('party')} : {});
-const ruPanelHead = (title, close) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
+const ruBack = () => ruHref(ruOpen().tab, ruOpen().tab === 'internal' ? {party: ruQuery().get('party') || ''} : {});
+const ruPanelHead = (title: string, close: string) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
 
 
 // If broken: the three choices, one line on what the chosen one does, and under Ask first the reviewer (no pick: the
 // manager above the one who broke it).
-function ruBrokenHTML(value, reviewer, disabled) {
+function ruBrokenHTML(value: IfBroken | null | undefined, reviewer: string | null | undefined, disabled: boolean) {
   const dis = disabled ? ' disabled' : '';
-  return `${ruSegHTML('if_broken', RU_BROKEN, value, disabled)}<p class="ru-hint" data-ru-hint>${esc(RU_BROKEN_HINT[value] || '')}</p>
+  return `${ruSegHTML('if_broken', RU_BROKEN, value, disabled)}<p class="ru-hint" data-ru-hint>${esc(RU_BROKEN_HINT[value ?? ''] || '')}</p>
     <label class="ru-reviewer"${value === 'escalate' ? '' : ' hidden'}><span class="ru-lbl">Reviewer <span class="ru-opt">(optional)</span></span>
       <select name="reviewer"${dis}><option value="">Manager</option>${ruPeople().map(p => `<option value="${esc(p.id)}"${reviewer === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>`;
 }
-function ruBrokenSync(form, value) {
-  form.querySelector('.ru-reviewer').hidden = value !== 'escalate';
-  form.querySelector('[data-ru-hint]').textContent = RU_BROKEN_HINT[value] || '';
+function ruBrokenSync(form: HTMLElement, value: string) {
+  ruFind('.ru-reviewer', form).hidden = value !== 'escalate';
+  ruFind('[data-ru-hint]', form).textContent = RU_BROKEN_HINT[value] || '';
 }
 
-async function ruRulePanel(side, id, note = '') {
+async function ruRulePanel(side: HTMLElement, id: string, note = '') {
   const want = side.dataset.open;
   side.innerHTML = ruPanelHead('Rule', ruBack()) + skelRows(4);
-  let r;
-  try { r = await get('/v2/rules/' + encodeURIComponent(id), {fresh: true}); }
-  catch (e) { if (side.dataset.open === want) side.innerHTML = ruPanelHead('Rule', ruBack()) + `<p class="err ru-pad">${esc(e.message)}</p>`; return; }
+  let r: RuleRow;
+  try { r = await get<RuleRow>('/v2/rules/' + encodeURIComponent(id), {fresh: true}); }
+  catch (e) { if (side.dataset.open === want) side.innerHTML = ruPanelHead('Rule', ruBack()) + `<p class="err ru-pad">${esc(errorMessage(e, ''))}</p>`; return; }
   if (side.dataset.open !== want) return;
   const edit = !!r.can_edit, dis = edit ? '' : ' disabled', internal = r.kind === 'internal';
-  if (!internal && !ruOpen().sources.length) ruOpen().sources = await ruAll('/v2/rule-sources').catch(() => []);
+  if (!internal && !ruOpen().sources.length) ruOpen().sources = await ruAll<RuleSource>('/v2/rule-sources').catch(() => []);
   const dues = ruDueSorted(r);
   const quote = ruQuoteHTML(r.cite);
   const suggested = r.status === 'suggested';
@@ -1232,41 +1273,41 @@ async function ruRulePanel(side, id, note = '') {
             <button class="primary" type="button" data-ru-accept-one>Add</button></div>`
         : '<div class="ru-foot"><button class="ghost" type="button" data-ru-retire>Retire</button><span class="spacer"></span><button class="primary" type="submit">Save</button></div>'}
     </form>`;
-  const form = side.querySelector('form'), status = form.querySelector('.ru-status');
+  const form = ruFind<HTMLFormElement>('form', side), status = ruFind('.ru-status', form), controls = ruControls<RuleEditControls>(form);
   // A suggestion is added only with a Who: Add waits until the editor names one.
-  const addOne = form.querySelector('[data-ru-accept-one]');
-  const whoSet = scope => scope.everyone || scope.all_bots || scope.outside_editions || ['groups', 'bots', 'people'].some(k => scope[k].length);
+  const addOne = form.querySelector<HTMLButtonElement>('[data-ru-accept-one]');
+  const whoSet = (scope: ScopeIds) => scope.everyone || scope.all_bots || scope.outside_editions || [scope.groups, scope.bots, scope.people].some(list => list?.length);
   // The sentence under the rule follows the Who and With being edited.
-  const follow = () => { form.querySelector('.ru-follow').textContent = ruFollowSentence(who.value(), withEd?.value()); };
-  const who = ruScopeEditor(form.querySelector('[data-scope="who"]'), r.who, {flags: true, disabled: !edit,
+  const follow = () => { ruFind('.ru-follow', form).textContent = ruFollowSentence(who.value(), withEd?.value()); };
+  const who = ruScopeEditor(ruFind('[data-scope="who"]', form), r.who, {flags: true, disabled: !edit,
     onChange: () => { if (addOne) addOne.disabled = !whoSet(who.value()); follow(); }});
   if (addOne) addOne.disabled = !whoSet(who.value());
-  const withEd = internal ? ruScopeEditor(form.querySelector('[data-scope="with"]'), r.with, {flags: false, disabled: !edit, onChange: follow}) : null;
+  const withEd = internal ? ruScopeEditor(ruFind('[data-scope="with"]', form), r.with, {flags: false, disabled: !edit, onChange: follow}) : null;
   ruSegWire(form, (name, v) => { if (name === 'if_broken') ruBrokenSync(form, v); });
   // The rule reads with its mentions as chips; an editor clicks it (or presses Enter on it) to edit the words.
-  const read = form.querySelector('.ru-read');
+  const read = ruFind('.ru-read', form);
   const write = () => {
     read.hidden = true;
-    const box = form.elements.text;
+    const box = controls.text;
     box.hidden = false; box.focus(); box.setSelectionRange(box.value.length, box.value.length);
   };
   if (edit) {
-    read.addEventListener('click', ev => { if (!ev.target.closest('a')) write(); });
-    read.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.target.closest('a')) { ev.preventDefault(); write(); } });
+    read.addEventListener('click', ev => { const t = eventElement(ev); if (t && !t.closest('a')) write(); });
+    read.addEventListener('keydown', ev => { const t = eventElement(ev); if (ev.key === 'Enter' && t && !t.closest('a')) { ev.preventDefault(); write(); } });
   }
   // The fields changed in the panel, as an edit sends them (`version` alone when nothing changed).
   const changes = () => {
-    const body = {version: r.version};
-    const text = form.elements.text.value.trim(), description = form.elements.description.value.trim();
+    const body: Record<string, unknown> = {version: r.version};
+    const text = controls.text.value.trim(), description = controls.description.value.trim();
     if (text !== r.text) body.text = text;
     if (description !== (r.description || '')) body.description = description;
     if (!ruSameScope(who.value(), r.who)) body.who = who.value();
     if (withEd && !ruSameScope(withEd.value(), r.with)) body.with = withEd.value();
-    if (!internal && form.elements.source.value !== r.source?.id) body.source_id = form.elements.source.value;
+    if (!internal && controls.source.value !== r.source?.id) body.source_id = controls.source.value;
     const broken = ruSegValue(form, 'if_broken');
     if (broken !== r.if_broken) body.if_broken = broken;
     // The reviewer shows only under Ask first; a stored one stays unless the person picks another.
-    const reviewer = form.elements.reviewer.value;
+    const reviewer = controls.reviewer.value;
     if (broken === 'escalate' && reviewer !== (r.reviewer?.id || '')) body.reviewer = reviewer;
     return body;
   };
@@ -1274,14 +1315,14 @@ async function ruRulePanel(side, id, note = '') {
     ev.preventDefault();
     const body = changes();
     if (Object.keys(body).length === 1) { status.textContent = 'Saved'; return; }
-    const button = form.querySelector('[type=submit]'); button.disabled = true; status.textContent = 'Saving…';
+    const button = ruFind<HTMLButtonElement>('[type=submit]', form); button.disabled = true; status.textContent = 'Saving…';
     try {
       await post('/v2/rules/' + encodeURIComponent(r.id), body);
       if (side.dataset.open === want) await ruRedraw(side, 'rule:' + r.id, 'Saved');
       else await ruReload();
     } catch (e) {
       button.disabled = false;
-      if (e.status === 409 && side.dataset.open === want) { await ruRedraw(side, 'rule:' + r.id, 'Changed elsewhere'); return; }
+      if (errorStatus(e) === 409 && side.dataset.open === want) { await ruRedraw(side, 'rule:' + r.id, 'Changed elsewhere'); return; }
       status.textContent = ruError(e);
     }
   };
@@ -1298,7 +1339,7 @@ async function ruRulePanel(side, id, note = '') {
       toast('Added');
     } catch (e) {
       addOne.disabled = false;
-      if (e.status === 409 && side.dataset.open === want) { await ruRedraw(side, 'rule:' + r.id, 'Changed elsewhere'); return; }
+      if (errorStatus(e) === 409 && side.dataset.open === want) { await ruRedraw(side, 'rule:' + r.id, 'Changed elsewhere'); return; }
       status.textContent = ruError(e);
     }
   });
@@ -1312,7 +1353,7 @@ async function ruRulePanel(side, id, note = '') {
   form.querySelector('[data-ru-retire]')?.addEventListener('click', async () => {
     if (!confirm('Retire this rule?')) return;
     try {
-      const out = await post('/v2/rules/' + encodeURIComponent(r.id) + '/retire', {version: r.version});
+      const out: {due?: RuleDue[]} = await post('/v2/rules/' + encodeURIComponent(r.id) + '/retire', {version: r.version});
       const dues = (out.due || []).filter(d => !d.retired_at);
       if (dues.length && confirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`))
         for (const d of dues) await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
@@ -1320,25 +1361,25 @@ async function ruRulePanel(side, id, note = '') {
       await ruReload();
       toast('Retired');
     } catch (e) {
-      if (e.status === 409 && side.dataset.open === want) { await ruRedraw(side, 'rule:' + r.id, 'Changed elsewhere'); return; }
+      if (errorStatus(e) === 409 && side.dataset.open === want) { await ruRedraw(side, 'rule:' + r.id, 'Changed elsewhere'); return; }
       status.textContent = ruError(e);
     }
   });
 }
 
 // One due date, or a new one (`id` "new"; `ruleId` when it comes from a rule's panel, else a rule is picked).
-async function ruDuePanel(side, id, ruleId, note = '') {
+async function ruDuePanel(side: HTMLElement, id: string, ruleId: string, note = '') {
   const want = side.dataset.open, close = ruHref('due');
   const fresh = id === 'new';
   // An existing one: GET /rule-due/<id> holds its history (edits included) and what the viewer may do.
-  let d = null;
+  let d: RuleDue | null = null;
   if (!fresh) {
     const gone = () => { side.innerHTML = ruPanelHead('Due date', close) + '<p class="muted ru-pad">This due date is gone.</p>'; };
     side.innerHTML = ruPanelHead('Due date', close) + skelRows(3);
-    try { d = await get('/v2/rule-due/' + encodeURIComponent(id), {fresh: true}); }
+    try { d = await get<RuleDue>('/v2/rule-due/' + encodeURIComponent(id), {fresh: true}); }
     catch (e) {
       if (side.dataset.open !== want) return;
-      if (e.status === 404) gone(); else side.innerHTML = ruPanelHead('Due date', close) + `<p class="err ru-pad">${esc(e.message)}</p>`;
+      if (errorStatus(e) === 404) gone(); else side.innerHTML = ruPanelHead('Due date', close) + `<p class="err ru-pad">${esc(errorMessage(e, ''))}</p>`;
       return;
     }
     if (side.dataset.open !== want) return;
@@ -1346,17 +1387,17 @@ async function ruDuePanel(side, id, ruleId, note = '') {
     if (d.ended_on && d.replaced_by) { location.replace(ruHref('due', {due: d.replaced_by})); return; }
     if (d.retired_at || d.ended_on) { gone(); return; }
   }
-  let rules = [];
+  let rules: RuleRow[] = [];
   if (fresh && !ruleId) {
     side.innerHTML = ruPanelHead('Add due date', close) + skelRows(3);
     rules = (await ruAll('/v2/rules?status=active').catch(() => [])).filter(r => r.can_edit);
     if (side.dataset.open !== want) return;
   }
-  let rule = null;
-  if (fresh && ruleId) rule = await get('/v2/rules/' + encodeURIComponent(ruleId)).catch(() => null);
+  let rule: RuleRow | null = null;
+  if (fresh && ruleId) rule = await get<RuleRow>('/v2/rules/' + encodeURIComponent(ruleId)).catch(() => null);
   if (side.dataset.open !== want) return;
-  const edit = fresh ? true : !!d.can_edit, dis = edit ? '' : ' disabled';
-  const opt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
+  const edit = fresh || !!d?.can_edit, dis = edit ? '' : ' disabled';
+  const opt = (v: string, l: string, sel: string | null | undefined) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
   const owner = d?.owner || '';
   const owners = `<optgroup label="Bots">${ruBots().map(b => opt('bot:' + b.id, b.name, owner)).join('')}</optgroup>
     <optgroup label="People">${ruPeople().map(p => opt('human:' + p.id, p.name, owner || myActor())).join('')}</optgroup>`;
@@ -1368,7 +1409,7 @@ async function ruDuePanel(side, id, ruleId, note = '') {
     ...marks.map(m => `<div class="ru-h ru-mark"><span>${esc(ruDay(m.due_on, true))}</span><span class="muted">${m.via === 'routine'
       ? 'task closed ' + esc(ruDay(m.at)) : 'marked by ' + esc(ruActorName(m.satisfied_by))}</span><span class="spacer"></span>${ruPill('satisfied')}</div>`)].join('') : '';
   const openDays = d?.open_days || [];
-  const title = fresh ? 'Add due date' : d.rule.text;
+  const title = fresh ? 'Add due date' : d?.rule.text ?? '';
   side.innerHTML = `${ruPanelHead(title, close)}
     <form class="ru-form">
       ${fresh ? `<label class="ru-fl"><span class="ru-lbl">Rule</span>${rule ? `<span class="ru-ruletext">${esc(rule.text)}</span>`
@@ -1384,27 +1425,28 @@ async function ruDuePanel(side, id, ruleId, note = '') {
       ${d?.routine_id && lead != null ? `<a class="ru-routine" href="#/automations/${encodeURIComponent(d.routine_id)}">Open routine ›</a>` : ''}
       ${d ? `<div class="ru-stat"><span class="ru-lbl">Status</span>${ruPill(d.status)}<span class="spacer"></span>
         ${d.can_satisfy && d.status !== 'satisfied' ? '<button class="ghost small" type="button" data-ru-satisfy>Mark satisfied</button>' : ''}</div>
-        <div class="ru-satisfy-on" hidden><select name="due_on" aria-label="Which due date">${openDays.map(day => opt(day, ruDay(day, true), d.due_on)).join('')}</select><button class="ghost small" type="button" data-ru-satisfy-on>Mark</button></div>
+        <div class="ru-satisfy-on" hidden><select name="due_on" aria-label="Which due date">${openDays.map(day => opt(day, ruDay(day, true), d?.due_on)).join('')}</select><button class="ghost small" type="button" data-ru-satisfy-on>Mark</button></div>
         <div class="ru-fl"><span class="ru-lbl">History</span><div class="ru-hist">${history || '<span class="ru-none">—</span>'}</div></div>` : ''}
       <p class="ru-status" role="status">${esc(note)}</p>
       ${edit ? `<div class="ru-foot">${fresh ? '' : '<button class="ghost" type="button" data-ru-remove>Remove</button>'}<span class="spacer"></span><button class="primary" type="submit">Save</button></div>` : ''}
     </form>`;
-  const form = side.querySelector('form'), status = form.querySelector('.ru-status');
+  const form = ruFind<HTMLFormElement>('form', side), status = ruFind('.ru-status', form), fields = ruControls<DueControls>(form);
   form.onsubmit = async ev => {
     ev.preventDefault();
-    const f = form.elements, button = form.querySelector('[type=submit]');
+    const f = fields, button = ruFind<HTMLButtonElement>('[type=submit]', form);
     button.disabled = true; status.textContent = 'Saving…';
     try {
-      let saved;
+      let saved: RuleDue;
       if (fresh) {
         const target = rule?.id || f.rule.value;
-        const body = {first_due: f.due.value, repeats: f.repeats.value, owner: f.owner.value};
+        const body: Record<string, unknown> = {first_due: f.due.value, repeats: f.repeats.value, owner: f.owner.value};
         if (f.routine.value === 'task') body.task_days = Number(f.task_days.value);
         saved = await post('/v2/rules/' + encodeURIComponent(target) + '/due', body);
       } else {
         // A new date or repeat starts again from the date shown (the next one due), not the first date ever set, so
         // occurrences already satisfied stay behind. An owner change alone keeps the anchor.
-        const body = {};
+        if (!d) throw new Error('This due date is gone.');
+        const body: Record<string, unknown> = {};
         if (f.due.value !== d.due_on || f.repeats.value !== d.repeats) { body.first_due = f.due.value; body.repeats = f.repeats.value; }
         if (f.owner.value !== d.owner) body.owner = f.owner.value;
         const days = f.routine.value === 'task' ? Number(f.task_days.value) : null;
@@ -1416,26 +1458,28 @@ async function ruDuePanel(side, id, ruleId, note = '') {
       else await ruRedraw(side, 'due:' + saved.id, 'Saved');
     } catch (e) { button.disabled = false; status.textContent = ruError(e); }
   };
-  form.elements.routine.onchange = () => {
-    const on = form.elements.routine.value === 'task', box = form.querySelector('.ru-lead');
-    box.hidden = !on; form.elements.task_days.disabled = !on;
+  fields.routine.onchange = () => {
+    const on = fields.routine.value === 'task', box = ruFind('.ru-lead', form);
+    box.hidden = !on; fields.task_days.disabled = !on;
   };
-  const satisfy = async dueOn => {
+  const satisfy = async (dueOn: string) => {
     status.textContent = 'Saving…';
     try {
+      if (!d) throw new Error('This due date is gone.');
       await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/satisfied', dueOn ? {due_on: dueOn} : {});
       await ruRedraw(side, 'due:' + d.id, 'Saved');
     } catch (e) { status.textContent = ruError(e); }
   };
   // More than one open occurrence: the server needs to know which one.
   form.querySelector('[data-ru-satisfy]')?.addEventListener('click', () => {
-    if (openDays.length > 1) { form.querySelector('.ru-satisfy-on').hidden = false; return; }
+    if (openDays.length > 1) { ruFind('.ru-satisfy-on', form).hidden = false; return; }
     void satisfy('');
   });
-  form.querySelector('[data-ru-satisfy-on]')?.addEventListener('click', () => void satisfy(form.elements.due_on.value));
+  form.querySelector('[data-ru-satisfy-on]')?.addEventListener('click', () => void satisfy(fields.due_on.value));
   form.querySelector('[data-ru-remove]')?.addEventListener('click', async () => {
     if (!confirm('Remove this due date?')) return;
     try {
+      if (!d) throw new Error('This due date is gone.');
       await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
       location.hash = ruHref('due');
       await ruReload();
@@ -1446,15 +1490,15 @@ async function ruDuePanel(side, id, ruleId, note = '') {
 // ----------------------------------------------------------------- Add rule
 // Internal or External first; Internal asks Rule, Who (Followed by) and With, External asks Rule, Who and From (an
 // existing one, or a new name with its kind); then If broken. A person who can't manage what they wrote adds a suggestion, which the server decides.
-async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
-  let dlg = document.getElementById('ru-add');
+async function ruAddOpen({kind = 'internal', who = null, after = null}: {kind?: RuleKind; who?: RuleScope | ScopeIds | null; after?: ((made: RuleRow) => unknown) | null} = {}) {
+  let dlg = document.getElementById('ru-add') as HTMLDialogElement | null;
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.id = 'ru-add'; dlg.className = 'ru-modal'; dlg.setAttribute('aria-label', 'Add rule');
-    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
+    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg?.close(); });
     document.body.appendChild(dlg);
   }
-  const sources = await ruAll('/v2/rule-sources').catch(() => []);
+  const sources = await ruAll<RuleSource>('/v2/rule-sources').catch(() => []);
   // Opened for one party (a bot's page, a Reach panel), the rule is for that party: just the text, the rest behind More.
   const quick = !!who && Object.values(who).some(v => Array.isArray(v) ? v.length : v);
   dlg.innerHTML =`<form class="ru-form" method="dialog">
@@ -1475,20 +1519,21 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
       <p class="ru-status" role="status"></p>
       <div class="ru-foot"><span class="spacer"></span><button class="ghost" type="button" data-ru-close>Cancel</button><button class="primary" type="submit">Save</button></div>
     </form>`;
-  const form = dlg.querySelector('form'), status = form.querySelector('.ru-status');
-  const adv = form.querySelector('[data-ru-adv]');
-  if (adv) adv.onclick = () => { adv.hidden = true; form.querySelector('.ru-adv').hidden = false; };
-  const whoEd = ruScopeEditor(form.querySelector('[data-scope="who"]'), who || {}, {flags: true});
-  const withEd = ruScopeEditor(form.querySelector('[data-scope="with"]'), {}, {flags: false});
-  const show = k => form.querySelectorAll('[data-for]').forEach(el => { el.hidden = el.dataset.for !== k; });
+  const form = ruFind<HTMLFormElement>('form', dlg), status = ruFind('.ru-status', form);
+  const adv = form.querySelector<HTMLButtonElement>('[data-ru-adv]');
+  if (adv) adv.onclick = () => { adv.hidden = true; ruFind('.ru-adv', form).hidden = false; };
+  const whoEd = ruScopeEditor(ruFind('[data-scope="who"]', form), who || {}, {flags: true});
+  const withEd = ruScopeEditor(ruFind('[data-scope="with"]', form), {}, {flags: false});
+  const show = (k: string) => form.querySelectorAll<HTMLElement>('[data-for]').forEach(el => { el.hidden = el.dataset.for !== k; });
   show(kind);
   ruSegWire(form, (name, v) => { if (name === 'kind') show(v); if (name === 'if_broken') ruBrokenSync(form, v); });
-  form.elements.source.onchange = () => { form.querySelector('.ru-newsrc').hidden = form.elements.source.value !== 'new'; };
-  form.querySelectorAll('[data-ru-close]').forEach(b => { b.onclick = () => dlg.close(); });
+  const controls = ruControls<AddRuleControls>(form);
+  controls.source.onchange = () => { ruFind('.ru-newsrc', form).hidden = controls.source.value !== 'new'; };
+  form.querySelectorAll<HTMLButtonElement>('[data-ru-close]').forEach(b => { b.onclick = () => dlg.close(); });
   form.onsubmit = async ev => {
     ev.preventDefault();
-    const k = ruSegValue(form, 'kind'), f = form.elements, button = form.querySelector('[type=submit]');
-    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), if_broken: ruSegValue(form, 'if_broken')};
+    const k = ruSegValue(form, 'kind'), f = controls, button = ruFind<HTMLButtonElement>('[type=submit]', form);
+    const body: Record<string, unknown> = {kind: k, text: f.text.value.trim(), who: whoEd.value(), if_broken: ruSegValue(form, 'if_broken')};
     if (k === 'internal') body.with = withEd.value();
     if (body.if_broken === 'escalate' && f.reviewer.value) body.reviewer = f.reviewer.value;
     button.disabled = true; status.textContent = 'Saving…';
@@ -1513,7 +1558,7 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     } catch (e) { button.disabled = false; status.textContent = ruError(e); }
   };
   dlg.showModal();
-  form.elements.text.focus();
+  controls.text.focus();
 }
 
 // ----------------------------------------------------------------- Add document
@@ -1523,24 +1568,24 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
 // screening holds the document (`screening: "hold"`), Counsel is given none of its text, and the dialog says that instead.
 const RU_DOC_SKIP = new Set(['image', 'media']);   // Files kinds Counsel reads no text from
 const RU_DOC_PICKS = 6;
-const ruIsLink = v => /^https?:\/\/\S+$/i.test(v);
+const ruIsLink = (v: string) => /^https?:\/\/\S+$/i.test(v);
 // A refusal as one line: Counsel off, or the server's own reason (a file Counsel can't read and why, a link that didn't
 // open and why, a file or From that isn't there), which is already one line for the person.
-function ruDocError(e) {
-  if (e?.body?.error?.code === 'counsel_off') return 'Counsel is off.';
+function ruDocError(e: unknown) {
+  if (errorCode(e) === 'counsel_off') return 'Counsel is off.';
   return ruError(e);
 }
 async function ruDocOpen() {
-  let dlg = document.getElementById('ru-doc');
+  let dlg = document.getElementById('ru-doc') as HTMLDialogElement | null;
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.id = 'ru-doc'; dlg.className = 'ru-modal'; dlg.setAttribute('aria-label', 'Add document');
-    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
+    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg?.close(); });
     document.body.appendChild(dlg);
   }
-  const [sources, recent] = await Promise.all([ruAll('/v2/rule-sources').catch(() => []),
-    get('/v2/files?limit=50', {fresh: true}).then(r => r.files || []).catch(() => [])]);
-  const readable = f => f.locator !== 'remote_link' && !f.url && !RU_DOC_SKIP.has(f.library_kind) && !f.archived;
+  const [sources, recent] = await Promise.all([ruAll<RuleSource>('/v2/rule-sources').catch(() => []),
+    get<{files?: DocFile[]}>('/v2/files?limit=50', {fresh: true}).then(r => r.files || []).catch(() => [])]);
+  const readable = (f: DocFile) => f.locator !== 'remote_link' && !f.url && !RU_DOC_SKIP.has(f.library_kind ?? '') && !f.archived;
   const files = recent.filter(readable);
   const head = '<div class="ru-side-h"><h2>Add document</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>';
   dlg.innerHTML = `<form class="ru-form" method="dialog">${head}
@@ -1556,10 +1601,10 @@ async function ruDocOpen() {
       <p class="ru-status" role="status"></p>
       <div class="ru-foot"><span class="spacer"></span><button class="ghost" type="button" data-ru-close>Cancel</button><button class="primary" type="submit">Read and suggest rules</button></div>
     </form>`;
-  const form = dlg.querySelector('form'), status = form.querySelector('.ru-status'), find = form.elements.find;
-  const picks = form.querySelector('.ru-picks'), chosen = form.querySelector('.ru-doc');
-  let pick = null, found = [], seq = 0, soon = 0;
-  const pickRow = f => `<button type="button" class="ru-pick" role="option" data-id="${esc(f.id)}"><span class="nav-icon" aria-hidden="true">description</span>
+  const form = ruFind<HTMLFormElement>('form', dlg), status = ruFind('.ru-status', form), controls = ruControls<DocControls>(form), find = controls.find;
+  const picks = ruFind('.ru-picks', form), chosen = ruFind('.ru-doc', form);
+  let pick: DocFile | null = null, found: DocFile[] = [], seq = 0, soon = 0;
+  const pickRow = (f: DocFile) => `<button type="button" class="ru-pick" role="option" data-id="${esc(f.id)}"><span class="nav-icon" aria-hidden="true">description</span>
       <span class="ru-pick-t">${esc(f.title || f.name || f.id)}</span><span class="ru-pick-m">${esc(pageBotName(f))}</span></button>`;
   // The list under the box: recent readable files whose title has every word typed, then search hits by title and text.
   const drawPicks = () => {
@@ -1570,11 +1615,11 @@ async function ruDocOpen() {
     picks.hidden = false;
     picks.innerHTML = rows.map(pickRow).join('') || `<p class="ru-pick-none">${q ? 'No files match.' : 'No files yet.'}</p>`;
   };
-  const choose = f => {
+  const choose = (f: DocFile | null) => {
     pick = f;
     chosen.hidden = !f;
     find.hidden = !!f;
-    if (f) chosen.querySelector('.ru-doc-t').textContent = f.title || f.name || f.id;
+    if (f) ruFind('.ru-doc-t', chosen).textContent = f.title || f.name || f.id;
     else { find.value = ''; find.focus(); }
     drawPicks();
   };
@@ -1586,24 +1631,24 @@ async function ruDocOpen() {
     const q = find.value.trim(), mine = ++seq;
     if (!q || ruIsLink(q)) return;
     soon = setTimeout(async () => {
-      const r = await get('/v2/files/search?q=' + encodeURIComponent(q) + '&limit=' + RU_DOC_PICKS).catch(() => null);
+      const r = await get<{results?: DocFile[]}>('/v2/files/search?q=' + encodeURIComponent(q) + '&limit=' + RU_DOC_PICKS).catch(() => null);
       if (mine !== seq || !dlg.open) return;
       found = (r?.results || []).filter(readable);
       drawPicks();
     }, 250);
   };
   picks.onclick = ev => {
-    const b = ev.target.closest('.ru-pick');
+    const b = eventElement(ev)?.closest<HTMLElement>('.ru-pick');
     if (b) choose([...files, ...found].find(f => f.id === b.dataset.id) || null);
   };
-  chosen.querySelector('[data-ru-unpick]').onclick = () => choose(null);
-  form.elements.source.onchange = () => { form.querySelector('.ru-newdoc').hidden = form.elements.source.value !== 'new'; };
+  ruFind<HTMLButtonElement>('[data-ru-unpick]', chosen).onclick = () => choose(null);
+  controls.source.onchange = () => { ruFind('.ru-newdoc', form).hidden = controls.source.value !== 'new'; };
   ruSegWire(form);
-  form.querySelectorAll('[data-ru-close]').forEach(b => { b.onclick = () => dlg.close(); });
+  form.querySelectorAll<HTMLButtonElement>('[data-ru-close]').forEach(b => { b.onclick = () => dlg.close(); });
   form.onsubmit = async ev => {
     ev.preventDefault();
-    const f = form.elements, button = form.querySelector('[type=submit]'), link = find.value.trim();
-    const body = {note: f.note.value.trim()};
+    const f = controls, button = ruFind<HTMLButtonElement>('[type=submit]', form), link = find.value.trim();
+    const body: Record<string, unknown> = {note: f.note.value.trim()};
     if (pick) body.file_id = pick.id;
     else if (ruIsLink(link)) body.url = link;
     else { status.textContent = 'Pick a file or paste a link.'; return; }
@@ -1614,7 +1659,7 @@ async function ruDocOpen() {
     } else if (f.source.value) body.source_id = f.source.value;
     else { status.textContent = 'Pick who it is from.'; return; }
     button.disabled = true; status.textContent = 'Reading…';
-    let out;
+    let out: DocReadAnswer;
     try { out = await post('/v2/rules/read', body); }
     catch (e) { button.disabled = false; status.textContent = ruDocError(e); return; }
     if (RU) RU.sources = [];
@@ -1635,18 +1680,18 @@ async function ruDocOpen() {
 // ----------------------------------------------------------------- the bot's Rules tab
 // Internal first (the written rules whose Who or With names the bot, then its settings as sentences, each opening the
 // setting), then External. Every teammate reads it. Each kind is paged on its own: a More row reads its next page.
-const ruBotRow = r => `<a class="ru-row" role="row" href="${ruHref(r.kind, {rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span>${r.kind === 'internal'
+const ruBotRow = (r: RuleRow) => `<a class="ru-row" role="row" href="${ruHref(r.kind, {rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span>${r.kind === 'internal'
   ? `<span class="ru-c${ruScopeWords(r.with, 'Anyone') === 'Anyone' ? ' ru-none' : ''}" data-l="With">${esc(ruScopeWords(r.with, 'Anyone'))}</span><span class="ru-c" data-l="Followed by">${esc(ruScopeWords(r.who))}</span>`
   : `<span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span>`}</a>`;
-const ruBotMore = (kind, cursor) => cursor ? `<button type="button" class="ru-row ru-more-row" data-ru-bot-more="${kind}" data-cursor="${esc(cursor)}">More</button>` : '';
+const ruBotMore = (kind: string, cursor: string | null | undefined) => cursor ? `<button type="button" class="ru-row ru-more-row" data-ru-bot-more="${kind}" data-cursor="${esc(cursor)}">More</button>` : '';
 let RU_BOT_GEN = 0;   // each read of the tab; an older response (or its More) never paints over a newer one
 // A bot's reach as the Rules panel has it: its mode and counts, each with where it comes from, and the exceptions it
 // sends or receives. Each row's link opens the panel, where it is changed.
-const RR_MODE_WORDS = {open: 'anyone', nearby: 'nearby', closed: "only who's listed"};
-function botReachRows(slug, data) {
+const RR_MODE_WORDS: Record<string, string> = {open: 'anyone', nearby: 'nearby', closed: "only who's listed"};
+function botReachRows(slug: string, data: ReachData | null | undefined) {
   if (!data) return [];   // a hub from before Reach
   const p = 'bot:' + slug, R = rrNormal(data), eff = rrEff(p, R), href = ruHref('internal', {party: p});
-  const row = (text, from = '') => `<div class="ru-row ru-setting" role="row"><span class="ru-txt">${esc(text)}${from ? ` <span class="rr-from">${esc(from)}</span>` : ''}</span>`
+  const row = (text: string, from = '') => `<div class="ru-row ru-setting" role="row"><span class="ru-txt">${esc(text)}${from ? ` <span class="rr-from">${esc(from)}</span>` : ''}</span>`
     + `<span class="ru-c ru-none">—</span><span class="ru-c"><a class="ru-set" href="${esc(href)}">Setting ›</a></span></div>`;
   const rows = [row('Reach: ' + RR_MODE_WORDS[eff.mode], rrFrom(p, eff, 'mode')),
     row(`Up to ${eff.chats_per_day} chats a day`, rrFrom(p, eff, 'chats_per_day')),
@@ -1654,22 +1699,22 @@ function botReachRows(slug, data) {
   for (const {l, dir, other} of rrLinesOf(p, R)) rows.push(row(`${dir === 'to' ? 'To' : 'From'} ${rrName(other)} · ${rrCount(l) || 'by rule'}`));
   return rows;
 }
-async function botRulesLoad(slug) {
-  const host = $('#bot-rules');
+async function botRulesLoad(slug: string) {
+  const host = $('#bot-rules') as HTMLElement | null;
   if (!host) return;
   const gen = ++RU_BOT_GEN, current = () => gen === RU_BOT_GEN && BOT?.slug === slug && host.isConnected;
   if (!host.dataset.loaded) host.innerHTML = skelRows(4, {card: true});
-  let data, reach;
+  let data: BotRules, reach: ReachData | null;
   try {
-    [data, reach] = await Promise.all([get('/v2/bots/' + encodeURIComponent(slug) + '/rules', {fresh: true}),
-      get('/v2/reach', {fresh: true}).catch(() => null)]);
+    [data, reach] = await Promise.all([get<BotRules>('/v2/bots/' + encodeURIComponent(slug) + '/rules', {fresh: true}),
+      get<ReachData>('/v2/reach', {fresh: true}).catch(() => null)]);
   }
-  catch (e) { if (current()) host.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  catch (e) { if (current()) host.innerHTML = `<p class="err">${esc(errorMessage(e, ''))}</p>`; return; }
   if (!current()) return;
   host.dataset.loaded = '1';
-  const internal = data.internal || {rules: []}, external = data.external || {rules: []}, settings = data.settings || [];
+  const internal: BotRulesPage = data.internal || {rules: []}, external: BotRulesPage = data.external || {rules: []}, settings: BotSetting[] = data.settings || [];
   const reachRows = botReachRows(slug, reach);
-  const count = (page, extra = 0) => `${page.rules.length + extra}${page.next_cursor ? '+' : ''}`;
+  const count = (page: BotRulesPage, extra = 0) => `${page.rules.length + extra}${page.next_cursor ? '+' : ''}`;
   host.innerHTML = `<section class="card ru-bot-card"><header><h2>Internal</h2><span class="muted" data-ru-n="internal">${count(internal, settings.length + reachRows.length)}</span><span class="spacer"></span>
         ${S.me?.role !== 'bot' ? '<button class="ghost small" type="button" data-ru-bot-add>+ Add rule</button>' : ''}</header>
       <div class="ru-table ru-bot-int" role="table"><div class="ru-row ru-head" role="row"><span>Rule</span><span>With</span><span>Followed by</span></div>
@@ -1685,17 +1730,18 @@ async function botRulesLoad(slug) {
   host.querySelector('[data-ru-bot-add]')?.addEventListener('click', () =>
     ruAddOpen({kind: 'internal', who: {bots: [slug]}, after: () => botRulesLoad(slug)}));
   host.onclick = async ev => {
-    const set = ev.target.closest('[data-ru-setting]');
+    const set = eventElement(ev)?.closest<HTMLElement>('[data-ru-setting]');
     if (set) { ruSettingGo(set, ev); return; }
-    const more = ev.target.closest('[data-ru-bot-more]');
+    const more = eventElement(ev)?.closest<HTMLButtonElement>('[data-ru-bot-more]');
     if (!more || more.disabled) return;
     more.disabled = true;
-    const kind = more.dataset.ruBotMore;
+    const kind = more.dataset.ruBotMore as 'internal' | 'external';
     try {
-      const page = (await get(`/v2/bots/${encodeURIComponent(slug)}/rules?${kind}_cursor=${encodeURIComponent(more.dataset.cursor)}`, {fresh: true}))[kind];
+      const page = (await get<BotRules>(`/v2/bots/${encodeURIComponent(slug)}/rules?${kind}_cursor=${encodeURIComponent(more.dataset.cursor ?? '')}`, {fresh: true}))[kind];
+      if (!page) throw new Error('This bot has no more rules.');
       if (!current() || !more.isConnected) return;
       more.insertAdjacentHTML('beforebegin', page.rules.map(ruBotRow).join(''));
       if (page.next_cursor) { more.dataset.cursor = page.next_cursor; more.disabled = false; } else more.remove();
-    } catch (e) { more.disabled = false; toast(e.message, true); }
+    } catch (e) { more.disabled = false; toast(errorMessage(e, ''), true); }
   };
 }
