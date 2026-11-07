@@ -489,8 +489,11 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
     # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first;
     # test_system_jobs_list scans all of backend/ for recorded job keys, so it is one more.
+    # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
+    # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
+    # seconds each) run for any test file change too.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 26
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 31
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
@@ -1353,3 +1356,74 @@ def test_a_file_that_reaches_tests_only_through_a_conftest_selects_its_direct_re
     assert "backend/tests/test_unrelated.py" not in plan["python"]
     assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"])
     assert any("conftest.py is reached" in note for note in plan["uncertain"])
+
+
+def test_a_changed_browser_script_runs_itself_when_the_map_does_not_list_it(tmp_path):
+    # The queue group of #2844 changed ui/tests/threads.cjs and threads-real-hub.cjs and ran neither: a ui/ file outside
+    # UI_MAP seeded nothing, and a browser script names no other script.
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/tests/notes.cjs", "// a browser script\n")
+    plan = checks.selection(["ui/tests/notes.cjs"], root=tmp_path, core=[])
+    assert "notes" in plan["browser"]
+    assert "--all" not in plan["browser"]
+
+
+def icon_font_tree(root):
+    """#2893's shape: scripts/build-icon-font.py globs ui/app/*.js and backend/tests/test_icon_font.py runs it."""
+    source(
+        root,
+        "scripts/build-icon-font.py",
+        "from pathlib import Path\n"
+        'ROOT = Path(__file__).resolve().parent.parent\nUI = ROOT / "ui"\n'
+        'def used_icons():\n    return [p.read_text() for p in UI.glob("app/*.js")]\n',
+    )
+    source(
+        root,
+        "backend/tests/test_icon_font.py",
+        "import importlib.util\nfrom pathlib import Path\n"
+        'ROOT = Path(__file__).resolve().parents[2]\n'
+        '_spec = importlib.util.spec_from_file_location("build_icon_font", ROOT / "scripts" / "build-icon-font.py")\n'
+        "build = importlib.util.module_from_spec(_spec)\n_spec.loader.exec_module(build)\n"
+        "def test_every_icon_in_use_is_in_the_font_manifest():\n    assert build.used_icons() is not None\n",
+    )
+
+
+def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui_folder(tmp_path):
+    # #2893 changed ui/app/ files. backend/tests/test_icon_font.py runs scripts/build-icon-font.py, which reads each
+    # ui/app/*.js: the test is reached through that module, not through a direct read of the file.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
+    source(tmp_path, "ui/app/new.js", "export const icon = 'filter_list';\n")
+    source(tmp_path, "ui/styles/new.css", ".x { color: red; }\n")
+    plan = checks.selection(["ui/app/new.js"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" in plan["python"]
+    unrelated = checks.selection(["ui/styles/new.css"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" not in unrelated["python"]
+
+
+def test_a_verdict_moves_change_runs_the_factory_sim_that_the_queue_did_not_run_for_2841():
+    # #2841 changed backend/verdict_moves.py and merged through the queue, which had no factory rule then: the sim went
+    # red on main at 21:26Z (verdict_past_open_sibling). The recorded call path reaches the file, so the sim runs.
+    assert checks.factory_reason(["backend/verdict_moves.py"]) is not None
+
+
+def test_a_template_edit_runs_the_hub_command_test_in_the_contract_job_that_2866_broke(mapped):
+    # #2866 added librarian commands with no recorded refusal. test_e2e_cli walks templates/ and skills/ and runs in the
+    # contract job, which any change under those folders selects.
+    assert "backend/tests/test_e2e_cli.py" in checks.CONTRACT_TESTS
+    plan = checks.selection(["templates/catalog/librarian/AGENT.md"])
+    assert plan["contracts"] is True
+
+
+def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder_listing(tmp_path, monkeypatch):
+    # A UI_MAP file runs its mapped scripts, and the module that globs ui/app/*.js reaches test_icon_font for it too,
+    # as it does for a file the map does not list. The map lists this file, so no rule-4 "not in UI_MAP" note applies.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
+    source(tmp_path, "ui/app/mapped.js", "export const icon = 'home';\n")
+    source(tmp_path, "ui/tests/mapped-one.cjs", "// the browser script the map links to\n")
+    monkeypatch.setattr(checks, "UI_MAP", {"ui/app/mapped.js": ["mapped-one"]})
+    plan = checks.selection(["ui/app/mapped.js"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" in plan["python"]
+    assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
+    assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
