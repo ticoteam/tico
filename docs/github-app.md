@@ -425,7 +425,7 @@ app from its settings page.
 
 New GitHub Apps include the task events and read permissions automatically. For an existing
 App, enable webhook events for Pull requests, Pull request reviews,
-Pull request review comments, Check runs, Check suites and Commit statuses, plus Push for
+Pull request review comments, Check runs, Check suites, Workflow runs and Commit statuses, plus Push for
 deploy tracking. Release events are not used. The webhook remains `POST /api/v2/github/webhook` with signature verification.
 Checks need read access to Checks and commit statuses need read access to Commit statuses in
 the GitHub App. Existing installations without these events keep their last known PR states;
@@ -437,6 +437,9 @@ check **Push** and save. Keep the existing webhook URL (`https://<your-host>/api
 secret, SSL verification and repository access unchanged. In **Recent Deliveries**, confirm a genuine
 event receives HTTP 200. An installation event confirms delivery, but does not restore missed pushes;
 enabling Push does not recreate historical deliveries.
+
+A finished workflow run counts as one more check on its head, so a failed workflow wakes the owner once for that
+head even when GitHub sent no check event for it. A started one says nothing.
 
 A PR event updates every task linked to that PR. Checks record passing, failing or pending;
 PR updates record clean, conflict or unknown mergeability. Reviews record approved, changes
@@ -486,6 +489,15 @@ A request adds them to that role and a withdrawn request takes them off; a reque
 the review arrived leaves them on. Logins are unique on the team: setting one someone else has returns
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who
 cannot read a private task, and finished tasks are skipped. Unset, review requests change no roles.
+
+A PR that names one active Dev ticket as "Dev 665", "Dev #665" or "Dev ticket 665" in its branch, title or body links
+itself to that ticket when it is opened, reopened or edited, as `hub task link` would, so a forgotten link does not leave
+the ticket without a PR. A bare "#665" is never read. A PR that names two tickets, a finished or non-Dev ticket, or a
+ticket that already has an open PR links nothing.
+
+GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on active
+Dev tickets whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
+pass, and wakes the owner once per head when one now conflicts.
 
 Several PRs can belong to one task. A PR on a task is information only: GitHub events, release
 tags and deploys never change the task's status or step; a person moves the task. A merged PR

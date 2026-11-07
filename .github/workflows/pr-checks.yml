@@ -12,6 +12,8 @@
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
 # A pull request's own push runs on hosted runners whether or not it comes from a fork. A fork's change runs on RunsOn
 # only once a maintainer queues it.
+# Repository variable TICO_CI_HOSTED=true runs every RunsOn job here on GitHub-hosted runners instead
+# (docs/releasing.md#tests-on-a-pr); unset, RunsOn is the default.
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
 name: PR checks
 
@@ -38,7 +40,7 @@ concurrency:
 jobs:
   plan:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
     timeout-minutes: 12
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -112,7 +114,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' }}
     name: ${{ matrix.suite }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -121,6 +123,9 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -188,7 +193,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.factory == 'true' }}
     name: factory sim ${{ matrix.shard }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -234,7 +239,7 @@ jobs:
     # once installed; tools are pinned.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -295,9 +300,12 @@ jobs:
     # checks should be. rustfmt and clippy -D warnings (scripts/rust_checks.sh) when a crate it checks changed.
     name: rust lint
     if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -325,9 +333,12 @@ jobs:
     # the build dependencies app.yml installs. Nothing runs when no app file changed.
     name: desktop app
     if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 45
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -412,7 +423,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.caddy == 'true' }}
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -427,6 +438,9 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -474,7 +488,7 @@ jobs:
     # after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
     needs: [plan, tests, factory-sim, caddy-linux, static, rust-lint, desktop-app, recorder]
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4

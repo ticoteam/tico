@@ -18,10 +18,24 @@ PLATFORMS = ("google_ads", "meta_ads")
 SERVICE = {"google_ads": "google-ads", "meta_ads": "meta-ads"}
 PLATFORM_OF = {v: k for k, v in SERVICE.items()}
 LABEL = {"google_ads": "Google Ads", "meta_ads": "Meta Ads"}
-# The vendor contact each platform's spend books under (ad_import makes it): a line or hold filed under it is the
-# platform's, whatever its descriptor says.
+# The vendor contact each platform's spend books under (ad_import makes it in native books): a line or hold filed under
+# it is the platform's, whatever its descriptor says.
 VENDOR = {"google_ads": "Google Ads", "meta_ads": "Meta"}
 _CONTACT = {name.casefold(): p for p, name in VENDOR.items()}
+# The names a mirrored book's own vendor for a platform goes by, first match wins (QuickBooks and Xero keep their own
+# contacts, and Tico never makes one there).
+MIRROR_NAMES = {
+    "google_ads": ("Google Ads", "Google", "Google LLC"),
+    "meta_ads": (
+        "Meta",
+        "Meta Ads",
+        "Facebook",
+        "Facebook Ads",
+        "Meta Platforms",
+        "Meta Platforms Inc",
+        "Meta Platforms, Inc.",
+    ),
+}
 # A card or bank descriptor that is a platform's ad charge. Tight on purpose: GOOGLE *ADS, GOOGLE ADS and GOOGLE*ADS but
 # not GOOGLE ADSENSE (nothing but digits or punctuation may follow ADS); FACEBK *, FB.ME/ADS, FACEBOOK ADS and META ADS
 # but not Meta's other charges (Workplace, Quest, Verified, Blueprint) or a bare FACEBOOK or META PLATFORMS.
@@ -258,7 +272,7 @@ def replace_spend(
 
 @dataclass(frozen=True)
 class LiveSpend:
-    """One counting ad account's spend over a window: an active account of an enabled import."""
+    """One counting ad account's spend over a window: an active account of an enabled import (`import_id`)."""
 
     ad_account_id: str
     platform: str
@@ -266,25 +280,84 @@ class LiveSpend:
     books_account_id: str
     currency: str
     amount: int
+    import_id: str = ""
 
 
 def live_spend(c: sqlite3.Connection, start: str, end: str) -> list[LiveSpend]:
     """Spend per counting account over [start, end] (days), one row per account and currency; accounts with none
-    still come back (amount 0), so a reader knows the platform covers them."""
+    still come back (amount 0), so a reader knows the platform covers them. An ad account two enabled imports both
+    hold (the import refuses that, so only older data could) counts once: the earliest account row."""
     if not ready(c):
         return []
     rows = c.execute(
-        "SELECT a.id, a.platform, COALESCE(a.bot_slug, '') AS bot_slug, i.account_id, "
-        "COALESCE(s.currency, a.currency) AS currency, COALESCE(SUM(s.amount_cents), 0) AS amount "
+        "SELECT a.id, a.platform, a.external_id, COALESCE(a.bot_slug, '') AS bot_slug, i.id AS import_id, "
+        "i.account_id, COALESCE(s.currency, a.currency) AS currency, COALESCE(SUM(s.amount_cents), 0) AS amount "
         "FROM fin_ad_accounts a JOIN fin_ad_imports i ON i.tool_id=a.tool_id AND i.enabled=1 "
         "LEFT JOIN fin_ad_spends s ON s.ad_account_id=a.id AND s.day BETWEEN ? AND ? "
-        "WHERE a.active=1 GROUP BY a.id, COALESCE(s.currency, a.currency) ORDER BY a.id",
+        "WHERE a.active=1 GROUP BY a.id, COALESCE(s.currency, a.currency) ORDER BY a.created_at, a.id",
         (start, end),
+    ).fetchall()
+    first: dict[tuple[str, str], str] = {}
+    for r in rows:
+        first.setdefault((str(r["platform"]), str(r["external_id"])), str(r["id"]))
+    return sorted(
+        (
+            LiveSpend(
+                r["id"],
+                r["platform"],
+                r["bot_slug"],
+                r["account_id"] or "",
+                r["currency"],
+                int(r["amount"]),
+                r["import_id"],
+            )
+            for r in rows
+            if first[(str(r["platform"]), str(r["external_id"]))] == str(r["id"])
+        ),
+        key=lambda x: (x.ad_account_id, x.currency),
     )
-    return [
-        LiveSpend(r["id"], r["platform"], r["bot_slug"], r["account_id"] or "", r["currency"], int(r["amount"]))
-        for r in rows
-    ]
+
+
+def account_label(platform: str, external_id: str) -> str:
+    """An ad account as its platform shows it: 123-456-7890 for Google Ads, act_123 for Meta."""
+    if platform == "google_ads" and len(external_id) == 10 and external_id.isdigit():
+        return f"{external_id[:3]}-{external_id[3:6]}-{external_id[6:]}"
+    return "act_" + external_id if platform == "meta_ads" else external_id
+
+
+@dataclass(frozen=True)
+class Claim:
+    """An ad account another enabled import already reads: one import per ad account, so its spend counts once."""
+
+    external_id: str
+    label: str
+    tool_id: str
+    tool_name: str
+
+    @property
+    def text(self) -> str:
+        return f"Account {self.label} already imports from {self.tool_name}"
+
+
+def claimed(c: sqlite3.Connection, tool_id: str, platform: str, external_ids: Iterable[str]) -> dict[str, Claim]:
+    """{external id: the claim} for those of these ad accounts an active account of another tool's enabled import on the
+    platform holds (the earliest such account when several do)."""
+    wanted = sorted(set(external_ids))
+    if not wanted or not ready(c):
+        return {}
+    marks = ",".join("?" * len(wanted))
+    out: dict[str, Claim] = {}
+    for r in c.execute(
+        "SELECT a.external_id, a.tool_id, COALESCE(t.name, a.tool_id) AS tool_name FROM fin_ad_accounts a "
+        "JOIN fin_ad_imports i ON i.tool_id=a.tool_id AND i.enabled=1 LEFT JOIN tools t ON t.id=a.tool_id "
+        f"WHERE a.active=1 AND a.platform=? AND a.tool_id<>? AND a.external_id IN ({marks}) "
+        "ORDER BY a.created_at, a.id",
+        (platform, tool_id, *wanted),
+    ):
+        ext = str(r["external_id"])
+        if ext not in out:
+            out[ext] = Claim(ext, account_label(platform, ext), str(r["tool_id"]), str(r["tool_name"]))
+    return out
 
 
 def account_spend(c: sqlite3.Connection, tool_id: str, start: str, end: str) -> dict[str, int]:
@@ -309,9 +382,9 @@ def last_import(c: sqlite3.Connection) -> str | None:
     return str(row[0]) if row and row[0] else None
 
 
-def enabled_platforms(c: sqlite3.Connection) -> dict[str, AdImport]:
-    """{platform: its enabled import}. At most one per platform (the API refuses a second)."""
-    return {i.platform: i for i in imports(c) if i.enabled}
+def enabled_imports(c: sqlite3.Connection) -> dict[str, AdImport]:
+    """{import id: an enabled import}. Several may read one platform, each its own ad accounts."""
+    return {i.id: i for i in imports(c) if i.enabled}
 
 
 def warn_once(c: sqlite3.Connection, budget_id: str, period_key: str, level: str, bot_slug: str, at: str) -> bool:
@@ -341,10 +414,29 @@ def descriptor_platform(text: str) -> str:
     return next((p for p, rx in DESCRIPTORS.items() if rx.search(text or "")), "")
 
 
+def platform_contact(c: sqlite3.Connection, book_id: str, platform: str, mirror: bool = False) -> str:
+    """The platform's vendor contact, found and never made ("" when none): a vendor contact named, or aliased, as
+    VENDOR says (native books, where ad_import makes it), or in mirrored books the first of MIRROR_NAMES the
+    provider's contacts go by. An active contact before an inactive one, then the oldest."""
+    names = MIRROR_NAMES[platform] if mirror else (VENDOR[platform],)
+    for name in names:
+        nk = name.casefold().strip()  # core.ledger.name_key
+        row = c.execute(
+            "SELECT k.id FROM fin_contacts k WHERE k.book_id=? AND k.kind IN ('vendor','both') AND (lower(k.name)=? "
+            "OR k.id IN (SELECT contact_id FROM fin_vendor_aliases WHERE book_id=? AND name_key=?)) "
+            "ORDER BY k.active DESC, k.created_at, k.id LIMIT 1",
+            (book_id, nk, book_id, nk),
+        ).fetchone()
+        if row is not None:
+            return str(row[0])
+    return ""
+
+
 def vendor_platform(c: sqlite3.Connection, book_id: str, key: str) -> str:
-    """The ad platform a vendor key is ("" when none). A contact is one when it is the contact the import made
-    ("Google Ads", "Meta") or its name or an alias is a platform descriptor; a posted name is one when its key or the
-    label it was posted under is."""
+    """The ad platform a vendor key is ("" when none). A contact is one when it is the platform's contact
+    (platform_contact; in mirrored books the provider's own), is named as the import names it ("Google Ads", "Meta"),
+    or its name or an alias is a platform descriptor; a posted name is one when its key or the label it was posted
+    under is."""
     if not key:
         return ""
     row = c.execute("SELECT name FROM fin_contacts WHERE id=?", (key,)).fetchone()
@@ -352,6 +444,11 @@ def vendor_platform(c: sqlite3.Connection, book_id: str, key: str) -> str:
         name = str(row[0] or "")
         if name.strip().casefold() in _CONTACT:
             return _CONTACT[name.strip().casefold()]
+        mode = c.execute("SELECT mode FROM fin_books WHERE id=?", (book_id,)).fetchone()
+        mirror = mode is not None and str(mode[0]) == "mirror"
+        found = next((p for p in PLATFORMS if platform_contact(c, book_id, p, mirror) == key), "")
+        if found:
+            return found
         aliases = [str(r[0]) for r in c.execute("SELECT name_key FROM fin_vendor_aliases WHERE contact_id=?", (key,))]
         return next((p for t in (name, *aliases) if (p := descriptor_platform(t))), "")
     label = c.execute("SELECT label FROM fin_vendor_labels WHERE book_id=? AND name_key=?", (book_id, key)).fetchone()

@@ -314,6 +314,8 @@ change on the merged result, and Release validation runs the whole gate on each 
 (`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
 so they start cold. A pull request's superseded run is canceled; a queue group is never canceled.
 
+**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `pr-checks.yml`, `pr-cache.yml`, `ci.yml` and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), so restores start cold more often, and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
+
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with

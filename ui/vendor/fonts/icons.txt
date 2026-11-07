@@ -65,6 +65,7 @@ expand_more
 fact_check
 feedback
 filter_alt
+filter_list
 flag
 flight
 folder_shared

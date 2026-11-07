@@ -20,7 +20,15 @@ else
   PYTHON_BIN="$(command -v python3)"
 fi
 case " $* " in
-  *" --writebaseline "*) exec uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" "$@" ;;
+  *" --writebaseline "*)
+    # basedpyright writes the baseline; then it is put in the layout scripts/baseline_merge.py merges (the ratchet checks it).
+    status=0
+    uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" "$@" || status=$?
+    if [ -f .basedpyright/baseline.json ]; then
+      "$PYTHON_BIN" scripts/baseline_merge.py normalize .basedpyright/baseline.json
+    fi
+    exit "$status"
+    ;;
 esac
 # lock: CI's default, made explicit so a laptop run is the same. Warnings count too; the baseline holds them as well.
 uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" --baselinemode=lock --warnings "$@"

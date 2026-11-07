@@ -5186,9 +5186,29 @@ STABLE.extend(
 )
 SCHEMAS.update(
     {
+        "FinanceBudgetState": obj(
+            {
+                "spent_from": {
+                    "type": "string",
+                    "enum": ["books", "platform", "mixed"],
+                    "description": "Where an ad budget's actual comes from: the books, the ad platform's daily spend "
+                    "or both (by month)",
+                },
+                "as_of": {
+                    "type": ["string", "null"],
+                    "description": "The ad platforms' last import, when their spend counts",
+                },
+                "reported": {
+                    "type": ["integer", "null"],
+                    "description": "Cents: an ad budget's platform spend shown beside actual and never in it (its vendor "
+                    "is not the platform's own contact, so nothing is swapped); null otherwise",
+                },
+            }
+        ),
+        "FinanceBudgetRow": obj({"id": "s", "name": "s", "platform": "s", "state": ref("FinanceBudgetState")}),
         "FinanceBudgets": obj(
             {
-                "budgets": items({"type": "object", "additionalProperties": True}),
+                "budgets": items(ref("FinanceBudgetRow")),
                 "more": "b",
                 "on": "s",
                 "view_version": "i",
@@ -5721,7 +5741,13 @@ SCHEMAS.update(
                 "books_lines": items(obj({"id": "s", "code": "s", "name": "s"})),
                 "elsewhere": {
                     "type": ["object", "null"],
-                    "properties": {"tool_id": {"type": "string"}, "tool_name": {"type": "string"}},
+                    "description": "One of this tool's ad accounts another enabled import already reads (one import "
+                    "per ad account), so this one can't be switched on; null when none",
+                    "properties": {
+                        "tool_id": {"type": "string"},
+                        "tool_name": {"type": "string"},
+                        "account": {"type": "string", "description": "The ad account, as its platform shows it"},
+                    },
                 },
                 "month": "s",
                 "month_label": "s",

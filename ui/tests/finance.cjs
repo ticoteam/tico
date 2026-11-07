@@ -855,6 +855,23 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('dialog.fin-dlg[open] [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       assert.deepEqual(actions(writes).at(-1), {kind: 'connection_disconnect', payload: {connection_id: 'c1'}}, tag + ': Disconnect sends connection_disconnect');
+      // A failed sync shows a short reason, the raw text in its title; a text it does not know is "Sync failed". A Brex
+      // pass that read keeps its notes in last_error while active: shown as a note, and the pill stays OK.
+      assert.deepEqual(await page.evaluate(() => ['Mercury refused the token', 'the Stripe key is missing; store it again in Settings',
+        'Brex said 429: slow down', 'Mercury did not answer', 'Stripe said 503', 'reconnect_required', 'Brex said 400: bad cursor'].map(finSyncWhy)),
+      ['Key lacks access', 'Key missing', 'Rate limited, retrying', 'Provider down', 'Provider down', 'Sign-in expired', 'Sync failed'], tag + ': sync errors in words');
+      const railError = sync => page.evaluate(s => {
+        const r = FIN.src.groups.flatMap(g => g.rows).find(x => x.id === 'm1');
+        r.sync = {...r.sync, ...s}; FIN_SRC.sel = 'bank:m1'; finSrcRail();
+        const kv = [...document.querySelectorAll('#fin-rail .fin-kv')].find(e => /^(Error|Note)$/.test(e.firstElementChild.textContent));
+        return {text: kv.innerText.replace(/\s+/g, ' ').trim(), title: kv.querySelector('[title]')?.getAttribute('title') ?? null,
+          pill: document.querySelector('#fin-rail .fin-rail-title .pill').textContent.trim()};
+      }, sync);
+      assert.deepEqual(await railError({status: 'error', last_error: 'Mercury said 502: Bad Gateway'}),
+        {text: 'Error Provider down', title: 'Mercury said 502: Bad Gateway', pill: 'Error'}, tag + ': a failed sync, in words');
+      assert.deepEqual(await railError({status: 'error', last_error: 'odd_code'}), {text: 'Error Sync failed', title: 'odd_code', pill: 'Error'}, tag + ': an unknown code');
+      const note = 'Brex card transactions of type REFUND are not mapped';
+      assert.deepEqual(await railError({provider: 'brex', status: 'active', last_error: note}), {text: 'Note ' + note, title: null, pill: 'OK'}, tag + ': a Brex note');
       await go(page, '#/finance/access', READY.access);
       // The owner first, then teams in org chart order, those on no team under their own heading, then the helpers;
       // the rail opens on the owner.

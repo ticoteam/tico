@@ -225,7 +225,12 @@ COPYRIGHT = "© 2025 Northwind Analytics, Inc. All rights reserved. Terms and pr
 
 def test_a_copyright_year_change_files_nothing(seeded, monkeypatch):
     watch(seeded)
-    pages(monkeypatch, BASE + "\n" + COPYRIGHT, BASE + "\n" + COPYRIGHT.replace("2025", "2026"))
+    # fetch_page returns normalized text; the copyright line is dropped there.
+    pages(
+        monkeypatch,
+        W.normalize(BASE + "\n" + COPYRIGHT),
+        W.normalize(BASE + "\n" + COPYRIGHT.replace("2025", "2026")),
+    )
     before = counts(seeded)
     assert check(seeded)["changed"] == 0
     assert check(seeded)["changed"] == 0

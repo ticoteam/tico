@@ -793,6 +793,10 @@ def test_a_receipt_that_cannot_read_its_pages_exits_zero_and_says_so(stdin):
     assert out.startswith("| Job | Result | Seconds |") and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
 
 
+HOSTED_SWITCH = "${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || "
+RUNSON_WORKFLOWS = ("ci.yml", "pr-cache.yml", "pr-checks.yml", "remote-run.yml")
+
+
 def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
     """Without main pushes, pr-cache.yml keeps main's caches fresh. Each cache it warms is a PR-check cache with the
     same action, key, path or shared key, on the same Spot runner (a key holds the runner image and arch), and every
@@ -831,8 +835,8 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
         if runner == "macos-latest":
             machine = runner
         else:
-            assert runner.startswith("runs-on=${{ github.run_id }}/") and "spot=false" not in runner, ident
-            machine = runner.split("}}", 1)[1]
+            assert runner.startswith(HOSTED_SWITCH) and "spot=false" not in runner, ident
+            machine = re.search(r"/volume=[^']+", runner).group(0)
             assert "gp3:125mbs" in machine, ident
         assert any((uses, args) == (r[1], r[2]) and machine in r[3] for r in restored), ident
         assert lookup is True or ident in ("pip", "npm"), ident  # setup-python/node have no lookup-only
@@ -923,8 +927,8 @@ def test_each_push_runs_only_the_cheap_checks_on_hosted_runners_and_the_queue_ru
     for name in pull_request_jobs - {"checks"}:
         runs_on = doc["jobs"][name]["runs-on"]
         # Only the merge queue takes the RunsOn label; every other event gets the free hosted runner.
-        assert runs_on.startswith("${{ github.event_name == 'merge_group' && format('runs-on={0}/"), name
-        assert runs_on.endswith("|| 'ubuntu-24.04' }}"), name
+        assert runs_on.startswith(HOSTED_SWITCH + "(github.event_name == 'merge_group' && format('runs-on={0}/"), name
+        assert runs_on.endswith("|| 'ubuntu-24.04') }}"), name
     assert doc["jobs"]["checks"]["runs-on"] == "ubuntu-24.04"
     for name in set(doc["jobs"]) - pull_request_jobs:
         assert "github.event_name == 'merge_group'" in str(doc["jobs"][name]["if"]), name
@@ -938,6 +942,30 @@ def test_runner_labels_stay_at_two_or_four_vcpus():
     assert len(families) == 7 and set(families) == {"/family=m8+m7+m6+r8+r7"}, families
     # The Caddy image takes the same families on amd64 only; arm64 keeps its label.
     assert "matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || ''" in text
+
+
+def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
+    """vars.TICO_CI_HOSTED == 'true' moves a RunsOn job to a GitHub-hosted runner. Unset, each RunsOn label is the
+    default, and only a hosted job frees the preinstalled SDKs. The macOS recorder job stays on macos-latest."""
+    import yaml
+
+    for name in RUNSON_WORKFLOWS:
+        jobs = yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text())["jobs"]
+        for job_name, job in jobs.items():
+            runner = str(job.get("runs-on", ""))
+            if "runs-on=" not in runner:
+                continue
+            # The arm64 jobs nest their arch choice inside the switch: "&& (matrix.arch == 'arm64' && ... || ...)".
+            hosted = "${{ vars.TICO_CI_HOSTED == 'true' && "
+            assert runner.startswith(hosted) and "'ubuntu-24.04'" in runner, (name, job_name)
+            assert "format('runs-on={0}/" in runner, (name, job_name)  # the RunsOn label is the fallback, kept verbatim
+            if "arm64" in runner:
+                assert "'ubuntu-24.04-arm'" in runner, (name, job_name)
+            for step in job.get("steps", []):
+                if "/opt/ghc" in str(step.get("run", "")):
+                    assert step.get("if") == "vars.TICO_CI_HOSTED == 'true'", (name, job_name)
+    recorder = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["recorder"]
+    assert recorder["runs-on"] == "macos-latest"
 
 
 def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes():

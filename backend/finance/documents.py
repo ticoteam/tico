@@ -2361,7 +2361,9 @@ ATTACH_RIGHT = {"entry": R.BOOK, "feed": R.BOOK, "unmatched": R.BOOK, "bill": R.
 
 def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """File receipts and documents (Library file ids) on an entry, a feed row, a bill or an invoice the asker sees, or
-    as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts."""
+    as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts. That each
+    file exists and the asker may read it is checked where the asker's identity is, before the action runs
+    (finance_routes.readable_files, for every request through the API and the hub tools)."""
     from .banking import seen
 
     V.only(p, ("subject_kind", "subject_id", "file_ids"))
