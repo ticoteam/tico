@@ -29,6 +29,8 @@ stages it has visited; a requirement added later does not reach a card already p
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -835,6 +837,21 @@ def override_reason(note: str | None) -> str:
     return f"{OVERRIDE_REASON}: {text}".encode()[:REASON_MAX_BYTES].decode(errors="ignore")
 
 
+# The actor whose decision prescribes the move now being made (a named reviewer's "Not validated"). Only that actor's backward
+# move skips the rule-editor test; the reviewer is still recorded as the actor of the move.
+_DECIDED_MOVE: ContextVar[str | None] = ContextVar("pipeline_engine_decided_move", default=None)
+
+
+@contextmanager
+def decided_move(actor: str) -> "Iterator[None]":
+    """Runs the moves inside it as a decision the actor already made (its authority is checked by the caller)."""
+    token = _DECIDED_MOVE.set(actor)
+    try:
+        yield
+    finally:
+        _DECIDED_MOVE.reset(token)
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,
@@ -865,7 +882,7 @@ def check_move(
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
     if target is not None and target["type_id"] == here["type_id"] and target["position"] < here["position"]:
         if (
-            has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor
+            has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor and _DECIDED_MOVE.get() != actor
         ):  # the off switch: no rules, no gate
             H.refuse(
                 conn,

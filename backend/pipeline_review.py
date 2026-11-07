@@ -1184,7 +1184,8 @@ def not_validated(
         back, spawn_link = route
         current = _current_attachment(c, task_id, requirement_id)
         decision = _decide(c, actor, task, requirement, "failed", text, current)
-        _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
+        with pipeline_engine.decided_move(actor):  # the reviewer decided it; the move is recorded as theirs
+            _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
         child = pipeline_links.spawn(c, spawn_link, task_id, again=True, note=text)
         if child is None:
             raise Declined("not_filed", "The follow-up ticket could not be filed", 409)

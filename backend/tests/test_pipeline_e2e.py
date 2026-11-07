@@ -25,6 +25,7 @@ from backend import (
     pipeline_manager,
     pipeline_overview,
     pipeline_review,
+    pipeline_rights,
     pipeline_setup,
     task_relations as TR,
 )
@@ -1050,3 +1051,50 @@ def test_declining_a_product_card_closes_its_open_subtask_and_keeps_the_shipped_
     assert H.task(co.c, d42)["note"] == "Parent declined"
     assert H.task(co.c, d41)["status"] == "closed"  # shipped stays shipped: it is in Done
     assert co.where(d41) == ("Engineering", "Done")
+
+
+# ----------------------------------------------------------------------------- finding 13: a named reviewer can decide
+def test_a_named_reviewer_who_is_not_an_editor_can_file_not_validated(co):
+    """Finding 13 (D64/D66): Ben is Validate's named reviewer and not a pipeline editor. Not validated succeeds, the card
+    goes back to In development, and the events name Ben as the actor."""
+    ben_card = review_card(co)
+    approve_spec(co, ben_card)
+    (d41,) = subtasks(co, ben_card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    assert co.where(ben_card) == ("Product", "Validate")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.c.execute("UPDATE stage_requirements SET reviewer_id = ? WHERE id = ?", (BEN, checked))
+    co.c.commit()
+    assert not pipeline_rights.may_edit_rules(co.c, BEN, co.type["Product"])  # Ben is not an editor
+    co.attach(ben_card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, BEN, ben_card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert result["verdict"] == "failed"
+    assert co.where(ben_card) == ("Product", "In development")
+    actors = {
+        r[0]
+        for r in co.c.execute(
+            "SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step'",
+            (ben_card,),
+        )
+    }
+    assert BEN in actors
+
+
+def test_a_person_who_is_neither_the_reviewer_nor_an_editor_cannot_file_not_validated(co):
+    """Finding 13: Cal is neither the named reviewer nor an editor. Refused with 403, and nothing moves."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.c.execute("UPDATE stage_requirements SET reviewer_id = ? WHERE id = ?", (BEN, checked))
+    co.c.commit()
+    co.attach(card, checked, url=VALIDATION)
+    with pytest.raises(pipeline_review.Declined) as caught:
+        pipeline_review.not_validated(co.c, CAL, card, checked, "Load time stayed over 4 s")
+    co.c.rollback()
+    assert caught.value.status == 403
+    assert co.where(card) == ("Product", "Validate")
