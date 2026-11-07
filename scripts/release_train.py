@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Tico's own release windows, canary then stable, and the hotfix lane (docs/releasing.md#release-windows).
+"""Tico's own release windows (docs/releasing.md#release-windows). The canary (Tico Team) takes each green candidate
+automatically. Stable (TIDY) takes a canary release only after someone approves its release notes.
 
     python3 scripts/release_train.py guard              should the release job run for this event (read-only)
-    python3 scripts/release_train.py window [--open]    act: (--open: promote first) ship a green candidate or validate main
-    python3 scripts/release_train.py promote            canary -> stable, when the bake gate passes
+    python3 scripts/release_train.py window             act: promote approved releases (a window opens, or the backstop
+                                                        runs), then ship a green candidate or validate main
+    python3 scripts/release_train.py promote            canary -> stable, when the canary's release is approved
     python3 scripts/release_train.py hotfix --reason "..." [--sha SHA] [--promote-stable true|false]
                                                 [--override-hold true|false]
-    python3 scripts/release_train.py status             the window, what canary and stable run, the next step
+    python3 scripts/release_train.py status             the window, what canary and stable run, the approvals, the next step
+    python3 scripts/release_train.py notes BASE HEAD    the release notes for HEAD since BASE (read-only)
 
 The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
 
@@ -17,10 +20,15 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     RUN_URL
     CANARY_URL, CANARY_UPDATE_KEY          the canary install (Tico Team) and its update key (docs/service-keys.md)
     STABLE_URL, STABLE_UPDATE_KEY          the stable install and its update key
-    BAKE_HOURS                             how long the canary runs a release before stable gets it (default 4)
     RELEASE_HOLD                           any value holds promotion to stable (a hotfix too, unless override_hold)
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
     GITHUB_ACTOR                           hotfix only: who overrode a hold
+
+Approval: each candidate that reaches the canary gets an open issue, "Release vX.Y.Z: awaiting approval" (label
+release-approval), whose body is its release notes. Someone with write access approves it by adding the `approved` label
+or commenting `/approve`; the `hold` label keeps it from stable. Promotion takes the canary's release to stable at a
+window's open and at the backstop, only when it is approved, not held and healthy, and then closes its issue. A newer
+release on the canary closes the older issues, with a link to the new one.
 
 A release is published as not latest and marked latest (the GitHub release and the images' `latest` tags) only once the
 canary runs it healthy, so new installs, update checks and desktop apps never get a release the canary has not run. The
@@ -52,6 +60,7 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
+NOTES_PATH = ROOT / "scripts/release_notes.py"
 LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 # Window starts in Los Angeles wall-clock time, on weekdays (Monday to Friday) and at weekends.
 WEEKDAY_WINDOWS = ((7, 30), (11, 0), (14, 0), (20, 30))
@@ -69,7 +78,7 @@ CRONS = [
     "0 23 * * *",
 ]
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
-# does, and never opens one, so it never promotes. Minutes 5, 25 and 45: never a window's minute (00 or 30).
+# does, never opens one, and promotes an approved canary release. Minutes 5, 25 and 45: never a window's minute (00 or 30).
 BACKSTOP_CRON = "5-59/20 * * * *"
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 TITLE = re.compile(r"^Validate ([0-9a-f]{40}) as (v\S+) from (v\S+)$")
@@ -79,6 +88,17 @@ UNFINISHED = {"queued", "pending", "waiting", "requested", "in_progress"}
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 ISSUE_LABEL = "release-train"
 BLOCKER_LABEL = "release-blocker"
+APPROVAL_LABEL = "release-approval"
+APPROVED = "approved"
+HOLD = "hold"
+WRITE_LEVELS = ("admin", "maintain", "write")  # the repository roles that may approve
+APPROVAL_TITLE = re.compile(r"^Release (v\d+\.\d+\.\d+): awaiting approval$")
+APPROVE_FOOTER = (
+    "---\n"
+    "Approve: anyone with write access adds the `approved` label or comments `/approve`. Hold: add the `hold` label.\n"
+    "Stable (TIDY) takes an approved release at the next window or backstop run (every 20 minutes), unless it is held or a"
+    " health check fails."
+)
 RELEASE_WAIT = 90 * 60
 VALIDATION_WAIT = 150 * 60
 DISPATCH_WAIT = 120
@@ -92,14 +112,15 @@ REGISTRY = "ghcr.io/ticoteam"
 SKEW = timedelta(seconds=60)  # GitHub's timestamps and this clock can differ a little
 
 
-def _load_rollout():
-    spec = importlib.util.spec_from_file_location("tico_rollout", ROLLOUT_PATH)
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-rollout = _load_rollout()
+rollout = _load("tico_rollout", ROLLOUT_PATH)
+release_notes = _load("tico_release_notes", NOTES_PATH)
 
 
 def sleep(seconds):
@@ -194,6 +215,19 @@ def window_cron_opens(cron, now):
     if fired > now:
         fired -= timedelta(days=1)
     return window_start(now) == fired
+
+
+def window_opens(env, now):
+    """Whether this run opens a window: a manual run, or a window cron that is the current window's start."""
+    event = env.get("GITHUB_EVENT_NAME", "")
+    schedule = env.get("SCHEDULE", "")
+    return event == "workflow_dispatch" or (
+        event == "schedule" and schedule in CRONS and window_cron_opens(schedule, now)
+    )
+
+
+def is_backstop(env):
+    return env.get("GITHUB_EVENT_NAME") == "schedule" and env.get("SCHEDULE") == BACKSTOP_CRON
 
 
 def hhmm(when):
@@ -366,6 +400,11 @@ class GitHub:
             raise Fail("opening the %s issue: %s %s" % (labels[0], code, data.get("message", "")))
         return data
 
+    def edit(self, number, body, state):
+        code, data, _ = self.call("PATCH", "issues/%d" % number, {"body": body, "state": state})
+        if code != 200:
+            raise Fail("updating #%d: %s %s" % (number, code, data.get("message", "")))
+
     def last_text(self, issue):
         """The issue's last comment, or its body when it has none."""
         count = int(issue.get("comments") or 0)
@@ -381,6 +420,13 @@ class GitHub:
 
     def close(self, number):
         self.call("PATCH", "issues/%d" % number, {"state": "closed", "state_reason": "completed"})
+
+    def permission(self, login):
+        """The repository role of a login, as the write levels it counts for: whether it may approve a release."""
+        code, data, _ = self.call("GET", "collaborators/%s/permission" % urllib.parse.quote(login, safe=""))
+        if code != 200:
+            return False
+        return data.get("permission") in WRITE_LEVELS or data.get("role_name") in WRITE_LEVELS
 
 
 # ---- the record: job summary and the log the issue quotes ----
@@ -723,11 +769,7 @@ def cmd_guard(gh, env, now):
     finds nothing to do never enters the `release` environment or queues behind (or displaces) a hotfix."""
     event = env.get("GITHUB_EVENT_NAME", "")
     schedule = env.get("SCHEDULE", "")
-    # Only a window cron that started a real window (or a manual run) opens one. The backstop, an off-season twin of a
-    # cron, and a cron this does not know, act like a push.
-    opening = event == "workflow_dispatch" or (
-        event == "schedule" and schedule in CRONS and window_cron_opens(schedule, now)
-    )
+    opening = window_opens(env, now)
     go = False
     if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
         note("Release windows are off (repository variable RELEASE_TRAINS is not `on`)")
@@ -738,22 +780,28 @@ def cmd_guard(gh, env, now):
             opening = False
         elif opening:
             go = True
-            note(
-                "Window step: %s" % ("window opens (%s)" % env.get("SCHEDULE") if event == "schedule" else "manual run")
-            )
+            note("Window step: %s" % ("window opens (%s)" % schedule if event == "schedule" else "manual run"))
         else:
             plan = plan_step(gh, now, event_run(env))
             lines = problems(plan)
             go = plan["action"] in ("ship", "dispatch") or bool(lines and not reported(gh, lines))
             note("Window step: %s" % plan["why"])
-            # The guard cannot read the canary (no environment), so only the backstop checks a lagging latest: at most
-            # every 20 minutes, the window job retries it when the canary runs that release healthy.
-            if not go and event == "schedule" and schedule == BACKSTOP_CRON:
+            # The guard cannot read the canary (no environment), so only the backstop checks a lagging latest and an
+            # approved release waiting for stable: at most every 20 minutes. The window job decides on the canary.
+            if not go and is_backstop(env):
                 lagging = lagging_latest(gh)
-                if lagging:
+                pending = None if lagging else pending_approval(gh)
+                if lagging or pending:
                     go = True
-                    note("Window step: %s is published but not latest" % lagging)
-    output(go=str(go).lower(), open=str(go and opening).lower())
+                    note(
+                        "Window step: %s"
+                        % (
+                            "%s is published but not latest" % lagging
+                            if lagging
+                            else "%s is approved for stable" % pending
+                        )
+                    )
+    output(go=str(go).lower())
     return 0
 
 
@@ -812,41 +860,146 @@ def dispatch_candidate(gh, sha, version, previous, timeout=DISPATCH_WAIT):
     return None
 
 
-# ---- promote: canary -> stable ----
+# ---- approval: stable takes a canary release only once someone approves its notes ----
 
 
-def running_since(status, version):
-    """When the canary started running `version`: its release history's entry for it (backend/releases.py)."""
-    for entry in reversed((status or {}).get("history") or []):
-        if rollout.plain(entry.get("version")) == version:
-            return parse_time(entry.get("since"))
+def approval_title(version):
+    return "Release %s: awaiting approval" % version
+
+
+def find_approval(gh, version, state="open"):
+    """The approval record of a version (open unless state says otherwise), or None."""
+    want = approval_title(version)
+    return next((issue for issue in gh.issues(APPROVAL_LABEL, state) if issue.get("title") == want), None)
+
+
+def open_approvals(gh):
+    """The open approval records, oldest version first, as (version, issue)."""
+    found = []
+    for issue in gh.issues(APPROVAL_LABEL):
+        match = APPROVAL_TITLE.match(str(issue.get("title") or ""))
+        if match:
+            found.append((match.group(1), issue))
+    return sorted(found, key=lambda item: parse_version(item[0]) or (0, 0, 0))
+
+
+def approval_state(gh, issue):
+    """(who approved, held). The approver is the login with write access that added the `approved` label, or that
+    commented `/approve` (the newest such comment); "" when nobody with write access did. `held` is the hold label."""
+    names = {str(label.get("name") or "") for label in issue.get("labels") or []}
+    number = issue["number"]
+    approver = ""
+    if APPROVED in names:
+        for event in reversed(gh.pages("issues/%d/events?per_page=100" % number)):
+            if event.get("event") == "labeled" and (event.get("label") or {}).get("name") == APPROVED:
+                actor = str((event.get("actor") or {}).get("login") or "")
+                if actor and gh.permission(actor):
+                    approver = actor
+                break
+    if not approver:
+        for comment in reversed(gh.pages("issues/%d/comments?per_page=100" % number)):
+            lines = str(comment.get("body") or "").strip().splitlines()
+            if lines and lines[0].strip().lower() == "/approve":
+                who = str((comment.get("user") or {}).get("login") or "")
+                if who and gh.permission(who):
+                    approver = who
+                    break
+    return approver, HOLD in names
+
+
+def pending_approval(gh):
+    """The oldest open approval record that is approved and not held, or None: stable may take it."""
+    for version, issue in open_approvals(gh):
+        approver, held = approval_state(gh, issue)
+        if approver and not held:
+            return version
     return None
 
 
-def bake_gate(*, version, canary_status, now, bake_hours, hold, blockers):
-    """Whether stable may take what the canary runs. Returns (waits, faults): waits hold the promotion quietly (bake
-    time, the hold switch, a release-blocker issue); faults hold it and are reported. Anything this cannot tell (no
-    answer, an unknown state, no start time) is a fault, never a pass."""
-    waits, faults = [], []
-    plain = rollout.plain(version)
+def approval_body(version, sha, notes, validated):
+    head = "Candidate %s at %s (validated: %s)" % (version, sha[:12], validated or "not recorded")
+    return "\n".join([head, "", notes.rstrip(), "", APPROVE_FOOTER]) + "\n"
+
+
+def open_approval(gh, version, sha, notes, validated=""):
+    """The approval record of a candidate the canary is about to run: created, or updated and reopened when an earlier
+    attempt made it. Its labels exist first. Returns the issue."""
+    gh.ensure_label(APPROVAL_LABEL, "0e8a16", "A release waits for someone to approve its notes")
+    gh.ensure_label(APPROVED, "0e8a16", "Stable (TIDY) may take this release")
+    gh.ensure_label(HOLD, "b60205", "Holds this release from stable (TIDY)")
+    body = approval_body(version, sha, notes, validated)
+    found = find_approval(gh, version, state="all")
+    if found:
+        gh.edit(found["number"], body, "open")
+        return found
+    return gh.create_issue(approval_title(version), body, [APPROVAL_LABEL])
+
+
+def retire_approvals(gh, version, text, *, inclusive):
+    """Closes the open approval records older than `version` (and `version`'s own, when inclusive), with a comment."""
+    for old, issue in open_approvals(gh):
+        older = parse_version(old) < parse_version(version)
+        if older or (inclusive and old == version):
+            gh.comment(issue["number"], text)
+            gh.close(issue["number"])
+            note("Closed the approval for %s: %s" % (old, " ".join(text.split())))
+
+
+def drop_approval(gh, issue, reason):
+    """Closes the approval record of a candidate the canary did not reach: there is nothing to approve."""
+    gh.comment(issue["number"], "Not on the canary, so there is nothing to approve: %s" % " ".join(str(reason).split()))
+    gh.close(issue["number"])
+
+
+def release_notes_for(gh, env, head, previous):
+    """The notes for head: the changes since the last stable release, which is what stable runs (the previous tag when
+    stable's release cannot be read), so an approver sees everything stable would take."""
+    base = previous
+    stable = install("STABLE", env)
+    if stable:
+        try:
+            release = as_tag(running(stable))
+        except Fail as exc:
+            note("Notes: stable's release cannot be read (%s); the notes start at %s" % (exc, previous))
+            release = ""
+        if parse_version(release):
+            base = release
+    return release_notes.build(gh, base, head)
+
+
+def approval_waits(approval, approver, held):
+    """Why the canary's release may not go to stable yet, from its approval record (None when there is none)."""
+    if approval is None:
+        return ["no open approval for this release"]
+    number = approval.get("number")
+    if held:
+        return ["#%s is on hold" % number]
+    if not approver:
+        return ["#%s is not approved yet" % number]
+    return []
+
+
+# ---- promote: canary -> stable ----
+
+
+def promotion_gate(*, version, canary_status, approval_waits, hold, blockers):
+    """Whether stable may take what the canary runs. Returns (waits, faults): waits hold the promotion quietly (no
+    approval yet, the approval is on hold, RELEASE_HOLD, a release-blocker issue); faults hold it and are reported.
+    Anything this cannot tell (no answer, an unknown state) is a fault, never a pass."""
+    waits, faults = list(approval_waits), []
     if not canary_status:
         faults.append("the canary's update status cannot be read")
     else:
         state = canary_status.get("state") or ""
-        running_ = rollout.plain(canary_status.get("running"))
-        if running_ != plain:
-            faults.append("the canary's update status says it runs %s, not %s" % (running_ or "nothing", plain))
+        if rollout.plain(canary_status.get("running")) != rollout.plain(version):
+            faults.append(
+                "the canary's update status says it runs %s, not %s"
+                % (rollout.plain(canary_status.get("running")) or "nothing", rollout.plain(version))
+            )
         elif state not in ("healthy", "idle"):
             faults.append(
                 "the canary's last update is %s: %s" % (state or "unknown", canary_status.get("message") or "")
             )
-        since = running_since(canary_status, plain)
-        if since is None:
-            faults.append("the canary does not say since when it runs v%s" % plain)
-        else:
-            baked = (now - since).total_seconds() / 3600
-            if baked < bake_hours:
-                waits.append("the canary has run v%s %.1f h of %g h" % (plain, baked, bake_hours))
     return waits + holds(hold, blockers), faults
 
 
@@ -856,12 +1009,13 @@ def holds(hold, blockers):
     return found + ["release-blocker #%s is open: %s" % (issue.get("number"), issue.get("title")) for issue in blockers]
 
 
-def promote(gh, env, now=None):
+def promote(gh, env):
+    """Canary -> stable, when the canary runs a stable release ahead of stable's, that release is approved and not held,
+    and the canary runs it healthy. Stable's update closes the release's approval record, and so do older ones."""
     canary, stable = install("CANARY", env), install("STABLE", env)
     if not canary or not stable:
         note("Promote: skipped, " + missing("CANARY" if not canary else "STABLE"))
         return
-    now = now or datetime.now(timezone.utc)
     status = update_status(canary)
     canary_release = rollout.plain((status or {}).get("running"))
     if not canary_release:
@@ -872,15 +1026,17 @@ def promote(gh, env, now=None):
     want, have = as_tag(canary_release), as_tag(stable_release)
     if want == have:
         note("Promote: stable already runs %s" % want)
+        retire_approvals(gh, want, "Stable (TIDY) already runs %s." % want, inclusive=True)
         return
     if not parse_version(want) or not parse_version(have) or parse_version(want) <= parse_version(have):
         note("Promote: skipped, the canary's %s is not a stable release ahead of stable's %s" % (want, have))
         return
-    waits, faults = bake_gate(
+    approval = find_approval(gh, want)
+    approver, held = approval_state(gh, approval) if approval else ("", False)
+    waits, faults = promotion_gate(
         version=want,
         canary_status=status,
-        now=now,
-        bake_hours=float(env.get("BAKE_HOURS") or 4),
+        approval_waits=approval_waits(approval, approver, held),
         hold=env.get("RELEASE_HOLD", ""),
         blockers=gh.issues(BLOCKER_LABEL),
     )
@@ -889,8 +1045,9 @@ def promote(gh, env, now=None):
     if waits:
         note("Promote: holding %s on the canary, %s" % (want, "; ".join(waits)))
         return
-    note("Promote: stable %s -> %s" % (have, want))
+    note("Promote: stable %s -> %s (approved by %s)" % (have, want, approver))
     update_install(stable, want)
+    retire_approvals(gh, want, "Promoted to stable (TIDY), approved by @%s." % approver, inclusive=True)
 
 
 # ---- the release-train issue ----
@@ -907,13 +1064,15 @@ def reported(gh, key):
     return bool(found) and marker(key) in gh.last_text(found[0])
 
 
-def report(gh, ok, lines, *, key=None, title_="Release window failing", close_title=None):
+def report(gh, ok, lines, *, key=None, title_="Release window failing", close_title=None, extra=""):
     """Failure: comment on the open release-train issue, or open one; not again when its last comment is the same
     problem (`key`, the failure lines; default `lines`). Success: close the open one. With close_title and nothing open,
-    a success files a closed record (hotfixes, a republished release)."""
+    a success files a closed record (hotfixes, a republished release). `extra` is more text under the lines."""
     gh.ensure_label(ISSUE_LABEL, "d93f0b", "Release windows and hotfixes: open means a release step failed")
     gh.ensure_label(BLOCKER_LABEL, "b60205", "Holds promotion of the canary release to stable")
     body = "\n".join(["Run: " + run_url(), ""] + ["- " + line for line in lines])
+    if extra:
+        body += "\n\n" + extra
     found = gh.issues(ISSUE_LABEL)
     if not ok:
         mark = marker(lines if key is None else key)
@@ -934,8 +1093,8 @@ def report(gh, ok, lines, *, key=None, title_="Release window failing", close_ti
 
 
 def cmd_window(gh, env, opening, now=None):
-    """The release job: at a window's open (or a manual run) promote first; then ship the first green candidate, or
-    validate main's head. Reports a failure, or a completed window, on the release-train issue."""
+    """The release job: at a window's open, or at the backstop, promote the approved canary release first; then ship the
+    first green candidate, or validate main's head. Reports a failure, or a completed window, on the release-train issue."""
     now = now or datetime.now(timezone.utc)
     failures, promoted, shipped = [], False, False
 
@@ -951,8 +1110,8 @@ def cmd_window(gh, env, opening, now=None):
 
     record = None
     step("latest", lambda: catch_up_latest(gh, env))
-    if opening:
-        step("promote", lambda: promote(gh, env, now))
+    if opening or is_backstop(env):
+        step("promote", lambda: promote(gh, env))
         promoted = True
     plan = {}
     manual = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
@@ -964,17 +1123,32 @@ def cmd_window(gh, env, opening, now=None):
             note("REPORTED " + line)
         if plan["action"] == "ship":
             if not promoted:
-                # Stable takes the canary's baked release before the canary moves on.
-                step("promote", lambda: promote(gh, env, now))
+                # Stable takes the canary's approved release before the canary moves on.
+                step("promote", lambda: promote(gh, env))
 
             def ship():
                 nonlocal shipped, record
                 canary = install("CANARY", env)
                 if not canary:
                     raise Fail("ship: %s; nothing tagged" % missing("CANARY"))
+                notes = release_notes_for(gh, env, plan["sha"], plan["newest"])
                 publish(gh, plan["sha"], plan["version"])
                 shipped = True
-                update_install(canary, plan["version"])
+                # The approval record exists before the canary moves, so an approval of the candidate is never lost.
+                approval = open_approval(
+                    gh, plan["version"], plan["sha"], notes, plan.get("run", {}).get("html_url", "")
+                )
+                try:
+                    update_install(canary, plan["version"])
+                except Exception as exc:
+                    drop_approval(gh, approval, str(exc))
+                    raise
+                retire_approvals(
+                    gh,
+                    plan["version"],
+                    "Superseded by %s, which is on the canary: %s" % (plan["version"], approval.get("html_url")),
+                    inclusive=False,
+                )
                 if not mark_latest(gh, plan["version"]):
                     record = "Release %s shipped, not marked latest (a newer release is)" % plan["version"]
 
@@ -1015,7 +1189,10 @@ def wait_validation(gh, want, since, timeout=VALIDATION_WAIT):
         sleep(POLL)
 
 
-def hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
+def hotfix(gh, env, sha, reason, promote_stable, override_hold=False, record=None):
+    """Ships a hotfix to the canary, and to stable when promote_stable and nothing holds it (override_hold passes a hold).
+    Its approval record is opened before the canary moves and closed once stable runs it; without stable, it waits for
+    approval like any canary release. Its notes go to `record` (a list), for the hotfix's issue."""
     if not reason_ok(reason):
         raise Fail("a hotfix needs a reason of at least a short sentence (15 characters, 3 words)")
     note("Hotfix reason: " + " ".join(reason.split()))
@@ -1042,6 +1219,7 @@ def hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
     )
     if existing and existing.get("conclusion") == "success":
         note("Validation already green: %s" % existing.get("html_url"))
+        green = existing
     else:
         if existing:
             since = parse_time(existing.get("created_at")) or since
@@ -1049,17 +1227,31 @@ def hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
         else:
             gh.dispatch("ci.yml", "main", {"candidate_sha": sha, "previous_release": newest, "version": version})
             note("Dispatched Release validation: " + want)
-        wait_validation(gh, want, since - SKEW)
+        green = wait_validation(gh, want, since - SKEW)
+    notes = release_notes_for(gh, env, sha, newest)
+    if record is not None:
+        record.append(notes)
     publish(gh, sha, version)
     canary = install("CANARY", env)
     if not canary:
         note("Canary: skipped, %s; stable not touched" % missing("CANARY"))
         mark_latest(gh, version)
         return version
-    update_install(canary, version)
+    approval = open_approval(gh, version, sha, notes, green.get("html_url", ""))
+    try:
+        update_install(canary, version)
+    except Exception as exc:
+        drop_approval(gh, approval, str(exc))
+        raise
+    retire_approvals(
+        gh,
+        version,
+        "Superseded by hotfix %s, which is on the canary: %s" % (version, approval.get("html_url")),
+        inclusive=False,
+    )
     mark_latest(gh, version)
     if not promote_stable:
-        note("Stable: not promoted (promote_stable is off); the next window's bake gate decides")
+        note("Stable: not promoted (promote_stable is off); the approval for %s decides" % version)
         return version
     stable = install("STABLE", env)
     if not stable:
@@ -1068,8 +1260,8 @@ def hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
     held = holds(env.get("RELEASE_HOLD", ""), gh.issues(BLOCKER_LABEL))
     if held and not override_hold:
         note(
-            "Stable: held, %s. The next window's bake gate decides, or run the hotfix again with override_hold"
-            % "; ".join(held)
+            "Stable: held, %s. The approval for %s waits; or run the hotfix again with override_hold"
+            % ("; ".join(held), version)
         )
         return version
     if held:
@@ -1078,13 +1270,14 @@ def hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
             % (env.get("GITHUB_ACTOR") or "unknown", "; ".join(held))
         )
     update_install(stable, version)
+    retire_approvals(gh, version, "Promoted to stable (TIDY) by hotfix %s." % version, inclusive=True)
     return version
 
 
 def cmd_hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
-    version, failure = "", None
+    version, failure, record = "", None, []
     try:
-        version = hotfix(gh, env, sha, reason, promote_stable, override_hold)
+        version = hotfix(gh, env, sha, reason, promote_stable, override_hold, record=record)
     except Fail as exc:
         failure = str(exc)
         note("FAILED hotfix: %s" % exc)
@@ -1099,6 +1292,7 @@ def cmd_hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
         key=[run_url(), short, failure or ""],
         title_="Hotfix failing: " + short,
         close_title="Hotfix %s: %s" % (version, short),
+        extra="\n".join(record),
     )
     output(reported="true")
     return 1 if failure else 0
@@ -1117,7 +1311,11 @@ def cmd_status(gh, env, now):
         "why": plan["why"],
         "hold": env.get("RELEASE_HOLD", ""),
         "blockers": [issue["number"] for issue in gh.issues(BLOCKER_LABEL)],
+        "approvals": [],
     }
+    for version, issue in open_approvals(gh):
+        approver, held = approval_state(gh, issue)
+        out["approvals"].append({"version": version, "number": issue["number"], "approved_by": approver, "held": held})
     for role in ("CANARY", "STABLE"):
         target = install(role, env)
         status = update_status(target) if target else None
@@ -1130,12 +1328,18 @@ def cmd_status(gh, env, now):
     return 0
 
 
+def cmd_notes(gh, base, head):
+    """The release notes for head since base, on stdout (read-only)."""
+    print(release_notes.build(gh, base, head))
+    return 0
+
+
 def main(argv=None, env=None, now=None):
     env = dict(os.environ if env is None else env)
     now = now or datetime.now(timezone.utc)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["guard", "window", "promote", "hotfix", "status"])
-    parser.add_argument("--open", action="store_true", help="window: a window opens now, so promote first")
+    parser.add_argument("command", choices=["guard", "window", "promote", "hotfix", "status", "notes"])
+    parser.add_argument("refs", nargs="*", help="notes: BASE HEAD")
     parser.add_argument("--sha", default="")
     parser.add_argument("--reason", default="")
     parser.add_argument("--promote-stable", default="true")
@@ -1146,7 +1350,7 @@ def main(argv=None, env=None, now=None):
         if args.command == "guard":
             return cmd_guard(gh, env, now)
         if args.command == "window":
-            return cmd_window(gh, env, args.open, now)
+            return cmd_window(gh, env, window_opens(env, now), now)
         if args.command == "hotfix":
             return cmd_hotfix(
                 gh,
@@ -1158,12 +1362,17 @@ def main(argv=None, env=None, now=None):
             )
         if args.command == "status":
             return cmd_status(gh, env, now)
-        promote(gh, env, now)
+        if args.command == "notes":
+            if len(args.refs) != 2:
+                print("usage: release_train.py notes BASE HEAD", file=sys.stderr)
+                return 2
+            return cmd_notes(gh, args.refs[0], args.refs[1])
+        promote(gh, env)
         return 0
     except Fail as exc:
         note("FAILED %s: %s" % (args.command, exc))
         if args.command == "guard":
-            output(go="false", open="false")
+            output(go="false")
         return 1
 
 

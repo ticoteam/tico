@@ -60,8 +60,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
 - **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
-- **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
-  past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
+- **At the open**, the canary's release is promoted to stable once it is approved and nothing holds it (see
+  [Approval](#approval)). Then, if main has moved past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
 - **The first green candidate ships.** When a validation of this window goes green, the window tags that commit,
   publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window. The release is
   published as not latest; only once the canary runs it healthy does the window make it the latest GitHub release and
@@ -69,7 +69,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   not run. The canary's updater installs that exact version, latest or not. Latest never moves backwards (a newer
   release that is already latest stays so, and the issue says so), and a marking that failed or did not finish is
   retried by the backstop and each window step once the canary runs that release healthy.
-- **Notes.** When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
+- **Notes and approval.** Each candidate the canary takes gets an issue to approve, with its release notes (see
+  [Approval](#approval)). When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
   vX.Y.Z" task.
 - **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue, once: a failure
   the issue's last comment already reports is not posted again. Each push to main while the window is open validates
@@ -78,12 +79,13 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   The next window that ships closes the issue.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
-- **The bake gate.** Stable takes the canary's release only when the canary has run it for 4 hours (`BAKE_HOURS`), its
+- **Approval.** Stable takes the canary's release only when someone has approved it (see [Approval](#approval)), its
   last update is healthy, `RELEASE_HOLD` is empty and no open issue is labelled `release-blocker`. Anything the gate
-  cannot read holds the release and is reported on the issue. Promotion runs at each open, and again just before a new
-  release goes to the canary.
+  cannot read holds the release and is reported on the issue. Promotion runs at each open and at the backstop, and
+  again just before a new release goes to the canary.
 - **Holding.** Set the repository variable `RELEASE_HOLD` to a reason (or open a `release-blocker` issue) to keep
-  stable where it is. Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
+  stable where it is, for every release. To keep one release off stable, add the `hold` label to its approval issue.
+  Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
 - **By hand.** `gh workflow run train.yml --ref main` runs one window step now (promote, then ship or validate,
   validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
@@ -91,7 +93,7 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
 Triggers: the window schedules (one UTC cron per window start under either offset), every push to main, every
 finished Release validation run, a manual run, and a backstop schedule every 20 minutes
 (at :05, :25 and :45, never a window's minute) that takes a step in an open window
-if an event was missed (it never opens a window or promotes). A small read-only job decides first, so a push with
+if an event was missed (it never opens a window; it promotes an approved release). A small read-only job decides first, so a push with
 nothing to do ends in seconds. Every job that acts (the window job and the hotfix) shares one concurrency group, so two
 never start a build or a release at once. One race remains: GitHub keeps one waiting job per group, so a hotfix queued
 behind a running window job can still be replaced by a window job whose read-only check ran just before the hotfix
@@ -99,8 +101,31 @@ was queued; a hotfix that shows as cancelled that way is simply run again.
 
 Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
 and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
-(`on` to go live), `RELEASE_HOLD`, `BAKE_HOURS` (default 4). The window tags with the Actions token, which starts no
+(`on` to go live) and `RELEASE_HOLD`. The window tags with the Actions token, which starts no
 workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
+
+### Approval
+
+Stable (TIDY) takes a canary release only once someone approves it. Approval is a judgment about what the release
+contains, so the approver reads the notes.
+
+- **The issue.** Each candidate the canary takes gets an open issue, `Release vX.Y.Z: awaiting approval`, labelled
+  `release-approval`. Its body is the release notes, built by `scripts/release_notes.py`: every pull request merged
+  since the release stable runs. High-risk pull requests come first, then user-facing ones (`ui/`, `clients/`, `app/`),
+  then backend ones (`backend/`, `runner-rs/`, `recorder/`, `templates/`), then the internal ones, one line each. Every
+  other block gives the pull request's Spec, its demo steps (written for the Acme Lights demo company), its risk, its
+  checks on the head commit, its reviews and receipts, and the areas it touches. What a pull request leaves out shows
+  as "none linked", "none written" or "not stated".
+- **Approving.** Anyone with write access approves it by adding the `approved` label or commenting `/approve`. The
+  repository's permission for that login is checked, so a label or comment from anyone else does not count. The `hold`
+  label keeps one release off stable.
+- **Promotion.** At each window open, and at the backstop, stable takes the canary's release once it is approved, not
+  held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it healthy. Stable's
+  update closes the issue, and the issue says who approved it.
+- **Superseded.** A newer release on the canary closes an older issue with a link to the newer one. A candidate whose
+  canary update failed is closed too, as not on the canary: there is nothing to approve.
+- **Reading the notes.** `python3 scripts/release_train.py notes v0.5.200 v0.5.201` prints the notes for any range,
+  read-only. It needs `GITHUB_TOKEN`.
 
 ### A release that did not publish
 
@@ -131,10 +156,11 @@ gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board aft
 
 Anyone with write access may run it, bots included. It validates the commit as the next patch, publishes it, updates
 the canary, marks it latest once the canary is healthy and, unless `promote_stable` is off, updates stable right
-after, with no bake. Holds still apply: with `RELEASE_HOLD` set or a `release-blocker` issue open, stable is left
+after, without waiting for an approval. Holds still apply: with `RELEASE_HOLD` set or a `release-blocker` issue open, stable is left
 where it is unless `override_hold` is on, and the override is written, with who ran it, in the run summary and on the
-issue. The reason is required and goes on a `release-train` issue: closed when the hotfix succeeds, left open when it
-fails. A hotfix release also closes the current window.
+issue. The reason is required, and the reason and its release notes go on a `release-train` issue: closed when the hotfix
+succeeds, left open when it fails. A hotfix release also closes the current window. With `promote_stable` off, the
+hotfix's approval issue decides stable, as for any canary release.
 
 ## The fast path
 

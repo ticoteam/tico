@@ -323,7 +323,15 @@ def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane()
         assert job["concurrency"] == {"group": "release-train", "cancel-in-progress": False}
         assert job["environment"] == "release"
         assert "github.ref == 'refs/heads/main'" in job["if"]
-        assert job["permissions"] == {"actions": "write", "contents": "write", "issues": "write", "packages": "write"}
+        # Read access to pull requests and checks is for the release notes an approval issue carries.
+        assert job["permissions"] == {
+            "actions": "write",
+            "contents": "write",
+            "issues": "write",
+            "packages": "write",
+            "pull-requests": "read",
+            "checks": "read",
+        }
         for name in ("CANARY_URL", "STABLE_URL", "CANARY_UPDATE_KEY", "STABLE_UPDATE_KEY", "RELEASE_HOLD"):
             assert name in job["env"]
         assert "RELEASE_TAG_TOKEN" not in job["env"]
