@@ -143,6 +143,33 @@ def stop_told_manager(run):
     )
 
 
+def stop_nudged(run):
+    """A stop that reaches a manager gives that manager a ticket at once (backend/stranded_resume.py `_nudge`), made within
+    ten minutes of the stop; a stop that reaches the builder itself makes none."""
+    from backend import hubdb as H
+    from backend import stranded_resume as SR
+
+    stops, bad = 0, []
+    with run.w.store.read() as c:
+        for task_id, told, when in c.execute(
+            "SELECT subject_id, new, created_at FROM history_events WHERE subject_type='task' AND kind=?", (SR.STOPPED,)
+        ).fetchall():
+            row = H.task(c, task_id)
+            if row is None or not told or told == row["owner_id"]:
+                continue
+            stops += 1
+            made = c.execute(
+                "SELECT count(*) FROM tasks WHERE owner_id=? AND title LIKE ? AND created_at>=? AND created_at<=?",
+                (told, "%made no progress in %", when, H.shift(when, minutes=10)),
+            ).fetchone()[0]
+            if not made:
+                bad.append(f"{run.w.title(task_id)} told {told}, no ticket to it within 10 minutes")
+    return (
+        not bad,
+        f"{len(bad)} of {stops} stops to a manager gave it no ticket: " + "; ".join(bad[:4]),
+    )
+
+
 SCENARIOS = [
     Scenario(
         "stranded_doing",
@@ -153,6 +180,7 @@ SCENARIOS = [
         checks=standard(
             ("every ticket a turn left in progress is picked up within the late hours", GAP, stranded_resumed),
             ("a stop of resumes is told to the owner's manager", "the manager nudge", stop_told_manager),
+            ("a stop of resumes gives its manager a ticket at once", "the manager nudge", stop_nudged),
         ),
     ),
 ]
