@@ -1,3 +1,4 @@
+# pyright: strict
 """The Dev tickets pipeline as the pipeline page shows it: stages with requirements (dots), what waits on Ana (the
 play button), the manager's rail (a clean run, a failed one, what it did) and a ticket past its stage limit (Late).
 
@@ -5,7 +6,8 @@ Only the tables and routes that exist before the pipeline engine are used: the t
 the requirements, decisions, visits and manager rows are written as the engine would leave them."""
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Any
 
 from ..store import H
 
@@ -49,11 +51,11 @@ TICKETS = (
 )
 
 
-def _id():
+def _id() -> str:
     return H.new_id()
 
 
-def seed(b):
+def seed(b: Any) -> None:
     b.at(days=3)
     with b.store.read() as c:
         row = c.execute("SELECT id FROM task_types WHERE name=?", (NAME,)).fetchone()
@@ -64,8 +66,10 @@ def seed(b):
         made = b.call("POST", "task-types", {"name": NAME, "steps": steps, "numbered": True})
         type_id = made["type"]["id"]
     with b.store.read() as c:
-        stage = {r["name"]: r["id"] for r in c.execute("SELECT id, name FROM task_steps WHERE type_id=?", (type_id,))}
-    ids = {}
+        stage: dict[str, str] = {
+            r["name"]: r["id"] for r in c.execute("SELECT id, name FROM task_steps WHERE type_id=?", (type_id,))
+        }
+    ids: dict[str, str] = {}
     for key, title, stage_name, _, owner, _ in TICKETS:
         b.at(days=3)
         ids[key] = b.call(
@@ -74,13 +78,13 @@ def seed(b):
             {"title": title, "body": title + ".", "owner": owner, "type": type_id, "step": stage[stage_name]},
         )["task"]["id"]
 
-    def write(c):
+    def write(c: Any) -> None:
         ts = H.now()
         c.execute("UPDATE task_types SET manager=? WHERE id=?", (MANAGER, type_id))
         c.execute("UPDATE task_types SET pipeline_owner_id=?, manager_every_minutes=60 WHERE id=?", (OWNER, type_id))
         for name, _, limit in STAGES:
             c.execute("UPDATE task_steps SET limit_minutes=? WHERE id=?", (limit, stage[name]))
-        req = {}
+        req: dict[str, str] = {}
         for position, (stage_name, name, kind, reviewed_by, reviewer) in enumerate(REQUIREMENTS):
             req[name] = _id()
             c.execute(
@@ -134,7 +138,7 @@ def seed(b):
                         (attach_id, task, req[name], link, "sha256:" + key.lower(), version, "bot:devops", entered),
                     )
         # The manager's rail: a clean run, a failed one and a quiet one, with what it did.
-        runs = []
+        runs: list[tuple[str, datetime]] = []
         for minutes, status, error, actions in (
             (10, "ok", None, 1),
             (70, "failed", "The model was unreachable", 0),

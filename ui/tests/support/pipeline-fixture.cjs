@@ -82,8 +82,11 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
       return json(pref[1] in state.prefs ? {value: state.prefs[pref[1]]} : {});
     }
     const reqs = p.match(/^\/api\/v2\/tasks\/([^/]+)\/requirements$/);
-    if (reqs && req.method() === 'GET') return json({requirements: [{id: 'r-shots', name: 'Screenshots', kind: 'attachment', stage_id: 'build', stage: 'Build',
-      state: 'waiting', why: null, reviewed_by: 'person', reviewer_id: ME, version: 1, decision: null, attachment: null}]});
+    if (reqs && req.method() === 'GET') {
+      const found = tasks().find(x => x.id === reqs[1]);
+      return json({requirements: (found?.requirements || []).map(r => ({id: r.id, name: r.name, kind: r.id === 'r-shots' ? 'attachment' : 'run', stage_id: found.step_id,
+        stage: found.step.name, state: r.state === 'missing' ? 'none' : r.state, why: r.detail || null, reviewed_by: 'person', reviewer_id: r.next_actor, version: 1, decision: null, attachment: null}))});
+    }
     const atts = p.match(/^\/api\/v2\/tasks\/([^/]+)\/requirements\/([^/]+)\/attachments$/);
     if (atts) {
       if (req.method() === 'POST') { const body = req.postDataJSON() || {}; state.attachments.push(body); state.posts.push({path: 'attach', body});
