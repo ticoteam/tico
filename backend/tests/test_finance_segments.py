@@ -81,14 +81,11 @@ def _segments(c) -> None:
 
 
 def _dedicated(c, rows: list[tuple[str, str]]) -> None:
-    """Who is tagged with which segment (actors), in segment_members, the table Track A owns."""
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS segment_members (member TEXT NOT NULL, segment_id TEXT NOT NULL, "
-        "PRIMARY KEY (member, segment_id))"
-    )
+    """Who is tagged with which segment (actors), in segment_members, the table Track A owns. The migrated table has
+    created_at and created_by, both required."""
     c.executemany(
-        "INSERT INTO segment_members(member, segment_id) VALUES(?, ?)",
-        [(SG.member_ref(c, who), sid) for who, sid in rows],
+        "INSERT INTO segment_members(segment_id, member, created_at, created_by) VALUES(?, ?, ?, ?)",
+        [(sid, SG.member_ref(c, who), "2026-11-01T00:00:00Z", OWNER) for who, sid in rows],
     )
 
 
