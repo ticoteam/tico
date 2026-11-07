@@ -1,4 +1,4 @@
-// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.js
+// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.ts
 // goalWhyHtml). A goal with no Why says "Not tied to the vision"; the Strategy Bot's
 // proposal is accepted as it is or edited, and an Accept on a line the Strategy Bot has since replaced is refused and
 // shows

@@ -1,4 +1,4 @@
-// Video and audio cards in a conversation (Visual replies 3/4): ui/app/visual-media.js inside the real card frame
+// Video and audio cards in a conversation (Visual replies 3/4): ui/app/visual-media.ts inside the real card frame
 // (visual-cards.js), on a bare page. Neither starts by itself (preload metadata, no autoplay, the isolated address, never a blob or the signed-in file
 // URL); seeking far into a long clip asks for that part by range instead of the whole file; starting one clip pauses
 // the other; an address that expires mid-play is swapped for the card's newest one at the same position, still
@@ -62,8 +62,8 @@ const UI = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
     await page.addScriptTag({content: `'use strict';
       const API = '/api';
       const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);`});
-    await page.addScriptTag({content: UI('app/visual-cards.js')});
-    await page.addScriptTag({content: UI('app/visual-media.js')});
+    await page.addScriptTag({content: UI('app/visual-cards.ts')});
+    await page.addScriptTag({content: UI('app/visual-media.ts')});
     // A thread drawn the way chat and task comments draw it: every message's cards, swapped in whole (visualSwap).
     await page.addScriptTag({content: `
       window.messages = [];

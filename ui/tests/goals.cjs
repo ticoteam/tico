@@ -1,4 +1,4 @@
-// The Goals page (ui/goals-kpis.js): one tree of every person and bot, nested as the org chart nests them, a line each
+// The Goals page (ui/goals-kpis.ts): one tree of every person and bot, nested as the org chart nests them, a line each
 // with the goal to the right (cut short, whole in its tooltip) and KPI chips; helper bots off it; tapping a line opens
 // that owner's panel, where goals and KPIs are added and edited. No helper chat sits beside it; Ask is the way in.
 // Fixtures only, no network.

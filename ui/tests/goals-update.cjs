@@ -1,4 +1,4 @@
-// "Post update" in an owner's panel on Goals (ui/goals-kpis.js goalUpdateHtml): each live goal the viewer may colour (its
+// "Post update" in an owner's panel on Goals (ui/goals-kpis.ts goalUpdateHtml): each live goal the viewer may colour (its
 // owner, the owner of the goal it supports, anyone above the owner: backend/goal_routes.py may_colour) offers a form with
 // what is going on and "How is it going?". Empty words send nothing; an answer on a goal with no judged measure colours it
 // without a page reload; no answer saves words only; a goal its measures colour says so; a refusal or a dropped line

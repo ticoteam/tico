@@ -1,4 +1,4 @@
-// Health has no tab: General opens with one Health line (ui/health.js hlSummaryDraw). It counts Health's checks by
+// Health has no tab: General opens with one Health line (ui/health.ts hlSummaryDraw). It counts Health's checks by
 // severity with Settings' own issues (one a person must act on is urgent, the rest FYI), says "All good" when nothing
 // needs work, carries the alert dot, and shows a newer release with the owner's one Update (none for a member or when
 // Tico runs updates). Details opens #/settings/health: no tab highlighted, a way back to General, and the issues a
@@ -38,7 +38,7 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.5.10', app_name: 'Tico', update};
       if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});

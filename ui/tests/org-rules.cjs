@@ -1,4 +1,4 @@
-// The Rules page (ui/app/org-rules.js) on a real hub seeded with the scenario org and its groups: Dana adds an internal
+// The Rules page (ui/app/org-rules.ts) on a real hub seeded with the scenario org and its groups: Dana adds an internal
 // rule from the Engineering Lead's Reach panel (Who already the Engineering Lead) with a With, and its panel opens (its panel says who follows it with whom, and If broken reads Stop / Ask
 // first / Warn), a rule naming a teammate as @slug shows a mention chip that opens them, edits it in the side panel, a stale save is refused and the panel
 // reloads, a due date is added, marked satisfied, its repeat changed and a routine set, a second date shows beside

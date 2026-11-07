@@ -5910,7 +5910,7 @@ def pr_state(links):
 
 def task_tree(conn, task_id, visible_ids=None):
     rows = descendants(conn, task_id)
-    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.js).
+    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.ts).
     nodes = {
         r["id"]: {
             **{k: r[k] for k in ("id", "title", "status", "owner_id")},
@@ -11528,7 +11528,7 @@ def unanswered_ask(conn, task_row, *, actor=None):
     return None
 
 
-# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.js holds the same
+# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.ts holds the same
 # number: change both together).
 DECLINED_NEEDS_HOURS = 24
 

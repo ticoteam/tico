@@ -198,6 +198,7 @@ function betaMark(root = document) {
   root.querySelectorAll('[data-beta]').forEach(el => { el.innerHTML = betaPill(el.dataset.beta); });
 }
 // ----------------------------------------------------------------- derived state
+/** @returns {string} */
 function stateOf(slug) {
   const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';

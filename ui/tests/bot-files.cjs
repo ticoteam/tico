@@ -1,4 +1,4 @@
-// The Files section of a bot's right rail (ui/bot-files.js): a plain list of names, three rows and a small
+// The Files section of a bot's right rail (ui/bot-files.ts): a plain list of names, three rows and a small
 // "+N" / "Less" inline, no counts, subtitle or buttons. A linked document opens at its provider
 // (a new tab), a stored file in the app's viewer (a CSV as a table, a quoted comma kept in one cell),
 // a file that did not sync is plain text, never a storage address; on a computer and on a phone.

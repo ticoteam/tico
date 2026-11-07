@@ -50,7 +50,7 @@ KINDS = {
 # common name, and versions already stored under the other still show inline (KINDS above).
 ALIASES = {"audio/vnd.wave": "audio/wav"}
 MB = 1024 * 1024
-# A page or SVG is read whole by the viewer (ui/app/viewer.js caps it at 10 MB); video and audio stream by range.
+# A page or SVG is read whole by the viewer (ui/app/viewer.ts caps it at 10 MB); video and audio stream by range.
 LIMITS = {"image": 25 * MB, "svg": 10 * MB, "page": 10 * MB, "video": 2048 * MB, "audio": 2048 * MB}
 MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",), "image/gif": (b"GIF87a", b"GIF89a")}
 TITLE_MAX = 200

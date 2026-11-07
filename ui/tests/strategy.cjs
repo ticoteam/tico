@@ -1,4 +1,4 @@
-// The Strategy section (ui/strategy-page.js) against a stand-in for GET /api/v2/strategy, the market cards' reads and
+// The Strategy section (ui/strategy-page.ts) against a stand-in for GET /api/v2/strategy, the market cards' reads and
 // all their writes (fixtures only, the Acme example): the owner reads the draft as cards (the summary on top, no vision;
 // Where we play beside the bets; Competitors beside Related news; the seven fixed sections and an extra one), edits the
 // summary and each bet's statement in place with the draft's revision, adds a bet with + Bet (active), removes one with
@@ -97,7 +97,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json(bots);

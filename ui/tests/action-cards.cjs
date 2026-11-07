@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in the Assistant's chat (ui/assistant.js; BotOps has no DM of its own now), fixtures only.
+// BotOps' Confirm cards in the Assistant's chat (ui/assistant.ts; BotOps has no DM of its own now), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread

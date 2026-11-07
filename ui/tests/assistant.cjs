@@ -1,4 +1,4 @@
-// The Assistant page (ui/app/assistant-page.js): its own chat at #/assistant with the bot chat's thread and composer,
+// The Assistant page (ui/app/assistant-page.ts): its own chat at #/assistant with the bot chat's thread and composer,
 // reached from your own person page's Assistant tab (absent from anyone else's); search
 // (⌘K) does not offer it. An empty chat offers suggestions, a lookup answers at once with in-app
 // links, a proposal is a Confirm / Cancel card that only your click runs, and it all fits a phone. Fixtures only.

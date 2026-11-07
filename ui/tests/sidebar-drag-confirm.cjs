@@ -1,4 +1,4 @@
-// Offline regression for moving teammates in the sidebar's team list (ui/app/sidebar.js orgDropAsk). Fixtures only.
+// Offline regression for moving teammates in the sidebar's team list (ui/app/sidebar.ts orgDropAsk). Fixtures only.
 //  - a drop saves nothing at once: the tree shows the new place and a strip under the moved row asks "Move Doc Updater
 //    under Design?" with Move and Cancel, focus on Move; Cancel, Escape and a press elsewhere put the chart back with
 //    no request and focus back on the row (not for a press elsewhere);

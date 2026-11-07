@@ -1,4 +1,4 @@
-// Files kept for the visit (fileKeep, ui/app/viewer.js) stay within a 64 MB budget per cache, but the file just
+// Files kept for the visit (fileKeep, ui/app/viewer.ts) stay within a 64 MB budget per cache, but the file just
 // loaded is never the one let go: a picture over the budget on its own opened blank, in the viewer and as a chat
 // picture. Older files nothing shows still go. Fixtures only.
 const {chromium, webkit} = require('playwright');

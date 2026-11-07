@@ -1,4 +1,4 @@
-// The credential card (ui/credential-card.js): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
+// The credential card (ui/credential-card.ts): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
 // there, and it goes to one route only (the credential request's save), never anywhere else, never back into
 // the page, a toast or the console. Fixtures only, no network.
 const {chromium, webkit} = require('playwright');

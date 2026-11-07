@@ -166,7 +166,7 @@ def definition(api, body, headers=None):
 
 # Where the old names may still be written: the upgrade that renames them, and the UI's fallback for a roster read
 # before it.
-OLD_NAME_ALLOWED = {"backend/strategy_bot.py", "backend/store.py", "ui/app/notices.js", "ui/app/state.js"}
+OLD_NAME_ALLOWED = {"backend/strategy_bot.py", "backend/store.py", "ui/app/notices.ts", "ui/app/state.js"}
 
 
 def test_the_old_name_is_nowhere_a_person_sees():

@@ -1,8 +1,8 @@
-// Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Tico Assistant" row at the bottom of
+// Ask (ui/app/ask-panel.ts): the person's chat bot on every page. On a computer the "Tico Assistant" row at the bottom of
 // the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel straight above the row that names the
 // page it sees and sends it with the message, and a close mark takes the row's dot place; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
 // its place beside the panel's name and lands there exactly, and flies back down on close; Tico's turns carry no dot.
-// The header has no +, no Show chat and nothing of Tico support (the Tico team has its own chat, ui/support.js); a
+// The header has no +, no Show chat and nothing of Tico support (the Tico team has its own chat, ui/support.ts); a
 // #/support link in a reply opens that chat over the page. A Confirm card BotOps
 // left in its own chat and bots' questions sit in the thread by when they were asked, answered here. No BotOps or
 // Assistant rows in the rail. Fixtures only.

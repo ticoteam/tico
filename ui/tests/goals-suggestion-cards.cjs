@@ -1,4 +1,4 @@
-// Goal suggestion cards say what yes does (ui/goals-kpis.js goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
+// Goal suggestion cards say what yes does (ui/goals-kpis.ts goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
 // Strategy Bot suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and
 // a
 // missing data source, and folds away the goal editor's target fields; each yes button says what it does, the no button

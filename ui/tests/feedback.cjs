@@ -1,4 +1,4 @@
-// 👍 / 👎 on a bot's work (ui/app/feedback.js), against a fake of the feedback routes (backend/feedback.py). Fixtures only.
+// 👍 / 👎 on a bot's work (ui/app/feedback.ts), against a fake of the feedback routes (backend/feedback.py). Fixtures only.
 //  - an older server (404 on the batched read) shows no control at all, and nothing asks for reasons;
 //  - one batched read per subject type for what is drawn, never one per message, and never a person's own message;
 //  - 👍 saves in one tap and a second tap removes it; 👎 saves, then its sheet offers recent reasons as chips, says

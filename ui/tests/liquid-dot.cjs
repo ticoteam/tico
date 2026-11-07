@@ -1,4 +1,4 @@
-// No browser: the Liquid Dot's state rules (ui/app/liquid-dot.js). Ask's chat maps to idle, working or talking; a dot
+// No browser: the Liquid Dot's state rules (ui/app/liquid-dot.ts). Ask's chat maps to idle, working or talking; a dot
 // under 20px only idles (or holds still); an unknown state idles; and setting a drawn dot follows the same rules. The
 // idle scheduler swaps variants every 6-14 s and leaves no timer in a hidden tab; every keyframe in liquid-dot.css
 // moves transform or opacity only, and the blob's shape never animates.
@@ -13,7 +13,7 @@ let nextTimer = 1, onVisibility = null;
 const page = {hidden: false, addEventListener: (type, fn) => { if (type === 'visibilitychange') onVisibility = fn; }, querySelectorAll: () => []};
 const context = vm.createContext({document: page, setTimeout: (fn, ms) => { timers.set(nextTimer, ms); return nextTimer++; },
   clearTimeout: id => timers.delete(id), matchMedia: () => ({matches: false})});
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/liquid-dot.js'), 'utf8')
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/liquid-dot.js'), 'utf8')
   + '\n;globalThis.api = {ldotState, ldotWord, ldotChatState, ldotHTML, ldotSet, ldotNextIdle, ldotSchedule, ldotScheduled, LDOT_IDLES, LDOT_IDLE_MS};', context);
 const {ldotState, ldotWord, ldotChatState, ldotHTML, ldotSet, ldotNextIdle, ldotSchedule, ldotScheduled, LDOT_IDLES, LDOT_IDLE_MS} = context.api;
 

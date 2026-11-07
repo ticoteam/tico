@@ -1,4 +1,4 @@
-// Types for the globals the classic scripts under ui/ share (ui/app/core.js, api.js, state.js, ...). A declaration here is
+// Types for the globals the classic scripts under ui/ share (ui/app/core.ts, api.js, state.js, ...). A declaration here is
 // read by the JSDoc on the JavaScript that defines the global, and by the TypeScript files that use it. No file here
 // is a module, so every name below is global, as the scripts' own names are.
 // A field the server sends but the page does not read is left out. A field read on the page is optional when the

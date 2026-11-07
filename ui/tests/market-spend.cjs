@@ -1,4 +1,4 @@
-// Market's money, players and value chain (ui/app/redesign-market.js, ui/market-spend.js, ui/market-page.js) against a
+// Market's money, players and value chain (ui/app/redesign-market.ts, ui/market-spend.ts, ui/market-page.ts) against a
 // stand-in for GET /api/v2/market/spend and /market/value-chain and their writes (fixtures only, the Acme example): the
 // tiles; treemap areas follow the sizes; the segment panel shows each estimate with its params, and the owner's param
 // edit posts and reads again while a member sees no edit, research or cite; the Offering/Buyer and basis switches ask
@@ -88,7 +88,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json([]);

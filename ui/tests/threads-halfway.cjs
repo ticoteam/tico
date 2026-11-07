@@ -68,7 +68,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json(['ops', 'fin', 'qa', ...(twin ? ['ops2'] : [])].map(name => ({name,
       display_name: name === 'qa' ? 'QA' : name === 'ops2' ? 'Ops' : name[0].toUpperCase() + name.slice(1),

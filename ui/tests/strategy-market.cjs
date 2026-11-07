@@ -1,4 +1,4 @@
-// Strategy › Market, one page (ui/app/redesign-market.js) against the fake hub in support/strategy-fake.cjs (the Acme
+// Strategy › Market, one page (ui/app/redesign-market.ts) against the fake hub in support/strategy-fake.cjs (the Acme
 // example): the header and its three tiles, then the five questions in order, each with the briefing's answer line
 // when it has one and none when it does not. What changed? lists the items by kind with the bets they touch, and Read
 // opens the whole briefing; Who are we up against? marks our row and opens a player's note; What are buyers saying?

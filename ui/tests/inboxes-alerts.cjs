@@ -21,7 +21,7 @@ const {unrouted} = require('./support/routes.cjs');
       const file = path.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
       if (path.startsWith('/vendor/') && fs.existsSync(uiFile(path.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(path.slice(1)))});
-      if (path.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(path)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (path === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (path.startsWith('/api/v2/alerts/')) {
         if (req.method() === 'GET') return json(state);
@@ -52,7 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
     });
     await page.goto('https://tico-ui.test/#/settings/company-inbox');
     // #/settings/company-inbox is an old address: route() sends it on to Tools (location.replace) and the new page draws
-    // in a view transition (ui/app/router.js routeChanged), a frame or more later, replacing #main. Draw the card after
+    // in a view transition (ui/app/router.ts routeChanged), a frame or more later, replacing #main. Draw the card after
     // that page is on the screen, or it overwrites the card and [data-alert-send-code] never appears.
     await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id && location.hash.startsWith('#/tools') && document.querySelector('#main #tools-root'));
     const draw = admin => page.evaluate(async admin => {
