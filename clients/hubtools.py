@@ -3837,13 +3837,15 @@ def market_watch_check(api, args):
     "week's findings, each {text, kind: change|signal|theme|size, entity_ids: [market ids it touches]}. The server works out "
     "which bets cite those ids and tells the Strategy Bot. `answers` are one-line answers to the Market page's questions, "
     "keyed changed, money, players, reach, saying (140 characters each); left out, the week's stay. The same week again "
-    "replaces it.",
+    "replaces it. `segment_id` posts it as one of the company's segments' briefing (its own page); left out, it is the "
+    "whole market's.",
     {
         "week": _s("ISO week, like 2026-W44"),
         "title": _s("A short title"),
         "body": _s("The briefing in Markdown"),
         "items": {"type": "array", "items": {"type": "object"}, "description": "{text, kind, entity_ids} per finding"},
         "answers": {"type": "object", "description": "{changed, money, players, reach, saying}: one sentence each"},
+        "segment_id": _s("A segment's id, like segment/<slug>; left out, the whole market's"),
     },
     required=("week", "title", "body"),
     writes=True,
@@ -3852,17 +3854,21 @@ def market_briefing_post(api, args):
     body = {"week": args["week"], "title": args["title"], "body": args["body"], "items": args.get("items") or []}
     if args.get("answers") is not None:
         body["answers"] = args["answers"]
+    if args.get("segment_id"):
+        body["segment_id"] = args["segment_id"]
     return api.post("market/briefings", body, key=_key(args))
 
 
 @tool(
     "hub_market_briefing_latest",
     "The newest weekly market briefing with its body, its items and the bets it touches "
-    "(`briefing` is null before the first); `source` names the automation run that posted it, if one did.",
-    {},
+    "(`briefing` is null before the first); `source` names the automation run that posted it, if one did. "
+    "`segment_id` reads that segment's newest briefing instead of the whole market's.",
+    {"segment_id": _s("A segment's id, like segment/<slug>; left out, the whole market's")},
 )
 def market_briefing_latest(api, args):
-    return api.get("market/briefings/latest")
+    query = {"segment": args["segment_id"]} if args.get("segment_id") else {}
+    return api.get("market/briefings/latest", **query)
 
 
 # ----------------------------------------------------------------------------- market spend

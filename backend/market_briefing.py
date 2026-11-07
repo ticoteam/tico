@@ -5,7 +5,9 @@ The briefing is a market page (`market/briefings/<week>`) and a row here that al
 market entities it touches. The server works out which bets those entities touch: an active bet of the published
 strategy whose `cites`, or whose thesis wrong-if `market_id`, is one of them. It emits `market.briefing` with the
 touched bets, so the Strategy Bot's routine on that event looks only at them; with none touched, it has nothing to do.
-One row per ISO week: posting the same week again replaces it and keeps `created_at`. A briefing an automation posted
+One row per ISO week and segment: `segment_id` is '' for the whole market, or one of the company's segments
+(backend/segments.py), which has its own briefing for the same week. Posting the same week and segment again replaces it
+and keeps `created_at`. Every read takes `segment` and answers for the whole market unless it names one. A briefing an automation posted
 (`post_update` to market, backend/automation_actions.py) carries `source: {automation, run, task}`; a post by hand
 clears it. `cadence` says how Market labels it: `daily` when an automation posted it on a schedule that runs on more
 than one day a week (the built-in Market briefing, each morning) or on anything but a schedule, so it is dated by its
@@ -27,6 +29,7 @@ from pydantic import Field
 from . import hubdb as H
 from . import market as MK
 from . import models as M
+from . import segments as SG
 from . import strategy as S
 from .store import Problem
 
@@ -45,9 +48,10 @@ PAGE = "market/briefings/"
 CATEGORY = "Market / Briefings"
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS market_briefings (id TEXT PRIMARY KEY, week TEXT NOT NULL UNIQUE, title TEXT NOT NULL, "
-    "body TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', bets TEXT NOT NULL DEFAULT '[]', created_by TEXT, "
-    "created_at TEXT, updated_at TEXT, answers TEXT)",
+    "CREATE TABLE IF NOT EXISTS market_briefings (id TEXT PRIMARY KEY, week TEXT NOT NULL, "
+    "segment_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL, body TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', "
+    "bets TEXT NOT NULL DEFAULT '[]', created_by TEXT, created_at TEXT, updated_at TEXT, answers TEXT, "
+    "UNIQUE(week, segment_id))",
 )
 
 
@@ -61,6 +65,17 @@ def this_week(at=None):
     """The ISO week of a day: 2026-W44."""
     year, week, _ = (at or datetime.now(timezone.utc)).isocalendar()
     return f"{year}-W{week:02d}"
+
+
+def page_id(week, segment=""):
+    """The market page that mirrors a briefing: the whole market's is `market/briefings/<week>`; a segment's adds its
+    segment's id, with the slash made a dash, so every page id stays one path segment."""
+    return PAGE + week + ("-" + segment.replace("/", "-") if segment else "")
+
+
+def event_subject(week, segment=""):
+    """The subject a briefing's event and history row carry: the week, and the segment after an @ when it has one."""
+    return week + ("@" + segment if segment else "")
 
 
 # ----------------------------------------------------------------------------- reading
@@ -128,22 +143,28 @@ def _view(c, row, body=True):
     return out
 
 
-def listing(c, limit=LIMIT_MAX):
+def listing(c, limit=LIMIT_MAX, segment=""):
+    """The briefings of one scope ('' is the whole market), newest week first. `segment` is checked by the caller."""
     limit = max(1, min(int(limit or LIMIT_MAX), LIMIT_MAX))
     return [
         _view(c, r, body=False)
-        for r in c.execute("SELECT * FROM market_briefings ORDER BY week DESC LIMIT ?", (limit,))
+        for r in c.execute(
+            "SELECT * FROM market_briefings WHERE segment_id=? ORDER BY week DESC LIMIT ?", (segment, limit)
+        )
     ]
 
 
-def get(c, week):
-    row = c.execute("SELECT * FROM market_briefings WHERE week=?", (week,)).fetchone()
+def get(c, week, segment=""):
+    row = c.execute("SELECT * FROM market_briefings WHERE week=? AND segment_id=?", (week, segment)).fetchone()
     return _view(c, row) if row else None
 
 
-def latest(c):
-    row = c.execute("SELECT * FROM market_briefings ORDER BY week DESC LIMIT 1").fetchone()
-    return _view(c, row) if row else None
+def latest(c, segment="", body=True):
+    """The newest briefing of one scope, or None. `body=False` leaves the page out (the segment comparison reads many)."""
+    row = c.execute(
+        "SELECT * FROM market_briefings WHERE segment_id=? ORDER BY week DESC LIMIT 1", (segment,)
+    ).fetchone()
+    return _view(c, row, body) if row else None
 
 
 # ----------------------------------------------------------------------------- writing
@@ -167,13 +188,15 @@ def clip_answers(raw):
     return out
 
 
-def post(c, who, week, title, body, items, source=None, answers=None):
-    """Write (or replace) the week's briefing, its market page, and emit `market.briefing`. The caller has checked the
-    writer. `items=None` keeps the week's stored items and bets, and `answers=None` its answers. `source` is the
-    automation run that posted it, if one did. Returns the briefing."""
+def post(c, who, week, title, body, items, source=None, answers=None, segment_id=""):
+    """Write (or replace) the week's briefing for the whole market or one segment, its market page, and emit
+    `market.briefing`. The caller has checked the writer. `items=None` keeps the week's stored items and bets, and
+    `answers=None` its answers. `source` is the automation run that posted it, if one did. `segment_id` must be one of
+    the company's segments (backend/segments.py), or '' for the whole market. Returns the briefing."""
     if not WEEK.match(week):
         raise Problem("validation", "week is an ISO week like 2026-W44", 422)
-    before = c.execute("SELECT * FROM market_briefings WHERE week=?", (week,)).fetchone()
+    segment = SG.require_ours(c, segment_id)
+    before = c.execute("SELECT * FROM market_briefings WHERE week=? AND segment_id=?", (week, segment)).fetchone()
     if items is None:
         items = MK.loads(before["items"], []) if before else []
         bets = MK.loads(before["bets"], []) if before else []
@@ -190,10 +213,11 @@ def post(c, who, week, title, body, items, source=None, answers=None):
     else:
         answers = clip_answers(answers)
     now = H.now()
-    MK.write_page(c, who.actor, PAGE + week, title, body, CATEGORY, replace=True, record=False)
+    MK.write_page(c, who.actor, page_id(week, segment), title, body, CATEGORY, replace=True, record=False)
     if before:
         c.execute(
-            "UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated_at=?, source=?, answers=? WHERE week=?",
+            "UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated_at=?, source=?, answers=? "
+            "WHERE week=? AND segment_id=?",
             (
                 title,
                 body,
@@ -203,15 +227,17 @@ def post(c, who, week, title, body, items, source=None, answers=None):
                 MK.dumps(source) if source else None,
                 MK.dumps(answers),
                 week,
+                segment,
             ),
         )
     else:
         c.execute(
-            "INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created_at, updated_at, "
-            "source, answers) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO market_briefings (id, week, segment_id, title, body, items, bets, created_by, created_at, "
+            "updated_at, source, answers) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 H.new_id(),
                 week,
+                segment,
                 title,
                 body,
                 MK.dumps(items),
@@ -223,16 +249,24 @@ def post(c, who, week, title, body, items, source=None, answers=None):
                 MK.dumps(answers),
             ),
         )
-    H.event(c, who.actor, "market.briefing", week, {"items": len(items), "bets": len(bets), "replaced": bool(before)})
-    # One event per week; a replacement that touches other bets than before is a new occurrence for them.
+    subject = event_subject(week, segment)
+    H.event(
+        c, who.actor, "market.briefing", subject, {"items": len(items), "bets": len(bets), "replaced": bool(before)}
+    )
+    # One event per week and scope; a replacement that touches other bets than before is a new occurrence for them.
     again = MK.loads(before["bets"], []) if before else []
     if not before or (bets and set(bets) != set(again)):
-        subject = week if not before else week + "." + hashlib.sha256(",".join(sorted(bets)).encode()).hexdigest()[:6]
-        H.hook(c, "market.briefing", subject, lambda: {"week": week, "bets": list(bets)}, who.actor, revision=0)
-    return get(c, week)
+        key = subject if not before else subject + "." + hashlib.sha256(",".join(sorted(bets)).encode()).hexdigest()[:6]
+        # The whole market's payload stays the week and its bets; a segment's names the segment too.
+        data = {"week": week, "bets": list(bets), **({"segment_id": segment} if segment else {})}
+        H.hook(c, "market.briefing", key, lambda: data, who.actor, revision=0)
+    return get(c, week, segment)
 
 
 # ----------------------------------------------------------------------------- HTTP
+SEGMENT_QUERY = Query(default="", max_length=200, description="A segment id, or empty for the whole market")
+
+
 class BriefingItem(M.Contract):
     text: str = Field(min_length=1, max_length=TEXT_MAX)
     kind: str = Field(default="change", pattern="^(" + "|".join(KINDS) + ")$")
@@ -255,41 +289,59 @@ class BriefingPost(M.Contract):
     body: str = Field(min_length=1, max_length=BODY_MAX)
     items: list[BriefingItem] = Field(default_factory=list, max_length=ITEMS_MAX)
     answers: BriefingAnswers | None = None
+    segment_id: str = Field(default="", max_length=200)
 
 
 def install(app, store, auth, mutate):
     @app.get("/api/v2/market/briefings")
-    def briefings(request: Request, limit: int = Query(default=LIMIT_MAX, ge=1, le=LIMIT_MAX)):
-        """The weekly briefings, newest first, without their bodies. Market readers."""
+    def briefings(
+        request: Request,
+        limit: int = Query(default=LIMIT_MAX, ge=1, le=LIMIT_MAX),
+        segment: str = SEGMENT_QUERY,
+    ):
+        """The weekly briefings of the whole market, or of `segment`, newest first, without their bodies. Market
+        readers."""
         auth.domain(request.state.identity)
         with store.read() as c:
-            return {"briefings": listing(c, limit)}
+            return {"briefings": listing(c, limit, SG.require_ours(c, segment))}
 
     @app.get("/api/v2/market/briefings/latest")
-    def briefing_latest(request: Request):
-        """The newest briefing with its body, or `null` before the first. `touched` names the bets it touches."""
+    def briefing_latest(request: Request, segment: str = SEGMENT_QUERY):
+        """The newest briefing of the whole market, or of `segment`, with its body, or `null` before the first.
+        `touched` names the bets it touches."""
         auth.domain(request.state.identity)
         with store.read() as c:
-            return {"briefing": latest(c)}
+            return {"briefing": latest(c, SG.require_ours(c, segment))}
 
     @app.get("/api/v2/market/briefings/{week}")
-    def briefing_show(request: Request, week: str):
+    def briefing_show(request: Request, week: str, segment: str = SEGMENT_QUERY):
         auth.domain(request.state.identity)
         with store.read() as c:
-            row = get(c, week)
+            row = get(c, week, SG.require_ours(c, segment))
         if not row:
             raise Problem("not_found", f"There is no briefing for {week}", 404)
         return {"briefing": row}
 
     @app.post("/api/v2/market/briefings")
     def briefing_post(request: Request, body: BriefingPost):
-        """The Librarian's (or the owner's) briefing for a week; the same week again replaces it. Without `answers`
-        the week's answers stay."""
+        """The Librarian's (or the owner's) briefing for a week, of the whole market or of one segment (`segment_id`);
+        the same week and scope again replaces it. Without `answers` the week's answers stay."""
         who = request.state.identity
 
         def work(c):
             MK.require_writer(who)
             answers = body.answers.model_dump() if body.answers is not None else None
-            return {"briefing": post(c, who, body.week, body.title, body.body, body.items, answers=answers)}
+            return {
+                "briefing": post(
+                    c,
+                    who,
+                    body.week,
+                    body.title,
+                    body.body,
+                    body.items,
+                    answers=answers,
+                    segment_id=body.segment_id,
+                )
+            }
 
         return mutate(request, body, work)

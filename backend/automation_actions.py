@@ -518,8 +518,8 @@ def _may_write_market(c, author):
 
 def _post_update(c, auto, run_id, args, values):
     """Post the text (else what the turn before wrote) as the owner. `to` is where: `updates` (the default), and
-    `market`, the week's briefing on Market. With both, Updates gets one line pointing at the briefing, added to the
-    owner's daily update. Each post carries `source: {automation, run, task}`."""
+    `market`, the week's briefing on Market (of one segment when `segment_id` names it). With both, Updates gets one line
+    pointing at the briefing, added to the owner's daily update. Each post carries `source: {automation, run, task}`."""
     to = args.get("to", ["updates"])
     to = [to] if isinstance(to, str) else to
     if not isinstance(to, list) or not to or any(t not in POST_TO for t in to):
@@ -547,9 +547,11 @@ def _post_update(c, auto, run_id, args, values):
         from . import market_briefing as MB
 
         title, body = _briefing(text, args.get("title"))
-        out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, None, source=source)[
-            "week"
-        ]
+        # `segment_id` makes it that segment's briefing; the server refuses one that is not the company's.
+        segment = str(args.get("segment_id") or "")
+        out["briefing"] = MB.post(
+            c, SimpleNamespace(actor=author), MB.this_week(), title, body, None, source=source, segment_id=segment
+        )["week"]
         text = _pointer(c, poster, title)
     if "updates" in to:
         # A warned step's text leads with its warn line (_warned_args): it goes on after the writing checks.

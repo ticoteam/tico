@@ -3374,8 +3374,20 @@ def parser():
         dest="answers_file",
         help="JSON object of one-line answers: {changed, money, players, reach, saying}",
     )
+    s.add_argument(
+        "--segment",
+        dest="segment_id",
+        default=None,
+        help="a segment's id (segment/<slug>): this briefing is that segment's; left out, the whole market's",
+    )
     s.set_defaults(fn="market briefing post")
     s = briefing.add_parser("latest", help="the newest briefing, its items and the bets it touches")
+    s.add_argument(
+        "--segment",
+        dest="segment_id",
+        default=None,
+        help="a segment's id (segment/<slug>): this briefing is that segment's; left out, the whole market's",
+    )
     s.set_defaults(fn="market briefing latest")
     s = market.add_parser(
         "define", help="Librarian or owner: define the market (what it is, what is in and out, how to count)"

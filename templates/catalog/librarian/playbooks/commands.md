@@ -48,10 +48,12 @@ does and what it returns. For any other command, run `hub <group> --help` first.
 - `hub market watch list [--entity <entity id>]`: the watched pages and when each was last read.
 - `hub market watch check`: reads the watched pages now.
 - `hub market watch stop <watch id>`: stops one watch. The row is kept.
-- `hub market briefing post --week <YYYY-Www> --title "<title>" --body-file <file.md> [--items-file <items.json>] [--answers-file <answers.json>]`:
+- `hub market briefing post --week <YYYY-Www> --title "<title>" --body-file <file.md> [--items-file <items.json>] [--answers-file <answers.json>] [--segment <segment id>]`:
   posts the week's briefing with its tagged items and the Market page's answer lines (`playbooks/write-the-briefing.md`,
-  step 3). The same week again replaces it; without `--answers-file` the week's answers stay.
-- `hub market briefing latest`: the newest briefing, with its items and the bets it touches.
+  step 3). The same week again replaces it; without `--answers-file` the week's answers stay. `--segment` posts it as
+  that segment's briefing instead of the whole market's (step 3b).
+- `hub market briefing latest [--segment <segment id>]`: the newest briefing, with its items and the bets it touches; with
+  `--segment`, that segment's.
 - `hub strategy show`: the published strategy: its bets and what each one cites.
 - `hub lens list --market` and `hub lens run where-to-play --answers-file <file.json>`: the market lenses, and a lens run.
 

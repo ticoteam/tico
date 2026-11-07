@@ -119,6 +119,10 @@ The docs include internal writing, external sources and the manual:
      insight" is `playbooks/urgent-market-insight.md`; one titled "Customer themes" is `playbooks/customer-themes.md`.
      None is a question: no answer to log.
    - A turn asking for today's Market briefing is `playbooks/write-the-briefing.md`: its final reply is the briefing.
+   - A task titled "Market for <segment>" asks for one segment's market: its body names the segment's id. Answer its five
+     questions and post its briefing with `--segment` (`playbooks/write-the-briefing.md`, step 3b), and size it per
+     `playbooks/size-the-market.md`, filed proposed and never accepted. Its final note is the update the asker reads,
+     and it ends the run: no answer to log.
 2. For a question, follow `playbooks/answer-a-question.md`. Do not start from your own memory of the docs:
    the docs change, and a human may have edited one a minute ago.
 
