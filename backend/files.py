@@ -1353,14 +1353,21 @@ class Files:
 
     def write(self, request, who, body, work):
         # File mutations use their own wrapper, so repeat the current fence under Store's lock too.
-        source = getattr(request.state, "privacy_source", who)
+        if request is None:
+            # A server-side publish (backend/review_pages.py) has no request: its operation is this path and its retry
+            # key is the body's hash, so the same publish again replays its receipt.
+            source, path = who, "/server/files"
+            key = hashlib.sha256(encode(body).encode()).hexdigest()
+        else:
+            source, path = getattr(request.state, "privacy_source", who), request.url.path
+            key = request.headers.get("idempotency-key")
         result = self.store.mutate(
             who,
-            request.url.path,
-            request.headers.get("idempotency-key"),
+            path,
+            key,
             body,
             work,
-            check=lambda c: privacy.guard_write(c, source, request.url.path, self.auth),
+            check=lambda c: privacy.guard_write(c, source, path, self.auth),
         )
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
