@@ -103,8 +103,7 @@ const sideways = page => page.evaluate(() => [document.documentElement, document
 const wide = page => page.evaluate(() => {
   const name = el => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.classList.length ? '.' + [...el.classList].join('.') : ''}`;
   const m = document.querySelector('#main'), d = document.documentElement;
-  const out = [...document.body.querySelectorAll('*')].filter(el => { const r = el.getBoundingClientRect(); return r.width && r.right > innerWidth + 1
-    && !(el.parentElement && el.parentElement.closest('.fin-scroll, [data-fin-tabs], .fin-tabs')); });
+  const out = [...document.body.querySelectorAll('*')].filter(el => { const r = el.getBoundingClientRect(); return r.width && r.right > innerWidth + 1 && ['absolute', 'fixed'].includes(getComputedStyle(el).position); });
   return `doc ${d.scrollWidth}/${d.clientWidth} main ${m && m.scrollWidth}/${m && m.clientWidth}; ` + out.slice(0, 8).map(el => { const r = el.getBoundingClientRect(); return `${name(el)} ${Math.round(r.left)}..${Math.round(r.right)}`; }).join(', ');
 });
 // The actions a page sent (not dry runs): {kind, payload} in order.
