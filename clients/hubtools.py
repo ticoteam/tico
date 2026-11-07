@@ -4060,6 +4060,176 @@ def market_segment_add(api, args):
     )
 
 
+# ----------------------------------------------------------------------------- the company's segments
+# What the company plays in (backend/segments.py): the market's segments the company operates in, each with its
+# dedicated teammates and its own strategy text. Writes are the owner's on their own click: the Assistant proposes
+# them as cards (`hub assistant propose`), and a bot admin is refused by the route.
+SEGMENT_COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")
+SEGMENT_STRATEGY_KEYS = ("summary", *STRATEGY_SECTIONS)
+
+
+def _segment_path(segment_id):
+    """A segment id is `segment/<slug>`: its slash stays, the route takes the rest of the path."""
+    return "segments/" + quote(str(segment_id), safe="/")
+
+
+@tool(
+    "hub_segment_list",
+    "The segments the company plays in, in list order: each one's id, name, who it is for, color, rank, faces (the "
+    "dedicated teammates, highest on the chart first) and teammates (how many are dedicated).",
+    {},
+)
+def segment_list(api, args):
+    return api.get("segments")
+
+
+@tool(
+    "hub_segment_show",
+    "One segment: its leads, its strategy fields (the summary and the seven sections, each with the text the segment "
+    "reads, the company's text and whether it changed; the owner reads the draft and its revision), and its live bets.",
+    {"id": _s("The segment's id, segment/<slug>")},
+    ("id",),
+)
+def segment_show(api, args):
+    return api.get(_segment_path(args["id"]))
+
+
+@tool(
+    "hub_segment_add",
+    "Owner: a segment the company plays in. A market segment of that name joins the company's and keeps its id; a "
+    "new one lands last in the list. Answers {segment}.",
+    {
+        "name": _s("The segment's name"),
+        "who": _s("One line: who it is for"),
+        "color": {
+            "type": "string",
+            "enum": list(SEGMENT_COLORS),
+            "description": "Its color; default the next free one",
+        },
+    },
+    ("name",),
+    writes=True,
+)
+def segment_add(api, args):
+    return api.post(
+        "segments",
+        {"name": args["name"], "who": args.get("who") or "", "color": args.get("color") or None},
+        key=_key(args),
+    )
+
+
+@tool(
+    "hub_segment_edit",
+    "Owner: a segment's name, who it is for or color. Only what is sent changes; who \"\" clears it. Answers {segment}.",
+    {
+        "id": _s("The segment's id, segment/<slug>"),
+        "name": _s("New name"),
+        "who": _s("One line: who it is for; an empty string clears it"),
+        "color": {"type": "string", "enum": list(SEGMENT_COLORS)},
+    },
+    ("id",),
+    writes=True,
+)
+def segment_edit(api, args):
+    body = {k: args[k] for k in ("name", "who", "color") if args.get(k) is not None}
+    return api.post(_segment_path(args["id"]), body, key=_key(args))
+
+
+@tool(
+    "hub_segment_order",
+    "Owner: the list order of the company's segments: every segment it plays in, once each, in the order given. "
+    "Answers {segments}, the list.",
+    {"ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Every segment id, in order"}},
+    ("ids",),
+    writes=True,
+)
+def segment_order(api, args):
+    return api.post("segments/order", {"ids": list(args["ids"])}, key=_key(args))
+
+
+@tool(
+    "hub_segment_remove",
+    "Owner: take a segment out of the company's. Its operates-in edge ends and its teammate tags go; the market keeps "
+    "the segment with its edges, competitors and sizes. Answers {id, removed}.",
+    {"id": _s("The segment's id, segment/<slug>")},
+    ("id",),
+    writes=True,
+)
+def segment_remove(api, args):
+    return api.post("segments/remove", {"id": args["id"]}, key=_key(args))
+
+
+@tool(
+    "hub_segment_strategy",
+    "Owner: a segment's own strategy text for the sections sent, in the draft (the owner publishes on the Strategy "
+    "page). An empty text gives the company's text back for that section. `revision` is the draft's revision as "
+    "hub_segment_show reads it. Answers {strategy}.",
+    {
+        "id": _s("The segment's id, segment/<slug>"),
+        "revision": {"type": "integer", "description": "The draft's revision as hub_segment_show read it"},
+        "sections": {
+            "type": "object",
+            "description": "Section key to its text. Keys: summary, serve, sell, proof, now, know, how, not",
+            "additionalProperties": {"type": "string"},
+        },
+        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
+    },
+    ("id", "revision"),
+    writes=True,
+)
+def segment_strategy(api, args):
+    sections = dict(args.get("sections") or {})
+    for item in args.get("section") or []:
+        key, sep, text = str(item).partition("=")
+        if not sep:
+            raise APIError("validation", f"'{item}': use KEY=TEXT (KEY= gives the company's text back)", 422)
+        sections[key.strip()] = text
+    unknown = sorted(set(sections) - set(SEGMENT_STRATEGY_KEYS))
+    if unknown:
+        raise APIError("validation", f"Unknown section {unknown[0]}: use {', '.join(SEGMENT_STRATEGY_KEYS)}", 422)
+    return api.call(
+        "PUT",
+        "segments/strategy",
+        {"id": args["id"], "revision": int(args["revision"]), "sections": sections},
+        key=_key(args),
+    )
+
+
+@tool(
+    "hub_segment_members",
+    "The teammates tagged with a segment (the company's, or `all`), highest on the chart first: each one's member "
+    "ref (bot:<id> or person:<id>) and its segments. `truncated` says the list was cut.",
+    {},
+)
+def segment_members(api, args):
+    return api.get("segments/members")
+
+
+@tool(
+    "hub_segment_tag",
+    "Owner: a teammate's segments, replaced by the ones given: segment ids, or `all` alone for every segment. clear "
+    "takes every tag off. The member is bot:<id> or person:<id>. Answers {member, segments}.",
+    {
+        "member": _s("bot:<id> or person:<id>"),
+        "segments": {"type": "array", "items": {"type": "string"}, "description": "Segment ids, or [\"all\"]"},
+        "clear": {"type": "boolean", "description": "Take every segment tag off"},
+    },
+    ("member",),
+    writes=True,
+)
+def segment_tag(api, args):
+    segments = list(args.get("segments") or [])
+    if args.get("clear") and segments:
+        raise APIError("validation", "Send segments or clear, not both", 422)
+    if not segments and not args.get("clear"):
+        raise APIError("validation", "Name a segment (or all), or send clear to take every tag off", 422)
+    return api.post(
+        "segments/members",
+        {"member": args["member"], "segments": [] if args.get("clear") else segments},
+        key=_key(args),
+    )
+
+
 @tool(
     "hub_market_size_add",
     "Librarian or owner: file one estimate of a segment's yearly spend in US dollars. Every method "

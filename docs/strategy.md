@@ -186,6 +186,8 @@ out of the company; a bot's request to do so gets `403`. A Librarian may retire 
 the company plays in leaves it on the owner's click only (`/segments/remove`, or a market route the same click
 confirms). The owner, on their own click or by a card they confirmed, tags a teammate with a segment; a bot admin, a
 bot or an unconfirmed Assistant call gets `403`.
+The Assistant never writes these directly: it proposes each one as a card (`hub assistant propose`), and the
+owner's tap runs it. Its strategy text is the owner's to write on the Strategy page.
 
 ## Lenses
 
@@ -368,6 +370,16 @@ hub strategy bet update <id> [the same flags]      hub strategy bet retire <id> 
 hub strategy guides                     deprecated; the Default guide only
 hub lens list|run|show|runs            see Lenses (lenses.md)
 hub goal create ... --bet <id>          hub goal update <id> --bet <id>
+hub segment list                        the company's segments in list order: id, name, who, color, faces
+hub segment show <id>                   one: its leads, its strategy fields (the draft's revision for the owner), its bets
+hub segment add --name N [--who W] [--color C]        owner only (the Assistant proposes it as a card)
+hub segment edit <id> [--name N] [--who W|--who ""] [--color C]   only what is passed changes
+hub segment order <id> <id> ...         the list order, every segment once
+hub segment remove <id>                 takes it out of the company's; its teammate tags go
+hub segment strategy <id> --revision N [--set KEY=TEXT ...]   the segment's text in the draft; KEY= gives the company's back
+hub segment members                     every tagged teammate, highest on the chart first
+hub segment tag <bot:ID|person:ID> <id>...  | --clear      owner only: a teammate's segments
+                                        `hub market segment ...` is the market graph (the Librarian), not these
 ```
 
 Every command has an MCP tool of the same name and arguments (`hub_strategy_show`, `hub_strategy_bet_add`,

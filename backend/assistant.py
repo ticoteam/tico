@@ -871,6 +871,12 @@ _PROPOSABLE = [
         ("POST", r"/api/v2/segments/segment/[^/]+"),
         ("PUT", r"/api/v2/segments/strategy"),
         ("POST", r"/api/v2/market/segments/(target|remove)"),
+        # A customer's segment (backend/finance_routes.py, a Finance action's own key), a Finance action that carries a
+        # budget's or a customer's segment (`segment_id`), and a bot's context length once the bot exists
+        # (backend/bot_settings_routes.py: its expected revision is the bot's current one, read with `hub bot show`).
+        ("POST", r"/api/v2/finance/contacts/[^/]+/segment"),
+        ("POST", r"/api/v2/finance/actions"),
+        ("POST", r"/api/v2/bots/[^/]+/compact-at"),
     )
 ]
 # What only BotOps may propose, for a person who asked it in chat (backend/botops_act.py lists the routes it

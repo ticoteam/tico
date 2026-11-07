@@ -640,3 +640,44 @@ def test_a_merge_moves_the_latest_published_text_of_a_segment_too(api):
         published = S.current(c)["sections"].get("segments", {})
     assert first not in published
     assert published[second]["summary"] == "Small landlords, one building at a time."
+
+
+def test_the_segment_finance_and_bot_context_routes_are_cards_and_only_those_routes_are():
+    """The Assistant proposes these by card (`hub assistant propose`): each route is proposable, and its neighbours in
+    the same shape are not."""
+    from backend.assistant import valid_operation
+
+    for method, path in (
+        ("POST", "/api/v2/segments/members"),
+        ("PUT", "/api/v2/segments/strategy"),
+        ("POST", "/api/v2/segments/segment/screening"),
+        ("POST", "/api/v2/finance/contacts/cust-1/segment"),
+        ("POST", "/api/v2/finance/actions"),
+        ("POST", "/api/v2/bots/ops/compact-at"),
+    ):
+        assert valid_operation(method, path), (method, path)
+    for method, path in (
+        ("GET", "/api/v2/segments"),
+        ("PUT", "/api/v2/finance/actions"),
+        ("POST", "/api/v2/finance/contacts/cust-1"),
+        ("POST", "/api/v2/finance/contacts/cust-1/segment/extra"),
+    ):
+        assert not valid_operation(method, path), (method, path)
+
+
+def test_a_compact_at_card_writes_nothing_until_the_owner_taps_it(api):
+    setup_attempt(api, "ops")
+    _r, attempt = assistant_turn(api, "ana-test")
+    before = get(api, "bots/ops")["revision"]
+    operation = {
+        "summary": "Compact ops at 250k",
+        "method": "POST",
+        "path": "/api/v2/bots/ops/compact-at",
+        "body": {"compact_at": 250000, "expected_revision": before},
+    }
+    action = post(api, "assistant/actions", operation, token=attempt["token"])["action"]
+    assert action["status"] == "pending"
+    assert get(api, "bots/ops")["revision"] == before  # a pending card has changed nothing
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
+    assert get(api, "bots/ops")["revision"] == before + 1

@@ -149,6 +149,14 @@ the Assistant (`assistant_direct`, `assistant_approvals`); a Tico support report
 company's server connection or its storage. A write whose body carries a secret is refused from chat too: a secret goes
 in Credentials (`hub credential request`). A person-only setting stays person-only, with the reason and the link.
 
+**Segments and their money are cards.** A segment, its strategy and a teammate's tags are the owner's own click: the
+route refuses the Assistant's direct write (`403`), so it proposes each one as a card (`hub assistant propose`). A
+budget, a customer's segment and a new bot's context length are cards too (`/api/v2/finance/actions`,
+`/api/v2/finance/contacts/{id}/segment`, `/api/v2/bots/{bot}/compact-at`). The "Set up segments" job
+([playbooks/set-up-segments.md](../templates/catalog/assistant/playbooks/set-up-segments.md)) proposes them in one
+reply. Its strategy text is written by the owner on the Strategy page: the draft's revision is not shown to the
+Assistant, so it cannot save that text itself.
+
 **The citation is checked.** The message must be yours, typed in your own Assistant DM (not written by a bot or the
 Assistant, not in another thread), and no more than 30 minutes old when the write is made. A run whose message is not
 yours, or is older, gets no cited words: its writes are cards (`403 confirm_required`), and an explicit citation that
