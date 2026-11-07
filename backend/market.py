@@ -2470,7 +2470,14 @@ def install(app, store, auth, mutate):
                     raise Problem("merge", "Say which entity this one merges into", 422)
                 return {"entity": merge_entities(c, who.actor, entity_id, body.into, body.insight_id)}
             if action == "retire":
+                from . import strategy_market as SM  # one of the company's segments leaves on the owner's click only
+
+                SM.leave_company_guard(c, who, entity_id)
                 return {"entity": retire_entity(c, who.actor, entity_id, body.insight_id)}
+            if body.status == "retired":
+                from . import strategy_market as SM
+
+                SM.leave_company_guard(c, who, entity_id)
             row, _events = update_entity(
                 c,
                 who.actor,

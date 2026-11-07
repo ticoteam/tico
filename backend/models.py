@@ -966,7 +966,7 @@ class SegmentStrategy(Contract):
     company's text again. `id` is the segment; `revision` is the draft's as read."""
 
     id: str = Field(min_length=3, max_length=200)
-    revision: int | None = None
+    revision: int
     sections: dict[str, str] = Field(default_factory=dict, max_length=8)
 
 

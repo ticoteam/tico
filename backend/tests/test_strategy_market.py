@@ -5,8 +5,9 @@ company stops playing in stays in the market, with its teammates' tags off. Exam
 from datetime import datetime, timedelta, timezone
 
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_market import _librarian
-from backend.tests.test_market_spend import defined, evidence
+from backend.tests.test_market_spend import defined, evidence, size
 
 
 def segments(api, token="ana-test"):
@@ -117,3 +118,38 @@ def test_competitors_are_added_by_name_or_site_and_removed_and_added_again(api):
     post(api, "market/competitors", {"name": "Northwind.example"})
     assert len(get(api, "market/competitors")["competitors"]) == 2
     post(api, "market/competitors", {"name": "Rival"}, token="cara-test", expected=403)
+
+
+def test_a_segment_the_company_plays_in_leaves_only_on_the_owners_click(api):
+    first, second, sub = defined(api)
+    post(api, "market/segments/target", {"id": first, "target": "ours"})
+    _librarian(api)
+    _, _, librarian = setup_attempt(api, "librarian")
+    post(api, f"market/entities/{first}", {"status": "retired"}, token=librarian["token"], expected=403)
+    post(api, f"market/entities/{first}/retire", {}, token=librarian["token"], expected=403)
+    assert segments(api)[first]["self"]
+    post(api, f"market/entities/{second}/retire", {}, token=librarian["token"])  # not ours: the market's own cleanup
+    assert second not in segments(api)
+    post(api, f"market/entities/{first}/retire", {})  # the owner's click takes it out of the company first
+    assert first not in segments(api)
+    assert not any(s["self"] for s in segments(api).values())
+
+
+def test_an_unconfirmed_assistant_call_does_not_make_a_segment_the_companys(api):
+    first, second, sub = defined(api)
+    _, attempt = assistant_turn(api, "ana-test")
+    post(api, "market/segments/target", {"id": first, "target": "ours"}, token=attempt["token"], expected=403)
+    assert not segments(api)[first]["self"]
+
+
+def test_a_merge_proposes_a_moved_size_the_target_already_has_accepted(api):
+    first, second, _ = defined(api)
+    moved = size(api, first, accept=True)
+    kept = size(api, second, accept=True)
+    buyers = size(api, first, accept=True, dimension="buyer")  # another dimension: the moved row stays accepted
+    post(api, f"market/entities/{first}/merge", {"into": second})
+    estimates = next(s for s in get(api, "market/spend")["segments"] if s["id"] == second)["estimates"]
+    status = {e["id"]: e["status"] for e in estimates}
+    assert status[moved["id"]] == "proposed"
+    assert status[kept["id"]] == "accepted"
+    assert status[buyers["id"]] == "accepted"

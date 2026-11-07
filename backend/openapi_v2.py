@@ -6996,7 +6996,8 @@ STABLE.extend(
             'Segments',
             'createSegment',
             'Owner only: a segment the company plays in, by name. A market segment of that name joins; one that is the '
-            "company's already, or merged away, is a 409; a removed one comes back with its id",
+            "company's already is a 409, and one merged into a segment that is no longer active is a 409; "
+            "a removed one comes back with its id",
             None,
         ),
         (

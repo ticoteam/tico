@@ -171,10 +171,6 @@ def _domain(auth: "Auth", who: "Identity") -> None:
     cast(Callable[..., object], auth.domain)(who)
 
 
-def _bot_admin(auth: "Auth", who: "Identity") -> bool:
-    return cast(Callable[..., bool], auth.bot_admin)(who)
-
-
 def _draft(c: sqlite3.Connection) -> Row | None:
     from . import strategy as ST
 
@@ -322,10 +318,12 @@ def create(
     company: str = "",
 ) -> Row:
     """A segment the company plays in. A market segment of that name (active, or with that name as an alias) joins the
-    company's and keeps its id, its history and its color; one that is already the company's is a 409. A merged one is
-    a 409 naming the segment it merged into, as the market does. A removed one comes back with its id, and a new one is
-    made under the market's root, which is defined as "<company> market" first when there is none (the Strategy page
-    does the same). It lands last in the list, in the first color no other of the company's has, unless `color` says."""
+    company's and keeps its id, its history and its color: a name that is an alias of a merged segment joins the one it
+    merged into, when that is active (200, that segment's id). One that is already the company's is a 409, and so is a
+    merged one whose merge target is no longer active (the 409 names that target). A removed one comes back with its id,
+    and a new one is made under the market's root, which is defined as "<company> market" first when there is none (the
+    Strategy page does the same). It lands last in the list, in the first color no other of the company's has, unless
+    `color` says."""
     name = _text(name, NAME_MAX, "name", required=True)
     who = _text(who, WHO_MAX, "one line of who it is for")
     seg_id = "segment/" + _slug(name)
@@ -346,7 +344,7 @@ def create(
         merged = next(r for r in found if r["status"] == "merged")
         raise Problem(
             "exists",
-            f"{merged['name']} was merged into {merged['merged_into']}; the company plays in that one",
+            f"{merged['name']} was merged into {merged['merged_into']}, which is no longer an active segment",
             409,
             extra={"id": merged["id"], "merged_into": merged["merged_into"]},
         )
@@ -570,10 +568,12 @@ def _chart(c: sqlite3.Connection) -> Directory:
     return {"names": names, "depth": depth, "hidden": set()}
 
 
-def _directory(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None) -> Directory:
+def _directory(
+    c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None, chart: Directory | None = None
+) -> Directory:
     """What faces and members are listed with: each teammate on the org chart by its name, its depth on the chart (the
-    people and bots above it), and the people the viewer may not see."""
-    base = _chart(c)
+    people and bots above it), and the people the viewer may not see. `chart` is `_chart(c)` when the caller has it."""
+    base = chart if chart is not None else _chart(c)
     hidden: set[str] = set()
     if who is not None and auth is not None:
         people_hidden, _groups = _unseen(c, who, auth)
@@ -666,7 +666,7 @@ def write_strategy(
     c: sqlite3.Connection,
     actor: str,
     segment_id: str,
-    revision: int | None,
+    revision: int,
     changes: dict[str, str],
 ) -> Row:
     """The segment's own text for some sections in the draft (`""` gives the company's text back), against the draft
@@ -689,10 +689,11 @@ def detail(c: sqlite3.Connection, auth: "Auth", who: "Identity", segment_id: str
     """GET /api/v2/segments/{id}: the segment (as the list shows it), its leads, its strategy and its live bets. The
     leads are the company's, whoever may see them; the ones the viewer may not see are left out of the list."""
     row = _ours_row(c, segment_id)
-    directory = _directory(c, who, auth)
+    chart = _chart(c)
+    directory = _directory(c, who, auth, chart)
     tagged = _dedicated(c, segment_id)
     live = _faces_of(tagged, directory)
-    company_leads = _leads(tagged, _managers(c), _chart(c))
+    company_leads = _leads(tagged, _managers(c), chart)
     return {
         **_segment_view(row, _index_of(c, segment_id), [_face(r, directory) for r in live], len(live)),
         "leads": [_face(r, directory) for r in company_leads if r not in directory["hidden"]],
@@ -705,17 +706,17 @@ def detail(c: sqlite3.Connection, auth: "Auth", who: "Identity", segment_id: str
 def run_text(c: sqlite3.Connection, bot: str | None, published: Row | None) -> str:
     """What a bot's run is handed about the segments it is dedicated to (backend/learned.py for_turn), from the published
     version the caller read once for the turn (`published`, strategy.current): each segment as `Segment: <name> — <who>`
-    with its published summary under it, in list order. A bot tagged `all` is handed every one of the company's
-    segments; a bot with no tag is handed nothing. "" when nothing is published or there is no segment to hand over."""
+    with its published summary under it, in list order. Only the segments a bot is tagged with by name are handed: a tag
+    of `all` hands it nothing, and so does no tag. "" when nothing is published or there is no segment to hand over."""
     if not published:
         return ""
-    mine = member_segments(c, "bot:" + str(bot or ""))
+    mine = [s for s in member_segments(c, "bot:" + str(bot or "")) if s != ALL]
     if not mine:
         return ""
     own = _segment_sections(published)
     blocks: list[str] = []
     for row in _ordered_rows(c):
-        if ALL not in mine and row["id"] not in mine:
+        if row["id"] not in mine:
             continue
         head = f"Segment: {row['name']}" + (f" — {row['summary']}" if row["summary"] else "")
         item: Row = own.get(row["id"]) or {}
@@ -740,12 +741,6 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
             raise Problem("forbidden", "A bot proposes a change to the segments and the owner confirms it", 403)
         raise Problem("forbidden", "Only the owner changes the segments, on their own click", 403)
 
-    def tagger(who: "Identity") -> None:
-        _domain(auth, who)
-        if who.role == "owner" or _bot_admin(auth, who):
-            return
-        raise Problem("forbidden", "Only an owner or an admin tags a teammate with a segment", 403)
-
     def company() -> str:
         return _company_name(store)
 
@@ -761,11 +756,12 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
 
     @app.post("/api/v2/segments/members")
     def segment_members_set(request: Request, body: M.SegmentMembers):
-        """A teammate's segments, replaced by the ones sent ([] clears them): the company's segment ids, or `all` alone."""
+        """A teammate's segments, replaced by the ones sent ([] clears them): the company's segment ids, or `all` alone.
+        The owner tags, on their own click (or a card they confirmed); a bot admin cannot."""
         who: "Identity" = request.state.identity
 
         def work(c: sqlite3.Connection):
-            tagger(who)
+            owner(who)
             return set_member(c, who.actor, body.member, body.segments)
 
         return mutate(request, body, work)

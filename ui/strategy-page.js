@@ -752,8 +752,9 @@ function strategyBindMarket(state, body) {
     const cycle = tile => {
       const seg = (spend()?.segments || []).find(s => s.id === tile.dataset.seg);
       if (!seg) return;
-      const to = seg.self ? 'next' : seg.next ? 'none' : 'ours';
-      seg.self = to === 'ours'; seg.next = to === 'next';
+      // Us or none: one flag. A segment the company meant to enter next is one of its own now, so there is no Next here.
+      const to = seg.self ? 'none' : 'ours';
+      seg.self = to === 'ours'; seg.next = false;
       strategyPaintMarket('spend');
       $(`#strat-where [data-seg="${CSS.escape(seg.id)}"]`)?.focus();
       post('/v2/market/segments/target', {id: seg.id, target: to}).catch(error => failed('spend', error));

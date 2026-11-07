@@ -243,10 +243,13 @@ def target(c, actor, segment_id, to, company=""):
     return {"id": segment_id, "ours": on}
 
 
-def _move_draft_text(c, actor, old, new):
-    """The draft's text for a segment that merged away is the one it merged into's, where that one has no text of its
-    own for a section (its own text wins). The draft's revision moves on, so a page that read it sees the change."""
-    row = c.execute("SELECT id, sections FROM strategy_versions WHERE status='draft'").fetchone()
+def _move_segment_text(c, actor, old, new, status):
+    """The text of a segment that merged away, in the draft (`status` "draft") or in the latest published version
+    (`status` "published"): the one it merged into keeps the sections it has text for, and the rest move over. Only the
+    draft's revision moves on, so a page that read it sees the change; a published version's text is what a run reads."""
+    row = c.execute(
+        "SELECT id, sections FROM strategy_versions WHERE status=? ORDER BY n DESC LIMIT 1", (status,)
+    ).fetchone()
     if not row:
         return
     raw = MK.loads(row[1], {})
@@ -257,16 +260,24 @@ def _move_draft_text(c, actor, old, new):
     moved = texts.pop(old)
     texts[new] = {**moved, **(texts.get(new) or {})}
     raw["segments"] = texts
-    c.execute(
-        "UPDATE strategy_versions SET sections=?, revision=revision+1, updated_at=?, updated_by=? WHERE id=?",
-        (MK.dumps(raw), H.now(), actor, row[0]),
-    )
+    if status == "draft":
+        c.execute(
+            "UPDATE strategy_versions SET sections=?, revision=revision+1, updated_at=?, updated_by=? WHERE id=?",
+            (MK.dumps(raw), H.now(), actor, row[0]),
+        )
+    else:
+        c.execute(
+            "UPDATE strategy_versions SET sections=?, updated_at=?, updated_by=? WHERE id=?",
+            (MK.dumps(raw), H.now(), actor, row[0]),
+        )
 
 
 def follow_merge(c, actor, segment_id, into_id):
     """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities). Its Us edge moved there with
     the graph's other edges. Its teammate tags move there when it is one of the company's (else they go), and so do the
-    strategy bets that name it, its text in the draft, and the rows the other modules key by segment."""
+    strategy bets that name it, its text in the draft and in the latest published version, and the rows the other
+    modules key by segment. A size the target already has accepted for the same dimension, basis and year cannot be
+    accepted twice, so the moved one is proposed."""
     had = c.execute("SELECT 1 FROM segment_members WHERE segment_id=? LIMIT 1", (segment_id,)).fetchone()
     if into_id in ours_ids(c):
         c.execute(
@@ -278,14 +289,34 @@ def follow_merge(c, actor, segment_id, into_id):
     if had:
         bump_finance_view(c, "segment tags")
     c.execute("UPDATE strategy_bets SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
+    c.execute(
+        "UPDATE market_sizes SET segment_id=?, status='proposed', updated_at=? WHERE segment_id=? AND status='accepted' "
+        "AND EXISTS (SELECT 1 FROM market_sizes t WHERE t.segment_id=? AND t.status='accepted' "
+        "AND t.dimension=market_sizes.dimension AND t.basis=market_sizes.basis AND t.year=market_sizes.year)",
+        (into_id, H.now(), segment_id, into_id),
+    )
     for table in MOVED_BY_SEGMENT:
         if "segment_id" in _columns(c, table):
             c.execute(f"UPDATE {table} SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
-    _move_draft_text(c, actor, segment_id, into_id)
+    _move_segment_text(c, actor, segment_id, into_id, "draft")
+    _move_segment_text(c, actor, segment_id, into_id, "published")
 
 
 def _columns(c, table):
     return {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+
+
+def leave_company_guard(c, who, segment_id):
+    """The entity routes (market/entities/{id}/retire, and a status "retired" write) never take one of the company's
+    segments out of the market. The owner's click does, through `remove_segment`, which ends its edges and its teammates'
+    tags first; anyone else, a bot included, gets 403."""
+    if segment_id not in ours_ids(c):
+        return
+    from . import goal_routes
+
+    if not goal_routes.company_editor(who, tap=True):
+        raise Problem("forbidden", f"{segment_id} is one of the company's segments; only the owner takes it out", 403)
+    remove_segment(c, who.actor, segment_id)
 
 
 def remove_segment(c, actor, segment_id):
@@ -432,11 +463,11 @@ def install(app, store, auth, mutate):
 
         def work(c):
             writer(who)
-            if who.role == "bot":
+            from . import goal_routes  # the owner's own click: a bot, or an Assistant call not confirmed, is refused
+
+            if not goal_routes.company_editor(who, tap=True):
                 raise Problem(
-                    "forbidden",
-                    "Only a person makes a segment one of the company's; propose it to the owner instead",
-                    403,
+                    "forbidden", "Only the owner makes a segment one of the company's, on their own click", 403
                 )
             return target(c, who.actor, body.id, body.target, company())
 

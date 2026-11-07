@@ -156,7 +156,8 @@ keeps its own.
 
 **Who is dedicated.** A teammate, human or bot, tagged with a segment is dedicated to it: one of its **faces**, highest
 on the team chart first (the people and bots above it count as its depth; groups do not). A tag of `all` means the
-teammate works across every segment. It is not one of their faces, and its runs are handed every segment's summary. A
+teammate works across every segment. It is not one of their faces, and its runs are handed no segment text: a run gets only the segments it is
+tagged with by name. A
 teammate may carry several tags. A segment's **leads** are its live dedicated teammates whose manager is not dedicated to
 it too; when every one of them has a dedicated manager (a loop in the chart), the highest one leads. Archived bots and
 removed people lose their tags. Anyone signed in can read a segment, its faces and its leads. A teammate the viewer may
@@ -175,14 +176,16 @@ the segment changed it (`changed`). A bot can propose strategy text for a segmen
 lists its live bets.
 
 **In a run.** A bot dedicated to a segment is handed, in its run context, each of its segments as
-`Segment: <name> — <who>` with the segment's published summary under it. A bot tagged `all` is handed every one of the
-company's segments that way. Only published text is handed, never a draft, and at most 2,000 characters in all (a longer
+`Segment: <name> — <who>` with the segment's published summary under it. A bot whose only tag is `all` is handed no segment
+text; only the segments it is tagged with by name are handed that way. Only published text is handed, never a draft, and at most 2,000 characters in all (a longer
 one is cut with `…`). The company's summary still goes to every run, in the same context.
 
 **Who may do what.** Anyone signed in reads the segments. The draft is the owner's, as the company's is. The owner, on
 their own click or by a card they confirmed in the Assistant, writes a segment, its strategy and the list, and takes one
-out of the company; a bot's request to do so gets `403`. A Librarian may retire a segment that is not the company's. The
-owner or a bot admin tags a teammate with a segment; a member gets `403`.
+out of the company; a bot's request to do so gets `403`. A Librarian may retire a segment that is not the company's; one
+the company plays in leaves it on the owner's click only (`/segments/remove`, or a market route the same click
+confirms). The owner, on their own click or by a card they confirmed, tags a teammate with a segment; a bot admin, a
+bot or an unconfirmed Assistant call gets `403`.
 
 ## Lenses
 
@@ -384,7 +387,7 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `POST /segments` | the owner | `{name, who?, color?}`: a segment the company plays in (a market segment of that name joins, a removed one comes back with its id); answers `{segment}` |
 | `POST /segments/order` | the owner | `{ids}`: every segment the company plays in, once each; answers `{segments}` |
 | `GET /segments/members` | any reader | `{members: [{member, segments}], truncated}`: every tagged teammate, highest on the chart first, at most 500; `segments` lists the ids and `"all"` |
-| `POST /segments/members` | the owner or a bot admin | `{member: "bot:<id>" or "person:<id>", segments: [id or "all"]}`, `[]` clears; answers `{member, segments}` |
+| `POST /segments/members` | the owner, on their own click | `{member: "bot:<id>" or "person:<id>", segments: [id or "all"]}`, `[]` clears; answers `{member, segments}` |
 | `GET /segments/{id}` | any reader | the segment as the list shows it, plus `leads` (its live faces whose manager is not one of them), `strategy` (`{draft, revision, version, fields: [{key, title, text, company, changed, from}]}`; the draft for the owner and the published text otherwise; `from` is `segment` or `company`) and `bets` (`{id, statement, status}`, live ones) |
 | `POST /segments/{id}` | the owner | `{name?, who?, color?}`, only what is sent changes; answers `{segment}` |
 | `POST /segments/remove` | the owner | `{id}`: takes the segment out of the company's; its teammate tags go; answers `{id, removed}` |

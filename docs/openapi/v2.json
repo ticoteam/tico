@@ -34841,7 +34841,7 @@
         ]
       },
       "post": {
-        "summary": "Owner only: a segment the company plays in, by name. A market segment of that name joins; one that is the company's already, or merged away, is a 409; a removed one comes back with its id",
+        "summary": "Owner only: a segment the company plays in, by name. A market segment of that name joins; one that is the company's already is a 409, and one merged into a segment that is no longer active is a 409; a removed one comes back with its id",
         "operationId": "createSegment",
         "requestBody": {
           "content": {
@@ -73422,14 +73422,7 @@
             "title": "Id"
           },
           "revision": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "integer",
             "title": "Revision"
           },
           "sections": {
@@ -73444,7 +73437,8 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id"
+          "id",
+          "revision"
         ],
         "title": "SegmentStrategy",
         "description": "A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); \"\" uses the\ncompany's text again. `id` is the segment; `revision` is the draft's as read."

@@ -611,3 +611,26 @@ def test_the_people_list_carries_the_callers_access_and_a_manager_edits_their_re
     # The list says what the server does: her manager edits Cara's profile and a peer does not.
     assert api.post("/api/v2/people/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
     assert api.post("/api/v2/people/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403
+
+
+def test_a_person_tagged_with_a_segment_is_hidden_where_the_person_is(acme):
+    api, tokens = acme
+    with api.app.state.store.transaction() as c:
+        for member in ("person:cara", "bot:counsel"):
+            c.execute(
+                "INSERT INTO segment_members (segment_id, member, created_at, created_by) VALUES (?,?,?,?)",
+                ("segment/screening", member, "2026-11-01T00:00:00Z", "human:ana"),
+            )
+    tagged = "SELECT member FROM segment_members"
+    assert "person:cara" in sql_column(api, tagged, "eve-test")
+    set_access(
+        api,
+        "humans/cara",
+        token="cara-test",
+        see={"teams": ["legal"]},
+        read={"teams": ["legal"]},
+        write={"teams": ["legal"]},
+    )
+    assert "person:cara" not in sql_column(api, tagged, "eve-test")  # Sales cannot see her
+    assert "person:cara" in sql_column(api, tagged, "fay-test")  # Contracts sits under Legal
+    assert "bot:counsel" in sql_column(api, tagged, "eve-test")  # a bot's tag is not a person's

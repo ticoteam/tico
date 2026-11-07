@@ -351,8 +351,7 @@ def test_a_dedicated_bot_is_handed_the_published_text_of_its_segments_and_not_th
         assert SG.run_text(c, ops, S.current(c)) == head + "\nSmall landlords, one building at a time."
     post(api, "segments/members", {"member": "bot:ops", "segments": ["all"]})
     with api.app.state.store.read() as c:
-        text = SG.run_text(c, ops, S.current(c))
-    assert text == head + "\nSmall landlords, one building at a time.\n\nSegment: Payments"
+        assert SG.run_text(c, ops, S.current(c)) == ""  # a tag of all alone hands no segment text
 
 
 def test_a_run_is_handed_at_most_run_max_characters_of_segment_text(api, monkeypatch):
@@ -364,7 +363,7 @@ def test_a_run_is_handed_at_most_run_max_characters_of_segment_text(api, monkeyp
     write_segment(api, second, {"summary": "B" * 300})
     publish(api)
     setup_attempt(api, "ops")
-    post(api, "segments/members", {"member": "bot:ops", "segments": ["all"]})
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first, second]})
     monkeypatch.setattr(SG, "RUN_MAX", 200)
     with api.app.state.store.read() as c:
         ops = H.resolve_bot(c, "ops")["id"]
@@ -601,3 +600,38 @@ def test_the_bet_segment_column_is_added_to_a_strategy_table_that_lacks_it_once(
     module.up(conn)
     assert [row[1] for row in conn.execute("PRAGMA table_info(strategy_bets)")] == ["id", "statement", "segment_id"]
     module.up(sqlite3.connect(":memory:"))  # a new file has no bets table yet
+
+
+def test_only_the_owner_on_their_click_tags_a_teammate_with_a_segment(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    setup_attempt(api, "ops")
+    post(
+        api, "segments/members", {"member": "bot:ops", "segments": [first]}, token="ben-test", expected=403
+    )  # bot admin
+    _, attempt = assistant_turn(api, "ana-test")
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first]}, token=attempt["token"], expected=403)
+    assert get(api, "segments/members")["members"] == []
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first]})
+    assert [m["member"] for m in get(api, "segments/members")["members"]] == ["bot:ops"]
+
+
+def test_a_segment_strategy_write_names_the_draft_revision_it_read(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    put(api, "segments/strategy", {"id": first, "sections": {"serve": "Landlords with 1-20 units."}}, expected=422)
+    assert write_segment(api, first, {"serve": "Landlords with 1-20 units."})["strategy"]["id"] == first
+
+
+def test_a_merge_moves_the_latest_published_text_of_a_segment_too(api):
+    first, second, _ = defined(api)
+    segment(api, "Screening")
+    segment(api, "Payments")
+    ready(api)
+    write_segment(api, first, {"summary": "Small landlords, one building at a time."})
+    publish(api)
+    post(api, f"market/entities/{first}/merge", {"into": second})
+    with api.app.state.store.read() as c:
+        published = S.current(c)["sections"].get("segments", {})
+    assert first not in published
+    assert published[second]["summary"] == "Small landlords, one building at a time."
