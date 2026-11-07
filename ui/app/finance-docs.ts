@@ -212,7 +212,7 @@ function finDocPage(kind: FinDocKind) {
     if (t.closest('[data-fin-doc-add]')) { void finDocAdd(kind); return; }
     if (t.closest('[data-fin-email-set]')) { finDocEmailSet(); return; }
     const copy = t.closest<HTMLElement>('[data-fin-copy]');
-    if (copy) { void copyText(copy.dataset.finCopy).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
+    if (copy) { void copyText(copy.dataset.finCopy!).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
     const tr = t.closest<HTMLElement>('tr[data-fin-doc]');
     if (tr && tr.dataset.finDoc !== FIN.doc.sel) { FIN.doc.sel = tr.dataset.finDoc; finDocDraw(); void finDocOne(); }
   };

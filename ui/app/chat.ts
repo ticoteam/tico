@@ -165,7 +165,7 @@ interface ChatState {
   lastMain?: ChatMessage | null | undefined;
   seenLast?: string | undefined;
   holdsFor?: string | undefined;
-  holds?: unknown[] | undefined;
+  holds?: RuleHold[];
   goalSupported?: boolean | undefined;
   goalEditing?: boolean | undefined;
   goalRefused?: boolean | undefined;
@@ -562,7 +562,7 @@ document.addEventListener('click', async ev => {
   const button = eventElement(ev)?.closest<HTMLElement>('.bubble [data-chat-copy]');
   if (!button) return;
   ev.preventDefault();
-  try { await copyText(button.dataset.chatCopy); toast('Message copied'); }
+  try { await copyText(button.dataset.chatCopy!); toast('Message copied'); }
   catch { toast('Could not copy the message', true); }
 });
 // On touch there is no hover: a tap on a message shows its copy button under it, and a tap elsewhere hides it.
@@ -1281,7 +1281,7 @@ function v2ChatStream(state: ChatState, loaded = false) {
       else if (state.live?.interrupted) void v2ChatSnapshot(state);
     }),
   ];
-  state.liveOff = () => { clearTimeout(down); offs.forEach(off => off()); state.liveOff = null; state.liveCid = null; };
+  state.liveOff = () => { clearTimeout(down); offs.forEach(off => { off(); }); state.liveOff = null; state.liveCid = null; };
 }
 
 const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';

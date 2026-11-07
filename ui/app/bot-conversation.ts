@@ -23,7 +23,7 @@ async function loadDocs(slug) {
     const f = await get(`/employees/${encodeURIComponent(slug)}/files`);
     if (BOT?.slug !== slug) return;
     if ($('#agent')) $('#agent').innerHTML = f['AGENT.md'] ? md(f['AGENT.md'].replace(/^# .*\n/, '')) : '<div class="empty">Instructions have not been published by the computer yet.</div>';
-    for (const [n, t] of Object.entries(f.playbooks || {})) { const el = document.getElementById('pb-' + n); if (el) el.innerHTML = md(t); }
+    for (const [n, t] of Object.entries<string>(f.playbooks || {})) { const el = document.getElementById('pb-' + n); if (el) el.innerHTML = md(t); }
     const tabs = [['Status note', f['state.md']], ['Learnings', f['memory/learnings.md']], ['Decisions', f['memory/decisions.md']]];
     for (const [n, t] of Object.entries(f.playbooks || {})) if (n !== 'README.md') tabs.push(['Playbook: ' + n.replace(/\.md$/, ''), t]);
     tabs.push(['Manifest', '```yaml\n' + (f['bot.yaml'] || f['employee.yaml'] || '') + '\n```']);

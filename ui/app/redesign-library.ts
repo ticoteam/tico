@@ -43,9 +43,9 @@ interface LcState {
   rows: LcTool[] | null; groups: LcGroup[]; items: LcItem[]; error: string; key: string | null; root: HTMLElement;
   loading: Promise<void> | null; filter: LcFilter; single?: boolean;
 }
-interface LcSlackLink { id: string; thread_id: string; }
+type LcSlackLink = import('../types/api').SlackLink;
 interface LcSlackPage { links?: LcSlackLink[]; next_cursor?: string | null; available?: boolean; }
-interface LcThread { id: string; archived_at?: string | null; }
+type LcThread = ThreadRow;
 interface LcThreadsPage { attention?: LcThread[]; threads?: LcThread[]; next_cursor?: string | null; }
 type LcLine = {team: LcGroup | undefined; sort: string; html: string};
 
@@ -386,15 +386,16 @@ function lcWireFacts(): void {
   };
 }
 // The connections an owner makes here: the GitHub App on GitHub's page, the Slack workspace and its channels on Slack's.
+type LcCard = [string, string, ((host: HTMLElement | null) => Promise<void>)?];
 function lcMountConnect(service: string): void {
-  const cards = {
+  const cards: LcCard[] = {
     github: S.me?.role === 'owner' ? [['GitHub App', 'set-github', window.mountGithubConnect]] : [],
     slack: [...(S.me?.role === 'owner' ? [['Slack workspace', 'set-slack', window.mountSlackConnect]] : []),
             ...(S.me?.bot_admin ? [['Slack channels', 'set-slack-channels', window.mountSlackChannels]] : [])],
   }[service] || [];
   const facts = lcFacts();
   if (!facts || !cards.length) return;
-  facts.insertAdjacentHTML('afterend', cards.map(([title, id]: string[]) => `<section class="card lc-connect"><header><h2>${esc(title)}</h2></header><div id="${id}">${skelRows(1, {card: true})}</div></section>`).join(''));
+  facts.insertAdjacentHTML('afterend', cards.map(([title, id]) => `<section class="card lc-connect"><header><h2>${esc(title)}</h2></header><div id="${id}">${skelRows(1, {card: true})}</div></section>`).join(''));
   for (const [, id, mount] of cards) mount?.($('#' + id));
 }
 // A credential no tool names: its facts, who has it, and what may be done.

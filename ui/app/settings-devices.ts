@@ -634,7 +634,7 @@ function renderSettingsMachines() {
         + (kind === 'mac' ? '<button class="ghost" type="button" id="machine-checkout">Use a Tico checkout instead</button>' : '');
       const commands = [main, ...more];
       status.querySelectorAll('[data-machine-copy]').forEach(button => button.onclick = () =>
-        void copyText(commands[Number(button.dataset.machineCopy)][1]).then(() => toast('Command copied')));
+        void copyText(commands[Number(button.dataset.machineCopy)][1]!).then(() => toast('Command copied')));
       const checkout = $('#machine-checkout');
       if (checkout) checkout.onclick = async () => {
         checkout.disabled = true;

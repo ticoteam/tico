@@ -37,7 +37,7 @@ function orgFanChatBots(current: string | undefined): OrgFanBot[] {
   return orgRecent().filter(slug => shown.has(slug) && slug !== current).slice(0, 4)
     .map(slug => ({slug, recent: true, n: needsMeCount(slug)}));
 }
-let ORG_FAN_FROM: Element | null = null;
+let ORG_FAN_FROM: HTMLElement | null = null;
 function orgFanOpen(opts: {chat?: string; anchor?: Element | null} = {}) {
   const fan = $('#org-fan');
   clearTimeout(ORG_FAN_HIDE);        // a close just before (a back navigation) must not hide it again
@@ -55,7 +55,7 @@ function orgFanOpen(opts: {chat?: string; anchor?: Element | null} = {}) {
   const at = opts.anchor?.getBoundingClientRect();
   fan.style.paddingBottom = at ? `${Math.max(0, window.innerHeight - at.top + 10)}px` : '';
   fan.hidden = false;
-  const from: Element = opts.anchor || $('#mobile-org');
+  const from = (opts.anchor || $('#mobile-org')) as HTMLElement;
   ORG_FAN_FROM = from;
   from.setAttribute('aria-expanded', 'true');
   fan.classList.add('open');

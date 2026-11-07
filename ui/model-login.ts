@@ -234,7 +234,7 @@
 
     body.addEventListener('click', event => {
       const copy = eventElement(event)?.closest('[data-copy]');
-      if (copy && login) void copyText(login.code).then(() => toast('Code copied'), () => toast('Could not copy the code', true));
+      if (copy && login) void copyText(login.code!).then(() => toast('Code copied'), () => toast('Could not copy the code', true));
     });
     body.addEventListener('submit', async event => {
       event.preventDefault();
