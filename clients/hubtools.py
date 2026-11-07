@@ -10829,8 +10829,8 @@ def gateway_video(api, args):
         raise ValueError(
             "seconds is 3 to 15, resolution is " + ", ".join(VIDEO_RESOLUTIONS) + ", aspect is 16:9 or 9:16"
         )
+    # No model here: the Gateway route sets it, and refuses any field its body model does not declare (a 422).
     body = {
-        "model": "tico-video",
         "prompt": str(args["prompt"]),
         "seconds": seconds,
         "resolution": resolution,
@@ -11889,8 +11889,9 @@ FINANCE_METRICS = [
     "unreconciled_days",
     "duplicate_charges",
     "price_increases",
+    "unattributed",
 ]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account", "item", "project", "vendor"]
 FINANCE_INBOX = [
     "uncategorized",
     "bill_to_enter",
@@ -12114,7 +12115,7 @@ def _fin_paged(api, path, query, key, budget):
     "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
     "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
     "name, with their ids, for categorize, bill_create and rule_create. Name a kind to page with cursor; without "
-    "one you get the first few of each kind (not accounts: name that kind).",
+    "one you get the first few of each kind (not accounts or vendors: name that kind).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),

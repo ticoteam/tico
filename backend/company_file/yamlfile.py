@@ -3,8 +3,9 @@
 The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
 from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
 a bot's `reports_to` set by the visitor or BotOps, the one `first_job`, and an existing agent's department and reason.
-Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. A plan without a strategy is still written as
-0.2, byte for byte, so its file imports on an app from before 0.3; the reader takes both.
+Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. The strategy's optional `channels`, and a bet's
+optional `name` and `segment`, are written only when present. A plan without a strategy is still written as 0.2, byte
+for byte, so its file imports on an app from before 0.3; the reader takes both.
 An employee's or existing agent's optional `team` (the name of its group) is read and written in either format.
 """
 
@@ -171,24 +172,33 @@ def _items(key, rows, indent, lines):
     return out
 
 
+def _bet_lines(b):
+    """A bet's entry lines. The short name and the segment are written only when the bet has them, so a bet without
+    them is written as it was before."""
+    lines = [
+        "id: %s" % word(b["id"]),
+        "statement: %s" % q(b["statement"]),
+        "why: %s" % q(b["why"]),
+        "rules_out: %s" % q(b["rules_out"]),
+        "wrong_if: %s" % q(b["wrong_if"]),
+        "check_by: %s" % (b["check_by"] or q("")),
+    ]
+    if b.get("name"):
+        lines.append("name: %s" % q(b["name"]))
+    if b.get("segment"):
+        lines.append("segment: %s" % q(b["segment"]))
+    return lines
+
+
 def strategy_lines(s):
-    """The `strategy:` block, format 0.3: every part written, an empty one as "" or []."""
+    """The `strategy:` block, format 0.3: every part written, an empty one as "" or []. The channels line is written only
+    when a channel is picked."""
     market, listening = s["market"], s["listening"]
     L = ["strategy:", "  summary: %s" % q(s["summary"]), "  vision: %s" % q(s["vision"]), "  sections:"]
     L += ["    %s: %s" % (key, q(s["sections"][key])) for key in D.SECTIONS]
-    L += _items(
-        "bets",
-        s["bets"],
-        2,
-        lambda b: [
-            "id: %s" % word(b["id"]),
-            "statement: %s" % q(b["statement"]),
-            "why: %s" % q(b["why"]),
-            "rules_out: %s" % q(b["rules_out"]),
-            "wrong_if: %s" % q(b["wrong_if"]),
-            "check_by: %s" % (b["check_by"] or q("")),
-        ],
-    )
+    L += _items("bets", s["bets"], 2, _bet_lines)
+    if s.get("channels"):
+        L.append("  channels: [%s]" % ", ".join(word(key) for key in s["channels"]))
     definition = market["definition"]
     L += [
         "  market:",
@@ -295,6 +305,8 @@ def _strategy(raw):
             {
                 "id": _str(b.get("id")),
                 **{key: _str(b.get(key)) for key in ("statement", "why", "rules_out", "wrong_if", "check_by")},
+                # The short name and the segment are optional: a bet without them has no such keys.
+                **{key: _str(b[key]) for key in ("name", "segment") if key in b},
             }
             for b in _rows(raw, "bets")
         ],
@@ -342,6 +354,8 @@ def _strategy(raw):
                 for p in _rows(listening, "posts")
             ],
         },
+        # The optional channels pass through as written: draft.check holds them to the channel list.
+        **({"channels": raw["channels"]} if raw.get("channels") is not None else {}),
     }
 
 

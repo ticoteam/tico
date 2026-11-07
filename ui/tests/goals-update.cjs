@@ -1,4 +1,4 @@
-// "Post update" in an owner's panel on Goals (ui/goals-kpis.js goalUpdateHtml): each live goal the viewer may colour (its
+// "Post update" in an owner's panel on Goals (ui/goals-kpis.ts goalUpdateHtml): each live goal the viewer may colour (its
 // owner, the owner of the goal it supports, anyone above the owner: backend/goal_routes.py may_colour) offers a form with
 // what is going on and "How is it going?". Empty words send nothing; an answer on a goal with no judged measure colours it
 // without a page reload; no answer saves words only; a goal its measures colour says so; a refusal or a dropped line
@@ -50,7 +50,7 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
       if (p === '/api/v2/config') return json({});

@@ -684,7 +684,7 @@ def create_app(settings=None):
         telemetry.capture("request", exc, 503, route=error_route(request))
         request.state.telemetry_captured = True
         # The write lock stayed taken past store.WRITE_WAIT: a load answer, not a fault. Clients retry with the same
-        # Idempotency-Key (runner, clients/tico.py, ui/app/api.js), so the write lands once.
+        # Idempotency-Key (runner, clients/tico.py, ui/app/api.ts), so the write lands once.
         if "locked" in str(exc) or "busy" in str(exc):
             return JSONResponse(
                 {"error": {"code": "busy", "detail": "Tico is busy; retry shortly", "retryable": True}},
@@ -1295,8 +1295,8 @@ def create_app(settings=None):
                 and response.status_code in (200, 304)
                 and ui_bundle.versioned(settings.ui_dir, request.url.path, request.query_params.get("v"))
             ):
-                # theme.js and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
-                # year, so an open needs no round trip for them; theme.js holds up the first paint.
+                # theme.ts and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
+                # year, so an open needs no round trip for them; theme.ts holds up the first paint.
                 response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = (

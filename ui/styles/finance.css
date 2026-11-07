@@ -207,7 +207,7 @@
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
 .fin-private .fin-chip{white-space:normal}
 
-/* Payables and Receivables (ui/app/finance-docs.js): plain rows, a rail with the document and its decisions. */
+/* Payables and Receivables (ui/app/finance-docs.ts): plain rows, a rail with the document and its decisions. */
 .fin-t tbody tr[data-fin-doc]:hover td{background:var(--surface2)}
 .fin-doc-email:empty{display:none}
 .fin-copy{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

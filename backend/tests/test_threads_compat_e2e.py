@@ -22,7 +22,7 @@ from clients import hubcli, remotecli
 from clients.tico import APIError
 
 BODY = "A long reply about the launch plan and its checks. " * 110  # about 5.5 KB a message
-CHAT_PAGE = {"limit": 50, "max_bytes": 163840}  # the web app's chat page (ui/app/chat.js)
+CHAT_PAGE = {"limit": 50, "max_bytes": 163840}  # the web app's chat page (ui/app/chat.ts)
 
 
 def read(api, cid, token="ana-test", **query):

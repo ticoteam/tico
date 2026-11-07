@@ -9,7 +9,7 @@
    - Colour: --accent is for Tico's Liquid Dot, the one primary action on a view and a chart's one series. Links,
      counts, selection, focus and done or idle marks are ink; only states that need someone (blocked, failed) take a hue.
    - Selected / current: --surface2 and weight 600, as the sidebar's .cur. No accent fills, no bars, with one exception:
-     the sidebar's current row carries the one sliding ink bar (ui/app/motion.js).
+     the sidebar's current row carries the one sliding ink bar (ui/app/motion.ts).
    - Chevrons: chevron_right, turned --chev-open when open, transform over --dur-fast --ease.
    - Card headers: sentence case, --t-base 600 --ink, one row of --s3 under it. The uppercase label (.label: --t-label
      600 --track-caps --muted) is for section and table heads and field keys, never a card's title.

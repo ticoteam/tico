@@ -4919,6 +4919,16 @@ STABLE.extend(
             "FinanceAttributionRules",
         ),
         (
+            "/api/v2/finance/attribution/dimensions",
+            "get",
+            "Finance",
+            "listFinanceAttributionDimensions",
+            "The classes, departments (locations) and projects seen on P&L lines in the last 12 months the caller sees, "
+            "largest amount first, each with its line count, amount and rule (its shares, or null); needs the "
+            "finance.attribution right or admin. Set them with the attribution_map action",
+            "FinanceAttributionDimensions",
+        ),
+        (
             "/api/v2/finance/lines/{line_id}/attribution",
             "get",
             "Finance",
@@ -5110,6 +5120,15 @@ STABLE.extend(
             "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
             "unreconciled_days",
             "FinanceMetric",
+        ),
+        (
+            "/api/v2/finance/unattributed",
+            "get",
+            "Finance",
+            "listFinanceUnattributed",
+            "The Unattributed queue: the P&L lines in the period (this month by default) with no team, teammate or attribution "
+            "in force, newest first, paged by cursor, cut to what the caller sees",
+            "FinanceUnattributed",
         ),
         (
             "/api/v2/finance/close/{month}",
@@ -5761,6 +5780,25 @@ SCHEMAS.update(
                 "can_change": "b",
             }
         ),
+        "FinanceAttributionDimensions": obj(
+            {
+                "dimensions": items(
+                    obj(
+                        {
+                            "kind": "s",
+                            "id": "s",
+                            "name": "s",
+                            "lines": "i",
+                            "amount": "i",
+                            "rule_id": "n",
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                        }
+                    )
+                ),
+                "can_change": "b",
+                "view_version": "i",
+            }
+        ),
         "FinanceMercuryUsers": obj(
             {"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n", "updated_at": "s"}))}
         ),
@@ -6217,6 +6255,7 @@ SCHEMAS.update(
                                     "item",
                                     "location",
                                     "project",
+                                    "vendor",
                                 ],
                             },
                             "id": "s",
@@ -6228,6 +6267,32 @@ SCHEMAS.update(
                 "currency": "s",
                 "view_version": "i",
             }
+        ),
+        "FinanceUnattributed": obj(
+            {
+                "lines": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "date": "s",
+                            "entry_id": "s",
+                            "account": obj({"id": "s", "code": "s", "name": "s"}),
+                            "amount": "i",
+                            "description": "s",
+                            "memo": "s",
+                            "vendor": obj({"id": "s", "name": "s"}),
+                            "source": "s",
+                        }
+                    )
+                ),
+                "next_cursor": "n",
+                "start": "s",
+                "end": "s",
+                "as_of": "s",
+                "currency": "s",
+                "view_version": "i",
+            },
+            required=["lines", "start", "end", "as_of", "view_version"],
         ),
         "FinanceMetric": obj(
             {
