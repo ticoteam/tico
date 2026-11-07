@@ -382,10 +382,21 @@ def _without_segments(version):
     return {**version, "sections": {k: v for k, v in version["sections"].items() if k != "segments"}}
 
 
+def _segment_changes(mine, published):
+    """How many segments the draft's text differs on from the latest published version: a segment whose changed keys
+    and their text are not the same in both. Both sides are read as _segment_sections keeps them, so a key cleared to ""
+    is no key. Without a draft it is 0; before the first publish every segment with text in the draft counts."""
+    if not mine:
+        return 0
+    have = mine["sections"].get("segments") or {}
+    was = ((published or {}).get("sections") or {}).get("segments") or {}
+    return sum(1 for sid in set(have) | set(was) if have.get(sid, {}) != was.get(sid, {}))
+
+
 def view(c, auth, who):
     """GET /strategy. The owner gets the draft, every live bet and the latest retired ones; everyone else the
     published version's bets only. No guide prompts: they are GET /strategy/guides. No segment text (see
-    _without_segments)."""
+    _without_segments); `segment_changes` says how many segments the draft changes, so the owner's Publish knows."""
     from . import goal_routes
 
     editor = goal_routes.company_editor(who)
@@ -406,6 +417,8 @@ def view(c, auth, who):
     # The draft is the owner's: a bot never reads an unpublished "What we won't do".
     return {
         **({"draft": _without_segments(mine)} if editor else {}),
+        # 0 for everyone but the owner: no draft is shown to them, so its count is not theirs to read.
+        "segment_changes": _segment_changes(mine, published),
         "current": _without_segments(published),
         "bets": listed,
         "label": guide(gid)["bets_label"],

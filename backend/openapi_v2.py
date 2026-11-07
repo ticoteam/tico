@@ -4093,6 +4093,23 @@ SCHEMAS = {
         },
         required=["goals", "owners", "unaligned", "other_kpis", "proposals"],
     ),
+    # GET /api/v2/strategy (backend/strategy.py view): the company's sections and bets; the draft for the owner only.
+    "StrategyView": obj(
+        {
+            "segment_changes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many segments' text the draft changes against the latest published version (0 with "
+                "no draft, and 0 for everyone but the owner); a segment's text is GET /api/v2/segments/{id}'s",
+            },
+            "may_edit": {
+                "type": "boolean",
+                "description": "The owner on their own click; the draft is then in `draft`",
+            },
+            "bets": items({"type": "object"}),
+        },
+        required=["segment_changes", "may_edit", "bets"],
+    ),
     "StrategyBotView": obj(
         {
             "name": "s",
@@ -5176,7 +5193,10 @@ STABLE.extend(
             "getFinanceLine",
             "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
             "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
-            "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n "
+            "unattributed filter it as the P&L's expenses view does; segment keeps the entries that count toward one company "
+            "segment (unallocated for none), the lines that segment's column sums, and without the whole P&L only a segment "
+            "you lead (else refused). next_month and next_by are the whole line's projection, not split by segment. "
+            "Private totals only from whole cohorts. Rows past top_n "
             "fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
             "FinanceReport",
         ),
@@ -6933,7 +6953,7 @@ STABLE.extend(
             'Strategy',
             'getStrategy',
             'The published strategy, its bets with their goals and colour, the website; the owner also gets the draft',
-            None,
+            'StrategyView',
         ),
         (
             '/api/v2/strategy/draft',
@@ -7093,7 +7113,7 @@ STABLE.extend(
             'Segments',
             'updateSegmentStrategy',
             "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision "
-            "answers 409",
+            "answers 409, and only a card the owner confirmed may leave revision out (otherwise 422)",
             None,
         ),
     ]

@@ -16,8 +16,8 @@ A segment is a market graph `segment` entity (backend/market.py) the company pla
   field by field against the company's text;
 - the segment text a dedicated bot's run is handed (`run_text`, backend/learned.py).
 
-Writes are the owner's, on their own click (goal_routes.company_editor; a confirmed Assistant card counts), teammate
-tags included: a bot admin cannot tag a teammate. Reads are for everyone signed in.
+Writes are the owner's, on their own click (goal_routes.company_editor; a confirmed Assistant or BotOps card counts),
+teammate tags included: a bot admin cannot tag a teammate. Reads are for everyone signed in.
 A segment that stops being one of the company's loses its tags (strategy_market.untag): a tag names one of the
 company's segments, or `all`, and nothing else.
 """
@@ -618,6 +618,21 @@ def led_by(c: sqlite3.Connection, ref: str) -> set[str]:
     return {sid for sid, refs in _tagged(c).items() if ref in refs and ref in _leads(refs, managers, chart)}
 
 
+def lead_map(c: sqlite3.Connection) -> dict[str, set[str]]:
+    """Each teammate ref → the company's segments it leads (the same rule as `leads` and `led_by`), from one read of the
+    chart and the managers. Nobody tagged: nothing is read."""
+    tagged = _tagged(c)
+    if not tagged:
+        return {}
+    chart = _chart(c)
+    managers = _managers(c)
+    out: dict[str, set[str]] = {}
+    for sid, refs in tagged.items():
+        for ref in _leads(refs, managers, chart):
+            out.setdefault(ref, set()).add(sid)
+    return out
+
+
 def members(c: sqlite3.Connection, who: "Identity | None" = None, auth: "Auth | None" = None) -> Row:
     """GET /api/v2/segments/members: every teammate tagged with one of the company's segments or `all`, highest on the
     chart first, the viewer's hidden people left out. `truncated` says the list was cut at MEMBERS_MAX."""
@@ -669,11 +684,11 @@ def write_strategy(
     c: sqlite3.Connection,
     actor: str,
     segment_id: str,
-    revision: int,
+    revision: int | None,
     changes: dict[str, str],
 ) -> Row:
     """The segment's own text for some sections in the draft (`""` gives the company's text back), against the draft
-    revision the page read. Answers the strategy view."""
+    revision the page read (None: no check, for a confirmed card). Answers the strategy view."""
     _ours_row(c, segment_id)
     _update_draft(c, actor, revision, {"segments": {segment_id: dict(changes)}})
     return strategy_view(c, segment_id, True)
@@ -794,11 +809,16 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: Callable[..., 
 
     @app.put("/api/v2/segments/strategy")
     def segment_strategy_write(request: Request, body: M.SegmentStrategy):
-        """The segment's own text for the sections sent ("" gives the company's back), in the draft. Answers {strategy}."""
+        """The segment's own text for the sections sent ("" gives the company's back), in the draft. `revision` is the
+        draft's as read (409 when it moved on); a card the owner confirmed may leave it out and writes its keys onto
+        the draft as it is. Answers {strategy}."""
         who: "Identity" = request.state.identity
 
         def work(c: sqlite3.Connection):
             owner(who)
+            confirmed_card = bool(who.via) and who.confirmed
+            if body.revision is None and not confirmed_card:
+                raise Problem("validation", "Send the draft's revision as you read it", 422)
             return {"strategy": write_strategy(c, who.actor, body.id, body.revision, body.sections)}
 
         return mutate(request, body, work)

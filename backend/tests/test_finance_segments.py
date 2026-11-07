@@ -327,7 +327,7 @@ def test_the_segment_pnl_splits_each_line_once_and_its_total_is_the_pnl(books): 
         _month(c)
         out = FR.pnl_by(c, OWNER, "segment", *OCTOBER, basis="accrual")
         assert _columns(out) == ALL_COLUMNS
-        assert [x["rank"] for x in out["columns"]] == [1, 2, None, None, None]
+        assert [x["rank"] for x in out["columns"]] == [0, 1, 2, None, None]
         assert _values(out, "income") == {S1: 10_000, S2: 0, S3: 0, SG.UNALLOCATED: 4_000, SG.TOTAL: 14_000}
         assert _values(out, "expense") == {S1: 1_700, S2: 5_000, S3: 0, SG.UNALLOCATED: 500, SG.TOTAL: 7_200}
         assert _values(out, "contribution") == {S1: 8_300, S2: -5_000, S3: 0, SG.UNALLOCATED: 3_500, SG.TOTAL: 6_800}
@@ -572,6 +572,18 @@ def test_a_segment_column_equals_the_sum_of_its_drill_down_lines(books):  # noqa
         assert FR.line_detail(c, OWNER, account(c, "6510"), *OCTOBER, segment=S1)["total"] == 1_000  # a budget
         assert FR.line_detail(c, OWNER, account(c, "6100"), *OCTOBER, segment=S2)["total"] == 5_000  # budgets, parent
         assert FR.line_detail(c, OWNER, account(c, "6530"), *OCTOBER, segment=SG.UNALLOCATED)["total"] == 500
+        # Each line's entries are the lines its total sums: budget and customer lines, for the owner and for a lead.
+        for who, key, code in (
+            (OWNER, S1, "4000"),
+            (OWNER, S1, "6510"),
+            (OWNER, S2, "6100"),
+            (OWNER, SG.UNALLOCATED, "6530"),
+            ("human:cara", S1, "4000"),
+            ("human:cara", S1, "6510"),
+        ):
+            drill = FR.line_detail(c, who, account(c, code), *OCTOBER, segment=key)
+            assert drill["entries"], (who, key, code)
+            assert sum(e["amount"] for e in drill["entries"]) == drill["total"], (who, key, code)
         mine = FR.pnl_by(c, "human:cara", "segment", *OCTOBER, basis="accrual")
         assert _columns(mine) == [S1]
         assert (_values(mine, "income")[S1], _values(mine, "expense")[S1]) == columns[S1]

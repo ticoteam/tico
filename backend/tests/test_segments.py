@@ -217,6 +217,21 @@ def test_faces_are_the_dedicated_teammates_highest_on_the_chart_and_leads_have_n
     assert detail["teammates"] == 2 and detail["faces"][1]["kind"] == "bot"
 
 
+def test_lead_map_names_for_each_teammate_what_led_by_names(api):
+    first, second, _ = defined(api)
+    segment(api, "Screening")
+    segment(api, "Payments")
+    setup_attempt(api, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")  # ops reports to cpo
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first, second]})
+    post(api, "segments/members", {"member": "bot:cpo", "segments": [first]})
+    with api.app.state.store.read() as c:
+        mapped = SG.lead_map(c)
+        assert mapped == {"bot:cpo": {first}, "bot:ops": {second}}  # ops's manager is dedicated to Screening
+        assert all(SG.led_by(c, ref) == sids for ref, sids in mapped.items())
+
+
 def test_a_cycle_of_dedicated_managers_leads_with_the_highest_face(api):
     first, _, _ = defined(api)
     segment(api, "Screening")
@@ -332,6 +347,21 @@ def test_the_company_strategy_payload_carries_no_segment_text(api):
     assert "segments" not in reader["current"]["sections"]
     # The segment's own text stays where it is read: its own route.
     assert {f["key"]: f for f in get(api, "segments/" + first)["strategy"]["fields"]}["serve"]["changed"] is True
+
+
+def test_a_segment_only_edit_counts_as_a_change_for_publish_until_it_is_published(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    publish(api, "First")
+    assert get(api, "strategy")["segment_changes"] == 0
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})
+    assert get(api, "strategy")["segment_changes"] == 1
+    assert get(api, "strategy", token="ben-test")["segment_changes"] == 0  # no draft is shown to a reader
+    assert publish(api, "Second")["n"] == 2
+    assert get(api, "strategy")["segment_changes"] == 0
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})  # the same text is no change
+    assert get(api, "strategy")["segment_changes"] == 0
 
 
 def test_a_dedicated_bot_is_handed_the_published_text_of_its_segments_and_not_the_draft(api):
@@ -627,6 +657,51 @@ def test_a_segment_strategy_write_names_the_draft_revision_it_read(api):
     assert out["strategy"]["revision"] == read + 1
     assert [f["text"] for f in out["strategy"]["fields"] if f["key"] == "serve"] == ["Landlords with 1-20 units."]
     write_segment(api, first, {"serve": "Stale."}, revision=read, expected=409)
+
+
+def test_a_confirmed_card_writes_its_keys_without_a_revision_and_leaves_the_others_alone(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    write_segment(api, first, {"serve": "Landlords with 1-20 units.", "sell": "Bots at $99."})
+    _r, attempt = assistant_turn(api, "ana-test")
+    operation = {
+        "summary": "Change Screening's serve",
+        "method": "PUT",
+        "path": "/api/v2/segments/strategy",
+        "body": {"id": first, "sections": {"serve": "Small landlords."}},
+    }
+    action = post(api, "assistant/actions", operation, token=attempt["token"])["action"]
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
+    text = {f["key"]: f["text"] for f in get(api, "segments/" + first)["strategy"]["fields"]}
+    assert text["serve"] == "Small landlords." and text["sell"] == "Bots at $99."
+    assert get(api, "strategy")["draft"]["sections"]["not"] == "No enterprise deals."
+
+
+def test_an_unconfirmed_assistant_call_is_refused_with_or_without_a_revision(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})
+    _r, attempt = assistant_turn(api, "ana-test")
+    body = {"id": first, "sections": {"serve": "Assistant."}}
+    put(api, "segments/strategy", {**body, "revision": draft_revision(api)}, token=attempt["token"], expected=403)
+    put(api, "segments/strategy", body, token=attempt["token"], expected=403)
+    text = {f["key"]: f["text"] for f in get(api, "segments/" + first)["strategy"]["fields"]}
+    assert text["serve"] == "Landlords with 1-20 units."
+
+
+def test_the_owner_without_a_revision_gets_422_and_a_stale_one_409(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})
+    refused = put(api, "segments/strategy", {"id": first, "sections": {"serve": "No revision."}}, expected=422)
+    assert refused["error"]["code"] == "validation"
+    write_segment(api, first, {"serve": "Stale."}, revision=draft_revision(api) - 1, expected=409)
+    text = {f["key"]: f["text"] for f in get(api, "segments/" + first)["strategy"]["fields"]}
+    assert text["serve"] == "Landlords with 1-20 units."
 
 
 def test_a_merge_moves_the_draft_text_and_leaves_the_published_version_as_it_was(api):

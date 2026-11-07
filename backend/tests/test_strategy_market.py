@@ -129,6 +129,9 @@ def test_a_segment_the_company_plays_in_leaves_only_on_the_owners_click(api):
     post(api, f"market/entities/{first}/retire", {}, token=librarian["token"], expected=403)
     post(api, f"market/entities/{first}", {"status": "merged"}, token=librarian["token"], expected=403)
     post(api, f"market/entities/{first}/merge", {"into": second}, token=librarian["token"], expected=403)
+    post(
+        api, f"market/entities/{second}/merge", {"into": first}, token=librarian["token"], expected=403
+    )  # a bot folds in
     assert segments(api)[first]["self"]
     post(api, f"market/entities/{second}/retire", {}, token=librarian["token"])  # not ours: the market's own cleanup
     assert second not in segments(api)
