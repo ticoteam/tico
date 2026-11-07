@@ -164,14 +164,16 @@ def _carry_attachments(conn: sqlite3.Connection, filer: str, source_id: str, chi
         conn.execute("RELEASE pipeline_spawn_link")
 
 
-def spawn(conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False) -> str | None:
+def spawn(
+    conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False, note: str | None = None
+) -> str | None:
     """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the
     target pipeline's first stage, titled as the source, with a line pointing back at it and the source's links carried
     over. It is filed as the source's owner (so the owner is the requester). Once per (link, source ticket): while a
     handoff for that pair is live (not returned), nothing is filed again. A returned (undone) handoff allows a new one.
     `again=True` is a deliberate second spawn (Validate's "Not validated"), which skips that check and is recorded as its
-    own handoff. A refusal by the rules is logged on the source, and the source moves on alone. Returns the new ticket's
-    id, or None when nothing was filed."""
+    own handoff; `note` leads its body as "Follow-up: <note>". A refusal by the rules is logged on the source, and the
+    source moves on alone. Returns the new ticket's id, or None when nothing was filed."""
     if link["mode"] != "spawn":
         return None
     if not again:
@@ -189,7 +191,8 @@ def spawn(conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = 
     if first is None or source is None:
         return None
     filer = str(source["owner_id"])
-    body = f"Made from {_label(conn, source_id)}: {source['title']}. Its links are attached."
+    lead = f"Follow-up: {note}. " if note else ""
+    body = f"{lead}Made from {_label(conn, source_id)}: {source['title']}. Its links are attached."
     conn.execute("SAVEPOINT pipeline_spawn")
     try:
         child = H.task_create(

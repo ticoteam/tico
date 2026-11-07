@@ -471,6 +471,39 @@ def test_leaving_review_twice_files_one_subtask_until_the_handoff_is_returned(co
     assert pipeline_links.spawn(co.c, link, card) is None  # the new handoff is live again
 
 
+def test_not_validated_files_a_follow_up_and_returns_the_card_to_development(co):
+    """Validate's "Not validated" (a person's call): P12 goes back to In development, one follow-up Engineering ticket is
+    filed under it with "Follow-up: <reason>" in its body, and that stage waits on the new ticket until it ships. Only a
+    person can make the call, and it is its own handoff."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    assert co.where(card) == ("Product", "Validate")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+
+    with pytest.raises(pipeline_review.Declined):
+        pipeline_review.not_validated(co.c, PM, card, checked, "The measures did not hold")  # a bot cannot make it
+    co.c.rollback()
+
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert result["verdict"] == "failed" and result["moved_back_to"] == "In development"
+    assert co.where(card) == ("Product", "In development")
+    d43 = subtasks(co, card)[-1]
+    assert d43 != d41 and co.where(d43) == ("Engineering", "Todo")
+    assert H.task(co.c, d43)["body"].startswith("Follow-up: Load time stayed over 4 s. ")
+    assert co.count("pipeline_handoffs", "source_task_id = ? AND target_task_id = ?", card, d43) == 1
+    assert co.count("stage_decisions", "task_id = ? AND verdict = 'failed'", card) == 1
+    assert co.dots(card)["Engineering shipped"]["state"] == "waiting"  # D43 is open: not met yet
+
+    co.move(d43, "Doing", actor=ANA)
+    co.set_status(d43, "done")
+    assert co.where(card) == ("Product", "Validate")
+
+
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
     card = review_card(co)
     approve_spec(co, card)
