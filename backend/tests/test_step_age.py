@@ -16,6 +16,11 @@ def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):
         c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (typ["id"],))
     else:
         c.execute("UPDATE task_types SET manager=? WHERE id=?", (manager, typ["id"]))
+    # The Warn after the boot gives an engineering type's working step (task_steps.limit_minutes, 4 hours).
+    c.execute(
+        "UPDATE task_steps SET limit_minutes=240 WHERE type_id=? AND name='In Progress' AND limit_minutes IS NULL",
+        (typ["id"],),
+    )
     row = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step="In Progress", lint=False)
     return H.task(c, row["id"])
 
@@ -81,19 +86,18 @@ def test_the_board_reads_when_a_working_ticket_entered_its_step(api):
     assert get(api, "tasks/" + working["id"])["task"]["step_since"] == rows[working["id"]]["step_since"]
 
 
-def test_a_steps_own_hours_time_it_on_any_board_and_override_the_dev_default(api):
-    from backend import step_flow
+def test_a_steps_own_warn_after_replaces_the_default_and_a_step_without_one_is_never_late(api):
+    from backend import pipeline_manager as PM
 
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        c.execute("UPDATE task_steps SET flow=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
+        c.execute("UPDATE task_steps SET limit_minutes=480 WHERE id=?", (row["step_id"],))
         assert late_ids(c, 4.5) == [], "not late at 4.5 h: its own 8 h, not the default 4"
         assert late_ids(c, 8.5) == [row["id"]]
-        # A step of a type that is not engineering is timed only by its own setting, at whatever status it has.
-        typ = H.type_create(c, H.KEEPER, "Content", [{"name": "Drafting", "status": "open"}], bots="work")
-        step_flow.apply(c, typ["id"], {"Drafting": {"late_hours": 1}})
-        draft = H.task_create(c, "bot:ops", "Draft the launch mail", "x", "bot:cpo", type=typ["id"], lint=False)
-        assert SA.late_limit(c, H.task(c, draft["id"])) == 1
+        # "Don't warn" (no Warn after) is authoritative: a legacy flow's late_hours does not bring the warning back.
+        c.execute("UPDATE task_steps SET limit_minutes=NULL, flow=? WHERE id=?", ('{"late_hours": 8}', row["step_id"]))
+        assert late_ids(c, 20) == []
+        assert PM.late_tickets(c, [H.task(c, row["id"])], later(20)) == {}
 
 
 def test_a_manager_who_has_just_been_at_a_late_ticket_is_told_only_if_it_stays_late(api):
