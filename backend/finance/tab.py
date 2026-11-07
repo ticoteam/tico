@@ -1095,6 +1095,7 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
             "manager": defaults.manager,
             "member": defaults.member,
             "manager_payroll": defaults.manager_payroll,
+            "segment_lead": defaults.segment_lead,
         },
         "can_view_as": owner,
         "can_edit_defaults": owner,

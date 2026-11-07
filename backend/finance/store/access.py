@@ -50,6 +50,7 @@ def defaults(c: sqlite3.Connection) -> Defaults:
         manager=stored.get("manager", base.manager),
         member=stored.get("member", base.member),
         manager_payroll=stored.get("manager_payroll", base.manager_payroll),
+        segment_lead=stored.get("segment_lead", base.segment_lead),
     )
 
 
@@ -68,6 +69,7 @@ def seed_defaults(c: sqlite3.Connection, by: str, at: str) -> None:
         ("manager", base.manager),
         ("member", base.member),
         ("manager_payroll", base.manager_payroll),
+        ("segment_lead", base.segment_lead),
     ):
         c.execute(
             "INSERT INTO fin_view_defaults(role, policy, created_at, created_by, updated_at) VALUES(?,?,?,?,?) "

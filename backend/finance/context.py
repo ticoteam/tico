@@ -14,6 +14,7 @@ from .store import access as SA
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
+from . import segmentation as SG
 
 OWNER_KEY = "owner"  # who Finance was set up for: the owner when Tico has no owner record
 APPROVER_KEY = "finance_approver"  # the one person finance-admin approvals go to (else the owner)
@@ -39,6 +40,7 @@ class Ctx:
     memo: dict[str, Any] = field(default_factory=lambda: dict[str, Any]())  # per-call reads (budgeting's ad spend)
     deciding: bool = False  # set while an approval is rechecked: outcomes then use the true figures
     decider: str = ""  # the person whose decision an approved action commits on (approval_decided), or ""
+    caller: str = ""  # the actor who asked (the real caller, not the teammate an action is for), set by actions._plan
 
     @property
     def today(self) -> str:
@@ -60,8 +62,22 @@ class Ctx:
                 accounts=self.accounts,
                 at=self.at,
                 version=SA.view_version(self.c),
+                led=self.segment_leads(viewer),
             )
         return self._views[viewer]
+
+    def segment_leads(self, actor: str) -> frozenset[str]:
+        """The segments `actor` leads (segmentation.lead_map), read once per call."""
+        if "segment_leads" not in self.memo:
+            self.memo["segment_leads"] = SG.lead_map(self.c)
+        return self.memo["segment_leads"].get(actor, frozenset())
+
+    def dedicated(self, actor: str) -> frozenset[str]:
+        """The segments `actor` is dedicated to (tagged with), read once per call."""
+        key = "dedicated:" + actor
+        if key not in self.memo:
+            self.memo[key] = SG.dedicated(self.c, actor)
+        return self.memo[key]
 
     def budgets(self) -> dict[str, B.Budget]:
         if self._budgets is None:

@@ -642,8 +642,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health report <key>                report a finding as a Tico bug, one ticket per problem
     hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
-    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
-                    [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
+    hub finance report <pnl|pnl_by|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
+                    [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor|segment] [--month YYYY-MM]
                     [--year YYYY]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
@@ -651,6 +651,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
     hub finance action <action-id>         an action's status and result
     hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
+    hub finance segment-review [--cursor C] [--limit N]    the customers no person has set a segment for, a page at a time
+    hub finance contact-segment <contact-id> <segment-id|""> [--operation-id KEY]   set a customer's segment; "" clears it
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -5061,6 +5063,7 @@ def parser():
         "kind",
         choices=[
             "pnl",
+            "pnl_by",
             "balance_sheet",
             "cash_flow",
             "budget_vs_actual",
@@ -5079,7 +5082,7 @@ def parser():
     s.add_argument("--basis", choices=["cash", "accrual"])
     s.add_argument("--compare", choices=["prior"])
     s.add_argument("--top-n", type=int)
-    s.add_argument("--by", choices=["department", "team", "teammate", "bot", "person", "vendor", "account"])
+    s.add_argument("--by", choices=["department", "team", "teammate", "bot", "person", "vendor", "account", "segment"])
     s.add_argument("--month", help="close: the month, YYYY-MM")
     s.set_defaults(fn="finance report")
     s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
@@ -5135,6 +5138,15 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
+    s = fin.add_parser("segment-review", help="the customers no person has set a company segment for")
+    s.add_argument("--cursor")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="finance segment-review")
+    s = fin.add_parser("contact-segment", help="set a customer's company segment; an empty id clears it")
+    s.add_argument("contact_id")
+    s.add_argument("segment_id", help='the company segment\'s id, or "" for none')
+    s.add_argument("--operation-id", help="the action's key (default: HUB_OPERATION_ID)")
+    s.set_defaults(fn="finance contact-segment")
     manager = sub.add_parser(
         "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
     ).add_subparsers(dest="sub")

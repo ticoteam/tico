@@ -27,6 +27,7 @@ def _budget(r: Any) -> Budget:
         rollover=r["rollover"],
         active=bool(r["active"]),
         created_at=r["created_at"],
+        segment_id=r["segment_id"] or "",
     )
 
 
@@ -48,8 +49,8 @@ def budgets(c: sqlite3.Connection, book_id: str) -> dict[str, Budget]:
 def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
     c.execute(
         "INSERT INTO fin_budgets(id, book_id, name, owner, period, account_id, catch_all, team, teammate, vendor, "
-        "parent_id, warn_pct, at_limit, rollover, active, created_at, created_by, updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "parent_id, warn_pct, at_limit, rollover, active, created_at, created_by, updated_at, segment_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             b.id,
             b.book_id,
@@ -69,14 +70,16 @@ def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
             at,
             by,
             at,
+            b.segment_id or None,
         ),
     )
 
 
 def update_budget(c: sqlite3.Connection, b: Budget, at: str) -> None:
     c.execute(
-        "UPDATE fin_budgets SET name=?, owner=?, warn_pct=?, at_limit=?, rollover=?, active=?, updated_at=? WHERE id=?",
-        (b.name, b.owner, b.warn_pct, b.at_limit, b.rollover, int(b.active), at, b.id),
+        "UPDATE fin_budgets SET name=?, owner=?, warn_pct=?, at_limit=?, rollover=?, active=?, segment_id=?, "
+        "updated_at=? WHERE id=?",
+        (b.name, b.owner, b.warn_pct, b.at_limit, b.rollover, int(b.active), b.segment_id or None, at, b.id),
     )
 
 

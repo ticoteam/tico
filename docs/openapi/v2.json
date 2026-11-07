@@ -15338,7 +15338,7 @@
     },
     "/api/v2/finance/budgets": {
       "get": {
-        "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents. The owner may pass view_as",
+        "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents; segment keeps the budgets whose segment (their own, else their parent's) is that one, and a segment the company no longer runs matches nothing. The owner may pass view_as",
         "operationId": "listFinanceBudgets",
         "parameters": [
           {
@@ -15394,6 +15394,23 @@
                 }
               ],
               "title": "View As"
+            }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
             }
           }
         ],
@@ -15900,6 +15917,167 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceContacts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/contacts/segment-review": {
+      "get": {
+        "summary": "Customers no person has set the segment of (segment_sure 0), by name, paged by cursor: the list a person reviews. A person's choice, even none, leaves the list",
+        "operationId": "listFinanceSegmentReview",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceContacts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/contacts/{contact_id}/segment": {
+      "post": {
+        "summary": "Set a customer's segment (segment_id; empty clears it). A person's choice is sure; a bot's is a guess that never overwrites a sure one. Runs as the contact_segment action and answers as one",
+        "operationId": "setFinanceContactSegment",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactSegmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAction"
                 }
               }
             }
@@ -17173,7 +17351,7 @@
     },
     "/api/v2/finance/pnl": {
       "get": {
-        "summary": "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget and projection beside each actual; each row says its section. view=expenses filters by teams and teammates (several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
+        "summary": "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget and projection beside each actual; each row says its section. view=expenses filters by teams and teammates (several at once), who (bots, people or both) and unattributed; segment keeps one segment's lines (segment=unallocated the lines in no segment); without the whole P&L only a segment you lead, else refused. The owner may pass view_as",
         "operationId": "getFinancePnl",
         "parameters": [
           {
@@ -17379,6 +17557,23 @@
               "default": false,
               "title": "Unattributed"
             }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
           }
         ],
         "responses": {
@@ -17548,7 +17743,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; pnl_by with by=segment gives one column per segment, then Unallocated and Total for a full P&L viewer (a segment lead gets their own columns only), with income, expense and contribution rows; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -17690,7 +17885,8 @@
                     "project",
                     "location_class",
                     "location_project",
-                    "class_project"
+                    "class_project",
+                    "segment"
                   ],
                   "type": "string"
                 },
@@ -53952,6 +54148,20 @@
         ],
         "title": "Confirmation"
       },
+      "ContactSegmentRequest": {
+        "properties": {
+          "segment_id": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Segment Id",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ContactSegmentRequest",
+        "description": "A customer's segment: a company segment's id, or \"\" for none."
+      },
       "Contract": {
         "properties": {},
         "additionalProperties": false,
@@ -56381,12 +56591,16 @@
               },
               "manager_payroll": {
                 "type": "string"
+              },
+              "segment_lead": {
+                "type": "string"
               }
             },
             "required": [
               "manager",
               "manager_payroll",
-              "member"
+              "member",
+              "segment_lead"
             ],
             "additionalProperties": true
           },
@@ -57375,12 +57589,26 @@
           },
           "state": {
             "$ref": "#/components/schemas/FinanceBudgetState"
+          },
+          "segment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_segment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
+          "effective_segment_id",
           "id",
           "name",
           "platform",
+          "segment_id",
           "state"
         ],
         "additionalProperties": true
@@ -57899,6 +58127,15 @@
                 },
                 "created_at": {
                   "type": "string"
+                },
+                "segment_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "segment_sure": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -58986,6 +59223,12 @@
           },
           "view": {
             "type": "string"
+          },
+          "segment": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "team": {
             "type": [

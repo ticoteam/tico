@@ -30,6 +30,8 @@ OTHERS_SEE = ("totals", "hidden")
 MANAGER_POLICIES = ("team_expenses", "own_expenses", "none")
 MEMBER_POLICIES = ("own_expenses", "none")
 PAYROLL_POLICIES = ("totals", "hidden")
+# A segment's lead sees that segment's P&L (spec: Access). "none" turns it off for every lead.
+SEGMENT_LEAD_POLICIES = ("lead", "none")
 PRIVATE_LABEL = "Payroll (private)"
 MIN_PAID = 3  # a department's payroll cell shows only with at least this many paid people
 
@@ -41,6 +43,7 @@ class Defaults:
     manager: str = "none"  # Finance is the owner's alone until they open it up or grant
     member: str = "none"
     manager_payroll: str = "totals"  # "hidden": managers never see their department's payroll total
+    segment_lead: str = "lead"  # a segment's leads see its P&L column ("none": nobody does)
 
 
 @dataclass(frozen=True)
@@ -70,13 +73,15 @@ class PrivateLine:
 class Slice:
     """Part of the P&L a viewer sees: which accounts (`expense`, `pnl`, or the explicit `ids`) and whose lines
     (`company`: all, unattributed included; `teams`: lines tagged with one of `teams`; `mates`: tagged with one of
-    `mates`, a manager's reports; `own`: tagged with the viewer)."""
+    `mates`, a manager's reports; `own`: tagged with the viewer; `segments`: tagged with one of `segments`, whoever
+    the team is, for a segment's lead)."""
 
     accounts: str
     whose: str
     teams: frozenset[str] = frozenset()
     ids: frozenset[str] = frozenset()
     mates: frozenset[str] = frozenset()
+    segments: frozenset[str] = frozenset()
 
     def covers_account(self, account: Account) -> bool:
         if self.accounts == "ids":
@@ -92,6 +97,8 @@ class Slice:
             return tags.get("team", "") in self.teams
         if self.whose == "mates":
             return tags.get("teammate", "") in self.mates
+        if self.whose == "segments":
+            return tags.get("segment", "") in self.segments
         return bool(viewer) and tags.get("teammate", "") == viewer
 
 
@@ -148,6 +155,18 @@ class View:
 
     def company_expenses(self) -> bool:
         return self.everything or any(s.whose == "company" and s.accounts in ("expense", "pnl") for s in self.slices)
+
+    def company_pnl(self) -> bool:
+        """Whether this viewer sees the whole P&L: every line, revenue included (the segment P&L's Total and columns)."""
+        return self.everything or any(s.whose == "company" and s.accounts == "pnl" for s in self.slices)
+
+    def segments_led(self) -> frozenset[str]:
+        """The segments this viewer leads: their P&L columns, and nothing else of the segment P&L."""
+        out: set[str] = set()
+        for s in self.slices:
+            if s.whose == "segments":
+                out |= s.segments
+        return frozenset(out)
 
     def teams(self, account: Account | None = None) -> frozenset[str]:
         """Every team whose lines (on `account`, or on any expense line) this viewer sees."""
@@ -220,11 +239,15 @@ def resolve(
     accounts: Mapping[str, Account],
     at: str,
     version: int = 0,
+    led: frozenset[str] = frozenset(),
 ) -> View:
-    """The viewer's view now. System work sees everything; the owner sees everything, private detail included."""
+    """The viewer's view now. System work sees everything; the owner sees everything, private detail included. `led` is
+    the segments the viewer leads (segments.leads): their P&L lines, whoever's team the lines are on."""
     if viewer == SYSTEM or (org.owner and viewer == org.owner):
         return View(viewer=viewer, everything=True, full_detail=frozenset(private), version=version)
     slices = list(default_slices(org, viewer, defaults))
+    if led and defaults.segment_lead == "lead":
+        slices.append(Slice(accounts="pnl", whose="segments", segments=led))
     everything = balance_sheet = payables = receivables = sources = False
     bs_lines: set[str] = set()
     used: list[str] = []
@@ -375,6 +398,7 @@ class Cell:
     location: str = ""  # the location, class and project tag values of its lines ("" when none)
     class_id: str = ""
     project: str = ""
+    segment: str = ""  # the segment the line counts toward ("" for Unallocated; reads._cells)
 
 
 @dataclass(frozen=True)

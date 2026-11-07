@@ -5,6 +5,7 @@ books. A tag never widens who sees a line: view checks stay with the caller."""
 from collections.abc import Mapping
 from typing import Any
 
+from .. import segments as SEG
 from ..records import reads as RR
 from ..records import store as RS
 from .context import Ctx
@@ -15,13 +16,15 @@ RECORD_TABLES = {"location": "locations", "project": "projects"}
 
 
 def check_tags(ctx: Ctx, tags: Mapping[str, str]) -> dict[str, str]:
-    """Refuse a location, project or class tag that names no active record. Returns the tags as they are stored: a
-    record named by an id it was brought in under is stored under the row it is, so one record has one name in the
-    books."""
+    """Refuse a location, project or class tag that names no active record, and a segment tag that is not one of the
+    company's segments. Returns the tags as they are stored: a record named by an id it was brought in under is stored
+    under the row it is, so one record has one name in the books."""
     out = dict(tags)
     for kind, value in tags.items():
         if kind == "class":
             found = SC.class_active(ctx.c, value)
+        elif kind == "segment":
+            found = value in SEG.ours_ids(ctx.c)
         elif kind in RECORD_TABLES:
             found = RR.is_active(ctx.c, RECORD_TABLES[kind], value)
             if found:

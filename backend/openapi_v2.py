@@ -4733,7 +4733,9 @@ STABLE.extend(
             "Finance",
             "listFinanceBudgets",
             "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
-            "day (the version in effect then); amounts in cents. The owner may pass view_as",
+            "day (the version in effect then); amounts in cents; segment keeps the budgets whose segment (their own, "
+            "else their parent's) is that one, and a segment the company no longer runs matches nothing. The owner may "
+            "pass view_as",
             "FinanceBudgets",
         ),
         (
@@ -4743,7 +4745,9 @@ STABLE.extend(
             "getFinancePnl",
             "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget "
             "and projection beside each actual; each row says its section. view=expenses filters by teams and teammates "
-            "(several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
+            "(several at once), who (bots, people or both) and unattributed; segment keeps one segment's lines "
+            "(segment=unallocated the lines in no segment); without the whole P&L only a segment you lead, else refused. "
+            "The owner may pass view_as",
             "FinancePnl",
         ),
         (
@@ -4936,6 +4940,24 @@ STABLE.extend(
             "FinanceContacts",
         ),
         (
+            "/api/v2/finance/contacts/segment-review",
+            "get",
+            "Finance",
+            "listFinanceSegmentReview",
+            "Customers no person has set the segment of (segment_sure 0), by name, paged by cursor: the list a person "
+            "reviews. A person's choice, even none, leaves the list",
+            "FinanceContacts",
+        ),
+        (
+            "/api/v2/finance/contacts/{contact_id}/segment",
+            "post",
+            "Finance",
+            "setFinanceContactSegment",
+            "Set a customer's segment (segment_id; empty clears it). A person's choice is sure; a bot's is a guess "
+            "that never overwrites a sure one. Runs as the contact_segment action and answers as one",
+            "FinanceAction",
+        ),
+        (
             "/api/v2/finance/chart",
             "get",
             "Finance",
@@ -4977,7 +4999,9 @@ STABLE.extend(
             "Finance",
             "getFinanceReport",
             "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
-            "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
+            "caller's view; pnl_by with by=segment gives one column per segment, then Unallocated and Total for a "
+            "full P&L viewer (a segment lead gets their own columns only), with income, expense and contribution "
+            "rows; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
             "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
             "FinanceReportOf",
         ),
@@ -5207,7 +5231,16 @@ SCHEMAS.update(
                 },
             }
         ),
-        "FinanceBudgetRow": obj({"id": "s", "name": "s", "platform": "s", "state": ref("FinanceBudgetState")}),
+        "FinanceBudgetRow": obj(
+            {
+                "id": "s",
+                "name": "s",
+                "platform": "s",
+                "state": ref("FinanceBudgetState"),
+                "segment_id": {"type": ["string", "null"]},
+                "effective_segment_id": {"type": ["string", "null"]},
+            }
+        ),
         "FinanceBudgets": obj(
             {
                 "budgets": items(ref("FinanceBudgetRow")),
@@ -5224,6 +5257,7 @@ SCHEMAS.update(
                 "period": "s",
                 "basis": "s",
                 "view": "s",
+                "segment": {"type": ["string", "null"]},
                 "team": "n",
                 "teammate": "n",
                 "budget_as_of": "n",
@@ -5450,7 +5484,7 @@ SCHEMAS.update(
                         }
                     )
                 ),
-                "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
+                "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s", "segment_lead": "s"}),
                 "can_view_as": "b",
                 "can_edit_defaults": "b",
                 "view_version": "i",
@@ -5981,6 +6015,8 @@ SCHEMAS.update(
                             "active": "b",
                             "owed": obj({"bills": "i", "invoices": "i"}, required=[]),
                             "created_at": "s",
+                            "segment_id": {"type": ["string", "null"]},
+                            "segment_sure": "b",
                         },
                         required=["id", "name", "kind", "active"],
                     )

@@ -768,10 +768,15 @@ def live_ads(
 
 def leaf(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: str = "") -> B.Budget | None:
     """The budget a spend counts against (most specific wins; the catch-all takes uncovered expense lines). A teammate
-    with no team named counts in the team they are in."""
-    team = team or (ctx.org.team_of.get(teammate, "") if teammate else "")
+    with no team named counts in the team they are in. `vendor` is a name a vendor contact goes (or went) by."""
     if vendor and any(b.vendor for b in ctx.budgets().values()):
-        vendor = SAP.vendor_resolved(ctx.c, ctx.book.id, vendor)  # a name a vendor contact goes (or went) by
+        vendor = SAP.vendor_resolved(ctx.c, ctx.book.id, vendor)
+    return leaf_resolved(ctx, account_id, team, teammate, vendor)
+
+
+def leaf_resolved(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: str = "") -> B.Budget | None:
+    """`leaf` for a vendor already resolved to its contact (a rollup row's vendor is): no lookup of the vendor again."""
+    team = team or (ctx.org.team_of.get(teammate, "") if teammate else "")
     return B.find(
         ctx.budgets(),
         B.Charge(account_id=account_id, team=team, teammate=teammate, vendor=vendor),

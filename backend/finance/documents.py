@@ -23,7 +23,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from ..records import reads as RR
-from . import budgeting, delivery, posting, shared
+from . import budgeting, delivery, posting, segmentation, shared
 from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
@@ -38,6 +38,7 @@ from .core.tax import SALES_TAX, taxable_default
 from .usage import CREDIT
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
+from .store import access as SA
 from .store import actions as SX
 from .store import ap as SAP
 from .store import banking as SK
@@ -266,6 +267,44 @@ def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         f"Add {f['kind']} {f['name']}",
         apply,
         facts={"contact.kind": str(f["kind"]), "counterparty": str(f["name"])},
+    )
+
+
+def contact_segment(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """A customer's segment (spec: Money). A person's choice is final (segment_sure 1). Whoever acts, only a person
+    themselves sets a choice: a bot acting for a person (who is that person) still writes a guess (segment_sure 0), and
+    a guess can be replaced by a later guess but never overwrites a person's choice. The caller is the real actor, not
+    the teammate the action is for."""
+    V.only(p, ("contact_id", "segment_id"))
+    old = SAP.get(ctx.c, "fin_contacts", V.text(p, "contact_id", 80))
+    if old is None or str(old["book_id"]) != ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such contact")
+    if str(old["kind"]) not in ("customer", "both"):
+        raise invalid("a segment is set on a customer")
+    _need_contact_rights(ctx, who, str(old["kind"]))
+    segment = segmentation.checked(ctx.c, V.opt_text(p, "segment_id", 80) or "")
+    was = str(old["segment_id"] or "")
+    by_person = ctx.caller.startswith("human:")
+    if not by_person and int(old["segment_sure"] or 0) == 1 and segment != was:
+        raise denied("a person set this customer's segment; a bot cannot change it")
+    sure = 1 if by_person else int(old["segment_sure"] or 0) if segment == was else 0
+
+    def apply(aid: str) -> Result:
+        SAP.update(
+            ctx.c,
+            "fin_contacts",
+            str(old["id"]),
+            {"segment_id": segment or None, "segment_sure": sure, "updated_at": ctx.at},
+        )
+        if segment != was:
+            SA.bump_view(ctx.c, f"contact {old['id']} segment", ctx.at)  # the revenue it counts toward moves
+        return {"contact_id": str(old["id"]), "segment_id": segment or None, "segment_sure": bool(sure)}
+
+    return Plan(
+        K.default_gate(ctx.org, who, "contact_segment"),
+        f"Set {old['name']}'s segment to {segment or 'none'}",
+        apply,
+        facts={"contact.kind": str(old["kind"]), "counterparty": str(old["name"])},
     )
 
 
@@ -2521,6 +2560,7 @@ next_number, money_of = _next_number, _money
 PLANNERS = {
     "contact_create": contact_create,
     "contact_update": contact_update,
+    "contact_segment": contact_segment,
     "bill_create": bill_create,
     "bill_update": bill_update,
     "bill_approve": bill_approve,
