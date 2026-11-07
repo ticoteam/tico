@@ -46,12 +46,18 @@ on every tracked file; CI runs the same checks. Turn on the pre-push hook once p
 ```bash
 git config core.hooksPath .githooks
 git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
+git config merge.tico-baseline-counts.driver 'python3 scripts/baseline_merge.py counts %O %A %B'
+git config merge.tico-baseline-toml.driver 'python3 scripts/baseline_merge.py toml %O %A %B'
+git config merge.tico-baseline-pyright.driver 'python3 scripts/baseline_merge.py pyright %O %A %B'
 ```
 
 After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
 The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
-conflicting; without it git merges that file as text. The generated `ui/types/api.d.ts` is not committed:
-`scripts/check_ui_types.sh` writes it.
+conflicting; without it git merges that file as text. The last three lines do the same for the lint baseline
+(`ruff-baseline-counts.json`, `ruff-baseline.toml`) and the type baseline (`.basedpyright/baseline.json`): each side's
+change is applied to the base, so two branches that fix different findings merge. GitHub's "Update branch" button and
+the merge queue merge as text and do not run these drivers; update a branch locally when it needs the drivers. The
+generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
@@ -134,6 +140,9 @@ company already owns, so their commits need no sign-off, and their pull requests
 - Keep real team names, human names, domains and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - Describe the behavior change and how you checked it in the pull request.
+- Fill in the template's Spec, Demo steps and Risk sections. The release notes that approvers read are built from them:
+  the Spec link, the steps to see the change work in the Acme Lights demo company, and the risk level with what could go
+  wrong.
 
 ## How we work
 
@@ -152,7 +161,9 @@ Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's note
 
 A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
-GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
-stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
-rolls out Tico releases; it only monitors them. The details are in
-[docs/releasing.md](docs/releasing.md#release-windows).
+GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
+(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
+`release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
+The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
+[docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in
+[docs/releasing.md](docs/releasing.md#approval).

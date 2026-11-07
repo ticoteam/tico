@@ -71,6 +71,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, NoReturn
 
 from .batch_work import isolated
@@ -9473,8 +9474,9 @@ def next_run_tasks(conn, bot, exclude=None):
     )
 
 
-def chunks(values, size=500):
-    """`values` in slices small enough for one statement's `IN (?,...)`."""
+def chunks[T](values: Iterable[T], size: int = 500) -> list[list[T]]:
+    """`values` in slices small enough for one statement's `IN (?,...)`. Annotated: inferred, its type differed between
+    basedpyright runs on the same code (task_privacy.py:1593 on Nov 7)."""
     values = list(values)
     return [values[start : start + size] for start in range(0, len(values), size)]
 

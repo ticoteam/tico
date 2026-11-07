@@ -247,6 +247,22 @@ def links(c, row):
     ]
 
 
+def merged_work(c, row):
+    """Whether the ticket has a merged or shipped linked PR and is at or past its type's merge step. A check after the
+    merge (Post Release QA) judges merged work, so it needs no open PR; a review before the merge still does."""
+    from . import hubdb as H, step_flow
+
+    if not any(p["kind"] == "pr" and p.get("state") in ("merged", "shipped") for p in H.task_links(c, row["id"])):
+        return False
+    merge = step_flow.merge_step(c, row.get("type_id"))
+    if not merge:
+        return False
+    for step_id in (row.get("step_id"), row.get("blocked_from_step")):
+        if step_id and step_flow.at_or_past(c, {"step_id": step_id}, merge):
+            return True
+    return False
+
+
 def mint_failure(exc, repo):
     """Describe a failed token request without exposing exception text or response bodies."""
     from .store import Problem
@@ -535,6 +551,8 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
     writers = "The owner, a manager above the owner, or a person who may edit this ticket"
     prs = links(c, row) if prs is None else prs
     if not prs:
+        if require_pr and merged_work(c, row):
+            return  # The work already merged: a check after the merge judges it, and no open PR is left to link.
         if require_pr:
             return (
                 "receipt",

@@ -281,3 +281,19 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
   .fin-vpick{min-width:0}
   .fin-form label.fin-map-row{grid-template-columns:1fr}
 }
+/* Attribution: a split's chips, the share rows of its dialogs, the rules table's menu and the line's "Attributed to". */
+.fin-chip-muted{color:var(--muted)}
+.fin-share-rows{display:flex;flex-direction:column;gap:8px}
+.fin-share-row{display:grid;grid-template-columns:minmax(0,1fr) 84px 36px;gap:8px;align-items:center}
+.fin-share-row select,.fin-share-row input{min-width:0;height:var(--ctl)}
+.fin-share-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.fin-share-clear{display:flex;justify-content:flex-start}
+.fin-share-actions{display:flex;flex-wrap:wrap;gap:6px}
+.fin-share-actions:empty{display:none}
+.fin-share-hist{margin-top:10px}
+.fin-share-hist summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
+.fin-share-hist .fin-kv{margin-top:6px}
+.fin-confirm{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+@media (max-width:640px){
+  .fin-share-row{grid-template-columns:minmax(0,1fr) 76px 36px}
+}

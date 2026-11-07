@@ -101,6 +101,11 @@ ALL = (
     "prepaid_amortize",
     # Gateway credit: bank money onto the prepaid asset usage draws down (backend/finance/topups.py)
     "gateway_topup",
+    # attribution: which teammates and teams a posted P&L line counts for, with shares (backend/finance/attribution.py)
+    "attribute",
+    "attribute_undo",
+    "attribution_rule_set",
+    "attribution_rule_delete",
 )
 # The kinds not yet carried out: listed (act help says so) and refused with not_available. Every kind is live today.
 NOT_LIVE: frozenset[str] = frozenset()
@@ -178,6 +183,10 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     "estimate_accept": R.AR,
     "estimate_decline": R.AR,
     "estimate_convert": R.AR,
+    "attribute": R.ATTRIBUTION,
+    "attribute_undo": R.ATTRIBUTION,
+    "attribution_rule_set": R.ATTRIBUTION,
+    "attribution_rule_delete": R.ATTRIBUTION,
 }
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = (
@@ -421,7 +430,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     ),
     "right_grant": (
         ("teammate", "str", ""),
-        ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),
+        ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin|attribution"),
         ("expires_at?", "str", ""),
     ),
     "right_revoke": (("teammate", "str", ""), ("right", "str", "")),
@@ -608,6 +617,34 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     ),
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
     "prepaid_amortize": (("bill_line_id", "str", ""), ("month", "str", "YYYY-MM, due and not yet expensed")),
+    "attribute": (
+        ("line_id", "str", "a posted P&L line"),
+        (
+            "splits",
+            "list[{teammate?: str, team?: str, share_bps: int}]",
+            "shares in basis points (1 to 10000, total at most 10000; the rest stays unattributed); [] clears "
+            "the override, so the line counts as its rule or tags again",
+        ),
+    ),
+    "attribute_undo": (("line_id", "str", "the attribution before the latest change on the line is put back"),),
+    "attribution_rule_set": (
+        ("id?", "str", "update this rule; omit to create one"),
+        ("name", "str", ""),
+        (
+            "match",
+            "{kind: vendor|account|money_account, id: str}",
+            "vendor: a vendor's contact id; account: a P&L account; money_account: the bank or card account "
+            "a line was paid with",
+        ),
+        ("splits", "list[{teammate?: str, team?: str, share_bps: int}]", "as on attribute, at least one"),
+        ("enabled?", "bool", "default true"),
+        (
+            "apply_from?",
+            "day",
+            "also re-applies the rule to lines from that day that have no person's or bot's override",
+        ),
+    ),
+    "attribution_rule_delete": (("id", "str", "lines it attributed go back to their tags; overrides stay"),),
     "gateway_topup": (
         ("money_account_id", "str", "a bank money account the money comes from"),
         ("amount", "minor", "more than zero: the money moved onto Gateway credit"),
@@ -833,6 +870,10 @@ WORDS: dict[str, str] = {
     "bill_void": "Void a bill (an entered one is reversed).",
     "prepaid_amortize": "Expense one due month of a prepaid bill line, out of its prepaid asset.",
     "gateway_topup": "Top up Gateway credit from a bank account: a prepaid asset moves, no expense.",
+    "attribute": "Set who a posted P&L line counts for, in shares (teammates and teams); [] clears it.",
+    "attribute_undo": "Put back the attribution a line had before its latest change.",
+    "attribution_rule_set": "Create or change a rule that attributes lines by vendor, account or money account.",
+    "attribution_rule_delete": "Delete a rule: its lines go back to their tags (overrides stay).",
     "invoice_create": "Draft an invoice.",
     "invoice_send": "Send an invoice: it posts to receivables, and returns its email (text, recipients, send approval).",
     "invoice_remind": "Remind the customer an unpaid invoice is late (once per stage), by email under a send approval.",

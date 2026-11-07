@@ -60,8 +60,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
 - **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
-- **At the open**, the canary's release is promoted to stable if the bake gate passes (below). Then, if main has moved
-  past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
+- **At the open**, the canary's release is promoted to stable once it is approved and nothing holds it (see
+  [Approval](#approval)). Then, if main has moved past the newest release, Release validation (`ci.yml`) is dispatched for main's head as the next patch.
 - **The first green candidate ships.** When a validation of this window goes green, the window tags that commit,
   publishes it (`release.yml`, dispatched on the tag) and updates the canary. That closes the window. The release is
   published as not latest; only once the canary runs it healthy does the window make it the latest GitHub release and
@@ -69,7 +69,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   not run. The canary's updater installs that exact version, latest or not. Latest never moves backwards (a newer
   release that is already latest stays so, and the issue says so), and a marking that failed or did not finish is
   retried by the backstop and each window step once the canary runs that release healthy.
-- **Notes.** When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
+- **Notes and approval.** Each candidate the canary takes gets an issue to approve, with its release notes (see
+  [Approval](#approval)). When a release publishes, the monitoring Release Manager files the Technical Writer's "Release notes for
   vX.Y.Z" task.
 - **A red candidate keeps the window open.** The failure goes on the one open `release-train` issue, once: a failure
   the issue's last comment already reports is not posted again. Each push to main while the window is open validates
@@ -78,12 +79,13 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   The next window that ships closes the issue.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
-- **The bake gate.** Stable takes the canary's release only when the canary has run it for 4 hours (`BAKE_HOURS`), its
+- **Approval.** Stable takes the canary's release only when someone has approved it (see [Approval](#approval)), its
   last update is healthy, `RELEASE_HOLD` is empty and no open issue is labelled `release-blocker`. Anything the gate
-  cannot read holds the release and is reported on the issue. Promotion runs at each open, and again just before a new
-  release goes to the canary.
+  cannot read holds the release and is reported on the issue. Promotion runs at each open and at the backstop, and
+  again just before a new release goes to the canary.
 - **Holding.** Set the repository variable `RELEASE_HOLD` to a reason (or open a `release-blocker` issue) to keep
-  stable where it is. Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
+  stable where it is, for every release. To keep one release off stable, add the `hold` label to its approval issue.
+  Set `RELEASE_TRAINS` to anything but `on` to stop the windows altogether.
 - **By hand.** `gh workflow run train.yml --ref main` runs one window step now (promote, then ship or validate,
   validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
@@ -91,7 +93,7 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
 Triggers: the window schedules (one UTC cron per window start under either offset), every push to main, every
 finished Release validation run, a manual run, and a backstop schedule every 20 minutes
 (at :05, :25 and :45, never a window's minute) that takes a step in an open window
-if an event was missed (it never opens a window or promotes). A small read-only job decides first, so a push with
+if an event was missed (it never opens a window; it promotes an approved release). A small read-only job decides first, so a push with
 nothing to do ends in seconds. Every job that acts (the window job and the hotfix) shares one concurrency group, so two
 never start a build or a release at once. One race remains: GitHub keeps one waiting job per group, so a hotfix queued
 behind a running window job can still be replaced by a window job whose read-only check ran just before the hotfix
@@ -99,8 +101,37 @@ was queued; a hotfix that shows as cancelled that way is simply run again.
 
 Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
 and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
-(`on` to go live), `RELEASE_HOLD`, `BAKE_HOURS` (default 4). The window tags with the Actions token, which starts no
+(`on` to go live) and `RELEASE_HOLD`. The window tags with the Actions token, which starts no
 workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
+
+### Approval
+
+Stable (TIDY) takes a canary release only once someone approves it. Approval is a judgment about what the release
+contains, so the approver reads the notes.
+
+- **The issue.** Each candidate the canary takes gets an open issue, `Release vX.Y.Z: awaiting approval`, labelled
+  `release-approval`. Its body is the release notes, built by `scripts/release_notes.py`: every pull request merged
+  since the release stable runs. High-risk pull requests come first, then user-facing ones (`ui/`, `clients/`, `app/`),
+  then backend ones (`backend/`, `runner-rs/`, `recorder/`, `templates/`), then the internal ones, one line each. The
+  first line counts the blocks by group. A block gives the pull request's Spec, its demo steps (written for the Acme
+  Lights demo company) and its risk when it has them, and says so in one line when it has none of the three. It also
+  gives its reviews and receipts, and the areas it touches. Its checks show only when one failed or none ran.
+- **Approving.** A person with write access approves it by adding the `approved` label or commenting `/approve`. The
+  repository's permission for that login is checked, and the account must be a person: a bot or a GitHub App does not
+  count, even with write access, and neither does anyone without write access. The `hold` label keeps one release off
+  stable.
+- **Promotion.** At each window open, and at the backstop, stable takes the canary's release once it is approved, not
+  held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it healthy. Stable's
+  update closes the issue, and the issue says who approved it.
+- **Superseded.** A newer release on the canary closes an older issue with a link to the newer one. A candidate whose
+  canary update failed is closed too, as not on the canary: there is nothing to approve.
+- **Reading the notes.** `python3 scripts/release_train.py notes v0.5.200 v0.5.201` prints the notes for any range,
+  read-only. It needs `GITHUB_TOKEN`.
+- **Pictures.** A candidate the canary runs also gets a "What it looks like" section above its notes: before and after
+  pictures of the pages it changes (see [Before and after screenshots](#before-you-tag)). They are made after the window
+  and the canary update, so neither waits for them, and approval does not wait for them either. The issue says the
+  pictures are on their way until they arrive, and says so with the run's link when they could not be made. Hotfixes get
+  no pictures.
 
 ### A release that did not publish
 
@@ -131,10 +162,11 @@ gh workflow run hotfix.yml --ref main -f reason="Tasks vanish from the board aft
 
 Anyone with write access may run it, bots included. It validates the commit as the next patch, publishes it, updates
 the canary, marks it latest once the canary is healthy and, unless `promote_stable` is off, updates stable right
-after, with no bake. Holds still apply: with `RELEASE_HOLD` set or a `release-blocker` issue open, stable is left
+after, without waiting for an approval. Holds still apply: with `RELEASE_HOLD` set or a `release-blocker` issue open, stable is left
 where it is unless `override_hold` is on, and the override is written, with who ran it, in the run summary and on the
-issue. The reason is required and goes on a `release-train` issue: closed when the hotfix succeeds, left open when it
-fails. A hotfix release also closes the current window.
+issue. The reason is required, and the reason and its release notes go on a `release-train` issue: closed when the hotfix
+succeeds, left open when it fails. A hotfix release also closes the current window. With `promote_stable` off, the
+hotfix's approval issue decides stable, as for any canary release.
 
 ## The fast path
 
@@ -304,15 +336,18 @@ A `docs/` page, CHANGELOG.md or a GitHub file runs the tests that read it (by pa
 the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
 `scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
 a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
-fall back to the full default Python suite and core browser scripts. Runner/harness changes also run slow conformance on
+run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`). A conftest runs the tests below it
+while there are at most 25; a test that reaches a changed file only through a conftest fixture adds the smoke set. Runner/harness changes also run slow conformance on
 the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
-changes, or every browser script when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
+changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
 crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
 (`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
 so they start cold. A pull request's superseded run is canceled; a queue group is never canceled.
+
+**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `pr-checks.yml`, `pr-cache.yml`, `ci.yml` and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), so restores start cold more often, and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
@@ -345,7 +380,7 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
-GitHub release. The merge queue runs this full default suite on uncertain selections; known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
+GitHub release. The merge queue never runs the full default suite: an uncertain selection runs the smoke set, and known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
 
 ## Merge queue
@@ -359,6 +394,9 @@ checks on that merge commit, and moves main only when they pass.
 - **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
   browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
   recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
+- **The factory simulation** (RunsOn Spot, one 4-vCPU VM per group): seed 1 of every scenario, only when the change
+  reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
+  check fails the group. Release validation runs seeds 1-3 as before.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
@@ -552,6 +590,17 @@ PASS, FAIL or SKIP per step and exits non-zero on a failure. `scripts/install.sh
 script does what the installer does after its preflight (checksummed bundle, `.env`, `docker compose up -d`). For a
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
+
+**Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
+demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
+`scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
+shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
+changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
+looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
+(`TICO_DEMO_NOW` sets the demo's "now"), so a ref compared with itself shoots no changed pair. The release train calls it
+for each candidate it ships (the `shots` job in `train.yml`), with stable's release as the base and the candidate as the
+head. The job uploads the folder as the artifact `release-shots-<version>`, and the `approval-shots` job puts its section
+on the approval issue (see [Approval](#approval)).
 
 ### Behaviour replay
 

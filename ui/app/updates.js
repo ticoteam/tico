@@ -789,10 +789,23 @@ async function botLatestUpdate(slug) {
     <button type="button" class="rail-more" data-latest-more hidden>More</button>`;
   host.hidden = false;
   const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
-  more.hidden = body.scrollHeight <= body.clientHeight + 2;
   more.onclick = () => { const open = body.classList.toggle('open'); more.textContent = open ? 'Less' : 'More'; };
+  botLatestFoldMore(host);
+  // The fold depends on the text's rendered height, which a first measure can take before the webfonts load,
+  // so measure again once they are ready and whenever the rail changes size.
+  latestFold?.disconnect();
+  latestFold = new ResizeObserver(() => botLatestFoldMore(host));
+  latestFold.observe(host);
+  void document.fonts?.ready.then(() => botLatestFoldMore(host));
   BOT.latest = u.read ? null : u;
   botLatestSeen();
+}
+let latestFold = null;
+// "More" shows only when the folded text is cut off. An open text keeps its "Less" whatever it measures.
+function botLatestFoldMore(host) {
+  const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
+  if (!body || !more || body.classList.contains('open')) return;
+  more.hidden = body.scrollHeight <= body.clientHeight + 2;
 }
 // Called when the rail is drawn or comes into view: an unread latest update it shows is now read.
 function botLatestSeen() {

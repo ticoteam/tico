@@ -146,6 +146,7 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
         flush_wakes,
         reconcile_worktree_prs,
         refresh_deployed_tasks,
+        refresh_conflicts,
         refresh_pending_checks,
         refresh_queue_removals,
     )
@@ -157,6 +158,8 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_pending_checks(github_app)
     # A merge-queue removal that was not a merge is read afresh before its owner is woken (github.refresh_queue_removals).
     refresh_queue_removals(github_app)
+    # An open pull request's conflict with a moved base sends no event: read the unknown and stale ones (github.refresh_conflicts).
+    refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
     # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).

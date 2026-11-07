@@ -1,8 +1,9 @@
 # Two tiers. Each push to a pull request runs only the cheap checks (plan, static) on free GitHub-hosted
 # Ubuntu runners, so a push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
 # A merge queue group (the merge_group event, once per queue group) runs everything else on RunsOn Spot VMs in Tico's
-# own AWS account: the tests the group's merged change selects, the Rust and desktop checks, the macOS recorder tests
-# and the Linux Caddy image. The group selects from its own base and head. Static checks run in the group too: its merge
+# own AWS account: the tests the group's merged change selects, the factory simulation when the change reaches what it
+# runs (scripts/pr_checks.py factory_reason), the Rust and desktop checks, the macOS recorder tests and the Linux Caddy
+# image. The group selects from its own base and head. Static checks run in the group too: its merge
 # commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead of it.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
 # pull request runs nothing.
@@ -11,6 +12,8 @@
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
 # A pull request's own push runs on hosted runners whether or not it comes from a fork. A fork's change runs on RunsOn
 # only once a maintainer queues it.
+# Repository variable TICO_CI_HOSTED=true runs every RunsOn job here on GitHub-hosted runners instead
+# (docs/releasing.md#tests-on-a-pr); unset, RunsOn is the default.
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
 name: PR checks
 
@@ -37,11 +40,13 @@ concurrency:
 jobs:
   plan:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
     timeout-minutes: 12
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
+      factory: ${{ steps.plan.outputs.factory }}
+      factory_shards: ${{ steps.plan.outputs.factory_shards }}
       recorder: ${{ steps.recorder.outputs.run }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -109,7 +114,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' }}
     name: ${{ matrix.suite }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -118,6 +123,9 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -178,14 +186,60 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  factory-sim:
+    # Merge queue groups only, when the plan selects the factory simulation (scripts/pr_checks.py factory_reason). Seed 1
+    # of every scenario, in one VM per group of the sim's own packing (timings.json; run.py --shard), four scenarios at a
+    # time on each. Release validation runs seeds 1-3 (ci.yml). A pull request's push never runs it.
+    needs: plan
+    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.factory == 'true' }}
+    name: factory sim ${{ matrix.shard }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.factory_shards) }}
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh python
+      - name: Run this group of the factory sim
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -o pipefail
+          "$RUNNER_TEMP/venv/bin/python" -W ignore -m evals.factory.run --seeds 1 --shard "$SHARD" -j 4 2>&1 \
+            | tee "$RUNNER_TEMP/sim.log"
+      - if: always()
+        name: Summary
+        run: |
+          { echo '### Factory sim, group ${{ matrix.shard }}'; echo '```'
+            awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   static:
     # Every change, on both tiers: pinned ruff against its baseline (no new findings or suppressions), basedpyright on
     # the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
-    # once installed; tools are pinned.
+    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too.
     name: static checks
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ${{ github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || (github.event_name == 'merge_group' && format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) || 'ubuntu-24.04') }}
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -232,6 +286,8 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: UI lint
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
+      - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
+        run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
       - name: Runner wire contract
@@ -246,9 +302,12 @@ jobs:
     # checks should be. rustfmt and clippy -D warnings (scripts/rust_checks.sh) when a crate it checks changed.
     name: rust lint
     if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -276,9 +335,12 @@ jobs:
     # the build dependencies app.yml installs. Nothing runs when no app file changed.
     name: desktop app
     if: ${{ github.event_name == 'merge_group' }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 45
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -363,7 +425,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.caddy == 'true' }}
     name: caddy-linux-${{ matrix.arch }}
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.arch == 'arm64' && 'arm64' || 'x64', matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -378,6 +440,9 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -424,8 +489,8 @@ jobs:
     # Merge queue groups only. Failed runs keep their timing receipt, but a canceled run ends here: a final job queued
     # after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    needs: [plan, tests, caddy-linux, static, rust-lint, desktop-app, recorder]
-    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    needs: [plan, tests, factory-sim, caddy-linux, static, rust-lint, desktop-app, recorder]
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     # Four minutes: checkout and the artifact download run before the receipt, which is capped at one minute below.
     # A hang in the receipt canceled the whole job at three minutes on #2487.
     timeout-minutes: 4
@@ -454,7 +519,7 @@ jobs:
     # skipped job passes: a pull request skips the merge queue jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, tests, rust-lint, desktop-app, recorder, caddy-linux]
+    needs: [plan, static, tests, factory-sim, rust-lint, desktop-app, recorder, caddy-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -463,6 +528,7 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           STATIC: ${{ needs.static.result }}
           TESTS: ${{ needs.tests.result }}
+          FACTORY_SIM: ${{ needs.factory-sim.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
           DESKTOP_APP: ${{ needs.desktop-app.result }}
           RECORDER: ${{ needs.recorder.result }}
@@ -478,6 +544,7 @@ jobs:
           check plan "$PLAN"
           check static "$STATIC"
           check tests "$TESTS"
+          check factory-sim "$FACTORY_SIM"
           check rust-lint "$RUST_LINT"
           check desktop-app "$DESKTOP_APP"
           check recorder "$RECORDER"

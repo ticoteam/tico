@@ -1,5 +1,6 @@
 # One release check for one candidate, split across isolated native VMs that run side by side.
 # The VMs are RunsOn instances in Tico's own AWS account (dispatched runs only, never fork code).
+# TICO_CI_HOSTED=true runs them on GitHub-hosted runners instead (docs/releasing.md#tests-on-a-pr).
 # No PR/push tests, schedule or publication: the release window (train.yml), a hotfix (hotfix.yml) or a person dispatches
 # it for an exact commit and version, and release.yml and the release window find the run by its title.
 # It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
@@ -36,7 +37,7 @@ concurrency:
 jobs:
   # What to validate: the requested candidate against the requested published release.
   candidate:
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       previous: ${{ steps.pick.outputs.previous }}
@@ -63,9 +64,12 @@ jobs:
         include:
           - {arch: x64, name: linux-x86_64, target: x86_64-unknown-linux-musl}
           - {arch: arm64, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-${{ matrix.arch }}${{ matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '' }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}', github.run_id, matrix.arch, matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 20
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -131,13 +135,16 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}${{ matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '' }}/extras=s3-cache
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.platform == 'arm64' && 'arm64' || 'x64', matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 30
     permissions:
       actions: read   # watches this run's native-linux build
       contents: read
       packages: write
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -262,7 +269,7 @@ jobs:
           - {name: python-28, part: python, shard: '28/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
           - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
-    runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, matrix.runner) }}
     env:
       CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
       PREVIOUS_RELEASE: ${{ needs.candidate.outputs.previous }}
@@ -507,7 +514,7 @@ jobs:
   factory-sim:
     needs: candidate
     name: factory-sim-${{ matrix.shard }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -516,6 +523,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: '1'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}

@@ -238,7 +238,6 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
         ("PPC Specialist", "paid-media"),
         ("Communications Manager", "pr"),
         ("Online Reviews Manager", "reputation"),
-        ("Brand Designer", "brand"),
         ("SDET", "issue-triage"),
         ("Software Engineer in Test", "issue-triage"),
         ("Test Engineer", "issue-triage"),
@@ -266,6 +265,7 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
         "Affiliate Marketing Manager",
         "Marketing Coordinator",
         "Digital Marketing Manager",
+        "Brand Designer",  # the Brand Owner is built in, so no card is hired for it
         "Backend Engineer",
         "Go Developer",
         "Data Scientist",

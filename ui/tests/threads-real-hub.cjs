@@ -237,10 +237,15 @@ async function restrictPerson(hub) {
     const selected = tab => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
       tab, {timeout: t(15000)});
     await selected('home');
-    assert.equal(await phone.locator('#btabs [data-bt="dm"]').innerText(), 'DM');
-    await phone.locator('#btabs [data-bt="dm"]').tap();
-    await selected('dm');
-    await phone.locator('#btabs [data-bt="home"]').tap();
+    // 9d11efec7: a phone has one chat tab; the DM is Incognito, the toggle in the top line (aria-pressed = DM).
+    assert.equal(await phone.locator('#btabs [data-bt="dm"]').count(), 0, 'no DM tab: the DM is Incognito');
+    assert.equal(await phone.locator('#bot-incognito').getAttribute('aria-pressed'), 'false', 'Incognito starts off');
+    await phone.locator('#bot-incognito').tap();
+    await phone.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true',
+      null, {timeout: t(15000)});
+    await selected('home');
+    await phone.locator('#bot-incognito').tap();
+    await phone.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false', null, {timeout: t(15000)});
     await selected('home');
     await phone.context().close();
 

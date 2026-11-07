@@ -98,8 +98,8 @@ def test_a_bot_asking_to_merge_docs_only_is_refused_with_the_code(api, monkeypat
     monkeypatch.setattr(docs_merge, "changed_files", lambda service, repo, number: ["docs/setup.md"])
     r = api.post("/api/v2/approvals", json={"kind": "merge", "payload": DOCS_PR}, headers=headers("docs-test"))
     assert r.status_code == 422, r.text
-    assert r.json()["code"] == docs_merge.REFUSAL
-    assert "needs no approval" in r.json()["detail"]
+    assert r.json()["error"]["code"] == docs_merge.REFUSAL
+    assert "needs no approval" in r.json()["error"]["detail"]
 
 
 def test_a_bot_asking_to_merge_mixed_changes_still_gets_an_approval(api, monkeypatch):

@@ -28,7 +28,8 @@ def mapped(monkeypatch, repo_map):
     monkeypatch.setattr(checks, "DependencyMap", lambda root: repo_map if root == ROOT else build(root))
 
 
-def test_uncertain_changes_and_main_run_everything_and_ui_keeps_its_map(tmp_path, mapped):
+def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_map(tmp_path, mapped):
+    smoke_tests, smoke_scripts = checks.smoke(ROOT)
     for changed in (
         ["conftest.py"],
         ["backend/tests/conftest.py"],
@@ -37,23 +38,29 @@ def test_uncertain_changes_and_main_run_everything_and_ui_keeps_its_map(tmp_path
         ["package-lock.json"],
         ["backend/missing.py"],
         [],
-        ["docs/missing.md"],
     ):
         plan = checks.selection(changed)
-        assert plan["python"] is None and plan["browser"] is None and plan["caddy"], changed
+        assert plan["python"] is not None and plan["browser"] is not None, changed
+        assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"]), changed
+        assert "--all" not in plan["browser"] and plan["uncertain"], changed
+    assert checks.selection(["docs/missing.md"])["python"] is not None
     main = checks.selection(["backend/task_loops.py"], "push")
     assert main["python"] is None and main["browser"] is None and main["caddy"]
     ui = checks.selection(["ui/app/chat.js"])
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
     assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
-    assert checks.selection(["ui/app/core.js"])["browser"] == ["--all"]
+    # A UI file the map does not list runs its linked scripts and the smoke browser scripts, never every script.
+    core = checks.selection(["ui/app/core.js"])
+    assert "--all" not in core["browser"] and set(checks.browser_scripts([])) <= set(core["browser"])
     assert checks.selection(["runner-rs/harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
     assert checks.selection(["backend/harness_actions.py"])["conformance"]
-    # A removed mapped browser test makes the map uncertain, even if its sibling remains.
+    # A removed mapped browser test runs the smoke browser scripts, even if its sibling remains.
+    smoke_tree(tmp_path)
     (tmp_path / "ui/app").mkdir(parents=True)
     (tmp_path / "ui/app/chat.js").touch()
-    assert checks.selection(["ui/app/chat.js"], root=tmp_path)["python"] is None
+    missing = checks.selection(["ui/app/chat.js"], root=tmp_path)
+    assert "--all" not in missing["browser"] and set(smoke_scripts) <= set(missing["browser"]) and missing["uncertain"]
 
 
 def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbalance(tmp_path):
@@ -109,7 +116,9 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     # 48 measured seconds fit one VM; the time target, not a fixed count, sets the number of groups.
     assert len(groups) == 1 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["conftest.py"])
-    assert checks.prepare("pull_request", "base", target)["python"] is None
+    # A root conftest runs the smoke set and the tests that name it, never all of the tests below it.
+    conftest_python = checks.prepare("pull_request", "base", target)["python"]
+    assert set(checks.smoke(ROOT)[0]) & set(files) <= set(conftest_python) <= set(files)
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     calls = []
     monkeypatch.setattr(
@@ -133,7 +142,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
 
 def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_too(tmp_path):
     # A new tool, response field or command reference can change the contract without a Python import edge.
-    graph = SimpleNamespace(files=[], unparsed=set(), affected=lambda *args: set())
+    smoke_tree(tmp_path)
     for name in (
         "backend/routes/tasks.py",
         "clients/hubtools.py",
@@ -147,16 +156,15 @@ def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_
         "companies/acme.yaml",
     ):
         source(tmp_path, name, "")
-        graph.files.append(name)
-        assert checks.selection([name], root=tmp_path, graph=graph, core=[])["contracts"], name
+        assert checks.selection([name], root=tmp_path, core=[])["contracts"], name
     # Removing a template must still catch refusal entries that have become stale.
     (tmp_path / "templates/bot/role.md").unlink()
     assert checks.selection(["templates/bot/role.md"], root=tmp_path)["contracts"]
     source(tmp_path, "ui/app/unrelated.js", "")
-    graph.files.append("ui/app/unrelated.js")
-    assert not checks.selection(["ui/app/unrelated.js"], root=tmp_path, graph=graph, core=[])["contracts"]
+    assert not checks.selection(["ui/app/unrelated.js"], root=tmp_path, core=[])["contracts"]
     assert not checks.selection(["README.md"], root=tmp_path)["contracts"]
-    assert checks.selection([], root=tmp_path)["contracts"]
+    # An empty diff runs the smoke set, which has no contract test; the contracts job follows its inputs only.
+    assert not checks.selection([], root=tmp_path)["contracts"]
     assert checks.selection(["README.md"], event="push", root=tmp_path)["contracts"]
 
 
@@ -431,9 +439,15 @@ def source(root, name, text):
     path.write_text(text)
 
 
+def smoke_tree(root):
+    """A temporary tree reads its own copy of the smoke set (rules 2 to 4 run it)."""
+    source(root, checks.SMOKE_FILE, (ROOT / checks.SMOKE_FILE).read_text())
+
+
 def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other(tmp_path, mapped):
     # A hub imported through a shared helper (the way most tests reach backend.app through test_api) selects every
-    # test that imports the helper, at module level, in a function, by importlib or as a conftest fixture body.
+    # test that imports the helper, at module level, in a function or by importlib. A conftest fixture body that runs
+    # it is not followed: its users get the smoke set instead (rule 2).
     source(tmp_path, "backend/__init__.py", "")
     source(tmp_path, "backend/hub.py", "VALUE = 1\n")
     source(tmp_path, "backend/app.py", "from . import hub\n")
@@ -449,21 +463,26 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     source(tmp_path, "backend/tests/test_dynamic.py", "import importlib\nimportlib.import_module('backend.app')\n")
     source(tmp_path, "backend/tests/test_fixture.py", "def test_x(app): pass\n")
     source(tmp_path, "backend/tests/test_leaf.py", "from backend.leaf import LEAF\ndef test_x(): pass\n")
+    smoke_tree(tmp_path)
+    smoke_tests, _ = checks.smoke(tmp_path)
     hub = checks.selection(["backend/hub.py"], root=tmp_path, core=[])
-    assert hub["python"] == [
+    direct = {
         "backend/tests/test_api.py",
         "backend/tests/test_dynamic.py",
-        "backend/tests/test_fixture.py",
         "backend/tests/test_late.py",
         "backend/tests/test_uses_helper.py",
-    ]
-    assert hub["browser"] == [] and not hub["caddy"] and hub["reason"] == "measured dependency map"
+    }
+    assert direct <= set(hub["python"]) and set(smoke_tests) <= set(hub["python"])
+    assert "backend/tests/test_fixture.py" not in hub["python"]
+    # A measured change runs only the browser scripts it touches (none here); the smoke browser set is for uncertain ones.
+    assert hub["browser"] == [] and not hub["caddy"]
+    assert hub["reason"].startswith("measured dependency map")
     assert checks.selection(["backend/leaf.py"], root=tmp_path, core=[])["python"] == ["backend/tests/test_leaf.py"]
     # A computed import may load anything, so the file that makes it runs whatever changes.
     source(tmp_path, "backend/tests/test_any.py", "import importlib\nimportlib.import_module(name)\n")
     assert "backend/tests/test_any.py" in checks.selection(["backend/leaf.py"], root=tmp_path, core=[])["python"]
     source(tmp_path, "backend/broken.py", "syntax error !\n")
-    assert checks.selection(["backend/broken.py"], root=tmp_path)["python"] is None
+    assert set(smoke_tests) <= set(checks.selection(["backend/broken.py"], root=tmp_path, core=[])["python"])
     # On this checkout: a test-only change runs that test and the few that import, read or list it (or every file,
     # like test_local_imports), not the suite; the scheduler's guard follows
     # task_loops; the shared helper reaches the Caddy container test through caddy_assets.
@@ -519,7 +538,7 @@ def test_docs_changelog_and_workflow_edits_run_the_tests_that_read_them_not_the_
     assert picked(".github/workflows/release.yml") == ["scripts/tests/test_release_workflow.py"]
     # Code beside a page still reaches whatever imports it.
     assert "backend/tests/test_api.py" in picked("docs/other.md", "backend/manual.py")
-    assert picked("docs/removed.md") is None
+    assert picked("docs/removed.md") == ["backend/tests/test_manual.py"]
     # The PR workflow runs what reads it, one short browser script and the Caddy job it alone defines.
     workflow = checks.selection([checks.PR_WORKFLOW], root=tmp_path, core=[], added=[])
     assert workflow["python"] == [] and workflow["browser"] == [checks.SMOKE_SCRIPT] and workflow["caddy"]
@@ -632,7 +651,8 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
     # On this checkout, edits (CI passes only --diff-filter=A files as added) reach the guards that list and read.
     corpus = checks.selection(["backend/tests/fixtures/golden_corpus/kept/handbook.md"], added=[])["python"]
     assert "backend/tests/test_golden_corpus.py" in corpus
-    assert "backend/tests/test_icon_font.py" in checks.selection(["ui/app/api.js"], added=[])["python"]
+    # A UI file outside the map runs the tests that name it or read it directly, not every reader's importers.
+    assert "scripts/tests/test_pr_checks.py" in checks.selection(["ui/app/api.js"], added=[])["python"]
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):
@@ -656,16 +676,17 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
 
     names = [f"s{i}" for i in range(40)]
     listed = []
-    monkeypatch.setattr(checks, "browser_scripts", lambda args: listed.append(args) or names)
+    monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: listed.append(args) or names)
     monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
     monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(
         checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.js"]
     )
+    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     timings = tmp_path / "durations.json"
     timings.write_text(json.dumps({f"ui/tests/{n}.cjs": 60 for n in names}))
     plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings)
-    assert listed == [["--all"]]
+    assert listed[-1] and "--all" not in listed[-1]
     browser = [j for j in plan["matrix"]["include"] if j["suite"].startswith("browser-")]
     assert len(browser) == checks.job_count(2400, "browser") > 1
     assert sorted(sum([j["files"] for j in browser], [])) == sorted(names)
@@ -793,6 +814,10 @@ def test_a_receipt_that_cannot_read_its_pages_exits_zero_and_says_so(stdin):
     assert out.startswith("| Job | Result | Seconds |") and out.rstrip().endswith(checks.RECEIPT_INCOMPLETE)
 
 
+HOSTED_SWITCH = "${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || "
+RUNSON_WORKFLOWS = ("ci.yml", "pr-cache.yml", "pr-checks.yml", "remote-run.yml")
+
+
 def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
     """Without main pushes, pr-cache.yml keeps main's caches fresh. Each cache it warms is a PR-check cache with the
     same action, key, path or shared key, on the same Spot runner (a key holds the runner image and arch), and every
@@ -831,8 +856,8 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
         if runner == "macos-latest":
             machine = runner
         else:
-            assert runner.startswith("runs-on=${{ github.run_id }}/") and "spot=false" not in runner, ident
-            machine = runner.split("}}", 1)[1]
+            assert runner.startswith(HOSTED_SWITCH) and "spot=false" not in runner, ident
+            machine = re.search(r"/volume=[^']+", runner).group(0)
             assert "gp3:125mbs" in machine, ident
         assert any((uses, args) == (r[1], r[2]) and machine in r[3] for r in restored), ident
         assert lookup is True or ident in ("pip", "npm"), ident  # setup-python/node have no lookup-only
@@ -904,12 +929,14 @@ def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_g
     target = tmp_path / "plan.json"
     plan = checks.prepare("merge_group", "queue-base", target, head="queue-head")
     assert seen == [("queue-base", "queue-head", None), ("queue-base", "queue-head", "A")]
-    assert plan["reason"] == "measured dependency map" and plan["python"] is not None
+    assert plan["reason"].startswith("measured dependency map") and plan["python"] is not None
     expected = sorted(set(checks.selection(["backend/task_loops.py"])["python"]) & set(files))
     assert plan["python"] == expected
     # An empty group diff falls back to the full suite, as a pull request's does.
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [])
-    assert checks.prepare("merge_group", "queue-base", target, head="queue-head")["python"] is None
+    assert checks.prepare("merge_group", "queue-base", target, head="queue-head")["python"] == [
+        "backend/tests/test_auth.py"
+    ]
 
 
 def test_each_push_runs_only_the_cheap_checks_on_hosted_runners_and_the_queue_runs_the_rest():
@@ -923,8 +950,8 @@ def test_each_push_runs_only_the_cheap_checks_on_hosted_runners_and_the_queue_ru
     for name in pull_request_jobs - {"checks"}:
         runs_on = doc["jobs"][name]["runs-on"]
         # Only the merge queue takes the RunsOn label; every other event gets the free hosted runner.
-        assert runs_on.startswith("${{ github.event_name == 'merge_group' && format('runs-on={0}/"), name
-        assert runs_on.endswith("|| 'ubuntu-24.04' }}"), name
+        assert runs_on.startswith(HOSTED_SWITCH + "(github.event_name == 'merge_group' && format('runs-on={0}/"), name
+        assert runs_on.endswith("|| 'ubuntu-24.04') }}"), name
     assert doc["jobs"]["checks"]["runs-on"] == "ubuntu-24.04"
     for name in set(doc["jobs"]) - pull_request_jobs:
         assert "github.event_name == 'merge_group'" in str(doc["jobs"][name]["if"]), name
@@ -935,9 +962,33 @@ def test_runner_labels_stay_at_two_or_four_vcpus():
     text = (ROOT / ".github" / "workflows" / "pr-checks.yml").read_text()
     assert set(re.findall(r"runner=(\d+)cpu", text)) <= {"2", "4"}
     families = re.findall(r"runner=\d+cpu-linux-x64(/family=[^/']+)?/", text)
-    assert len(families) == 6 and set(families) == {"/family=m8+m7+m6+r8+r7"}, families
+    assert len(families) == 7 and set(families) == {"/family=m8+m7+m6+r8+r7"}, families
     # The Caddy image takes the same families on amd64 only; arm64 keeps its label.
     assert "matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || ''" in text
+
+
+def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
+    """vars.TICO_CI_HOSTED == 'true' moves a RunsOn job to a GitHub-hosted runner. Unset, each RunsOn label is the
+    default, and only a hosted job frees the preinstalled SDKs. The macOS recorder job stays on macos-latest."""
+    import yaml
+
+    for name in RUNSON_WORKFLOWS:
+        jobs = yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text())["jobs"]
+        for job_name, job in jobs.items():
+            runner = str(job.get("runs-on", ""))
+            if "runs-on=" not in runner:
+                continue
+            # The arm64 jobs nest their arch choice inside the switch: "&& (matrix.arch == 'arm64' && ... || ...)".
+            hosted = "${{ vars.TICO_CI_HOSTED == 'true' && "
+            assert runner.startswith(hosted) and "'ubuntu-24.04'" in runner, (name, job_name)
+            assert "format('runs-on={0}/" in runner, (name, job_name)  # the RunsOn label is the fallback, kept verbatim
+            if "arm64" in runner:
+                assert "'ubuntu-24.04-arm'" in runner, (name, job_name)
+            for step in job.get("steps", []):
+                if "/opt/ghc" in str(step.get("run", "")):
+                    assert step.get("if") == "vars.TICO_CI_HOSTED == 'true'", (name, job_name)
+    recorder = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["recorder"]
+    assert recorder["runs-on"] == "macos-latest"
 
 
 def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes():
@@ -958,4 +1009,291 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
+    assert exit_code({**passing, "factory-sim": "failure"}) == 1
+    assert exit_code({**passing, "factory-sim": "skipped"}) == 0
     assert exit_code({**passing, "plan": "skipped"}) == 0
+
+
+def measured(code=(), data=(), folders=()):
+    return {"code": list(code), "data": list(data), "folders": list(folders)}
+
+
+def test_a_change_the_recorded_sim_run_reads_selects_the_factory_sim():
+    recorded = measured(code=["backend/wake_rules.py"], data=["backend/data/rules.json"], folders=["backend/workers/"])
+    assert "runs or reads" in checks.factory_reason(["backend/wake_rules.py"], call_path=recorded)
+    assert "runs or reads" in checks.factory_reason(["backend/data/rules.json"], call_path=recorded)
+    assert "lists backend/workers/" in checks.factory_reason(["backend/workers/new_job.py"], call_path=recorded)
+    assert "catalog template" in checks.factory_reason(["templates/catalog/new-role/AGENT.md"], call_path=recorded)
+
+
+def test_changes_the_sim_never_reads_do_not_select_it():
+    # A listing sees only the entries directly in its folder: a change below one of them moves nothing it lists.
+    recorded = measured(code=["backend/wake_rules.py"], folders=["backend/workers/"])
+    for name in [
+        "ui/app/chat.ts",
+        "docs/releasing.md",
+        "backend/tests/test_auth.py",
+        "scripts/remote.py",
+        "backend/workers/sub/job.py",
+    ]:
+        assert checks.factory_reason([name], call_path=recorded) is None, name
+
+
+def test_the_sim_pins_its_own_code_its_workflow_job_and_the_pinned_backend_requirements():
+    recorded = measured()
+    assert "sim's own code" in checks.factory_reason(["evals/factory/sim.py"], call_path=recorded)
+    assert "defines the sim's job" in checks.factory_reason([checks.PR_WORKFLOW], call_path=recorded)
+    assert "pins" in checks.factory_reason(["backend/requirements-dev.txt"], call_path=recorded)
+    assert "pins" in checks.factory_reason(["backend/requirements.txt"], call_path=recorded)
+
+
+def test_an_empty_or_unmeasured_change_runs_the_sim(tmp_path):
+    assert "empty" in checks.factory_reason([], call_path=measured())
+    assert "missing" in checks.factory_reason(["docs/releasing.md"], root=tmp_path)
+
+
+def test_a_factory_plan_packs_the_sim_only_for_a_merge_group(monkeypatch):
+    monkeypatch.setattr(checks, "factory_call_path", lambda root=checks.ROOT: measured(code=["backend/wake_rules.py"]))
+    pull = checks.factory_plan("pull_request", ["backend/wake_rules.py"])
+    assert pull["run"] is True and pull["shards"] == ["1/1"]
+    queue = checks.factory_plan("merge_group", ["backend/wake_rules.py"])
+    assert queue["run"] is True and queue["shards"] == checks.factory_shards()
+    unrelated = checks.factory_plan("merge_group", ["ui/app/chat.ts"])
+    assert unrelated["run"] is False and unrelated["shards"] == ["1/1"]
+
+
+def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm():
+    from evals.factory import run as factory
+    from evals.factory.scenarios import SCENARIOS
+
+    timings = factory.timings()
+    assert set(timings) == {s.name for s in SCENARIOS}, "timings.json needs a time for every scenario"
+    shards = checks.factory_shards()
+    count = len(shards)
+    assert shards == [f"{index}/{count}" for index in range(1, count + 1)]
+    pairs = [(name, 1) for name in sorted(timings)]
+    groups = [factory.pack(pairs, count, timings)[index] for index in range(count)]
+    assert sorted(pair for group in groups for pair in group) == sorted(pairs)
+    slowest_vm = max(sum(timings[name] for name, _ in group) for group in groups) / factory.REMOTE_CPUS
+    assert slowest_vm <= 300, slowest_vm
+
+
+def test_the_factory_sim_job_runs_only_in_the_queue_on_the_plans_shards():
+    jobs = workflow_jobs()["jobs"]
+    assert {"factory", "factory_shards"} <= set(jobs["plan"]["outputs"])
+    job = jobs["factory-sim"]
+    assert job["needs"] == "plan"
+    assert "github.event_name == 'merge_group'" in job["if"] and "needs.plan.outputs.factory == 'true'" in job["if"]
+    assert job["strategy"]["matrix"]["shard"] == "${{ fromJSON(needs.plan.outputs.factory_shards) }}"
+    assert "runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7" in job["runs-on"]
+    [sim] = [step["run"] for step in job["steps"] if "evals.factory.run" in step.get("run", "")]
+    assert '--seeds 1 --shard "$SHARD" -j 4' in sim
+
+
+def test_the_recorded_call_path_matches_the_repository_and_decides_what_the_queue_runs():
+    recorded = checks.factory_call_path()
+    # The two data entries that are not files: the sim opens VERSION, which this repository does not have, and a
+    # directory of registry fixtures. Neither is a file a change can add without also changing what the sim reads.
+    not_files = {"VERSION", "backend/tests/fixtures/registry"}
+    assert all((checks.ROOT / name).is_file() for name in recorded["code"])
+    assert all((checks.ROOT / name).is_file() or name in not_files for name in recorded["data"])
+    assert all((checks.ROOT / name).is_dir() for name in recorded["folders"])
+    assert not [name for name in recorded["code"] if name.startswith("ui/")]
+    assert "ui/index.html" in recorded["data"] and "backend/wake_rules.py" in recorded["code"]
+    assert "templates/catalog/" in recorded["folders"]
+    assert checks.factory_reason(["backend/wake_rules.py"]) is not None
+    assert checks.factory_reason(["ui/app/chat.ts"]) is None
+    assert checks.factory_reason(["docs/releasing.md"]) is None
+    assert checks.factory_reason(["scripts/tests/test_pr_checks.py"]) is None
+
+
+def test_a_deleted_file_runs_the_tests_that_name_or_read_its_old_path(tmp_path, mapped):
+    smoke_tree(tmp_path)
+    source(tmp_path, "backend/__init__.py", "")
+    source(tmp_path, "backend/tests/test_missing_user.py", "from backend.missing import X\ndef test_x(): pass\n")
+    source(
+        tmp_path,
+        "backend/tests/test_reads_path.py",
+        "from pathlib import Path\ndef test_x(): Path('backend/missing.py').read_text()\n",
+    )
+    source(tmp_path, "backend/tests/test_unrelated.py", "def test_x(): pass\n")
+    plan = checks.selection(["backend/missing.py"], root=tmp_path, core=[])
+    assert plan["python"] == ["backend/tests/test_missing_user.py", "backend/tests/test_reads_path.py"]
+    assert plan["browser"] == []
+    # Code that still names the old path would fail on import: its checks run with the smoke set.
+    source(tmp_path, "backend/other.py", "from backend.missing import X\n")
+    plan = checks.selection(["backend/missing.py"], root=tmp_path, core=[])
+    assert "backend/tests/test_missing_user.py" in plan["python"]
+    assert "backend/tests/test_unrelated.py" not in plan["python"]
+    assert set(checks.smoke(tmp_path)[0]) <= set(plan["python"])
+
+
+def test_a_renamed_away_file_names_its_old_path_and_a_pure_ui_rename_lists_only_the_new_name(tmp_path):
+    assert checks.name_status("R100\0ui/app/a.js\0ui/app/a.ts\0") == [("R", "ui/app/a.ts", "ui/app/a.js", 100)]
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    git("init", "-q", "-b", "main")
+    same = "export const value = 1;\n" * 40
+    source(tmp_path, "ui/app/a.js", same)
+    source(tmp_path, "ui/app/b.js", same)
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+    git("mv", "ui/app/a.js", "ui/app/a.ts")
+    git("mv", "ui/app/b.js", "ui/app/c.js")
+    source(tmp_path, "ui/app/c.js", same + "// edited\n")
+    git("add", "-A")
+    git("commit", "-qm", "Rename")
+    head = git("rev-parse", "HEAD")
+    # a.js to a.ts with the same bytes lists only the new name; a rename that also edits keeps the old name.
+    assert checks.changed_files(base, head, root=tmp_path) == ["ui/app/a.ts", "ui/app/b.js", "ui/app/c.js"]
+    assert checks.changed_files(base, head, root=tmp_path, only="A") == ["ui/app/a.ts", "ui/app/c.js"]
+
+
+def test_a_pinned_file_runs_the_tests_that_read_it_and_the_smoke_set(tmp_path, mapped):
+    smoke_tree(tmp_path)
+    source(tmp_path, "requirements.txt", "flask==3.0.0\n")
+    source(
+        tmp_path,
+        "backend/tests/test_deps.py",
+        "from pathlib import Path\ndef test_x(): Path('requirements.txt').read_text()\n",
+    )
+    source(tmp_path, "backend/tests/test_unrelated.py", "def test_x(): pass\n")
+    smoke_tests, smoke_scripts = checks.smoke(tmp_path)
+    plan = checks.selection(["requirements.txt"], root=tmp_path, core=[])
+    assert "backend/tests/test_deps.py" in plan["python"] and "backend/tests/test_unrelated.py" not in plan["python"]
+    assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"])
+    assert checks.pinned("requirements-dev.txt") and checks.pinned("pytest.ini")
+    assert not checks.pinned("docs/requirements.md")
+
+
+def test_a_conftest_runs_the_tests_below_it_when_few_and_the_smoke_set_when_many(tmp_path, mapped):
+    smoke_tree(tmp_path)
+    smoke_tests = checks.smoke(tmp_path)[0]
+    source(tmp_path, "scripts/tests/conftest.py", "import pytest\n")
+    source(tmp_path, "scripts/tests/test_small.py", "def test_x(): pass\n")
+    small = checks.selection(["scripts/tests/conftest.py"], root=tmp_path, core=[])
+    assert "scripts/tests/test_small.py" in small["python"] and not set(smoke_tests) & set(small["python"])
+    for index in range(checks.CONFTEST_BELOW_LIMIT + 1):
+        source(tmp_path, f"scripts/tests/test_many_{index}.py", "def test_x(): pass\n")
+    big = checks.selection(["scripts/tests/conftest.py"], root=tmp_path, core=[])
+    assert set(smoke_tests) <= set(big["python"])
+    assert "scripts/tests/test_small.py" not in big["python"]
+
+
+def test_an_unparsed_file_runs_the_checks_that_name_it_else_the_smoke_set(tmp_path, mapped):
+    smoke_tree(tmp_path)
+    smoke_tests, smoke_scripts = checks.smoke(tmp_path)
+    source(tmp_path, "backend/broken.py", "syntax error !\n")
+    source(tmp_path, "backend/tests/test_names_broken.py", "PATH = 'backend/broken.py'\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_other.py", "def test_x(): pass\n")
+    named = checks.selection(["backend/broken.py"], root=tmp_path, core=[])
+    assert named["python"] == ["backend/tests/test_names_broken.py"] and named["browser"] == []
+    source(tmp_path, "backend/broken2.py", "syntax error !\n")
+    unnamed = checks.selection(["backend/broken2.py"], root=tmp_path, core=[])
+    assert set(smoke_tests) <= set(unnamed["python"]) and set(smoke_scripts) <= set(unnamed["browser"])
+
+
+def test_a_ui_file_outside_the_map_runs_its_readers_its_linked_scripts_and_the_smoke_browser(tmp_path, mapped):
+    smoke_tree(tmp_path)
+    smoke_scripts = checks.smoke(tmp_path)[1]
+    source(tmp_path, "ui/app/extra.js", "export {};\n")
+    source(
+        tmp_path,
+        "scripts/tests/test_extra_reader.py",
+        "from pathlib import Path\ndef test_x(): Path('ui/app/extra.js').read_text()\n",
+    )
+    source(tmp_path, "ui/tests/linked.cjs", "const page = 'ui/app/extra.js';\n")
+    plan = checks.selection(["ui/app/extra.js"], root=tmp_path, core=[])
+    assert "scripts/tests/test_extra_reader.py" in plan["python"]
+    assert "linked" in plan["browser"] and set(smoke_scripts) <= set(plan["browser"])
+    assert "--all" not in plan["browser"]
+
+
+def test_an_index_html_script_rename_counts_as_a_change_to_the_file_it_loads(tmp_path):
+    diff = '+<script src="app/b.js"></script>\n-<script src="app/a.js"></script>\n+++ ui/index.html\n'
+    assert checks.script_srcs("ui/index.html", diff) == ["ui/app/b.js"]
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    git("init", "-q", "-b", "main")
+    source(tmp_path, "ui/index.html", '<script src="app/a.js"></script>\n')
+    source(tmp_path, "ui/app/a.js", "a\n")
+    source(tmp_path, "ui/app/b.js", "b\n")
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+    source(tmp_path, "ui/index.html", '<script src="app/b.js"></script>\n')
+    git("add", "-A")
+    git("commit", "-qm", "Load b")
+    head = git("rev-parse", "HEAD")
+    assert checks.script_changes(base, head, ["ui/index.html"], root=tmp_path) == ["ui/app/b.js"]
+    assert checks.script_changes(base, head, ["ui/app/b.js"], root=tmp_path) == []
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_pull_requests_and_queue_groups_never_run_the_full_suite_or_every_browser_script(event, mapped):
+    changes = (
+        ["backend/task_loops.py"],
+        ["conftest.py"],
+        ["requirements.txt"],
+        ["pytest.ini"],
+        ["package-lock.json"],
+        ["ui/app/core.js"],
+        ["ui/app/chat.js"],
+        ["backend/missing.py"],
+        ["docs/missing.md"],
+        ["backend/tests/conftest.py"],
+        ["Dockerfile"],
+        [checks.PR_WORKFLOW],
+        [],
+    )
+    for changed in changes:
+        plan = checks.selection(changed, event)
+        assert plan["python"] is not None and plan["browser"] is not None, changed
+        assert "--all" not in plan["browser"], changed
+        assert plan["reason"] != "main runs the full default suite", changed
+
+
+def test_the_smoke_set_is_checked_and_a_missing_entry_fails_the_check(tmp_path):
+    assert checks.smoke_check(ROOT) == []
+    source(
+        tmp_path,
+        checks.SMOKE_FILE,
+        json.dumps(
+            {
+                "python": [{"file": "backend/tests/test_gone.py", "seconds": 1, "reason": "gone"}],
+                "browser": [{"script": "gone", "seconds": 1, "reason": "gone"}],
+            }
+        ),
+    )
+    problems = checks.smoke_check(tmp_path)
+    assert any("test_gone.py" in problem for problem in problems)
+    assert any("browser gone" in problem for problem in problems)
+    source(tmp_path, checks.SMOKE_FILE, "[]")
+    assert checks.smoke_check(tmp_path)
+
+
+def test_a_file_that_reaches_tests_only_through_a_conftest_selects_its_direct_readers_and_the_smoke_set(
+    tmp_path, mapped
+):
+    # The root conftest loads a slot script by path, the slot script reads remote.py, and remote's own test imports it.
+    smoke_tree(tmp_path)
+    smoke_tests, smoke_scripts = checks.smoke(tmp_path)
+    source(tmp_path, "conftest.py", "SLOT = 'scripts/heavy_slot.py'\n")
+    source(tmp_path, "scripts/heavy_slot.py", "REMOTE = 'scripts/remote.py'\n")
+    source(tmp_path, "scripts/remote.py", "X = 1\n")
+    source(tmp_path, "scripts/tests/test_remote.py", "from scripts import remote\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_unrelated.py", "def test_x(): pass\n")
+    plan = checks.selection(["scripts/remote.py"], root=tmp_path, core=[])
+    assert "scripts/tests/test_remote.py" in plan["python"]
+    assert "backend/tests/test_unrelated.py" not in plan["python"]
+    assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"])
+    assert any("conftest.py is reached" in note for note in plan["uncertain"])

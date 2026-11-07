@@ -276,7 +276,9 @@ async function main() {
   const started = Date.now();
   const env = {TICO_BROWSER: 'chromium', ...process.env, TICO_UI_SLOWDOWN: String(selected.slowdown)};
   const run = async file => {
-    const result = await runScript(path.join(dir, file), {env, timeout: selected.timeout});
+    // A walkthrough is a long tour of screens, and takes its screenshots as it goes: it gets five times the script budget.
+    const timeout = WALKTHROUGHS.includes(file.replace(/\.cjs$/, '')) ? selected.timeout * 5 : selected.timeout;
+    const result = await runScript(path.join(dir, file), {env, timeout});
     const {code, out, timedOut, secs} = result;
     if (code === 0 && !timedOut) {
       timings[file.replace(/\.cjs$/, '')] = secs;
@@ -284,7 +286,7 @@ async function main() {
     }
     else {
       failed.push(file);
-      const why = timedOut ? `, stopped: still running after ${selected.timeout}s` : '';
+      const why = timedOut ? `, stopped: still running after ${timeout}s` : '';
       const text = timedOut ? `${out.trimEnd()}\n${stoppedReport(result)}` : out.trimEnd();
       console.log(`FAIL  ${file} (${secs.toFixed(1)}s${why})\n${text.replace(/^/gm, '      ')}\n`);
     }

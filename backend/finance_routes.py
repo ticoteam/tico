@@ -468,6 +468,20 @@ def install(app, store, auth, mutate):
         who = viewer(request)
         return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
 
+    @app.get("/api/v2/finance/attribution-rules")
+    def finance_attribution_rules(request: Request):
+        """The book's attribution rules (vendor, P&L account or money account, and their shares); needs the attribution
+        right or admin."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.attribution_rules(c, who.actor))
+
+    @app.get("/api/v2/finance/lines/{line_id}/attribution")
+    def finance_line_attribution(request: Request, line_id: str, view_as: str | None = None):
+        """One posted P&L line's attribution: the shares in force, their amounts and the line's history, as far as the
+        caller sees the line. The owner may pass view_as."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.line_attribution(c, actor, line_id))
+
     @app.get("/api/v2/finance/bills")
     def finance_bills(
         request: Request,

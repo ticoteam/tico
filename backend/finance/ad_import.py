@@ -38,6 +38,7 @@ from typing import Any, cast
 from . import ad_warnings
 from .core import ledger as L
 from .core.org import SYSTEM
+from .context import load
 from .gateway_sync import Bell
 from .mercury import Opener
 from .store import ads as SA
@@ -706,6 +707,11 @@ def run(store: Any, vault: object, import_id: str, *, now: str | None = None, ht
             stored += SA.replace_spend(c, aid, start, end, fetched.spend.get(acct.external_id, []), at)
         SA.deactivate_missing(c, imp.tool_id, [a.external_id for a in mine], at)
         ensure_vendor(c, imp.platform, at)
+        if mine and SL.book(c) is not None:
+            # The days just replaced move the platform's shares on the charges whose windows they fall in (attribution).
+            from .attribution import refresh_platform  # lazy: attribution imports the posting path
+
+            refresh_platform(load(c, at), SYSTEM, imp.platform, start, end)
         # A history_from moved earlier while this ran wants a full read again: keep last_import_at empty then.
         full_again = current.history_from < imp.history_from
         note = "; ".join(t.text for t in sorted(taken.values(), key=lambda t: t.external_id))

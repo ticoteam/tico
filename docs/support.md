@@ -129,6 +129,9 @@ asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by def
 **On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
 are kept for the team and the bot, not shown to the person. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
 
+A copy run from source (version `dev`) with no `TICO_HQ_URL` never sends by the rule: the report waits for a person's
+yes, as below.
+
 **Off.** The report waits for a person's yes:
 
 1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
