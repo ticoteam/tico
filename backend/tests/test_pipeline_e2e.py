@@ -504,6 +504,33 @@ def test_not_validated_files_a_follow_up_and_returns_the_card_to_development(co)
     assert co.where(card) == ("Product", "Validate")
 
 
+def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_ones(co):
+    """The generic close cascade (hubdb._finish_children) reaches the spawned subtasks: the open one closes with the card,
+    the one already done stays done."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    co.close(card, actor=ANA)
+    assert H.task(co.c, card)["status"] == "closed"
+    assert H.task(co.c, d41)["status"] == "done"
+    assert H.task(co.c, d42)["status"] == "closed"
+    assert H.task(co.c, d42)["note"] == f"Closed with #{H.task(co.c, card)['number']}"  # the generic cascade's note
+
+
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
     card = review_card(co)
     approve_spec(co, card)
