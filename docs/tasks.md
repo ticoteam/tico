@@ -201,7 +201,7 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 
 A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks. Review 1 sends its
 feedback back to the Builder's Fixes step whichever way it goes. Review 2's approval goes to the merge, and a fix made
-after it merges once CI is green on its head. On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
+after it merges once CI is green on its head. Without QA steps, Review 2 has no timeout: an unanswered one waits for its reviewer. On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
 In QA is `qa`, Post Release QA is `release_qa`, and In QA passes to the merge (skip tag `skip-qa`). Pending Release
 takes merged tickets, and released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
 Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing

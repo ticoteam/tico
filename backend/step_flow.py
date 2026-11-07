@@ -513,10 +513,9 @@ DEV = {  # the settings each Dev tickets type is given once; a person changes th
         "gate": True,
         "check": "review",
     },
-    "Review 2": {
+    "Review 2": {  # no timeout: a change waits for its reviewer rather than passing to the merge unreviewed
         "on_pass": MERGE,
         "on_fail": "Review 2 Fixes",
-        "timeout_hours": 1,
         "gate": True,
         "check": "review",
     },

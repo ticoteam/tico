@@ -89,7 +89,9 @@ def max_at_check(slack=0.5):
             spans = run.w.check_waits(t["id"], until=run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
             for name, span in spans:
                 step = run.w.board.step(name)
-                if step and step.check and span > step.check.timeout_hours + slack:
+                # a check with no timeout waits for its reviewer, so it has no limit to hold it to
+                limit = step.check.timeout_hours if step and step.check else None
+                if limit is not None and span > limit + slack:
                     long.append(f"{t['title']} {name} {span:.1f}h")
         return not long, ", ".join(long[:6])
 

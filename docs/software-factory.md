@@ -108,7 +108,7 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | In Progress | doing | Builder | Building |
 | Review 1 | review | Builder | Reviewer 1 comments |
 | Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
-| Review 2 | review | Builder | Reviewer 2 comments on the updated change. Always runs; its approval is the last review before the merge |
+| Review 2 | review | Builder | Reviewer 2 comments on the updated change. Always runs, with no timeout: it waits for its reviewer. Its approval is the last review before the merge |
 | Review 2 Fixes | doing | Builder | Builder acts on the feedback; once CI is green on the new head, the ticket merges |
 | Pending Release | review | Merge | Merged; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to the next step by itself |
 | Done | done | Release | Shipped in a published release |

@@ -379,6 +379,21 @@ def test_a_board_without_qa_merges_once_review_2_approves_and_ci_is_green(api):
     assert step(api, task) == "Pending Release"
 
 
+def test_a_board_without_qa_leaves_review_2_open_past_its_hours_for_its_reviewer(api):
+    """Review 2 has no timeout on the recommended board: an unanswered check waits for its reviewer rather than
+    passing the change to the merge."""
+    from datetime import timedelta
+
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    review = check(api, task, "Review 2: PR #412")
+    with api.app.state.store.transaction() as c:
+        later = H.parse_ts(H.now()) + timedelta(hours=24)
+        assert V.timeouts(c, later.strftime("%Y-%m-%dT%H:%M:%S.%fZ")) == [], "no timeout to act on"
+        assert H.task(c, review["id"])["status"] != "closed"
+    assert step(api, task) == "Review 2"
+    assert not builder_jobs(api), "no merge is handed off while the check is open"
+
+
 def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_recorded(api):
     task = ticket(api, step="QA Fixes", labels=["skip-qa"])
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
