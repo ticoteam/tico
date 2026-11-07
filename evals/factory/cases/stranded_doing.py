@@ -99,7 +99,11 @@ def stranded_resumed(run):
 
 def stop_told_manager(run):
     """Each stop of resumes (three runs with no progress, backend/stranded_resume.py) is told to the owner's manager when
-    that is another active bot that reads the task. Named when it is not, with the reason."""
+    that is another active bot that reads the task. The manager is the org chart's, read as auth reads it: the bot's
+    reports_to, else the reports_to in its declared settings. Named when it is not, with the reason."""
+    import json
+
+    from backend import bot_settings as BS
     from backend import hubdb as H
     from backend import stranded_resume as SR
 
@@ -112,8 +116,14 @@ def stop_told_manager(run):
             if row is None:
                 continue
             owner = H.actor_id(row["owner_id"])
-            found = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (owner,)).fetchone()
-            manager = (found[0] if found else "") or ""
+            found = c.execute(
+                f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (owner,)
+            ).fetchone()
+            if found is None:
+                continue
+            declared = json.loads(found["config"]) if found["config"] else {}
+            column = found["reports_to"] or ""
+            manager = column or (declared or {}).get("reports_to") or ""
             if not manager:
                 continue
             manager = manager if H.actor_kind(manager) else H.bot_actor(manager)
@@ -124,7 +134,8 @@ def stop_told_manager(run):
                 state = (H.bot(c, H.actor_id(manager)) or {}).get("state")
                 reads = H.bot_reads_task(c, manager, row)
                 bad.append(
-                    f"{run.w.title(task_id)} told {told}, not {manager} (manager state {state}, reads it {reads})"
+                    f"{run.w.title(task_id)} told {told}, not {manager} (column {column!r}, declared "
+                    f"{(declared or {}).get('reports_to')!r}, manager state {state}, reads it {reads})"
                 )
     return (
         not bad,
