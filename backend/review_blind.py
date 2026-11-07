@@ -165,10 +165,11 @@ def hidden_task_ids(c: sqlite3.Connection, who: str | tuple[str, ...] | list[str
     return out
 
 
-def marks(c: sqlite3.Connection, check: Row, ticket: Row, step: Row | None = None) -> dict[str, Any]:
+def marks(c: sqlite3.Connection, check: Row | None, ticket: Row | None, step: Row | None = None) -> dict[str, Any]:
     """The refs a message carrying `check`'s findings on `ticket` is written with: its review step when the check is a
     review, so a later check on the ticket is blind to it and the message is filterable without reading its text."""
-    step = _child_check(c, check, ticket) if step is None else step
+    if step is None and check and ticket:
+        step = _child_check(c, check, ticket)
     return {REVIEW_STEP: step["id"]} if step and _check_kind(step) == "review" else {}
 
 
