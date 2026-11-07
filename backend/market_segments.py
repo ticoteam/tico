@@ -86,6 +86,46 @@ def _listed(c: Conn, sid: str) -> Row:
     return row
 
 
+def _money(c: Conn, extra: list[str]) -> tuple[int, dict[str, Row], dict[str, Row | None]]:
+    """The spend year, each segment's accepted size in that year, and its roll-up over its sub-segments. Compare and a
+    segment's page both read the money this way. `extra` are the company's segment ids, in the tree or not."""
+    defn = _definition(c)
+    shared = _shared_values(defn)
+    opts: Row = defn or {}
+    year = int(opts.get("year") or datetime.now(timezone.utc).year)
+    root = opts.get("root")
+    tree: Row = _tree(c, root) if root else {"order": [], "parent": {}, "rows": {}}
+    scope = sorted(set(tree["order"]) | set(extra))
+    first: dict[str, Row] = {}
+    for row in c.execute(
+        "SELECT * FROM market_sizes WHERE dimension=? AND year=? AND basis=? AND status='accepted' "
+        "AND segment_id IN (SELECT value FROM json_each(?)) ORDER BY created_at, id",
+        (DIMENSION, year, BASIS, json.dumps(scope)),
+    ):
+        first.setdefault(row["segment_id"], row)
+    accepted: dict[str, Row] = {sid: _effective(_size_row(row), shared) for sid, row in first.items()}
+    rolled = _rolled(tree["order"], tree["parent"], {sid: accepted.get(sid) for sid in tree["order"]})
+    return year, accepted, rolled
+
+
+def _yearly_spend(sid: str, own: Row, rolled: dict[str, Row | None]) -> Any:
+    """A segment's yearly spend: its roll-up when it has sub-segments in the tree, else its own accepted size."""
+    if sid in rolled:
+        return (rolled[sid] or {}).get("spend_usd")
+    return own.get("spend_usd")
+
+
+def _our_share(c: Conn, sid: str, spend: Any, year: int) -> float | None:
+    """The company's newest revenue or ARR figure for the segment in the spend year, over its yearly spend, as a percent
+    to one decimal. Null when there is no such figure or no spend."""
+    figure = c.execute(
+        "SELECT value FROM market_figures WHERE entity_id=? AND segment_id=? AND metric IN ('revenue','arr') "
+        "AND value IS NOT NULL AND substr(as_of,1,4)=? ORDER BY as_of DESC, created_at DESC, id LIMIT 1",
+        (MK.OWN_COMPANY_ID, sid, str(year)),
+    ).fetchone()
+    return round(figure["value"] / spend * 100, 1) if figure and spend and spend > 0 else None
+
+
 # ----------------------------------------------------------------------------- compare
 def _tagged(briefing: Row | None, segment_id: str) -> list[Row]:
     """The briefing's items, each tagged with its scope and its week ('' is the whole market)."""
@@ -119,23 +159,8 @@ def compare(c: Conn) -> dict[str, Any]:
     across them so none crowds out the rest: at most CHANGED_MAX in all, newest week first. Each item carries its
     `segment_id` and its `week`. The published active bets are read once for all the briefings.
     """
-    defn = _definition(c)
-    shared = _shared_values(defn)
-    opts: Row = defn or {}
-    year = int(opts.get("year") or datetime.now(timezone.utc).year)
-    root = opts.get("root")
-    tree: Row = _tree(c, root) if root else {"order": [], "parent": {}, "rows": {}}
     listed = _ordered_segments(c)
-    scope = sorted(set(tree["order"]) | {seg["id"] for seg in listed})
-    first: dict[str, Row] = {}
-    for row in c.execute(
-        "SELECT * FROM market_sizes WHERE dimension=? AND year=? AND basis=? AND status='accepted' "
-        "AND segment_id IN (SELECT value FROM json_each(?)) ORDER BY created_at, id",
-        (DIMENSION, year, BASIS, json.dumps(scope)),
-    ):
-        first.setdefault(row["segment_id"], row)
-    accepted: dict[str, Row] = {sid: _effective(_size_row(row), shared) for sid, row in first.items()}
-    rolled = _rolled(tree["order"], tree["parent"], {sid: accepted.get(sid) for sid in tree["order"]})
+    year, accepted, rolled = _money(c, [seg["id"] for seg in listed])
     active = _active_bets(c)
 
     segments: list[Row] = []
@@ -143,18 +168,8 @@ def compare(c: Conn) -> dict[str, Any]:
     for seg in listed:
         sid: str = seg["id"]
         own: Row = accepted.get(sid) or {}
-        spend: Any
-        if sid in rolled:
-            roll: Row = rolled[sid] or {}
-            spend = roll.get("spend_usd")
-        else:
-            spend = own.get("spend_usd")
-        figure = c.execute(
-            "SELECT value FROM market_figures WHERE entity_id=? AND segment_id=? AND metric IN ('revenue','arr') "
-            "AND value IS NOT NULL AND substr(as_of,1,4)=? ORDER BY as_of DESC, created_at DESC, id LIMIT 1",
-            (MK.OWN_COMPANY_ID, sid, str(year)),
-        ).fetchone()
-        share: float | None = round(figure["value"] / spend * 100, 1) if figure and spend and spend > 0 else None
+        spend: Any = _yearly_spend(sid, own, rolled)
+        share = _our_share(c, sid, spend, year)
         briefing = _latest(c, sid, body=False, active=active)
         lists.append(_tagged(briefing, sid))
         segments.append(
@@ -177,8 +192,10 @@ def compare(c: Conn) -> dict[str, Any]:
 # ----------------------------------------------------------------------------- one segment's page
 def page(c: Conn, sid: str) -> dict[str, Any]:
     """One segment's market: its name and one-line who, the five answers and briefing of its newest briefing, its sizes
-    as the market page shows them, its players, and the history of it, its sub-segments and its players."""
+    as the market page shows them, its players, the history of it, and `our_share`: the figure compare shows for it."""
     listed = _listed(c, sid)
+    year, accepted, rolled = _money(c, [sid])
+    share = _our_share(c, sid, _yearly_spend(sid, accepted.get(sid) or {}, rolled), year)
     view = _spend(c, DIMENSION, BASIS)
     entry: Row = (
         next((s for s in view["segments"] if s["id"] == sid), None)
@@ -203,6 +220,7 @@ def page(c: Conn, sid: str) -> dict[str, Any]:
             "color": listed["color"],
             "rank": listed["rank"],
         },
+        "our_share": share,  # the same figure compare shows for the segment
         "answers": shown.get("answers", {}),
         "briefing": briefing,
         "sizes": {
