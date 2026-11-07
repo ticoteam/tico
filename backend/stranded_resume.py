@@ -190,7 +190,10 @@ def _nudge(c: sqlite3.Connection, row: dict[str, Any], told: str) -> None:
             deduplicate=False,
             lint=False,
         )
-        H._wake(c, H.task(c, made["id"]), told, body, {"wake": "nudge", "task": row["id"]}, trigger="stall_check")
+        # needs_action makes the wake immediate. Without it a lead's catch-all digest row batches this notice (its job
+        # is held as a "rule" batch), and the manager reads the ticket only at the daily digest.
+        refs = {"wake": "nudge", "task": row["id"], "needs_action": True}
+        H._wake(c, H.task(c, made["id"]), told, body, refs, trigger="stall_check")
     except H.Refused:
         return
 
