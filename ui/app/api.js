@@ -4,10 +4,8 @@
 'use strict';
 
 /** @typedef {import('../types/api').Problem} Problem */
-/**
- * A failed answer's JSON body: a Problem, a task cap's 409 (`message` beside a code), or FastAPI's validation list.
- * @typedef {{error?: string | Problem['error'], message?: string, detail?: string | {loc?: (string | number)[], msg: string}[]}} FailureBody
- */
+/** A failed answer's JSON body (ui/types/shared.d.ts): a Problem, a task cap's 409 (`message` beside a code), or FastAPI's validation list. */
+/** @typedef {ApiFailureBody} FailureBody */
 /** @typedef {{at: number, raw: Promise<RawGet | null>}} Prefetch */
 /** @typedef {{r: Response, text: string, kept?: {tag: string, text: string}}} RawGet */
 /**
@@ -28,7 +26,7 @@ const apiError = (j, r) => {
 };
 // The message is what a person reads; `body` is the one extra fact a refusal carries, such as the
 // task a duplicate feature request already has (`backend/store.py`, Problem.extra).
-/** @param {FailureBody} j @param {Response} r @returns {Error & {body: FailureBody, status: number}} */
+/** @param {FailureBody} j @param {Response} r @returns {ApiFailure} */
 const apiFailure = (j, r) => Object.assign(new Error(apiError(j, r)), {body: j, status: r.status});
 // Signed out, by any sign-in (session.js): the built-in login page, or the banner. A locked Tico Cloud company's 402
 // `locked` shows Pay to continue at once (cloud-access.js).
@@ -315,6 +313,7 @@ async function cloudCompose(path, body, files = [], opts = {}) {
   if (!result.task && !result.message) throw new Error('The server did not confirm this upload.');
   return result;
 }
+/** @param {string} msg @param {boolean} [isErr] @param {ToastAction | null} [action] @param {ToastOptions} [opts] */
 const toast = (msg, isErr, action, opts = {}) => {
   if (isErr && SESSION.out && !opts.keepWhenSignedOut) return;   // the signed-out banner says why every request fails (session.js)
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
