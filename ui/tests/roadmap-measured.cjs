@@ -49,6 +49,7 @@ async function open(browser, {viewport = DESKTOP, theme = 'dark', unfolded = fal
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
+    if (p.startsWith('/api/v2/preferences/')) return json({key: p.split('/').pop(), value: null});
     if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags: []});
     if (p === '/api/v2/task-types' && req.method() === 'GET') return json({types});
     if (p === '/api/v2/tasks' && req.method() === 'GET') {
@@ -60,9 +61,15 @@ async function open(browser, {viewport = DESKTOP, theme = 'dark', unfolded = fal
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/#/tasks?type=product-roadmap&view=board');
-  const measuredShown = unfolded ? '[data-col="measured"] .bcard' : '#task-body .bcard';
-  await page.waitForFunction(sel => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'product-roadmap' && document.querySelector('#task-body ' + sel),
-    measuredShown);
+  const shown = unfolded ? '[data-col="measured"] .bcard' : '.bcard';
+  await page.waitForFunction(sel => typeof TASKS_ST !== 'undefined' && !TASKS_ST.loading && TASKS_ST.type === 'product-roadmap'
+    && document.querySelector('#task-body ' + sel), shown).catch(async error => {
+    // A timeout names what the page showed, so the run's log says why the board did not open.
+    const seen = await page.evaluate(() => ({hash: location.hash, type: typeof TASKS_ST === 'undefined' ? null : TASKS_ST.type,
+      loading: typeof TASKS_ST === 'undefined' ? null : TASKS_ST.loading, body: (document.querySelector('#task-body')?.innerText || '').slice(0, 300)}))
+      .catch(e => ({unreadable: String(e.message).split('\n')[0]}));
+    throw new Error(`the board did not open (${String(error.message).split('\n')[0]}): ${JSON.stringify({seen, errors: errors.slice(0, 3)})}`);
+  });
   return {page, errors};
 }
 
