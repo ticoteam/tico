@@ -172,8 +172,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are.
   Everyone who can read the Home can read those messages, except one whose own references name a task, meeting or file
   its reader may not read, or one that replies to, answers, or takes its inputs from a message naming a task
-  its reader may not read, directly or through a chain of such links. A reply does not yet carry the file refusal of the
-  message it replies to on every read path. This is fixed in Dev 779 and the clause returns when it ships. The check does not read the words typed into a message or the files attached to it. An
+  its reader may not read, directly or through a chain of such links. The check does not read the words typed into a message or the files attached to it. An
   attached file is checked when opened, with each message it is attached to. A Tico Mail Read grant on a letter's scan lets its holder open that
   scan whatever it is attached to, and the grant does not open the task. When the Assistant or BotOps reads for the holder, the bot must qualify on its own: a person's grant never grants its bot access. Otherwise it is refused if it is linked to a
   task its reader may not read; if any message it is attached to is one its reader may not read; if it is a letter's
