@@ -518,3 +518,73 @@ def test_the_engine_calls_approve_and_mark_met_with_no_versions_and_catches_hubd
     with pytest.raises(H.Refused):
         R.mark_met(w.c, BEN, w.task, w.signoff, "note")
     assert R.mark_met(w.c, ANA, w.task, w.signoff, "note")["verdict"] == "override"
+
+
+def _queue_statements(w):
+    statements = []
+    w.c.set_trace_callback(statements.append)
+    try:
+        items = R.queue_for(w.c, ANA)
+    finally:
+        w.c.set_trace_callback(None)
+    return len(statements), len(items)
+
+
+def test_the_queue_query_count_does_not_grow_faster_than_it_did_before_the_queue_fields(world):
+    """The queue reads each row's state one row at a time, which predates the queue fields. The fields add a fixed number
+    of queries. Growing from 10 to 30 items ran 280 more queries on head 1496f6da0, before the fields; it may not grow."""
+    w = world
+    for i in range(4):
+        w.attach(w.ticket(f"Ten {i}"), w.mockup, f"ten-{i}")
+    ten, ten_items = _queue_statements(w)
+    for i in range(10):
+        w.attach(w.ticket(f"Thirty {i}"), w.mockup, f"thirty-{i}")
+    thirty, thirty_items = _queue_statements(w)
+    assert (ten_items, thirty_items) == (10, 30)
+    assert thirty - ten <= 280
+
+
+def test_a_bot_reviewed_item_carries_its_bot_note_and_a_person_reviewed_one_carries_none(world):
+    w = world
+    w.c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (BEN, w.task))
+    judge = w.requirement("Judge", "attachment", "bot_then_person")
+    w.attach(requirement=judge, digest="judge")
+    w.decide(judge, "unsure", judge="bot", reason="The logo is too small")
+    items = {i["requirement_id"]: i for i in R.queue_for(w.c, ANA)}
+    bot = items[judge]
+    assert bot["bot_note"] == "The logo is too small"
+    assert bot["reviewer_id"] == ANA and bot["can_mark_met"] is True
+    assert bot["assignee"] == {"id": BEN, "name": H.actor_name(w.c, BEN)}
+    assert bot["moves_to"] is None  # the sign-off and the mockup are still unmet
+    person = items[w.mockup]
+    assert person["bot_note"] == "" and person["reviewer_id"] == ANA
+    assert person["assignee"] == {"id": BEN, "name": H.actor_name(w.c, BEN)}
+
+
+def test_moves_to_is_the_next_stage_only_when_the_item_is_the_last_one_unmet(world):
+    w = world
+    (before,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff and i["task_id"] == w.task]
+    assert before["moves_to"] is None  # the mockup is unmet, so the ticket stays
+    w.approve(w.mockup)
+    (last,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task]
+    assert last["requirement_id"] == w.signoff
+    assert last["moves_to"] == {"stage_id": w.shipped, "name": "Shipped"}
+
+
+def test_reviewer_id_is_the_claimant_and_a_plain_member_cannot_mark_met(world, monkeypatch):
+    w = world
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: [])
+    w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.signoff))
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits").fetchone()[0]
+    w.c.execute(
+        "INSERT INTO pipeline_manager_actions (id, pipeline_id, pipeline_manager_run_id, task_id, stage_visit_id, "
+        "stage_requirement_id, action, created_at) VALUES ('pa2',?,'run1',?,?,?,'ask_backup',?)",
+        (w.pipeline, w.task, visit, w.signoff, H.now()),
+    )
+    (asked,) = R.queue_for(w.c, BEN)
+    assert asked["reviewer_id"] == ANA and asked["can_mark_met"] is False
+    R.claim(w.c, BEN, w.task, w.signoff)
+    assert R.queue_for(w.c, BEN)[0]["reviewer_id"] == BEN
+    (seen_by_ana,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff]
+    assert seen_by_ana["reviewer_id"] == BEN

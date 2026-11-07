@@ -81,6 +81,11 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
 
 
+def _ids(values: Any) -> str:
+    """The distinct non-empty values as a JSON array, to bind once as `IN (SELECT value FROM json_each(?))`."""
+    return json.dumps(sorted({str(v) for v in values if v}))
+
+
 def _shift(ts: str, **delta: float) -> str:
     return str(_hub().shift(ts, **delta))
 
@@ -181,20 +186,25 @@ def _fresh_required(requirement: Row) -> bool:
     return _needs(requirement).get("newer_than_change", True) is not False
 
 
-def _met_decision(c: "sqlite3.Connection", task: Row, requirement: Row, attachment: Row | None) -> Row | None:
-    """The decision that makes the requirement met now, or None. The newest met, override, withdrawn or failed decision
-    decides; a met one counts only at the current work version and for the attachment it judged."""
-    for decision in _decisions(c, task["id"], requirement["id"]):
+def _met_in(requirement: Row, attachment: Row | None, decisions: list[Row], revision: int) -> Row | None:
+    """The decision that makes the requirement met, from its decisions (newest first), or None. The newest met, override,
+    withdrawn or failed decision decides; a met one counts only at `revision` and for the attachment it judged."""
+    for decision in decisions:
         if decision["verdict"] not in (*MET_VERDICTS, "withdrawn", "failed"):
             continue
         if decision["verdict"] not in MET_VERDICTS:
             return None
-        if _fresh_required(requirement) and decision["work_version"] != _revision(task):
+        if _fresh_required(requirement) and decision["work_version"] != revision:
             return None
         if attachment and decision["attachment_digest"] and decision["attachment_digest"] != attachment["digest"]:
             return None
         return decision
     return None
+
+
+def _met_decision(c: "sqlite3.Connection", task: Row, requirement: Row, attachment: Row | None) -> Row | None:
+    """The decision that makes the requirement met now, or None (see `_met_in`)."""
+    return _met_in(requirement, attachment, _decisions(c, task["id"], requirement["id"]), _revision(task))
 
 
 def requirement_state(c: "sqlite3.Connection", task: Row, requirement: Row) -> str:
@@ -357,6 +367,133 @@ def _item(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row, why:
     }
 
 
+def _named(owner: str, humans: dict[str, Any], bots: dict[str, Row]) -> str:
+    """What a person reads for an owner, as `hubdb.actor_name` does it, from rows fetched in a batch."""
+    key = owner.split(":", 1)[1] if ":" in owner else owner
+    if not owner.startswith("human:"):
+        bot = bots.get(key)
+        if bot:
+            return str(bot.get("display_name") or bot.get("slug") or key)
+    return str(humans.get(key) or key)
+
+
+def _bot_note(decisions: list[Row], work_version: int) -> str:
+    """The reason of the latest bot judgement on this requirement, when it is for the current work; else ''."""
+    for decision in decisions:
+        if decision["judge"] == "bot":
+            return str(decision.get("reason") or "") if decision["work_version"] == work_version else ""
+    return ""
+
+
+def _queue_fields(c: "sqlite3.Connection", actor: str, items: list[Row], now: str) -> None:
+    """Adds assignee, bot_note, moves_to, reviewer_id and can_mark_met to each queue item. Each input is read with one
+    query over all the items, so the count does not grow with the rows; `may_edit_rules` runs once per pipeline."""
+    if not items:
+        return
+    task_ids = _ids(i["task_id"] for i in items)
+    stage_ids = _ids(i["stage_id"] for i in items)
+    live = _rows(
+        c,
+        "SELECT * FROM stage_requirements WHERE pipeline_stage_id IN (SELECT value FROM json_each(?)) "
+        "AND retired_at IS NULL",
+        (stage_ids,),
+    )
+    req_ids = _ids(r["id"] for r in live)
+    requirements = {r["id"]: r for r in live}
+    owners = {
+        r["id"]: r["owner_id"]
+        for r in _rows(c, "SELECT id, owner_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (task_ids,))
+    }
+    bare = _ids(o.split(":", 1)[1] if ":" in o else o for o in owners.values() if o)
+    humans = {
+        r["id"]: r["name"]
+        for r in _rows(c, "SELECT id, name FROM humans WHERE id IN (SELECT value FROM json_each(?))", (bare,))
+    }
+    bots = {
+        r["id"]: r
+        for r in _rows(
+            c, "SELECT id, display_name, slug FROM bots WHERE id IN (SELECT value FROM json_each(?))", (bare,)
+        )
+    }
+    decisions: dict[tuple[str, str], list[Row]] = {}
+    for d in _rows(
+        c,
+        "SELECT * FROM stage_decisions WHERE undone_at IS NULL AND task_id IN (SELECT value FROM json_each(?)) "
+        "AND stage_requirement_id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC, rowid DESC",
+        (task_ids, req_ids),
+    ):
+        decisions.setdefault((d["task_id"], d["stage_requirement_id"]), []).append(d)
+    current: dict[tuple[str, str], Row] = {}
+    for a in _rows(
+        c,
+        "SELECT id, task_id, stage_requirement_id, digest FROM requirement_attachments WHERE removed_at IS NULL "
+        "AND task_id IN (SELECT value FROM json_each(?)) AND stage_requirement_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY created_at DESC, rowid DESC",
+        (task_ids, req_ids),
+    ):
+        current.setdefault((a["task_id"], a["stage_requirement_id"]), a)
+    holders: dict[tuple[str, str], str] = {}
+    for cl in _rows(
+        c,
+        "SELECT task_id, stage_requirement_id, claimed_by FROM review_claims WHERE released_at IS NULL "
+        "AND (expires_at IS NULL OR expires_at>?) AND task_id IN (SELECT value FROM json_each(?)) "
+        "AND stage_requirement_id IN (SELECT value FROM json_each(?))",
+        (now, task_ids, req_ids),
+    ):
+        holders[(cl["task_id"], cl["stage_requirement_id"])] = cl["claimed_by"]
+    links = {
+        r["from_pipeline_stage_id"]: r["to_pipeline_id"]
+        for r in _rows(
+            c,
+            "SELECT from_pipeline_stage_id, to_pipeline_id FROM pipeline_links WHERE mode='move' AND retired_at IS NULL "
+            "AND from_pipeline_stage_id IN (SELECT value FROM json_each(?))",
+            (stage_ids,),
+        )
+    }
+    pipeline_ids = {i["pipeline_id"] for i in items}
+    steps = _rows(
+        c,
+        "SELECT id, type_id, name, position, status FROM task_steps WHERE type_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY position, id",
+        (_ids([*pipeline_ids, *links.values()]),),
+    )
+    names = {s["id"]: s["name"] for s in steps}
+    rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
+    for item in items:
+        key = (item["task_id"], item["requirement_id"])
+        owner = owners.get(item["task_id"])
+        item["assignee"] = {"id": owner, "name": _named(owner, humans, bots)} if owner else None
+        item["bot_note"] = _bot_note(decisions.get(key, []), item["work_version"])
+        item["reviewer_id"] = holders.get(key) or requirements[item["requirement_id"]].get("reviewer_id")
+        item["can_mark_met"] = bool(rights[item["pipeline_id"]])
+        item["moves_to"] = _moves_to(item, live, decisions, current, links, steps, names)
+
+
+def _moves_to(
+    item: Row,
+    live: list[Row],
+    decisions: dict[tuple[str, str], list[Row]],
+    current: dict[tuple[str, str], Row],
+    links: dict[str, str],
+    steps: list[Row],
+    names: dict[str, str],
+) -> Row | None:
+    """Where the ticket goes if this item is the stage's last unmet requirement, the same destination approve uses;
+    None while another requirement of the stage is unmet, or at the last stage."""
+    for other in live:
+        if other["pipeline_stage_id"] != item["stage_id"] or other["id"] == item["requirement_id"]:
+            continue
+        if other.get("enforced_by"):
+            continue  # a mirror of the review gate, which still decides it (as in `_stage_met`)
+        key = (item["task_id"], other["id"])
+        if _met_in(other, current.get(key), decisions.get(key, []), item["work_version"]) is None:
+            return None
+    destination = _destination_in(item["stage_id"], item["pipeline_id"], links.get(item["stage_id"]), steps)
+    if destination is None:
+        return None
+    return {"stage_id": destination[1], "name": names.get(destination[1], "")}
+
+
 def queue_for(
     c: "sqlite3.Connection", actor: str, pipeline_id: str | None = None, stage_id: str | None = None
 ) -> list[Row]:
@@ -389,6 +526,7 @@ def queue_for(
         why = _why_sees(c, actor, task["id"], requirement)
         if why and _waits_on_person(c, task, requirement):
             items.append(_item(c, actor, task, requirement, why, now))
+    _queue_fields(c, actor, items, now)
     items.sort(key=lambda item: (not item["late"], item["since"], item["task_id"], item["requirement_id"]))
     return items
 
@@ -536,6 +674,26 @@ def _decide(
     return decision
 
 
+def _destination_in(stage_id: str, pipeline_id: str, link: str | None, steps: list[Row]) -> tuple[str, str] | None:
+    """(type id, step id) after stage `stage_id` of `pipeline_id`, from the steps of the pipeline and of a move link's
+    target (ordered by position, id). Through the link to the target's first live stage, else the next live stage of
+    the pipeline. None at the last stage. Reads nothing, so the queue can run it over many rows."""
+
+    def live(step: Row) -> bool:
+        return step["status"] not in ("closed", "declined")
+
+    if link:
+        first = next((s for s in steps if s["type_id"] == link and live(s)), None)
+        return (link, first["id"]) if first else None
+    here = next((s for s in steps if s["id"] == stage_id), None)
+    if here is None:
+        return None
+    after = next(
+        (s for s in steps if s["type_id"] == pipeline_id and s["position"] > here["position"] and live(s)), None
+    )
+    return (pipeline_id, after["id"]) if after else None
+
+
 def _next_destination(c: "sqlite3.Connection", requirement: Row) -> tuple[str, str] | None:
     """(type id, step id) the ticket goes to after this stage: through the stage's `move` link to the first stage of the
     target pipeline, else the next position whose status is not closed or declined. None at the last stage."""
@@ -545,24 +703,15 @@ def _next_destination(c: "sqlite3.Connection", requirement: Row) -> tuple[str, s
         "AND retired_at IS NULL",
         (requirement["pipeline_stage_id"],),
     )
-    if link:
-        first = _one(
-            c,
-            "SELECT id FROM task_steps WHERE type_id=? AND status NOT IN ('closed','declined') "
-            "ORDER BY position, id LIMIT 1",
-            (link["to_pipeline_id"],),
-        )
-        return (link["to_pipeline_id"], first["id"]) if first else None
-    here = _one(c, "SELECT position FROM task_steps WHERE id=?", (requirement["pipeline_stage_id"],))
-    if here is None:
-        return None
-    after = _one(
+    target = link["to_pipeline_id"] if link else None
+    types = _ids([requirement["pipeline_id"], *([target] if target else [])])
+    steps = _rows(
         c,
-        "SELECT id FROM task_steps WHERE type_id=? AND position>? AND status NOT IN ('closed','declined') "
-        "ORDER BY position, id LIMIT 1",
-        (requirement["pipeline_id"], here["position"]),
+        "SELECT id, type_id, name, position, status FROM task_steps WHERE type_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY position, id",
+        (types,),
     )
-    return (requirement["pipeline_id"], after["id"]) if after else None
+    return _destination_in(requirement["pipeline_stage_id"], requirement["pipeline_id"], target, steps)
 
 
 def _stage_met(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
