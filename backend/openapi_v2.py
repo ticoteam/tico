@@ -7113,7 +7113,7 @@ STABLE.extend(
             'Segments',
             'updateSegmentStrategy',
             "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision "
-            "answers 409",
+            "answers 409, and only a card the owner confirmed may leave revision out (otherwise 422)",
             None,
         ),
     ]

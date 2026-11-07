@@ -659,6 +659,51 @@ def test_a_segment_strategy_write_names_the_draft_revision_it_read(api):
     write_segment(api, first, {"serve": "Stale."}, revision=read, expected=409)
 
 
+def test_a_confirmed_card_writes_its_keys_without_a_revision_and_leaves_the_others_alone(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    write_segment(api, first, {"serve": "Landlords with 1-20 units.", "sell": "Bots at $99."})
+    _r, attempt = assistant_turn(api, "ana-test")
+    operation = {
+        "summary": "Change Screening's serve",
+        "method": "PUT",
+        "path": "/api/v2/segments/strategy",
+        "body": {"id": first, "sections": {"serve": "Small landlords."}},
+    }
+    action = post(api, "assistant/actions", operation, token=attempt["token"])["action"]
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
+    text = {f["key"]: f["text"] for f in get(api, "segments/" + first)["strategy"]["fields"]}
+    assert text["serve"] == "Small landlords." and text["sell"] == "Bots at $99."
+    assert get(api, "strategy")["draft"]["sections"]["not"] == "No enterprise deals."
+
+
+def test_an_unconfirmed_assistant_call_is_refused_with_or_without_a_revision(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})
+    _r, attempt = assistant_turn(api, "ana-test")
+    body = {"id": first, "sections": {"serve": "Assistant."}}
+    put(api, "segments/strategy", {**body, "revision": draft_revision(api)}, token=attempt["token"], expected=403)
+    put(api, "segments/strategy", body, token=attempt["token"], expected=403)
+    text = {f["key"]: f["text"] for f in get(api, "segments/" + first)["strategy"]["fields"]}
+    assert text["serve"] == "Landlords with 1-20 units."
+
+
+def test_the_owner_without_a_revision_gets_422_and_a_stale_one_409(api):
+    first, _, _ = defined(api)
+    segment(api, "Screening")
+    ready(api)
+    write_segment(api, first, {"serve": "Landlords with 1-20 units."})
+    refused = put(api, "segments/strategy", {"id": first, "sections": {"serve": "No revision."}}, expected=422)
+    assert refused["error"]["code"] == "validation"
+    write_segment(api, first, {"serve": "Stale."}, revision=draft_revision(api) - 1, expected=409)
+    text = {f["key"]: f["text"] for f in get(api, "segments/" + first)["strategy"]["fields"]}
+    assert text["serve"] == "Landlords with 1-20 units."
+
+
 def test_a_merge_moves_the_draft_text_and_leaves_the_published_version_as_it_was(api):
     first, second, _ = defined(api)
     segment(api, "Screening")
