@@ -32,7 +32,7 @@ SETTINGS_FILES = sorted(
         "settings-storage.ts",
         "settings-webhooks.js",
         "subscriptions.js",
-        "bot-budget.js",
+        "bot-budget.ts",
         "bot-profile.js",
         "usage.js",
         "task-pipelines.js",
@@ -40,7 +40,7 @@ SETTINGS_FILES = sorted(
         "roadmaps.js",
         "inboxes-texts.js",
         "inboxes-letters.js",
-        "cloud-machines.js",
+        "cloud-machines.ts",
     ]
 )
 

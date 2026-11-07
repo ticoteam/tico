@@ -77,7 +77,7 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') peop
 async function renderSettingsPeople() {
   const el = $('#set-people'); if (!el) return;
   try {
-    // HQ's switch for Tico support on cloud machines comes with it (ui/app/cloud-machines.js), null off Tico Cloud.
+    // HQ's switch for Tico support on cloud machines comes with it (ui/app/cloud-machines.ts), null off Tico Cloud.
     const [view, support] = await Promise.all([get('/v2/access'), cloudSupportRead()]);
     if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;

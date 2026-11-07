@@ -1,4 +1,4 @@
-/* ui/app/cloud-access.js — Tico Cloud: the Out of credit strip and Pay to continue (backend/cloud_access.py)
+/* ui/app/cloud-access.ts — Tico Cloud: the Out of credit strip and Pay to continue (backend/cloud_access.py)
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -8,12 +8,24 @@
 // is Pay to continue, with Download your files for the owner (Settings › General's Download all files). While either
 // shows, the state is read every 30 s, so paying opens the app by itself; leaving a lock reloads the page, since what
 // was open behind it was refused while it lasted.
-let CLOUD_ACCESS = null, CLOUD_TIMER = 0, CLOUD_SHOWN = 'open', CLOUD_ROLE = null;
+// The cloud company's access state as HQ sends it: access is open, frozen or locked, with the reason and the billing page.
+interface CloudAccessState {
+  access?: string;
+  reason?: string;
+  billing_url?: unknown;
+  [key: string]: unknown;
+}
+const CLOUD_ACCESS_WORDS = ['open', 'frozen', 'locked'];
+let CLOUD_ACCESS: CloudAccessState | null = null, CLOUD_TIMER = 0, CLOUD_SHOWN = 'open', CLOUD_ROLE: string | null = null;
 const CLOUD_POLL = 30000;
-const CLOUD_WHY = {trial_over: 'Your trial has ended.', unpaid: "This month's payment didn't go through."};
-const cloudPayUrl = u => typeof u === 'string' && /^https:\/\/\S+$/.test(u) ? u : '';
-function cloudAccessApply(cloud) {
-  CLOUD_ACCESS = cloud && typeof cloud === 'object' && ['open', 'frozen', 'locked'].includes(cloud.access) ? cloud : null;
+const CLOUD_WHY: Record<string, string> = {trial_over: 'Your trial has ended.', unpaid: "This month's payment didn't go through."};
+const cloudPayUrl = (u: unknown): string => typeof u === 'string' && /^https:\/\/\S+$/.test(u) ? u : '';
+// A cloud value that carries one of the access words above, and is not anything else; any other value is not a cloud company.
+function isCloudAccessState(value: unknown): value is CloudAccessState {
+  return typeof value === 'object' && value !== null && 'access' in value && typeof value.access === 'string' && CLOUD_ACCESS_WORDS.includes(value.access);
+}
+function cloudAccessApply(cloud: unknown) {
+  CLOUD_ACCESS = isCloudAccessState(cloud) ? cloud : null;
   const access = CLOUD_ACCESS?.access || 'open', was = CLOUD_SHOWN;
   CLOUD_SHOWN = access;
   if (was === 'locked' && access !== 'locked') { location.reload(); return; }
@@ -28,7 +40,7 @@ async function cloudAccessPoll() {
   CLOUD_TIMER = setTimeout(cloudAccessPoll, CLOUD_POLL);
 }
 // Any request refused 402 `locked` (api.js signInRedirect): Pay to continue at once, not at the next poll.
-function cloudAccessLocked(cloud) {
+function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
 }
 // The status poll (refresh.js, boot.js) carries it on every page.
@@ -40,11 +52,12 @@ function cloudAccessRender() {
   root.classList.toggle('cloud-frozen', access === 'frozen');
   root.classList.toggle('cloud-locked', access === 'locked');
   root.classList.toggle('strip', root.classList.contains('demo') || access === 'frozen');
-  document.querySelectorAll('[data-cloud-pay]').forEach(a => { if (url) a.href = url; else a.removeAttribute('href'); });
+  document.querySelectorAll<HTMLAnchorElement>('[data-cloud-pay]').forEach(a => { if (url) a.href = url; else a.removeAttribute('href'); });
   if (access !== 'locked') return;
-  const why = $('#cloud-lock [data-cloud-why]');
-  if (why) why.textContent = CLOUD_WHY[CLOUD_ACCESS?.reason] || 'Your plan is paused.';
-  const download = $('#cloud-lock [data-cloud-download]');
+  const why: HTMLElement | null = $('#cloud-lock [data-cloud-why]');
+  // CLOUD_ACCESS.reason is absent when HQ sends none; '' has no entry in CLOUD_WHY, so it takes the same fallback as undefined did.
+  if (why) why.textContent = CLOUD_WHY[CLOUD_ACCESS?.reason ?? ''] || 'Your plan is paused.';
+  const download: HTMLAnchorElement | null = $('#cloud-lock [data-cloud-download]');
   if (!download) return;
   download.href = `${API}/v2/system/storage/export`;
   // Only the owner may download every file (backend/tico_storage.py storage_export); who that is comes with /me.
