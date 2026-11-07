@@ -160,6 +160,8 @@ interface Employee {
   id: string;
   name?: string;
   slug?: string;
+  /** The bot's template icon name: the Overview face's glyph when it is a plain name (ui/app/overview.ts). */
+  icon?: string | null;
   display_name?: string;
   status?: string;
   template?: string;
@@ -279,6 +281,8 @@ interface V2State {
 /** The copies each page keeps for its next visit (S.lastRead). Pages not listed here keep their own shape. */
 interface LastRead {
   automations?: { list?: unknown[]; groups?: unknown; stats?: unknown; range?: string; maint?: unknown; heart?: unknown };
+  /** The Overview's bot-hours card (ui/app/overview-hours.ts). */
+  hours?: OverviewHours | undefined;
   /** The Dashboard's places, keyed by the place's key. */
   places?: Record<string, unknown>;
   [page: string]: unknown;
