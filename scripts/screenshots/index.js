@@ -135,7 +135,7 @@ const PAGES = [
     ui: ['ui/strategy-page.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js', 'ui/app/redesign-market.js', 'ui/app/strategy-budget.js',
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.js', 'ui/app/growth-*.ts', 'ui/app/brand-page.js', 'ui/styles/growth.css']},
-  {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/styles/finance.css']},
+  {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
   {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.js', 'ui/app/org-rule-holds.js', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/styles/automations.css']},
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
