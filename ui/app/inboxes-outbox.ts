@@ -106,6 +106,11 @@ function lettersOutOptions(value: string | null | undefined, company?: string | 
     LETTERS_OUT_MODES.map(([key, label]) => `<option value="${key}"${key === value ? ' selected' : ''}${
       (company === 'never' && key !== 'never') || (company === 'ask_first' && key === 'on_their_own') ? ' disabled' : ''}>${label}</option>`).join('');
 }
+// A grant's principal as 'type:id': its option's value, or a grant row's data-lo-grant.
+function lettersGrantParts(value: string): [string, string] {
+  const [type = '', id = ''] = value.split(':');
+  return [type, id];
+}
 function lettersOutCap(value: string) {
   if (String(value).trim() === '') return null;
   const amount = Number(value);
@@ -164,13 +169,13 @@ async function lettersOutAccess(host: Element, ctx: InboxCtx, config: LettersOut
       <button type="submit" class="ghost">Give send access</button></form>` : ''}`);
   const addForm = host.querySelector<HTMLFormElement>('[data-lo-add]');
   addForm?.addEventListener('submit', async event => {
-    event.preventDefault(); const form = addForm!, button = form.querySelector<HTMLButtonElement>('button')!; button.disabled = true;
-    const [type, id] = (form.elements as unknown as LettersOutControls /* named control */).principal.value.split(':') as [string, string];
+    event.preventDefault(); const form = addForm!, button = form.querySelector<HTMLButtonElement>('button')!, controls = form.elements as unknown as LettersOutControls; button.disabled = true;
+    const [type, id] = lettersGrantParts(controls.principal.value);
     try { await put(`/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, {level: 'send'}); if (ctx.live()) ctx.refresh(); }
     catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
   });
   for (const item of host.querySelectorAll<HTMLElement>('[data-lo-grant]')) {
-    const [type, id] = item.dataset.loGrant!.split(':') as [string, string], path = `/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
+    const [type, id] = lettersGrantParts(item.dataset.loGrant!), path = `/v2/letters/outboxes/company/grants/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
     const revoke = item.querySelector<HTMLButtonElement>('[data-lo-revoke]')!;
     revoke.onclick = async () => {
       const button = revoke; button.disabled = true;
@@ -179,8 +184,8 @@ async function lettersOutAccess(host: Element, ctx: InboxCtx, config: LettersOut
     };
     const policy = item.querySelector<HTMLFormElement>('form');
     policy?.addEventListener('submit', async event => {
-      event.preventDefault(); const form = policy!, button = form.querySelector<HTMLButtonElement>('button')!; button.disabled = true;
-      try { await put(`/v2/letters/bots/${encodeURIComponent(id)}/settings`, {mode: (form.elements as unknown as LettersOutControls /* named control */).mode.value || null, monthly_cap_micros: lettersOutCap((form.elements as unknown as LettersOutControls /* named control */).cap.value)});
+      event.preventDefault(); const form = policy!, button = form.querySelector<HTMLButtonElement>('button')!, controls = form.elements as unknown as LettersOutControls; button.disabled = true;
+      try { await put(`/v2/letters/bots/${encodeURIComponent(id)}/settings`, {mode: controls.mode.value || null, monthly_cap_micros: lettersOutCap(controls.cap.value)});
         if (ctx.live()) { toast('Saved'); button.disabled = false; } }
       catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
     });
@@ -284,15 +289,15 @@ async function lettersOutSettingsRender(host: Element, ctx: InboxCtx): Promise<v
     <div class="lo-setting-row"><span>Always ask</span><span>Certified mail<br>Courts and agencies<br>Letters we couldn’t fully read<br>First letter to an address</span></div>
     ${ctx.admin ? '<div class="lo-controls"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-lo-check>Check connection</button><a href="#/tools/address/outbox">Who can use it</a></div>' : ''}</fieldset></form>`);
   if (!ctx.admin) return;
-  const form = host.querySelector<HTMLFormElement>('form')!;
+  const form = host.querySelector<HTMLFormElement>('form')!, controls = form.elements as unknown as LettersOutControls;
   form.onsubmit = async event => {
     event.preventDefault(); const button = form.querySelector<HTMLButtonElement>('[type=submit]')!; button.disabled = true;
     try {
-      const returnAddress: Record<string, string> = Object.fromEntries(fields.map(([key]): [string, string] => [key, (form.elements as unknown as LettersOutControls /* named control */)[key]!.value.trim()]));
+      const returnAddress: Record<string, string> = Object.fromEntries(fields.map(([key]): [string, string] => [key, controls[key]!.value.trim()]));
       const any = Object.values(returnAddress).some(Boolean);
       if (any && ['name', 'line1', 'city', 'state', 'postal_code'].some(key => !returnAddress[key])) throw new Error('Complete the return address.');
-      await put('/v2/letters/settings', {return_address: any ? returnAddress : null, mode: (form.elements as unknown as LettersOutControls /* named control */).mode.value,
-        monthly_cap_micros: lettersOutCap((form.elements as unknown as LettersOutControls /* named control */).cap.value)});
+      await put('/v2/letters/settings', {return_address: any ? returnAddress : null, mode: controls.mode.value,
+        monthly_cap_micros: lettersOutCap(controls.cap.value)});
       if (ctx.live()) { toast('Saved'); ctx.refresh(); }
     } catch (e) { if (ctx.live()) { toast(errorMessage(e, ''), true); button.disabled = false; } }
   };

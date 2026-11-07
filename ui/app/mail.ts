@@ -172,6 +172,8 @@ async function mailMore(): Promise<void> {
   if (load !== MAIL_LOAD) return;
   mailDrawList(st, MAIL_ACC.messages, []);
 }
+// The mail page's search box (drawn with the page): a timer and the list read it when they run.
+function mailSearchBox(): HTMLInputElement | null { return $('#mail-q') as HTMLInputElement | null; }
 async function pageMail(): Promise<void> {
   if (S.me && !S.me.mail_access) { location.hash = TASKS; return; }
   $('#main')!.classList.add('mail-layout');
@@ -201,7 +203,7 @@ async function pageMail(): Promise<void> {
       </div>
     </div>`;
     const tabBar = $('.mail-tabs') as HTMLElement;
-    const searchBox = $('#mail-q') as HTMLInputElement;
+    const searchBox = mailSearchBox()!;
     ($('#mail-box-list') as HTMLElement).onclick = ev => {
       const button = eventElement(ev)!.closest<HTMLElement>('[data-mailbox]'); if (!button) return;
       mailGo({mailbox: button.dataset.mailbox, thread: '', tbox: '', view: 'inbox'});
@@ -221,7 +223,7 @@ async function pageMail(): Promise<void> {
     };
     searchBox.oninput = () => {
       clearTimeout(MAIL_SEARCH);
-      MAIL_SEARCH = setTimeout(() => mailGo({q: ($('#mail-q') as HTMLInputElement).value.trim(), thread: ''}), 280);
+      MAIL_SEARCH = setTimeout(() => mailGo({q: mailSearchBox()!.value.trim(), thread: ''}), 280);
     };
     searchBox.onkeydown = ev => {
       if (ev.key === 'Enter') { ev.preventDefault(); clearTimeout(MAIL_SEARCH); mailGo({q: searchBox.value.trim(), thread: ''}); }
@@ -286,7 +288,7 @@ async function pageMail(): Promise<void> {
     }
     return;
   }
-  const qbox = $('#mail-q') as HTMLInputElement | null; if (qbox && qbox.value !== st.q) qbox.value = st.q;
+  const qbox = mailSearchBox(); if (qbox && qbox.value !== st.q) qbox.value = st.q;
   $('#mail-chips')!.innerHTML = MAIL_CHIPS.map(([id, label]) =>
     `<button type="button" class="mail-chip${st.label === id ? ' on' : ''}" data-mail-chip="${id}">${esc(label)}</button>`).join('') +
     `<button type="button" class="mail-chip${st.attach ? ' on' : ''}" data-mail-chip="attach">Has attachment</button>`;

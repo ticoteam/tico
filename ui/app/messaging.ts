@@ -158,20 +158,24 @@ function messagingDetail(data: MessagingDetail): void {
     </section>
   </div>`;
 }
+// The message dialog, its title and body: the page draws them once, so one lookup serves each call.
+function messagingMessageDialog(): {d: HTMLDialogElement; body: HTMLElement; title: HTMLElement} {
+  return {d: $('#msg-message-dialog') as HTMLDialogElement, body: $('#msg-message-body')!, title: $('#msg-message-title')!};
+}
 async function messagingOpenMail(mailbox: string, thread: string): Promise<void> {
-  const d = $('#msg-message-dialog') as HTMLDialogElement, body = $('#msg-message-body')!;
-  $('#msg-message-title')!.textContent = 'Email thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
+  const {d, body, title} = messagingMessageDialog();
+  title.textContent = 'Email thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
     const data = await get<MailPageThread>(`/v2/mail/threads/${encodeURIComponent(thread)}?mailbox=${encodeURIComponent(mailbox)}`);
-    $('#msg-message-title')!.textContent = data.messages?.[0]?.subject || 'Email thread';
+    title.textContent = data.messages?.[0]?.subject || 'Email thread';
     body.innerHTML = (data.messages || []).map(m => `<article class="mail-msg"><div class="meta"><strong>${esc(mailFrom(m))}</strong><span class="muted">${esc(fmt(m.date))}</span></div>
       <div class="tags">${mailTags(m.labels)}${(m.rule_hits || []).map(h => `<span class="pill">Rule ${esc(h.id || 'matched')}</span>`).join('')}</div>
       <pre>${esc(m.body || '')}</pre></article>`).join('') || '<div class="empty">No messages.</div>';
   } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
 }
 async function messagingOpenSlack(bot: string, channel: string, thread: string): Promise<void> {
-  const d = $('#msg-message-dialog') as HTMLDialogElement, body = $('#msg-message-body')!;
-  $('#msg-message-title')!.textContent = 'Slack thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
+  const {d, body, title} = messagingMessageDialog();
+  title.textContent = 'Slack thread'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
     const qs = new URLSearchParams({channel, thread_ts: thread});
     const data = await get<{messages?: MessagingSlackMessage[] | null}>(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-thread?${qs}`);
@@ -180,8 +184,8 @@ async function messagingOpenSlack(bot: string, channel: string, thread: string):
   } catch (e) { body.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; }
 }
 async function messagingOpenDigest(bot: string, digest: string): Promise<void> {
-  const d = $('#msg-message-dialog') as HTMLDialogElement, body = $('#msg-message-body')!;
-  $('#msg-message-title')!.textContent = 'Slack check'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
+  const {d, body, title} = messagingMessageDialog();
+  title.textContent = 'Slack check'; body.innerHTML = '<div class="empty">Loading…</div>'; d.showModal();
   try {
     const data = await get<MessagingDigest & {messages?: MessagingSlackMessage[] | null}>(`/v2/messaging/bots/${encodeURIComponent(bot)}/slack-digests/${encodeURIComponent(digest)}`);
     body.innerHTML = `<p class="muted">${data.count} message${data.count === 1 ? '' : 's'} delivered to the bot${data.skipped ? ` · ${data.skipped} skipped in high volume` : ''} · ${esc(fmt(data.created_at))}</p>` +
@@ -196,7 +200,7 @@ async function pageMessaging(): Promise<void> {
   if (!$('#message-bot-page')) {
     main.innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail"><div class="empty">Loading message bot…</div></div>
       <dialog class="msg-message-dialog" id="msg-message-dialog"><div class="msg-message-head"><strong id="msg-message-title"></strong><button class="ghost" type="button" id="msg-message-close" aria-label="Close message">×</button></div><div class="msg-message-body" id="msg-message-body"></div></dialog></div>`;
-    ($('#msg-message-close') as HTMLElement).onclick = () => ($('#msg-message-dialog') as HTMLDialogElement).close();
+    ($('#msg-message-close') as HTMLElement).onclick = () => messagingMessageDialog().d.close();
     const detailPanel = $('#msg-detail') as HTMLElement;
     detailPanel.onclick = async ev => {
       const hit = eventElement(ev)!;
