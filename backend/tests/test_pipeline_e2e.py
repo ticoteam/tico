@@ -537,10 +537,12 @@ def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_o
 
 
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
+    """A subtask declined is closed without shipping: with nothing shipped the card does not pass. (A close lands a
+    subtask in the Done stage, which the visit rule counts as shipped, so a decline is the not-shipped case.)"""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.close(d41)
+    co.set_status(d41, "declined")
     assert co.where(card) == ("Product", "In development")
     assert co.dots(card)["Engineering shipped"]["state"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
@@ -962,3 +964,59 @@ def test_undo_refuses_a_not_validated_decision(co):
     co.c.rollback()
     assert caught.value.code == "not_undoable"
     assert co.where(card) == ("Product", "In development")
+
+
+# ----------------------------------------------------------------------------- finding 6: shipping is a visit, not a status
+def standing_names(co, card, stage="In development"):
+    """{requirement name: state} for a card read as if it sat at `stage` (a closed card has no dots, so this reads the
+    engine's standings directly)."""
+    row = {"id": card, "type_id": co.type["Product"], "step_id": co.stage("Product", stage), "status": "doing"}
+    return {s.requirement["name"]: s.state for s in pipeline_engine.standings(co.c, [row]).get(card, [])}
+
+
+def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(co):
+    """Finding 6: the booted Engineering Done stage has status closed. A real move there is shipped, so Product leaves In
+    development for Validate without a status "done" write."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert co.where(card) == ("Product", "Validate")
+
+
+def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
+    """Finding 6: a subtask closed with its card is gone. d41 shipped through its Done visit; d42 closed with the card.
+    The shipped one meets the requirement and the cascade-closed one neither counts nor blocks."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)  # shipped; d42 is still open, so the card waits in development
+    assert co.where(card) == ("Product", "In development")
+    co.close(card, actor=ANA)  # the cascade closes d42 with its card
+    assert H.task(co.c, d42)["status"] == "closed"
+    assert standing_names(co, card)["Engineering shipped"] == "met"
+
+
+def test_a_subtask_that_only_closed_with_its_card_never_passes_the_card(co):
+    """Finding 6: with nothing shipped and only a cascade-closed subtask, the card is not met (the PM is asked)."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.close(card, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert standing_names(co, card)["Engineering shipped"] == "failed"
