@@ -121,7 +121,8 @@ What does not work yet:
 - **Product repositories** and **deleting repositories** are not offered for a personal account.
 
 The one-time Administration change does nothing for a personal account yet, so Tools shows the waiting bots and their
-create links instead of the Administration fix.
+create links instead of the Administration fix. Tico already requests **Administration** when it makes a personal account's
+app, so one acceptance covers automatic repository creation once that lands; until then Tico does not use it there.
 
 ## Separate identity for reviewers
 

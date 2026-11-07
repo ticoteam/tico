@@ -381,7 +381,11 @@ class GitHubApp:
         if kind in ACCOUNT_TYPES:
             return kind
         if r.status_code < 300 and kind is not None:
-            raise Problem("github_account_missing", f"No GitHub account or organization named {name}", 404)
+            raise Problem(
+                "github_account",
+                "GitHub says that account is not a user or an organization, so Tico cannot connect it. Enter a user or an organization name.",
+                422,
+            )
         raise Problem(
             "github_account", "GitHub could not say what that account is; try again shortly", 502, retryable=True
         )
@@ -683,7 +687,9 @@ class GitHubApp:
     def _mint(self, key, repos, permissions, diagnose):
         installation = self.installation()
         if not installation:
-            raise Problem("github_not_installed", "The GitHub App is not installed on the organization yet", 409)
+            current = self.row()
+            word = account_word(current) if current else "organization"
+            raise Problem("github_not_installed", f"The GitHub App is not installed on the {word} yet", 409)
         token = self._jwt()
         body = {"permissions": permissions}
         if repos:
@@ -1509,6 +1515,9 @@ def install_github_app(app, settings, store):
             if service.key_lost(c):
                 raise Problem("github_key_missing", LOST_KEY, 409)
         kind = service.account_type(org)
+        if kind == PERSONAL:
+            # Always asked for a personal account, so one acceptance covers repository creation once it is built.
+            administration = True
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
             c.execute("DELETE FROM github_app_states WHERE created_at<?", (time.time() - STATE_TTL,))
@@ -2214,7 +2223,9 @@ def install_github_app(app, settings, store):
                 )
             if body.org.lower() != row["org"].lower():
                 raise Problem(
-                    "github_repo", "The confirmed organization does not match the currently connected organization", 409
+                    "github_repo",
+                    f"The confirmed {account_word(row)} does not match the currently connected {account_word(row)}",
+                    409,
                 )
 
             # Capability checks and token minting are safe to retry. Bind the exact Owner operation

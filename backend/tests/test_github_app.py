@@ -1438,6 +1438,10 @@ def test_the_setup_link_goes_to_the_settings_of_the_kind_of_account_the_name_is(
     personal(gh)
     user = manifest(api, org="ana-dev")
     assert user["action"].startswith("https://github.com/settings/apps/new?state=")
+    # A personal account always asks for Administration, so one acceptance covers repository creation once that lands.
+    assert user["manifest"]["default_permissions"]["administration"] == "write"
+    left_out = manifest(api, org="ana-dev", administration="false")
+    assert left_out["manifest"]["default_permissions"]["administration"] == "write"
     org = manifest(api)
     assert org["action"].startswith("https://github.com/organizations/Acme/settings/apps/new?state=")
     with api.app_state.store.read() as c:
@@ -1459,6 +1463,18 @@ def test_an_unknown_name_or_a_github_that_cannot_say_is_a_clear_problem_not_a_gu
     assert refused().status_code == 502
     gh.account_status, gh.account_down = None, True
     assert refused().status_code == 502
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM github_app_states").fetchone()[0] == 0
+
+
+def test_an_account_github_says_is_neither_a_user_nor_an_organization_is_a_clear_problem_with_no_manifest(api, gh):
+    # GitHub answers 200 but with a type Tico does not connect (a bot account): no state row, no setup link, no manifest.
+    gh.accounts["some-bot"] = "Bot"
+    r = api.get("/api/v2/github/app/manifest", params={"org": "some-bot"}, headers=auth())
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "github_account"
+    assert "not a user or an organization" in r.json()["error"]["detail"]
+    assert "action" not in r.json() and "manifest" not in r.json()
     with api.app_state.store.read() as c:
         assert c.execute("SELECT count(*) FROM github_app_states").fetchone()[0] == 0
 
@@ -1501,6 +1517,12 @@ def test_a_personal_account_waits_for_a_person_to_create_a_bots_repository(api, 
     assert task["title"] == "Create ana-dev/bot-newbie on GitHub"
     assert "organisation" not in task["body"] and "Administration" not in task["body"]
     assert error["create_url"] in task["body"]
+    # Without Administration an organization is warned that BotOps cannot create repositories; a personal account is not,
+    # because no BotOps fix exists there (a person creates the repository).
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE github_app SET administration=0 WHERE id='app'")
+    ids = {x["id"] for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
+    assert "github_repo_create" not in ids
 
 
 def test_a_personal_account_offers_no_product_repository_and_no_delete(api, gh):

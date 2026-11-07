@@ -28,15 +28,17 @@ window.mountGithubConnect = async function (host) {
       ${repos}
       <p class="muted">Connected before release tracking? In <a data-gh-events target="_blank" rel="noopener">the app's events on GitHub</a>, tick <strong>Release</strong>. Pushed tags work without it.</p>
       ${state.installed ? '' : `<p class="muted">Choose <strong>All repositories</strong> when GitHub asks. Each bot's token still covers only its own repository.</p>`}
-      <div class="row">${state.installed ? '' : `<a class="primary" role="button" href="${text(state.install_url)}" target="_blank" rel="noopener">Install on ${text(state.org)}</a>`}
+      <div class="row">${state.installed ? '' : `<a class="primary" role="button" data-gh-install-link target="_blank" rel="noopener">Install on ${text(state.org)}</a>`}
       <button type="button" class="ghost" data-gh-disconnect>Disconnect</button>
-      <a href="${text(state.uninstall_url)}" target="_blank" rel="noopener">Uninstall on GitHub</a></div>
+      <a data-gh-uninstall-link target="_blank" rel="noopener">Uninstall on GitHub</a></div>
       <p class="muted">Disconnect forgets the app here; delete it on GitHub to revoke access.</p>
       <p role="status" data-gh-status></p>`;
     // The server's GitHub links are set as properties, and only when they point at GitHub over https.
     const link = (node, url) => { if (node && /^https:\/\/github\.com\//.test(url || '')) node.href = url; };
     link(host.querySelector('[data-gh-permissions]'), state.permissions_url);
     link(host.querySelector('[data-gh-events]'), state.permissions_url);
+    link(host.querySelector('[data-gh-install-link]'), state.install_url);
+    link(host.querySelector('[data-gh-uninstall-link]'), state.uninstall_url);
     host.querySelectorAll('[data-gh-create]').forEach(node => link(node, (state.waiting || [])[Number(node.dataset.ghCreate)]?.create_url));
     const recheck = host.querySelector('[data-gh-recheck]');
     if (recheck) recheck.onclick = async () => {
