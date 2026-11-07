@@ -90,7 +90,7 @@ function budgetTree(limits) {
     const lead = kind === 'group' ? budgetGroupLead(id) : '';
     // Teammates first (in a group its lead first), then the groups by their order.
     const rank = k => k.kind === 'group' ? 2 : lead && (k.kind === 'person' ? 'person:' + k.id : 'bot:' + k.name) === lead ? 0 : 1;
-    kids.map((k, i) => [k, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || (a[0].kind === 'group' && b[0].kind === 'group'
+    kids.map((k, i): [typeof k, number] => [k, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || (a[0].kind === 'group' && b[0].kind === 'group'
       ? (a[0].order || 0) - (b[0].order || 0) : 0) || a[1] - b[1])
       .forEach(([k]) => { const kid = make(k, node); if (kid) node.kids.push(kid); });
     return node;
@@ -100,7 +100,7 @@ function budgetTree(limits) {
   const tops = (by[''] || []).filter(k => k.kind !== 'seat' && !(k.kind === 'group' && k.helpers));
   const owner = tops.find(n => n.kind === 'person' && n.id === S.me?.owner_id) || tops.find(n => n.kind === 'person' && n.person?.role === 'owner');
   const rank = k => k === owner ? 0 : k.kind === 'group' ? 2 : 1;
-  tops.map((k, i) => [k, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || (a[0].kind === 'group' && b[0].kind === 'group'
+  tops.map((k, i): [typeof k, number] => [k, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || (a[0].kind === 'group' && b[0].kind === 'group'
     ? (a[0].order || 0) - (b[0].order || 0) : 0) || a[1] - b[1]).forEach(([k]) => { const kid = make(k, root); if (kid) root.kids.push(kid); });
   // Helpers and the bots the chart leaves out, each in a branch of its own at the end.
   const live = e => !['archived', 'planned'].includes(e.status);
