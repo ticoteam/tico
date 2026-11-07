@@ -154,8 +154,8 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     """The Home a person's chat with this bot goes into once the bot's chats have moved (rooms.personal_room, the chat and
     work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has home_merges
     rows): a bot the move never reached, and a fresh install's, keep their chats as they are, for one lookup. None where the
-    move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a Home linked to
-    another install, a person who may not read the Home, and a bot with no Home when `create` is False."""
+    move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a person who may
+    not read the Home, and a bot with no Home when `create` is False."""
     from . import threads
 
     bot = _covered_bot(c, str(bot_ref or "").strip().removeprefix("bot:"))
