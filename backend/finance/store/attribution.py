@@ -53,7 +53,7 @@ class Facts:
     money_account_id: str
 
 
-def splits_json(splits: Sequence[Split]) -> str:
+def dump_splits(splits: Sequence[Split]) -> str:
     return json.dumps(
         [{"teammate": s.teammate, "team": s.team, "share_bps": s.share_bps} for s in splits], sort_keys=True
     )
@@ -79,7 +79,7 @@ def in_force(c: sqlite3.Connection, line_id: str) -> Any:
 
 def in_force_splits(c: sqlite3.Connection, line_id: str) -> tuple[Split, ...]:
     row = in_force(c, line_id)
-    return parse_splits(str(row["splits_json"])) if row is not None else ()
+    return parse_splits(str(row["splits"])) if row is not None else ()
 
 
 def in_force_rows(c: sqlite3.Connection, line_ids: Sequence[str]) -> dict[str, Any]:
@@ -101,7 +101,7 @@ def claim_of_line(c: sqlite3.Connection, line_id: str) -> Claim | None:
     row = in_force(c, line_id)
     if row is None:
         return None
-    splits = parse_splits(str(row["splits_json"]))
+    splits = parse_splits(str(row["splits"]))
     if not splits:
         return None
     return Claim(splits, str(row["source"]), str(row["rule_id"] or ""))
@@ -148,9 +148,9 @@ def write(
             (at, new, str(old["id"])),
         )
     c.execute(
-        "INSERT INTO fin_attributions(id, book_id, line_id, splits_json, source, rule_id, set_by, created_at) "
+        "INSERT INTO fin_attributions(id, book_id, line_id, splits, source, rule_id, set_by, created_at) "
         "VALUES(?,?,?,?,?,?,?,?)",
-        (new, book_id, line_id, splits_json(splits), source, rule_id or None, by, at),
+        (new, book_id, line_id, dump_splits(splits), source, rule_id or None, by, at),
     )
     return new
 
@@ -160,7 +160,7 @@ def in_force_source(c: sqlite3.Connection, line_id: str) -> tuple[str, str, tupl
     row = in_force(c, line_id)
     if row is None:
         return ("", "", ())
-    return (str(row["source"]), str(row["rule_id"] or ""), parse_splits(str(row["splits_json"])))
+    return (str(row["source"]), str(row["rule_id"] or ""), parse_splits(str(row["splits"])))
 
 
 def lines_with_rule(c: sqlite3.Connection, rule_id: str) -> list[str]:
@@ -169,7 +169,7 @@ def lines_with_rule(c: sqlite3.Connection, rule_id: str) -> list[str]:
         str(r[0])
         for r in c.execute(
             "SELECT line_id FROM fin_attributions WHERE rule_id=? AND source='rule' AND superseded_at IS NULL "
-            "AND splits_json<>'[]' ORDER BY line_id",
+            "AND splits<>'[]' ORDER BY line_id",
             (rule_id,),
         ).fetchall()
     ]
@@ -189,7 +189,7 @@ def rule(c: sqlite3.Connection, rule_id: str) -> Any:
 
 
 def rule_splits(row: Any) -> tuple[Split, ...]:
-    return parse_splits(str(row["splits_json"]))
+    return parse_splits(str(row["splits"]))
 
 
 def rule_taking(c: sqlite3.Connection, book_id: str, match_kind: str, match_id: str) -> Any:
@@ -217,15 +217,15 @@ def put_rule(
 ) -> None:
     if exists:
         c.execute(
-            "UPDATE fin_attribution_rules SET name=?, match_kind=?, match_id=?, splits_json=?, enabled=?, "
+            "UPDATE fin_attribution_rules SET name=?, match_kind=?, match_id=?, splits=?, enabled=?, "
             "apply_from=?, updated_at=? WHERE id=?",
-            (name, match_kind, match_id, splits_json(splits), int(enabled), apply_from, at, rule_id),
+            (name, match_kind, match_id, dump_splits(splits), int(enabled), apply_from, at, rule_id),
         )
         return
     c.execute(
-        "INSERT INTO fin_attribution_rules(id, book_id, name, match_kind, match_id, splits_json, enabled, apply_from, "
+        "INSERT INTO fin_attribution_rules(id, book_id, name, match_kind, match_id, splits, enabled, apply_from, "
         "created_by, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (rule_id, book_id, name, match_kind, match_id, splits_json(splits), int(enabled), apply_from, by, at, at),
+        (rule_id, book_id, name, match_kind, match_id, dump_splits(splits), int(enabled), apply_from, by, at, at),
     )
 
 
@@ -318,9 +318,7 @@ def candidate_lines(c: sqlite3.Connection, book_id: str, rule_row: Any, since: s
 def lines_owned_by_people(c: sqlite3.Connection, line_ids: Sequence[str]) -> set[str]:
     """The lines among these with a person's or bot's override in force (a rule never replaces one)."""
     rows = in_force_rows(c, line_ids)
-    return {
-        lid for lid, r in rows.items() if str(r["source"]) in ("person", "bot") and parse_splits(str(r["splits_json"]))
-    }
+    return {lid for lid, r in rows.items() if str(r["source"]) in ("person", "bot") and parse_splits(str(r["splits"]))}
 
 
 def rule_label_targets(c: sqlite3.Connection, book_id: str, rule_rows: Sequence[Any]) -> Mapping[str, str]:

@@ -49,7 +49,7 @@ def _split_rows(row: Any | None) -> list[dict[str, object]]:
         return []
     return [
         {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
-        for x in SATT.parse_splits(str(row["splits_json"]))
+        for x in SATT.parse_splits(str(row["splits"]))
     ]
 
 

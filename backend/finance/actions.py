@@ -1124,6 +1124,8 @@ DEV_COPY_KEPT = (
     "fin_ad_accounts",
     "fin_ad_spends",
     "fin_ad_warnings",
+    "fin_attributions",
+    "fin_attribution_rules",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
 # inbox, cards and their authorizations, payees and payments, the ad spend imports) and spend holds. In the order they
