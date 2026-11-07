@@ -16,7 +16,7 @@ interface PipelineRequirement {
   next_actor: string | null;
   /** What stands on the ticket for it: the decision's reason, or the attachment's source. */
   detail?: string;
-  /** Whether this person may mark it met: the pipeline's owner or an Admin (the routes do not say; see pipelineMayEditRules). */
+  /** Whether this person may mark it met: the pipeline's owner or an Admin, the rule the task types' can_edit_rules carries (pipelineMayEditRules). */
   can_mark_met?: boolean;
   /** attachment, field, approval or run. Only the ticket's detail rows carry it. */
   kind?: string;
@@ -190,7 +190,8 @@ interface ServerRail {
   manager?: string | null;
   missed_runs: number;
   last_run: ServerRun | null;
-  over_limit: { task_id: string; title: string; stage: string; hours: number; limit_hours: number; since: string }[];
+  /** limit_minutes (the stage's Warn after) is preferred when the server sends it; limit_hours stays for older servers. */
+  over_limit: { task_id: string; title: string; stage: string; hours: number; limit_hours: number; limit_minutes?: number; since: string }[];
   log: (ServerRun | ServerAction)[];
 }
 
@@ -276,7 +277,7 @@ function managerViewFromRail(rail: ServerRail): PipelineManagerView {
       title: item.title,
       stage_name: item.stage,
       age_minutes: Math.round(item.hours * 60),
-      limit_minutes: Math.round(item.limit_hours * 60),
+      limit_minutes: item.limit_minutes ?? Math.round(item.limit_hours * 60),
     })),
     log,
     actions: [],

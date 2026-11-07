@@ -2458,6 +2458,10 @@ SCHEMAS = {
             "status": "s",
             "check_pool": "a",
             "check_limit": "i",
+            "limit_minutes": {
+                "type": ["integer", "null"],
+                "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
+            },
             "flow": {
                 "type": "object",
                 "description": "What the step does with a ticket (docs/tasks.md, Step "
@@ -6948,6 +6952,11 @@ SCHEMAS['Task']['properties'].update(
 SCHEMAS['TaskType']['properties'].update(
     {
         'default_visibility': {'enum': ['public', 'private']},
+        'can_edit_rules': {
+            'type': 'boolean',
+            'description': "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, "
+            "the pipeline's owner or an Admin (backend/pipeline_rights.py)",
+        },
         'manager': {'type': ['string', 'null']},
         'role': {
             'type': ['string', 'null'],

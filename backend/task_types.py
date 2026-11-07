@@ -4,6 +4,7 @@ from fastapi import Request
 
 from . import hubdb as H
 from . import models as M
+from . import pipeline_rights
 from .store import Problem
 
 
@@ -14,9 +15,14 @@ def install_task_types(app, store, auth, mutate, mover):
 
     @app.get("/api/v2/task-types")
     def types(request: Request):
-        auth.domain(request.state.identity)
+        who = request.state.identity
+        auth.domain(who)
         with store.read() as c:
-            return {"types": H.type_list(c)}
+            listed = H.type_list(c)
+            # Each pipeline says whether this caller may change its rules: the check a move's override uses.
+            for typ in listed:
+                typ["can_edit_rules"] = pipeline_rights.may_edit_rules(c, who.actor, typ["id"])
+            return {"types": listed}
 
     @app.get("/api/v2/task-types/{type_id}")
     def task_type(request: Request, type_id: str):

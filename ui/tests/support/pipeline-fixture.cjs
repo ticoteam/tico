@@ -11,7 +11,7 @@ const steps = [
   {id: 'build', name: 'Build', status: 'doing', position: 1},
   {id: 'review1', name: 'Review 1', status: 'review', position: 2},
 ];
-const type = {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, steps: steps.map(s => ({...s, type_id: 'dev-tickets'}))};
+const type = {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, can_edit_rules: true, steps: steps.map(s => ({...s, type_id: 'dev-tickets'}))};
 
 function task(id, title, stepId, requirements) {
   const step = steps.find(s => s.id === stepId);

@@ -216,6 +216,27 @@ def test_only_editors_override_and_it_is_logged(tmp_path):
     assert rows(c, "SELECT kind FROM history_events WHERE subject_id=? AND kind='stage_override'", task)
 
 
+def test_an_override_logs_the_reason_the_editor_gave(tmp_path):
+    c, board = pipeline(tmp_path)
+    requirement(c, board, "Drafting", "Lead approves")
+    task = card(c, board, owner=BEN)["id"]
+    H.task_update(c, ANA, task, step="Review", override_requirements=True, note="Lead is on leave until Monday")
+    decisions = rows(c, "SELECT verdict, reason FROM stage_decisions WHERE task_id=?", task)
+    assert decisions == [{"verdict": "override", "reason": "Moved on without it: Lead is on leave until Monday"}]
+
+
+def test_an_override_without_a_note_logs_the_fixed_reason_and_a_long_note_fits_the_row(tmp_path):
+    c, board = pipeline(tmp_path)
+    requirement(c, board, "Drafting", "Lead approves")
+    blank, long = card(c, board, owner=BEN)["id"], card(c, board, owner=BEN)["id"]
+    H.task_update(c, ANA, blank, step="Review", override_requirements=True, note="   ")
+    H.task_update(c, ANA, long, step="Review", override_requirements=True, note="é" * 600)
+    assert rows(c, "SELECT reason FROM stage_decisions WHERE task_id=?", blank) == [{"reason": "Moved on without it"}]
+    [capped] = rows(c, "SELECT reason FROM stage_decisions WHERE task_id=?", long)
+    assert capped["reason"].startswith("Moved on without it: é") and len(capped["reason"].encode()) <= 500
+    assert E.override_reason(None) == "Moved on without it"
+
+
 def test_moving_back_is_for_editors_and_the_keeper_and_is_logged(tmp_path):
     c, board = pipeline(tmp_path)
     requirement(c, board, "Drafting", "Lead approves", reviewed_by="person")

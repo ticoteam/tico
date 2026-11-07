@@ -1669,11 +1669,10 @@ def create_app(settings=None):
         typ = next((t for t in pipelines if t["id"] == row.get("type_id")), None)
         value["type"] = {"id": typ["id"], "name": typ["name"]} if typ else None
         step = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
-        # A step's check pool, flow and warn time are the type's settings, not sent again on each of a board's tasks.
+        # A step's check pool and flow are the type's settings, not sent again on each of a board's tasks. Its warn time
+        # (limit_minutes) stays: a card's time in its stage shows once past it (ui/app/pipeline-rail.ts pipelineStepLate).
         value["step"] = (
-            {k: v for k, v in step.items() if k not in ("check_pool", "check_limit", "flow", "limit_minutes")}
-            if step
-            else None
+            {k: v for k, v in step.items() if k not in ("check_pool", "check_limit", "flow")} if step else None
         )
         if c is not None:
             value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]

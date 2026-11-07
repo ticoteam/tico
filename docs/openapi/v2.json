@@ -78283,6 +78283,13 @@
           "check_limit": {
             "type": "integer"
           },
+          "limit_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null"
+          },
           "flow": {
             "type": "object",
             "description": "What the step does with a ticket (docs/tasks.md, Step flow). On a check step, other_company is prefer (the default) or require."
@@ -78451,6 +78458,10 @@
               "public",
               "private"
             ]
+          },
+          "can_edit_rules": {
+            "type": "boolean",
+            "description": "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, the pipeline's owner or an Admin (backend/pipeline_rights.py)"
           },
           "manager": {
             "type": [
