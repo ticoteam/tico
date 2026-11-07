@@ -1313,6 +1313,9 @@ class Store:
 
             _step_flow.ensure(c)
             _step_flow.seed(c)
+            from . import pipeline_engine as _pipeline_engine
+
+            _pipeline_engine.boot(c)  # prefixes D and P, default Warn after, open stage visits
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
 
