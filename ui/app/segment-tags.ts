@@ -188,7 +188,7 @@ function segTagMenuOpen(anchor: HTMLElement, ref: string, name: string, done: ()
       .catch((e: unknown) => {
         busy = false;
         draw();
-        toast(e instanceof Error ? e.message : 'Could not save the segments', true, null, {host: anchor.closest<HTMLElement>('dialog[open]') || undefined});
+        toast(e instanceof Error ? e.message : 'Could not save the segments', true, null, {host: anchor.closest<HTMLElement>('dialog[open]')});
       });
   });
   segPopMount(anchor, el);
