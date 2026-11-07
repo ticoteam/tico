@@ -22,6 +22,7 @@ from . import names
 from . import read_cache
 from . import visuals
 from .store import H, Problem
+from . import spec_approval
 from clients import bot_files as BF
 
 SCHEMA = """
@@ -46,6 +47,9 @@ def ensure(c):
     for statement in SCHEMA.split(";"):
         if statement.strip():
             c.execute(statement)
+    from . import spec_approval
+
+    spec_approval.migrate(c)
 
 
 class PageEdit(M.Contract):
@@ -346,6 +350,12 @@ class Pages:
         as_of = check_as_of(fields.get("as_of"))
         replaces = str(fields.get("replaces") or "").strip()
         task = str(fields.get("task") or "").strip()
+        spec = str(fields.get("spec") or "").lower() in ("1", "true", "yes")
+        if spec:
+            # A spec is a page on a Product roadmap card; its styles are inlined so the stored page reads the same anywhere.
+            with self.store.read() as c:
+                spec_approval.check_publish(c, task)
+            data = spec_approval.inline_styles(data)
         cleaned, unembedded = visuals.clean(data, "page", base=False)
         if len(cleaned) > visuals.LIMITS["page"]:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
@@ -360,10 +370,22 @@ class Pages:
 
                 editor = Identity("bot:" + row["bot_id"], "bot")
             c.execute(
-                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?) "
+                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
-                "archived=CASE WHEN ? THEN 0 ELSE archived END",
-                (row["id"], cadence or "none", as_of, now, now, cadence, as_of, now, int(bool(changed))),
+                "spec=COALESCE(?,spec),archived=CASE WHEN ? THEN 0 ELSE archived END",
+                (
+                    row["id"],
+                    cadence or "none",
+                    as_of,
+                    now,
+                    now,
+                    spec_approval.CARD if spec else None,
+                    cadence,
+                    as_of,
+                    now,
+                    spec_approval.CARD if spec else None,
+                    int(bool(changed)),
+                ),
             )
             if audience_set:
                 self.set_audience(c, editor, row, checked_audience(c, audience))
@@ -519,6 +541,7 @@ class Pages:
 def install_pages(app, store, auth, files):
     pages = Pages(app, store, auth, files)
     app.state.pages = pages
+    spec_approval.bind(files)
     publish_doc = {
         "requestBody": {
             "required": True,
@@ -539,6 +562,7 @@ def install_pages(app, store, auth, files):
                             "replaces": {"type": "string"},
                             "path": {"type": "string"},
                             "scope": {"enum": ["task", "bot"]},
+                            "spec": {"type": "boolean"},
                             "audience": {"anyOf": [{"$ref": "#/components/schemas/AccessAudience"}, {"type": "null"}]},
                         },
                     }

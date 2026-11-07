@@ -29459,6 +29459,9 @@
                       "bot"
                     ]
                   },
+                  "spec": {
+                    "type": "boolean"
+                  },
                   "audience": {
                     "anyOf": [
                       {
