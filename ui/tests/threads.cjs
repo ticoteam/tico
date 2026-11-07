@@ -1204,16 +1204,29 @@ let browser = null;
     const picture = await empty.locator('.tr-diagram').boundingBox();
     assert.ok(picture && picture.width > 300 && picture.width <= 360, 'the picture is drawn, at most 360px wide: ' + JSON.stringify(picture));
     await themed(page, 'empty');
+    // A narrower desktop window (the picture scales with its pane) and a very short one (844x260): the block starts on
+    // screen, its pane scrolls, and New thread can be scrolled into reach.
+    await page.setViewportSize({width: 844, height: 260});
+    // Wait until the pane has taken this window's height and overflows it, before measuring or scrolling it.
+    await page.waitForFunction(() => { const e = document.querySelector('.tr-empty'); return !!e && e.scrollHeight > e.clientHeight; });
+    const fit = await empty.locator('.empty-state').evaluate(e => ({top: Math.round(e.getBoundingClientRect().top),
+      picture: Math.round(e.querySelector('.tr-diagram').getBoundingClientRect().width),
+      pane: Math.round(e.parentElement.getBoundingClientRect().width)}));
+    assert.ok(fit.top >= 0 && fit.picture <= fit.pane, 'the block starts on screen, the picture fits its pane: ' + JSON.stringify(fit));
+    await empty.evaluate(e => { e.scrollTop = e.scrollHeight; });
+    assert.ok(await empty.locator('[data-tr-new]').evaluate(b => b.getBoundingClientRect().bottom <= innerHeight),
+      'New thread is in reach once the pane scrolls');
     await empty.locator('[data-tr-new]').click();
     await page.locator('#thread-new[open]').waitFor();
-    assert.ok(await sideways(page) <= 1300, 'no sideways scroll');
+    assert.ok(await sideways(page) <= 844, 'no sideways scroll');
     await page.locator('#thread-new .nt-x').click();
     await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;
   }
-  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there.
+  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there. railOff
+  // is the case above (nothing pinned, nothing opened), where a desktop window would draw the picture.
   {
     railOff = true;
     const {page, seen} = await open(browser, 'ana', {phone: true});

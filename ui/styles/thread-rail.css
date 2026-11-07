@@ -12,10 +12,11 @@
 .tr-rail>*{flex-shrink:0}
 .tr-pane{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;padding:0 20px max(var(--s3),env(safe-area-inset-bottom))}
 .tr-pane .thread-page{max-width:none}
-.tr-empty{flex:1;display:flex;align-items:center;justify-content:center}
+/* overflow-y: a window too short for the block scrolls the pane, where a centred block would be cut off at both ends */
+.tr-empty{flex:1;display:flex;align-items:center;justify-content:center;overflow-y:auto}
 /* No thread open (TR_EMPTY_HTML, ui/app/thread-rail.js): the picture, one heading, one sentence and New thread, centred.
-   The picture is 360px at most and takes its colours from the tokens, so both themes read it. */
-.tr-empty .empty-state{width:min(360px,100%);padding:var(--s6) 0}
+   The picture is 360px at most, scales down with its pane, and takes its colours from the tokens, so both themes read it. */
+.tr-empty .empty-state{width:min(360px,100%);margin:auto;padding:var(--s6) 0}
 .tr-empty h2{font-size:var(--t-lg)}
 .tr-empty p{margin:0}
 .tr-diagram{display:block;width:100%;height:auto;margin-bottom:var(--s2)}
