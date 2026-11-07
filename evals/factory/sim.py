@@ -278,7 +278,10 @@ class Run:
         """Diagnostic only, read on a short round: for each ready bot the round did not start, the sim's own turn for it
         (running, parked, since when) and the server's newest attempt for it (id, state, lease, stop, and the start
         place's wait reason). A bot the sim names busy in the claim body is refused by the claim, whatever readiness says."""
+        from backend.claim_holds import CHECK
+
         lines = []
+        execution = w.app.state.execution
         with w.store.read() as c:
             for slug in slugs:
                 bot = team.bot(slug)
@@ -288,9 +291,17 @@ class Run:
                     "WHERE a.bot_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT 1",
                     (slug,),
                 ).fetchone()
+                health = c.execute("SELECT last_error FROM service_health WHERE service=?", (CHECK + slug,)).fetchone()
+                queued = c.execute(
+                    "SELECT id,held,redirect FROM jobs WHERE bot_id=? AND state='queued' "
+                    "ORDER BY created_at,id LIMIT 1",
+                    (slug,),
+                ).fetchone()
                 lines.append(
-                    f"{slug} turn: sim running {bot.running}, parked {bot.parked} since {bot.parked_since}; "
-                    f"server newest attempt {tuple(row) if row else None}"
+                    f"{slug} turn: sim running {bot.running}, parked {bot.parked}; server newest attempt "
+                    f"{tuple(row) if row else None}; claim check backoff {execution.check_backoff.get(slug)} "
+                    f"waiting {execution.check_waiting(slug)} health {health[0] if health else None}; "
+                    f"oldest queued job {tuple(queued) if queued else None}"
                 )
         return lines
 
