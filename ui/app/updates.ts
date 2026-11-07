@@ -382,7 +382,7 @@ function updKpiTile(k: UpdKpi, tracked: boolean): string {
   return `<li class="upd-kpi">
       <span class="upd-kpi-name">${tracked ? gdot(k.status) : ''}${esc(k.name)}</span>
       <span class="upd-kpi-val tnum">${esc(value)}</span>
-      ${(series || []).length > 1 ? kpiSpark(series, tracked ? k.status : 'gray', 132, 28) : ''}
+      ${(series || []).length > 1 ? kpiSpark(series, tracked ? k.status ?? 'gray' : 'gray', 132, 28) : ''}
       ${k.target_label ? `<span class="upd-kpi-sub">${esc(k.target_label)}</span>` : ''}
       ${k.note ? `<span class="upd-kpi-sub">${esc(k.note)}</span>` : ''}</li>`;
 }

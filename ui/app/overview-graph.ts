@@ -247,7 +247,7 @@ function ogRulesOf(key: string): {who: OGRule[]; with: OGRule[]; all: OGRule[]} 
 const ogGoalsAll = (): OGGoal[] => { const goals = ogNow().goals; return Array.isArray(goals) ? goals : []; };
 const ogGoalsOf = (key: string): OGGoal[] => ogGoalsAll().filter(g => goalLive(g) && ogActorKey(g.owner_id) === key).sort(goalRank);
 const ogGoalStatus = (g: OGGoal): OGStatus => g.status === 'done' ? 'done' : (['green', 'yellow', 'red', 'none'] as (string | null)[]).includes(g.status) ? g.status as OGStatus : 'gray';
-const ogGoalWord = (g: OGGoal): string => { const s = ogGoalStatus(g); return s === 'done' ? 'Done' : KPI_LABEL[s]; };
+const ogGoalWord = (g: OGGoal): string => { const s = ogGoalStatus(g); return s === 'done' ? 'Done' : KPI_LABEL[s]!; };
 
 function ogMetaHtml(node: OGNode): string {
   if (node.kind === 'group') return '';

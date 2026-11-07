@@ -49,7 +49,7 @@ function sessionProbe(): Promise<boolean> {
   const probe = Promise.race([
     fetch(API + '/v2/me', {cache: 'no-store', redirect: 'manual', signal: stop.signal})
       .then(async r => sessionCheck(r, r.status === 401 ? await r.json().catch(() => ({})) : {}), () => false),
-    new Promise(done => { timer = setTimeout(() => { stop.abort(); done(false); }, SESSION_PROBE_MS); }),
+    new Promise<boolean>(done => { timer = setTimeout(() => { stop.abort(); done(false); }, SESSION_PROBE_MS); }),
   ]).finally(() => {
     clearTimeout(timer);
     if (SESSION.probe === probe) { SESSION.probe = null; SESSION.probedAt = Date.now(); }
