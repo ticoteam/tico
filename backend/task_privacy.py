@@ -317,6 +317,8 @@ def prime_attempts(c, aids):
         meetings.prime_attempts(inputs, moved)
         tasks = set()
         for aid in chunk:
+            # The run's messages, for attempt_pages_readable (a file refusal is per reader, so only the rows are kept).
+            values[("attempt_messages", aid)] = inputs[aid]
             try:
                 ids = set(carried[aid])
                 for message in inputs[aid]:
@@ -879,18 +881,25 @@ def attempt_readable(c, actor, aid, memo=None):
 
 def attempt_pages_readable(c, actor, aid):
     """A run's job message and inputs keep their own file refusal and that of the messages they reply to (the same
-    rule as ReadIndex.attempt_pages)."""
-    rows = c.execute(
-        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=? "
-        "UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
-        (aid, aid),
-    ).fetchall()
-    for row in rows:
-        message = dict(row)
-        refs = H._json(message.get("refs"), {}) or {}
-        if not (page_message_readable(c, actor, refs) and reply_pages_readable(c, actor, message)):
-            return False
-    return True
+    rule as ReadIndex.attempt_pages). The reply chains are read one query per level for all of them together, so a
+    run with many inputs costs no more statements than one with a few."""
+    values = read_cache.cache(c)
+    messages = values.get(("attempt_messages", aid)) if values is not None else None
+    if messages is None:
+        messages = [
+            dict(row)
+            for row in c.execute(
+                "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=? "
+                "UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+                (aid, aid),
+            ).fetchall()
+        ]
+    parents = reply_chain_rows(c, messages)
+    return all(
+        page_message_readable(c, actor, H._json(message.get("refs"), {}) or {})
+        and reply_pages_readable(c, actor, message, lookup=parents.get)
+        for message in messages
+    )
 
 
 def require_attempt(c, who, aid):
@@ -1347,6 +1356,22 @@ def page_message_readable(c, actor, refs):
 
 
 REPLY_CHAIN_LIMIT = 100
+
+
+def reply_chain_rows(c, messages):
+    """The stored messages on the in_reply_to chains of `messages`, keyed by id: one query per level of the chains."""
+    found, frontier = {}, {m["in_reply_to"] for m in messages if m.get("in_reply_to")}
+    while frontier and len(found) < REPLY_CHAIN_LIMIT:
+        marks = ",".join("?" * len(frontier))
+        rows = {
+            row["id"]: dict(row)
+            for row in c.execute(f"SELECT id,refs,in_reply_to FROM messages WHERE id IN ({marks})", sorted(frontier))
+        }
+        found.update(rows)
+        frontier = {
+            row["in_reply_to"] for row in rows.values() if row["in_reply_to"] and row["in_reply_to"] not in found
+        }
+    return found
 
 
 def reply_pages_readable(c, actor, message, lookup=None):
