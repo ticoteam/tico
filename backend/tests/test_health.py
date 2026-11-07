@@ -1910,6 +1910,9 @@ def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
             (H.now(),),
         )
         enqueue_stored(c, "mb")
+        # Assigning each ticket queued the bot's wake for it; those runs have finished by now. Only the busy
+        # ticket's message is still queued (the live-job test of the check, as invariants.task_stuck reads it).
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='helper' AND id<>'mb'")
         c.execute(
             "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
             (H.shift(H.now(), hours=-30), idle["id"], busy["id"]),

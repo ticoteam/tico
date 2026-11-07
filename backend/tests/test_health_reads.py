@@ -201,7 +201,9 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
     body, total = counted(api, monkeypatch, "/api/v2/health")
     primed = api.get("/api/v2/health", headers=headers("ana-test")).content
     assert any(row["id"] == "waiting" for row in body["checks"])
-    assert total < 250, total  # 2,360 before
+    # 2,360 before. The Needs-you plates (3fea68e53) count each person's queue in full, about 20 statements a person
+    # (24, 21 and 16 for three people here, about 65 in all), so the rest is about 220 and the budget allows for them.
+    assert total < 300, total
     with monkeypatch.context() as unprimed:
         # Each job read on its own, every task asked every wait: what the checks read before.
         unprimed.setattr(execution, "_queue_suspects", lambda c, queue: None)
