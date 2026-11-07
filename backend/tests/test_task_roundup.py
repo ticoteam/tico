@@ -1,7 +1,7 @@
 """The task roundup (backend/task_roundup.py): each run (three times a day by default, at 6am, noon and 6pm company time) gives
 each active bot at most one wake, with one list of its tasks that have a missed update, have gone quiet, have a follow-up
 time that has come, or need a look for a late ticket, a backlog or a question. A task waiting on a person or a live blocker with nothing new is not listed, a task waiting on nothing is
-listed once quiet a day, Tico's own notices and check-backs are not news, a task with a run already queued is not listed, a
+listed once quiet a day, Tico's own notices and check-backs are not news, queued jobs hide lines other than due follow-ups, a
 bot with nothing to list gets no message, a private task is named without its title or any detail of it, a list reaches the
 bot alone, and a quiet task is listed again only after seven days. Synthetic fixtures only."""
 
@@ -12,15 +12,16 @@ import pytest
 
 from backend import bot_settings as BS
 from backend.enqueue import enqueue_stored
-from backend import question_tasks as QT, still_needed, task_check_backs, task_roundup
+from backend import question_tasks as QT, execution, still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_holds as TH
 from backend import task_relations as TR
 from backend.store import H
 from backend.tests.hold_rows import set_holds
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.test_api import api, claim  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
 from backend.tests.test_step_backlog import board as backlog_board, tickets as backlog_tickets
+from backend.tests.test_task_lanes import task_bot
 
 DAY = "2026-11-03T14:00:00.000000Z"  # the 6am run (company time is Pacific, PST on this date); fixed for the tests
 NOON = H.shift(DAY, hours=6)  # the noon run, 20:00 UTC
@@ -1305,6 +1306,78 @@ def test_an_explicit_follow_up_that_has_come_is_listed_first_once_and_then_clear
         assert lines[1].endswith("has come: Check whether the quote came in")
         assert H.task(c, mine["id"])["check_back_at"] is None  # cleared once it is listed
         assert "finance" not in task_roundup.run(c, NOON)["woke"]  # listed once: not again
+
+
+def test_a_waiting_tasks_held_job_does_not_hide_its_due_follow_up_and_the_roundup_is_claimed(api, monkeypatch):
+    monkeypatch.setattr(H, "now", lambda: DAY)
+    machine = task_bot(api, lanes=True, others=("finance",))
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = task(c, "Chase the quote")
+        settle(c, mine["id"], "finance", ago(days=3))
+        H.task_update(
+            c, "bot:finance", mine["id"], status="waiting", waiting_on="human:ana", note="Ana, please send the quote."
+        )
+        task_check_backs.set_time(
+            c,
+            H.task(c, mine["id"]),
+            ago(hours=1),
+            "Check whether the quote came in",
+            actor="bot:finance",
+            at=ago(hours=3),
+        )
+        complete_jobs(c)
+        row = H.task(c, mine["id"])
+        message = H._wake(c, row, "bot:finance", "Check on the quote.", {"wake": "resume"})
+        held = dict(c.execute("SELECT * FROM jobs WHERE message_id=?", (message["id"],)).fetchone())
+        assert held["state"] == "queued"
+        assert (
+            execution.job_refusal(c, held, BS.read(c, "finance"), {"finance": True}, set(), True, False) == "task_wait"
+        )
+
+        assert "finance" in task_roundup.run(c, DAY)["woke"]
+        assert f"{mine['id'][:8]} Chase the quote: Follow-up time set by " in only_list(c)
+        assert H.task(c, mine["id"])["check_back_at"] is None
+        assert task_roundup._mark(c, task_roundup.LISTED_KEY + mine["id"]) == DAY
+        notice = H.message(
+            c,
+            c.execute(
+                "SELECT id FROM messages WHERE recipient_id='bot:finance' AND refs LIKE '%task_roundup%'"
+            ).fetchone()[0],
+        )
+        assert notice["sender_id"] == H.KEEPER and notice["refs"]["wake"] == "task_roundup"
+        assert notice["conversation_id"] != row["conversation_id"]
+        assert execution.work_task_id(notice, H.conversation(c, notice["conversation_id"])) is None
+        assert "finance" not in task_roundup.run(c, NOON)["woke"]
+
+    turn = claim(api, machine, "finance")
+    assert turn and turn["message"]["id"] == notice["id"]
+    with store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (held["id"],)).fetchone()[0] == "queued"
+        assert H.task(c, mine["id"])["status"] == "waiting"
+
+
+@pytest.mark.parametrize("state", ["leased", "running"])
+def test_a_due_follow_up_with_a_live_turn_is_not_listed_or_consumed(api, state):
+    store = api.app.state.store
+    with store.transaction() as c:
+        mine = task(c, "Chase the quote")
+        settle(c, mine["id"], "finance", ago(days=3))
+        due = ago(hours=1)
+        task_check_backs.set_time(
+            c, H.task(c, mine["id"]), due, "Check whether the quote came in", actor="bot:finance", at=ago(hours=3)
+        )
+        complete_jobs(c)
+        job = c.execute(
+            "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='finance' AND m.conversation_id=? LIMIT 1",
+            (mine["conversation_id"],),
+        ).fetchone()[0]
+        c.execute("UPDATE jobs SET state=? WHERE id=?", (state, job))
+        assert "finance" not in task_roundup.run(c, DAY)["woke"]
+        assert lists(c) == []
+        assert H.task(c, mine["id"])["check_back_at"] == due
+        assert task_roundup._mark(c, task_roundup.LISTED_KEY + mine["id"]) is None
 
 
 def test_a_follow_up_still_to_come_is_not_listed_and_wakes_nothing_on_its_own(api):

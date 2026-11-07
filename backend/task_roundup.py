@@ -47,6 +47,7 @@ time. When it has come, the task is listed first on its owner bot's list as "Fol
 (the note trimmed), and the time is then cleared, so it is listed once. Tico sets no follow-up time of its own, and a
 task a person owns is on no bot's list. A date a snooze left behind is not a follow-up: it holds nothing, and a snooze in
 force hides the task (task_snooze.snoozed) until it ends.
+A held queued job does not hide a due follow-up.
 
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
@@ -353,21 +354,26 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
         )
     )
     for row in rows:
-        if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
+        if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at):
             continue
         private = H.task_private(c, row)
         follow = follow_up(c, row)
         if follow and H.parse_ts(row["check_back_at"]) <= now:
-            groups[DUE].append(
-                (
-                    row["check_back_at"],
-                    _item(
-                        row["id"], _line(row, _due_reason(follow, private), private), LISTED_KEY + row["id"], due=True
-                    ),
+            # A queued notice may be held by the task's wait; only a live turn can pick up its follow-up.
+            if not _running(c, slug, row, queued=False):
+                groups[DUE].append(
+                    (
+                        row["check_back_at"],
+                        _item(
+                            row["id"],
+                            _line(row, _due_reason(follow, private), private),
+                            LISTED_KEY + row["id"],
+                            due=True,
+                        ),
+                    )
                 )
-            )
             continue
-        if not sweeping:
+        if _running(c, slug, row) or not sweeping:
             continue
         last_turn = _last_turn(c, row, slug, actor)
         listed = _listed(c, row["id"])
@@ -1000,14 +1006,15 @@ def _who(c, actor):
     return H.actor_name(c, actor) or actor
 
 
-def _running(c, slug, row):
-    """Whether a job for this bot in the task's conversation is queued, leased or running: it is being woken already."""
+def _running(c, slug, row, *, queued=True):
+    """Whether a job for this bot in the task's conversation is leased or running, including queued jobs by default."""
+    states = ("queued", "leased", "running") if queued else ("leased", "running")
     try:
         return (
             c.execute(
                 "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-                "AND j.state IN ('queued','leased','running') AND m.conversation_id=? LIMIT 1",
-                (slug, row["conversation_id"]),
+                f"AND j.state IN ({','.join('?' * len(states))}) AND m.conversation_id=? LIMIT 1",
+                (slug, *states, row["conversation_id"]),
             ).fetchone()
             is not None
         )
