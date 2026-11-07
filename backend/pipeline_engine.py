@@ -32,7 +32,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from . import hubdb, pipeline_rights
+from . import hubdb, pipeline_rights, requirement_attachments
 
 H: Any = hubdb
 
@@ -740,7 +740,9 @@ def detail(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     names = {str(s["id"]): str(s["name"]) for s in stages(conn, str(row["type_id"] or ""))}
-    for s in standings(conn, [row]).get(task_id, []):
+    found = standings(conn, [row]).get(task_id, [])
+    shown = _attachments_by_requirement(conn, task_id)
+    for s in found:
         decision, attachment = s.decision, s.attachment
         out.append(
             {
@@ -773,9 +775,29 @@ def detail(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
                     "by": attachment["attached_by"],
                     "at": attachment["created_at"],
                 },
+                "attachments": shown.get(s.id, []),
             }
         )
     return out
+
+
+def _attachments_by_requirement(conn: sqlite3.Connection, task_id: str) -> dict[str, list[dict[str, Any]]]:
+    """The newest attachments of each requirement on one ticket, capped per requirement, as read views. One query and
+    one media lookup for the whole ticket, so the ticket page needs no request per requirement."""
+    rows = _rows(
+        conn,
+        "SELECT id, stage_requirement_id, source, blob_id, file_id, file_version, url, digest, work_version, attached_by, "
+        "created_at FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY stage_requirement_id "
+        "ORDER BY created_at DESC, id DESC) AS n FROM requirement_attachments WHERE task_id = ? AND removed_at IS NULL) "
+        "WHERE n <= ? ORDER BY created_at DESC, id DESC",
+        (task_id, requirement_attachments.ATTACH_LIMIT),
+    )
+    kept: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        kept.setdefault(str(row["stage_requirement_id"]), []).append(row)
+    shown = requirement_attachments.views(conn, [r for bucket in kept.values() for r in bucket])
+    by_id = {str(r["id"]): r for r in shown}
+    return {req: [by_id[str(r["id"])] for r in bucket] for req, bucket in kept.items()}
 
 
 # ---------------------------------------------------------------------------------------------- boot

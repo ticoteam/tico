@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_links, pipeline_rights
+from . import pipeline_links, pipeline_rights, requirement_attachments
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -572,6 +572,14 @@ def _queue_fields(
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names)
 
 
+def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
+    """Adds each shown attachment's format, name and href (its immutable content address), one media lookup for all."""
+    shown = [item for item in items if item["attachment"]]
+    rows = [facts.attachments[(item["task_id"], item["requirement_id"])] for item in shown]
+    for item, view in zip(shown, requirement_attachments.views(c, rows), strict=True):
+        item["attachment"].update(format=view["format"], name=view["name"], href=view["href"])
+
+
 def _moves_to(
     item: Row,
     live: list[Row],
@@ -641,6 +649,7 @@ def queue_for(
     queue = _Queue(c, waiting, facts, now)
     items = [queue.item(actor, task, requirement, why) for task, requirement, why in waiting]
     _queue_fields(c, actor, items, live, tasks, queue)
+    _attachment_views(c, items, facts)
     items.sort(key=lambda item: (not item["late"], item["since"], item["task_id"], item["requirement_id"]))
     return items
 
