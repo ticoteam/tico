@@ -256,7 +256,11 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
-  own DM with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
+  own DM with it (the **Chat** tab); any first message from a person does the same. Every bot interviews top-down
+  (runner-rs `SETUP_TURN`): the company (its market, target segments and who it loses to), then its goals, then its own job
+  from its playbook. It reads what Tico knows first and never asks what that says, adds what it learns about the company to
+  the shared doc `onboarding/interview.md` so the next bot only asks whether anything changed, and suggests the person open
+  the mic and just talk; the Onboarding pill carries the same tip. It learns only: it answers and asks in
   its thread, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
   comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in

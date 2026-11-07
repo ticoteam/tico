@@ -890,6 +890,7 @@ class Onboarding:
         rows = {
             slug: {
                 "title": choice["display_name"],
+                "template": choice["template"],
                 "team": teams.get(choice["template"], ""),
                 "description": job_description(
                     cards.get(choice["template"]) or {},
