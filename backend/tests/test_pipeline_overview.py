@@ -241,3 +241,18 @@ def test_the_map_counts_each_window_the_same_as_direct_sql(api):
             ).fetchone()[0]
         (edge,) = overview(api, period)["edges"]
         assert edge["count"] == direct, period
+
+
+def test_a_factory_with_no_links_renders_cleanly(api):
+    # Leads and customers live in the CRM, so a factory may have pipelines with no links between them at all.
+    growth = make_factory(api, "Gro")
+    marketing, steps = make_type(api, "Mkt", factory=growth)
+    sales, _ = make_type(api, "Sls", factory=growth)
+    card(api, marketing, steps["Doing"])
+
+    week = overview(api)
+    assert week["edges"] == []
+    assert week["loops"] == []
+    assert {p["id"] for p in week["pipelines"]} >= {marketing, sales}
+    assert [f["name"] for f in week["factories"]] == ["Gro"]
+    assert week["factories"][0]["done"] == 0
