@@ -6,7 +6,7 @@
 'use strict';
 
 const OVERVIEW_CAMPUS = OVERVIEW + '/campus';
-const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.js
+const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.ts
 const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.js
 const TEAM_PAGE = '#/team/';
 const DASH_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
