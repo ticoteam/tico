@@ -1356,3 +1356,28 @@ def test_moves_to_never_names_a_destination_pipeline_the_reader_may_not_see(worl
     item = next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff)
     assert item["moves_to"] is None
     assert R.queue_for(w.c, BEN) == []  # and Ben, who may see Legal, is not a reviewer of Design
+
+
+def test_a_hidden_pipeline_and_an_unknown_one_answer_the_queue_the_same(tmp_path, monkeypatch):
+    ids = {
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+    }
+    _company_owner_is_chris(monkeypatch)
+    _company_owner_is_chris(monkeypatch)
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            legal, legal_step = _members_only(w, "Legal", BEN)
+        ana = {"Authorization": "Bearer ana-test"}
+        answers = []
+        for pipeline in (legal, "pl-does-not-exist"):
+            for path in (
+                f"/api/v2/pipelines/{pipeline}/review/queue",
+                f"/api/v2/pipelines/{pipeline}/stages/{legal_step}/review/queue",
+            ):
+                response = client.get(path, headers=ana)
+                answers.append((response.status_code, response.json()))
+        assert answers[0] == answers[2] and answers[1] == answers[3]
+        assert answers[0][0] == answers[1][0] == 404

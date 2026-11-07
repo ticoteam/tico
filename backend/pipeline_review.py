@@ -1393,9 +1393,10 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         with cast(Any, store).read() as c:
             # A pipeline the reader may not see has no queue for them, and it answers exactly as one that is not there.
             # Items on members-only pipelines they may not see are left out, and so are tickets they may not open.
-            hidden = pipeline_rights.hidden_pipeline_ids(c, who.task_actor or who.actor)
-            if pipeline_id and pipeline_id in hidden:
+            reader_actor = who.task_actor or who.actor
+            if pipeline_id and not pipeline_rights.may_see(c, reader_actor, pipeline_id):
                 raise Problem("not_found", "No such pipeline", 404)
+            hidden = pipeline_rights.hidden_pipeline_ids(c, reader_actor)
             scope = pipeline_rights.list_sql(c, who.actor, cast(Any, auth).task_sql(c, who))
             items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope)
             return {"items": [item for item in items if item["pipeline_id"] not in hidden]}
