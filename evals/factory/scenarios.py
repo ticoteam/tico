@@ -3,7 +3,7 @@ fixes it when it is a known gap today, so a failing check reads as "not built ye
 
 from collections import Counter
 
-from .board import design_board
+from .board import design_board, qa_board
 from .sim import Scenario, at, tickets
 from .world import START
 
@@ -440,7 +440,7 @@ def standard(*extra):
 SCENARIOS = [
     Scenario(
         "happy_path",
-        "Six tickets, every bot answers well: assigned, R1, R2, QA, merge, release.",
+        "Six tickets, every bot answers well: assigned, R1, R2, merge, release.",
         setup=lambda run, w, team: tickets(run, w, 6),
         checks=standard(
             ("at most a fifth of turns are noise", QUEUE, noise_under(0.2)),
@@ -550,6 +550,7 @@ SCENARIOS = [
         setup=lambda run, w, team: tickets(run, w, 8),
         styles={"qa": {"fail": 0.33, "cant_test": 0.33}},
         checks=standard(),
+        board=qa_board,
     ),
     Scenario(
         "skip_qa",
@@ -557,6 +558,7 @@ SCENARIOS = [
         setup=lambda run, w, team: tickets(run, w, 8),
         styles={"qa": {"fail": 0.5}, "builder": {"skip_check": 0.5}},
         checks=standard(),
+        board=qa_board,
     ),
     Scenario(
         "off_script",

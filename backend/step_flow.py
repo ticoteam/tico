@@ -501,10 +501,34 @@ def skip_target(c, row, s):
 
 
 # ----------------------------------------------------------------------------------------------- the Dev board
+# The recommended Dev board has no QA steps: Review 2 always runs, and its approval hands the ticket to the merge. A
+# change pushed after Review 2 merges once CI is green on its new head. A review that asks for changes is feedback:
+# the ticket goes to its fixes step, and the builder moves it on once the feedback is in.
 DEV = {  # the settings each Dev tickets type is given once; a person changes them on its steps
     "On Deck": {"backlog": {"over": 10, "per": "step", "notify": ["manager"], "every_hours": 4}},
-    # A review is feedback, not a gate: whatever it says goes back to the builder, who moves the ticket on once its
-    # feedback is in. Only QA passes or fails, and its pass makes the merge next.
+    "Review 1": {
+        "on_pass": "Review 1 Fixes",
+        "on_fail": "Review 1 Fixes",
+        "timeout_hours": 1,
+        "gate": True,
+        "check": "review",
+    },
+    "Review 2": {
+        "on_pass": MERGE,
+        "on_fail": "Review 2 Fixes",
+        "timeout_hours": 1,
+        "gate": True,
+        "check": "review",
+    },
+    "Review 2 Fixes": {"after_green": MERGE},
+    "Pending Release": {"on_merge": True, "can_hold": False},
+    "Done": {"can_hold": False},
+}
+# A board that still has QA steps (In QA, QA Fixes or Post Release QA) keeps the flow it was given with them: a QA pass
+# goes to the merge, and Review 2's changes go to Review 2 Fixes, whose builder moves the ticket on to In QA.
+QA_STEPS = ("In QA", "QA Fixes", "Post Release QA")
+QA_DEV = {
+    "On Deck": {"backlog": {"over": 10, "per": "step", "notify": ["manager"], "every_hours": 4}},
     "Review 1": {
         "on_pass": "Review 1 Fixes",
         "on_fail": "Review 1 Fixes",
@@ -527,6 +551,16 @@ DEV = {  # the settings each Dev tickets type is given once; a person changes th
 }
 
 
+def has_qa(c, type_id):
+    """Whether a type still has a QA step, which keeps its QA settings rather than the recommended ones."""
+    return any(s["name"] in QA_STEPS for s in steps(c, type_id))
+
+
+def dev_flows(c, type_id):
+    """The Dev settings for one type: the QA board's when it has QA steps, else the recommended board's."""
+    return QA_DEV if has_qa(c, type_id) else DEV
+
+
 def seed(c):
     """Give each Dev tickets type the Dev board's flow once, on the steps it has; a step that already has a flow
     keeps it."""
@@ -540,8 +574,9 @@ def seed(c):
             or c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone()
         ):
             continue
-        apply(c, ident, DEV)
-        H.event(c, H.KEEPER, SEEDED, ident, {"flow": sorted(DEV)})
+        flows = dev_flows(c, ident)
+        apply(c, ident, flows)
+        H.event(c, H.KEEPER, SEEDED, ident, {"flow": sorted(flows)})
     seed_checks(c)
 
 
@@ -571,11 +606,12 @@ def seed_checks(c):
             continue  # a board Tico does not move keeps no flow; its checks are known by their titles
         given = {}
         merged = merge_step(c, ident)
+        flows = dev_flows(c, ident)
         for s in steps(c, ident):
             flow = of(s)
             if "check" in flow:
                 continue
-            kind = (DEV.get(s["name"]) or {}).get("check") or _inferred(s, merged["position"] if merged else None)
+            kind = (flows.get(s["name"]) or {}).get("check") or _inferred(s, merged["position"] if merged else None)
             if not kind:
                 continue
             c.execute(

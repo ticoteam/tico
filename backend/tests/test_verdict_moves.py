@@ -22,6 +22,16 @@ STEPS = [
     ("Post Release QA", "review"),
     ("Done", "done"),
 ]
+NO_QA_STEPS = [
+    ("On Deck", "open"),
+    ("In Progress", "doing"),
+    ("Review 1", "review"),
+    ("Review 1 Fixes", "doing"),
+    ("Review 2", "review"),
+    ("Review 2 Fixes", "doing"),
+    ("Pending Release", "review"),
+    ("Done", "done"),
+]
 
 
 def receipt(api, task, head=HEAD):
@@ -52,9 +62,9 @@ def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runt
     return turn
 
 
-def ticket(api, step="Review 1", labels=()):
+def ticket(api, step="Review 1", labels=(), steps=STEPS):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in steps])
         rules.seed_dev(c)
     task = post(
         api,
@@ -351,6 +361,20 @@ def test_a_board_without_qa_merges_after_its_last_review_once_ci_is_green(api):
     assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD
     _suite(api, "github-actions", "completed", "success", sha=HEAD, id=7)
     assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1, "once per head"
+    hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
+    assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_merges_once_review_2_approves_and_ci_is_green(api):
+    """The Dev board's own settings, with no flow set here: a board without QA steps hands Review 2's approval to the
+    merge, which waits for green CI."""
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    verdict(api, check(api, task, "Review 2: PR #412"), "approve")
+    assert step(api, task) == "Review 2"
+    assert not builder_jobs(api), "nothing to do until CI is green"
+    _suite(api, "github-actions", "completed", "success", sha=HEAD)
+    merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
     assert step(api, task) == "Pending Release"
 

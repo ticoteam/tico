@@ -1,6 +1,6 @@
-"""Check pools: the bots that may do a check step (a step whose flow names its `check` kind: Review 1, Review 2, In QA
-and Post Release QA on the Dev board), set on the step in Settings > Tasks, and how Tico gives a ticket's check to
-one of them (Dev 534 A).
+"""Check pools: the bots that may do a check step (a step whose flow names its `check` kind: Review 1 and Review 2
+on the Dev board, plus In QA and Post Release QA on a board that still has them), set on the step in Settings > Tasks,
+and how Tico gives a ticket's check to one of them (Dev 534 A).
 
 When a ticket enters a step with a pool and has no open check there for its pull request head, Tico files the check
 (`Review 1: PR #n`, the head recorded as any check's is: review_gate.remember_heads) and gives it to the least busy
@@ -41,9 +41,13 @@ HELD = ("paused", "quarantined", "limited", "crashed")  # bot_status states that
 SEED = {
     "Review 1": ("pr-reviewer-sol", "reviewer-2", "reviewer-xai", "reviewer-muse"),
     "Review 2": ("pr-reviewer-sol", "reviewer-2", "reviewer-xai", "reviewer-muse"),
+}
+# The QA steps' pools. A step a board does not have takes no pool, so a board without QA steps is given only SEED.
+SEED_QA = {
     "In QA": ("qa-engineer", "qa-claude", "qa-xai", "qa-muse"),
     "Post Release QA": ("qa-engineer-copy",),
 }
+POOLS = {**SEED, **SEED_QA}
 SEEDED = "check_pools.seeded"
 # A Security check is asked for by title; it is no step of a board.
 SECURITY = re.compile(r"^Security(?:\b|:)", re.I)
@@ -197,7 +201,7 @@ def seed(c):
         ):
             continue
         given = {}
-        for step, slugs in SEED.items():
+        for step, slugs in POOLS.items():
             have = []
             for s in slugs:
                 found = c.execute(
@@ -214,7 +218,7 @@ def seed(c):
                 ).rowcount
             ):
                 given[step] = have
-        if any(c.execute("SELECT 1 FROM bots WHERE slug=?", (s,)).fetchone() for v in SEED.values() for s in v):
+        if any(c.execute("SELECT 1 FROM bots WHERE slug=?", (s,)).fetchone() for v in POOLS.values() for s in v):
             H.event(c, H.KEEPER, SEEDED, ident, {"pools": given})
 
 

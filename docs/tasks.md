@@ -153,7 +153,7 @@ A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Relea
 
 ### Check pools: who takes a ticket's check
 
-Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse`; Post Release QA `qa-engineer-copy`.
+Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; on a board with QA steps, In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse` and Post Release QA `qa-engineer-copy`.
 
 When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. The model company is the Builder's company as its runs on the ticket actually ran (the Builder's configured company only while none of them is known), and a bot's company is the one a check given to it runs on: its task model's when it has one that can run now, else its configured model's, or what its last few such runs ran on. Each check step has an **Another model company** setting (`other_company` in its flow, see Step flow), `prefer` by default, and it decides what a bot of the Builder's company may do. With `prefer`, that bot takes the check only when no other pool bot is free, rather than the check waiting, for a review and a QA check alike, and a bot whose company Tico can't name comes after one of another company it can. With `require`, a bot of the Builder's company is never given the check, not even when it is the only free one: the check waits when every free bot runs on that company (the reason says so), and a bot of the Builder's company that finishes its own check does not take it. Require also never gives the check to a bot whose company Tico can't name (a model it doesn't know or a reseller picks, such as Cursor's auto, or part of a recent run on one), and while any part of the Builder's runs on the ticket is of unknown company the check waits for every bot. The bot is woken at once.
 
@@ -199,10 +199,11 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `check` | The kind of check the step asks for: `review`, `qa` or `release_qa`. Review pools, the one-open-check rule, Review 2 never going to an earlier review's bot, QA waivers and blocked checks find their steps by this, so a renamed check step keeps working. A check request is titled with the step's name (`QA` for a QA step); `Review <n>`, `QA` and `Post Release QA` still name the board's nth review, its QA and its after-release check. |
 | `other_company` | On a check step only: `prefer` (the default, also when left out) or `require`. Prefer gives the check to a bot of another model company than the Builder's before one of the Builder's company, which takes it only when no other is free. Require never gives it to one of the Builder's company: the check waits when every free bot runs on that company. See Check pools. |
 
-A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks, In QA is `qa` and
-Post Release QA is `release_qa`; reviews send their feedback back to the Builder's Fixes step
-whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
-released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
+A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks. Review 1 sends its
+feedback back to the Builder's Fixes step whichever way it goes. Review 2's approval goes to the merge, and a fix made
+after it merges once CI is green on its head. On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
+In QA is `qa`, Post Release QA is `release_qa`, and In QA passes to the merge (skip tag `skip-qa`). Pending Release
+takes merged tickets, and released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
 Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing
 is left at Pending Release.
 
@@ -840,9 +841,9 @@ bot; writing `send_webhook` is for a person, or a bot with outbound sending on, 
 
 A task entering a step is the event `step_entered`; a rule's `when` can name the `step` and the `role` (`owner`,
 `requester`, `qa`, `release_manager`, `other`). A team with no `step_entered` rule writes nothing on a step move. A Dev
-tickets type is given three editable rows when it is created or renamed: **QA Fixes** wakes the Builder that owns the
-ticket, **Pending Release** is a note to the Release Manager, and **In QA** wakes QA only. Delete a row and it stays
-deleted.
+tickets type is given its editable rows when it is created or renamed: **Pending Release** is a note to the Release
+Manager. A board with QA steps also gets **QA Fixes** (wakes the Builder that owns the ticket) and **In QA** (wakes QA
+only). Delete a row and it stays deleted.
 
 A rule's `step` names a step of its type, by the step's name or its id (case ignored). Saving a wake rule that names a
 step its type does not have is refused (422), and the message lists the type's real steps. Renaming a step moves the
