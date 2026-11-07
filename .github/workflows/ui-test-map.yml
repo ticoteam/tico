@@ -14,10 +14,6 @@ on:
         description: Open or update the map pull request (scheduled runs always do)
         type: boolean
         default: false
-  # TEMPORARY, for the first measured run only: GitHub dispatches a new workflow only once it is on main, so this branch
-  # runs the measure from its own push. The commit that adds the measured map removes this trigger.
-  push:
-    branches: [chris/rel-ui-test-map]
 
 permissions:
   contents: read
