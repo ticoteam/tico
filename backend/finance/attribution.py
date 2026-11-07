@@ -37,7 +37,7 @@ MAX_TEXT = 80
 def _splits(raw: object, ctx: Ctx) -> tuple[CA.Split, ...]:
     """The shares a request names, checked: each names a current teammate and/or a team, shares are whole basis points
     from 1 to 10000 and add up to at most 10000, at most MAX_PARTS of them. An empty list clears."""
-    if isinstance(raw, list) and not raw:
+    if raw == []:
         return ()  # an empty list clears an attribution (a rule refuses it, see attribution_rule_set)
     out: list[CA.Split] = []
     total = 0
