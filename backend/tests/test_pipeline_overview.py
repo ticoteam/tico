@@ -165,17 +165,19 @@ def test_rights_say_who_may_edit_a_pipeline(api):
 
 
 def test_a_spawn_is_not_an_input_but_the_card_that_made_it_still_is(api):
-    growth = make_factory(api, "Gro")
-    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    # Sales is the first pipeline of Gro. Its subtask comes from Mkt, the first pipeline of another factory.
+    growth = make_factory(api, "Gro", position=0)
     sales, s_steps = make_type(api, "Sls", factory=growth)
+    other = make_factory(api, "Other", position=1)
+    marketing, m_steps = make_type(api, "Mkt", factory=other)
     spawn = link(api, marketing, m_steps["Doing"], sales, mode="spawn")
-    source = card(api, marketing, m_steps["Doing"])  # made by a person: an input
-    made = card(api, sales, s_steps["Doing"])  # the card the spawn makes
-    handoff(api, spawn, made["id"], ago(hours=2))
-    inputs = {i["label"]: i["count"] for i in overview(api)["inputs"] if i["to"] == marketing}
-    assert inputs == {"Team ideas": 1}  # the spawned card is excluded; its source is not
-    assert overview(api)["edges"][0]["mode"] == "spawn"
-    assert source["id"] != made["id"]
+    source = card(api, marketing, m_steps["Doing"])  # made by a person: an input to Mkt
+    made = card(api, sales, s_steps["Doing"])  # the subtask the spawn files in Sales: not an input
+    handoff(api, spawn, made["id"], ago(hours=2), source=source["id"])
+    week = overview(api)
+    assert {i["label"]: i["count"] for i in week["inputs"] if i["to"] == sales} == {}
+    assert {i["label"]: i["count"] for i in week["inputs"] if i["to"] == marketing} == {"Team ideas": 1}
+    assert [(e["mode"], e["count"]) for e in week["edges"]] == [("spawn", 1)]
 
 
 def test_inputs_cap_labels_at_five_then_other_and_count_every_card(api):
@@ -233,18 +235,41 @@ def test_a_loop_counts_its_laps_and_shows_a_median_from_three(api):
 def test_the_map_counts_each_window_the_same_as_direct_sql(api):
     growth = make_factory(api, "Gro")
     marketing, m_steps = make_type(api, "Mkt", factory=growth)
-    sales, _ = make_type(api, "Sls", factory=growth)
+    sales, s_steps = make_type(api, "Sls", factory=growth)
     lead = link(api, marketing, m_steps["Doing"], sales)
-    cards = [card(api, marketing, m_steps["Doing"]) for _ in range(3)]
-    for c_, hours in zip(cards, (12, 3 * 24, 10 * 24), strict=True):
-        handoff(api, lead, c_["id"], ago(hours=hours))
+    ages = (12, 3 * 24, 10 * 24)  # hours before now: inside 1 day, inside 7 days, inside 30 days only
+    arrived = [card(api, marketing, m_steps["Doing"]) for _ in ages]
+    finished = [card(api, sales, s_steps["Doing"]) for _ in ages]
+    for t in finished:
+        move(api, t["id"], step=s_steps["Done"])
+    with api.app.state.store.transaction() as c:
+        for t, hours in zip(arrived, ages, strict=True):
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (ago(hours=hours), t["id"]))
+        for t, hours in zip(finished, ages, strict=True):
+            c.execute(
+                "UPDATE history_events SET created_at=? WHERE subject_type='task' AND kind='step' AND subject_id=?",
+                (ago(hours=hours), t["id"]),
+            )
+    for t, hours in zip(arrived, ages, strict=True):
+        handoff(api, lead, t["id"], ago(hours=hours))
     for period, days in (("1d", 1), ("7d", 7), ("30d", 30)):
-        with api.app.state.store.transaction() as c:
-            direct = c.execute(
-                "SELECT COUNT(*) FROM pipeline_handoffs WHERE created_at>=? AND returned_at IS NULL", (ago(days=days),)
+        since = ago(days=days)
+        with api.app.state.store.read() as c:
+            handoffs = c.execute(
+                "SELECT COUNT(*) FROM pipeline_handoffs WHERE created_at>=? AND returned_at IS NULL", (since,)
             ).fetchone()[0]
-        (edge,) = overview(api, period)["edges"]
-        assert edge["count"] == direct, period
+            arrivals = c.execute(
+                "SELECT COUNT(*) FROM tasks WHERE type_id=? AND created_at>=?", (marketing, since)
+            ).fetchone()[0]
+            done = c.execute(
+                "SELECT COUNT(DISTINCT subject_id) FROM history_events WHERE subject_type='task' AND kind='step' "
+                "AND new=? AND created_at>=?",
+                (s_steps["Done"], since),
+            ).fetchone()[0]
+        week = overview(api, period)
+        assert [e["count"] for e in week["edges"]] == [handoffs], period
+        assert sum(i["count"] for i in week["inputs"] if i["to"] == marketing) == arrivals, period
+        assert week["factories"][0]["done"] == done, period
 
 
 def test_a_factory_with_no_links_renders_cleanly(api):
