@@ -114,10 +114,10 @@ def test_a_new_ui_file_that_no_table_names_picks_every_page(repo: Path) -> None:
 
 
 def test_an_unshown_file_picks_no_page_and_is_named(repo: Path) -> None:
-    selection = picked(repo, {'ui/app/vault.js': 'vault\n'})
+    selection = picked(repo, {'ui/app/vault.ts': 'vault\n'})
     assert selection.pages == []
-    assert selection.unshown == ['ui/app/vault.js']
-    assert 'not shown: ui/app/vault.js' in selection.reason
+    assert selection.unshown == ['ui/app/vault.ts']
+    assert 'not shown: ui/app/vault.ts' in selection.reason
 
 
 def test_a_dark_line_turns_the_dark_pictures_on(repo: Path) -> None:

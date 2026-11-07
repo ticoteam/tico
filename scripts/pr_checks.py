@@ -17,10 +17,10 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
-    "ui/app/chat.ts": ["chat", "imported-history"],
-    "ui/app/chat-outline.ts": ["chat", "imported-history"],
-    "ui/app/visual-cards.ts": ["visual-cards", "visual-fallback", "visual-hosted"],
-    "ui/app/visual-media.ts": ["visual-media", "visual-media-app"],
+    "ui/app/chat.js": ["chat", "imported-history"],
+    "ui/app/chat-outline.js": ["chat", "imported-history"],
+    "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
+    "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
 }
 
 
