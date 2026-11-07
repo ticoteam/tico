@@ -22,9 +22,10 @@ function pipelineDotsSummary(reqs: PipelineRequirement[]): string {
   return `${met} of ${reqs.length} requirement${reqs.length === 1 ? '' : 's'} met`;
 }
 
-/** The dots on a card, or '' when the ticket has no requirements (the server sends the key only when it has some). */
-function pipelineDotsHTML(task: { requirements?: PipelineRequirement[] | null }): string {
-  const reqs = task.requirements ?? [];
+/** The dots on a card, or '' when the ticket has no requirements (the server sends the key only when it has some). The
+    board's rows carry the server's states (`none` is a missing requirement, drawn hollow), so they are mapped first. */
+function pipelineDotsHTML(task: { requirements?: (ServerDot | PipelineRequirement)[] | null }): string {
+  const reqs = pipelineBoardDots(task.requirements ?? []);
   if (!reqs.length) return '';
   const dots = reqs.map(req => {
     const label = pipelineDotLabel(req);

@@ -7,13 +7,29 @@ const TASK_REQ_STATE_WORDS: Record<PipelineReqState, string> = {
   met: 'Met', waiting: 'Waiting', out_of_date: 'Out of date', failed: 'Not passed', missing: 'Missing',
 };
 
-/** What the ticket shows for one piece of evidence: a link by its address, a file as a file. The newest one of a requirement
-    that is out of date says so: the work changed after it was attached. */
+/** What the ticket shows for one piece of evidence. Its link is the content's own address (href: a company file's pinned
+    version, so a later version never replaces what was reviewed). An image shows a preview that opens it; anything else is
+    a link named by what it is. The newest one of a requirement that is out of date says so. */
 function taskReqAttachmentHTML(att: PipelineReqAttachment, stale: boolean): string {
-  const href = att.url || (att.file_id ? `/api/v2/files/${encodeURIComponent(att.file_id)}` : '');
-  const label = att.url || (att.source === 'file' || att.source === 'blob' ? 'File' : att.source.replace('_', ' '));
-  const name = href ? `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(label)}</a>` : esc(label);
-  return `<li>${name}${att.at ? ` <span class="muted">${esc(ageShort(att.at))}</span>` : ''}${stale ? ' <span class="task-req-old">out of date</span>' : ''}</li>`;
+  const href = att.href ?? '';
+  const label = att.name || (att.source === 'link' ? 'Link' : 'File');
+  const name = !href ? esc(label)
+    : att.format === 'image'
+      ? `<a class="task-req-thumb" href="${esc(href)}" target="_blank" rel="noopener"><img src="${esc(href)}" alt="${esc(label)}" loading="lazy"></a>`
+      : `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(label)}</a>`;
+  return `<li>${name}${att.created_at ? ` <span class="muted">${esc(ageShort(att.created_at))}</span>` : ''}${stale ? ' <span class="task-req-old">out of date</span>' : ''}</li>`;
+}
+
+/** The state words of a requirement on a ticket. A met one says who passed it, and under which version when the rule has
+    changed since (the decision stands under the version it was made under). */
+function taskReqStateText(req: PipelineRequirement): string {
+  const word = TASK_REQ_STATE_WORDS[req.state] || req.state;
+  if (req.state === 'met' && req.passed) {
+    const who = req.passed.by ? actorLabel(req.passed.by) : '';
+    const old = req.passed.version < req.passed.current ? `under v${req.passed.version}` : '';
+    return [old ? `${word} ${old}` : word, who].filter(Boolean).join(' · ');
+  }
+  return `${word}${req.next_actor && req.state !== 'met' ? ` · ${actorLabel(req.next_actor)}` : ''}`;
 }
 
 /** The section's markup for these requirements, or '' when there are none. */
@@ -36,7 +52,7 @@ function taskRequirementsSection(taskId: string, typeId: string, reqs: PipelineR
     return `<div class="task-req" data-req-id="${esc(req.id)}" data-state="${esc(req.state)}">
       <span class="pdot pdot-${esc(req.state)}" aria-hidden="true"></span>
       <span class="task-req-name">${esc(req.name)}${req.detail ? ` <span class="muted">${esc(req.detail)}</span>` : ''}${files}</span>
-      <span class="task-req-state">${esc(TASK_REQ_STATE_WORDS[req.state] || req.state)}${req.next_actor && req.state !== 'met' ? ` · ${esc(actorLabel(req.next_actor))}` : ''}</span>
+      <span class="task-req-state">${esc(taskReqStateText(req))}</span>
       <span class="task-req-end">${more}</span>
     </div>`;
   }).join('');
@@ -58,23 +74,21 @@ function taskRequirementsSection(taskId: string, typeId: string, reqs: PipelineR
 
 /** The requirements section of the ticket as the board's dots give it, or '' when its stage has none. It fills in from
     the ticket's own requirements (taskRequirementsLoad) once it is on the page. */
-function taskRequirementsHTML(task: { id: string | number; type_id?: string; requirements?: PipelineRequirement[] | null }): string {
-  return taskRequirementsSection(String(task.id), task.type_id ?? '', task.requirements ?? []);
+function taskRequirementsHTML(task: { id: string | number; type_id?: string; requirements?: (ServerDot | PipelineRequirement)[] | null }): string {
+  return taskRequirementsSection(String(task.id), task.type_id ?? '', pipelineBoardDots(task.requirements ?? []));
 }
 
 /** Fills the ticket's requirements from GET /v2/tasks/{id}/requirements (what each asks for, who decided, what is
-    attached) and the evidence on each attachment requirement. A read that fails leaves the dots' version. */
+    attached). A read that fails leaves the dots' version. */
 async function taskRequirementsLoad(root: ParentNode): Promise<void> {
   for (const section of root.querySelectorAll<HTMLElement>('.task-requirements[data-task-id]')) {
     const taskId = section.dataset.taskId ?? '';
     const typeId = section.dataset.typeId ?? '';
     try {
+      // One read: the requirements come with their attachments, so there is no request per attachment requirement.
       const reqs = await pipelineTaskRequirements(taskId);
       const may = pipelineMayEditRules(typeId);
-      await Promise.all(reqs.map(async req => {
-        req.can_mark_met = may && req.state !== 'met';
-        if (req.kind === 'attachment') req.attachments = await pipelineAttachments(taskId, req.id).catch(() => []);
-      }));
+      for (const req of reqs) req.can_mark_met = may && req.state !== 'met';
       if (!section.isConnected) continue;
       const html = taskRequirementsSection(taskId, typeId, reqs);
       if (!html) continue;
