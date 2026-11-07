@@ -123,8 +123,15 @@ empty private repository in the account (`POST /user/repos`). A bot's repository
 call, still uses installation tokens.
 
 - Each return from GitHub carries a single-use state that Tico made for the owner's session: the Authorize link, or the
-  install link on a personal account, which may ask for the authorization too (`request_oauth_on_install`). A return
-  without a valid state, from another person, or more than an hour after its state was made is refused.
+  install link. Every Install link in Tools goes through Tico's `/api/v2/github/app/install`, which makes the state and
+  sends the owner on to GitHub; the install may ask for the authorization too (`request_oauth_on_install`). A return
+  with a code or an error, without a valid state, from another person, or more than an hour after its state was made
+  is refused.
+- An install's return with no state and no code is taken only when its installation is on the owner's own account.
+  Tico asks GitHub for that installation (`GET /app/installations/{id}`, which answers for this App alone) and compares
+  the account's numeric id with the one the App was made for; any other installation is refused with
+  `github_installation`. The install step runs on that return, and authorizing stays a separate step. This covers an
+  install return whose state GitHub does not send back.
 - The token is refreshed automatically when fewer than ten minutes of it remain. GitHub rotates the refresh token on each
   refresh, and Tico stores the new one before it uses the new access token. Refreshes run one at a time.
 - A refresh GitHub refuses, or a token GitHub rejects, forgets that authorization only (a newer one is kept). Tools asks

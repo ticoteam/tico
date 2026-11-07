@@ -16,7 +16,7 @@ const CALLBACK = 'https://tico.acme.example/api/v2/github/app/authorized';
 const PERSONAL = {
   connected: true, slug: 'acme-tico', org: 'ana-dev', account_type: 'User', app_id: 4242, administration: true, installed: true,
   authorized: false, callback_url: CALLBACK,
-  install_url: 'https://github.com/apps/acme-tico/installations/new',
+  install_url: '/api/v2/github/app/install',
   settings_url: 'https://github.com/settings/apps/acme-tico',
   permissions_url: 'https://github.com/settings/apps/acme-tico/permissions',
   uninstall_url: 'https://github.com/settings/installations',
@@ -117,6 +117,12 @@ async function themed(page, locator, name) {
       await host.locator('[data-gh-install]').waitFor();
       assert.equal(await host.getByRole('button', {name: 'Authorize', exact: true}).count(), 1, 'the same one button');
       assert.equal(await host.locator('[data-gh-authorize] code').count(), 0, 'no callback hint once the App has it');
+
+      // Not installed yet: the Install link is Tico's own route, which makes the state GitHub's install return must carry.
+      state.app = {...PERSONAL, callback_url: '', installed: false};
+      await page.reload();
+      await host.locator('[data-gh-install]').waitFor();
+      assert.equal(await host.locator('[data-gh-install-link]').getAttribute('href'), PERSONAL.install_url, 'the install link goes through Tico');
 
       // Authorized: the card says Tico can create them, with no Authorize button.
       state.app = AUTHORIZED;

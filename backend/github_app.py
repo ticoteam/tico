@@ -165,6 +165,11 @@ def account_word(row):
     return "account" if account_kind(row) == PERSONAL else "organization"
 
 
+# The install link is Tico's own route: it mints the single-use state the install's return must carry, then sends
+# the owner on to GitHub's install page.
+INSTALL_PATH = "/api/v2/github/app/install"
+
+
 def links(row):
     """The GitHub pages for the App and its installation, built from the row: an organization's settings live under its
     own URL, a personal account's under the user's. Every link Tico shows or sends a person to is built here."""
@@ -179,7 +184,7 @@ def links(row):
     return {
         "settings_url": base,
         "permissions_url": base + "/permissions",
-        "install_url": f"https://github.com/apps/{slug}/installations/new",
+        "install_url": INSTALL_PATH,
         "uninstall_url": installations,
     }
 
@@ -794,6 +799,25 @@ class GitHubApp:
         with self.store.transaction() as c:
             c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (found["id"] if found else None,))
         return int(found["id"]) if found else None
+
+    def installation_account_id(self, installation_id):
+        """The numeric id of the account one of this App's installations is on, or None when GitHub does not know the
+        installation as this App's: GitHub answers for this App's own installations only."""
+        token = self._jwt()
+        r = self._call("GET", f"/app/installations/{installation_id}", headers={"Authorization": "Bearer " + token})
+        if r.status_code == 404:
+            return None
+        if r.status_code >= 300:
+            limited = rate_limited(r)
+            raise Problem(
+                "github_installations",
+                "GitHub would not show the app's installation",
+                502,
+                retryable=limited,
+                extra={"github_status": r.status_code, "rate_limited": limited},
+            )
+        account = r.json().get("account") or {}
+        return int(account["id"]) if account.get("id") else None
 
     def live_permissions(self, refresh=False):
         """The installation's permissions as GitHub reports them now, cached briefly; None when they
@@ -1841,6 +1865,17 @@ def install_github_app(app, settings, store):
         with store.transaction() as c:
             return {"replaced": service.replace_lost_key(c, who.actor)}
 
+    def install_page(actor, slug):
+        """GitHub's install page for the App, with a fresh single-use state made for this person. The install's return
+        carries it back to /authorized, and only a state Tico made is taken."""
+        nonce = secrets.token_urlsafe(24)
+        with store.transaction() as c:
+            c.execute("DELETE FROM github_user_states WHERE created_at<?", (time.time() - STATE_TTL,))
+            c.execute(
+                "INSERT INTO github_user_states(nonce,actor,created_at) VALUES(?,?,?)", (nonce, actor, time.time())
+            )
+        return f"https://github.com/apps/{quote(str(slug), safe='')}/installations/new?" + urlencode({"state": nonce})
+
     @app.get("/api/v2/github/app/callback")
     def callback(request: Request, code: str = "", state: str = ""):
         who = owner(request)
@@ -1872,14 +1907,7 @@ def install_github_app(app, settings, store):
                 {"org": saved["org"], "account_type": saved["account_type"], "app_id": conversion["id"]},
             )
         # The install's return to the authorize callback carries this state back; the callback takes only a state Tico made.
-        nonce = secrets.token_urlsafe(24)
-        with store.transaction() as c:
-            c.execute(
-                "INSERT INTO github_user_states(nonce,actor,created_at) VALUES(?,?,?)", (nonce, who.actor, time.time())
-            )
-        return RedirectResponse(
-            f"https://github.com/apps/{conversion['slug']}/installations/new?state={nonce}", status_code=302
-        )
+        return RedirectResponse(install_page(who.actor, conversion["slug"]), status_code=302)
 
     @app.get("/api/v2/github/app/authorize-link")
     def authorize_link(request: Request):
@@ -1900,6 +1928,16 @@ def install_github_app(app, settings, store):
         query = urlencode({"client_id": row["client_id"], "redirect_uri": user_callback(settings), "state": nonce})
         return {"url": f"{WEB}/login/oauth/authorize?{query}"}
 
+    @app.get("/api/v2/github/app/install")
+    def install_link(request: Request):
+        """The App's install page on GitHub. Every Install link in the UI comes here, so the install's return carries a
+        state Tico made for this session, the way the Authorize link's does."""
+        who = owner(request)
+        row = service.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App first", 409)
+        return RedirectResponse(install_page(who.actor, row["slug"]), status_code=302)
+
     @app.get("/api/v2/github/app/authorized")
     def authorized(
         request: Request,
@@ -1909,12 +1947,15 @@ def install_github_app(app, settings, store):
         setup_action: str = "",
         error: str = "",
     ):
-        """Where GitHub sends the owner after they authorize Tico for the personal account, or after an install that asks for
-        the authorization too. Every return must carry the single-use state Tico made for this session (the Authorize link or
-        the install link), unused and fresh. An install's return (installation_id or setup_action) runs the install step
-        first, and an installation_id must be the App's own installation. A return without a code (the owner declined) goes
-        back to Tools after that."""
+        """Where GitHub sends the owner after they authorize Tico for the personal account, or after an install. Every return
+        must carry the single-use state Tico made for this session (the Authorize link or the install link), unused and
+        fresh, except an install's return with no state and no code: that one is taken only for an installation on the
+        owner's own account (installed_without_state). An install's return runs the install step first, and an
+        installation_id must be the App's own installation. A return without a code (the owner declined, or the install
+        asked for no authorization) goes back to Tools after that."""
         who = owner(request)
+        if installation_id and not (state or code or error):
+            return installed_without_state(who, installation_id)
         with store.transaction() as c:
             found = c.execute("SELECT * FROM github_user_states WHERE nonce=?", (state,)).fetchone() if state else None
             if found:
@@ -1939,9 +1980,12 @@ def install_github_app(app, settings, store):
                 raise Problem(
                     "github_installation", "That installation is not this GitHub App's; start again from Tools", 409
                 )
-        if error or not code:
-            if error:
-                return RedirectResponse("/#/tools/github?github=declined", status_code=302)
+        if error:
+            return RedirectResponse("/#/tools/github?github=declined", status_code=302)
+        if not code:
+            if installation_id or setup_action:
+                # An install that asked the owner for no authorization: the install step ran, and Tools goes on from here.
+                return RedirectResponse("/#/tools/github?github=installed", status_code=302)
             raise Problem("github_exchange", "GitHub did not send an authorization code", 400)
         tokens = service.exchange_user(code)
         login, github_id = service.user_identity(tokens["access_token"])
@@ -1978,6 +2022,23 @@ def install_github_app(app, settings, store):
         with store.transaction() as c:
             H.event(c, actor, "github.app_installed", "", {"installed": bool(found)})
         return found
+
+    def installed_without_state(who, installation_id: str):
+        """An install's return with no state, which GitHub may send without the one Tico made. It is taken only when the
+        installation is this App's and sits on the owner's own account: GitHub answers for this App's installations alone,
+        so the account id is the check. A code or an error always goes through the state check instead."""
+        row = service.row()
+        if not row or account_kind(row) != PERSONAL:
+            raise Problem("github_not_connected", "Connect the personal GitHub account first", 409)
+        with store.read_transaction() as c:
+            expected = service.owner_id(c)
+        account = service.installation_account_id(int(installation_id)) if installation_id.isdigit() else None
+        if not expected or account != expected:
+            raise Problem(
+                "github_installation", "That installation is not this account's GitHub App; start again from Tools", 409
+            )
+        installed_now(who.actor)
+        return RedirectResponse("/#/tools/github?github=installed", status_code=302)
 
     @app.get("/api/v2/github/app/installed")
     def installed(request: Request):

@@ -38,8 +38,8 @@ window.mountGithubConnect = async function (host) {
       <a data-gh-uninstall-link target="_blank" rel="noopener">Uninstall on GitHub</a></div>
       <p class="muted">Disconnect forgets the app here; delete it on GitHub to revoke access.</p>
       <p role="status" data-gh-status></p>`;
-    // The server's GitHub links are set as properties, and only when they point at GitHub over https.
-    const link = (node, url) => { if (node && /^https:\/\/github\.com\//.test(url || '')) node.href = url; };
+    // The server's links are set as properties, and only when they point at GitHub over https or at Tico's install route.
+    const link = (node, url) => { if (node && (url === '/api/v2/github/app/install' || /^https:\/\/github\.com\//.test(url || ''))) node.href = url; };
     link(host.querySelector('[data-gh-permissions]'), state.permissions_url);
     link(host.querySelector('[data-gh-events]'), state.permissions_url);
     link(host.querySelector('[data-gh-install-link]'), state.install_url);

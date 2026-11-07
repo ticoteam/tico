@@ -60,6 +60,7 @@ class FakeGitHub:
         self.conversion_owner = {"login": "Acme", "type": "Organization"}  # whose account GitHub made the App under
         self.token_login = "ana-dev"  # the login GitHub says an authorized user token is for
         self.user_id = 9001  # the numeric id of that login (GET /user)
+        self.installation_account_id = 9001  # the account the installation is on (GET /app/installations/{id})
         self.refresh_status = None  # answer every refresh with this status, as GitHub failing does, when set
         self.refuse_refresh = False  # refuse every refresh (the refresh token is no longer good)
         self.refreshes, self.issued = 0, 0  # refreshes made; tokens issued (gho_<n> access, ghr_<n> refresh)
@@ -137,7 +138,7 @@ class FakeGitHub:
         if path == "/app/installations":
             return httpx.Response(200, json=self.installations)
         if path.startswith("/app/installations/") and not path.endswith("/access_tokens"):
-            info = {"id": 77, "repository_selection": self.selection}
+            info = {"id": 77, "repository_selection": self.selection, "account": {"id": self.installation_account_id}}
             if self.permissions is not None:
                 info["permissions"] = self.permissions
             return httpx.Response(200, json=info)
@@ -471,7 +472,7 @@ def test_state_is_single_use_and_bound_to_session(api, gh):
 def test_callback_stores_secrets_and_never_exposes_pem(api, gh, caplog):
     caplog.set_level("DEBUG")
     r = connect(api)
-    assert r.headers["location"] == "https://github.com/apps/acme-tico/installations/new"
+    assert r.headers["location"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
     assert gh.of("/conversions")[0][1] == "/app-manifests/the-code/conversions"
     status = api.get("/api/v2/github/app", headers=auth())
     body = status.text
@@ -1494,6 +1495,7 @@ def personal(gh, login="ana-dev"):
     gh.accounts[login] = "User"
     gh.conversion_owner = {"login": login, "type": "User", "id": gh.user_id}
     gh.installations = [{"id": 77, "account": {"login": login}}]
+    gh.installation_account_id = gh.user_id
 
 
 def test_the_setup_link_goes_to_the_settings_of_the_kind_of_account_the_name_is(api, gh):
@@ -1552,7 +1554,7 @@ def test_a_personal_app_is_saved_under_the_login_github_made_it_for_not_the_name
     assert status["settings_url"] == "https://github.com/settings/apps/acme-tico"
     assert status["permissions_url"] == "https://github.com/settings/apps/acme-tico/permissions"
     assert status["uninstall_url"] == "https://github.com/settings/installations"
-    assert status["install_url"] == "https://github.com/apps/acme-tico/installations/new"
+    assert status["install_url"] == "/api/v2/github/app/install"
     with api.app_state.store.read() as c:
         assert tuple(c.execute("SELECT org,account_type FROM github_app").fetchone()) == ("ana-dev", "User")
     # The installation is found by that login, so a run token can be minted for the account's repositories.
@@ -1609,7 +1611,8 @@ def test_the_owner_authorizes_tico_for_the_personal_account_once_and_only_that_a
     with api.app_state.store.read() as c:  # a Tools sign-in is not an install: the install step does not run on it
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0] == installs
     status = api.get("/api/v2/github/app", headers=auth()).json()
-    assert status["authorized"] is True and status["callback_url"] == PUBLIC + "/api/v2/github/app/authorized"
+    # The manifest named the callback, so the card has no callback hint to show.
+    assert status["authorized"] is True and status["callback_url"] == ""
     assert "gho_" not in json.dumps(status) and "ghr_" not in json.dumps(status)
     with api.app_state.store.read() as c:
         sealed = bytes(c.execute("SELECT ciphertext FROM github_user_token").fetchone()[0])
@@ -1901,6 +1904,49 @@ def test_an_install_return_runs_the_install_step_and_a_decline_goes_back_to_tool
     assert declined.status_code == 302 and declined.headers["location"] == "/#/tools/github?github=declined"
 
 
+def test_the_status_install_link_mints_a_state_its_return_takes_once(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    status = api.get("/api/v2/github/app", headers=auth()).json()
+    assert status["install_url"] == "/api/v2/github/app/install"
+    link = api.get(status["install_url"], headers=auth())
+    assert link.status_code == 302, link.text
+    assert link.headers["location"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
+    state = parse_qs(urlparse(link.headers["location"]).query)["state"][0]
+    params = {"state": state, "installation_id": "77", "setup_action": "install"}
+    back = api.get("/api/v2/github/app/authorized", params=params, headers=auth())
+    assert back.status_code == 302 and back.headers["location"] == "/#/tools/github?github=installed", back.text
+    assert api.get("/api/v2/github/app", headers=auth()).json()["installed"] is True
+    again = api.get("/api/v2/github/app/authorized", params=params, headers=auth())
+    assert again.status_code == 400 and again.json()["error"]["code"] == "github_state", again.text
+
+
+def test_an_install_return_with_no_state_is_taken_only_for_an_installation_on_the_owners_account(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    params = {"installation_id": "77", "setup_action": "install"}
+    gh.installation_account_id = 1234  # the App's installation is on another account
+    refused = api.get("/api/v2/github/app/authorized", params=params, headers=auth())
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_installation", refused.text
+    gh.installation_account_id = gh.user_id
+    back = api.get("/api/v2/github/app/authorized", params=params, headers=auth())
+    assert back.status_code == 302 and back.headers["location"] == "/#/tools/github?github=installed", back.text
+    assert api.get("/api/v2/github/app", headers=auth()).json()["installed"] is True
+    # A code is the OAuth exchange, which stays strict: without the state it is refused.
+    strict = api.get("/api/v2/github/app/authorized", params={**params, "code": "the-code"}, headers=auth())
+    assert strict.status_code == 400 and strict.json()["error"]["code"] == "github_state", strict.text
+
+
+def test_an_install_return_with_no_state_is_refused_for_an_app_that_recorded_no_owner_id(api, gh):
+    personal(gh, "ana-dev")
+    gh.conversion_owner = {"login": "ana-dev", "type": "User"}  # GitHub did not say whose account the App was made for
+    connect(api, org="ana-dev")
+    refused = api.get(
+        "/api/v2/github/app/authorized", params={"installation_id": "77", "setup_action": "install"}, headers=auth()
+    )
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_installation", refused.text
+
+
 def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
     sql = (Path(G.__file__).parent / "migrations" / "20261107181259_github_user_token.sql").read_text(encoding="utf-8")
     with sqlite3.connect(":memory:") as c:
@@ -1934,13 +1980,13 @@ def test_links_follow_the_kind_of_account_everywhere_they_are_built():
     assert G.links(organization) == {
         "settings_url": "https://github.com/organizations/Acme/settings/apps/acme-tico",
         "permissions_url": "https://github.com/organizations/Acme/settings/apps/acme-tico/permissions",
-        "install_url": "https://github.com/apps/acme-tico/installations/new",
+        "install_url": "/api/v2/github/app/install",
         "uninstall_url": "https://github.com/organizations/Acme/settings/installations",
     }
     assert G.links(personal_row) == {
         "settings_url": "https://github.com/settings/apps/acme-tico",
         "permissions_url": "https://github.com/settings/apps/acme-tico/permissions",
-        "install_url": "https://github.com/apps/acme-tico/installations/new",
+        "install_url": "/api/v2/github/app/install",
         "uninstall_url": "https://github.com/settings/installations",
     }
     assert repo_waits.permissions_url(None, personal_row) == G.links(personal_row)["permissions_url"]

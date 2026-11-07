@@ -90,6 +90,9 @@ TABLES = {
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset(
     {
+        # The owner's GitHub user token and its single-use states (backend/github_app.py, the personal-accounts migration).
+        "github_user_states",
+        "github_user_token",
         # Native threads (backend/threads.py, calls, Slack threads), merged before their row shapes.
         "call_holds",
         "call_participants",
