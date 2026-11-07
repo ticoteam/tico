@@ -269,6 +269,32 @@ def alias_add(c: sqlite3.Connection, book_id: str, name_key: str, contact_id: st
     )
 
 
+def alias_row(c: sqlite3.Connection, book_id: str, name_key: str) -> Any:
+    return c.execute(
+        "SELECT contact_id, merged_from FROM fin_vendor_aliases WHERE book_id=? AND name_key=?", (book_id, name_key)
+    ).fetchone()
+
+
+def alias_put(
+    c: sqlite3.Connection, book_id: str, name_key: str, contact_id: str, at: str, merged_from: str | None
+) -> None:
+    """A vendor merge's alias: a new name, or an alias moved to `contact_id` from the contact it was on."""
+    if alias_of(c, book_id, name_key):
+        c.execute(
+            "UPDATE fin_vendor_aliases SET contact_id=?, merged_from=? WHERE book_id=? AND name_key=?",
+            (contact_id, merged_from, book_id, name_key),
+        )
+        return
+    c.execute(
+        "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at, merged_from) VALUES(?,?,?,?,?)",
+        (book_id, name_key, contact_id, at, merged_from),
+    )
+
+
+def alias_delete(c: sqlite3.Connection, book_id: str, name_key: str) -> None:
+    c.execute("DELETE FROM fin_vendor_aliases WHERE book_id=? AND name_key=?", (book_id, name_key))
+
+
 def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
     """The vendor a new line posts under (spec §3: one key per vendor): a contact's id stays; a name that is an active
     vendor contact's alias becomes its id; any other name stays as written, for posting.post to key (L.name_key) and
@@ -294,12 +320,16 @@ def renewals_due(c: sqlite3.Connection, book_id: str) -> list[Any]:
 
 
 def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
-    """The vendor a budget or a charge means: a contact's id stays; a name aliased to a contact (even one no longer
-    active: its history still maps) is that contact's id; any other name is its name key."""
-    if not key or is_contact(c, key):
+    """The vendor a budget or a charge means: a name aliased to a contact (even one no longer active: its history still
+    maps) is that contact's id, and so is a contact id a merge moved onto another vendor (vendors.py). A contact's id
+    with no alias stays; any other name is its name key."""
+    if not key:
         return key
     nk = name_key(key)
-    return alias_of(c, book_id, nk) or nk
+    alias = alias_of(c, book_id, nk)
+    if alias:
+        return alias
+    return key if is_contact(c, key) else nk
 
 
 def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:

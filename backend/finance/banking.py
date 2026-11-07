@@ -29,6 +29,7 @@ from .core import feeds as F
 from .core import kinds as K
 from .core import ledger as L
 from .core import validate as V
+from .core.merchant import merchant_key
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
@@ -621,6 +622,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
         "txn_date": t.txn_date,
         "amount": t.amount,
         "counterparty": t.counterparty,
+        "vendor_key": merchant_key(t.counterparty),
         "description": t.description,
         "pending": 1 if t.pending else 0,
         "provider_status": t.status,

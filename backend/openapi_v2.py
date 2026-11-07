@@ -5362,7 +5362,8 @@ SCHEMAS.update(
                             "lines": items({"type": "object", "additionalProperties": True}),
                             "account_id": "s",
                             "account": "s",
-                            "vendor": "s",
+                            # a bank or card row: {id, name} (its vendor); an entry's line: the vendor's id
+                            "vendor": {"anyOf": [{"type": "string"}, obj({"id": "s", "name": "s"})]},
                             "vendor_name": "s",
                             "memo": "s",
                             "source": "s",

@@ -23,6 +23,20 @@ reconciliation cleared it keeps its booked status: it stays in the list, does no
 `provider_status` holds the bank's word. A row a person ignored stays in the list as `ignored` until the bank ends it; then
 it leaves the list like any other row the bank ended.
 
+## Vendors
+
+A bank or card row's vendor is one identity per merchant. Its key strips what the bank adds to a name: a processor
+prefix (`SQ *`, `TST*`, `PAYPAL *`), a reference or store number and case, so `GOOGLE *ADS8812` and `GOOGLE ADS` are one
+vendor. The Transactions read (and `hub_finance_search` on `feed`) gives each bank or card row `vendor: {id, name}`: `id` is
+the contact the key resolves to, else the key, and `name` is the contact's name. Watch's duplicate charge and price
+increase checks group by that vendor and name the finding by it.
+
+`vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
+them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.
+Spend by vendor, budgets and attribution rules then count the names as `into`. A name already on another contact is
+refused, and the error says which. `vendor_unmerge {into, keys}` takes back a merge: pass the `keys` it returned. A mirrored
+book (QuickBooks, Xero) gets only the aliases; its contacts are left alone.
+
 ## Acting
 
 `hub finance act help` lists every action kind with the right it needs; `hub finance act help --payload
