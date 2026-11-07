@@ -60,6 +60,19 @@ since yesterday, post no answers file: the week's answers stay.
 Then reply with the page: a one-line title of a few words, then the bullets under their groups. The run posts your reply
 as the week's briefing and keeps the items you tagged. A person who asks for a briefing in a task gets the same post.
 
+## 3b. Each segment with news
+
+The company plays in segments, each with its own briefing page. `hub market segments` lists the company's segments, each
+with its id and name. `hub market spend` gives each segment's `players`. An item belongs to a segment when one of its
+`entity_ids` is one of the segment's players or the segment itself. For each of the company's segments with at least one item today, post
+its briefing the same way as step 3, with that segment's items only and its answers, from its own items and sizes:
+
+    hub market briefing post --segment segment/<slug> --week 2026-W44 --title "<a few words>" \
+      --body-file <segment>.md --items-file <segment>-items.json --answers-file <segment>-answers.json
+
+A segment with no item today gets no post: its week's briefing stays as it was. These posts are not your reply; the
+reply is the whole market's page from step 2.
+
 ## 4. Finish
 
 Do not message the Strategy Bot about the briefing: the server opens its task when the items touch a bet.

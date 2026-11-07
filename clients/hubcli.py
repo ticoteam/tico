@@ -3383,8 +3383,20 @@ def parser():
         dest="answers_file",
         help="JSON object of one-line answers: {changed, money, players, reach, saying}",
     )
+    s.add_argument(
+        "--segment",
+        dest="segment_id",
+        default=None,
+        help="a segment's id (segment/<slug>): this briefing is that segment's; left out, the whole market's",
+    )
     s.set_defaults(fn="market briefing post")
     s = briefing.add_parser("latest", help="the newest briefing, its items and the bets it touches")
+    s.add_argument(
+        "--segment",
+        dest="segment_id",
+        default=None,
+        help="a segment's id (segment/<slug>): this briefing is that segment's; left out, the whole market's",
+    )
     s.set_defaults(fn="market briefing latest")
     s = market.add_parser(
         "define", help="Librarian or owner: define the market (what it is, what is in and out, how to count)"
@@ -3486,6 +3498,10 @@ def parser():
     s.add_argument("--basis", choices=["product", "platform"])
     s.add_argument("--year", type=int)
     s.set_defaults(fn="market spend")
+    s = market.add_parser(
+        "segments", help="the company's segments side by side, with the newest briefing items across them"
+    )
+    s.set_defaults(fn="market segments")
     s = market.add_parser("research", help="owner only: ask the Librarian to define and size the market")
     s.add_argument("description")
     s.set_defaults(fn="market research")

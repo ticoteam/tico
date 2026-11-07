@@ -5734,6 +5734,9 @@ def create_app(settings=None):
     from .market_spend import install as install_market_spend
 
     install_market_spend(app, store, auth, mutate)
+    from .market_segments import install as install_market_segments
+
+    install_market_segments(app, store, auth, mutate)
     from .strategy_market import install as install_strategy_market
 
     install_strategy_market(app, store, auth, mutate)
