@@ -1,26 +1,36 @@
 # pyright: strict
 """Visual specs: a product manager's spec is a Tico page filed on its Product roadmap card (`hub page publish --spec
---task <card>`). Only a person moves the card from Spec to Approved. That hands the spec to a builder: a frozen copy
-of the spec page is filed and pinned on a new Dev ticket under the card, and the ticket's body carries the page link
-and its text. Review and QA children of the ticket get the same link and text (child_body).
+--task <card>`). Only a person moves the card from Spec to Approved: by hand, by answering the approval question a bot
+asks under the card on the spec topic (after_answer), or through the person's own Assistant on words they wrote in its
+chat (_may_approve). That hands the spec to a builder: a frozen copy of the spec page is filed and pinned on a new Dev
+ticket under the card, and the ticket's body carries the page link and its text. Review and QA children of the ticket
+get the same link and text (child_body).
 
 The styles are inlined into the stored HTML when the spec is published (inline_styles), so the page reads the same
 wherever it is opened, and the frozen copy shares the spec's stored bytes: nothing is snapshotted twice."""
 
 import html
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 from . import hubdb as H
 from . import roadmap_flow as RF
+from . import task_relations as TR
 
-# The hub core and the roadmap are not typed yet; these aliases leave their calls to be checked where they are made.
+# The hub core, the roadmap and the relations are not typed yet; these aliases leave their calls to be checked where
+# they are made.
 hub: Any = H
 roadmap: Any = RF
+relations: Any = TR
 
 SPEC = "Spec"
 APPROVED = "Approved"
+# The question topic a bot asks the approval under (`hub task question --topic spec-approval`), and its approving option.
+TOPIC = "spec-approval"
+APPROVE = "Approve"
 # Read in this order: tokens define the :root variables the rest use.
 STYLES = ("tokens.css", "base.css", "components.css", "brand.css")
 TEXT_CAP = 6000
@@ -28,12 +38,20 @@ NO_DEV = "No Dev tickets type, so no builder ticket was made"
 CARD, FROZEN = "card", "frozen"  # pages.spec values: the live spec on a card, its copy on a Dev ticket
 
 _files: Any = None
+_base = ""  # this server's address, so a ticket's page link opens from anywhere
 
 
-def bind(files: Any) -> None:
-    """The Files service (backend/files.py), set when the pages are installed: a frozen copy is a version of a file."""
-    global _files
+def bind(files: Any, public_url: str | None = None) -> None:
+    """The Files service (backend/files.py) and this server's address, set when the pages are installed: a frozen copy
+    is a version of a file, and a ticket links its page by route."""
+    global _files, _base
     _files = files
+    _base = str(public_url or "").rstrip("/")
+
+
+def page_link(file_id: str) -> str:
+    """The route the Tico UI opens a page at."""
+    return f"{_base}/#/page/{quote(file_id, safe='')}"
 
 
 def inline_styles(data: bytes) -> bytes:
@@ -99,11 +117,24 @@ def _frozen(c: Any, ticket_id: str) -> Any:
     ).fetchone()
 
 
+def _may_approve(actor: str) -> bool:
+    """A person moves a spec to Approved: directly, or through their own Assistant on words they wrote in its chat (the
+    DELEGATION record assistant.instruction makes, for that person, which the move then records as via assistant). A bot,
+    an automation or BotOps acting with a person's rights is refused."""
+    if not hub.is_human(actor):
+        return False
+    via = hub.VIA.get()
+    if not via:
+        return True
+    lent: Any = hub.DELEGATION.get() or {}
+    return bool(via == "assistant" and lent.get("for") == actor and lent.get("run") == "asked" and lent.get("cited"))
+
+
 def check(c: Any, actor: str, row: Any, step_id: Any) -> None:
-    """Before the move is written: a bot, or anyone acting for a bot, cannot approve a spec, and a card needs one."""
+    """Before the move is written: only a person moves a spec to Approved (_may_approve), and the card needs a spec."""
     if not approval(c, row, step_id):
         return
-    if not hub.is_human(actor) or hub.VIA.get():
+    if not _may_approve(actor):
         hub.refuse(c, actor, "approval", "Only a person moves a spec to Approved.")
     if spec_page(c, row["id"]) is None:
         hub.refuse(c, actor, "spec", "Publish the spec page on this card first")
@@ -132,7 +163,25 @@ def _id_of(task: Any) -> str:
 
 
 def _block(title: str, file_id: str, text: str) -> str:
-    return f"Spec: {title}\nSpec page: {file_id}\n\n{text}"
+    return f"Spec: {title}\nSpec page: {page_link(file_id)}\n\n{text}"
+
+
+def _attempt(c: Any, write: Callable[[], Any]) -> str | None:
+    """One write in a savepoint: a refusal rolls it back and comes back as its reason, so the caller can say why."""
+    c.execute("SAVEPOINT spec_write")
+    try:
+        write()
+    except hub.Refused as exc:
+        c.execute("ROLLBACK TO spec_write")
+        return str(exc.detail or exc)
+    finally:
+        c.execute("RELEASE spec_write")
+    return None
+
+
+def _note(c: Any, card_id: str, text: str) -> None:
+    """A line from the system on the card: the approval did not go through, and why."""
+    hub.task_comment(c, hub.KEEPER, card_id, text, wake=False)
 
 
 def handoff(c: Any, actor: str, card: Any) -> None:
@@ -197,7 +246,34 @@ def handoff(c: Any, actor: str, card: Any) -> None:
         (row["id"], "none", None, now, now, FROZEN, FROZEN, now),
     )
     pages_api.Pages.pin_to_task(c, row, ticket_id, actor=actor)
+    # The ticket links the frozen copy, the page the builder reads; the live spec may change after approval.
+    _attempt(c, lambda: hub.task_update(c, actor, ticket_id, body=_block(spec["title"], row["id"], text)))
     hub.event(c, actor, "spec.approved", card["id"], {"ticket": ticket_id, "page": row["id"]})
+
+
+def after_answer(c: Any, who: Any, row: Any, task_id: str, answers: dict[str, list[str]], dismiss: bool) -> None:
+    """A question on the spec topic that the person it asks answers Approve moves its card to Approved, as that person.
+    Any other answer leaves the card where it is. The question is closed already (question_tasks.answer), so a refused
+    move, or a card no longer in Spec, is a note on the card."""
+    if dismiss or hub.question_topic(row.get("question_topic")) != TOPIC:
+        return
+    picks = {label.casefold() for labels in answers.values() for label in labels}
+    if APPROVE.casefold() not in picks:
+        return
+    card_id = relations.parent_of(c, task_id)
+    card = cast(dict[str, Any] | None, hub.task(c, card_id)) if card_id else None
+    if not card_id or not card:
+        return
+    if who.actor != row["owner_id"]:
+        _note(c, card_id, f"Only the person it asks approves a spec. The card stays in {SPEC}.")
+        return
+    target = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name=?", (card["type_id"], APPROVED)).fetchone()
+    if not target or not approval(c, card, target[0]):
+        _note(c, card_id, f"Nothing approved: the card is not in {SPEC}.")
+        return
+    reason = _attempt(c, lambda: hub.task_update(c, who.actor, card_id, step=target[0]))
+    if reason:
+        _note(c, card_id, f"Not approved: {reason}")
 
 
 def child_body(c: Any, ticket_id: Any, body: Any) -> str:

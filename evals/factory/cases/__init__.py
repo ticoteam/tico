@@ -31,6 +31,9 @@ SCENARIOS += _snoozed_ticket
 from .spec_handoff import SCENARIOS as _spec_handoff
 
 SCENARIOS += _spec_handoff
+from .spec_question import SCENARIOS as _spec_question
+
+SCENARIOS += _spec_question
 from .verdict_past_open_sibling import SCENARIOS as _verdict_past_open_sibling
 
 SCENARIOS += _verdict_past_open_sibling

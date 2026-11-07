@@ -541,7 +541,7 @@ class Pages:
 def install_pages(app, store, auth, files):
     pages = Pages(app, store, auth, files)
     app.state.pages = pages
-    spec_approval.bind(files)
+    spec_approval.bind(files, auth.settings.public_url)
     publish_doc = {
         "requestBody": {
             "required": True,

@@ -662,6 +662,10 @@ def answer(
         lambda: {"id": task_id, "to": who.actor, "from": row["requester_id"], "task_id": parent},
         who.actor,
     )
+    # After the question closes, so the card it blocks is free: an Approve on a spec question moves the card (spec_approval).
+    from . import spec_approval
+
+    spec_approval.after_answer(c, who, row, task_id, body.answers, body.dismiss)
     return {"answer": value, "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": True}
 
 
