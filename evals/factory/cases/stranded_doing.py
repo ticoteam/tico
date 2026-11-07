@@ -48,10 +48,32 @@ def trace_of(run, task_id, start, end):
     return " | ".join(line[:150] for line in (head + changes)[:6])
 
 
+def held_all_window(run, task_id, start, end):
+    """Whether the daily resume limit holds the task at every sweep moment from `start` to `end`: DAY_LIMIT resumes in
+    the 24 hours up to that moment (backend/stranded_resume.py state). The product's rule, not a missed pickup, so the
+    late hours do not judge such a turn; the detail still names it."""
+    from backend import stranded_resume as SR
+
+    resumed = sorted(
+        run.w.H.parse_ts(r["created_at"])
+        for r in run.w.sql(
+            "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=?",
+            (task_id, SR.RESUMED),
+        )
+    )
+    moment = start
+    while moment <= end:
+        if sum(1 for t in resumed if moment - timedelta(hours=24) <= t <= moment) < SR.DAY_LIMIT:
+            return False
+        moment += timedelta(minutes=SR.SWEEP_MINUTES)
+    return True
+
+
 def stranded_resumed(run):
     """Every ticket a builder's turn left in progress gets an event within the late hours of that turn. A turn that ended
-    less than the late hours before the run ended is not judged: the run ended before they came."""
-    stranded, late = 0, []
+    less than the late hours before the run ended is not judged: the run ended before they came. Nor is one the daily
+    resume limit holds through its late hours (named in the detail)."""
+    stranded, late, held = 0, [], []
     for bot in run.t.builders:
         for when, task_id in bot.left:
             first = later_event(run, task_id, when)
@@ -59,15 +81,20 @@ def stranded_resumed(run):
                 continue
             stranded += 1
             if first is None or (first - when).total_seconds() / 3600 > STUCK_HOURS:
+                if held_all_window(run, task_id, when, when + timedelta(hours=STUCK_HOURS)):
+                    held.append(run.w.title(task_id))
+                    continue
                 end = first or run.w.now()
                 late.append(
                     f"{run.w.title(task_id)} ({bot.slug}, {(first - when).total_seconds() / 3600 if first else 'never'} h)"
                     f" [trace: {trace_of(run, task_id, when, end)}]"
                 )
-    return (
-        not late,
-        f"{len(late)} of {stranded} left in progress were not picked up within {STUCK_HOURS} h: " + ", ".join(late[:4]),
+    detail = f"{len(late)} of {stranded} left in progress were not picked up within {STUCK_HOURS} h: " + ", ".join(
+        late[:4]
     )
+    if held:
+        detail += f"; {len(held)} held by the daily resume limit, not judged: {', '.join(held[:4])}"
+    return not late, detail
 
 
 SCENARIOS = [
