@@ -253,7 +253,7 @@ function segPageDraw(seg: SegDetail, load: number, sees: boolean): void {
 function segHeadHtml(seg: SegDetail, sees: boolean): string {
   const id = encodeURIComponent(seg.id);
   const links: [string, string, string][] = [[RD_GOALS, 'Goals', 'goals'], [GR_ROUTE, 'Growth', 'growth']];
-  if (sees) links.push([RD_BUDGET, 'Budget', 'budget'], [FIN_ROUTE + '/pnl', 'P&L', 'pnl']);
+  if (sees) links.push([FIN_ROUTE + '/budgets', 'Budget', 'budget'], [FIN_ROUTE + '/pnl', 'P&L', 'pnl']);
   return `<header class="seg-head">
       <div class="seg-title">${segDot(seg.color)}<h2>${esc(seg.name)}</h2></div>
       ${seg.who ? `<p class="seg-who-l">${esc(seg.who)}</p>` : ''}

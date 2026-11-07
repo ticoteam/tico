@@ -200,6 +200,8 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.equal(await page.locator('.seg-title .seg-dot').getAttribute('data-seg-color'), 'blue', tag + ': the dot');
       assert.deepEqual(await attrs(page, '.seg-links a', 'segLink'), ['goals', 'growth', 'budget', 'pnl'], tag + ': Budget and P&L for a Finance viewer');
       for (const href of await hrefs(page, '.seg-links a')) assert.match(href, /\?segment=segment%2Fchecks$/, tag + ': each link filters to the segment: ' + href);
+      assert.equal(await page.locator('[data-seg-link="budget"]').getAttribute('href'), '#/finance/budgets?segment=segment%2Fchecks', tag + ': Budget is Finance Budgets for the segment');
+      assert.equal(await page.locator('[data-seg-link="pnl"]').getAttribute('href'), '#/finance/pnl?segment=segment%2Fchecks', tag + ': P&L is Finance P&L for the segment');
       assert.equal(await page.locator('[data-seg-field]').count(), 8, tag + ': all eight strategy fields');
       await snap(page, 'segment-page-desktop-top');
       const serve = page.locator('[data-seg-field="serve"]'), sell = page.locator('[data-seg-field="sell"]');
