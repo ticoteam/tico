@@ -1,13 +1,16 @@
 """Incremental release validation (docs/releasing.md#incremental-validation).
 
-A full Release validation (ci.yml's whole gate) runs when no green full validation finished in the last 24 hours whose
-commit main still contains. That green run is the anchor, whichever release it validated: at most one full run a day.
-A candidate after it runs only what its diff from the anchor selects (scripts/pr_checks.py selection, the merge queue's
-rules, never the full suite), the browser smoke set, the factory checks when their inputs changed, the product part
-(the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, and what failed
-in the newest red validation since the anchor. The image builds run for every candidate (ci.yml's images job). A red
-validation is not run again until a commit since it selects one of its failures; until then the window waits. A green
-validation after it (full or incremental, of a commit main still contains) supersedes it.
+A full Release validation (ci.yml's whole gate) runs only when no full validation finished in the last 24 hours ran
+the suite to an answer whose commit main still contains: a green one, or a red one naming its failures. That run is the
+anchor, whichever release it validated, so a day has one full run. Only a cancelled full run, or a red one with unnamed
+failures (a build, a VM, a startup failure), leaves no anchor: the next candidate is a full run again, so consecutive
+unnamed reds each take one. Nothing else dispatches a full run within 24 hours of an anchor. A candidate after the anchor runs only what its diff from the anchor
+selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set, the factory
+checks when their inputs changed, the product part (the upgrade journey and the Docker smoke checks) when its previous
+release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and the
+failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until a
+commit since it selects one of its failures; until then the window waits. A green validation after it (full or
+incremental, of a commit main still contains) supersedes it.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
 diff and selection from Checkout below, so the unit tests and the replay run the same code.
@@ -68,18 +71,45 @@ def failed_tokens(jobs):
     return tokens
 
 
-def anchor_of(records, now, contained):
-    """The newest green full validation that finished within the last 24 hours and whose commit main still contains, or
-    None. `records` are newest first, every release's validations (validation_record in release_train): the anchor may
-    have validated an earlier release."""
-    for record in records:
-        if record["incremental"] or record["status"] != "completed" or record["conclusion"] != "success":
+def anchor_of(records, now, contained, named):
+    """The anchor: the newest full validation that finished within the last 24 hours (by finish time), whose commit main
+    still contains, and that ran the suite to an answer: green, or red naming its failures. `named(record)` gives a red
+    record's failed tokens (a set; None when a failure cannot be named). A cancelled run, and a red one with unnamed
+    failures (a build, a VM, a startup failure), is no anchor, so one more full run may follow it. Returns the record with
+    its "failed" tokens (empty when green), or None. `records` are every release's validations (validation_record in
+    release_train): the anchor may have validated an earlier release."""
+    candidates = [
+        record
+        for record in records
+        if not record["incremental"]
+        and record["status"] == "completed"
+        and record["conclusion"] != "cancelled"
+        and record["finished"] is not None
+        and now - record["finished"] <= ANCHOR_AGE
+    ]
+    for record in sorted(candidates, key=lambda item: item["finished"], reverse=True):
+        if not contained(record["sha"]):
             continue
-        if record["finished"] is None or now - record["finished"] > ANCHOR_AGE:
-            continue
-        if contained(record["sha"]):
-            return record
+        if record["conclusion"] == "success":
+            return {**record, "failed": set()}
+        if record["conclusion"] in FAILED:
+            failed = named(record)
+            if failed is not None:
+                return {**record, "failed": failed}
     return None
+
+
+def anchor_open(records, anchor, contained):
+    """Whether the anchor is a red validation that no later green one supersedes (full or incremental, of a commit main
+    still contains): its failures are then carried, and red_rule applies to it. `records` are newest first."""
+    if anchor is None or anchor["conclusion"] not in FAILED:
+        return False
+    for record in records:
+        if record["id"] == anchor["id"]:
+            return True
+        if record["status"] == "completed" and record["conclusion"] == "success" and contained(record["sha"]):
+            return False
+    return False
 
 
 def red_since(records, anchor, contained):

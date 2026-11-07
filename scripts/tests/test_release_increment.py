@@ -73,10 +73,53 @@ def plan_of(
 # ---- the anchor and the red run ----
 
 
+def unnamed(record):
+    return None  # a red validation whose failures no log names
+
+
 def test_the_anchor_is_the_newest_green_full_validation_of_the_last_day():
     records = [record(3, C, incremental=True), record(2, B, hours=3), record(1, A, hours=5)]
-    assert ri.anchor_of(records, NOW, lambda sha: True)["id"] == 2
-    assert ri.anchor_of(records, NOW, lambda sha: sha != B)["id"] == 1
+    assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 2
+    assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["failed"] == set()
+    assert ri.anchor_of(records, NOW, lambda sha: sha != B, unnamed)["id"] == 1
+
+
+def test_the_anchor_is_the_newest_by_finish_time_not_by_list_order():
+    records = [record(1, A, hours=3), record(2, B, hours=2)]  # oldest first
+    assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 2
+
+
+def test_a_red_full_naming_its_failures_is_the_anchor_and_carries_them():
+    records = [record(2, B, conclusion="failure", hours=2), record(1, A, hours=3)]
+    anchor = ri.anchor_of(records, NOW, lambda sha: True, lambda item: {"backend/tests/test_a.py"})
+    assert (anchor["id"], anchor["failed"]) == (2, {"backend/tests/test_a.py"})
+
+
+def test_a_cancelled_or_unnamed_red_full_is_no_anchor_so_an_older_one_is():
+    records = [
+        record(3, C, conclusion="cancelled", hours=1),
+        record(2, B, conclusion="failure", hours=2),
+        record(1, A, hours=3),
+    ]
+    assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 1
+    assert ri.anchor_of(records, NOW, lambda sha: True, lambda item: {"x"})["id"] == 2
+
+
+def test_a_stale_red_running_or_uncontained_validation_is_no_anchor():
+    assert ri.anchor_of([record(1, A, hours=25)], NOW, lambda sha: True, unnamed) is None
+    assert ri.anchor_of([record(1, A, conclusion="failure")], NOW, lambda sha: True, unnamed) is None
+    assert ri.anchor_of([record(1, A, status="in_progress")], NOW, lambda sha: True, unnamed) is None
+    assert ri.anchor_of([record(1, A)], NOW, lambda sha: False, unnamed) is None
+
+
+def test_a_red_anchor_stays_open_until_a_green_validation_of_main_supersedes_it():
+    anchor = record(2, B, conclusion="failure", hours=2)
+    later_green = record(3, C, hours=1, incremental=True)
+    assert ri.anchor_open([anchor], anchor, lambda sha: True) is True
+    assert ri.anchor_open([later_green, anchor], anchor, lambda sha: True) is False
+    assert ri.anchor_open([later_green, anchor], anchor, lambda sha: sha != C) is True
+    assert ri.anchor_open([anchor], dict(anchor, conclusion="success"), lambda sha: True) is False
+    assert ri.anchor_open([anchor], None, lambda sha: True) is False
 
 
 def test_a_stale_red_running_or_uncontained_validation_is_no_anchor():

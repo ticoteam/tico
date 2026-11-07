@@ -109,18 +109,28 @@ workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
 A window validates a head in one of two ways. A **full** validation is the whole gate (`ci.yml`, as before). An
 **incremental** one runs the same gate on less, and says so in its run title (`... from vX.Y.Z (incremental on <anchor>)`).
 
-- **Anchor.** A full validation runs when no green full validation finished in the last 24 hours whose commit main still
-  contains. That green run is the anchor, whichever release it validated: at most one full validation a day.
+- **Anchor.** A full validation runs only when no full validation of the last 24 hours (by finish time) ran the suite to
+  an answer: a green one, or a red one that names its failed tests, of a commit main still contains. That run is the
+  anchor, whichever release it validated. Nothing else dispatches a full validation within 24 hours of an anchor: the
+  next candidate is incremental from it, and a plan too big to dispatch (or one that cannot be made) waits until the
+  anchor is a day old rather than running a second full validation. A cancelled run, and a red one whose failures no log
+  names (a build, a VM, a startup failure), is no anchor, so the candidate after it is a full validation again. Consecutive
+  unnamed reds therefore each take one more full run.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
   merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
-  anchor's, and the tests that failed in the newest red run since the anchor. A failed file that marks slow tests also
-  runs in the contracts lane (`-m slow`). The plan is `scripts/release_increment.py`. The image builds run for every
-  candidate, full or incremental.
-- **Red runs.** A red run stays open, across releases, until a green validation (full or incremental, of a commit main
-  still contains) runs after it. While it is open, the window runs a later head only when a commit since that run selects
-  one of its failed tests. Otherwise it waits, and the window's log says `the window waits` and why. A red run that names
-  no failure, or whose diff cannot be read, is run again on the next commit. A red run at main's head waits for a push.
+  anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
+  contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
+- **Images.** Every candidate, full or incremental, builds its images: the Dockerfile copies the whole tree
+  (`COPY . /opt/tico`), so every candidate changes their inputs, and `release.yml` ships the candidate's own images. This
+  is the rule that images build only if their inputs changed, not an exception to it.
+- **Red runs.** A red run that names its failed tests is the anchor when it is the newest such within the day (see
+  Anchor). A red run stays open, across releases, until a green validation (full or incremental, of a commit main still
+  contains) runs after it. The tests carried into an incremental plan are the failed ones of the open reds: the anchor's,
+  when it is red and still open, together with the newest red run since it. While a red run is open, the window runs a
+  later head only when a commit since that run selects one of its failed tests. Otherwise it waits, and the window's log
+  says `the window waits` and why. A red run that names no failure, or whose diff cannot be read, is run again on the
+  next commit. A red run at main's head waits for a push.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane, and `alone` tests never do. A UI script runs when its own files change or a `UI_MAP` entry selects it:
   `ui/tests/task-code.cjs` has no entry for the UI files it covers, so a change to them does not select it. The measured

@@ -810,50 +810,58 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     def main_has(sha):
         return gh.contains("main", sha)
 
-    anchor = increment.anchor_of(records, now, main_has)
-    red = increment.red_since(records, anchor, main_has)
+    def named(record):
+        return gh.failed_tokens(record["id"])
+
+    anchor = increment.anchor_of(records, now, main_has, named)
+    # The open reds: the anchor when it is red and no green validation since supersedes it, then the newest red since it.
+    reds = [anchor] if increment.anchor_open(records, anchor, main_has) else []
+    newer = increment.red_since(records, anchor, main_has)
+    if newer is not None:
+        reds.append({**newer, "failed": named(newer)})
     # The anchor may validate an earlier release: its product part (the upgrade journey) then starts from its previous.
     previous_changed = anchor is not None and anchor["previous"] != newest
-    if red is not None:
-        red = {**red, "failed": gh.failed_tokens(red["id"])}
-    if red is not None and not manual:
-        # A red validation runs again only once a commit since it selects one of its failures (or names none: any commit).
-        since = checkout.tokens_since(red["sha"], head) if checkout is not None and red["sha"] != head else None
-        go, why = increment.red_rule(red, head, since)
-        if not go:
-            plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
-            return plan
+    if not manual:
+        # Each open red runs again only once a commit since it selects one of its failures (or names none: any commit).
+        for red in reds:
+            since = checkout.tokens_since(red["sha"], head) if checkout is not None and red["sha"] != head else None
+            go, why = increment.red_rule(red, head, since)
+            if not go:
+                plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
+                return plan
     if anchor is None:
-        reason = "no green full validation in the last 24 hours, of any release"
-    elif checkout is None:
-        reason = "no checkout to select the changes from"
-    elif red is not None and not red["failed"]:
-        reason = "%s named no failure a commit could fix" % red["url"]
-    else:
-        reason = ""
-    if reason:
         plan.update(
             action="dispatch",
             mode="full",
             anchor=None,
             increment=None,
-            why="validate %s as %s from %s: a full validation (%s)" % (head[:12], version, newest, reason),
+            why="validate %s as %s from %s: a full validation (no full validation in the last 24 hours ran the suite to "
+            "an answer, of any release)" % (head[:12], version, newest),
         )
         return plan
-    carried = set(red["failed"]) if red is not None else set()
-    try:
-        text = checkout.plan(anchor["sha"], head, carried, previous_changed=previous_changed)
-    except Exception as exc:  # noqa: BLE001 - an incremental plan that cannot be made runs the full validation
-        text = None
-        note("Incremental plan failed, validating in full: %s: %s" % (type(exc).__name__, exc))
-    if text is None:
+    if checkout is None:
+        # Without a checkout the window job (which has one) makes the plan: the mode is the anchor's incremental run.
         plan.update(
             action="dispatch",
-            mode="full",
-            anchor=None,
+            mode="incremental",
+            anchor=anchor["sha"],
             increment=None,
-            why="validate %s as %s from %s: a full validation (the incremental plan is too big or could not be made)"
-            % (head[:12], version, newest),
+            why="validate %s as %s from %s incrementally on %s (the plan is made with the checkout)"
+            % (head[:12], version, newest, anchor["sha"][:12]),
+        )
+        return plan
+    carried = set().union(*(red["failed"] or set() for red in reds))
+    try:
+        text = checkout.plan(anchor["sha"], head, carried, previous_changed=previous_changed)
+    except Exception as exc:  # noqa: BLE001 - a plan that cannot be made waits: a second full validation is not an option
+        text = None
+        note("Incremental plan failed: %s: %s" % (type(exc).__name__, exc))
+    if text is None:
+        plan.update(
+            action="wait",
+            why="window open since %s; the incremental plan on %s is too big or could not be made, and no second full "
+            "validation runs before the anchor is a day old (%s)"
+            % (hhmm(start), anchor["sha"][:12], hhmm(anchor["finished"] + increment.ANCHOR_AGE)),
         )
         return plan
     jobs = len(json.loads(text)["jobs"])

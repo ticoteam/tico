@@ -661,14 +661,15 @@ def red_then_anchor(anchor_at=OPENED - timedelta(hours=1), red_at=NOW - timedelt
 
 
 def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed():
+    # C went red naming its failure, so C is the anchor: the window reruns from it, carrying what failed. No full run.
     gh = red_then_anchor()
     gh.failed = {3: {"backend/tests/test_b.py"}}
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
     picked = rt.plan_step(gh, NOW, checkout=checkout)
-    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
     assert picked["increment"] == PLAN_TEXT
-    assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % B[:12] in picked["why"]
-    assert ("tokens_since", C, D) in checkout.calls and ("plan", B, D, {"backend/tests/test_b.py"}) in checkout.calls
+    assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % C[:12] in picked["why"]
+    assert ("tokens_since", C, D) in checkout.calls and ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
 
 
 def test_a_red_validation_waits_and_says_so_while_no_commit_selects_what_failed():
@@ -679,33 +680,102 @@ def test_a_red_validation_waits_and_says_so_while_no_commit_selects_what_failed(
     assert "backend/tests/test_b.py" in picked["why"] and gh.dispatched == []
 
 
-def test_a_red_naming_no_failure_runs_the_full_validation():
-    gh = red_then_anchor()  # its log names nothing a commit could fix
-    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
-    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
-    assert "named no failure a commit could fix" in picked["why"]
+def test_a_red_naming_no_failure_reruns_from_the_green_anchor_without_a_second_full():
+    # C's log names nothing, so C is no anchor; B (green, within the day) is. Its next candidate is incremental on B:
+    # a full run is never planned while an anchor is under a day old.
+    gh = red_then_anchor()
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert ("plan", B, D, set()) in checkout.calls
 
 
 def test_a_stale_anchor_runs_the_full_validation_once_a_day():
-    gh = red_then_anchor(anchor_at=NOW - timedelta(hours=25))
+    # The green anchor and the red validation after it are both over a day old: no anchor is left, so one full run.
+    gh = red_then_anchor(anchor_at=NOW - timedelta(hours=26), red_at=NOW - timedelta(hours=25))
     gh.failed = {3: {"backend/tests/test_b.py"}}
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
     assert (picked["action"], picked["mode"]) == ("dispatch", "full")
-    assert "no green full validation" in picked["why"]
+    assert "no full validation in the last 24 hours" in picked["why"]
 
 
-def test_an_incremental_plan_too_big_to_dispatch_runs_the_full_validation():
+def test_an_incremental_plan_too_big_to_dispatch_waits_rather_than_running_a_second_full_validation():
     gh = red_then_anchor()
     gh.failed = {3: {"backend/tests/test_b.py"}}
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=None))
-    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
-    assert "too big" in picked["why"]
+    assert picked["action"] == "wait" and gh.dispatched == []
+    assert "too big" in picked["why"] and "no second full validation" in picked["why"]
 
 
-def test_without_a_checkout_every_validation_is_full():
+def test_without_a_checkout_the_validation_is_incremental_on_the_anchor_so_the_guard_dispatches_it():
     gh = red_then_anchor()
     gh.failed = {3: {"backend/tests/test_b.py"}}
-    assert rt.plan_step(gh, NOW)["mode"] == "full"
+    picked = rt.plan_step(gh, NOW)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert picked["increment"] is None
+
+
+def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_incremental_from_it():
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
+    assert ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
+
+
+def test_a_cancelled_full_is_no_anchor_so_the_next_candidate_is_a_full_validation():
+    gh = FakeGitHub([run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since=None, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "full", None)
+
+
+def test_a_red_full_naming_no_failure_is_no_anchor_so_the_next_candidate_is_a_full_validation():
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1))], head=D)
+    gh.order = [A, B, C, D]
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "full", None)
+
+
+@pytest.mark.parametrize(
+    "runs, anchor, failed",
+    [
+        ([run(B, id=2, at=NOW - timedelta(hours=2))], B, {}),
+        (
+            [
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=NOW - timedelta(hours=2)),
+            ],
+            B,
+            {},
+        ),
+        (
+            [
+                run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=NOW - timedelta(hours=2)),
+            ],
+            B,
+            {},
+        ),
+        (
+            [
+                run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
+                run(B, id=2, at=NOW - timedelta(hours=2)),
+            ],
+            C,
+            {3: {"backend/tests/test_b.py"}},
+        ),
+    ],
+    ids=["green", "red-unnamed", "cancelled", "red-named"],
+)
+def test_a_second_full_is_never_planned_while_an_anchor_under_a_day_old_exists(runs, anchor, failed):
+    gh = FakeGitHub(runs, head=D)
+    gh.order = [A, B, C, D]
+    gh.failed = failed
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", anchor)
 
 
 def test_an_incremental_validation_names_its_anchor_and_plan_and_a_full_one_names_neither():
@@ -741,8 +811,9 @@ def test_validation_records_say_which_runs_are_incremental_and_only_full_green_o
 
 
 def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_waited_for():
-    # main is A <- B <- C <- D (the head). A is this release's green full run before the window; B went red before it;
-    # C is an earlier release's green incremental run after B, so it supersedes B's red.
+    # main is A <- B <- C <- D (the head). B is this release's red validation naming its failure, the newest full one
+    # within the day, so it is the anchor. C is an earlier release's green incremental run after B: it supersedes B's
+    # red, so nothing is carried and nothing waits.
     earlier = dict(
         run(C, version="v0.5.200", previous="v0.5.199", id=3, at=OPENED - timedelta(minutes=30)),
         display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=A),
@@ -759,8 +830,8 @@ def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_wai
     gh.failed = {2: {"backend/tests/test_b.py"}}
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
     picked = rt.plan_step(gh, NOW, checkout=checkout)
-    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", A)
-    assert checkout.calls == [("plan", A, D, set())]  # nothing carried, and no commit was read against the red run
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert checkout.calls == [("plan", B, D, set())]  # nothing carried, and no commit was read against the red run
     assert "carries" not in picked["why"] and "the window waits" not in picked["why"]
 
 
