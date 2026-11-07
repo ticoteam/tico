@@ -52,6 +52,7 @@ class FakeGitHub:
         self.comments, self.closed = [], []  # (number, body) of the comments this run posted; the numbers it closed
         self.issue_list, self.created = [], []  # every issue, and the ones this run filed
         self.events, self.user_comments = {}, {}  # per issue number: its timeline events, and people's comments
+        self.ceiling_ids = set()  # the run ids ci.yml's ceiling job stopped
         self.blockers = []
         self.writers = {"chris"}  # the logins with write access
         self.latest = []
@@ -85,6 +86,9 @@ class FakeGitHub:
 
     def failed_tokens(self, run_id):
         return self.failed.get(run_id)
+
+    def ceiling_stopped(self, run):
+        return run.get("id") in self.ceiling_ids
 
     def recent_runs(self, workflow):
         return (list(self.runs) if workflow == "ci.yml" else []) + self.others[workflow]
@@ -637,6 +641,51 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
     assert plan(FakeGitHub(), finished=stale)["red"] is None
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="cancelled"))["red"]["conclusion"] == "cancelled"
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="success"))["red"] is None
+
+
+CEILING_HOLD = "Full runs: ceiling reached (10/day) · next after 00:00 UTC"
+
+
+def test_a_run_the_ceiling_stopped_holds_the_window_and_is_never_a_failure():
+    stopped = run(C, conclusion="failure", id=9, at=NOW - timedelta(minutes=5))
+    gh = FakeGitHub([stopped])
+    gh.ceiling_ids = {9}
+    for manual in (False, True):
+        held = plan(gh, manual=manual)
+        assert held["action"] == "wait" and held["why"].endswith(CEILING_HOLD)
+        assert (held["red"], held["held"], rt.problems(held)) == (None, None, [])
+    # Its failed finish, handed to the window job by the workflow_run event, is no red candidate either.
+    finished = {"conclusion": "failure", "title": rt.title(C, "v0.5.201", "v0.5.200"), "url": stopped["html_url"]}
+    assert plan(gh, finished=finished)["red"] is None
+
+
+def test_a_real_red_on_main_is_still_reported_beside_the_ceiling_hold():
+    gh = FakeGitHub(
+        [run(C, conclusion="failure", id=4, at=NOW - timedelta(minutes=20)), run(C, conclusion="failure", id=9)]
+    )
+    gh.ceiling_ids = {9}
+    red = plan(gh)
+    assert red["action"] == "wait" and red["why"].endswith(CEILING_HOLD)
+    assert rt.problems(red) == ["Candidate v0.5.201 at %s ended failure: https://github.example/run/4" % C[:12]]
+
+
+def test_only_a_run_the_ceiling_stopped_on_this_utc_day_is_a_stop():
+    today, earlier = run(C, conclusion="failure", id=9), run(C, conclusion="failure", id=8, at=NOW - timedelta(days=1))
+    gh = FakeGitHub([today, earlier])
+    gh.ceiling_ids = {8, 9}
+    assert [item["id"] for item in rt.ceiling_stops(gh, [today, earlier], NOW)] == [9]
+
+
+def test_the_ceiling_job_counts_as_a_stop_only_on_its_own_message(monkeypatch):
+    gh = rt.GitHub("ticoteam/tico", "token")
+    jobs = [{"id": 5, "name": "ceiling", "conclusion": "failure"}]
+    monkeypatch.setattr(gh, "pages", lambda path, key=None, limit=10: jobs)
+    monkeypatch.setattr(gh, "job_log", lambda job_id: "##[error]10 full runs today; ceiling reached")
+    assert gh.ceiling_stopped({"id": 9})
+    monkeypatch.setattr(gh, "job_log", lambda job_id: "##[error]gh api: HTTP 502")
+    assert not gh.ceiling_stopped({"id": 9})
+    jobs[0]["conclusion"] = "skipped"
+    assert not gh.ceiling_stopped({"id": 9})
 
 
 class FakeCheckout:
