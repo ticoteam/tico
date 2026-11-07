@@ -276,6 +276,11 @@ def require_direct_setting(c, method, path, body, trial=None, base=""):
 NEVER = [
     (m, re.compile(p))
     for m, p in (
+        # The owner's segment writes (backend/segments.py `owner`) and a customer's segment (backend/finance_routes.py): a turn
+        # proposes each as a card, and the owner's tap runs it (a confirmed card is not checked here).
+        ("POST", r"/api/v2/segments(/.*)?"),
+        ("PUT", r"/api/v2/segments/strategy"),
+        ("POST", r"/api/v2/finance/contacts/[^/]+/segment"),
         # A personal token, a service key, a stored credential (its value, its grants, its import and its deletion) is issued,
         # shown or revoked by the person in Settings or Credentials, never through a chat. Every route that writes a
         # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and

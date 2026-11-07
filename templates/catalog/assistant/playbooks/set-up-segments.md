@@ -1,40 +1,25 @@
 # Set up segments
 
-The owner asks you to set up their segments (jobs.md 52). It is their chat, so you act as them. A segment, a strategy
-text, a teammate tag and a new bot are cards they tap: nothing changes until they do. A goal is saved only on their plain
-yes to a read-back. Strategy text is a card you propose; they publish it on the Strategy page. Budgets and customer tags
-are tasks for the Finance Manager, which applies its own approvals.
+The owner asks you to set up their segments (jobs.md 52). It is their chat, so you act as them. A segment, a strategy text, a teammate's tags, a new bot, a customer's segment and a weekly note are cards they tap: nothing changes until they do. A goal is saved only on their plain yes to a read-back. Budgets, and the Finance Manager's customer and spend tags, are tasks for the Finance Manager, which applies its own approvals.
 
-1. **Ask first.** Three to five short questions in one message: who buys, what they pay for, which group the company
-   serves badly today, who already runs it, and which one to start with. Then read the record: `hub strategy show`,
-   `hub segment list` (what the company plays in now), `hub market segment tree` (the market) and
-   `hub finance segment-review` (customers with no segment yet).
-2. **Propose three to five segments**, one card each, after their answers:
-   `hub assistant propose --summary "Make <name> a segment" --method POST --path /api/v2/segments --body '{"name":"<name>","who":"<one line: who it is for>"}'`.
-   Leave out `color` and the next free one is taken. A market segment of the same name joins the company's.
-3. **Draft each segment's strategy in this chat**: its summary, and only the sections it changes (serve, sell, proof, now,
-   know, how, not). Ask them to strike or confirm each one. For each segment they keep, one card with the sections they
-   kept: `hub assistant propose --summary "Strategy for <name>: <keys>" --method PUT --path /api/v2/segments/strategy --body '{"id":"segment/<slug>","sections":{"<key>":"<text>"}}'`.
-   That card is the owner's `hub segment strategy <segment-id> --set KEY=TEXT`, with no revision. Then say: publish it on the
-   [Strategy](#/strategy) page, in the segment's part, after you tap the card.
-4. **Goals per segment**: follow job 34. Put each goal's `segment_id` as `segment/<slug>` in the read-back. Save only on
-   their plain yes.
-5. **Budgets per segment: one task to the Finance Manager.** Find its slug in `hub team show` (step 7 uses the same one). Then
-   `hub task create --owner <slug> --title "Propose segment budgets" --body "Propose one budget per segment, each with segment_id segment/<slug>: <segment: amount in cents, from YYYY-MM-DD, as the owner gave it>. Update the budget where one exists, create it where none does; hub finance act help lists the fields. Each one goes through your own approvals."`.
-   Amounts are in cents, as in job 47. You do not propose budgets yourself.
-6. **Owners and tags.** Suggest one owner bot per segment from `hub team show`, or a new one. A new bot is a card:
-   `hub assistant propose --summary "New bot <name>, owner of <segment>" --method POST --path /api/v2/bots --body '{"display_name":"<name>","description":"<one line>","reports_to":"<manager slug>","model":"<model id from hub bot model>","effort":"<effort>"}'`.
-   Its context length is a second card once the bot exists, on a later turn: read its `revision` with `hub bot show <slug>`,
-   then `hub assistant propose --summary "Context for <name>: <tokens>" --method POST --path /api/v2/bots/<slug>/compact-at --body '{"compact_at":<tokens>,"expected_revision":<revision>}'`.
-   A teammate's tags are a card too: read them with `hub segment members`, then
-   `hub assistant propose --summary "Tag <name> with <segment>" --method POST --path /api/v2/segments/members --body '{"member":"bot:<slug>","segments":["segment/<slug>"]}'`.
-   Never move a bot yourself.
-7. **Finance Manager: customer tags.** With the slug from step 5, one task:
-   `hub task create --owner <slug> --title "Tag each customer with its segment" --body "Tag each customer with the segment it belongs to, from hub finance segment-review, against these segments: <names>. Put the ones you are unsure of in one list for the owner."`.
-   Later, read `hub finance segment-review` for the unsure ones and show them to the owner as one list.
-8. **Weekly note.** Ask once whether they want a weekly note for each segment. On yes, make one routine per segment as job 46
-   does, owned by the segment's first face in `hub segment list`. Say where the note lands.
+Work in three turns. Each one waits for the owner's answer.
 
-Reply in one short message: how many cards are waiting in their chat, that the Finance Manager has the budget and tag
-tasks, and that nothing changes until they tap. Strategy text goes on the Strategy page after the strategy cards are tapped.
-No undo line: nothing has changed yet. Each card can be declined in their chat.
+**Turn 1: ask.** Read the record first: `hub strategy show`, `hub segment list` (what the company plays in now), `hub market segment tree` (the market) and `hub finance segment-review` (customers with no segment yet). Then ask three to five short questions in one message: who buys, what they pay for, which group the company serves badly today, who already runs it, and which one to start with.
+
+**Turn 2: the first cards.** After their answers, propose three to five segments, one card each, and any new bot as a card. Nothing else in this reply.
+- A segment: `hub assistant propose --summary "Make <name> a segment" --method POST --path /api/v2/segments --body '{"name":"<name>","who":"<one line: who it is for>"}'`. Leave out `color` and the next free one is taken. A market segment of the same name joins the company's.
+- A new bot, for each owner they want that does not exist yet: `hub assistant propose --summary "New bot <name>, owner of <segment>" --method POST --path /api/v2/bots --body '{"display_name":"<name>","description":"<one line>","reports_to":"<manager slug>","model":"<model id>","effort":"<effort>"}'`. Take the model id from `hub bot model <any bot slug>`, which lists the models and the efforts each one takes. The effort is low, medium, high, xhigh or max; ultra only where that model lists it.
+
+Reply in one short message: how many cards wait in their chat, and that the strategy, goal, budget, tag and weekly note steps come once the segments exist. Nothing changes until they tap.
+
+**Turn 3: the rest, once the segments exist.** Run `hub segment list` and use only the real ids it prints (`segment/<slug>`). Then, in this order:
+
+1. **Strategy.** Draft each segment's strategy in this chat: its summary, and only the sections it changes (serve, sell, proof, now, know, how, not). Ask them to strike or confirm each one. For each segment they keep, one card with the sections they kept: `hub assistant propose --summary "Strategy for <name>: <keys>" --method PUT --path /api/v2/segments/strategy --body '{"id":"segment/<slug>","sections":{"<key>":"<text>"}}'`. It has no revision: the tap writes only those keys. Then say: publish it on the [Strategy](#/strategy) page, in the segment's part, after you tap the card.
+2. **Goals.** Per segment, follow job 34, with each goal's `segment_id` as `segment/<slug>` in the read-back. Save only on their plain yes.
+3. **Owner bots and tags.** Suggest one owner bot per segment from `hub team show`. A teammate's tags are one card, and that card replaces the teammate's list: read the current one with `hub segment members`, and send every segment it already has plus the new one: `hub assistant propose --summary "Tag <name> with <segment>" --method POST --path /api/v2/segments/members --body '{"member":"bot:<slug>","segments":["segment/<existing>","segment/<new>"]}'`. Never move a bot yourself.
+4. **Context length.** Once a new bot exists, on a later turn: read its `revision` with `hub bot show <slug>`, then `hub assistant propose --summary "Context for <name>: <tokens>" --method POST --path /api/v2/bots/<slug>/compact-at --body '{"compact_at":<tokens>,"expected_revision":<revision>}'`.
+5. **Budgets: one task to the Finance Manager.** Find its slug in `hub team show`. Then `hub task create --owner <slug> --title "Propose segment budgets" --body "Propose one budget per segment, each with segment_id segment/<slug>: <segment: amount in cents, from YYYY-MM-DD, as the owner gave it>. Update the budget where one exists, create it where none does; hub finance act help lists the fields. Each one goes through your own approvals."`. Amounts are in cents, as in job 47. You do not propose budgets yourself.
+6. **Customers and spend: one task to the Finance Manager.** With the same slug: `hub task create --owner <slug> --title "Tag customers and spend by segment" --body "Tag each customer and each spend line with the segment it belongs to, from hub finance segment-review, against these segments: <names>. Put the ones you are unsure of in one list for the owner."`. Then read `hub finance segment-review` for its unsure list and show it to the owner as one list. For each customer the owner places, one card: `hub assistant propose --summary "Put <customer> in <segment>" --method POST --path /api/v2/finance/contacts/<id>/segment --body '{"segment_id":"segment/<slug>"}'`, with the `<id>` that the review gives.
+7. **Weekly note.** Ask once whether they want a weekly note for each segment. On yes, one card per segment, owned by that segment's owner bot from step 3: `hub assistant propose --summary "Weekly note for <name>" --method POST --path /api/v2/automations --body '{"name":"Weekly note: <name>","owner":"bot:<owner slug>","trigger":{"type":"schedule","cron":"0 9 * * 1","tz":"<their IANA zone>"},"steps":[{"id":"run","type":"bot_turn","bot":"<owner slug>","prompt":"Each Monday, write a short note on <name> (<segment id>): what moved in its strategy, bets and teammates. Send the note to the top face of the segment: its first lead, else its first face."}]}'`. Take the zone from `hub settings find timezone`; with none, leave `tz` out (it runs in UTC) and say so.
+
+Reply in one short message: how many cards wait in their chat, that the Finance Manager has the budget and customer tasks, and that nothing changes until they tap. Any goal they said yes to is saved already: link it as `[goal](#/goals/<id>)` and say "say undo to put it back." Each card can be declined in their chat.

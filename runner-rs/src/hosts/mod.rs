@@ -452,6 +452,7 @@ const HUB_READ_PATHS: &[&str] = &[
     "file read",
     "file search",
     "finance search",
+    "finance segment-review",
     "goal checkin list",
     "goal list",
     "goal show",

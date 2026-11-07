@@ -3274,6 +3274,7 @@ def parser():
         help="the company's segments: list, show, add, edit, order, remove, strategy, teammate tags",
     ).add_subparsers(dest="sub")
     s = segment.add_parser("list", help="the segments in list order: name, who, color, faces")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="segment list")
     s = segment.add_parser("show", help="one segment: its leads, its strategy fields, its live bets")
     s.add_argument("id", metavar="SEGMENT_ID", help="segment/<slug>")

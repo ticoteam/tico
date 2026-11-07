@@ -4132,6 +4132,8 @@ def segment_add(api, args):
 )
 def segment_edit(api, args):
     body = {k: args[k] for k in ("name", "who", "color") if args.get(k) is not None}
+    if not body:  # refused here, before any request: there is nothing to change
+        raise APIError("validation", "Name what to change: --name, --who or --color", 422)
     return api.post(_segment_path(args["id"]), body, key=_key(args))
 
 
@@ -13156,6 +13158,19 @@ ASSISTANT_WRITES = {
 }
 ASSISTANT_WRITES.update('hub_email_' + action for action in EMAIL_ORGANIZE)
 AUDIENCE = {
+    # The owner's segment writes (backend/segments.py `owner`): a bot proposes them as a card and the owner's tap runs
+    # them. The Assistant is not offered them, and a turn's own write is refused (backend/assistant.py NEVER).
+    **{
+        name: ("owner",)
+        for name in (
+            "hub_segment_add",
+            "hub_segment_edit",
+            "hub_segment_order",
+            "hub_segment_remove",
+            "hub_segment_strategy",
+            "hub_segment_tag",
+        )
+    },
     **{
         name: HUMANS_AND_ASSISTANT
         for name in (

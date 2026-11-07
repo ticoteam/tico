@@ -763,3 +763,54 @@ def test_a_compact_at_card_writes_nothing_until_the_owner_taps_it(api):
     done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
     assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
     assert get(api, "bots/ops")["revision"] == before + 1
+
+
+def test_a_turns_own_write_to_a_segment_or_a_customers_segment_is_refused(api):
+    """The owner's segment writes and a customer's segment are cards: an Assistant turn's own write is refused (the NEVER
+    list in backend/assistant.py, and the owner's gate behind it), and nothing changes."""
+    from backend.assistant import admits_on_turn
+
+    assert not admits_on_turn("POST", "/api/v2/finance/contacts/cust-1/segment", {"segment_id": "segment/x"})
+    assert not admits_on_turn("POST", "/api/v2/segments/members", {"member": "bot:ops", "segments": []})
+    assert not admits_on_turn("PUT", "/api/v2/segments/strategy", {"id": "segment/x", "sections": {}})
+    seg = segment(api, "Screening")["segment"]["id"]
+    _r, attempt = assistant_turn(api, "ana-test")
+    token = attempt["token"]
+    before = get(api, "segments/members")
+    post(api, "segments/members", {"member": "bot:ops", "segments": [seg]}, token=token, expected=403)
+    put(
+        api,
+        "segments/strategy",
+        {"id": seg, "sections": {"summary": "Landlords pay on time."}},
+        token=token,
+        expected=403,
+    )
+    post(api, f"segments/{seg}", {"who": "Landlords"}, token=token, expected=403)
+    assert get(api, "segments/members") == before
+
+
+def test_a_confirmed_customer_segment_card_stores_the_persons_choice(api):
+    """The owner taps the card: the customer's segment is their own choice (segment_sure 1), not a guess."""
+    from backend.tests.test_finance_fixtures import AT
+    from backend.tests.test_finance_fixtures import act as finance_act
+
+    seg = segment(api, "Small businesses")["segment"]["id"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, "human:ana", AT)
+        customer = finance_act(c, "human:ana", "contact_create", {"name": "Fabrikam", "kind": "customer"})
+        cid = str(customer.result["contact_id"])
+    _r, attempt = assistant_turn(api, "ana-test")
+    operation = {
+        "summary": "Put Fabrikam in Small businesses",
+        "method": "POST",
+        "path": f"/api/v2/finance/contacts/{cid}/segment",
+        "body": {"segment_id": seg},
+    }
+    action = post(api, "assistant/actions", operation, token=attempt["token"])["action"]
+    assert action["status"] == "pending"
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
+    with store.read() as c:
+        row = c.execute("SELECT segment_id, segment_sure FROM fin_contacts WHERE id=?", (cid,)).fetchone()
+    assert tuple(row) == (seg, 1)

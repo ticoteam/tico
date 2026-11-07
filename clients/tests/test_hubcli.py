@@ -2475,3 +2475,58 @@ def test_the_hub_segment_commands_send_each_route_its_body(monkeypatch):
         run("segment", "tag", "bot:ops")  # no segment and no --clear: never a silent clear
     with pytest.raises(APIError):
         run("segment", "tag", "bot:ops", "segment/a", "--clear")
+
+
+def test_a_segment_edit_with_nothing_to_change_is_refused_before_any_request(monkeypatch):
+    from clients import remotecli
+    from clients.tico import APIError
+
+    sent = []
+
+    class API:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana", "role": "owner"}
+            sent.append(("GET", path))
+            return {}
+
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body))
+            return {}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", API)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    with pytest.raises(APIError):
+        remotecli.run(hubcli.parser().parse_args(["segment", "edit", "segment/screening"]))
+    assert sent == []
+
+
+def test_hub_segment_list_prints_one_line_per_segment_in_list_order():
+    from clients import remotecli
+
+    text = remotecli.segment_list_text(
+        {
+            "segments": [
+                {
+                    "id": "segment/small-businesses",
+                    "name": "Small businesses",
+                    "who": "Landlords",
+                    "color": "blue",
+                    "faces": [{"id": "bot:ops"}],
+                },
+                {"id": "segment/creators", "name": "Creators", "who": "", "color": "green", "faces": []},
+            ]
+        }
+    )
+    assert text.splitlines() == [
+        "● blue  Small businesses  segment/small-businesses  Landlords  1 face",
+        "● green  Creators  segment/creators  0 faces",
+    ]
+    assert remotecli.segment_list_text({"segments": []}).startswith("No segments yet")
