@@ -242,6 +242,8 @@
 .pe-goal,.pe-froms{grid-column:1/-1;margin:0;font-size:var(--t-sm)}
 .pe-goal span,.pe-froms span:first-child{color:var(--muted)}
 .pe-from+.pe-from::before{content:", "}
+.pe-members{grid-column:1/-1;margin:0;display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s2) var(--s3)}
+.pe-members legend{color:var(--muted);font-size:var(--t-sm);padding:0 4px}
 .pe-stages{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--s2)}
 .pe-stage{border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s2) var(--s3);background:var(--surface)}
 .pe-stage-head,.pe-stage-tools{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}

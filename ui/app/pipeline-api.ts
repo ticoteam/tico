@@ -374,3 +374,56 @@ async function pipelineAttachUpload(taskId: string, requirementId: string, file:
   if (!response.ok || !body.file_id) throw apiFailure(body as FailureBody, response);
   await pipelineAttachFile(taskId, requirementId, body.file_id, body.version);
 }
+
+// ------------------------------------------------------------------ settings and factories
+
+/** A pipeline's settings, as GET /v2/pipelines/{id}/settings sends them: what the editor's settings block shows. */
+interface PipelineSettings {
+  id: string;
+  name: string;
+  prefix: string | null;
+  goal: string | null;
+  /** A key of judge_models, or null for the default judge. */
+  judge_model: string | null;
+  visibility: 'company' | 'members';
+  factory_id: string | null;
+  owner_id: string | null;
+  manager_id: string | null;
+  /** Actor references, human:<id> or bot:<slug>. Only a members-only pipeline keeps a list. */
+  members: string[];
+  /** The judge models a pipeline may be given, in the order the server lists them. */
+  judge_models: string[];
+  /** The judge a pipeline has when its judge_model is null. */
+  default_judge_model: string;
+}
+
+/** A live factory, as GET /v2/factories lists it. */
+interface PipelineFactory {
+  id: string;
+  name: string;
+  goal: string | null;
+  owner_id: string | null;
+  manager_id: string | null;
+  position: number | null;
+}
+
+const pipelineSettingsPath = (pipelineId: string): string => pipelineRoute(`/${encodeURIComponent(pipelineId)}/settings`);
+
+/** A pipeline's settings. The editor reads them whole and saves only the fields it changed. */
+async function pipelineSettings(pipelineId: string): Promise<PipelineSettings> {
+  return get(pipelineSettingsPath(pipelineId), {fresh: true}) as Promise<PipelineSettings>;
+}
+
+/**
+ * Save some of a pipeline's settings: a field left out stays as it is. An empty goal or a null judge_model clears it;
+ * visibility "members" takes the pipeline out of its factory, which the server clears.
+ */
+async function pipelinePatchSettings(pipelineId: string, fields: Record<string, unknown>): Promise<void> {
+  await writeRequest('PATCH', pipelineSettingsPath(pipelineId), fields);
+}
+
+/** The live factories, in their order: the editor's Factory choice. */
+async function pipelineFactories(): Promise<PipelineFactory[]> {
+  const res = await get('/v2/factories') as { factories: PipelineFactory[] };
+  return res.factories;
+}

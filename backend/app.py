@@ -26,6 +26,7 @@ from . import outcome_stats
 from . import (
     factory_manager,
     pipeline_engine,
+    pipeline_factories,
     pipeline_github_checks,
     pipeline_judges,
     pipeline_links,
@@ -5791,6 +5792,7 @@ def create_app(settings=None):
     pipeline_engine.install(app, store, mutate, auth)
     pipeline_links.install(app, store, mutate, auth)
     pipeline_requirements.install(app, store, mutate, auth)
+    pipeline_factories.install(app, store, mutate, auth)
     requirement_attachments.install(app, store, mutate, auth)
     pipeline_judges.install(app, store, mutate, auth)
     pipeline_review.install(app, store, mutate, auth)
