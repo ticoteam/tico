@@ -107,3 +107,11 @@ def test_a_manager_who_has_just_been_at_a_late_ticket_is_told_only_if_it_stays_l
         )
         assert late_ids(c, 4.2) == [], "they know: no listing now"
         assert late_ids(c, 5) == [row["id"]], "an hour on and still late: now they hear"
+
+
+def test_a_steps_limit_column_is_its_warn_after_and_replaces_the_default(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        c.execute("UPDATE task_steps SET limit_minutes=30 WHERE id=?", (row["step_id"],))
+        assert late_ids(c, 0.4) == []
+        assert late_ids(c, 0.6) == [row["id"]]

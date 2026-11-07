@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import goals as G
+from . import pipeline_manager
 from . import placement, run_triggers
 from . import system_routines as SR
 from .batch_work import isolated
@@ -842,6 +843,8 @@ class Scheduler:
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at
             run_invariants(self.store, self.execution.auth, at, failures)
+        # Pipeline managers, their watchdog and the Factory Managers: plain code, one guarded call (backend/pipeline_manager.py).
+        pipeline_manager.run_due(self.store, at, failures)
         if self.tools_checked is None or at - self.tools_checked >= timedelta(minutes=5):
             # API tools on the proxy with a check path, each every 30 minutes (backend/api_tools.py): a real call with
             # each key, on its own thread, so a slow vendor never holds a tick.
