@@ -31,7 +31,7 @@ const MEMBERS = [{member: 'bot:builder', segments: ['seg-rental']}, {member: 'bo
   {member: 'person:cara', segments: ['seg-consumer']}];
 const GOALS = [{id: 'g-co', title: 'Reach 100 paying customers', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
   {id: 'g-rental', title: 'Book 40 rental demos a month', owner_id: 'bot:sales-lead', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: [], segment_id: 'seg-rental'}];
-const mkTask = (id, title, segment_id) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:builder', status: 'doing', lane: 'company',
+const mkTask = (id, title, segment_id) => ({id, title, body: 'Details.', owner_id: 'bot:builder', requester_id: 'human:ana', status: 'doing', lane: 'company',
   rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, segment_id, relations: {},
   created_at: new Date(Date.now() - 7200e3).toISOString(), updated_at: new Date(Date.now() - 3600e3).toISOString()});
 const TASKS = [mkTask('t-rent-1', 'Draft the rental offer page', 'seg-rental'), mkTask('t-rent-2', 'Pull rental lease counts', 'seg-rental'),
@@ -318,7 +318,7 @@ async function sizes(browser, name, hash, ready, opts = {}) {
     // 4. Tasks: the Segment filter keeps that segment's rows and shows a chip; a task's Segment saves with its version.
     await run('tasks: the filter, its chip, and a task\'s segment saved', async () => {
       const tag = 'tasks';
-      const {page, errors, hub} = await open(browser, {hash: '#/tasks?view=list'});
+      const {page, errors, hub} = await open(browser, {hash: '#/tasks?view=list&who=all'});
       await page.locator('#task-body [data-task-key]').first().waitFor();
       await page.locator('#task-filter').click();
       await page.locator('[data-pick-field="segment"]').click();
@@ -462,7 +462,7 @@ async function sizes(browser, name, hash, ready, opts = {}) {
     await run('sizes: person', () => sizes(browser, 'person', '#/person/cara', p => p.locator('#person-segments [data-seg-chips]').waitFor()));
     await run('sizes: bot', () => sizes(browser, 'bot', '#/bot/sales-lead/more', p => p.locator('#bot-segments:not([hidden]) [data-seg-chips]').waitFor()));
     await run('sizes: goals', () => sizes(browser, 'goals', '#/strategy/goals', p => p.locator('#strat-actions [data-seg-filter]').waitFor()));
-    await run('sizes: tasks', () => sizes(browser, 'tasks', '#/tasks?view=list',p => p.locator('#task-body [data-task-key]').first().waitFor()));
+    await run('sizes: tasks', () => sizes(browser, 'tasks', '#/tasks?view=list&who=all',p => p.locator('#task-body [data-task-key]').first().waitFor()));
     await run('sizes: growth', () => sizes(browser, 'growth', '#/growth', p => p.locator('[data-gr-seg-slot] [data-seg-filter]').waitFor()));
     await run('sizes: budgets', () => sizes(browser, 'budgets', '#/finance/budgets', p => p.locator('tr[data-fin-bud="b-rental-g"]').waitFor()));
     await run('sizes: pnl', () => sizes(browser, 'pnl', '#/finance/pnl', p => p.locator('#fin-pl table.fin-pl').waitFor()));
