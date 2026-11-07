@@ -6,12 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend import files as files_module
 from backend import hubdb as H
 from backend import pipeline_requirements as R
 from backend import requirement_attachments as A
+from backend import task_privacy as privacy
 from backend.store import Problem
 
-from .test_pipeline_foundation import ANA, boot, hub, step_id
+from .test_pipeline_foundation import ANA, T, boot, hub, insert, step_id
 
 
 class Auth:
@@ -134,3 +136,157 @@ def test_a_bot_cannot_attach_to_a_requirement_on_a_ticket_it_cannot_edit(tmp_pat
     with pytest.raises(H.Refused):  # a bot hubdb does not know cannot write at all
         A.attach(c, Auth(), SimpleNamespace(actor="bot:ghost"), task["id"], req["id"], body)
     assert c.execute("SELECT COUNT(*) FROM requirement_attachments").fetchone()[0] == 0
+
+
+def test_a_bot_that_only_reads_the_type_cannot_attach_evidence_and_one_that_works_it_can(tmp_path):
+    """Attaching changes the ticket, so it takes the rights a change takes: a bot the type lets only read it may not."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c,
+        ANA,
+        "Dev",
+        [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}],
+        mover=True,
+        bots="read",
+    )
+    stage = step_id(c, dev["id"], "Review")
+    task = H.task_create(c, ANA, "Ship the page", "", ANA, type=dev["id"], step="Review", lint=False)
+    insert(c, "bots", id="reader", slug="reader", display_name="Reader", state="active", created_at=T)
+    req = R.add(
+        c,
+        ANA,
+        stage,
+        {"name": "Live link", "kind": "attachment", "needs": {"formats": ["link"]}, "reviewed_by": "nobody"},
+    )
+    body = {"source": "link", "url": "https://x.example"}
+    reader = SimpleNamespace(actor="bot:reader")
+
+    with pytest.raises(Problem) as refused:
+        A.attach(c, Auth(), reader, task["id"], req["id"], body)
+    assert refused.value.status == 403
+    assert c.execute("SELECT COUNT(*) FROM requirement_attachments").fetchone()[0] == 0
+
+    c.execute("UPDATE task_types SET bots='work' WHERE id=?", (dev["id"],))
+    assert A.attach(c, Auth(), reader, task["id"], req["id"], body)["attached_by"] == "bot:reader"
+
+
+class Reviewing(Auth):
+    """Reads the reviewer's identity from its name, as the auth layer does for a person on the roster."""
+
+    def identity_for_actor(self, conn, actor):
+        return SimpleNamespace(actor=actor, role="human")
+
+
+def test_evidence_the_reviewer_cannot_read_is_refused_for_a_file_and_for_a_blob(tmp_path, monkeypatch):
+    """A file or blob the reviewer may not read is refused (403), and one the caller may not read is not found (404)."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    _, stage, task = _ticket(c)
+    insert(c, "bots", id="coo", slug="coo", display_name="COO", state="active", created_at=T)
+    digest = "d" * 64
+    insert(
+        c,
+        "blobs",
+        id="blob-1",
+        owner=ANA,
+        digest=digest,
+        size=3,
+        name="proof.pdf",
+        content_type="application/pdf",
+        created_at=T,
+    )
+    insert(
+        c,
+        "bot_files",
+        id="file-1",
+        bot_id="coo",
+        scope="task:" + task["id"],
+        identity="proof",
+        title="Proof",
+        kind="file",
+        mime="application/pdf",
+        locator="proof",
+        current_version=1,
+        state="ready",
+        task_id=task["id"],
+        first_activity_at=T,
+        last_activity_at=T,
+        archived=0,
+    )
+    insert(
+        c,
+        "bot_file_versions",
+        file_id="file-1",
+        version=1,
+        blob_id="blob-1",
+        digest=digest,
+        size=3,
+        name="proof.pdf",
+        mime="application/pdf",
+        actor="bot:coo",
+        created_at=T,
+    )
+    file_req = R.add(
+        c,
+        ANA,
+        stage,
+        {
+            "name": "Proof file",
+            "kind": "attachment",
+            "needs": {"formats": ["page"]},
+            "reviewed_by": "person",
+            "reviewer_id": "human:ben",
+        },
+    )
+    blob_req = R.add(
+        c,
+        ANA,
+        stage,
+        {
+            "name": "Proof blob",
+            "kind": "attachment",
+            "needs": {"formats": ["page"]},
+            "reviewed_by": "person",
+            "reviewer_id": "human:ben",
+        },
+    )
+    caller = SimpleNamespace(actor=ANA)
+    readable = {"caller": True, "reviewer": False}
+
+    def file_visible(conn, auth, who, row, cache):
+        return who.actor == ANA or readable["reviewer"]
+
+    def blob_readable(conn, actor, blob_id, memo=None):
+        return actor == ANA or readable["reviewer"]
+
+    monkeypatch.setattr(files_module, "file_visible", file_visible)
+    monkeypatch.setattr(privacy, "blob_readable", blob_readable)
+    auth = Reviewing()
+
+    for requirement, body in (
+        (file_req, {"source": "file", "file_id": "file-1"}),
+        (blob_req, {"source": "blob", "blob_id": "blob-1"}),
+    ):
+        with pytest.raises(Problem) as refused:
+            A.attach(c, auth, caller, task["id"], requirement["id"], body)
+        assert refused.value.status == 403, requirement["name"]
+    assert c.execute("SELECT COUNT(*) FROM requirement_attachments").fetchone()[0] == 0
+
+    readable["reviewer"] = True  # once the reviewer can read it, the same attach goes through
+    assert (
+        A.attach(c, auth, caller, task["id"], file_req["id"], {"source": "file", "file_id": "file-1"})["attached_by"]
+        == ANA
+    )
+    assert (
+        A.attach(c, auth, caller, task["id"], blob_req["id"], {"source": "blob", "blob_id": "blob-1"})["attached_by"]
+        == ANA
+    )
+
+    readable["caller"] = False  # a file the caller cannot read is not found to them
+    monkeypatch.setattr(files_module, "file_visible", lambda conn, auth, who, row, cache: False)
+    with pytest.raises(Problem) as hidden:
+        A.attach(c, auth, caller, task["id"], file_req["id"], {"source": "file", "file_id": "file-1"})
+    assert hidden.value.status == 404
