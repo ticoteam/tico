@@ -115,6 +115,8 @@ SKEW = timedelta(seconds=60)  # GitHub's timestamps and this clock can differ a 
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    # Registered before it runs: a dataclass looks its module up in sys.modules while the module executes (Python 3.12).
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 

@@ -3,6 +3,7 @@ that a failure reaches the release-train issue (scripts/release_train.py)."""
 
 from datetime import date, datetime, timedelta, timezone
 import re
+import sys
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -255,6 +256,15 @@ ENV = {
     "STABLE_UPDATE_KEY": "k2",
     "RELEASE_TRAINS": "on",
 }
+
+
+# ---- loading the scripts' modules ----
+
+
+def test_loaded_modules_are_registered_by_name():
+    # A dataclass looks its module up in sys.modules while the module runs, so each loader registers it first.
+    assert sys.modules["tico_release_notes"] is rt.release_notes
+    assert sys.modules["tico_rollout"] is rt.rollout
 
 
 # ---- versions and the clock ----
