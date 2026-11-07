@@ -1,6 +1,7 @@
 """The model side of the judge matrix. The server's judge (backend/pipeline_judges.py `judge_once`) judges each labeled case
-as it does in production: the state is built by the server's own `_state`, from the case's fields in the attributes the server
-reads from a Tico row. This file supplies only the model call, through the same Gateway clients the server uses.
+as it does in production: the state is built by the server's own `_state`, and the evidence text by the server's own loader
+(`text_of_bytes`, the one the server's read uses), from the case's text as the bytes Tico would hold. This file supplies only
+the model call, through the same Gateway clients the server uses.
 
 A model name picks its Gateway route, the one the server uses for it:
 
@@ -51,20 +52,27 @@ SOURCES = {"check": "check_run", "receipt": "receipt", "image": "blob"}
 
 
 def _attachment(case):
-    """The attachment as the server reads it from a Tico row: the text Tico would hold for it. An image has no text in
-    production (Tico reads none from it), so its case text is withheld and the judge sees the metadata only."""
+    """The attachment as the server reads it from a Tico row. The case's text stands for the bytes Tico would hold, under the
+    MIME type its kind carries, and the server's loader gives the text the judge is sent: none for an image (Tico reads no
+    text from one, so the judge sees only its metadata and answers unsure), the words of a text otherwise, cut at the cap.
+    A case with no attachment has no row, so it has no id: the judge is asked about no evidence."""
+    work = int(case["work"]["work_version"])
     att = case.get("attachment")
-    kind = (att or {}).get("kind")
-    text = None if kind in (None, "image") else (att.get("text") or "")
+    if att is None:
+        return {"task_work_version": work}
+    kind = att.get("kind")
+    data = (att.get("text") or "").encode()
+    text, cut = P.text_of_bytes("image/png" if kind == "image" else "text/plain", data, len(data))
     return {
         "id": f"att-{case['id']}",
-        "source": SOURCES.get(kind, "file") if att else "",
-        "digest": hashlib.sha256((text or "").encode()).hexdigest()[:16] if text else "",
+        "source": SOURCES.get(kind, "file"),
+        "digest": hashlib.sha256(data).hexdigest()[:16],
         "url": "",
         "file_version": 1,
-        "work_version": int((att or {}).get("work_version") or 0),
-        "task_work_version": int(case["work"]["work_version"]),
+        "work_version": int(att.get("work_version") or 0),
+        "task_work_version": work,
         "text": text,
+        "truncated": cut,
     }
 
 

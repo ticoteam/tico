@@ -151,7 +151,8 @@ def _visits(c: "sqlite3.Connection", pipeline_id: str) -> list[dict[str, Any]]:
 def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -> dict[str, dict[str, Any]]:
     """The one Late rule: the manager's rail and the overview both read it. A live ticket is late once it has spent its
     stage's Warn after (task_steps.limit_minutes, D55) in its open stage visit, and at the limit exactly. Time on hold does
-    not count (D40): an open hold, or a waiting ticket, pauses it, and its clock starts again at the latest release.
+    not count (D40): an open hold, or a waiting ticket, pauses it, and its clock starts again at the latest release or
+    the move back from waiting. A ticket with no open visit counts from its latest move into its step.
     `rows` are task rows (id, type_id, step_id, status, created_at). Returns {task id: {since, hours, limit_hours,
     limit_minutes}} for the late ones only."""
     now = when_of(at)
@@ -176,6 +177,30 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
             )
         )
     }
+    # A ticket with no open visit (a pipeline with no requirements has none) started its stage at its latest step move
+    # into that step, not when it was made (Fix L2-4).
+    into_step = {
+        (r["task_id"], r["step_id"]): r["at"]
+        for r in H._rows(
+            c.execute(
+                "SELECT subject_id AS task_id, new AS step_id, max(created_at) AS at FROM history_events "
+                f"WHERE subject_type='task' AND kind='step' AND subject_id IN ({marks}) GROUP BY subject_id, new",
+                ids,
+            )
+        )
+    }
+    # Waiting pauses the clock as a hold does, with or without a hold row (product roadmap moves make none): the clock
+    # starts again when the ticket leaves waiting (Fix L2-5).
+    left_waiting = {
+        r["task_id"]: r["at"]
+        for r in H._rows(
+            c.execute(
+                "SELECT subject_id AS task_id, max(created_at) AS at FROM history_events WHERE subject_type='task' "
+                f"AND kind='status' AND old='waiting' AND subject_id IN ({marks}) GROUP BY subject_id",
+                ids,
+            )
+        )
+    }
     open_now: set[str] = set()
     released: dict[str, list[str]] = {}
     for hold in H._rows(c.execute(f"SELECT task_id, released_at FROM task_holds WHERE task_id IN ({marks})", ids)):
@@ -188,8 +213,11 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
         ticket = r["id"]
         if ticket in open_now:
             continue
-        starts = [H.parse_ts(entered.get(ticket) or r.get("created_at") or "")]
+        since_step = into_step.get((ticket, str(r.get("step_id"))))
+        starts = [H.parse_ts(entered.get(ticket) or since_step or r.get("created_at") or "")]
         starts += [H.parse_ts(at_release) for at_release in released.get(ticket, [])]
+        if left_waiting.get(ticket):
+            starts.append(H.parse_ts(left_waiting[ticket]))
         began = max((t for t in starts if t is not None), default=None)
         if began is None:
             continue

@@ -26,7 +26,14 @@ from .test_pipeline_foundation import ANA, boot, hub, step_id
 FIXTURES = Path(__file__).parent / "fixtures"
 BEN = "human:ben"
 REQ = {"id": "req-1", "name": "Shows the page live", "rubric": "The link opens the page", "pipeline_id": None}
-ATTACHMENT = {"id": "att-1", "source": "link", "digest": "d", "url": "https://x.example", "file_version": 0}
+ATTACHMENT = {
+    "id": "att-1",
+    "source": "link",
+    "digest": "d",
+    "url": "https://x.example",
+    "file_version": 0,
+    "text": "The link opens the page",
+}
 
 
 def _settings(path):
@@ -139,7 +146,8 @@ def test_a_bot_reviewed_attachment_is_judged_once_and_the_decision_is_recorded(t
     assert [r["name"] for r in asked] == ["Live link"]
     with store.read() as conn:
         rows = [dict(r) for r in conn.execute("SELECT judge, verdict, judge_call_id FROM stage_decisions").fetchall()]
-    assert rows == [{"judge": "llm", "verdict": "met", "judge_call_id": rows[0]["judge_call_id"]}]
+    # A link has no text Tico can read, so even a confident "met" is unsure and a person decides (Fix L2-2).
+    assert rows == [{"judge": "llm", "verdict": "unsure", "judge_call_id": rows[0]["judge_call_id"]}]
     assert rows[0]["judge_call_id"]  # the decision points at its audit event
 
 
@@ -568,3 +576,89 @@ def test_the_judge_state_carries_the_pipeline_goal(tmp_path):
         {"name": "Shows the page live", "rubric": "The link opens", "goal": "Launch the lights"}, ATTACHMENT
     )
     assert "Launch the lights" in json.dumps(state)
+
+
+def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
+    """Fix L2-3: the judge's read is a range read of READ_MAX + 1 bytes, never the whole upload, and the cut is flagged."""
+    from backend import file_library as files
+
+    asked = []
+
+    class RangeStore:
+        """A blob store that honours the range it is asked for, and records it."""
+
+        def open_range(self, digest, start=0, end=None):
+            asked.append((start, end))
+            body = b"w" * (files.READ_MAX * 2)
+            yield body[start : None if end is None else end + 1]
+
+    text, cut = P._text_of(
+        SimpleNamespace(blobs=RangeStore()),
+        {"mime": "text/plain", "blob_digest": "a" * 64, "blob_size": files.READ_MAX * 2},
+    )
+    assert asked == [(0, files.READ_MAX)]
+    assert len(text) == files.READ_MAX and cut is True
+
+
+def test_a_text_blob_within_the_cap_is_not_cut():
+    from backend import file_library as files
+
+    class SmallStore:
+        def open_range(self, digest, start=0, end=None):
+            yield b"Shipped the page."
+
+    text, cut = P._text_of(
+        SimpleNamespace(blobs=SmallStore()), {"mime": "text/plain", "blob_digest": "a" * 64, "blob_size": 17}
+    )
+    assert (text, cut) == ("Shipped the page.", False)
+    assert files.READ_MAX > 17
+
+
+def test_evidence_the_judge_cannot_read_in_full_is_unsure_whatever_the_model_says(tmp_path):
+    """Fix L2-2: no text (an image, or a text Tico could not read) or a cut text is unsure, even at p 0.95; readable text is
+    still judged by the bands. Through the engine seam; the Haiku path is tested below."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    settings = _settings(path)
+    image = {**ATTACHMENT, "id": "att-shot", "source": "blob", "text": None}
+    cut = {**ATTACHMENT, "id": "att-cut", "truncated": True}
+    for evidence in (image, cut):
+        for p in (0.95, 0.05):
+            result = P.judge_once(c, REQ, evidence, "haiku-5.5", settings=settings, engine=_engine(p))
+            assert result["verdict"] == "unsure" and result["p"] == 0.5, (evidence["id"], p)
+    assert P.judge_once(c, REQ, ATTACHMENT, "haiku-5.5", settings=settings, engine=_engine(0.95))["verdict"] == "met"
+
+
+def test_a_met_on_truncated_text_through_the_default_haiku_path_is_unsure(tmp_path, monkeypatch):
+    """Fix L2-2 on the path the default pipelines use: the Haiku chat gets the unsure rule in its system prompt, and its
+    'met' on text it was not all shown is unsure. The chat answers p 0.95; nothing here writes the verdict."""
+    from backend import credentials
+    from backend import gateway_connection
+
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    settings = _settings(path)
+    store = Store(settings)
+    sent = []
+
+    class Chat:
+        model = "tico-low"
+
+        def __call__(self, system, user):
+            sent.append((system, json.loads(user)))
+            return {"p": 0.95, "reason": "The page opens"}
+
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+    monkeypatch.setattr(gateway_connection, "url", lambda c, settings=None, record=None: "https://gateway.example")
+    monkeypatch.setattr(J, "gateway_writer", lambda key_of, base, model, timeout, opener: Chat())
+    monkeypatch.setattr(backend_judge, "metered", lambda store, models, state, questions, label, call: call())
+    monkeypatch.setattr(credentials, "Vault", lambda store: None)
+    monkeypatch.setattr(P, "_installed_store", store)
+    cut = {**ATTACHMENT, "text": "The page opens and " * 40, "truncated": True}
+    result = P.judge_once(c, REQ, cut, "haiku-5.5", settings=settings)
+    assert result["verdict"] == "unsure"
+    system, state = sent[0]
+    assert "truncated" in system and "null" in system  # the rule the model is told
+    assert state["attachment"]["truncated"] is True

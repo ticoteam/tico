@@ -185,7 +185,7 @@
     "text": "Screenshot caption and text read from the image: Settings page. Appearance section. 'Dark mode' toggle shown off in light theme and on in dark theme (two panels).",
     "work_version": 3
    },
-   "expected": "met",
+   "expected": "unsure",
    "trap": null
   },
   {
@@ -209,7 +209,7 @@
     "text": "Screenshot text read from the image: Billing page. Plan: Team. Invoices table. No Dark mode control visible.",
     "work_version": 3
    },
-   "expected": "not_met",
+   "expected": "unsure",
    "trap": "wrong_screen"
   },
   {
@@ -233,7 +233,7 @@
     "text": "Settings page. Appearance section. 'Dark mode' toggle shown off in light theme and on in dark theme (two panels).",
     "work_version": 1
    },
-   "expected": "not_met",
+   "expected": "unsure",
    "trap": "old_version"
   },
   {
@@ -300,7 +300,7 @@
     "text": "Settings page. Appearance section. 'Dark mode' toggle shown off, light theme only. No second panel.",
     "work_version": 3
    },
-   "expected": "not_met",
+   "expected": "unsure",
    "trap": "partial"
   },
   {
