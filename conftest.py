@@ -186,7 +186,7 @@ def pytest_terminal_summary(terminalreporter):
     cost = connection_guard.SUMMED
     terminalreporter.write_line(
         f"pooled connection check: {cost['tests']} tests, {cost['seconds']:.1f} s of its own work "
-        f"({cost['joined']:.1f} s joining threads)"
+        f"({cost['joined']:.1f} s joining threads); the store's own connects took {cost['connect']:.1f} s, not counted"
     )
 
 
