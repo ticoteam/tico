@@ -70,6 +70,21 @@ async function openDialog(page) {
       await page.close();
     }
 
+    // Turn on now is the dialog's own switch: with an automation open behind the dialog, flipping it on and off
+    // saves nothing on that automation. The switch carries the page's `au-sw` class; only the dialog stopping its
+    // events (auDialog) keeps the page's switch handler from PATCHing the open automation's `enabled`.
+    {
+      const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP});
+      await page.locator('tr.au-row').first().click();
+      await page.waitForFunction(() => /^#\/automations\/./.test(location.hash));
+      await openDialog(page);
+      await page.locator('.au-nd [data-n="on"]').check();
+      await page.locator('.au-nd [data-n="on"]').uncheck();
+      assert.deepEqual(writes.filter(w => w.method === 'PATCH'), [], 'the open automation is not switched');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
     // Turn on now left off saves it off.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP});
