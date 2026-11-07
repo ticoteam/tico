@@ -1,5 +1,7 @@
-"""scripts/lint_baseline.py: the --base growth check follows a moved file."""
+"""scripts/lint_baseline.py: the --base growth check follows a moved file, and the per-file pieces, the generated toml,
+migration from the single counts file, and growth against a ref in either layout. Tests run on scratch roots only."""
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -178,3 +180,109 @@ def test_a_package_main_forwarder_and_a_shell_file(tmp_path, monkeypatch):
     assert lint_baseline.forwards_to("old/__main__.py", "new/__main__.py")
     assert not lint_baseline.forwards_to("old/__main__.py", "new/jobs.py")
     assert not lint_baseline.forwards_to("old/bash-env", "new/bash-env")  # ruff allowances are Python's only
+
+
+def write_text(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def commit(root, message):
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", message)
+
+
+def test_a_count_change_touches_only_that_files_piece(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    counts = {("backend/a.py", "BLE001"): 2, ("backend/b.py", "BLE001"): 1, ("backend/b.py", "F401"): 3}
+    lint_baseline.write_counts(counts)
+    folder = tmp_path / "baselines" / "ruff"
+    before = {p: p.read_text(encoding="utf-8") for p in folder.rglob("*.json")}
+    assert sorted(p.relative_to(folder).as_posix() for p in before) == ["backend/a.py.json", "backend/b.py.json"]
+    lint_baseline.write_counts({**counts, ("backend/a.py", "BLE001"): 1})
+    after = {p: p.read_text(encoding="utf-8") for p in folder.rglob("*.json")}
+    assert [p.name for p in before if before[p] != after[p]] == ["a.py.json"]
+    assert lint_baseline.read_counts() == {**counts, ("backend/a.py", "BLE001"): 1}
+
+
+def test_a_file_with_no_findings_loses_its_piece(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    lint_baseline.write_counts({("backend/a.py", "BLE001"): 1, ("backend/b.py", "F401"): 1})
+    lint_baseline.write_counts({("backend/b.py", "F401"): 1})
+    assert not (tmp_path / "baselines" / "ruff" / "backend" / "a.py.json").exists()
+    assert (tmp_path / "baselines" / "ruff" / "backend" / "b.py.json").exists()
+
+
+def test_generate_lists_every_pair_of_the_pieces_in_the_ruff_toml(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    write_text(tmp_path / "ruff.toml", '[lint]\nselect = ["F", "B"]\n')
+    lint_baseline.write_counts({("backend/b.py", "F401"): 1, ("backend/a.py", "BLE001"): 2})
+    assert lint_baseline.generate() == {("backend/b.py", "F401"): 1, ("backend/a.py", "BLE001"): 2}
+    text = (tmp_path / "ruff-baseline.toml").read_text(encoding="utf-8")
+    assert text.endswith('[lint.per-file-ignores]\n"backend/a.py" = ["BLE001"]\n"backend/b.py" = ["F401"]\n')
+
+
+def test_a_piece_with_two_files_or_at_the_wrong_path_is_a_layout_problem(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    lint_baseline.write_counts({("backend/a.py", "BLE001"): 1})
+    assert lint_baseline.layout_problems() == []
+    piece = tmp_path / "baselines" / "ruff" / "backend" / "a.py.json"
+    write_text(piece, json.dumps({"backend/a.py": {"BLE001": 1}, "backend/b.py": {"F401": 1}}, indent=2) + "\n")
+    problems = lint_baseline.layout_problems()
+    assert len(problems) == 1 and "holds 2 files" in problems[0]
+    write_text(
+        tmp_path / "baselines" / "ruff" / "elsewhere.json", lint_baseline.render_piece("backend/a.py", {"BLE001": 1})
+    )
+    write_text(piece, lint_baseline.render_piece("backend/a.py", {"BLE001": 1}))
+    problems = lint_baseline.layout_problems()
+    assert len(problems) == 1 and "not in the layout" in problems[0]
+
+
+def test_migrate_turns_the_tracked_counts_file_into_pieces_and_untracks_both_old_files(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q", "-b", "main")
+    write_text(tmp_path / "ruff.toml", '[lint]\nselect = ["F", "B"]\n')
+    old_counts = {"backend/a.py": {"BLE001": 2}, "backend/b.py": {"F401": 1}}
+    write_text(tmp_path / "ruff-baseline-counts.json", json.dumps(old_counts, indent=2, sort_keys=True) + "\n")
+    write_text(tmp_path / "ruff-baseline.toml", "# the single file of before the split\n[lint.per-file-ignores]\n")
+    commit(tmp_path, "before the split")
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    with pytest.raises(SystemExit):
+        lint_baseline.generate()  # the old files are still tracked: refuse
+    assert lint_baseline.migrate() == 0
+    assert lint_baseline.read_counts() == {("backend/a.py", "BLE001"): 2, ("backend/b.py", "F401"): 1}
+    assert not (tmp_path / "ruff-baseline-counts.json").exists()
+    tracked = subprocess.run(
+        ["git", "-C", str(tmp_path), "ls-files", "--", "ruff-baseline-counts.json", "ruff-baseline.toml"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert tracked.stdout == ""
+    text = (tmp_path / "ruff-baseline.toml").read_text(encoding="utf-8")
+    assert text.endswith('[lint.per-file-ignores]\n"backend/a.py" = ["BLE001"]\n"backend/b.py" = ["F401"]\n')
+    assert lint_baseline.migrate() == 0  # nothing left to migrate
+
+
+def test_the_growth_check_reads_a_ref_from_before_the_split(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q", "-b", "main")
+    write_text(tmp_path / "ruff.toml", '[lint]\nselect = ["B"]\n')
+    write_text(tmp_path / "ruff-baseline-counts.json", json.dumps({"backend/a.py": {"BLE001": 1}}, indent=2) + "\n")
+    commit(tmp_path, "before the split")
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    lint_baseline.write_counts({("backend/a.py", "BLE001"): 2})
+    problems = lint_baseline.check_growth("HEAD")
+    assert "count grew: backend/a.py BLE001 1 -> 2 (fix the findings; a baseline may only shrink)" in problems
+    lint_baseline.write_counts({("backend/a.py", "BLE001"): 1})
+    assert lint_baseline.check_growth("HEAD") == []
+
+
+def test_the_growth_check_reads_pieces_at_a_ref_from_after_the_split(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q", "-b", "main")
+    write_text(tmp_path / "ruff.toml", '[lint]\nselect = ["B"]\n')
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    lint_baseline.write_counts({("backend/a.py", "BLE001"): 1})
+    commit(tmp_path, "pieces")
+    lint_baseline.write_counts({("backend/a.py", "BLE001"): 2})
+    assert lint_baseline.check_growth("HEAD") == [
+        "count grew: backend/a.py BLE001 1 -> 2 (fix the findings; a baseline may only shrink)"
+    ]

@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/models_preset.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 63,
+                    "lineCount": 2
+                }
+            }
+        ]
+    }
+}

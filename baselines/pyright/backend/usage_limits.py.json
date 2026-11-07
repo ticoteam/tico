@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/usage_limits.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 100,
+                    "endColumn": 116,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -46,18 +46,19 @@ on every tracked file; CI runs the same checks. Turn on the pre-push hook once p
 ```bash
 git config core.hooksPath .githooks
 git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
-git config merge.tico-baseline-counts.driver 'python3 scripts/baseline_merge.py counts %O %A %B'
-git config merge.tico-baseline-toml.driver 'python3 scripts/baseline_merge.py toml %O %A %B'
-git config merge.tico-baseline-pyright.driver 'python3 scripts/baseline_merge.py pyright %O %A %B'
 ```
 
 After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
 The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
-conflicting; without it git merges that file as text. The last three lines do the same for the lint baseline
-(`ruff-baseline-counts.json`, `ruff-baseline.toml`) and the type baseline (`.basedpyright/baseline.json`): each side's
-change is applied to the base, so two branches that fix different findings merge. GitHub's "Update branch" button and
-the merge queue merge as text and do not run these drivers; update a branch locally when it needs the drivers. The
-generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
+conflicting; without it git merges that file as text. The lint and type baselines need no driver: each source file's
+findings are one file under `baselines/ruff/` and `baselines/pyright/`, so two branches that fix different files change
+different files and merge as text. (GitHub's "Update branch" button and the merge queue merge as text too; the merge
+queue runs no drivers at all, which is why the baselines are split.) `ruff-baseline.toml` and `.basedpyright/baseline.json`
+are generated from those files and git-ignored: `scripts/lint.sh` and `scripts/check_types.sh` write them, and
+`python3 scripts/lint_baseline.py --generate` writes the ruff one for editors and a bare `uvx ruff`, since `ruff.toml`
+extends it. A branch from before the split tracks the old single files: rebase it, then run
+`python3 scripts/lint_baseline.py --migrate` and `python3 scripts/pyright_baseline.py --migrate` on its own counts and
+entries, and commit. The generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 

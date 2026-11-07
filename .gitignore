@@ -37,3 +37,8 @@ tools/release-command/target/
 
 # Local type-check environment (scripts/check_types.sh).
 .venv-pyright/
+
+# Generated from baselines/ by scripts/lint_baseline.py and scripts/pyright_baseline.py: ruff and basedpyright read these
+# single files, and git tracks the per-file pieces in baselines/ instead.
+/ruff-baseline.toml
+/.basedpyright/baseline.json

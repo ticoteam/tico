@@ -1,9 +1,10 @@
 # Lint config for the Python code. Ruff is pinned: `uvx ruff@0.15.9` (scripts/lint.sh runs the checks).
 #
 # Production code is checked for bugs with the rule families below. Style rules (E501, I, UP, ...) are not enforced.
-# Existing findings are counted by (file, rule) in ruff-baseline-counts.json and listed in ruff-baseline.toml, which
-# this file extends. Each count may only go down: `python3 scripts/lint_baseline.py --check` fails on a finding past
-# its count, on a count that dropped without `--write`, and (with --base) on any count that grew.
+# Existing findings are counted by (file, rule) in baselines/ruff/<path>.json, one piece per file, and listed in
+# ruff-baseline.toml, which this file extends and which is generated from the pieces (git-ignored). Each count may only
+# go down: `python3 scripts/lint_baseline.py --check` fails on a finding past its count, on a count that dropped without
+# `--write`, and (with --base) on any count that grew.
 extend = "ruff-baseline.toml"
 # Tico Recorder's benchmarks are uv scripts that shell out to `security` and to paid speech APIs. They are run by hand
 # (recorder/bench/README.md), not part of the product, and their subprocess calls are left as written.
