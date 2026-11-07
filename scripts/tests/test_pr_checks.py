@@ -131,6 +131,32 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
         checks.run(target, "python-1")
 
 
+def test_selected_attempt_contention_file_runs_its_slow_acceptance_serially(tmp_path, monkeypatch):
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    contention = tmp_path / checks.ATTEMPT_CONTENTION_FILE
+    contention.parent.mkdir(parents=True)
+    contention.touch()
+    ordinary = tmp_path / "backend/tests/test_ordinary.py"
+    ordinary.touch()
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"matrix": {"include": [{"suite": "python-1", "files": [
+        checks.ATTEMPT_CONTENTION_FILE, "backend/tests/test_ordinary.py"]}]}}))
+    results = tmp_path / "ci-results"
+    results.mkdir()
+    (results / "python-1.xml").write_text('<testsuite><testcase/></testsuite>')
+    calls = []
+    monkeypatch.setattr(checks.subprocess, "run", lambda command, **kw:
+                        calls.append((command, kw)) or SimpleNamespace(returncode=0))
+
+    assert checks.run(plan, "python-1") == 0
+    assert len(calls) == 2
+    command, options = calls[1]
+    assert command[command.index("-n") + 1] == "0"
+    assert "-s" in command and "-m" in command
+    assert checks.ATTEMPT_CONTENTION_TEST in command
+    assert options["env"]["PYTEST_ADDOPTS"] == ""
+
+
 def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_too(tmp_path):
     # A new tool, response field or command reference can change the contract without a Python import edge.
     graph = SimpleNamespace(files=[], unparsed=set(), affected=lambda *args: set())
