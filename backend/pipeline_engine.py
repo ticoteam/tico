@@ -936,6 +936,13 @@ def decided_move(actor: str) -> "Generator[None, None, None]":
         _DECIDED_MOVE.reset(token)
 
 
+def is_cancellation(status: str | None) -> bool:
+    """The one test for "a cancellation, not progress": a ticket that is closed or declined. Both gates ask it (the move
+    gate in hubdb.task_update and the status gate in hubdb._set_status), so a cancellation is never held to completion
+    requirements. Who may cancel is still checked by the close and decline paths."""
+    return status in CLOSED
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,

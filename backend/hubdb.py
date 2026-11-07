@@ -4752,11 +4752,11 @@ def _set_status(
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
-    if row is not None and step_id and step_id != row.get("step_id") and effective not in ("closed", "declined"):
-        # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine).
-        # Cancelling (a close or a decline) is not forward progress: it is never held to exit requirements.
-        from . import pipeline_engine
+    from . import pipeline_engine
 
+    # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
+    # (a close or a decline) is not forward progress: it is never held to exit requirements.
+    if row is not None and step_id and step_id != row.get("step_id") and not pipeline_engine.is_cancellation(effective):
         pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
@@ -7690,7 +7690,8 @@ def task_update(
         from . import pipeline_engine, step_flow
 
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
-        if step_id and row and step_id != row.get("step_id"):
+        # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements.
+        if step_id and row and step_id != row.get("step_id") and not pipeline_engine.is_cancellation(effective):
             pipeline_engine.check_move(
                 conn, actor, {**row, "type_id": type_id}, step_id, override_requirements, override_note=note
             )

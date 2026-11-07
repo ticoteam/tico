@@ -1172,6 +1172,19 @@ def test_a_subtask_that_only_closed_with_its_card_never_passes_the_card(co):
 
 
 # ----------------------------------------------------------------------------- finding 7: decline cascades like close
+def test_the_owner_can_decline_a_card_with_an_unmet_approval_without_an_override(co):
+    """Finding R7: a cancellation is not progress, so the explicit move into Declined is not held to the stage's completion
+    requirements (the same exemption the status write has). The owner declines the card in Review, where the spec approval
+    is unmet, with no override. A bystander still cannot decline it."""
+    card = review_card(co)
+    declined = co.stage("Product", "Declined")
+    with pytest.raises(H.Refused):
+        H.task_update(co.c, CAL, card, step=declined, note="Dropped")  # not the owner: the decline is refused
+    co.c.rollback()
+    co.move(card, "Declined", actor=ANA, note="Dropped")
+    assert co.where(card) == ("Product", "Declined")
+
+
 def test_declining_a_product_card_closes_its_open_subtask_and_keeps_the_shipped_one(co):
     """Finding 7 (D66): an authorized move of a Product card into the Declined stage closes its open Engineering subtask
     with "Parent declined"; a subtask already done stays done. The editor passes the card's open requirements with an
