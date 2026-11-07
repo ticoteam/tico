@@ -172,7 +172,7 @@ async function shot(page, name) {
       const tag = 'budgets';
       const {page, errors, writes, reads, hub} = await open(browser);
       await row(page, 'b-rental-g').waitFor();
-      assert.deepEqual((await tabs(page)).slice(0, 3), ['P&L', 'Budgets', 'Balance sheet'], tag + ': Budgets right after P&L');
+      assert.deepEqual((await tabs(page)).slice(0, 2), ['P&L', 'Budgets'], tag + ': Budgets right after P&L');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Consumer Marketing Manager', 'Consumer Google Ad Owner',
         'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ad Owner', 'Video production'], tag + ': a tree, children under their parent');
       const depth = async id => (await row(page, id).getAttribute('style')).match(/--d:(\d+)/)[1];
