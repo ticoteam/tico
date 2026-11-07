@@ -40,6 +40,7 @@ import re
 import sqlite3
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import yaml
 from fastapi import Request
@@ -179,7 +180,7 @@ def _sections(raw):
     section stored under a key that later became a fixed one (`proof`, `now`) reads as `<key>-2` (or the next unused
     number), its title and body kept, so the owner can still edit or remove it."""
     raw = raw if isinstance(raw, dict) else {}
-    out = {k: str(raw.get(k) or "") for k in FIXED_KEYS}
+    out: dict[str, Any] = {k: str(raw.get(k) or "") for k in FIXED_KEYS}
     extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
     out["extra"] = {}
     for k, v in extra.items():
