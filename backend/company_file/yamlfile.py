@@ -359,7 +359,8 @@ def from_yaml(text):
     if not isinstance(doc, dict) or str(doc.get("version")) not in FORMATS:
         raise D.DraftError("the file isn't a format %s company file" % " or ".join(FORMATS))
     doc, _ = scrub_all(doc)
-    company = doc.get("company") if isinstance(doc.get("company"), dict) else {}
+    company = doc.get("company")
+    company = company if isinstance(company, dict) else {}
     draft = D.blank()
     draft["step"] = "chart"
     draft["company"] = {

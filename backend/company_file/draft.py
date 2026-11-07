@@ -248,8 +248,8 @@ def regions(value, field):
     for i, item in enumerate(rows):
         if not isinstance(item, str):
             raise DraftError("%s[%d] must be text" % (field, i))
-        text = re.sub("[\ud800-\udfff]", "", item)                # a lone surrogate from JSON is no text
-        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()     # newlines, tabs and other control characters: a space
+        text = re.sub("[\ud800-\udfff]", "", item)  # a lone surrogate from JSON is no text
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()  # newlines, tabs and other control characters: a space
         if not 1 <= len(text) <= LIMITS["region"]:
             raise DraftError("%s[%d] must be 1 to %d characters" % (field, i, LIMITS["region"]))
         if text.casefold() not in seen:
