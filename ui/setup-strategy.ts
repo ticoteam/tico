@@ -423,6 +423,7 @@ function ssBind(state: SsWizard): void {
 // The bet form (strategyBetFormHtml) with the Strategy page's rule: at most so many active. Here the choice stays as
 // picked and the form says why not.
 function ssBindForm(state: SsWizard, form: HTMLFormElement): void {
+  // The cast names the form's own controls (statement, why, rules_out, wrong_kind, status), as strategy-page.js renders them.
   const id = form.dataset.betForm ?? '', el = form.elements as SsBetFormFields, data = state.strat.data;
   const say = (text: string): void => { const whyNot = form.querySelector<HTMLElement>('[data-bet-why-not]'); if (!whyNot) throw new TypeError('no bet form message'); whyNot.textContent = text; whyNot.hidden = !text; };
   if (state.strat.say) say(state.strat.say);
