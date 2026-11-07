@@ -467,11 +467,19 @@ def test_a_measured_item_stays_measured_until_a_ticket_reopens(api):
     assert _roadmap_step(api, item) == 'Building'
 
 
-def test_a_plain_close_leaves_a_roadmap_item_where_it_is(api):
+def test_a_plain_close_clears_a_roadmap_item_step_as_before_and_never_lands_on_measured(api):
+    # A person's plain close on a steps-only type has no closed step to land on, so the step goes, as on main.
     item = _item(api, 'Plain close', step='Approved')
     closed = post(api, 'tasks/' + item['id'], {'version': item['version'], 'status': 'closed'})
-    assert closed['status'] == 'closed'
-    assert (get(api, 'tasks/' + item['id'])['task'].get('step') or {}).get('name') == 'Approved'
+    assert closed['status'] == 'closed' and closed['step'] is None
+    measured = _item(api, 'Plain close after measuring', step='Approved')
+    _step(api, measured, 'Measured')
+    closed = post(
+        api,
+        'tasks/' + measured['id'],
+        {'version': get(api, 'tasks/' + measured['id'])['task']['version'], 'status': 'closed'},
+    )
+    assert closed['status'] == 'closed' and closed['step'] is None
 
 
 def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
