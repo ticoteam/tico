@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_engine, pipeline_links, pipeline_rights, requirement_attachments
+from . import pipeline_engine, pipeline_github_checks, pipeline_links, pipeline_rights, requirement_attachments
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -688,7 +688,7 @@ def _authorized(
     # copied tickets need the per-ticket rule.
     from . import counsel
 
-    copies = counsel.page_copies(c)
+    copies = cast(dict[str, Any], cast(Any, counsel.page_copies)(c))
     allowed: set[str] = set()
     for tid, row in found.items():
         if row.get("type_id") and str(row["type_id"]) not in visible:
@@ -1061,6 +1061,7 @@ def approve(
                 (json.dumps({"advanced": moved}), _now(), decision["id"]),
             )
         _release_in(c, actor, task_id, requirement_id)
+        pipeline_github_checks.publish_changed(c, task_id, requirement_id)
     return {
         "decision_id": decision["id"],
         "verdict": "met",
@@ -1157,6 +1158,7 @@ def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
             if decision["stage_visit_id"] and (visit is None or visit["id"] != decision["stage_visit_id"]):
                 raise Declined("moved_on", "The ticket has moved on", 409)
         c.execute("UPDATE stage_decisions SET undone_at=?, undone_by=? WHERE id=?", (now, actor, decision_id))
+        pipeline_github_checks.publish_changed(c, decision["task_id"], decision["stage_requirement_id"])
     return {"decision_id": decision_id, "undone": True, "moved_back": moved is not None}
 
 
@@ -1314,6 +1316,7 @@ def not_validated(
             (json.dumps({"moved_back": str(back["id"]), "follow_up": child}), _now(), decision["id"]),
         )
         _release_in(c, actor, task_id, requirement_id)
+        pipeline_github_checks.publish_changed(c, task_id, requirement_id)
     return {
         "decision_id": decision["id"],
         "verdict": "failed",
@@ -1362,6 +1365,7 @@ def mark_met(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: 
         if _met_decision(c, task, requirement, current):
             raise Declined("already_met", "This requirement is already met", 409)
         decision = _decide(c, actor, task, requirement, "override", reason, current)
+        pipeline_github_checks.publish_changed(c, task_id, requirement_id)
     return {"decision_id": decision["id"], "verdict": "override", "work_version": decision["work_version"]}
 
 

@@ -86,17 +86,9 @@ def publish(conn: "sqlite3.Connection", task_id: str, stage_requirement_id: str,
     )
 
 
-def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
-    """Records the check each requirement of the ticket's current stage shows at each pull request head the ticket has.
-    Called by `publish_open` (the scheduler's pass), so a decision or an undo reaches GitHub on the next pass. Returns
-    how many checks were recorded."""
-    from . import pipeline_review  # the requirement's standing is the review module's reading of the same facts
-
-    found = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-    task: dict[str, Any] = dict(found) if found else {}
-    if not task.get("step_id"):
-        return 0
-    heads = sorted(
+def _heads(conn: "sqlite3.Connection", task_id: str) -> list[str]:
+    """The head commits of the ticket's pull requests, lowercase, sorted."""
+    return sorted(
         {
             str(r[0])
             for r in conn.execute(
@@ -106,7 +98,31 @@ def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
             ).fetchall()
         }
     )
-    if not heads:
+
+
+def _record(conn: "sqlite3.Connection", task: dict[str, Any], requirements: list[dict[str, Any]]) -> int:
+    """The check each of these requirements shows at each pull request head of the ticket. Returns how many were recorded."""
+    from . import pipeline_review  # the requirement's standing is the review module's reading of the same facts
+
+    heads = _heads(conn, task["id"])
+    recorded = 0
+    for requirement in requirements:
+        if not heads:
+            break
+        state = pipeline_review.requirement_state(conn, task, requirement)
+        for head in heads:
+            publish(conn, task["id"], requirement["id"], state, head)
+            recorded += 1
+    return recorded
+
+
+def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
+    """Records the check each requirement of the ticket's current stage shows at each pull request head the ticket has.
+    Called by `publish_open` (the scheduler's pass), so a decision or an undo reaches GitHub on the next pass. Returns
+    how many checks were recorded."""
+    found = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    task: dict[str, Any] = dict(found) if found else {}
+    if not task.get("step_id"):
         return 0
     requirements: list[dict[str, Any]] = [
         dict(r)
@@ -115,33 +131,56 @@ def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
             (task["step_id"],),
         ).fetchall()
     ]
-    recorded = 0
-    for requirement in requirements:
-        state = pipeline_review.requirement_state(conn, task, requirement)
-        for head in heads:
-            publish(conn, task_id, requirement["id"], state, head)
-            recorded += 1
-    return recorded
+    return _record(conn, task, requirements)
+
+
+def publish_changed(conn: "sqlite3.Connection", task_id: str, requirement_id: str | None) -> int:
+    """Records, in the caller's transaction, the checks a decision, an undo or an attachment changed: the requirement's own
+    check (it may be on a stage the ticket has left, so an approval that moved the ticket on still shows passed) and the
+    ticket's current stage, whose standing a new attachment or a moved ticket can change too. Returns how many checks were
+    recorded; nothing is posted here."""
+    recorded = publish_task(conn, task_id)
+    if not requirement_id:
+        return recorded
+    found = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    requirement = conn.execute("SELECT * FROM stage_requirements WHERE id=?", (requirement_id,)).fetchone()
+    if found is None or requirement is None or requirement["retired_at"]:
+        return recorded
+    return recorded + _record(conn, dict(found), [dict(requirement)])
+
+
+def _cursor_of(conn: "sqlite3.Connection") -> str:
+    """The last ticket a pass recorded (pipeline_check_cursor, one row), '' when none: the next pass starts from the first."""
+    row = conn.execute("SELECT task_id FROM pipeline_check_cursor WHERE id=1").fetchone()
+    return str(row[0]) if row else ""
 
 
 def publish_open(store: "Store", limit: int = PUBLISH_BATCH) -> int:
-    """Records the checks of the tickets that have a pull request and a stage with requirements: one transaction each.
-    How many checks were recorded."""
+    """Records the checks of the tickets that have a pull request and a stage with requirements: one batch of tickets after
+    the stored cursor, one transaction each, then the cursor moves past them. A short batch stores '' so the next pass
+    starts from the first ticket. The cursor is in the database, so a restart or another process resumes the same way.
+    Returns how many checks were recorded."""
     with cast(Any, store).read() as conn:
+        after = _cursor_of(conn)
         ids = [
             str(r[0])
             for r in conn.execute(
                 "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id=l.task_id "
                 "WHERE l.kind='pr' AND json_extract(l.detail,'$.head_sha') IS NOT NULL AND t.step_id IS NOT NULL "
                 "AND EXISTS (SELECT 1 FROM stage_requirements r WHERE r.pipeline_stage_id=t.step_id "
-                "AND r.retired_at IS NULL) ORDER BY l.task_id LIMIT ?",
-                (limit,),
+                "AND r.retired_at IS NULL) AND l.task_id>? ORDER BY l.task_id LIMIT ?",
+                (after, limit),
             ).fetchall()
         ]
     recorded = 0
     for task_id in ids:
         with cast(Any, store).transaction() as conn:
             recorded += publish_task(conn, task_id)
+    with cast(Any, store).transaction() as conn:
+        conn.execute(
+            "INSERT INTO pipeline_check_cursor (id, task_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id",
+            (ids[-1] if len(ids) >= limit else "",),
+        )
     return recorded
 
 

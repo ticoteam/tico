@@ -1,0 +1,7 @@
+-- Pipeline Track C: where the scheduler's check pass resumes (backend/pipeline_github_checks.py). One row, id 1, holding the
+-- last ticket id a pass recorded; a short pass stores '' so the next one starts from the first ticket again. It lives in the
+-- database, so a restart or a second process resumes where the last pass stopped. No ticket data is kept here.
+CREATE TABLE IF NOT EXISTS pipeline_check_cursor (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    task_id TEXT NOT NULL DEFAULT ''
+);
