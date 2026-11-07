@@ -24,6 +24,7 @@ from . import built_on
 from . import agents, app_delivery, mcp_oauth, oidc, views
 from . import outcome_stats
 from . import (
+    factory_manager,
     pipeline_engine,
     pipeline_github_checks,
     pipeline_judges,
@@ -5795,6 +5796,7 @@ def create_app(settings=None):
     pipeline_judges.install(app, store, mutate, auth)
     pipeline_review.install(app, store, mutate, auth)
     pipeline_manager.install(app, store, mutate, auth)
+    factory_manager.install(app, store, mutate, auth)
     pipeline_overview.install(app, store, mutate, auth)
     pipeline_github_checks.install(app, store, mutate, auth)
     from . import presence

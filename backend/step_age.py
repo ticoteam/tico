@@ -26,17 +26,25 @@ SEEN_HOURS = 1
 
 
 def _timed_steps(c):
-    """{step id: flow} for the steps whose flow sets status_hours or late_hours."""
+    """{step id: flow} for the steps whose flow sets status_hours or late_hours, or whose Limit (task_steps.limit_minutes,
+    "Warn after") is set. A set Limit is the step's late_hours: it replaces the flow's value."""
     from . import step_flow
 
     if not step_flow._ready(c):
         return {}
-    return {
-        s["id"]: step_flow.of(s)
-        for s in H._rows(
-            c.execute("SELECT id, flow FROM task_steps WHERE flow LIKE '%status_hours%' OR flow LIKE '%late_hours%'")
+    out: dict[str, dict] = {}
+    for s in H._rows(
+        c.execute(
+            "SELECT id, flow, limit_minutes FROM task_steps WHERE flow LIKE '%status_hours%' OR flow LIKE '%late_hours%' "
+            "OR limit_minutes IS NOT NULL"
         )
-    }
+    ):
+        flow = step_flow.of(s)
+        if s.get("limit_minutes") is not None:
+            flow = {**flow, "late_hours": s["limit_minutes"] / 60}
+        if "late_hours" in flow or "status_hours" in flow:
+            out[s["id"]] = flow
+    return out
 
 
 def late_limit(c, row, timed=None):
