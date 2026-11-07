@@ -54,6 +54,27 @@ def png(data):
         raise Problem("icon_type", "Use a valid PNG, JPEG or WebP image", 422) from exc
 
 
+TOUCH = 180  # an apple-touch icon's side, in pixels
+TOUCH_FILL = 0.8  # the logo fills this share of the side, leaving about a tenth of it as padding on each side
+
+
+def touch_png(data):
+    """The team logo as a home-screen icon: TOUCH by TOUCH, the logo fitted inside with its padding, flattened onto white.
+    Transparency would show as black on some devices, so the icon is opaque."""
+    with Image.open(io.BytesIO(data)) as image:
+        logo = image.convert("RGBA")
+    inside = round(TOUCH * TOUCH_FILL)
+    scale = inside / max(logo.width, logo.height)
+    size = (max(1, round(logo.width * scale)), max(1, round(logo.height * scale)))
+    # Premultiplied while it is resized, so the transparent edges do not darken the logo's own.
+    logo = logo.convert("RGBa").resize(size, Image.Resampling.LANCZOS).convert("RGBA")
+    canvas = Image.new("RGB", (TOUCH, TOUCH), "#ffffff")
+    canvas.paste(logo, ((TOUCH - logo.width) // 2, (TOUCH - logo.height) // 2), logo)
+    out = io.BytesIO()
+    canvas.save(out, format="PNG")
+    return out.getvalue()
+
+
 def current_digest(c):
     """The digest of the team icon now set, or None when none is."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()

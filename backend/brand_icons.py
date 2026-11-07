@@ -1,3 +1,4 @@
+# pyright: strict
 """Tico's icons for the server's own pages.
 
 ui/index.html links the app's icons under /assets/ (the files scripts/build-brand-icons.sh makes in ui/assets). The
@@ -8,6 +9,8 @@ server's other pages link those same files, and two root paths browsers ask for 
 from pathlib import Path
 
 from starlette.responses import Response
+
+from .config import Settings
 
 # The Tico mark, for every page of the server that is not the company page (backend/company_page/render.py).
 HEAD = (
@@ -20,32 +23,34 @@ HEAD = (
 
 # The two root paths, as a file of ui/assets and its media type. Both hosts answer them: the hub with the Tico mark,
 # the reader host with the team's logo when one is set (backend/company_page/reader_app.py).
-ROOT = {
+ROOT: dict[str, tuple[str, str]] = {
     "/favicon.ico": ("favicon-32.png", "image/png"),
     "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
 }
 # The brand files a page links under /assets/, as a file of ui/assets and its media type. Only these are public.
-FILES = {
+FILES: dict[str, tuple[str, str]] = {
     "/assets/tico/tico-mark.svg": ("tico/tico-mark.svg", "image/svg+xml"),
     "/assets/favicon-32.png": ("favicon-32.png", "image/png"),
     "/assets/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
 }
-PUBLIC_PATHS = frozenset(ROOT) | frozenset(FILES)
+PUBLIC_PATHS: frozenset[str] = frozenset(ROOT) | frozenset(FILES)
 CACHE = "public, max-age=86400"
+# A team's logo can change, so the reader host keeps the copy it serves for an hour rather than a day.
+TEAM_CACHE = "public, max-age=3600"
 # A brand file is only ever shown as an image. Served as a document, it gets no script and no framing.
-HEADERS = {
+HEADERS: dict[str, str] = {
     "Cache-Control": CACHE,
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
 }
 
 
-def public(path):
+def public(path: str) -> bool:
     """Whether `path` is one of the icons a signed-out browser may fetch."""
     return path in PUBLIC_PATHS
 
 
-def read(settings, rel):
+def read(settings: Settings, rel: str) -> bytes | None:
     """A file of ui/assets as bytes, or None when it is not there."""
     try:
         return (Path(settings.ui_dir) / "assets" / rel).read_bytes()
@@ -53,7 +58,7 @@ def read(settings, rel):
         return None
 
 
-def harden(response):
+def harden(response: Response) -> Response:
     """A brand file's response with its own headers: a file that is there is cached for a day, and nothing is served as
     a script document."""
     for name, value in HEADERS.items():
@@ -62,5 +67,5 @@ def harden(response):
     return response
 
 
-def reply(data, media_type):
-    return Response(data, media_type=media_type, headers=HEADERS)
+def reply(data: bytes, media_type: str, cache: str = CACHE) -> Response:
+    return Response(data, media_type=media_type, headers={**HEADERS, "Cache-Control": cache})

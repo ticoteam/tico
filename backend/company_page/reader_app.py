@@ -423,26 +423,42 @@ def build(store, settings, judge=lambda: None, blobs=lambda: None):
         with store.read() as c:
             return R.transparency_of(c) != "closed"
 
-    def team_logo():
-        """The team icon's bytes (backend/team_icon.py) when one is set and can be read now, else None."""
+    # The apple-touch icon of the current team logo, by its digest: made once per logo, not once per request.
+    touch_icons: dict[str, bytes] = {}
+
+    def team_logo(apple):
+        """The team's logo as a reader icon's bytes, or None when none is set or it can't be read now. The apple-touch
+        icon is the logo flattened and fitted (team_icon.touch_png), made once for each logo."""
         storage = blobs()
         if storage is None:
             return None
         try:
             with store.read() as c:
                 digest = team_icon.current_digest(c)
-            return storage.get(digest) if digest else None
-        except (Problem, sqlite3.Error, OSError):
+            if not digest:
+                return None
+            if not apple:
+                return storage.get(digest)
+            data = touch_icons.get(digest)
+            if data is None:
+                data = team_icon.touch_png(storage.get(digest))
+                touch_icons.clear()  # only the current logo's icon is kept
+                touch_icons[digest] = data
+            return data
+        except (Problem, sqlite3.Error, OSError, ValueError):
             log.warning("The team icon couldn't be read; the reader host shows Tico's mark", exc_info=True)
             return None
 
     def root_icon(request: Request):
-        """/favicon.ico and /apple-touch-icon.png: the team's logo when one is set, else Tico's mark. Read at each
-        request, so a logo set after the release was made still shows."""
+        """/favicon.ico and /apple-touch-icon.png: the team's logo when one is set, else Tico's mark. The logo is read at
+        each request, so a logo set after the release was made still shows."""
         rel, media_type = brand_icons.ROOT[request.url.path]
         if not answering():
             return not_found()
-        data = team_logo() or brand_icons.read(settings, rel)
+        logo = team_logo(apple=request.url.path == "/apple-touch-icon.png")
+        if logo is not None:
+            return brand_icons.reply(logo, media_type, brand_icons.TEAM_CACHE)
+        data = brand_icons.read(settings, rel)
         return brand_icons.reply(data, media_type) if data is not None else not_found()
 
     def asset(request: Request):
