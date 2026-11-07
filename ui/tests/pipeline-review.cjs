@@ -129,6 +129,8 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       assert.equal(state.posts[0].body.note, 'Screenshots never validated', 'the note is the reason sent');
       assert.equal(state.posts[0].body.work_version, 3, 'Not validated names the work version the reviewer saw');
       assert.equal(state.posts[0].body.requirement_version, 1, 'and the requirement version');
+      assert.equal(state.posts[0].body.attachment_id, 'c1', 'and the attachment the reviewer saw');
+      assert.equal(state.posts[0].body.stage_visit_id, 'v-validate', 'and the stage visit');
       await page.waitForFunction(() => document.querySelector('.pipe-review-notice')?.textContent.includes('follow-up'), null, {timeout: t(5000)});
       assert.equal((await page.locator('.pipe-review-notice').innerText()).trim(), 'Back to In development · follow-up D71 filed');
       assert.equal(await page.locator('[data-review-not-validated]').count(), 0, 'the next item is not at Validate');

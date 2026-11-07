@@ -72,6 +72,9 @@ interface PipelineReviewItem {
   can_mark_met?: boolean;
   /** Whether the viewer may send it Not validated (the server's follow-up rule, D66). */
   can_not_validate?: boolean;
+  /** The attachment and the stage visit the item shows, which Not validated names back to the server. */
+  attachment_id?: string | null;
+  stage_visit_id?: string | null;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
   claim: { by: string; label: string } | null;
@@ -184,6 +187,7 @@ interface ServerQueueItem {
   reviewer_id: string | null;
   can_mark_met: boolean;
   can_not_validate: boolean;
+  stage_visit_id: string | null;
 }
 
 interface ServerRun {
@@ -255,6 +259,8 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     work_version: row.work_version,
     attachment_digest: row.attachment_digest,
     requirement_version: row.requirement_version,
+    attachment_id: a?.id ?? null,
+    stage_visit_id: row.stage_visit_id ?? null,
   };
 }
 
@@ -367,6 +373,9 @@ async function pipelineNotValidated(item: PipelineReviewItem, reason: string):
     note: reason,
     work_version: item.work_version,
     requirement_version: item.requirement_version,
+    attachment_id: item.attachment_id ?? null,
+    attachment_digest: item.attachment_digest,
+    stage_visit_id: item.stage_visit_id ?? null,
   }) as Promise<{ decision_id: string; moved_back_to: string | null; follow_up: string | null }>;
 }
 

@@ -663,6 +663,7 @@ def shaped_rows(w, titles, items):
     for item in items:
         row = {**item, "task_id": titles[item["task_id"]], "pipeline_id": names[item["pipeline_id"]]}
         row["stage_id"] = names[item["stage_id"]]
+        row.pop("stage_visit_id")  # a random id; test_not_validated_refuses_an_attachment_or_a_visit_... reads it
         if item["moves_to"]:
             row["moves_to"] = {**item["moves_to"], "stage_id": names[item["moves_to"]["stage_id"]]}
         rows.append(row)
@@ -1399,3 +1400,64 @@ def test_not_validated_is_not_offered_while_another_reviewer_holds_the_claim(wor
     )
     assert item()["claimed_by"] == BEN
     assert item()["can_not_validate"] is False
+
+
+def test_not_validated_refuses_an_attachment_or_a_visit_the_reviewer_did_not_see(world):
+    """Not validated names the attachment (id and digest) and the stage visit the reviewer saw, inside the write (ST8). A
+    replaced attachment, even at the same work version, or another visit refuses it, and nothing is decided or filed."""
+    w = world
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    H.task_close(w.c, ANA, L.spawn(w.c, link_row, w.task), note="Done")
+    w.visit()
+    visit = w.c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (w.task,)).fetchone()[0]
+    seen = w.c.execute(
+        "SELECT id, digest FROM requirement_attachments WHERE task_id=? AND stage_requirement_id=? AND removed_at IS NULL",
+        (w.task, w.mockup),
+    ).fetchone()
+    rev = w.revision()
+    w.attach(digest="d2", attachment_id="a-replaced")  # the attachment is swapped at the same work version
+    seen_kw = dict(work_version=rev, requirement_version=1)
+    error = refused(
+        "stale",
+        R.not_validated,
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "No",
+        attachment_id=seen["id"],
+        attachment_digest=seen["digest"],
+        stage_visit_id=visit,
+        **seen_kw,
+    )
+    assert error.extra == {"reason": "attachment"}
+    error = refused(
+        "stale",
+        R.not_validated,
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "No",
+        attachment_id="a-replaced",
+        attachment_digest="d2",
+        stage_visit_id="v-another-visit",
+        **seen_kw,
+    )
+    assert error.extra == {"reason": "visit"}
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+    done = R.not_validated(
+        w.c,
+        ANA,
+        w.task,
+        w.mockup,
+        "Screenshots never validated",
+        attachment_id="a-replaced",
+        attachment_digest="d2",
+        stage_visit_id=visit,
+        **seen_kw,
+    )
+    assert done["verdict"] == "failed"

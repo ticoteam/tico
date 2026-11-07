@@ -550,6 +550,7 @@ class _Queue:
             "late": self.late(task, since),
             "claimed_by": claim_row["claimed_by"] if claim_row and claim_row["claimed_by"] != actor else None,
             "claimed_by_me": bool(claim_row and claim_row["claimed_by"] == actor),
+            "stage_visit_id": (self.facts.visits.get(task["id"]) or {}).get("id"),
         }
 
 
@@ -1263,11 +1264,17 @@ def not_validated(
     reason: str,
     work_version: int | None = None,
     requirement_version: int | None = None,
+    attachment_id: Any = CURRENT,
+    attachment_digest: Any = CURRENT,
+    stage_visit_id: Any = CURRENT,
 ) -> Row:
     """Validate's "Not validated" (D64), a person's call on the validation requirement. The spec's measures did not hold:
     the card goes back to the stage before Validate (In development, which then waits on the new subtask), and one
     follow-up Engineering subtask is filed under it, with the reason and the source's links. The follow-up is a second
-    spawn on purpose, so it is its own handoff. Person only, at Validate, on an item the person is waiting on."""
+    spawn on purpose, so it is its own handoff. Person only, at Validate, on an item the person is waiting on.
+
+    `attachment_id`, `attachment_digest` and `stage_visit_id` are the attachment and the stage visit the reviewer saw; when
+    given, they must still be the current ones, checked inside the write (stale otherwise, reason attachment or visit)."""
     text = _clip(reason)
     if text is None:
         raise Declined("reason_required", "Say what did not validate", 422)
@@ -1280,13 +1287,22 @@ def not_validated(
             raise Declined("stale", "The work changed since you looked", 409, extra={"reason": "work"})
         if requirement_version is not None and requirement_version != requirement["version"]:
             raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
+        current = _current_attachment(c, task_id, requirement_id)
+        if attachment_id is not CURRENT or attachment_digest is not CURRENT:
+            same = (current["id"] if current else None) == attachment_id and (
+                current["digest"] if current else None
+            ) == attachment_digest
+            if not same:
+                raise Declined("stale", "The attachment changed since you looked", 409, extra={"reason": "attachment"})
+        visit = _open_visit(c, task_id)
+        if stage_visit_id is not CURRENT and (visit["id"] if visit else None) != stage_visit_id:
+            raise Declined("stale", "The stage changed since you looked", 409, extra={"reason": "visit"})
         if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         route = _not_validated_route(c, actor, str(task["type_id"]), str(requirement["pipeline_stage_id"]), task_id)
         if route is None:
             raise Declined("not_validatable", "Not validated is not offered at this stage", 409)
         back, spawn_link = route
-        current = _current_attachment(c, task_id, requirement_id)
         decision = _decide(c, actor, task, requirement, "failed", text, current)
         with pipeline_engine.decided_move(actor):  # the reviewer decided it; the move is recorded as theirs
             _hub().task_update(c, actor, task_id, step=str(back["id"]), mover=True, note=f"Not validated: {text}")
@@ -1362,10 +1378,14 @@ class ReviewNote(M.Contract):
 
 
 class NotValidated(ReviewNote):
-    """Not validated names the work and the requirement the reviewer saw; either changing since refuses it (stale)."""
+    """Not validated names the work, the requirement, the attachment (id and digest, null when none) and the stage visit the
+    reviewer saw; any of them changing since refuses it (stale)."""
 
     work_version: int = Field(ge=0)
     requirement_version: int = Field(ge=1)
+    attachment_id: str | None = Field(max_length=128)
+    attachment_digest: str | None = Field(max_length=200)
+    stage_visit_id: str | None = Field(max_length=128)
 
 
 class ReviewMessage(M.Contract):
@@ -1478,6 +1498,9 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
                 body.note,
                 work_version=body.work_version,
                 requirement_version=body.requirement_version,
+                attachment_id=body.attachment_id,
+                attachment_digest=body.attachment_digest,
+                stage_visit_id=body.stage_visit_id,
             ),
         )
 

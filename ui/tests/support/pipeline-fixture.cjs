@@ -64,7 +64,7 @@ function queue(state) {
     pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: attachment.format,
     work_version: 3, attachment, attachment_digest: 'sha256:aa', why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
     assignee: {id: 'bot:b1', name: 'Builder'}, bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
-    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate'});
+    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null});
   const all = [
     row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
       {id: 'a1', source: 'link', format: 'image', name: 'shot.png', href: 'https://example.test/shot.png', file_id: null, file_version: null}),
