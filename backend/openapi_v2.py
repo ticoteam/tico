@@ -5002,7 +5002,7 @@ STABLE.extend(
             "get",
             "Finance",
             "getFinanceReport",
-            "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
+            "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the "
             "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
             "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
             "FinanceReportOf",
@@ -5099,7 +5099,7 @@ STABLE.extend(
             "getFinanceMetric",
             "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
             "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
-            "unreconciled_days",
+            "unreconciled_days, unattributed, ad_spend, per_conversion",
             "FinanceMetric",
         ),
         (
@@ -5135,6 +5135,15 @@ STABLE.extend(
             "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
             "mapped into the books. The Idempotency-Key is the action's key",
             "FinanceConnectionResult",
+        ),
+        (
+            "/api/v2/finance/campaigns",
+            "get",
+            "Finance",
+            "listFinanceCampaigns",
+            "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when "
+            "it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
+            "FinanceCampaigns",
         ),
         (
             "/api/v2/finance/ad-accounts",
@@ -6137,6 +6146,7 @@ SCHEMAS.update(
                         "ap_aging",
                         "ar_aging",
                         "spend_by",
+                        "campaigns",
                     ],
                 },
                 "prior": {"type": "object", "additionalProperties": True},
@@ -6274,6 +6284,41 @@ SCHEMAS.update(
                 "view_version": "i",
             },
             required=["lines", "start", "end", "as_of", "view_version"],
+        ),
+        "FinanceCampaigns": obj(
+            {
+                "month": "s",
+                "campaigns": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "platform": "s",
+                            "ad_account": obj({"id": "s", "name": "s"}),
+                            "owner": obj({"team": "s", "teammate": "s", "inherited": "b"}),
+                            "month": obj(
+                                {
+                                    "spend": "i",
+                                    "clicks": "i",
+                                    "conversions": "f",
+                                    "per_conversion": {"type": ["integer", "null"]},
+                                }
+                            ),
+                            "as_of": "s",
+                        }
+                    )
+                ),
+                "totals": obj(
+                    {
+                        "spend": "i",
+                        "clicks": "i",
+                        "conversions": "f",
+                        "per_conversion": {"type": ["integer", "null"]},
+                    }
+                ),
+                "as_of": "s",
+            },
+            required=["month", "campaigns", "totals", "as_of"],
         ),
         "FinanceMetric": obj(
             {

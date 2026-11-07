@@ -254,6 +254,7 @@ UNTYPED = frozenset(
         "fin_accounts",
         "fin_actions",
         "fin_ad_accounts",
+        "fin_ad_campaigns",
         "fin_ad_imports",
         "fin_ad_spends",
         "fin_ad_warnings",
