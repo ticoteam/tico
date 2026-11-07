@@ -1149,6 +1149,7 @@ DEV_COPY_EMPTIED = (
     "fin_holds",
     "fin_connections",
     "fin_ad_imports",
+    "fin_briefs",
 )
 
 
