@@ -246,7 +246,8 @@ def test_render_shows_nothing_outside_the_view_model():
 
     clean = view_model()
     doc = Doc(render.page(clean))
-    allowed = words(*strings_in(clean)) | TEMPLATE_WORDS | {"a", "mr"}  # the logo letter and the author's initials
+    # the logo letter and the author's initials; the page's two backgrounds, which its theme-color names
+    allowed = words(*strings_in(clean)) | TEMPLATE_WORDS | {"a", "mr", "0f1217", "ffffff"}
     allowed |= {str(int(w)) for w in allowed if w.isdigit()}
     assert words(*doc.text) <= allowed
     labels = [
@@ -895,7 +896,8 @@ def test_logo_is_copied_when_its_bytes_are_an_image_and_dropped_otherwise(world,
 
 
 class References(HTMLParser):
-    """Everything a page asks the browser to fetch or link to on its own origin."""
+    """Everything a page asks the browser to fetch or link to on its own origin, but the root icons: the server answers
+    those at each request (the team's logo, backend/company_page/reader_app.py), so they are never files of a release."""
 
     def __init__(self, text):
         super().__init__(convert_charrefs=True)
@@ -913,6 +915,7 @@ class References(HTMLParser):
                 and tag != "article"
                 and not (tag == "link" and attrs.get("rel") == "canonical")
                 and not value.startswith(("#", "?", "https://"))
+                and value not in ("/favicon.ico", "/apple-touch-icon.png")
             ):
                 self.found.add(value)
 
