@@ -513,7 +513,7 @@ def message_readable(c, actor, message, current=False):
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
-    if not page_message_readable(c, actor, carried):
+    if not page_message_readable(c, actor, carried) or not reply_pages_readable(c, actor, message):
         return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
@@ -603,6 +603,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             if not readable(c, reader, tasks):
                 return False
             if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
+            if not reply_pages_readable(c, reader, stored):
                 return False
         except Problem:
             return False
@@ -1322,6 +1324,28 @@ PAGE_MESSAGE_KEYS = ("target", "answer", "review", "body_sources")
 def page_message_readable(c, actor, refs):
     """Generated file-review messages carry names in prose as well as structured refs."""
     return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get(key) for key in PAGE_MESSAGE_KEYS])
+
+
+REPLY_CHAIN_LIMIT = 100
+
+
+def reply_pages_readable(c, actor, message, lookup=None):
+    """A reply inherits the file refusal of each message it replies to, at any depth: every message on its in_reply_to
+    chain is read with page_message_readable, as its own refs are. A chain of REPLY_CHAIN_LIMIT or more messages is
+    refused, as ReadIndex.sources refuses it; a cycle ends at the message seen. `lookup` reads a message by id."""
+    lookup = lookup or (lambda mid: H.message(c, mid, include_deleted=True))
+    seen, mid = set(), dict(message).get("in_reply_to")
+    while mid and mid not in seen:
+        if len(seen) >= REPLY_CHAIN_LIMIT:
+            return False
+        seen.add(mid)
+        parent = lookup(mid)
+        if not parent:
+            break
+        if not page_message_readable(c, actor, H._json(parent.get("refs"), {}) or {}):
+            return False
+        mid = parent.get("in_reply_to")
+    return True
 
 
 def page_content_readable(c, actor, payload):

@@ -232,8 +232,10 @@ class ReadIndex:
             direct = self._direct_attempt(aid)
             if direct is not None:
                 return direct
-            return self.meetings.attempt_readable(self.principals, aid) and not self.denied.intersection(
-                self.attempt_sources(aid)
+            return (
+                self.meetings.attempt_readable(self.principals, aid)
+                and not self.denied.intersection(self.attempt_sources(aid))
+                and self.attempt_pages(aid)
             )
         except ValueError:
             return False
@@ -321,6 +323,29 @@ class ReadIndex:
             ids.update(self.attempt_sources(run_id))
         return ids
 
+    def reply_pages(self, msg):
+        """A reply inherits the file refusal of each message it replies to, at any depth (task_privacy.reply_pages_readable)."""
+        return privacy.reply_pages_readable(self.c, self.principals, msg, self.target_message)
+
+    def attempt_pages(self, aid):
+        """Each message a run reads (its message and its inputs) passes its own file refusal and that of the messages it
+        replies to. A root's own refs were checked by _direct_attempt already; a reply reaches here without them."""
+        mids = [
+            row["message_id"]
+            for row in self.c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)
+            )
+        ]
+        mids.extend(r[0] for r in self.c.execute("SELECT message_id FROM attempt_inputs WHERE attempt_id=?", (aid,)))
+        for mid in mids:
+            msg = self.target_message(mid)
+            if msg and not (
+                privacy.page_message_readable(self.c, self.principals, H._json(msg.get("refs"), {}) or {})
+                and self.reply_pages(msg)
+            ):
+                return False
+        return True
+
     def _message_sources(self, mid, cid, refs, reply):
         return self.sources({"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
 
@@ -332,6 +357,8 @@ class ReadIndex:
             # room once per request, retaining unknown/deleted task denial.
             if refs in (None, "", "{}") and not reply:
                 return self.plain_room(cid)
+            if reply and not self.reply_pages({"in_reply_to": reply}):
+                return False
             # Do not retain large arbitrary reference payloads as cache keys.
             direct = self.direct_message(cid, refs) if len(refs or "") <= 4096 else self._direct_message(cid, refs)
             if direct is not None:
@@ -434,6 +461,7 @@ class ReadIndex:
                 or msg.get("deleted")
                 or self.denied.intersection(self.sources(msg))
                 or not self.meetings.message_readable(self.principals, msg)
+                or not self.reply_pages(msg)
             ):
                 return False
         except ValueError:
@@ -496,6 +524,7 @@ class ReadIndex:
                     or msg.get("deleted")
                     or self.denied.intersection(self.sources(msg))
                     or not self.meetings.message_readable(self.principals, msg)
+                    or not self.reply_pages(msg)
                 ):
                     return False
             except ValueError:
