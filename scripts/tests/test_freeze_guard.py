@@ -1,26 +1,35 @@
 """The freeze guard finds net reverts of shipped work and merged pull requests whose final head nobody approved."""
+
 import subprocess
 
 import pytest
 
 from scripts import freeze_guard
 
-pytestmark = pytest.mark.slow   # real git
+pytestmark = pytest.mark.slow  # real git
 
 FEATURE = [f"def resume_step_{i}(tree):\n    return tree.resume({i})\n" for i in range(4)]
 
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    for key, value in {"HOME": str(tmp_path), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
-                       "GIT_AUTHOR_NAME": "Acme Dev", "GIT_AUTHOR_EMAIL": "dev@acme.example",
-                       "GIT_COMMITTER_NAME": "Acme Dev", "GIT_COMMITTER_EMAIL": "dev@acme.example"}.items():
+    for key, value in {
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "Acme Dev",
+        "GIT_AUTHOR_EMAIL": "dev@acme.example",
+        "GIT_COMMITTER_NAME": "Acme Dev",
+        "GIT_COMMITTER_EMAIL": "dev@acme.example",
+    }.items():
         monkeypatch.setenv(key, value)
     path = tmp_path / "repo"
     path.mkdir()
     git(path, "init", "-q", "-b", "main")
     write(path, "app/worktrees.py", "import os\n")
-    write(path, "app/tests/test_worktrees.py", "".join(f"def test_step_{i}():\n    assert step({i})\n" for i in range(6)))
+    write(
+        path, "app/tests/test_worktrees.py", "".join(f"def test_step_{i}():\n    assert step({i})\n" for i in range(6))
+    )
     write(path, "CHANGELOG.md", "# Changelog\n")
     commit(path, "Start")
     return path
@@ -90,12 +99,14 @@ def test_a_change_that_undoes_a_shipped_pr_is_named_and_so_is_its_reapply(repo):
     meant = {"pr": 2, "reverts": result["findings"][0]["reverts"][:8], "source": "ticket 2"}
     assert kinds(freeze_guard.check(str(repo), "main", "v1.0.0", receipts + [meant], fetch=False)) == []
     other = {**meant, "reverts": git(repo, "rev-parse", "v1.0.0~1")[:8]}
-    assert kinds(freeze_guard.check(str(repo), "main", "v1.0.0", receipts + [other], fetch=False)) == [("NET REVERT", 2, 1)]
+    assert kinds(freeze_guard.check(str(repo), "main", "v1.0.0", receipts + [other], fetch=False)) == [
+        ("NET REVERT", 2, 1)
+    ]
 
     # Putting the reverted work back undoes what the next release shipped: the re-apply is named too.
     git(repo, "tag", "v1.1.0")
     head = pr(repo, 4, {"app/worktrees.py": shipped})
-    result = freeze_guard.check(str(repo), "main", None, [{"pr": 4, "head": head}], fetch=False)   # newest tag
+    result = freeze_guard.check(str(repo), "main", None, [{"pr": 4, "head": head}], fetch=False)  # newest tag
     assert kinds(result) == [("NET REVERT", 4, 2)]
 
 
@@ -129,8 +140,9 @@ def test_each_merged_pr_needs_an_approval_of_its_final_head(repo):
     head_12 = pr(repo, 12, {"app/c.py": "C = 1\n"})
     # PRs 15 and 16: only spacing inside a string, or only indentation, changed after review. Both change behaviour.
     reviewed_15 = reviewed_then_changed(repo, 15, "app/g.py", 'GREETING = "Hello world"\n', 'GREETING = "Helloworld"\n')
-    reviewed_16 = reviewed_then_changed(repo, 16, "app/h.py", "for x in xs:\n    run(x)\n    log(x)\n",
-                                        "for x in xs:\n    run(x)\nlog(x)\n")
+    reviewed_16 = reviewed_then_changed(
+        repo, 16, "app/h.py", "for x in xs:\n    run(x)\n    log(x)\n", "for x in xs:\n    run(x)\nlog(x)\n"
+    )
     # PRs 13 and 14 are squash merges: their heads and reviews are on GitHub.
     write(repo, "app/d.py", "D = 1\n")
     commit(repo, "D (#13)")
@@ -142,34 +154,49 @@ def test_each_merged_pr_needs_an_approval_of_its_final_head(repo):
     write(repo, "CHANGELOG.md", "# Changelog\n## 1.1.0\n")
     commit(repo, "Release 1.1.0")
 
-    receipts = [{"pr": 10, "head": reviewed_10, "source": "ticket 10"}, {"pr": 11, "head": reviewed_11[:8]},
-                {"pr": 12, "head": head_12[:7]}, {"pr": 15, "head": reviewed_15}, {"pr": 16, "head": reviewed_16}]
+    receipts = [
+        {"pr": 10, "head": reviewed_10, "source": "ticket 10"},
+        {"pr": 11, "head": reviewed_11[:8]},
+        {"pr": 12, "head": head_12[:7]},
+        {"pr": 15, "head": reviewed_15},
+        {"pr": 16, "head": reviewed_16},
+    ]
     github = FakeGitHub({13: "d" * 40, 14: "e" * 40}, {13: ["d" * 40], 14: ["f" * 40]})
     result = freeze_guard.check(str(repo), "main", "v1.0.0", receipts, github, fetch=False)
-    assert kinds(result) == [("NO PR", None, None), ("UNREVIEWED", 10, None), ("UNREVIEWED", 14, None),
-                             ("UNREVIEWED", 15, None), ("UNREVIEWED", 16, None)]
+    assert kinds(result) == [
+        ("NO PR", None, None),
+        ("UNREVIEWED", 10, None),
+        ("UNREVIEWED", 14, None),
+        ("UNREVIEWED", 15, None),
+        ("UNREVIEWED", 16, None),
+    ]
     texts = {f["pr"]: f["text"] for f in result["findings"]}
     assert git(repo, "rev-parse", "pr-10")[:8] in texts[10] and reviewed_10[:8] in texts[10]
     assert direct[:8] in texts[None]
 
     result = freeze_guard.check(str(repo), "main", "v1.0.0", receipts + [{"commit": direct}], github, fetch=False)
-    assert kinds(result) == [("UNREVIEWED", 10, None), ("UNREVIEWED", 14, None), ("UNREVIEWED", 15, None),
-                             ("UNREVIEWED", 16, None)]
+    assert kinds(result) == [
+        ("UNREVIEWED", 10, None),
+        ("UNREVIEWED", 14, None),
+        ("UNREVIEWED", 15, None),
+        ("UNREVIEWED", 16, None),
+    ]
 
 
 def test_a_one_line_fix_and_a_fix_many_releases_old_are_named_when_reverted(repo):
     pr(repo, 19, {"app/config.py": "TIMEOUT = 30\nRETRIES = 3\n"})
-    pr(repo, 20, {"app/config.py": "TIMEOUT = 60\nRETRIES = 3\n"})   # the one-line fix
+    pr(repo, 20, {"app/config.py": "TIMEOUT = 60\nRETRIES = 3\n"})  # the one-line fix
     pr(repo, 21, {"app/big.py": "".join(FEATURE)})
-    for n in range(30):   # more releases than anyone would think to look back over
+    for n in range(30):  # more releases than anyone would think to look back over
         write(repo, "app/noise.py", f"N = {n}\n")
         commit(repo, f"Noise {n}")
         git(repo, "tag", f"v1.0.{n}")
     head_22 = pr(repo, 22, {"app/config.py": "TIMEOUT = 30\nRETRIES = 3\n"})
     head_23 = pr(repo, 23, {"app/big.py": "\n"})
 
-    result = freeze_guard.check(str(repo), "main", None, [{"pr": 22, "head": head_22}, {"pr": 23, "head": head_23}],
-                                fetch=False)
+    result = freeze_guard.check(
+        str(repo), "main", None, [{"pr": 22, "head": head_22}, {"pr": 23, "head": head_23}], fetch=False
+    )
     assert result["previous"] == "v1.0.29"
     assert kinds(result) == [("NET REVERT", 22, 20), ("NET REVERT", 23, 21)]
     assert all("PR #2" in f["text"] for f in result["findings"])
@@ -177,7 +204,7 @@ def test_a_one_line_fix_and_a_fix_many_releases_old_are_named_when_reverted(repo
 
 def test_an_untagged_older_candidate_is_checked_against_the_release_before_it(repo):
     git(repo, "tag", "v1.0.0")
-    git(repo, "checkout", "-q", "-b", "release-1.0.1", "v1.0.0")   # a release branch never merged back
+    git(repo, "checkout", "-q", "-b", "release-1.0.1", "v1.0.0")  # a release branch never merged back
     write(repo, "CHANGELOG.md", "# Changelog\n## 1.0.1\n")
     commit(repo, "Release 1.0.1")
     git(repo, "tag", "v1.0.1")
@@ -194,13 +221,16 @@ def test_an_untagged_older_candidate_is_checked_against_the_release_before_it(re
         freeze_guard.check(str(repo), candidate, "v1.1.0", [], fetch=False)
     # A shallow checkout is refused before walking a wrong range; the unmerged release branch above still passed.
     shallow = repo.parent / "shallow"
-    subprocess.run(["git", "clone", "-q", "--depth", "1", "--no-single-branch", f"file://{repo}", str(shallow)], check=True)
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", "--no-single-branch", f"file://{repo}", str(shallow)], check=True
+    )
     with pytest.raises(freeze_guard.GuardError, match="unshallow"):
         freeze_guard.check(str(shallow), "origin/main", "v1.0.1", [], fetch=False)
 
 
 def test_reviews_on_a_later_page_count(monkeypatch):
     pages = '[{"state": "COMMENTED", "commit_id": "a"}]\n[{"state": "APPROVED", "commit_id": "b"}]\n'
-    monkeypatch.setattr(freeze_guard.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=pages, stderr=""))
+    monkeypatch.setattr(
+        freeze_guard.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=pages, stderr="")
+    )
     assert freeze_guard.GitHub("acme/tico").approvals(5) == ["b"]

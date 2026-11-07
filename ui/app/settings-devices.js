@@ -357,6 +357,32 @@ function machineUpdateWords(update) {
     return `<span class="pill ${update.state === 'incompatible' ? 'fail' : 'waiting'}" data-runner-outdated title="${esc([update.label, update.target ? `to ${update.target}` : ''].filter(Boolean).join(' '))}">Update</span>`;
   return '';
 }
+// Rename from the computer's pop-up (computer-detail.js): 1 to 100 characters once trimmed.
+async function settingsComputerRename(form) {
+  const input = form.querySelector('[data-computer-rename-input]'), id = form.dataset.computerRenameForm;
+  const label = input.value.trim();
+  settingsFieldClear(input);
+  if (!label || label.length > 100) { settingsFieldError(input, 'Enter 1 to 100 characters.'); input.focus(); return; }
+  const buttons = [...form.querySelectorAll('button')], edit = COMPUTER_RENAME_EDIT;
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    await post(`/v2/computers/${encodeURIComponent(id)}/label`, {label});
+    const machine = (SETTINGS_DATA.machines || []).find(row => row.id === id);
+    if (machine) machine.label = label;
+    // Only the edit that sent it closes: the pop-up may show another computer, or another edit, by now.
+    const dialog = $('#set-machines dialog.computer-detail');
+    if (dialog?.open && dialog.dataset.computer === id && COMPUTER_RENAMING === id && COMPUTER_RENAME_EDIT === edit) {
+      COMPUTER_RENAMING = '';
+      computerDetailPaint(true);
+      dialog.querySelector('[data-computer-rename]')?.focus();
+    }
+    toast('Renamed');
+    await loadSettings();
+  } catch (error) {
+    toast(error.message, true);
+    buttons.forEach(button => { button.disabled = false; });
+  }
+}
 // Turns at once on a computer: a whole number from 1 to 256, or empty for automatic. Anything else is named under the
 // row and not sent. The note is set from the answer, since a pop-up whose field is still focused is not redrawn.
 async function settingsTurnsAtOnceSave(input) {
@@ -406,8 +432,9 @@ function machineNowWords(machine) {
   const parts = [['running', 'running'], ['starting', 'starting'], ['queued', 'queued'], ['waiting', 'waiting']]
     .filter(([key]) => Number(counts[key]) > 0).map(([key, word]) => `${counts[key]} ${word}`);
   if (parts.length) return parts.join(' · ');
+  if (machineOnline(machine)) return 'idle';
   if (['stopped', 'stopping'].includes(machine.cloud_machine?.state)) return 'asleep';
-  return machineOnline(machine) ? 'idle' : 'offline';
+  return 'offline';
 }
 // The AI tools that get a column: those a subscription can be given to first (a picker each), then every other tool a
 // computer reports (its login's chip, as in the computer's pop-up).
@@ -431,15 +458,18 @@ function renderSettingsMachines() {
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
   const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const {pickers, others} = machineToolColumns(machines);
+  // Share the entry's support read; the rows are drawn again when it comes.
+  if (!CLOUD_SUPPORT.read && machines.some(machine => machine.cloud_machine))
+    void cloudSupportRead().then(view => { if (view) renderSettingsMachines(); });
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
     const dot = machine.revoked_at ? 'failed' : online ? 'ok' : '';
     const presence = machinePresenceWords(machine);
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
     const waiting = machineWaiting(machine) ? `<span class="pill waiting" data-machine-waiting title="Waiting for ${esc(machine.label)}">Waiting</span>` : '';
-    const now = machineNowWords(machine);
+    const now = machineNowWords(machine), support = cloudSupportWords(machine);
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
-      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span></td>
+      <td class="machine-cell"><span class="machine-head"><span class="machine-status" data-machine-status title="${esc(presence)}"><span class="dot ${dot}" aria-hidden="true"></span><span class="sr-only">${esc(presence)}</span></span><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button>${machineUpdateWords(machine.update)}${waiting}${failures ? `<span class="pill fail" title="${failures} bot${failures === 1 ? '' : 's'} not ready">${failures} not ready</span>` : ''}</span>${support ? `<span class="settings-cell-note" data-machine-support>${esc(support)}</span>` : ''}</td>
       <td class="num tnum machine-bot-count">${(machine.bots || []).length}</td>
       ${pickers.map(runtime => `<td data-label="${esc(subsToolName(runtime))}" data-subs-cell>${subsPickerHTML(machine, runtime)}</td>`).join('')}
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
@@ -628,7 +658,7 @@ function settingsSetupPrompt(slug) {
   return `Help me update the ${appName()} bot setup.\n\nCurrent cloud state:\n${rows.join('\n')}\n\nAsk me what I want to change, then use the formal owner-admin API. Do not edit the production SQLite database directly. Bot definitions in the ${appName()} backend are authoritative after the one-time bootstrap: create a bot with POST /api/v2/bots and update its name, description, hierarchy, status, repository, or room type with POST /api/v2/bots/{bot}/definition. No ${appName()} application deploy or registry publish is required. Provision the bot's repository on any computer that will run it, and verify computer readiness. Preserve tasks and conversation history. Change a bot's model, reasoning effort, or registered computer through POST /api/v2/bots/{bot}/transitions so ${appName()} checkpoints every current session before applying it. If the transition is blocked because the old computer is unavailable, explain what continuity will be lost and ask me before calling apply-without-checkpoint. Use revision and assignment-generation checks. Humans are still managed separately from bot definitions.`;
 }
 function settingsEnrollmentPrompt(operator, filename) {
-  return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot so existing sessions are checkpointed before the move.`;
+  return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico-computer doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot so existing sessions are checkpointed before the move.`;
 }
 function settingsCopyPrompt(slug) {
   void copyText(settingsSetupPrompt(slug)).then(() => toast(`${slug ? settingsBotName(slug) + ' ' : ''}setup prompt copied`)).catch(() => toast('Could not copy the setup prompt', true));

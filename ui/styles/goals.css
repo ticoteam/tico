@@ -219,6 +219,9 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 }
 
 #goal-body{max-width:1180px}
+/* The search above the tree (ui/app/goals.js pageGoals): the shared search box (forms.css), as wide as the tree. */
+#goal-search{display:block;max-width:1180px;margin:0 0 12px}
+.gt-none{margin:8px 0}
 /* Strategy proposals in Needs you (ui/goals-kpis.js strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
    what changes, or one row per goal with its Keep / Retire / Move to. */
 .kpi-prop.strat-prop{align-items:flex-start}

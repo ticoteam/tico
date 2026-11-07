@@ -1,4 +1,4 @@
-/* ui/app/learnings.js — The Learnings page (docs/learnings.md, Nightly learning run): a rail of nights, then one
+/* ui/app/learnings.js — The Learnings page (docs/learnings.md, Learn (beta)): a rail of nights, then one
    night read top to bottom. Sections Bots, Docs and Market, one row per subject; a row opens to each change with
    its source and diff (learnDiff, ui/app/bot-learnings.js). GET /api/v2/learnings and /api/v2/learnings/{id}. */
 'use strict';
@@ -17,7 +17,7 @@ async function pageLearnings() {
   try { data = await get('/v2/learnings'); } catch (e) { $('#lrn-night').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   if (load !== LEARN_LOAD) return;
   const nights = data.nights || [];
-  if (!nights.length) { $('#lrn-night').innerHTML = '<div class="empty">The first nightly learning run is tonight at 3:00.</div>'; return; }
+  if (!nights.length) { $('#lrn-night').innerHTML = '<div class="empty">Learn is a beta Maintenance step. Turn it on in Maintenance settings to collect learnings.</div>'; return; }
   const cur = nights.find(n => n.id === want) || nights[0];
   $('#lrn-nights').innerHTML = nights.map(n => `<a class="lrn-n${n.id === cur.id ? ' on' : ''}" href="${LEARNINGS}?night=${encodeURIComponent(n.id)}"><span>${esc(learnNight(n.night))}</span><span class="c">${n.status === 'done' ? n.updates : '—'}</span></a>`).join('');
   await learnShowNight(cur, load);
@@ -43,11 +43,11 @@ async function learnShowNight(n, load) {
 }
 
 function learnSubject(kind, x) {
-  const more = x.entries.length - 1;
+  const more = Math.max(0, x.entries.length - 1);
   const av = kind === 'bots' ? botAvatar(x.id, 22) : `<span class="lrn-sq" aria-hidden="true">${esc((x.name || '?')[0])}</span>`;
   const name = kind === 'bots' ? `<a href="#/bot/${encodeURIComponent(x.id)}">${esc(x.name)}</a>` : esc(x.name);
-  return `<details class="lrn-subj"><summary>${av}<span class="nm">${name}</span><span class="first">${esc(x.entries[0]?.title || '')}</span><span class="more">${more ? `+${more} more` : ''}<span class="nav-icon" aria-hidden="true">chevron_right</span></span></summary>
-    <div class="lrn-body">${x.saw ? `<div class="saw">${esc(x.saw)}</div>` : ''}${x.entries.map(learnEntry).join('')}</div></details>`;
+  return `<details class="lrn-subj"><summary>${av}<span class="nm">${name}</span><span class="first">${esc(x.entries[0]?.title || x.delivery_status || '')}</span><span class="more">${more ? `+${more} more` : ''}<span class="nav-icon" aria-hidden="true">chevron_right</span></span></summary>
+    <div class="lrn-body">${x.saw ? `<div class="saw">${esc(x.saw)}</div>` : ''}${x.delivery_status ? `<p>${esc(x.delivery_status)}</p>` : ''}${x.entries.map(learnEntry).join('')}</div></details>`;
 }
 
 function learnEntry(e) {

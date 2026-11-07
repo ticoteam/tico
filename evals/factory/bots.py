@@ -13,16 +13,17 @@ A bot's `style` is how its model behaves, as probabilities per turn that does re
 - `receipt_wording`: a builder's test receipt is worded the messy ways real ones are (RECEIPTS), and on a PR whose CI
   only skips it posts none; a receipt the gate refused it puts right on its next turn
 Every number is drawn from the scenario's seeded random generator, so a run repeats exactly."""
+
 import os
 from collections import Counter
 from .board import MERGE
 from .world import PRIMARY, Refusal
 
 TOKENS = {  # (cached input, uncached input, output) per kind of turn: a real team's averages over a week
-    "work": (3_700_000, 90_000, 17_000),     # a Builder's run
-    "review": (2_100_000, 93_000, 29_000),   # a reviewer's or QA's run
-    "noise": (760_000, 40_000, 5_300),       # woken, read the ticket, nothing to do (a lead's average run)
-    "plan": (2_500_000, 150_000, 40_000),    # an architect's plan for a major feature, on a bigger model
+    "work": (3_700_000, 90_000, 17_000),  # a Builder's run
+    "review": (2_100_000, 93_000, 29_000),  # a reviewer's or QA's run
+    "noise": (760_000, 40_000, 5_300),  # woken, read the ticket, nothing to do (a lead's average run)
+    "plan": (2_500_000, 150_000, 40_000),  # an architect's plan for a major feature, on a bigger model
 }
 FINISHED = ("done", "closed", "declined")
 # Test receipts as builders really word them, by what they report at the head they name. `clean` is the default.
@@ -43,7 +44,13 @@ RECEIPTS = {
 PASSING_RECEIPTS = ("clean", "repaired_seen", "repaired_prior", "repaired_old")
 FAILING_RECEIPTS = ("failing", "failing_words", "failing_line", "rerun_failed")
 TRACE = os.environ.get("SIM_TRACE") == "1"
-FAMILY_MODEL = {"claude": "claude-opus-5-5", "gpt": "gpt-6.1-sol", "grok": "grok-4.6"}   # a model Tico's catalog lists
+FAMILY_MODEL = {"claude": "claude-opus-5-5", "gpt": "gpt-6.1-sol", "grok": "grok-4.6"}  # a model Tico's catalog lists
+
+
+def refusal_code(reply):
+    """The code in a refusal's error body (`{"error": {"code": ...}}`), or None."""
+    error = reply.get("error") if isinstance(reply, dict) else None
+    return error.get("code") if isinstance(error, dict) else None
 
 
 class Bot:
@@ -53,12 +60,14 @@ class Bot:
         self.style = style or {}
         # Its runs report a model of its own family, so Tico's QA pool sees the companies a real team has (Dev 646).
         self.family, self.model, self.slots = family, model or FAMILY_MODEL.get(family, "claude-opus-5-5"), slots
-        self.available = True       # False: its computer is off (claims nothing)
-        self.limited_until = None   # set: every run is refused on a usage limit until then
-        self.turns = []             # one dict per finished turn
-        self.lost = []              # turns its computer lost going off, filed when it comes back
-        self.unfinished = set()     # messages whose turn ended without an answer: running one again is a retry
-        self.runtime, self.held = PRIMARY, False   # where its turn runs: held, the turn runs on a fallback
+        self.available = True  # False: its computer is off (claims nothing)
+        self.limited_until = None  # set: every run is refused on a usage limit until then
+        self.turns = []  # one dict per finished turn
+        self.lost = []  # turns its computer lost going off, filed when it comes back
+        self.unfinished = set()  # messages whose turn ended without an answer: running one again is a retry
+        self.runtime, self.held = PRIMARY, False  # where its turn runs: held, the turn runs on a fallback
+        self.parked = False  # its claimed turn is leased but waits for a computer place before it starts
+        self.parked_since = None
 
     @property
     def token(self):
@@ -69,13 +78,20 @@ class Bot:
 
     # ------------------------------------------------------------------ one turn
     # Minutes a turn takes, as (shortest, longest, most likely): a build can take two minutes or two hours.
-    MINUTES = {"build": (2, 120, 30), "fix": (2, 60, 12), "review": (2, 30, 8), "qa": (3, 40, 12), "plan": (10, 60, 25),
-               "short": (1, 4, 2)}
+    MINUTES = {
+        "build": (2, 120, 30),
+        "fix": (2, 60, 12),
+        "review": (2, 30, 8),
+        "qa": (3, 40, 12),
+        "plan": (10, 60, 25),
+        "short": (1, 4, 2),
+    }
     # One turn in twenty runs long: a build of three or four hours, an hour-long review.
     TAIL = {"build": (180, 240), "fix": (60, 120), "review": (30, 60), "qa": (40, 60), "plan": (60, 120)}
 
     def start(self, attempt):
-        """Begin a claimed turn: read what woke the bot, and decide how long the turn runs. It acts when it ends."""
+        """Begin a claimed turn: read what woke the bot, then ask the server for a computer place before anything starts
+        (see ask_place). Returns whether the turn started; it acts when its run ends."""
         w = self.world
         self._token = attempt["token"]
         self.attempt = attempt
@@ -84,18 +100,95 @@ class Bot:
         message = attempt.get("message") or {}
         refs = message.get("refs") or {}
         task = attempt.get("task")
-        self.record = {"at": w.now(), "bot": self.slug, "news": refs.get("handoff") or refs.get("news") or refs.get("rule")
-                       or message.get("kind"), "task": task and task["id"], "kind": "noise",
-                       "stale": self.stale(task, message), "action": None,
-                       "text": str(message.get("body") or "").replace("\n", " "), "runtime": self.runtime,
-                       "attempt": attempt["id"],
-                       # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
-                       # returns it, since no input row is written for it.
-                       "prompt": message.get("id")}
-        w.post(f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"])
+        self.record = {
+            "at": w.now(),
+            "bot": self.slug,
+            "news": refs.get("handoff") or refs.get("news") or refs.get("rule") or message.get("kind"),
+            "task": task and task["id"],
+            "kind": "noise",
+            "stale": self.stale(task, message),
+            "action": None,
+            "text": str(message.get("body") or "").replace("\n", " "),
+            "runtime": self.runtime,
+            "attempt": attempt["id"],
+            # The claimed message is the turn's prompt, carried in the claim's reply: the inputs poll never
+            # returns it, since no input row is written for it.
+            "prompt": message.get("id"),
+        }
+        return self.ask_place() == "started"
+
+    def ask_place(self):
+        """Ask the server for a computer place before the claimed turn starts, as the runner does (runner-rs execute.rs
+        try_start_place). The server records a wait it gives, so its next ask sees the wait and can stop the turn if its
+        task finished meanwhile. A place starts the turn (begin); a stop ends it unstarted (stop_unstarted); a lapsed
+        lease loses it (lose); a wait parks it (park). Answers what begin answers, or "parked", "stopped" or "gone"."""
+        w, attempt = self.world, self.attempt
+        status, reply = w.request("post", f"attempts/{attempt['id']}/start-place", {}, token=w.runner["token"])
+        if status >= 500:
+            return self.park()  # recorded by the world; the turn stays leased and asks again on the next tick
+        if status >= 400:
+            if refusal_code(reply) == "stale_lease":
+                self.lose()
+                return "gone"
+            raise Refusal(status, str(reply))
+        if reply.get("stop"):
+            self.stop_unstarted()
+            return "stopped"
+        if reply.get("reserved"):
+            return self.begin()
+        return self.park()
+
+    def park(self):
+        """The turn waits for a computer place: it stays leased, holds no place, and asks again on each tick."""
+        if not self.parked:
+            self.parked, self.parked_since = True, self.world.now()
+            self.record["parked"] = True
+        return "parked"
+
+    def begin(self):
+        """Ask the server to start the claimed turn, once it holds a place. Answers "started", "parked" (the place was
+        refused since: start_wait, so the turn stays leased and waits), or "gone" (its lease lapsed while it waited).
+        The server refuses a start it has not reserved, so this is a safety net behind ask_place."""
+        w, attempt = self.world, self.attempt
+        status, reply = w.request(
+            "post", f"attempts/{attempt['id']}/started", {"thread_id": "sim"}, token=w.runner["token"]
+        )
+        code = refusal_code(reply) if 400 <= status < 500 else None
+        if code == "start_wait":
+            return self.park()
+        if code == "stale_lease":
+            self.lose()
+            return "gone"
+        if 400 <= status < 500:
+            raise Refusal(status, str(reply))
+        self.parked = False
+        self.record["at"] = w.now()
         if self.slug in w.steer_bots:
             self.steer()
+        task = attempt.get(
+            "task"
+        )  # the claim's view of the ticket, as start() read it (minutes and kind_of_turn key it)
         self.ends = w.now() + __import__("datetime").timedelta(minutes=self.minutes(task))
+        return "started"
+
+    def retry_start(self):
+        """A parked turn asks for a computer place again, as the runner's wait does (runner-rs execute.rs
+        wait_start_place): a place starts it at once, and a stop before the start ends it unstarted."""
+        self.ask_place()
+
+    def stop_unstarted(self):
+        """A turn the server stopped before its start (its task finished while it waited, or a person stopped it): the
+        runner ends it unstarted, and the server settles it as interrupted."""
+        attempt, record = self.attempt, self.record
+        self.attempt = self.record = None
+        self.parked = False
+        self.finish(attempt, "interrupted")
+        record["action"] = "stopped before it started"
+        return self.log(record)
+
+    def due(self, now):
+        """Whether a started turn has run its time and ends now. A parked turn has not started, so it has no end yet."""
+        return self.running and not self.parked and now >= self.ends
 
     def minutes(self, task):
         if not task or self.limited_until and self.world.now() < self.limited_until:
@@ -171,19 +264,28 @@ class Bot:
         return getattr(self, "attempt", None) is not None
 
     def lose(self):
-        """The computer went off mid-turn: the turn did not finish, and the runner remembers it."""
+        """The turn is gone from its computer: the computer went off mid-turn, or the turn's lease lapsed while it waited
+        for a place. It did not finish, and the runner remembers it."""
         self.lost.append(self.attempt)
         self.unfinished.add((self.attempt.get("message") or {}).get("id"))
         self.attempt = self.record = None
+        self.parked = False
 
     def recover(self):
         """Back on, the runner files each turn it lost as the real runner does on a restart."""
         while self.lost:
             attempt = self.lost.pop()
-            self.world.call("post", f"attempts/{attempt['id']}/complete",
-                            {"outcome": "interrupted", "text": "Runner restarted during execution",
-                             "last_seq": attempt.get("last_seq", 0)},
-                            token=self.world.runner["token"], ok=False)
+            self.world.call(
+                "post",
+                f"attempts/{attempt['id']}/complete",
+                {
+                    "outcome": "interrupted",
+                    "text": "Runner restarted during execution",
+                    "last_seq": attempt.get("last_seq", 0),
+                },
+                token=self.world.runner["token"],
+                ok=False,
+            )
 
     def steer(self):
         """Read the inputs queued for the turn as it starts (the runner's first poll, which the sim makes once per turn),
@@ -192,7 +294,7 @@ class Bot:
         w, attempt = self.world, self.attempt
         status, reply = w.request("post", f"attempts/{attempt['id']}/inputs", {}, token=w.runner["token"])
         if status >= 500:
-            return      # recorded by the world; the turn runs without them, and the run's checks report the error
+            return  # recorded by the world; the turn runs without them, and the run's checks report the error
         if status >= 400:
             raise Refusal(status, str(reply))
         mids = [message["id"] for message in reply["messages"]]
@@ -203,15 +305,18 @@ class Bot:
     def renew(self):
         # A computer that is off sends nothing: its turn's lease lapses on the server, as a real lost computer's does.
         if self.running and self.available:
-            self.world.call("post", f"attempts/{self.attempt['id']}/renew", {}, token=self.world.runner["token"],
-                            ok=False)
+            self.world.call(
+                "post", f"attempts/{self.attempt['id']}/renew", {}, token=self.world.runner["token"], ok=False
+            )
 
     def log(self, record):
         self.turns.append(record)
         if TRACE:
-            print(f"{record['at']:%H:%M} {self.slug:16} {record['news'] or '-':18} {record['kind']:7}{'*' if record['stale'] else ' '}"
-                  f"{(self.world.title(record['task']) if record['task'] else '')[:28]:28} {record['action'] or ''}"
-                  + ("" if record["task"] and not record["stale"] else f" [{record['text'][:90]}]"))
+            print(
+                f"{record['at']:%H:%M} {self.slug:16} {record['news'] or '-':18} {record['kind']:7}{'*' if record['stale'] else ' '}"
+                f"{(self.world.title(record['task']) if record['task'] else '')[:28]:28} {record['action'] or ''}"
+                + ("" if record["task"] and not record["stale"] else f" [{record['text'][:90]}]")
+            )
         return record
 
     def finish(self, attempt, outcome, limited=False, resets=None, tokens=None, seq=0):
@@ -225,22 +330,27 @@ class Bot:
             body["primary_held"], body["fallback"] = True, self.runtime
         if tokens:
             cached, fresh, out = tokens
-            body["usage"] = {"input_tokens": fresh, "cached_tokens": cached, "output_tokens": out,
-                             "model": self.model, "runtime": self.runtime,
-                             "billing": "api"}
+            body["usage"] = {
+                "input_tokens": fresh,
+                "cached_tokens": cached,
+                "output_tokens": out,
+                "model": self.model,
+                "runtime": self.runtime,
+                "billing": "api",
+            }
         w.post(f"attempts/{attempt['id']}/complete", body, token=w.runner["token"])
 
     def stale(self, task, message):
         """Whether Tico's notice was out of date when the bot read it: its task had already finished, its CI news was
         for a head the PR has moved past, or it had moved to another step after the notice was written."""
         if not task or message.get("sender_id") not in (None, "keeper"):
-            return False   # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
+            return False  # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
         if message.get("id") in self.unfinished:
-            return False   # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
+            return False  # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
         if task["status"] in ("done", "closed", "declined"):
             return True
         head = (message.get("refs") or {}).get("pr_head")
-        if head:   # CI news is about a head, not a step: it is out of date once the PR moved on
+        if head:  # CI news is about a head, not a step: it is out of date once the PR moved on
             pr = self.world.pr_of(task["id"])
             return bool(pr) and self.world.prs[pr]["head"] != head
         moved = self.world.step_entered_at(task["id"], claimed_by="bot:" + self.slug)
@@ -263,12 +373,12 @@ class Builder(Bot):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.disputed = set()           # tickets whose failed head it sent back to the check unchanged
+        self.disputed = set()  # tickets whose failed head it sent back to the check unchanged
         self.pushed_after_waiver = set()
-        self.waiver_tries = []          # (when, ticket id, head, outcome) of its own waiver requests
-        self.owed = {}     # ticket id -> what its refused move needs: "receipt", or "push" for a failure at the head
-        self.posted = []   # (when, ticket id, head, wording) per receipt, "none" for one left out
-        self.moves = []    # (when, ticket id, step, refusal text or None) per move this builder made
+        self.waiver_tries = []  # (when, ticket id, head, outcome) of its own waiver requests
+        self.owed = {}  # ticket id -> what its refused move needs: "receipt", or "push" for a failure at the head
+        self.posted = []  # (when, ticket id, head, wording) per receipt, "none" for one left out
+        self.moves = []  # (when, ticket id, step, refusal text or None) per move this builder made
 
     def act(self, task, message):
         w, board = self.world, self.world.board
@@ -300,9 +410,16 @@ class Builder(Bot):
         if "major" in labels(task) and self.architects:
             plan = next((c for c in w.checks(task["id"]) if c["title"].startswith("Plan:")), None)
             if not plan:
-                w.post("tasks", {"owner": self.pick(self.architects, set()), "title": f"Plan: {task['title']}",
-                                 "body": "Plan this feature: the approach, the risks, the order of work.",
-                                 "relations": [{"task": task["id"], "kind": "parent"}]}, token=self.token)
+                w.post(
+                    "tasks",
+                    {
+                        "owner": self.pick(self.architects, set()),
+                        "title": f"Plan: {task['title']}",
+                        "body": "Plan this feature: the approach, the risks, the order of work.",
+                        "relations": [{"task": task["id"], "kind": "parent"}],
+                    },
+                    token=self.token,
+                )
                 return "asked the architect for a plan"
             if plan["status"] not in FINISHED:
                 return None
@@ -327,8 +444,13 @@ class Builder(Bot):
             return None
         pushed = None
         kept = self.keeps(task, judged, pr)
-        if not kept and (judged and str(judged.get("verdict_head") or "-") == w.prs[pr]["head"]
-                         or w.ci_state(pr) == "failing" or not judged and self.untouched_since_step(task, pr)):
+        if not kept and (
+            judged
+            and str(judged.get("verdict_head") or "-") == w.prs[pr]["head"]
+            or w.ci_state(pr) == "failing"
+            or not judged
+            and self.untouched_since_step(task, pr)
+        ):
             if tag and tag not in labels(task) and self.chance("skip_check"):
                 w.update(task["id"], token=self.token, labels=sorted(labels(task) | {tag}))
             self.push(task, pr)
@@ -338,8 +460,12 @@ class Builder(Bot):
                 return pushed or "forgot to hand it on"
             if step.next == MERGE:
                 return self.merge(task, pr) or pushed
-            return ((pushed + ", " if pushed else "") + ("disputed the fail, " if kept == "disputed" else "")
-                    + self.move(task, step.next) + self.try_waive(task, pr))
+            return (
+                (pushed + ", " if pushed else "")
+                + ("disputed the fail, " if kept == "disputed" else "")
+                + self.move(task, step.next)
+                + self.try_waive(task, pr)
+            )
         if pushed or w.ci_state(pr) != "passing":
             return pushed
         target = step.after_green
@@ -376,8 +502,11 @@ class Builder(Bot):
             return ""
         head = w.prs[pr]["head"]
         try:
-            w.post(f"tasks/{task['id']}/qa-waiver", {"head": head, "reason": "QA is slow; merging without it."},
-                   token=self.token)
+            w.post(
+                f"tasks/{task['id']}/qa-waiver",
+                {"head": head, "reason": "QA is slow; merging without it."},
+                token=self.token,
+            )
             outcome = "accepted"
         except Refusal as exc:
             outcome = f"refused ({exc.status})"
@@ -387,7 +516,10 @@ class Builder(Bot):
     def waived(self, task):
         """Whether a person's waiver covers the PR's current head, as the task view says (`current`)."""
         w = self.world
-        if not w.sql("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver' LIMIT 1", (task["id"],)):
+        if not w.sql(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='qa_waiver' LIMIT 1",
+            (task["id"],),
+        ):
             return False
         view = w.get("tasks/" + task["id"], token=self.token)["task"]
         return any(x.get("current") for x in view.get("qa_waivers") or [])
@@ -410,15 +542,19 @@ class Builder(Bot):
             return self.merge(task, pr)
         if check.passed == MERGE and pr and self.waived(task):
             # A person waived the check for this exact head: the owner merges at it, unless it has one more fix.
-            if task["id"] not in self.pushed_after_waiver \
-                    and len(self.pushed_after_waiver) < self.style.get("push_after_waiver", 0):
+            if task["id"] not in self.pushed_after_waiver and len(self.pushed_after_waiver) < self.style.get(
+                "push_after_waiver", 0
+            ):
                 self.pushed_after_waiver.add(task["id"])
                 self.push(task, pr)
                 return "pushed after the waiver"
             return self.merge(task, pr)
         if check.skip_tag and check.skip_tag in labels(task):
-            return self.merge(task, pr, fallback="skip tag ignored at " + step.name) if check.passed == MERGE else \
-                self.fallback(task, check.passed, "skip tag ignored at " + step.name)
+            return (
+                self.merge(task, pr, fallback="skip tag ignored at " + step.name)
+                if check.passed == MERGE
+                else self.fallback(task, check.passed, "skip tag ignored at " + step.name)
+            )
         if pr and w.ci_state(pr) == "failing":
             self.push(task, pr)
             return "pushed a fix for failing CI"
@@ -462,13 +598,16 @@ class Builder(Bot):
             del self.owed[task_id]
             task, pr = w.task(task_id), w.pr_of(task_id)
             if not any(h.get("kind") == "blocked" for h in task.get("holds") or ()) or not pr or w.prs[pr]["merged"]:
-                continue   # moved on meanwhile: nothing left to put right
+                continue  # moved on meanwhile: nothing left to put right
             if what == "push":
                 self.push(task, pr, clean=True)
             else:
                 self.receipt(task_id, pr, clean=True)
-            done.append(("pushed a fix with a clean receipt" if what == "push" else "posted a clean receipt")
-                        + " on " + task["title"])
+            done.append(
+                ("pushed a fix with a clean receipt" if what == "push" else "posted a clean receipt")
+                + " on "
+                + task["title"]
+            )
         return "; ".join(done) or None
 
     def fallback(self, task, step, why):
@@ -506,8 +645,9 @@ class Builder(Bot):
 
     def pick(self, bots, avoid):
         """The least busy bot, preferring another model family and one not used on this ticket."""
-        ranked = sorted(bots, key=lambda b: (b.slug in avoid, b.family == self.family, self.world.open_checks(b.slug),
-                                             b.slug))
+        ranked = sorted(
+            bots, key=lambda b: (b.slug in avoid, b.family == self.family, self.world.open_checks(b.slug), b.slug)
+        )
         return ranked[0].slug
 
 
@@ -518,6 +658,7 @@ def labels(task):
 class Checker(Bot):
     """Owns check subtasks (reviews, QA): judges the change at its head and finishes the subtask with a verdict. It
     never moves the ticket. Its style is how its model goes wrong."""
+
     GOOD, BAD = "approve", "changes"
 
     def act(self, task, message):
@@ -528,24 +669,34 @@ class Checker(Bot):
         head = w.head_for(task)
         if self.chance("off_script"):
             target = next(s.name for s in w.board.steps if s.work)
-            w.update(parent, token=self.token, step=target)   # refused: a checker never moves the ticket
+            w.update(parent, token=self.token, step=target)  # refused: a checker never moves the ticket
             return "moved the ticket"
         if self.chance("fallback_stop"):
             # A run on a fallback model stops itself and leaves the check open, as a real one did.
-            w.update(task["id"], token=self.token, note="Runtime blocker: this turn ran on a fallback model after the "
-                                                          "usage limit; stopping without a verdict.")
+            w.update(
+                task["id"],
+                token=self.token,
+                note="Runtime blocker: this turn ran on a fallback model after the "
+                "usage limit; stopping without a verdict.",
+            )
             return "stopped on a fallback model"
         if self.chance("garbled"):
             w.post(f"tasks/{task['id']}/comments", {"text": "Findings: the hand"}, token=self.token)
-            w.update(task["id"], token=self.token, status="done")   # no verdict line: today this is refused
+            w.update(task["id"], token=self.token, status="done")  # no verdict line: today this is refused
             return "garbled"
         if self.chance("stale_head"):
             old = w.prs[w.pr_of(parent)].get("old_heads") or []
             head = old[-1] if old else head
         if self.chance("cant_test"):
             w.post(f"tasks/{task['id']}/comments", {"text": "I can't test this change here."}, token=self.token)
-            w.update(task["id"], token=self.token, status="done", verdict=self.GOOD, verdict_head=head,
-                     note="Can't test: passed through")
+            w.update(
+                task["id"],
+                token=self.token,
+                status="done",
+                verdict=self.GOOD,
+                verdict_head=head,
+                note="Can't test: passed through",
+            )
             return "can't test"
         verdict = self.BAD if self.chance(self.BAD_STYLE) else self.GOOD
         w.post(f"tasks/{task['id']}/comments", {"text": f"Findings: {verdict}"}, token=self.token)
@@ -566,10 +717,18 @@ class Architect(Bot):
 
     def act(self, task, message):
         w = self.world
-        if task["owner_id"] != "bot:" + self.slug or task["status"] in FINISHED or not task["title"].startswith("Plan:"):
+        if (
+            task["owner_id"] != "bot:" + self.slug
+            or task["status"] in FINISHED
+            or not task["title"].startswith("Plan:")
+        ):
             return None
-        w.update(task["id"], token=self.token, status="done",
-                 note="Plan: 1. data model first; 2. API; 3. UI. Risks: migration order. Build in that order.")
+        w.update(
+            task["id"],
+            token=self.token,
+            status="done",
+            note="Plan: 1. data model first; 2. API; 3. UI. Risks: migration order. Build in that order.",
+        )
         return "planned"
 
 
@@ -581,15 +740,23 @@ class Lead(Bot):
     def act(self, task, message):
         refs = message.get("refs") or {}
         if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
-            self.world.post(f"tasks/{task['id']}/comments", {"text": f"@{task['owner_id'][4:]} this ticket is late at "
-                                                                     f"{self.world.step_of(task)}: what does it wait on?",
-                                                                     "needs_action": True},
-                            token=self.token)
+            self.world.post(
+                f"tasks/{task['id']}/comments",
+                {
+                    "text": f"@{task['owner_id'][4:]} this ticket is late at "
+                    f"{self.world.step_of(task)}: what does it wait on?",
+                    "needs_action": True,
+                },
+                token=self.token,
+            )
             return "asked the owner of a late ticket"
         if refs.get("step_backlog"):
             return self.spread(task)
-        if not task["title"].startswith("Hourly board sweep") or task["owner_id"] != "bot:" + self.slug \
-                or task["status"] in FINISHED:
+        if (
+            not task["title"].startswith("Hourly board sweep")
+            or task["owner_id"] != "bot:" + self.slug
+            or task["status"] in FINISHED
+        ):
             return None
         told = self.sweep()
         self.world.update(task["id"], token=self.token, status="done", note=told)
@@ -614,26 +781,46 @@ class Lead(Bot):
         for t in [t for t in here if t["owner_id"] == busiest and t["status"] == "open"][: (n - owned[target]) // 2]:
             w.update(t["id"], token=self.token, owner=target)
             moved += 1
-        return f"moved {moved} tickets from {busiest[4:]} to {target[4:]}" if moved else f"noted the backlog on {busiest[4:]}"
+        return (
+            f"moved {moved} tickets from {busiest[4:]} to {target[4:]}"
+            if moved
+            else f"noted the backlog on {busiest[4:]}"
+        )
 
     def sweep(self):
         w, board = self.world, self.world.board
         told = []
         # A snoozed ticket is off the board the lead reads until its date (docs/tasks.md, Snoozing a task).
-        snoozed = {r["id"] for r in w.sql("SELECT id FROM tasks WHERE snoozed_until>?", (w.H.now(),))}
+        snoozed = {
+            r["id"]
+            for r in w.sql(
+                "SELECT task_id id FROM task_holds WHERE kind='snoozed' AND released_at IS NULL AND until_at>?",
+                (w.H.now(),),
+            )
+        }
         for t in w.tickets():
             step = board.step(t["step"])
             # Only work its owner holds: a ticket queued for a start or out for a check moves without the owner.
-            if not step or not step.work or not str(t["owner_id"]).startswith("bot:") or t["status"] != "doing" \
-                    or t["id"] in snoozed:
+            if (
+                not step
+                or not step.work
+                or not str(t["owner_id"]).startswith("bot:")
+                or t["status"] != "doing"
+                or t["id"] in snoozed
+            ):
                 continue
             limit = step.wake_after_hours or 2
             if w.idle_hours(t["id"]) < limit:
                 continue
-            w.post(f"tasks/{t['id']}/comments", {"text": f"@{t['owner_id'][4:]} this ticket has sat at {step.name} for "
-                                                          f"{w.idle_hours(t['id']):.1f} h: what moves it on?",
-                                                          "needs_action": True},
-                   token=self.token)
+            w.post(
+                f"tasks/{t['id']}/comments",
+                {
+                    "text": f"@{t['owner_id'][4:]} this ticket has sat at {step.name} for "
+                    f"{w.idle_hours(t['id']):.1f} h: what moves it on?",
+                    "needs_action": True,
+                },
+                token=self.token,
+            )
             w.stuck_told.append((w.now(), t["id"]))
             told.append(t["title"])
         return ("told owners of " + ", ".join(told)) if told else "swept: nothing stuck"

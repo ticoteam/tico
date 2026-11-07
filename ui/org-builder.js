@@ -2,7 +2,7 @@
    bots into it, and watch the chart grow beside the conversation. The server has the departments and cards
    (GET /api/v2/setup/groups) and the suggestions (POST /api/v2/setup/recruit, from Tico HQ or its local
    recommender); this page shows them and keeps what is checked in the wizard's catalog state (`state.catalog.picked`),
-   from which ui/first-run.js builds `selected`. Nothing exists until "Create my team". Built-in and message bots
+   from which ui/first-run.js builds `selected`. Nothing exists until "Create my team". Built-ins and explicit catalog helpers
    are not on the chart: the built-ins are always created, and a `kind: helper` card is
    one switch under Message bots on the finished chart, off until someone turns it on. */
 'use strict';
@@ -142,7 +142,7 @@ function obCols(state, count) {
   const most = Math.max(1, Math.min(count || 1, 4, Math.floor((width - 40) / 220)));
   return Math.ceil((count || 1) / Math.ceil((count || 1) / most));
 }
-// The human at the top and each group hanging off one line with its bots below; built-in and message bots are not on it.
+// The human at the top and each group hanging off one line with its bots below; built-ins and catalog helpers are off it.
 // Beside the conversation it is one column; the finished chart spreads the departments into rows.
 function obChartHTML(state, big) {
   const org = state.org, me = S.me || {};
@@ -253,15 +253,14 @@ function obDeptHTML(state) {
         <button class="ghost" type="button" id="ob-skip">Skip group</button><span class="spacer"></span>${forward}</div>
     </article>`;
 }
-// Message bots sit apart from the chart: one switch each, off by default, and the Inbox Manager asks whose mailbox here.
+// Explicit catalog helpers have one switch each, off by default; the Inbox Manager asks whose mailbox here.
 function obHelpersHTML(state) {
   const cat = state.catalog, cards = obHelpers(state);
   if (!cards.length) return '';
   return `<section class="ob-helpers" id="ob-helpers" aria-labelledby="ob-helpers-h"><h3 id="ob-helpers-h">Message bots</h3>${cards.map(card => {
     const on = cat.picked.has(card.slug);
     return `<div class="ob-helper${on ? ' on' : ''}" data-ob-helper-row="${esc(card.slug)}"><label class="ob-helper-toggle">${obAvatar(card.slug, card, 28)}
-        <span class="ob-helper-name">${esc(catalogName(cat, card))}<small id="ob-helper-desc-${esc(card.slug)}">${esc(card.template === 'health-monitor'
-          ? 'Checks this install and gets setup problems fixed.' : card.template === 'inbox'
+        <span class="ob-helper-name">${esc(catalogName(cat, card))}<small id="ob-helper-desc-${esc(card.slug)}">${esc(card.template === 'inbox'
             ? 'Reads one person’s mailbox and prepares an email brief.' : card.summary)}</small></span>
         <input type="checkbox" role="switch" data-ob-helper="${esc(card.slug)}" aria-describedby="ob-helper-desc-${esc(card.slug)}" ${on ? 'checked' : ''}></label>
       ${on && card.template === 'inbox' ? obMailboxHTML(state, card.slug) : ''}</div>`;

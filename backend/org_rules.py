@@ -19,6 +19,7 @@ requires of us). A rule says who follows it and, for an internal rule, with whom
 
 Unversioned and idempotent (`ensure`), like backend/strategy.py.
 """
+
 import json
 from datetime import timedelta
 from typing import Literal
@@ -36,6 +37,7 @@ from . import task_caps
 from . import teammate_access as TA
 from .models import Contract
 from .store import Problem
+from . import bot_settings as BS
 
 KINDS = ("internal", "external")
 SOURCE_KINDS = ("vendor", "customer", "government", "other")
@@ -47,11 +49,11 @@ NAME_MAX = 200
 LIST_DEFAULT = 50
 LIST_MAX = 100
 DUE_LIST_MAX = 200
-BOT_LIST_MAX = 50           # the rules a bot's tab shows per kind, per page (a page also stops at LIST_BYTES)
-LIST_BYTES = 200_000        # the serialized size one page of rules may reach; a page always holds at least one row
-SCOPE_MAX = 100             # the names one Who or With may hold, in all
-DUE_PER_RULE = 20           # the due dates a rule's view names; the rest are counted (`due_more`)
-SETTINGS_TASK_CAPS = 20     # the task limits a bot's settings name; the rest are counted
+BOT_LIST_MAX = 50  # the rules a bot's tab shows per kind, per page (a page also stops at LIST_BYTES)
+LIST_BYTES = 200_000  # the serialized size one page of rules may reach; a page always holds at least one row
+SCOPE_MAX = 100  # the names one Who or With may hold, in all
+DUE_PER_RULE = 20  # the due dates a rule's view names; the rest are counted (`due_more`)
+SETTINGS_TASK_CAPS = 20  # the task limits a bot's settings name; the rest are counted
 SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
 
 SCHEMA = (
@@ -107,11 +109,17 @@ def _json(value):
 
 
 def _has(scope):
-    return bool(scope) and bool(scope.get("everyone") or scope.get("all_bots") or scope.get("outside_editions")
-                                or scope.get("groups") or scope.get("bots") or scope.get("people"))
+    return bool(scope) and bool(
+        scope.get("everyone")
+        or scope.get("all_bots")
+        or scope.get("outside_editions")
+        or scope.get("groups")
+        or scope.get("bots")
+        or scope.get("people")
+    )
 
 
-WHERE_MAX = 20          # terms one rule's `where` may name
+WHERE_MAX = 20  # terms one rule's `where` may name
 WHERE_THREAD_CHARS = 100
 
 
@@ -136,8 +144,11 @@ def _where_terms(c, value):
             ctx = ctx or _ctx(c)
             term = "team:" + _resolve(ctx, rest, ("group",))[1]
         else:
-            raise Problem("validation", "Where takes thread:<id>, team:<group>, kind:dm or has_outside_members, "
-                          f"not {text or raw}", 422)
+            raise Problem(
+                "validation",
+                f"Where takes thread:<id>, team:<group>, kind:dm or has_outside_members, not {text or raw}",
+                422,
+            )
         if term not in out:
             out.append(term)
     return out
@@ -157,10 +168,10 @@ def _where_hits(terms, place):
             hit = place.get("kind") == "dm"
         elif term.startswith("thread:"):
             # A sub-thread's write is in its root's thread too: a rule on the root names its sub-threads.
-            wanted = term[len("thread:"):]
+            wanted = term[len("thread:") :]
             hit = bool(wanted) and wanted in (place.get("thread"), place.get("root"))
         elif term.startswith("team:"):
-            hit = term[len("team:"):] in (place.get("teams") or ())
+            hit = term[len("team:") :] in (place.get("teams") or ())
         else:
             hit = False
         if hit:
@@ -186,8 +197,21 @@ def _get(c, rule_id):
 
 def _core(row):
     """The stored fields an audit row keeps (the derived views are not stored)."""
-    keep = ("id", "kind", "text", "description", "source_id", "cite", "who", "with", "where", "if_broken", "reviewer",
-            "status", "version")
+    keep = (
+        "id",
+        "kind",
+        "text",
+        "description",
+        "source_id",
+        "cite",
+        "who",
+        "with",
+        "where",
+        "if_broken",
+        "reviewer",
+        "status",
+        "version",
+    )
     return {k: row.get(k) for k in keep}
 
 
@@ -207,9 +231,7 @@ def redact_audit(c, auth, who, found):
             cite = snap.get("cite") if isinstance(snap, dict) else None
             if not cite:
                 continue
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
-            if not _cite_visible(c, auth, who, row, memo):
-                snap["cite"] = {"hidden": True}
+            snap["cite"] = _cite(c, auth, who, cite, memo)
 
 
 def _audit(c, actor, rule_id, before, after, who):
@@ -234,8 +256,13 @@ def _save(c, rule_id, status=None, extra=None):
 
 def _check_version(row, version):
     if version is not None and int(version) != int(row["version"]):
-        raise Problem("conflict", f"The rule changed since you opened it (version {row['version']}, not {version}); "
-                                  "reload it and make your change again", 409, extra={"version": row["version"]})
+        raise Problem(
+            "conflict",
+            f"The rule changed since you opened it (version {row['version']}, not {version}); "
+            "reload it and make your change again",
+            409,
+            extra={"version": row["version"]},
+        )
 
 
 def _page(rows, cursor, limit, render=None):
@@ -248,7 +275,7 @@ def _page(rows, cursor, limit, render=None):
             raise ValueError
     except ValueError:
         raise Problem("validation", "That cursor is not valid", 422) from None
-    chunk = rows[start:start + limit]
+    chunk = rows[start : start + limit]
     items = render(chunk) if render else chunk
     out, used = [], 0
     for item in items:
@@ -273,12 +300,16 @@ def _limit(value, default=LIST_DEFAULT, cap=LIST_MAX):
 def _ctx(c):
     roster, configs = G._roster(c), G._configs(c)
     return {
-        "roster": roster, "configs": configs, "people": roster.get("people") or [],
+        "roster": roster,
+        "configs": configs,
+        "people": roster.get("people") or [],
         "groups": {gid: g.get("name") or gid for gid, g in (roster.get("org_groups") or {}).items()},
         "bots": {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id, slug, display_name FROM bots")},
         "bot_slugs": {r["slug"]: r["id"] for r in c.execute("SELECT id, slug FROM bots")},
-        "sources": {r["id"]: {"id": r["id"], "name": r["name"], "kind": r["kind"]}
-                    for r in c.execute("SELECT * FROM rule_sources")},
+        "sources": {
+            r["id"]: {"id": r["id"], "name": r["name"], "kind": r["kind"]}
+            for r in c.execute("SELECT * FROM rule_sources")
+        },
     }
 
 
@@ -290,9 +321,11 @@ def _person_name(ctx, pid):
 
 
 def _scope_view(ctx, scope, *, flags=True):
-    out = {"groups": [{"id": g, "name": ctx["groups"].get(g, g)} for g in scope.get("groups", [])],
-           "bots": [{"id": b, "name": ctx["bots"].get(b, b)} for b in scope.get("bots", [])],
-           "people": [{"id": p, "name": _person_name(ctx, p)} for p in scope.get("people", [])]}
+    out = {
+        "groups": [{"id": g, "name": ctx["groups"].get(g, g)} for g in scope.get("groups", [])],
+        "bots": [{"id": b, "name": ctx["bots"].get(b, b)} for b in scope.get("bots", [])],
+        "people": [{"id": p, "name": _person_name(ctx, p)} for p in scope.get("people", [])],
+    }
     if flags:
         out = {"everyone": bool(scope.get("everyone")), "all_bots": bool(scope.get("all_bots")), **out}
         if scope.get("outside_editions"):
@@ -309,22 +342,35 @@ def _one_hit(hits, text, what):
 
 def _find_group(ctx, text):
     t = text.casefold()
-    return _one_hit([gid for gid, name in ctx["groups"].items() if gid == text or str(name).casefold() == t],
-                    text, "group")
+    return _one_hit(
+        [gid for gid, name in ctx["groups"].items() if gid == text or str(name).casefold() == t], text, "group"
+    )
 
 
 def _find_person(ctx, text):
     t = text.casefold()
-    return _one_hit([p["id"] for p in ctx["people"]
-                     if p["id"] == text or str(p.get("name") or "").casefold() == t
-                     or str(p.get("email") or "").casefold() == t], text, "person")
+    return _one_hit(
+        [
+            p["id"]
+            for p in ctx["people"]
+            if p["id"] == text or str(p.get("name") or "").casefold() == t or str(p.get("email") or "").casefold() == t
+        ],
+        text,
+        "person",
+    )
 
 
 def _find_bot(ctx, text):
     t = text.casefold()
-    return _one_hit([ident for ident, name in ctx["bots"].items()
-                     if ident == text or ctx["bot_slugs"].get(text) == ident or str(name).casefold() == t],
-                    text, "bot")
+    return _one_hit(
+        [
+            ident
+            for ident, name in ctx["bots"].items()
+            if ident == text or ctx["bot_slugs"].get(text) == ident or str(name).casefold() == t
+        ],
+        text,
+        "bot",
+    )
 
 
 _FINDERS = {"group": _find_group, "person": _find_person, "bot": _find_bot}
@@ -340,22 +386,28 @@ def _resolve(ctx, text, kinds=("group", "person", "bot")):
         if text.startswith(prefix):
             if kind not in kinds:
                 raise Problem("validation", f"{text} names a {kind}, and this takes {' or '.join(kinds)}", 422)
-            name = text[len(prefix):].strip()
+            name = text[len(prefix) :].strip()
             found = _FINDERS[kind](ctx, name)
             if not found:
                 raise Problem("not_found", f"Unknown {kind}: {name}", 404)
             return kind, found
     hits = [(kind, found) for kind in kinds for found in [_FINDERS[kind](ctx, text)] if found]
     if len(hits) > 1:
-        raise Problem("ambiguous", f"{text} is a " + " and a ".join(kind for kind, _ in hits) + "; write "
-                      + " or ".join(f"{kind}:{text}" for kind, _ in hits), 400)
+        raise Problem(
+            "ambiguous",
+            f"{text} is a "
+            + " and a ".join(kind for kind, _ in hits)
+            + "; write "
+            + " or ".join(f"{kind}:{text}" for kind, _ in hits),
+            400,
+        )
     if not hits:
         raise Problem("not_found", f"Unknown {'/'.join(kinds)}: {text}", 404)
     return hits[0]
 
 
 def _strip(text, prefix):
-    return text[len(prefix):] if text.startswith(prefix) else text
+    return text[len(prefix) :] if text.startswith(prefix) else text
 
 
 def scope_in(c, value, *, flags):
@@ -369,9 +421,13 @@ def scope_in(c, value, *, flags):
     if not flags and (raw.get("everyone") or raw.get("all_bots") or raw.get("outside_editions")):
         raise Problem("validation", "With names teammates: not everyone, all bots or outside editions", 422)
     ctx = _ctx(c)
-    out = {"everyone": bool(raw.get("everyone")) if flags else False,
-           "all_bots": bool(raw.get("all_bots")) if flags else False,
-           "groups": [], "bots": [], "people": []}
+    out = {
+        "everyone": bool(raw.get("everyone")) if flags else False,
+        "all_bots": bool(raw.get("all_bots")) if flags else False,
+        "groups": [],
+        "bots": [],
+        "people": [],
+    }
 
     def add(kind, found):
         key = {"group": "groups", "bot": "bots", "person": "people"}[kind]
@@ -387,7 +443,7 @@ def scope_in(c, value, *, flags):
     for key in ("groups", "bots", "people"):
         out[key] = sorted(out[key])
     if flags and raw.get("outside_editions"):
-        out["outside_editions"] = True      # only when set: a Who without it reads exactly as it always has
+        out["outside_editions"] = True  # only when set: a Who without it reads exactly as it always has
     if len(out["groups"]) + len(out["bots"]) + len(out["people"]) > SCOPE_MAX:
         raise Problem("validation", f"Keep one Who or With to {SCOPE_MAX} names", 422)
     return out
@@ -441,8 +497,9 @@ def any_active(c):
 
 def any_where(c):
     """Whether a rule in force names a place (`where`): a write's place is read only then."""
-    return c.execute("SELECT 1 FROM org_rules WHERE status='active' AND where_terms!='[]' LIMIT 1").fetchone() \
-        is not None
+    return (
+        c.execute("SELECT 1 FROM org_rules WHERE status='active' AND where_terms!='[]' LIMIT 1").fetchone() is not None
+    )
 
 
 def matching(c, author, recipients=(), place=None):
@@ -516,8 +573,11 @@ def may_manage(c, auth, who, scope, ctx=None):
 
 def _check_manage(c, auth, who, scope, ctx=None):
     if not may_manage(c, auth, who, scope, ctx):
-        raise Problem("forbidden", "Only the owner, an admin, a lead of a group in Who or an owner of a bot in Who "
-                                   "changes this rule", 403)
+        raise Problem(
+            "forbidden",
+            "Only the owner, an admin, a lead of a group in Who or an owner of a bot in Who changes this rule",
+            403,
+        )
 
 
 # ----------------------------------------------------------------------------- views
@@ -526,24 +586,35 @@ def _cite_visible(c, auth, who, row, memo):
     its run answers would (counsel.cite_readers), so a quote never enters a run whose asker could not read the file."""
     from . import counsel
     from . import files as F
+
     if not row:
         return False
     if not counsel.is_counsel(who):
         return F.file_visible(c, auth, who, row, memo.setdefault("files", {}))
     if "readers" not in memo:
         memo["readers"] = counsel.cite_readers(c, auth, who)
-    return bool(memo["readers"]) and all(F.file_visible(c, auth, reader, row, memo.setdefault(reader.actor, {}))
-                                         for reader in memo["readers"])
+    return bool(memo["readers"]) and all(
+        F.file_visible(c, auth, reader, row, memo.setdefault(reader.actor, {})) for reader in memo["readers"]
+    )
 
 
 def _cite(c, auth, who, cite, memo=None):
     if not cite:
         return None
+    from .files import page_ref_denials
+
+    denied = page_ref_denials(c, auth, who, cite)
+    if "A deleted page" in denied.values():
+        return {"removed": True, "label": "A deleted page"}
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
     if not _cite_visible(c, auth, who, row, memo if memo is not None else {}):
         return {"hidden": True}
-    return {"file_id": cite.get("file_id"), "version": cite.get("version"), "section": cite.get("section"),
-            "quote": cite.get("quote")}
+    return {
+        "file_id": cite.get("file_id"),
+        "version": cite.get("version"),
+        "section": cite.get("section"),
+        "quote": cite.get("quote"),
+    }
 
 
 def view(c, auth, who, row, ctx, dues=None, quote=True):
@@ -554,17 +625,33 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
     if row["reviewer"]:
         reviewer = {"id": row["reviewer"], "name": _person_name(ctx, row["reviewer"])}
     out = {
-        "id": row["id"], "kind": row["kind"], "text": row["text"], "description": row["description"],
+        "id": row["id"],
+        "kind": row["kind"],
+        "text": row["text"],
+        "description": row["description"],
         "who": _scope_view(ctx, row["who"]),
         "with": _scope_view(ctx, row["with"], flags=False) if row["kind"] == "internal" else None,
         "where": row["where"],
         "source": ctx["sources"].get(row["source_id"]) if row["source_id"] else None,
-        "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
-        "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
-        "version": row["version"], "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
-                 "task_days": d["task_days"]}
-                for d in dues[:DUE_PER_RULE]],
+        "if_broken": row["if_broken"],
+        "reviewer": reviewer,
+        "status": row["status"],
+        "suggested_by": row["suggested_by"],
+        "decided_by": row["decided_by"],
+        "decided_at": row["decided_at"],
+        "version": row["version"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "due": [
+            {
+                "id": d["id"],
+                "due_on": d["due_on"],
+                "status": d["status"],
+                "repeats": d["repeats"],
+                "task_days": d["task_days"],
+            }
+            for d in dues[:DUE_PER_RULE]
+        ],
         "due_more": max(0, len(dues) - DUE_PER_RULE),
         # Whether this caller may accept, edit, retire or add due dates (the UI hides what it can't use).
         "can_edit": row["status"] != "retired" and may_manage(c, auth, who, row["who"], ctx),
@@ -576,7 +663,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
 
 # ----------------------------------------------------------------------------- settings as sentences
 PERIOD_WORDS = {"per_30m": "30 minutes", "hourly": "hour", "daily": "day", "weekly": "week", "monthly": "month"}
-WINDOW_WORDS = (("turns_per_hour", "hour"), ("turns_per_day", "day"))   # a turn budget's window, in words
+WINDOW_WORDS = (("turns_per_hour", "hour"), ("turns_per_day", "day"))  # a turn budget's window, in words
 
 
 def _join(words):
@@ -589,9 +676,9 @@ def settings_for(c, bot, ctx=None):
     """The bot's settings as sentences, read from the modules that hold them. Each is {text, source, edit}; `edit` names
     the page and anchor where the setting is changed, or is null when no one changes it in the product."""
     from . import hubdb as HD
-    from . import mail_settings
     from . import turn_budgets
     from . import usage_limits
+
     ctx = ctx or _ctx(c)
     name = ctx["bots"].get(bot, bot)
     out = []
@@ -601,15 +688,30 @@ def settings_for(c, bot, ctx=None):
     if write["everyone"]:
         text = f"Everyone can message {name}"
     else:
-        names = ([ctx["groups"].get(g, g) for g in write["teams"]] + [ctx["bots"].get(b, b) for b in write["bots"]]
-                 + [_person_name(ctx, p) for p in write["people"]])
+        names = (
+            [ctx["groups"].get(g, g) for g in write["teams"]]
+            + [ctx["bots"].get(b, b) for b in write["bots"]]
+            + [_person_name(ctx, p) for p in write["people"]]
+        )
         text = f"Only {_join(names)} can message {name}" if names else f"Nobody can message {name}"
     out.append({"text": text, "source": "bot_access", "edit": {"page": "bot", "anchor": "access"}})
 
-    mail = mail_settings.stored(c, bot)
-    sends = bool(mail and mail["outbound_send"])
-    out.append({"text": f"{name} {'can send mail' if sends else 'cannot send mail outside Tico'}",
-                "source": "mail_settings", "edit": {"page": "settings", "anchor": "people"}})
+    from .email_sending import effective
+    from .google_workspace import permissions
+
+    mode = effective(c, bot=bot)["mode"] if permissions(c)["send_mail"] else "never"  # the company's Send mail too
+    out.append(
+        {
+            "text": f"{name} "
+            + {
+                "on_their_own": "sends mail on its own",
+                "ask_first": "asks before sending mail",
+                "never": "cannot send mail",
+            }[mode],
+            "source": "mail_settings",
+            "edit": {"page": "settings", "anchor": "people"},
+        }
+    )
 
     default = usage_limits.company(c)
     limits, source = usage_limits.effective(c, bot, default)
@@ -618,24 +720,39 @@ def settings_for(c, bot, ctx=None):
         if not value:
             continue
         if source.get(period) == "bot":
-            out.append({"text": f"Spends up to ${value:g} a {PERIOD_WORDS[period]}", "source": "usage_limits",
-                        "edit": {"page": "bot", "anchor": "spend", "path": f"/api/v2/usage/limits/{bot}"}})
+            out.append(
+                {
+                    "text": f"Spends up to ${value:g} a {PERIOD_WORDS[period]}",
+                    "source": "usage_limits",
+                    "edit": {"page": "bot", "anchor": "spend", "path": f"/api/v2/usage/limits/{bot}"},
+                }
+            )
         elif source.get(period) == "company":
-            out.append({"text": f"Follows the company limit: up to ${value:g} a {PERIOD_WORDS[period]}",
-                        "source": "usage_limits",
-                        "edit": {"page": "strategy", "anchor": "budget", "path": "/api/v2/usage/limits"}})
+            out.append(
+                {
+                    "text": f"Follows the company limit: up to ${value:g} a {PERIOD_WORDS[period]}",
+                    "source": "usage_limits",
+                    "edit": {"page": "strategy", "anchor": "budget", "path": "/api/v2/usage/limits"},
+                }
+            )
     found = usage_limits.pools(c, default)
     for scope in usage_limits.scopes_of(c, bot, default):
         caps = found[scope]
         label = usage_limits.label(c, scope, default)
-        path = "/api/v2/usage/pools/" + ("company" if scope == usage_limits.COMPANY
-                                         else "groups/" + scope.split(":", 1)[1])
+        path = "/api/v2/usage/pools/" + (
+            "company" if scope == usage_limits.COMPANY else "groups/" + scope.split(":", 1)[1]
+        )
         for key in usage_limits.KEYS:
             if caps.get(key):
-                out.append({"text": f"Spends up to ${caps[key]:g} a {PERIOD_WORDS[key[:-4]]} across {label}",
-                            "source": "usage_limits", "edit": {"page": "strategy", "anchor": "budget", "path": path}})
+                out.append(
+                    {
+                        "text": f"Spends up to ${caps[key]:g} a {PERIOD_WORDS[key[:-4]]} across {label}",
+                        "source": "usage_limits",
+                        "edit": {"page": "strategy", "anchor": "budget", "path": path},
+                    }
+                )
 
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     declared = turn_budgets._declared(config["config"] if config else None)
     own = turn_budgets.own(declared)
     shared = turn_budgets.limits(c, declared)
@@ -648,22 +765,32 @@ def settings_for(c, bot, ctx=None):
             text = f"Team default: {shared[key]} turns per {word}"
         out.append({"text": text, "source": "turn_budgets", "edit": {"page": "bot", "anchor": "turns"}})
 
-    caps = c.execute("SELECT receiver, per_day FROM task_caps WHERE sender=? ORDER BY receiver LIMIT ?",
-                     ("bot:" + bot, SETTINGS_TASK_CAPS)).fetchall()
+    caps = c.execute(
+        "SELECT receiver, per_day FROM task_caps WHERE sender=? ORDER BY receiver LIMIT ?",
+        ("bot:" + bot, SETTINGS_TASK_CAPS),
+    ).fetchall()
     for cap in caps:
         kind, _, ident = cap["receiver"].partition(":")
         who_name = _person_name(ctx, ident) if kind == "human" else ctx["bots"].get(ident, ident)
-        text = f"Can't send tasks to {who_name}" if cap["per_day"] == 0 else \
-            f"Up to {cap['per_day']} tasks a day to {who_name}"
+        text = (
+            f"Can't send tasks to {who_name}"
+            if cap["per_day"] == 0
+            else f"Up to {cap['per_day']} tasks a day to {who_name}"
+        )
         out.append({"text": text, "source": "task_caps", "edit": {"page": "bot", "anchor": "tasks"}})
     more = c.execute("SELECT count(*) FROM task_caps WHERE sender=?", ("bot:" + bot,)).fetchone()[0] - len(caps)
     if more > 0:
-        out.append({"text": f"{more} more task limits", "source": "task_caps",
-                    "edit": {"page": "bot", "anchor": "tasks"}})
+        out.append(
+            {"text": f"{more} more task limits", "source": "task_caps", "edit": {"page": "bot", "anchor": "tasks"}}
+        )
 
-    out.append({"text": f"At most {HD.UNSOLICITED_PER_DAY} unasked messages a day to each person", "source": "hubdb",
-                "edit": None})
-    out.append({"text": f"Asks go {HD.MAX_ASK_DEPTH} deep at most", "source": "hubdb", "edit": None})
+    out.append(
+        {
+            "text": f"At most {HD.UNSOLICITED_PER_DAY} unasked messages a day to each person",
+            "source": "hubdb",
+            "edit": None,
+        }
+    )
     out.append({"text": f"{HD.CAP_PER_HOUR} bot-to-bot messages an hour in one chat", "source": "hubdb", "edit": None})
     return out
 
@@ -734,25 +861,45 @@ def add_rule(c, auth, who, body):
         scope = given
     else:
         scope = _scope_checked(c, auth, who, body.get("who") or {})
-    with_scope = scope_in(c, body.get("with") or {}, flags=False) if kind == "internal" else \
-        {"groups": [], "bots": [], "people": []}
+    with_scope = (
+        scope_in(c, body.get("with") or {}, flags=False)
+        if kind == "internal"
+        else {"groups": [], "bots": [], "people": []}
+    )
     where = _where_terms(c, body.get("where"))
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
     now = H.now()
-    row = {"id": H.new_id(), "kind": kind, "text": text, "description": description, "source_id": source_id,
-           "cite": _json(cite) if cite else None, "who": _json(scope), "with_scope": _json(with_scope),
-           "where_terms": _json(where),
-           "if_broken": _if_broken(body.get("if_broken") or "block"), "reviewer": _reviewer(c, body.get("reviewer")),
-           "status": status, "suggested_by": who.actor, "decided_by": who.actor if status == "active" else None,
-           "decided_at": now if status == "active" else None, "via": _via(who), "version": 1,
-           "created_at": now, "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
-              "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
-              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
-              ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
-              ":via, :version, :created_at, :updated_at)", row)
+    row = {
+        "id": H.new_id(),
+        "kind": kind,
+        "text": text,
+        "description": description,
+        "source_id": source_id,
+        "cite": _json(cite) if cite else None,
+        "who": _json(scope),
+        "with_scope": _json(with_scope),
+        "where_terms": _json(where),
+        "if_broken": _if_broken(body.get("if_broken") or "block"),
+        "reviewer": _reviewer(c, body.get("reviewer")),
+        "status": status,
+        "suggested_by": who.actor,
+        "decided_by": who.actor if status == "active" else None,
+        "decided_at": now if status == "active" else None,
+        "via": _via(who),
+        "version": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    c.execute(
+        "INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
+        "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
+        "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
+        ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
+        ":via, :version, :created_at, :updated_at)",
+        row,
+    )
     stored = _get(c, row["id"])
     _audit(c, who.actor, row["id"], None, _core(stored), who)
     _event(c, who.actor, "added", row["id"], {"kind": kind, "status": status})
@@ -840,9 +987,19 @@ def decide_rule(c, auth, who, rule_id, body, action):
     _audit(c, who.actor, rule_id, before, _core(stored), who)
     _event(c, who.actor, event, rule_id, {})
     if action == "retire":
-        H.hook(c, "org_rule.retired", rule_id, lambda: {"id": rule_id, "kind": stored["kind"], "text": stored["text"],
-                                                        "source_id": stored["source_id"], "retired_by": who.actor},
-               who.actor)
+        H.hook(
+            c,
+            "org_rule.retired",
+            rule_id,
+            lambda: {
+                "id": rule_id,
+                "kind": stored["kind"],
+                "text": stored["text"],
+                "source_id": stored["source_id"],
+                "retired_by": who.actor,
+            },
+            who.actor,
+        )
     return {"rule": view(c, auth, who, stored, ctx, quote=False), "due": D.views(c, D.live_rows(c, [rule_id]))}
 
 
@@ -888,6 +1045,7 @@ def add_due(c, auth, who, rule_id, body):
     owner = owner_actor(c, body.get("owner"))
     _check_due_owner(c, auth, who, row, owner)
     from . import rule_due_routine as RR
+
     days = RR.task_days_of(body)
     due_id = D.add(c, who.actor, rule_id, first.isoformat(), repeats, zone, owner)
     if days is not RR.UNCHANGED and days is not None:
@@ -919,12 +1077,15 @@ def edit_due(c, auth, who, due_text, body):
             # A changed owner passes the same test as a new one; an owner kept as it is is never asked again.
             _check_due_owner(c, auth, who, rule, changes["owner"])
     from . import rule_due_routine as RR
+
     days = RR.task_days_of(body)
     if days is RR.UNCHANGED:
         days = RR.current_days(c, row)
     before = D.views(c, [row])[0]
-    replaced = changes.get("first_due_on", row["first_due_on"]) != row["first_due_on"] or \
-        changes.get("repeats", row["repeats"]) != row["repeats"]
+    replaced = (
+        changes.get("first_due_on", row["first_due_on"]) != row["first_due_on"]
+        or changes.get("repeats", row["repeats"]) != row["repeats"]
+    )
     if replaced:
         new_id = D.restart(c, who.actor, row, changes)
     else:
@@ -951,11 +1112,16 @@ def remove_due(c, auth, who, due_text):
     if row["ended_on"]:
         # An edit ended this row and started another (replaced_by), which now holds the routine: remove that one.
         later = c.execute("SELECT id FROM rule_due_dates WHERE replaces=?", (row["id"],)).fetchone()
-        raise Problem("ended", f"Due date {row['id']} was replaced by an edit; remove the one in force", 409,
-                      extra={"replaced_by_id": later["id"] if later else None})
+        raise Problem(
+            "ended",
+            f"Due date {row['id']} was replaced by an edit; remove the one in force",
+            409,
+            extra={"replaced_by_id": later["id"] if later else None},
+        )
     before = D.views(c, [row])[0]
     D.remove(c, row["id"])
     from . import rule_due_routine as RR
+
     RR.off(c, who.actor, row, _via(who))
     stored = D.one(c, row["id"])
     _audit(c, who.actor, rule["id"], {"due": before}, {"due": D.views(c, [stored])[0]}, who)
@@ -988,8 +1154,11 @@ def add_source(c, who, body):
             raise Problem("conflict", f"{found['name']} is already a source of kind {found['kind']}", 409)
         return dict(found)
     row = {"id": H.new_id(), "name": name, "kind": kind, "created_by": who.actor, "created_at": H.now()}
-    c.execute("INSERT INTO rule_sources (id, name, kind, created_by, created_at) VALUES (:id, :name, :kind, :created_by, "
-              ":created_at)", row)
+    c.execute(
+        "INSERT INTO rule_sources (id, name, kind, created_by, created_at) VALUES (:id, :name, :kind, :created_by, "
+        ":created_at)",
+        row,
+    )
     audit_log.write(c, who.actor, "rule_source:" + row["id"], None, row, _via(who))
     H.event(c, who.actor, "rule_source.added", "rule_source:" + row["id"], {"kind": kind})
     return row
@@ -1000,22 +1169,42 @@ def seed_external(c, who, text, source_name, source_kind):
     Everyone sees it and its due dates carry their owners, so no one has to accept it. Found again by its text and its
     source, so a second seed adds nothing. Returns the rule's id."""
     source = add_source(c, who, {"name": source_name, "kind": source_kind})
-    found = c.execute("SELECT id FROM org_rules WHERE kind='external' AND text=? AND source_id=?",
-                      (text, source["id"])).fetchone()
+    found = c.execute(
+        "SELECT id FROM org_rules WHERE kind='external' AND text=? AND source_id=?", (text, source["id"])
+    ).fetchone()
     if found:
         return str(found["id"])
     scope = {"everyone": True, "all_bots": False, "groups": [], "bots": [], "people": []}
     now = H.now()
-    row = {"id": H.new_id(), "kind": "external", "text": text, "description": "", "source_id": source["id"],
-           "cite": None, "who": _json(scope), "with_scope": _json({"groups": [], "bots": [], "people": []}),
-           "where_terms": "[]", "if_broken": "warn", "reviewer": None, "status": "active", "suggested_by": who.actor,
-           "decided_by": who.actor, "decided_at": now, "via": _via(who), "version": 1, "created_at": now,
-           "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
-              "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
-              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
-              ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
-              ":via, :version, :created_at, :updated_at)", row)
+    row = {
+        "id": H.new_id(),
+        "kind": "external",
+        "text": text,
+        "description": "",
+        "source_id": source["id"],
+        "cite": None,
+        "who": _json(scope),
+        "with_scope": _json({"groups": [], "bots": [], "people": []}),
+        "where_terms": "[]",
+        "if_broken": "warn",
+        "reviewer": None,
+        "status": "active",
+        "suggested_by": who.actor,
+        "decided_by": who.actor,
+        "decided_at": now,
+        "via": _via(who),
+        "version": 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    c.execute(
+        "INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
+        "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
+        "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
+        ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
+        ":via, :version, :created_at, :updated_at)",
+        row,
+    )
     _audit(c, who.actor, row["id"], None, _core(_get(c, row["id"])), who)
     _event(c, who.actor, "added", row["id"], {"kind": "external", "status": "active"})
     return row["id"]
@@ -1083,9 +1272,11 @@ def _list_rules(c, auth, who, args):
 
 def _renderer(c, auth, who, ctx):
     """Rows to views, with their due dates read once for the chunk."""
+
     def render(chunk):
         dues = D.due_rows(c, [r["id"] for r in chunk])
         return [view(c, auth, who, r, ctx, dues.get(r["id"], [])) for r in chunk]
+
     return render
 
 
@@ -1135,14 +1326,28 @@ def teammate_rules(c, auth, who):
     # Visibility as GET /api/v2/org applies it: a bot is keyed by its id (bot_config's key; the slug is only its label),
     # and a person left off the chart or unseen by the caller is out.
     access = auth.bot_accesses(c, who)
-    bot_keys = {row["slug"]: who_key(c, "bot:" + row["id"], ctx) for row in H.bots(c)
-                if row.get("state") != "archived" and access.get(row["id"], auth.FULL)["see"]}
+    bot_keys = {
+        row["slug"]: who_key(c, "bot:" + row["id"], ctx)
+        for row in H.bots(c)
+        if row.get("state") != "archived" and access.get(row["id"], auth.FULL)["see"]
+    }
     unseen_people, _ = TA.unseen(c, who, auth)
-    person_keys = {p["id"]: who_key(c, "human:" + p["id"], ctx) for p in P.visible_people(ctx["roster"])
-                   if p["id"] not in unseen_people}
+    person_keys = {
+        p["id"]: who_key(c, "human:" + p["id"], ctx)
+        for p in P.visible_people(ctx["roster"])
+        if p["id"] not in unseen_people
+    }
     return {
-        "rules": [{"id": r["id"], "kind": r["kind"], "text": r["text"], "if_broken": r["if_broken"],
-                   "can_edit": may_manage(c, auth, who, r["who"], ctx)} for r in rules],
+        "rules": [
+            {
+                "id": r["id"],
+                "kind": r["kind"],
+                "text": r["text"],
+                "if_broken": r["if_broken"],
+                "can_edit": may_manage(c, auth, who, r["who"], ctx),
+            }
+            for r in rules
+        ],
         "bots": [{"slug": slug, **found} for slug, found in sorted(_split(rules, bot_keys).items())],
         "people": [{"id": pid, **found} for pid, found in sorted(_split(rules, person_keys).items())],
     }
@@ -1170,14 +1375,29 @@ def due_list(c, auth, who, args):
             continue
         rule = active[found["rule_id"]]
         manage = may_manage(c, auth, who, rule["who"], ctx)
-        rows.append({"id": found["id"], "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
-                                                 "source": ctx["sources"].get(rule["source_id"])},
-                     "due_on": found["due_on"], "repeats": found["repeats"], "owner": found["owner"],
-                     "first_due_on": found["first_due_on"], "timezone": found["timezone"],
-                     "routine_id": found["routine_id"], "task_days": found["task_days"],
-                     "status": found["status"], "open": found["open"],
-                     "history": found["history"],
-                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner"]})
+        rows.append(
+            {
+                "id": found["id"],
+                "rule": {
+                    "id": rule["id"],
+                    "text": rule["text"],
+                    "kind": rule["kind"],
+                    "source": ctx["sources"].get(rule["source_id"]),
+                },
+                "due_on": found["due_on"],
+                "repeats": found["repeats"],
+                "owner": found["owner"],
+                "first_due_on": found["first_due_on"],
+                "timezone": found["timezone"],
+                "routine_id": found["routine_id"],
+                "task_days": found["task_days"],
+                "status": found["status"],
+                "open": found["open"],
+                "history": found["history"],
+                "can_edit": manage,
+                "can_satisfy": manage or who.actor == found["owner"],
+            }
+        )
     rows.sort(key=lambda r: (r["due_on"], r["id"]))
     page, nxt = _page(rows, args.get("cursor"), _limit(args.get("limit"), 100, DUE_LIST_MAX))
     return {"due": page, "next_cursor": nxt}
@@ -1193,9 +1413,12 @@ def due_show(c, auth, who, due_id):
     # The same check as the Due list's rows; a row that ended (edited or removed) or a retired rule is read only.
     live = rule["status"] == "active" and not row["retired_at"] and not row["ended_on"]
     manage = live and may_manage(c, auth, who, rule["who"])
-    return {**D.detail(c, row), "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
-                                         "status": rule["status"]},
-            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner"])}
+    return {
+        **D.detail(c, row),
+        "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"], "status": rule["status"]},
+        "can_edit": manage,
+        "can_satisfy": manage or (live and who.actor == row["owner"]),
+    }
 
 
 def counts(c, auth, who):
@@ -1203,10 +1426,12 @@ def counts(c, auth, who):
     rows = _active(c)
     active = {r["id"] for r in rows}
     dues = [r for r in D.live_rows(c) if r["rule_id"] in active]
-    return {"internal": sum(1 for r in rows if r["kind"] == "internal"),
-            "external": sum(1 for r in rows if r["kind"] == "external"),
-            "due": len(dues),
-            "suggested": c.execute("SELECT count(*) FROM org_rules WHERE status='suggested'").fetchone()[0]}
+    return {
+        "internal": sum(1 for r in rows if r["kind"] == "internal"),
+        "external": sum(1 for r in rows if r["kind"] == "external"),
+        "due": len(dues),
+        "suggested": c.execute("SELECT count(*) FROM org_rules WHERE status='suggested'").fetchone()[0],
+    }
 
 
 # ----------------------------------------------------------------------------- HTTP
@@ -1223,6 +1448,7 @@ class RuleScope(Contract):
 class RuleCite(Contract):
     """The part of a document a rule rests on: a Files version (`file_id`, `version`; the current one by default), the
     section it is in, and the quote, which must appear in that version's text (backend/counsel.py `check_cite`)."""
+
     file_id: str = Field(min_length=1, max_length=100)
     version: int | None = Field(default=None, ge=1)
     section: str = Field(default="", max_length=300)
@@ -1264,9 +1490,12 @@ class DueAdd(Contract):
     repeats: Literal["once", "weekly", "monthly", "quarterly", "yearly"]
     timezone: str | None = Field(default=None, max_length=64)
     owner: str = Field(min_length=1, max_length=200)
-    task_days: int | None = Field(default=None, ge=0, le=366,
-                                  description="Open the owner's task this many days before each due day (a routine); "
-                                              "absent or null for none")
+    task_days: int | None = Field(
+        default=None,
+        ge=0,
+        le=366,
+        description="Open the owner's task this many days before each due day (a routine); absent or null for none",
+    )
 
 
 class DueEdit(Contract):
@@ -1274,9 +1503,12 @@ class DueEdit(Contract):
     repeats: Literal["once", "weekly", "monthly", "quarterly", "yearly"] | None = None
     timezone: str | None = Field(default=None, max_length=64)
     owner: str | None = Field(default=None, max_length=200)
-    task_days: int | None = Field(default=None, ge=0, le=366,
-                                  description="The routine's lead time in days; null turns the routine off, absent "
-                                              "leaves it as it is")
+    task_days: int | None = Field(
+        default=None,
+        ge=0,
+        le=366,
+        description="The routine's lead time in days; null turns the routine off, absent leaves it as it is",
+    )
 
 
 class DueSatisfied(Contract):
@@ -1310,8 +1542,9 @@ def install(app, store, auth, mutate):
             return counts(c, auth, request.state.identity)
 
     @app.get("/api/v2/rules/due")
-    def rules_due(request: Request, next: str = "90d", status: str | None = None, cursor: str | None = None,
-                  limit: int = 100):
+    def rules_due(
+        request: Request, next: str = "90d", status: str | None = None, cursor: str | None = None, limit: int = 100
+    ):
         """Due dates of rules in force. `next=90d` lists those falling due within 90 days (overdue ones always come);
         `status` narrows to overdue, due_soon, upcoming or satisfied."""
         args = {"next": next, "status": status, "cursor": cursor, "limit": limit}
@@ -1327,15 +1560,33 @@ def install(app, store, auth, mutate):
             return teammate_rules(c, auth, request.state.identity)
 
     @app.get("/api/v2/rules")
-    def rules_list(request: Request, kind: str | None = None, status: str | None = "active", who: str | None = None,
-                   with_: str | None = Query(default=None, alias="with"), source: str | None = None,
-                   bot: str | None = None, mine: bool = False, cursor: str | None = None, limit: int = LIST_DEFAULT):
+    def rules_list(
+        request: Request,
+        kind: str | None = None,
+        status: str | None = "active",
+        who: str | None = None,
+        with_: str | None = Query(default=None, alias="with"),
+        source: str | None = None,
+        bot: str | None = None,
+        mine: bool = False,
+        cursor: str | None = None,
+        limit: int = LIST_DEFAULT,
+    ):
         """The rules, newest first, paged. `kind` internal|external; `status` suggested|active|retired|any (active by
         default); `who` and `with` name a group, person or bot; `source` a From; `bot` the rules that apply to a bot;
         `mine=true` the same for the caller's bot (or `bot`), plus its settings as sentences. Every teammate reads every
         sentence and From; a quote shows only where its file is readable."""
-        args = {"kind": kind, "status": status, "who": who, "with": with_, "source": source, "bot": bot,
-                "mine": mine, "cursor": cursor, "limit": limit}
+        args = {
+            "kind": kind,
+            "status": status,
+            "who": who,
+            "with": with_,
+            "source": source,
+            "bot": bot,
+            "mine": mine,
+            "cursor": cursor,
+            "limit": limit,
+        }
         with store.read() as c:
             return _list_rules(c, auth, request.state.identity, args)
 
@@ -1346,6 +1597,7 @@ def install(app, store, auth, mutate):
         admins add an Everyone rule. A cite is checked first: a quote that is not in its file is not stored, and the
         answer says `dropped` instead of a rule (the drop is counted in the events)."""
         from . import counsel
+
         who = request.state.identity
         data = with_scopes(body, "who", "with")
         blobs = request.app.state.blobs
@@ -1355,9 +1607,13 @@ def install(app, store, auth, mutate):
             if data.get("cite"):
                 cite = counsel.check_cite(c, auth, who, blobs, data["cite"])
                 if cite is None:
-                    return {"rule": None, "dropped": {"reason": "quote_not_in_source", "file_id": data["cite"]["file_id"]}}
+                    return {
+                        "rule": None,
+                        "dropped": {"reason": "quote_not_in_source", "file_id": data["cite"]["file_id"]},
+                    }
                 data["cite"] = cite
             return {"rule": add_rule(c, auth, who, data), "dropped": None}
+
         result = mutate(request, body, work)
         if result["dropped"] is not None:
             return result
@@ -1388,6 +1644,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return edit_rule(c, auth, who, rule_id, data)
+
         mutate(request, body, work)
         return fresh(who, rule_id)
 
@@ -1399,6 +1656,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return decide_rule(c, auth, who, rule_id, data, "accept")
+
         result = mutate(request, body, work)
         return {"rule": fresh(who, rule_id), "due": result["due"]}
 
@@ -1409,6 +1667,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "skip")
+
         result = mutate(request, body, work)
         return {"rule": fresh(who, rule_id), "due": result["due"]}
 
@@ -1419,6 +1678,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "retire")
+
         result = mutate(request, body, work)
         return {"rule": fresh(who, rule_id), "due": result["due"]}
 
@@ -1429,6 +1689,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return add_due(c, auth, who, rule_id, body.model_dump())
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/rule-due/{due_id}")
@@ -1438,6 +1699,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return edit_due(c, auth, who, due_id, body.model_dump(exclude_unset=True))
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/rule-due/{due_id}/remove")
@@ -1447,6 +1709,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return remove_due(c, auth, who, due_id)
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/rule-due/{due_id}/satisfied")
@@ -1457,6 +1720,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return satisfy_due(c, auth, who, due_id, body.due_on)
+
         return mutate(request, body, work)
 
     @app.get("/api/v2/rule-sources")
@@ -1475,11 +1739,17 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return {"source": add_source(c, who, body.model_dump())}
+
         return mutate(request, body, work)
 
     @app.get("/api/v2/bots/{bot}/rules")
-    def bot_rules_show(request: Request, bot: str, internal_cursor: str | None = None, external_cursor: str | None = None,
-                       limit: int = BOT_LIST_MAX):
+    def bot_rules_show(
+        request: Request,
+        bot: str,
+        internal_cursor: str | None = None,
+        external_cursor: str | None = None,
+        limit: int = BOT_LIST_MAX,
+    ):
         """A bot's Rules tab: its settings as sentences (each with the place it is changed), then its internal and its
         external rules, each paged: pass that kind's `next_cursor` as its cursor for the rest."""
         who = request.state.identity
@@ -1489,5 +1759,16 @@ def install(app, store, auth, mutate):
             return bot_rules(c, auth, who, bot, cursors, _limit(limit, BOT_LIST_MAX, BOT_LIST_MAX))
 
 
-__all__ = ["ensure", "matching", "applies_to", "may_manage", "scope_in", "settings_for", "view", "install", "counts", "redact_audit",
-           "due_show"]
+__all__ = [
+    "ensure",
+    "matching",
+    "applies_to",
+    "may_manage",
+    "scope_in",
+    "settings_for",
+    "view",
+    "install",
+    "counts",
+    "redact_audit",
+    "due_show",
+]

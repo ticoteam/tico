@@ -1,5 +1,6 @@
 """The shared outbox mechanics (backend/outbox.py) on a plain table: lease expiry re-claims a cut-off row, the retry
 schedule waits and gives up, and a row that was sent is never sent again by a repeat claim."""
+
 import random
 import sqlite3
 
@@ -7,8 +8,15 @@ import pytest
 
 from backend import outbox as O
 
-SENDS = O.Table("test_sends", due="ready", flight="sending", due_at="next_at", lease="lease", attempts="attempts",
-                error="last_error")
+SENDS = O.Table(
+    "test_sends",
+    due="ready",
+    flight="sending",
+    due_at="next_at",
+    lease="lease",
+    attempts="attempts",
+    error="last_error",
+)
 SCHEDULE = O.Waits((5, 300, 1800), jitter=0.1)
 
 
@@ -16,9 +24,11 @@ SCHEDULE = O.Waits((5, 300, 1800), jitter=0.1)
 def c():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE test_sends (id TEXT PRIMARY KEY, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
-                 "next_at REAL NOT NULL DEFAULT 0, lease REAL, last_error TEXT NOT NULL DEFAULT '', "
-                 "last_status INTEGER)")
+    conn.execute(
+        "CREATE TABLE test_sends (id TEXT PRIMARY KEY, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
+        "next_at REAL NOT NULL DEFAULT 0, lease REAL, last_error TEXT NOT NULL DEFAULT '', "
+        "last_status INTEGER)"
+    )
     yield conn
     conn.close()
 
@@ -71,7 +81,7 @@ def test_repeat_last_schedule_never_gives_up_and_keeps_its_last_wait():
     assert [schedule.after(n) for n in (1, 2, 3, 9)] == [60, 300, 300, 300]
     assert schedule.wait_for(9) == 300
     with pytest.raises(ValueError):
-        O.Waits((60,)).wait_for(2)                  # a schedule that gives up has no wait past its last attempt
+        O.Waits((60,)).wait_for(2)  # a schedule that gives up has no wait past its last attempt
 
 
 def test_a_row_gives_up_after_its_last_attempt_and_is_never_claimed_again(c):
@@ -79,9 +89,18 @@ def test_a_row_gives_up_after_its_last_attempt_and_is_never_claimed_again(c):
     before = O.counts().get(("test_sends", "gave_up"), 0)
     for attempt in range(1, SCHEDULE.max_attempts + 1):
         assert O.claim(c, SENDS, "a", 1000.0 * attempt)
-        gave_up = O.settle_failure(c, SENDS, "a", attempts=attempt, error=f"HTTP 500 #{attempt}", schedule=SCHEDULE,
-                                   now=1000.0 * attempt, later=lambda now, wait: now + wait, give_up_state="failed",
-                                   rng=random.Random(attempt))
+        gave_up = O.settle_failure(
+            c,
+            SENDS,
+            "a",
+            attempts=attempt,
+            error=f"HTTP 500 #{attempt}",
+            schedule=SCHEDULE,
+            now=1000.0 * attempt,
+            later=lambda now, wait: now + wait,
+            give_up_state="failed",
+            rng=random.Random(attempt),
+        )
         assert gave_up is (attempt == SCHEDULE.max_attempts)
     dead = row(c, "a")
     assert dead["state"] == "failed" and dead["attempts"] == 4 and dead["last_error"] == "HTTP 500 #4"
@@ -92,9 +111,19 @@ def test_a_row_gives_up_after_its_last_attempt_and_is_never_claimed_again(c):
 def test_a_failed_attempt_returns_the_row_to_due_with_its_next_time_and_keeps_its_id(c):
     add(c, "a")
     assert O.claim(c, SENDS, "a", 10.0)
-    gave_up = O.settle_failure(c, SENDS, "a", attempts=1, error="timeout", schedule=O.Waits((60,)), now=10.0,
-                               later=lambda now, wait: now + wait, give_up_state="failed", rng=random.Random(1),
-                               extra={"last_status": 503})
+    gave_up = O.settle_failure(
+        c,
+        SENDS,
+        "a",
+        attempts=1,
+        error="timeout",
+        schedule=O.Waits((60,)),
+        now=10.0,
+        later=lambda now, wait: now + wait,
+        give_up_state="failed",
+        rng=random.Random(1),
+        extra={"last_status": 503},
+    )
     assert gave_up is False
     retried = row(c, "a")
     assert retried["state"] == "ready" and retried["lease"] is None and retried["next_at"] == 70.0
@@ -124,7 +153,7 @@ def test_a_release_hands_the_row_back_unsent_with_no_attempt_counted(c):
 
 def test_each_caller_waits_what_it_waited_before():
     """Each caller's schedule gives the same wait, and the same give-up point, as the formula it had before the move."""
-    from backend import federation_sync as FED, postal_mail as PM, webhook_delivery as WH
+    from backend import postal_mail as PM, webhook_delivery as WH
     from backend.finance import mirror as FM, sync as FS
 
     class Factor:
@@ -134,12 +163,11 @@ def test_each_caller_waits_what_it_waited_before():
         def uniform(self, lo, hi):
             return self.f
 
-    for f in (0.9, 1.0, 1.1):                        # both edges of the webhook jitter band
+    for f in (0.9, 1.0, 1.1):  # both edges of the webhook jitter band
         for failed in range(1, 12):
             old = None if failed >= 8 else WH.RETRY_AFTER[failed - 1] * f
             assert WH.SCHEDULE.after(failed, Factor(f)) == old, ("webhook", failed, f)
     for attempts in range(1, 12):
-        assert FED.SCHEDULE.after(attempts) == min(FED.BACKOFF_MAX, FED.RETRY_FIRST * 2 ** min(attempts, 8))
         assert PM.SCHEDULE.after(attempts) == PM.BACKOFF[min(attempts - 1, len(PM.BACKOFF) - 1)]
         assert FM.WRITE_SCHEDULE.wait_for(attempts) == FM.RETRY[min(attempts, len(FM.RETRY)) - 1]
         assert FS.WRITE_SCHEDULE.wait_for(attempts) == FS.RETRY[min(attempts - 1, len(FS.RETRY) - 1)]

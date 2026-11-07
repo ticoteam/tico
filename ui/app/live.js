@@ -7,7 +7,7 @@
 // from the last change number it was given, so a reconnect misses nothing; `reset` means it was away longer than
 // the server keeps (a day) and each view reads in full. A browser with no EventSource keeps the old polls
 // (liveFallback); everywhere else nothing polls for what this stream carries.
-const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs'];
+const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs', 'letters'];
 const LIVE = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
               handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: ''};
 const liveAvailable = () => typeof EventSource !== 'undefined';
@@ -15,8 +15,13 @@ const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
 function liveOn(topic, fn) {
   if (!LIVE.handlers.has(topic)) LIVE.handlers.set(topic, new Set());
+  const had = LIVE.handlers.get(topic).size;
   LIVE.handlers.get(topic).add(fn);
-  return () => LIVE.handlers.get(topic)?.delete(fn);
+  if (topic === 'letters' && !had && LIVE.started) liveRestart();
+  return () => {
+    const removed = LIVE.handlers.get(topic)?.delete(fn);
+    if (removed && topic === 'letters' && !LIVE.handlers.get(topic)?.size && LIVE.started) liveRestart();
+  };
 }
 function liveEmit(topic, data) {
   for (const fn of [...(LIVE.handlers.get(topic) || [])]) {
@@ -107,7 +112,8 @@ function liveRestart() {
 // own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope() {
   const r = typeof S !== 'undefined' && S.route || '';
-  if (isTasksRoute(r) || r.startsWith('#/task/')) return {all: true};
+  if (isTasksRoute(r) || r.startsWith('#/meetings')) return {all: true};
+  if (r.startsWith('#/task/')) return {task: [decodeURIComponent(r.slice(7).split(/[/?]/)[0])], party: []};
   const open = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
   // A bot's route may name it by slug (a link made from a label); its actor is its id.
   const botRef = r.startsWith('#/bot/') ? decodeURIComponent(r.slice(6).split(/[/?]/)[0]) : '';
@@ -127,8 +133,10 @@ function liveUrl() {
   LIVE.taskKey = liveTaskKey(scope);
   // Without a conversation on screen, no messages or runs: those are every room's, and only one is shown.
   const topics = (conversations.length || threads.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs'))
-    .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length);
+    .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length)
+    .filter(t => t !== 'letters' || LIVE.handlers.get('letters')?.size);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
+  LIVE.urlTopics = topics;
   const q = new URLSearchParams({topics: topics.join(','), needs: 'changes'});
   if (LIVE.after != null) q.set('after', String(LIVE.after));
   if (conversations.length) q.set('conversation', conversations.join(','));
@@ -147,14 +155,20 @@ function liveEventsConnect() {
   if (SESSION.out) return;                                // signed out: nothing reconnects until the person signs in
   try { LIVE.es?.close(); } catch {}
   const es = LIVE.es = new EventSource(liveUrl());
+  es.topics = LIVE.urlTopics || [];
   LIVE.opened = Date.now();
   const current = () => LIVE.es === es;
   es.addEventListener('ready', ev => {
     if (!current()) return;
     const d = liveData(ev) || {};
-    if (LIVE.after == null) LIVE.after = Number(d.seq) || 0;
+    // `carried`: the topics this stream resumed without a gap, so it replays what changed in them meanwhile: those the
+    // last stream also carried, when it resumes from the last change number (`after`). The first stream carries none,
+    // and a topic newly added was not followed up to `after`.
+    const resumed = LIVE.after != null, carried = resumed ? es.topics.filter(t => LIVE.readyTopics?.includes(t)) : [];
+    LIVE.readyTopics = es.topics;
+    if (!resumed) LIVE.after = Number(d.seq) || 0;
     // The list as this stream counts from: a held copy of another version (missed while away) is read again.
-    if (d.needs_version) liveEmit('needs', {version: d.needs_version});
+    if (d.needs_version) liveEmit('needs', {version: d.needs_version, connect: true, carried});
     const was = LIVE.connected;
     LIVE.connected = true;
     if (!was) liveEmit('status', {connected: true});

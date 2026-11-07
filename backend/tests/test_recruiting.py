@@ -1,5 +1,6 @@
 """Recruiting a seat (backend/recruiting.py): bot-lifecycle-spec.md section 3, acceptance tests 6 to 8. Test 9 (Team >
 Add bot makes a seat first) is the page's: ui/tests/team-groups.cjs."""
+
 import json
 
 import pytest
@@ -9,21 +10,31 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
 from backend.tests.test_strategy_bot import as_bot
+from backend import bot_settings as BS
 
 
 def strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES('goal-manager',?,'ana')",
-                  ('{"runtime":"fake","host":"keeper"}',))
+        c.execute(
+            "INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
+            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
+            (H.now(),),
+        )
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:
+            BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
     return as_bot(api, "goal-manager")
 
 
 def providers(api, *enabled):
     current = get(api, "providers")
-    assert api.put("/api/v2/providers", headers=headers(), json={
-        "enabled": list(enabled), "expected_revision": current["revision"]}).status_code == 200
+    assert (
+        api.put(
+            "/api/v2/providers",
+            headers=headers(),
+            json={"enabled": list(enabled), "expected_revision": current["revision"]},
+        ).status_code
+        == 200
+    )
 
 
 def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
@@ -35,16 +46,18 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     assert all(set(model) == {"model", "name", "about", "seats"} for model in models)
     assert all("bots" not in model and "people" not in model and "tasks" not in model for model in models)
     from clients import hubtools
+
     offered = {tool["name"] for tool in hubtools.listing(kind="assistant")}
     assert "hub_org_models" in offered and "hub_assistant_propose" in offered
 
 
 def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):
-    import time
-    started = time.monotonic()
+    # At once means the first draft is composed from the catalog and never reaches the model, so nothing waits on one.
+    # Checked by the calls made, not by the clock, which a loaded runner can stretch.
+    model_calls = []
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *args, **kwargs: model_calls.append(args) or "")
     drafted = post(api, "seats/draft", {"title": "Customer support lead", "team": "Support"})
-    assert time.monotonic() - started < 1
-    assert drafted["source"] == "catalog"
+    assert drafted["source"] == "catalog" and model_calls == []
     text = drafted["description"]
     assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
     monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(RuntimeError("no key")))
@@ -55,9 +68,11 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     # Redraft asks the model once, for this title and boss; a failure, or an answer too short to use, keeps the
     # composed text. The first draft never asks.
     asked = []
+
     def rewrite(composed, title, boss, deadline, gateway=None):
         asked.append((title, boss))
         return "Leads our support desk.\n\nWhat you'll do\n- Answer every ticket the same day"
+
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
     post(api, "seats/draft", {"title": "Customer support lead"})
     assert asked == []
@@ -75,8 +90,18 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
     as_member(api, "ben@acme.example")
     for reports_to in ("coo", "nobody-here", "human:ana"):
-        post(api, "seats/draft", {"title": "Customer support lead", "reports_to": reports_to, "redraft": True}, token="cara-test")
-    post(api, "seats/draft", {"title": "Customer support lead", "reports_to": "human:cara", "redraft": True}, token="cara-test")
+        post(
+            api,
+            "seats/draft",
+            {"title": "Customer support lead", "reports_to": reports_to, "redraft": True},
+            token="cara-test",
+        )
+    post(
+        api,
+        "seats/draft",
+        {"title": "Customer support lead", "reports_to": "human:cara", "redraft": True},
+        token="cara-test",
+    )
     with api.app.state.store.read() as c:
         cara = H.human(c, "cara")["name"]
     assert asked == [("Customer support lead", "")] * 3 + [("Customer support lead", cara)]
@@ -89,55 +114,90 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     whose name shares only "Engineer". With no template that is the job, the model writes one from the title alone
     (no template text to rewrite), under the same bound; with no model, the box stays empty."""
     asked = []
+
     def write(composed, title, boss, deadline, gateway=None):
         asked.append((composed, title))
         return "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"
+
     monkeypatch.setattr(recruiting, "_rewrite_call", write)
     for title in ("Rust engineer", "iOS developer", "Data analyst"):
         drafted = post(api, "seats/draft", {"title": title})
-        assert drafted == {"description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day",
-                           "source": "model"}
+        assert drafted == {
+            "description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day",
+            "source": "model",
+        }
     assert asked == [("", "Rust engineer"), ("", "iOS developer"), ("", "Data analyst")]
     # A title that is a template's job drafts from that template at once, without the model, two-letter work included.
     _, cards = recruiting._recruitable(api.app.state.onboarding)
-    for title, template in (("QA engineer", "issue-triage"), ("Security engineer", "security-engineer"),
-                            ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead"),
-                            ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate"),
-                            ("Head of HR", "people-lead"), ("HR generalist", "people-hr"),
-                            ("Head of engineering", "engineering-lead"), ("Director of marketing", "marketing-lead"),
-                            ("Head of Human Resources", "people-lead"), ("Head of Legal Operations", "legal-ops"),
-                            ("Developer relations", "developer-advocate"), ("PR manager", "pr"),
-                            ("VP Engineering", "engineering-lead"), ("Head of Compliance", "compliance"),
-                            ("Head of Customer Success", "customer-success"), ("Account Director", "account-manager"),
-                            ("Human Resources Generalist", "people-hr"), ("Financial Planning Analyst", "spend-watcher"),
-                            ("SRE", "incident-scribe"), ("SDR", "sdr-research"),
-                            ("Site Reliability Manager", "incident-scribe"),
-                            ("Sales Development Specialist", "sdr-research"), ("Public relations manager", "pr"),
-                            ("Senior Software Developer", "pr-reviewer"), ("QA engineer (contract)", "issue-triage"),
-                            ("Security engineer - remote", "security-engineer"),
-                            ("Manager, Engineering", "engineering-manager"), ("Engineer, Security", "security-engineer"),
-                            ("Manager, Customer Success", "customer-success"),
-                            ("VP, Product Marketing", "product-marketing"), ("Sr. Security Engineer", "security-engineer"),
-                            ("Vice President, Product Marketing", "product-marketing"),
-                            ("Manager (Engineering)", "engineering-manager"), ("Analyst (Pricing)", "pricing"),
-                            ("Software Engineer, Security", "security-engineer"),
-                            ("Software Engineer (Security)", "security-engineer"),
-                            ("Software Engineer, Site Reliability", "incident-scribe"),
-                            ("Engineer (QA) - Remote, US", "issue-triage"),
-                            ("Support Representative", "support"), ("Customer Support Rep", "support"),
-                            ("Customer Service Agent", "support"),
-                            ("Director of Revenue Recognition", "revenue-accountant"),
-                            ("Employee Relations Manager", "hr-business-partner")):
+    for title, template in (
+        ("QA engineer", "issue-triage"),
+        ("Security engineer", "security-engineer"),
+        ("Marketing manager", "marketing-lead"),
+        ("Customer support lead", "support-lead"),
+        ("Head of People", "people-lead"),
+        ("Developer Advocates", "developer-advocate"),
+        ("Head of HR", "people-lead"),
+        ("HR generalist", "people-hr"),
+        ("Head of engineering", "engineering-lead"),
+        ("Director of marketing", "marketing-lead"),
+        ("Head of Human Resources", "people-lead"),
+        ("Head of Legal Operations", "legal-ops"),
+        ("Developer relations", "developer-advocate"),
+        ("PR manager", "pr"),
+        ("VP Engineering", "engineering-lead"),
+        ("Head of Compliance", "compliance"),
+        ("Head of Customer Success", "customer-success"),
+        ("Account Director", "account-manager"),
+        ("Human Resources Generalist", "people-hr"),
+        ("Financial Planning Analyst", "spend-watcher"),
+        ("SRE", "incident-scribe"),
+        ("SDR", "sdr-research"),
+        ("Site Reliability Manager", "incident-scribe"),
+        ("Sales Development Specialist", "sdr-research"),
+        ("Public relations manager", "pr"),
+        ("Senior Software Developer", "pr-reviewer"),
+        ("QA engineer (contract)", "issue-triage"),
+        ("Security engineer - remote", "security-engineer"),
+        ("Manager, Engineering", "engineering-manager"),
+        ("Engineer, Security", "security-engineer"),
+        ("Manager, Customer Success", "customer-success"),
+        ("VP, Product Marketing", "product-marketing"),
+        ("Sr. Security Engineer", "security-engineer"),
+        ("Vice President, Product Marketing", "product-marketing"),
+        ("Manager (Engineering)", "engineering-manager"),
+        ("Analyst (Pricing)", "pricing"),
+        ("Software Engineer, Security", "security-engineer"),
+        ("Software Engineer (Security)", "security-engineer"),
+        ("Software Engineer, Site Reliability", "incident-scribe"),
+        ("Engineer (QA) - Remote, US", "issue-triage"),
+        ("Support Representative", "support"),
+        ("Customer Support Rep", "support"),
+        ("Customer Service Agent", "support"),
+        ("Director of Revenue Recognition", "revenue-accountant"),
+        ("Employee Relations Manager", "hr-business-partner"),
+    ):
         assert recruiting._best_card(cards, title)["template"] == template, title
     # A title ending in a kind of job wants that kind: a designer is not the UX Writer, an assistant not the Account
     # Executive, a machine learning engineer not the Learning and Development Specialist.
-    for title in ("UX designer", "Executive assistant", "Machine learning engineer", "Product designer",
-                  "Accounting manager", "UX Designer (Contract)", "Rust engineer, platform",
-                  "UX Designer II", "UX Designer III"):
+    for title in (
+        "UX designer",
+        "Executive assistant",
+        "Machine learning engineer",
+        "Product designer",
+        "Accounting manager",
+        "UX Designer (Contract)",
+        "Rust engineer, platform",
+        "UX Designer II",
+        "UX Designer III",
+    ):
         assert recruiting._best_card(cards, title) is None, title
     # Every template's own name, and its plural, is that template's job.
-    misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
-              if (recruiting._best_card(cards, title) or {}).get("template") != card["template"]]
+    misses = [
+        card["name"]
+        for card in cards
+        for title in (card["name"], card["name"] + "s")
+        if (recruiting._best_card(cards, title) or {}).get("template") != card["template"]
+    ]
     assert misses == []
     asked.clear()
     assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog" and asked == []
@@ -157,31 +217,62 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
     not ("Influencer Marketing Manager" is not the Head of Marketing, "Partner Marketing Manager" not the HR Business
     Partner); a job of a kind may be a template named by rank on the work ("Release Engineer" is the Release Manager)."""
     _, cards = recruiting._recruitable(api.app.state.onboarding)
-    for title, template in (("CMO", "marketing-lead"), ("Chief Marketing Officer", "marketing-lead"),
-                            ("CTO", "engineering-lead"), ("Head of Growth", "marketing-lead"),
-                            ("PMM", "product-marketing"), ("Senior Product Marketer", "product-marketing"),
-                            ("Content Writer", "content"), ("Copywriter", "content"), ("Blog Writer", "content"),
-                            ("Social Media Coordinator", "listening"), ("Events Coordinator", "events"),
-                            ("Field Marketing Manager", "events"), ("Lifecycle Marketing Manager", "email-marketing"),
-                            ("Retention Marketing Manager", "email-marketing"), ("Marketing Ops Specialist", "marketing-ops"),
-                            ("Performance Marketing Manager", "paid-media"), ("Paid Social Manager", "paid-media"),
-                            ("PPC Specialist", "paid-media"), ("Communications Manager", "pr"),
-                            ("Online Reviews Manager", "reputation"), ("Brand Designer", "brand"),
-                            ("SDET", "issue-triage"), ("Software Engineer in Test", "issue-triage"),
-                            ("Test Engineer", "issue-triage"), ("AppSec Engineer", "security-engineer"),
-                            ("Build Engineer", "devops-engineer"), ("CI/CD Engineer", "devops-engineer"),
-                            ("Release Engineer", "release-notes"), ("Developer Relations Engineer", "developer-advocate"),
-                            ("DevRel", "developer-advocate"), ("Documentation Engineer", "docs-writer"),
-                            ("Code Reviewer", "pr-reviewer"), ("Software Engineer", "pr-reviewer"),
-                            ("Tax accountant", "tax"), ("Key account manager", "account-manager"),
-                            ("Software Development Engineer", "pr-reviewer"), ("Code Review Engineer", "pr-reviewer"),
-                            ("Product Security Engineer", "security-engineer"),
-                            ("Product Security Engineer II", "security-engineer"),
-                            ("Product Security Engineers", "security-engineer")):
+    for title, template in (
+        ("CMO", "marketing-lead"),
+        ("Chief Marketing Officer", "marketing-lead"),
+        ("CTO", "engineering-lead"),
+        ("Head of Growth", "marketing-lead"),
+        ("PMM", "product-marketing"),
+        ("Senior Product Marketer", "product-marketing"),
+        ("Content Writer", "content"),
+        ("Copywriter", "content"),
+        ("Blog Writer", "content"),
+        ("Social Media Coordinator", "listening"),
+        ("Events Coordinator", "events"),
+        ("Field Marketing Manager", "events"),
+        ("Lifecycle Marketing Manager", "email-marketing"),
+        ("Retention Marketing Manager", "email-marketing"),
+        ("Marketing Ops Specialist", "marketing-ops"),
+        ("Performance Marketing Manager", "paid-media"),
+        ("Paid Social Manager", "paid-media"),
+        ("PPC Specialist", "paid-media"),
+        ("Communications Manager", "pr"),
+        ("Online Reviews Manager", "reputation"),
+        ("SDET", "issue-triage"),
+        ("Software Engineer in Test", "issue-triage"),
+        ("Test Engineer", "issue-triage"),
+        ("AppSec Engineer", "security-engineer"),
+        ("Build Engineer", "devops-engineer"),
+        ("CI/CD Engineer", "devops-engineer"),
+        ("Release Engineer", "release-notes"),
+        ("Developer Relations Engineer", "developer-advocate"),
+        ("DevRel", "developer-advocate"),
+        ("Documentation Engineer", "docs-writer"),
+        ("Code Reviewer", "pr-reviewer"),
+        ("Software Engineer", "pr-reviewer"),
+        ("Tax accountant", "tax"),
+        ("Key account manager", "account-manager"),
+        ("Software Development Engineer", "pr-reviewer"),
+        ("Code Review Engineer", "pr-reviewer"),
+        ("Product Security Engineer", "security-engineer"),
+        ("Product Security Engineer II", "security-engineer"),
+        ("Product Security Engineers", "security-engineer"),
+    ):
         assert (recruiting._best_card(cards, title) or {}).get("template") == template, title
-    for title in ("Influencer Marketing Manager", "Partner Marketing Manager", "Affiliate Marketing Manager",
-                  "Marketing Coordinator", "Digital Marketing Manager", "Backend Engineer", "Go Developer",
-                  "Data Scientist", "Tech Lead", "Executive assistant", "UX designer"):
+    for title in (
+        "Influencer Marketing Manager",
+        "Partner Marketing Manager",
+        "Affiliate Marketing Manager",
+        "Marketing Coordinator",
+        "Digital Marketing Manager",
+        "Brand Designer",  # the Brand Owner is built in, so no card is hired for it
+        "Backend Engineer",
+        "Go Developer",
+        "Data Scientist",
+        "Tech Lead",
+        "Executive assistant",
+        "UX designer",
+    ):
         assert recruiting._best_card(cards, title) is None, title
 
 
@@ -189,6 +280,7 @@ def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_a
     """Strong is as good a fit by name as the drafted template ("Head of Sales" is the Sales Manager's job, not every
     template that says "Sales"). A job writing code in Engineering lists the cloud coding agents Tico connects: first
     when no template is the job, after the ones that are; no head's template leads a job of a kind."""
+
     def found(title, description=""):
         seat = post(api, "seats", {"title": title, "reports_to": "coo", "description": description})
         return post(api, f"seats/{seat['id']}/recruit", {})
@@ -219,21 +311,33 @@ def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_a
         seat = post(api, "seats", {"title": title, "reports_to": "coo", "description": ""})
         with api.app.state.store.read() as c:
             row = c.execute("SELECT * FROM seats WHERE id=?", (seat["id"],)).fetchone()
-            card = recruiting.top_card(api.app.state.auth, api.app.state.onboarding, c, Identity("human:ana", "owner"), row)
+            card = recruiting.top_card(
+                api.app.state.auth, api.app.state.onboarding, c, Identity("human:ana", "owner"), row
+            )
         return card and card["department"]
+
     assert top("Engineer") == "engineering" and top("Tech Lead") is None
 
 
 def test_a_model_draft_opens_in_the_catalog_s_voice():
     """However the model opens, the draft reads as a template does: "Owns...", never "I", "You", "AI teammate" or the
     title again."""
-    for written, title in (("AI teammate for the Marketing Coordinator role. You own the calendar.", "Marketing Coordinator"),
-                           ("AI Teammate, Frontend Engineer: you own the web interface.", "Frontend Engineer"),
-                           ("I own the Rust services.", "Rust engineer"), ("AI Engineer owns the AI features.", "AI Engineer"),
-                           ("You'll carry the pager.", "SRE"), ("Owns the pipelines.", "Data Engineer")):
+    for written, title in (
+        ("AI teammate for the Marketing Coordinator role. You own the calendar.", "Marketing Coordinator"),
+        ("AI Teammate, Frontend Engineer: you own the web interface.", "Frontend Engineer"),
+        ("I own the Rust services.", "Rust engineer"),
+        ("AI Engineer owns the AI features.", "AI Engineer"),
+        ("You'll carry the pager.", "SRE"),
+        ("Owns the pipelines.", "Data Engineer"),
+    ):
         assert recruiting._voice(written + "\n\nWhat you'll do\n- Ship", title).split("\n")[0] in (
-            "Owns the calendar.", "Owns the web interface.", "Owns the Rust services.", "Owns the AI features.",
-            "Carries the pager.", "Owns the pipelines."), written
+            "Owns the calendar.",
+            "Owns the web interface.",
+            "Owns the Rust services.",
+            "Owns the AI features.",
+            "Carries the pager.",
+            "Owns the pipelines.",
+        ), written
     assert recruiting._voice("You are the owner.", "X") == "You are the owner."
 
 
@@ -244,20 +348,30 @@ def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_em
     import io
     from clients import docs_qa
     from clients import gateway as G
+
     asked = []
+
     def gateway_answer(base, key, body, deadline):
         asked.append((base, key, body))
-        return {"choices": [{"message": {"content": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"}}]}
+        return {
+            "choices": [
+                {"message": {"content": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"}}
+            ]
+        }
+
     monkeypatch.setattr(recruiting, "_gateway_answer", gateway_answer)
     monkeypatch.setattr(docs_qa, "key", lambda: (_ for _ in ()).throw(docs_qa.NoKey("no key")))
     monkeypatch.delenv("TICO_GATEWAY_URL", raising=False)
     monkeypatch.setenv("TICO_GATEWAY_KEY", "gw-test-key")
     drafted = post(api, "seats/draft", {"title": "Rust engineer"})
-    assert drafted == {"description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day", "source": "model"}
+    assert drafted == {
+        "description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day",
+        "source": "model",
+    }
     [(base, key, body)] = asked
     assert (base, key) == (G.DEFAULT_BASE, "gw-test-key") and body["model"] == recruiting.GATEWAY_REWRITE_MODEL
     assert body["stream"] is False and body["messages"][0]["role"] == "user"
-    assert body["reasoning_effort"] == "low" and body["max_tokens"] >= 2000     # reasoning counts against the cap
+    assert body["reasoning_effort"] == "low" and body["max_tokens"] >= 2000  # reasoning counts against the cap
     assert "the role \"Rust engineer\"" in body["messages"][0]["content"]
 
     monkeypatch.setenv("TICO_GATEWAY_KEY", "")
@@ -268,11 +382,15 @@ def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_em
     monkeypatch.setattr(docs_qa, "key", lambda: "gemini-test-key")
     gemini = {"candidates": [{"content": {"parts": [{"text": "Owns the Rust services, as Gemini wrote it."}]}}]}
     monkeypatch.setattr(recruiting, "urlopen", lambda request, timeout: io.BytesIO(json.dumps(gemini).encode()))
-    assert post(api, "seats/draft", {"title": "Rust engineer"})["description"] == "Owns the Rust services, as Gemini wrote it."
+    assert (
+        post(api, "seats/draft", {"title": "Rust engineer"})["description"]
+        == "Owns the Rust services, as Gemini wrote it."
+    )
     assert len(asked) == 1
 
     # A draft that needs no model never reads the gateway key, so a vault that is down cannot break it.
     from backend import gateway_connection
+
     monkeypatch.setattr(gateway_connection, "target", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("vault down")))
     assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog"
 
@@ -282,15 +400,21 @@ def test_a_job_description_never_shows_the_bot_s_own_files_or_limits(api):
     No draft, and no applicant's day one, shows a file path or "within the requested work"."""
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     assert recruiting._plain("The label scheme it works from (knowledge/labels.md, knowledge/repro-checklist.md)") == (
-        "The label scheme it works from")
+        "The label scheme it works from"
+    )
     assert recruiting._plain("Every issue it handles, within the requested work and Tools") == "Every issue it handles"
     assert recruiting._plain("What the team does, in knowledge/company.md") == "What the team does"
-    assert recruiting._plain("Specs in Given/When/Then (red/amber/green)") == "Specs in Given/When/Then (red/amber/green)"
+    assert (
+        recruiting._plain("Specs in Given/When/Then (red/amber/green)") == "Specs in Given/When/Then (red/amber/green)"
+    )
     for card in cards:
         text = recruiting.compose(card).split("Works in:")[0]
         day_one = [recruiting._plain(item, 400) for item in card["raw"]["owns"][:6]]
         for words in [text, *day_one]:
-            assert "knowledge/" not in words and ".md" not in words and "requested work" not in words, (card["name"], words)
+            assert "knowledge/" not in words and ".md" not in words and "requested work" not in words, (
+                card["name"],
+                words,
+            )
 
 
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
@@ -299,6 +423,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     import time
     from urllib.request import Request
     from clients import docs_qa
+
     composed = post(api, "seats/draft", {"title": "Customer support lead"})
     body = {"title": "Customer support lead", "redraft": True}
     monkeypatch.setattr(recruiting, "REWRITE_SECONDS", 0.3)
@@ -306,9 +431,11 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
 
     class Answer(io.BytesIO):
         """A model's answer; `pause` is how long each piece takes to arrive."""
+
         def __init__(self, data, pause=0.0):
             super().__init__(data)
             self.pause, self.reads = pause, []
+
         def read1(self, n=-1):
             self.reads.append(n)
             time.sleep(self.pause)
@@ -318,6 +445,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
         def urlopen(request, timeout):
             opened.append(timeout)
             return answer
+
         monkeypatch.setattr(recruiting, "urlopen", urlopen)
 
     def workers():
@@ -367,7 +495,8 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
                     self.wfile.flush()
                     time.sleep(0.05)
             except OSError:
-                pass                        # the client hung up at its deadline
+                pass  # the client hung up at its deadline
+
         def log_message(self, *_):
             pass
 
@@ -377,8 +506,13 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     try:
         monkeypatch.setattr(docs_qa, "key", lambda: "k")
         url = f"http://127.0.0.1:{server.server_address[1]}/"
-        monkeypatch.setattr(recruiting, "urlopen",
-                            lambda request, timeout: opened.append(timeout) or real_urlopen(Request(url, data=request.data), timeout=timeout))
+        monkeypatch.setattr(
+            recruiting,
+            "urlopen",
+            lambda request, timeout: (
+                opened.append(timeout) or real_urlopen(Request(url, data=request.data), timeout=timeout)
+            ),
+        )
         started = time.monotonic()
         both = [threading.Thread(target=lambda: recruiting._rewrite("Composed.", "Support lead", "")) for _ in range(2)]
         for one in both:
@@ -406,6 +540,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
             self.send_header("Content-Length", str(len(whole)))
             self.end_headers()
             self.wfile.write(whole)
+
         def log_message(self, *_):
             pass
 
@@ -414,7 +549,11 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}/"
-        monkeypatch.setattr(recruiting, "urlopen", lambda request, timeout: real_urlopen(Request(url, data=request.data), timeout=timeout))
+        monkeypatch.setattr(
+            recruiting,
+            "urlopen",
+            lambda request, timeout: real_urlopen(Request(url, data=request.data), timeout=timeout),
+        )
         assert recruiting._rewrite("Composed.", "Support lead", "") == "Leads the support desk."
     finally:
         server.shutdown()
@@ -425,7 +564,9 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     big = Answer(huge)
     serve(big)
     assert post(api, "seats/draft", body) == composed and sum(big.reads) <= recruiting.REWRITE_BYTES + 1
-    fine = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads our support desk, every day of the week."}]}}]}).encode()
+    fine = json.dumps(
+        {"candidates": [{"content": {"parts": [{"text": "Leads our support desk, every day of the week."}]}}]}
+    ).encode()
     serve(Answer(fine))
     assert post(api, "seats/draft", body)["source"] == "model"
 
@@ -443,16 +584,21 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
 
 def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
     from backend import lifecycle
+
     with api.app.state.store.transaction() as c:
         # The seats table as the release before recruiting left it, with a person's text: an upgrade keeps it theirs.
         c.execute("DROP TABLE seats")
         c.execute(lifecycle.SCHEMA)
-        c.execute("INSERT INTO seats(id,title,description,reports_to,created_at,created_by,updated_at,updated_by) "
-                  "VALUES('s-old','Role','Keeps the books.','coo',?,'human:ana',?,'human:ben')", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO seats(id,title,description,reports_to,created_at,created_by,updated_at,updated_by) "
+            "VALUES('s-old','Role','Keeps the books.','coo',?,'human:ana',?,'human:ben')",
+            (H.now(), H.now()),
+        )
         lifecycle.ensure(c)
         owner = Identity("human:ana", "owner")
-        chart = lifecycle.create_seat(api.app.state.auth, c, owner, "Analyst", "From the chart model.", "coo",
-                                      description_by=recruiting.CHART)
+        chart = lifecycle.create_seat(
+            api.app.state.auth, c, owner, "Analyst", "From the chart model.", "coo", description_by=recruiting.CHART
+        )
     mine = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers email."})
     assert get(api, f"seats/{mine['id']}")["description_by"] == "person"
     assert get(api, "seats/s-old")["description_by"] == "person"
@@ -464,21 +610,34 @@ def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
 
 def test_recruit_answers_at_once_with_up_to_eight_applicants_best_first_each_with_a_match_and_a_model(api):
     providers(api, "anthropic", "openai")
-    seat = post(api, "seats", {"title": "Customer support lead", "reports_to": "coo",
-                               "description": "Answers customer email and chat and keeps the help center current."})
+    seat = post(
+        api,
+        "seats",
+        {
+            "title": "Customer support lead",
+            "reports_to": "coo",
+            "description": "Answers customer email and chat and keeps the help center current.",
+        },
+    )
     found = post(api, f"seats/{seat['id']}/recruit", {})
     candidates = found["candidates"]
     assert 3 < len(candidates) <= recruiting.CANDIDATES == 8
     assert "support" in candidates[0]["template"] and candidates[0]["match"] == "strong"
     tiers = [c["match"] for c in candidates]
-    assert tiers == sorted(tiers, key=["strong", "good", ""].index)        # best first
+    assert tiers == sorted(tiers, key=["strong", "good", ""].index)  # best first
     choices = {m["id"] for m in found["models"]}
     for c in candidates:
-        assert {"template", "name", "icon", "department", "line", "tags", "owns", "prerequisites", "match",
-                "source"} <= set(c) and "reason" not in c and c["source"] == "template"
+        assert (
+            {"template", "name", "icon", "department", "line", "tags", "owns", "prerequisites", "match", "source"}
+            <= set(c)
+            and "reason" not in c
+            and c["source"] == "template"
+        )
         assert c["line"] and "\n" not in c["line"] and len(c["line"]) <= 90
-        assert len(c["tags"]) <= 6 and all(n["state"] in ("connected", "on_hire", "not_set") for n in c["prerequisites"])
-        assert c["model"] in choices                                 # suggested, from a provider the team turned on
+        assert len(c["tags"]) <= 6 and all(
+            n["state"] in ("connected", "on_hire", "not_set") for n in c["prerequisites"]
+        )
+        assert c["model"] in choices  # suggested, from a provider the team turned on
     assert {m["provider"] for m in found["models"]} <= {"anthropic", "openai"}
 
     # Recruiting is for whoever may fill the seat.
@@ -488,8 +647,15 @@ def test_recruit_answers_at_once_with_up_to_eight_applicants_best_first_each_wit
 
 def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_then_its_repo(api):
     providers(api, "anthropic", "openai")
-    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo",
-                               "description": "Runs customer support and reports weekly on response times."})
+    seat = post(
+        api,
+        "seats",
+        {
+            "title": "Support lead",
+            "reports_to": "coo",
+            "description": "Runs customer support and reports weekly on response times.",
+        },
+    )
     found = post(api, f"seats/{seat['id']}/recruit", {})
     pick = found["candidates"][0]
     other = next(m["id"] for m in found["models"] if m["id"] != pick["model"])
@@ -500,28 +666,38 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     as_member(api, "ben@acme.example")
     post(api, f"seats/{seat['id']}/hire", {"template": pick["template"]}, token="cara-test", expected=403)
     post(api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": "gemini-3-pro"}, expected=422)
-    post(api, f"seats/{seat['id']}/hire", {"template": "botops"}, expected=422)       # a built-in is never a candidate
+    post(api, f"seats/{seat['id']}/hire", {"template": "botops"}, expected=422)  # a built-in is never a candidate
     with api.app.state.store.read() as c:
         assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
 
     below = post(api, "seats", {"title": "Support agent", "reports_to": "coo"})
-    with api.app.state.store.transaction() as c:   # a seat may report to another seat (the chart import makes these)
+    with api.app.state.store.transaction() as c:  # a seat may report to another seat (the chart import makes these)
         c.execute("UPDATE seats SET reports_to=? WHERE id=?", ("seat:" + seat["id"], below["id"]))
 
-    hired = post(api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": other, "name": "Support Desk"})
+    hired = post(
+        api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": other, "name": "Support Desk"}
+    )
     slug = hired["slug"]
     bot = get(api, f"bots/{slug}")
     assert (bot["stage"], bot["reports_to"], bot["display_name"], hired["name"]) == (
-        "onboarding", "coo", "Support Desk", "Support Desk")
+        "onboarding",
+        "coo",
+        "Support Desk",
+        "Support Desk",
+    )
     with api.app.state.store.read() as c:
-        hired_id = H.resolve_bot(c, slug)["id"]          # config and events are keyed by the bot's id, not its slug
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (hired_id,)).fetchone()[0])
+        hired_id = H.resolve_bot(c, slug)["id"]  # config and events are keyed by the bot's id, not its slug
+        config = BS.read(c, hired_id)
         assert config["model"] == other
         # The repository is built from this definition once the bot exists (the computer's `materialize`).
         assert config["materialize"] is True and config["template"] == pick["template"]
         assert "## Job description\nRuns customer support" in config["instructions"]
-        kinds = [r["kind"] for r in c.execute("SELECT action AS kind FROM events WHERE target IN (?,?) ORDER BY rowid",
-                                              (hired_id, seat["id"]))]
+        kinds = [
+            r["kind"]
+            for r in c.execute(
+                "SELECT action AS kind FROM events WHERE target IN (?,?) ORDER BY rowid", (hired_id, seat["id"])
+            )
+        ]
     assert kinds.index("bot.definition_created") < kinds.index("bot.needs_onboarding")
     # The seat is filled: off the Recruiting list, and a second pick is refused.
     open_seats = {s["id"]: s for s in get(api, "seats")["seats"]}
@@ -541,12 +717,27 @@ def fill(api, seat):
     return post(api, f"seats/{seat['id']}/hire", {"template": pick})
 
 
-def test_a_bot_hired_under_an_open_manager_seat_reports_above_it_until_that_seat_is_hired(api):
+def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_never_circles(api):
     providers(api, "anthropic", "openai")
-    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo",
-                               "description": "Leads marketing and sets the content plan."})
-    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
-                                 "description": "Writes the blog and the newsletter."})
+    # A bot hired under an open manager seat reports above it until that seat is hired.
+    head = post(
+        api,
+        "seats",
+        {
+            "title": "Head of Marketing",
+            "reports_to": "coo",
+            "description": "Leads marketing and sets the content plan.",
+        },
+    )
+    writer = post(
+        api,
+        "seats",
+        {
+            "title": "Content Marketer",
+            "reports_to": "seat:" + head["id"],
+            "description": "Writes the blog and the newsletter.",
+        },
+    )
     # The Hire page says who the bot reports to until the manager seat is hired, and that seat's title.
     assert get(api, f"seats/{writer['id']}")["reports_now"]["until"] == "Head of Marketing"
     assert "reports_now" not in get(api, f"seats/{head['id']}")
@@ -556,53 +747,53 @@ def test_a_bot_hired_under_an_open_manager_seat_reports_above_it_until_that_seat
     assert get(api, f"bots/{hired['slug']}")["stage"] == "onboarding"
 
     manager = fill(api, head)
-    assert bot_line(api, hired) == manager["bot"]              # the writer moves under the Head of Marketing bot
+    assert bot_line(api, hired) == manager["bot"]  # the writer moves under the Head of Marketing bot
     assert bot_line(api, manager) == "coo"
     assert get(api, "seats")["seats"] == []
 
-
-def test_a_chain_of_open_seats_hired_bottom_up_ends_with_each_bot_under_the_one_above(api):
-    providers(api, "anthropic", "openai")
-    top = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
-    middle = post(api, "seats", {"title": "Content Lead", "reports_to": "seat:" + top["id"],
-                                 "description": "Leads the content team."})
-    bottom = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + middle["id"],
-                                 "description": "Writes the content."})
+    # A chain of open seats hired bottom-up ends with each bot under the one above.
+    top = post(api, "seats", {"title": "Head of Sales", "reports_to": "coo", "description": "Leads sales."})
+    middle = post(
+        api, "seats", {"title": "Sales Lead", "reports_to": "seat:" + top["id"], "description": "Leads the sales team."}
+    )
+    bottom = post(api, "seats", {"title": "Sales Rep", "reports_to": "seat:" + middle["id"], "description": "Sells."})
     lowest = fill(api, bottom)
     assert bot_line(api, lowest) == "coo"
     highest = fill(api, top)
     middling = fill(api, middle)
     assert bot_line(api, middling) == highest["bot"]
-    assert bot_line(api, lowest) == middling["bot"]          # moved when the seat above it filled
+    assert bot_line(api, lowest) == middling["bot"]  # moved when the seat above it filled
     assert bot_line(api, highest) == "coo"
 
-
-def test_a_bot_moved_by_hand_under_an_open_manager_keeps_that_manager_when_the_seat_fills(api):
-    providers(api, "anthropic", "openai")
-    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
-    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
-                                 "description": "Writes the content."})
+    # A bot moved by hand under an open manager keeps that manager when the seat fills.
+    head = post(api, "seats", {"title": "Head of Support", "reports_to": "coo", "description": "Leads support."})
+    writer = post(
+        api,
+        "seats",
+        {"title": "Support Writer", "reports_to": "seat:" + head["id"], "description": "Writes the help pages."},
+    )
     hired = fill(api, writer)
-    # Someone moves the writer by hand before the manager is hired: the line they chose stays.
     revision = get(api, f"bots/{hired['slug']}")["revision"]
     post(api, f"bots/{hired['slug']}/definition", {"reports_to": "human:ben", "expected_revision": revision})
     fill(api, head)
     assert bot_line(api, hired) == "human:ben"
 
-
-def test_an_open_manager_moved_under_its_own_hire_does_not_circle_when_it_fills(api):
-    providers(api, "anthropic", "openai")
-    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
-    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
-                                 "description": "Writes the content."})
-    hired = fill(api, writer)                                  # placed under the owner, the line it was hired on
-    # The open manager moves under the writer's bot: a legal line while that seat is open.
-    assert api.patch(f"/api/v2/seats/{head['id']}", headers=headers(),
-                     json={"reports_to": "bot:" + hired["slug"]}).status_code == 200
-    manager = fill(api, head)                                  # filling must not close a circle
-    assert bot_line(api, manager) == hired["bot"]              # the manager reports to the writer's bot, as chosen
-    assert bot_line(api, hired) == "coo"                       # the writer stays where it was placed, not under the manager
-    with api.app.state.store.read() as c:                      # walk up from the manager: no bot twice, ends at the top
+    # An open manager moved under its own hire does not circle when it fills.
+    head = post(api, "seats", {"title": "Head of Finance", "reports_to": "coo", "description": "Leads finance."})
+    writer = post(
+        api, "seats", {"title": "Bookkeeper", "reports_to": "seat:" + head["id"], "description": "Keeps the books."}
+    )
+    hired = fill(api, writer)  # placed under the owner, the line it was hired on
+    assert (
+        api.patch(
+            f"/api/v2/seats/{head['id']}", headers=headers(), json={"reports_to": "bot:" + hired["slug"]}
+        ).status_code
+        == 200
+    )
+    manager = fill(api, head)  # filling must not close a circle
+    assert bot_line(api, manager) == hired["bot"]
+    assert bot_line(api, hired) == "coo"
+    with api.app.state.store.read() as c:  # walk up from the manager: no bot twice, ends at the top
         line, seen = manager["bot"], []
         while H.bot(c, line):
             assert line not in seen, "the bot hierarchy has a circle"
@@ -618,21 +809,32 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
     pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]
     # A template that is not a starter: BotOps builds its repository, so a team with no BotOps cannot hire it.
     real = recruiting._recruitable
+
     def no_starters(onboarding):
         value, cards = real(onboarding)
         return value, [{**card, "raw": {**card["raw"], "starter": False}} for card in cards]
+
     monkeypatch.setattr(recruiting, "_recruitable", no_starters)
     api.app.state.store.settings.test_identities["ana-assistant"] = Identity("human:ana", "owner", via="assistant")
 
     def state():
         with api.app.state.store.read() as c:
-            return ({r["slug"] for r in c.execute("SELECT slug FROM bots")},
-                    dict(c.execute("SELECT filled_by,closed_at,reports_to FROM seats WHERE id=?", (seat["id"],)).fetchone()),
-                    c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Set up %'").fetchone()[0])
+            return (
+                {r["slug"] for r in c.execute("SELECT slug FROM bots")},
+                dict(
+                    c.execute("SELECT filled_by,closed_at,reports_to FROM seats WHERE id=?", (seat["id"],)).fetchone()
+                ),
+                c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Set up %'").fetchone()[0],
+            )
+
     before = state()
-    for caller in (strategy_token, headers("ana-assistant")):          # a bot; the Assistant's own turn for the owner
-        assert api.post(f"/api/v2/seats/{seat['id']}/hire", headers=caller,
-                        json={"template": pick["template"]}).status_code == 403
+    for caller in (strategy_token, headers("ana-assistant")):  # a bot; the Assistant's own turn for the owner
+        assert (
+            api.post(
+                f"/api/v2/seats/{seat['id']}/hire", headers=caller, json={"template": pick["template"]}
+            ).status_code
+            == 403
+        )
     # The pick's own rule, behind the route's: a bot, or anyone acting for a person without their confirmation.
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM seats WHERE id=?", (seat["id"],)).fetchone()

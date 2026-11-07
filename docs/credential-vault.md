@@ -3,7 +3,7 @@
 How a credential reaches a bot. A bot receives only its granted Credentials; a `tools:` entry names the
 variable a tool needs. The runner retrieves the granted values and resolves 1Password references. It masks a run's
 granted values (as typed, URL-encoded or base64) with `••••` in everything it posts and logs, in the text
-files the run changed in the repository, and holds back a push whose commits contain one (`runner/redact.py`).
+files the run changed in the repository, and holds back a push whose commits contain one (`runner_support/redact.py`).
 Text-file scrubbing opens regular files without following symlinks and replaces them atomically in the same folder.
 Oversized files are left out of publication; scrubbing never writes through a swapped file or parent symlink.
 
@@ -16,6 +16,8 @@ Four words, used the same way everywhere:
   granted to that bot, and shares it with their other bots (team rule **Members store credentials for their bots**, on by default).
 - A **bot** is a worker. It has the credentials it was given and nothing else. **A bot never uses a credential that was not
   granted to it**, and never another bot's: having one in its own file on its computer does not make it anyone else's.
+  A bot can list the credentials granted to it (`GET /api/v2/credentials`) to check they reach its turns. Each entry has the
+  credential's name, kind and variable name; it never has the value, a preview, or anyone else's grants.
 - A **credential** is a stored secret with a name and, for a bot, the environment variable it arrives in (`JIRA_BASIC_AUTH`). Its value
   is encrypted and is never shown in a message, a log, an event or to a model.
 - A **grant** is the explicit yes: "this credential, for this bot" (or for a person). A grant can be taken away (**revoked**) and the
@@ -28,6 +30,22 @@ Tools → Credentials lists team credentials, usernames and masked previews. The
 Credentials use AES-256-GCM with per-write random nonces and credential-bound authenticated data. Reveal operations are audited; credential values are excluded from audit and idempotency receipts. Restoring a snapshot revokes restored grants to avoid resurrecting permissions.
 
 The Credential's variable-name field becomes an environment variable only for a granted bot, during its run (`GET /api/v2/credential-runtime`), on a Mac or Linux computer and in the Docker runner alike. File Credentials become mode-0600 temporary files during the run. A bot cannot be granted two Credentials that use one variable name (the second grant is refused until the first is taken away). Computer login entries describe existing CLI/browser sessions and must be connected separately on each computer. A bot's Tools list and Health count a granted Credential as present ("granted through the credential vault") even though its computer's secrets file does not hold it. Existing bots' own-file values migrate into grants on upgrade; an old file is never a run fallback. Storing a Credential does not erase that file or give its value to another bot.
+
+### Proxied tools
+
+An API tool's keys (Tools) are delivered one of two ways. **Proxy**, the default for a new tool with a known service:
+the key never leaves the server. In its place the run gets a proxy token in the key's variable and the proxy's address
+in `TICO_TOOL_<ID>_URL`; it calls `$TICO_TOOL_<ID>_URL/<path>` with the token where the key goes (or `hub tools call`),
+and `/api/v2/tool-proxy/<id>/<path>` checks the token, picks the key by the caller's level (a Read caller gets the read
+key; with no read key it may only make GET, HEAD and OPTIONS calls), sends the call on with the vendor's auth, scrubs
+the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A token
+is signed by the server, names one tool and one bot, and works only while the run it was made for is leased or running
+(a watcher's while its bot is assigned to that computer, for at most 12 hours); taking the level away stops the next
+call. The proxy sends only to a public https address: it resolves the tool's name at each call, refuses it when any
+address it resolves to is not public (a cell's metadata service, this machine, a private network), and connects to the
+address it checked, keeping the name for Host and TLS (backend/egress.py). **Computer** is the older way, and what every tool stored before Tools had: the value goes to the run's
+environment as above, so whoever controls that computer can read it. Tools lists those under Needs you with
+"Move to proxy".
 
 Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY` infer
 that variable when the optional variable field is blank. An explicit variable always wins. For a stored API key or token,
@@ -204,7 +222,7 @@ Use Credentials or its thread card for new values; grant them to the bot that ne
 
 A stored Credential may be `op://vault/item/field` instead of the credential. The runner
 resolves it at run start with a read-only 1Password service account (`OP_SERVICE_ACCOUNT_TOKEN`
-on the Computer, `runner/op.py`). The service account token stays with the runner; only the resolved granted value reaches the bot. A reference that does not resolve becomes an
+on the Computer, `runner_support/op.py`). The service account token stays with the runner; only the resolved granted value reaches the bot. A reference that does not resolve becomes an
 empty value, so preflight shows it as missing instead of a run failing halfway. Rotating an item
 in 1Password reaches a reference on the next run.
 

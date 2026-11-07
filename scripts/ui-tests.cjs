@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Runs the browser scripts in ui/tests/*.cjs a few at a time (npm run test:ui).
 // Each script's output is held and printed together, so a failure reads as one block.
-// EXCLUSIVE scripts (dot-perf, the Liquid Dot's throttled frame budgets) run after the others, alone.
 // Usage: node scripts/ui-tests.cjs [-j N] [--all] [--group NAME] [--list] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
 // --list prints the scripts the same arguments would run, one name per line, and runs nothing (CI splits them
 // across VMs). With TICO_UI_TIMINGS set, each passing script's seconds are written there as JSON {name: seconds}.
@@ -221,13 +220,21 @@ function stoppedReport({pending, calls, stopped}) {
 
 // Named groups of scripts: a group is every ui/tests script whose name starts with its prefix.
 const GROUPS = {e2e: 'e2e-'};
-// Frame-budget scripts (the Liquid Dot's throttled p95): run alone, after the others, so their frames are not stolen by a sibling's browser.
-const EXCLUSIVE = ['dot-perf'];
+
+// Frame and time budgets need spare CPU throughout the measurement, after the other browsers have finished.
+const ALONE = ['dot-perf.cjs', 'strategy-budget.cjs'];
+async function runScripts(files, jobs, run) {
+  const queue = files.filter(file => !ALONE.includes(file));
+  await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
+    while (queue.length) await run(queue.shift());
+  }));
+  for (const file of files.filter(file => ALONE.includes(file))) await run(file);
+}
 
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
-  const CORE = ['account-status', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
-                'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
+  const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meeting-page', 'meetings-pending', 'task-live', 'task-live-drafts', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
+                'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'threads-halfway', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs;
   let all = false;
@@ -257,6 +264,8 @@ async function main() {
   const files = allFiles.filter(f => chosen ? chosen.includes(f.replace(/\.cjs$/, '')) : !WALKTHROUGHS.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
+  // The page runs the UI's TypeScript files as their compiled JavaScript: compile them once, before any script reads it.
+  execFileSync(process.execPath, [path.join(__dirname, 'build-ui.cjs')], {stdio: 'inherit'});
   const {cores, idleFraction} = await sampleCpu();
   const selected = resources(process.env, cores, idleFraction);
   jobs ??= selected.jobs;
@@ -267,7 +276,9 @@ async function main() {
   const started = Date.now();
   const env = {TICO_BROWSER: 'chromium', ...process.env, TICO_UI_SLOWDOWN: String(selected.slowdown)};
   const run = async file => {
-    const result = await runScript(path.join(dir, file), {env, timeout: selected.timeout});
+    // A walkthrough is a long tour of screens, and takes its screenshots as it goes: it gets five times the script budget.
+    const timeout = WALKTHROUGHS.includes(file.replace(/\.cjs$/, '')) ? selected.timeout * 5 : selected.timeout;
+    const result = await runScript(path.join(dir, file), {env, timeout});
     const {code, out, timedOut, secs} = result;
     if (code === 0 && !timedOut) {
       timings[file.replace(/\.cjs$/, '')] = secs;
@@ -275,27 +286,21 @@ async function main() {
     }
     else {
       failed.push(file);
-      const why = timedOut ? `, stopped: still running after ${selected.timeout}s` : '';
+      const why = timedOut ? `, stopped: still running after ${timeout}s` : '';
       const text = timedOut ? `${out.trimEnd()}\n${stoppedReport(result)}` : out.trimEnd();
       console.log(`FAIL  ${file} (${secs.toFixed(1)}s${why})\n${text.replace(/^/gm, '      ')}\n`);
     }
   };
 
-  // EXCLUSIVE scripts measure frame budgets on a throttled page: they run alone, after the rest, so no sibling browser takes a core from them.
-  const alone = files.filter(f => EXCLUSIVE.includes(f.replace(/\.cjs$/, '')));
-  const queue = files.filter(f => !alone.includes(f));
-  await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
-    while (queue.length) await run(queue.shift());
-  }));
-  for (const file of alone) await run(file);
+  await runScripts(files, jobs, run);
   const secs = ((Date.now() - started) / 1000).toFixed(0);
   if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
-  console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (${secs}s)`
+  console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (all ${files.length} took ${secs}s)`
                             : `\n${files.length} UI scripts passed in ${secs}s`);
   process.exit(failed.length ? 1 : 0);
 }
 
-module.exports = {resources, runScript, sampleCpu, inSlot, stopTree, stoppedReport, redact};
+module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact};
 // A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh), before it samples
 // the CPU; hosted CI, a run already in a slot, or a computer without bash goes straight on.
 function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }

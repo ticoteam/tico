@@ -70,6 +70,7 @@
 .dream-doing{align-self:center;max-width:36ch;margin:0 0 6px;text-align:center;font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
 .dream-doing:empty{display:none}
 .dream-doing.fresh{animation:dream-fade 1.2s var(--ease) both}
+.dream-reason{align-self:center;max-width:52ch;margin:-2px 0 8px;text-align:center;font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
 .dream-line{align-self:center;margin:18px 0 6px;padding:6px 14px;border-radius:999px;background:var(--dream-scrim);font-size:var(--t-lg);font-weight:500;letter-spacing:.01em;animation:dream-fade 1.2s var(--ease) both}
 .learn-panel .dream-content:empty+.dream-foot{margin-top:auto}
 .dream-content{display:flex;flex-direction:column;gap:10px}

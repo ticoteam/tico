@@ -33,7 +33,7 @@ window.mountMeetingImporters = async function (host, options) {
       <details${only && !i.enabled ? ' open' : ''}><summary>Set up credentials</summary>
         <p class="muted">On that computer, create <code>${esc(i.setup.file)}</code> (mode 600) with:</p>
         <pre>${i.setup.keys.map(k => esc(k) + '=').join('\n')}</pre>
-        <p class="muted">Steps: ${esc(i.setup.doc)}. Check, from the Tico folder: <code>runtime/runner-venv/bin/python -m runner importers-doctor</code></p></details>
+        <p class="muted">Steps: ${esc(i.setup.doc)}. Check, from the Tico folder: <code>runtime/runner-venv/bin/python -m runner_support importers-doctor</code></p></details>
       <p role="status" data-imp-message></p></form>`;
   }).join('') + (machines.length ? '' : '<p class="empty">Add a computer under Computers first.</p>');
   host.querySelectorAll('form[data-importer]').forEach(form => {

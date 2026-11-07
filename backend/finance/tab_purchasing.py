@@ -2,6 +2,7 @@
 order is payables and an estimate is receivables, and the viewer needs the matching finance right too. A record with
 a line on a private account the viewer lacks full detail for, or a line outside the viewer's scope, stays hidden, as a
 bill does. Lists page by cursor, newest first."""
+
 import sqlite3
 from typing import Any, cast
 
@@ -16,8 +17,10 @@ from .tab import SCAN, decode_cursor, encode_cursor, page_size, private_cut
 
 Row = dict[str, Any]
 BATCH = 200
-STATUS = {"po": ("draft", "sent", "approved", "partial", "closed", "void"),
-          "estimate": ("draft", "sent", "accepted", "declined", "invoiced")}
+STATUS = {
+    "po": ("draft", "sent", "approved", "partial", "closed", "void"),
+    "estimate": ("draft", "sent", "accepted", "declined", "invoiced"),
+}
 NAME = {"po": "purchase order", "estimate": "estimate"}
 SIDE = {"po": ("bill", R.AP), "estimate": ("invoice", R.AR)}
 
@@ -42,13 +45,21 @@ def _sees(ctx: Ctx, viewer: str, lines: list[sqlite3.Row], cut: set[str]) -> boo
 
 
 def _head(kind: str, r: sqlite3.Row) -> Row:
-    status = (SP.shown_po(str(r["status"]), int(r["billed"]), int(r["total"])) if kind == "po"
-              else SP.shown_estimate(str(r["status"]), r["invoice_id"]))
-    out: Row = {"id": str(r["id"]), "number": str(r["number"]),
-                "contact": {"id": str(r["vendor_id" if kind == "po" else "customer_id"]),
-                            "name": str(r["contact_name"])},
-                "date": str(r["po_date" if kind == "po" else "estimate_date"]), "status": status,
-                "currency": str(r["currency"]), "total": int(r["total"]), "memo": str(r["memo"] or "")}
+    status = (
+        SP.shown_po(str(r["status"]), int(r["billed"]), int(r["total"]))
+        if kind == "po"
+        else SP.shown_estimate(str(r["status"]), r["invoice_id"])
+    )
+    out: Row = {
+        "id": str(r["id"]),
+        "number": str(r["number"]),
+        "contact": {"id": str(r["vendor_id" if kind == "po" else "customer_id"]), "name": str(r["contact_name"])},
+        "date": str(r["po_date" if kind == "po" else "estimate_date"]),
+        "status": status,
+        "currency": str(r["currency"]),
+        "total": int(r["total"]),
+        "memo": str(r["memo"] or ""),
+    }
     if kind == "po":
         out |= {"closed_by": str(r["closed_by"]), "approved_by": r["approved_by"] or None}
     else:
@@ -57,10 +68,15 @@ def _head(kind: str, r: sqlite3.Row) -> Row:
 
 
 def _line(ctx: Ctx, kind: str, x: sqlite3.Row) -> Row:
-    out: Row = {"id": str(x["id"]), "line_no": int(x["line_no"]),
-                "account": tab_ap.account_ref(ctx, x["account_id"]), "item_id": x["item_id"] or None,
-                "amount": int(x["amount"]), "description": str(x["description"]),
-                "tags": SK.loads(x["tags"])}
+    out: Row = {
+        "id": str(x["id"]),
+        "line_no": int(x["line_no"]),
+        "account": tab_ap.account_ref(ctx, x["account_id"]),
+        "item_id": x["item_id"] or None,
+        "amount": int(x["amount"]),
+        "description": str(x["description"]),
+        "tags": SK.loads(x["tags"]),
+    }
     if kind == "po":
         out["billed"] = SP.billed(ctx.c, str(x["id"]))
     else:
@@ -68,8 +84,18 @@ def _line(ctx: Ctx, kind: str, x: sqlite3.Row) -> Row:
     return out
 
 
-def _list(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None, contact_id: str | None, q: str,
-          cursor: str | None, limit: int, at: str | None) -> tuple[list[Row], str | None]:
+def _list(
+    c: sqlite3.Connection,
+    viewer: str,
+    kind: str,
+    *,
+    status: str | None,
+    contact_id: str | None,
+    q: str,
+    cursor: str | None,
+    limit: int,
+    at: str | None,
+) -> tuple[list[Row], str | None]:
     ctx = load(c, at)
     _check(ctx, viewer, kind)
     if status and status not in STATUS[kind]:
@@ -82,8 +108,16 @@ def _list(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None, 
     scanned = 0
     nxt: str | None = None
     while len(out) < most and scanned < SCAN:
-        batch = SP.listing(c, kind, book_id=ctx.book.id, status=status or "", contact_id=contact_id or "",
-                           q=(q or "").strip()[:100], before=before, most=BATCH)
+        batch = SP.listing(
+            c,
+            kind,
+            book_id=ctx.book.id,
+            status=status or "",
+            contact_id=contact_id or "",
+            q=(q or "").strip()[:100],
+            before=before,
+            most=BATCH,
+        )
         if not batch:
             break
         scanned += len(batch)
@@ -110,12 +144,20 @@ def _one(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str | N
     cut = set(private_cut(ctx, ctx.view(viewer)))
     if r is None or str(r["book_id"]) != ctx.book.id or not _sees(ctx, viewer, lines, cut):
         raise FinanceError(NOT_FOUND, f"no such {NAME[kind]} in your view")
-    return {**_head(kind, r), "lines": [_line(ctx, kind, x) for x in lines],
-            "view_version": ctx.view(viewer).version}
+    return {**_head(kind, r), "lines": [_line(ctx, kind, x) for x in lines], "view_version": ctx.view(viewer).version}
 
 
-def orders(c: sqlite3.Connection, viewer: str, *, status: str | None = None, vendor_id: str | None = None,
-           q: str = "", cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+def orders(
+    c: sqlite3.Connection,
+    viewer: str,
+    *,
+    status: str | None = None,
+    vendor_id: str | None = None,
+    q: str = "",
+    cursor: str | None = None,
+    limit: int = 50,
+    at: str | None = None,
+) -> Row:
     """Purchase orders the viewer sees, newest first. A search over number, memo and vendor name, a status (as
     shown) and a vendor narrow them. `next_cursor` pages."""
     rows, nxt = _list(c, viewer, "po", status=status, contact_id=vendor_id, q=q, cursor=cursor, limit=limit, at=at)
@@ -127,12 +169,22 @@ def order(c: sqlite3.Connection, viewer: str, po_id: str, at: str | None = None)
     return _one(c, viewer, "po", po_id, at)
 
 
-def estimates(c: sqlite3.Connection, viewer: str, *, status: str | None = None, customer_id: str | None = None,
-              q: str = "", cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+def estimates(
+    c: sqlite3.Connection,
+    viewer: str,
+    *,
+    status: str | None = None,
+    customer_id: str | None = None,
+    q: str = "",
+    cursor: str | None = None,
+    limit: int = 50,
+    at: str | None = None,
+) -> Row:
     """Estimates the viewer sees, newest first. A search over number, memo and customer name, a status (as shown) and
     a customer narrow them. `next_cursor` pages."""
-    rows, nxt = _list(c, viewer, "estimate", status=status, contact_id=customer_id, q=q, cursor=cursor, limit=limit,
-                      at=at)
+    rows, nxt = _list(
+        c, viewer, "estimate", status=status, contact_id=customer_id, q=q, cursor=cursor, limit=limit, at=at
+    )
     return {"estimates": rows, "next_cursor": nxt}
 
 

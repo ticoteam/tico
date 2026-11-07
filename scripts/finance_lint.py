@@ -6,28 +6,34 @@ layers.
 
     python3 scripts/finance_lint.py            # exit 1 and one line per problem
 """
+
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", "runner")
+SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", "runner_support")
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv"}
 OWNED = ("backend/finance/",)
 EXEMPT = ("scripts/finance_lint.py", "backend/tests/test_status_values.py")  # that test builds its own small tables
 # The migration files are the one schema authority (backend/migrations): they make and rebuild every table.
 EXEMPT_PREFIX = ("backend/tests/test_finance_", "backend/migrations/")
 READ_OK = {"fin_actions", "fin_connections"}
-WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE|"
-                   r"DROP\s+(?:TABLE|INDEX|TRIGGER)(?:\s+IF\s+EXISTS)?|CREATE\s+(?:TABLE|INDEX|TRIGGER))\s+"
-                   r"(?:IF\s+NOT\s+EXISTS\s+)?[\"`]?(fin_\w+)", re.IGNORECASE)
+WRITE = re.compile(
+    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE|"
+    r"DROP\s+(?:TABLE|INDEX|TRIGGER)(?:\s+IF\s+EXISTS)?|CREATE\s+(?:TABLE|INDEX|TRIGGER))\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?[\"`]?(fin_\w+)",
+    re.IGNORECASE,
+)
 READ = re.compile(r"\b(?:FROM|JOIN)\s+[\"`]?(fin_\w+)", re.IGNORECASE)
 # A Finance table named in quotes outside Finance is a list that a delete loop could run (devcopy once had one).
 NAMED = re.compile(r"[\"'`](fin_\w+)[\"'`]")
 # The schema's own lists name every table by design: the status lists the CHECKs come from, the rename tooling and the
 # test that lists every table's row model.
 NAMED_OK = ("backend/status_values.py", "scripts/cleanup/", "backend/tests/test_rows_schema.py")
-INNER = re.compile(r"(?:from|import)\s+(?:backend\.|\.+)?finance\.(core|store|handlers|budgeting|posting|context|setup)\b")
+INNER = re.compile(
+    r"(?:from|import)\s+(?:backend\.|\.+)?finance\.(core|store|handlers|budgeting|posting|context|setup)\b"
+)
 # The migration step creates the tables through the schema module; nothing else reaches past the two doors.
 INNER_OK = {("backend/store.py", "store")}
 

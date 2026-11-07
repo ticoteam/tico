@@ -666,7 +666,7 @@ async function kpiAddBind(form, goal, done) {
 function goalTreeShape() {
   const people = (S.people || []).filter(p => !p.hidden);
   const bots = (S.emps || []).filter(e => !['archived', 'retired'].includes(e.status));
-  // The sidebar's own rule: built-in and message bots stay outside the chart. The Strategy Bot is placed and then lifted
+  // The sidebar's own rule: built-ins and explicit helpers stay outside the chart. The Strategy Bot is placed and then lifted
   // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
   const placed = bots.filter(e => !isHelperBot(e) || e.id === 'goal-manager');
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.id)]);
@@ -675,7 +675,7 @@ function goalTreeShape() {
   for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   for (const p of people) put(orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf), {kind: 'person', id: p.id, person: p});
   for (const e of placed) {
-    // A bot under a built-in or message bot (or a bot that is gone) hangs from the next one up, else its owner.
+    // A bot under a helper (or a bot that is gone) hangs from the next one up, else its owner.
     let parent = orgBossKey({kind: 'bot', ...e});
     for (let hops = 0; parent.startsWith('b:') && !keys.has(parent) && hops < 5; hops++)
       parent = orgBossKey({kind: 'bot', ...(botRow(parent.slice(2)) || {})});
@@ -833,6 +833,35 @@ function goalTreeLines(tree) {
     if (!more) { open.length = d + 1; open[d] = true; }
   }
 }
+// The search above the tree (ui/app/goals.js pageGoals): every word, in any case, somewhere in a line's text: the owner's
+// name, its line of standing words, its goals' titles, descriptions, Whys and KPI names. A matching line shows with
+// all its goals and everyone above it; a matching department with everyone in it. The rest is taken out.
+function goalSearchText(actor, goals, loose) {
+  const kpis = list => (list || []).filter(k => !k.archived_at).map(k => k.name);
+  const person = actor.startsWith('human:') && /** @type {any[]} */ (S.people || []).find(p => p.id === actor.slice(6));
+  return [goalOwnerInfo(actor).name, person?.goals, ...kpis(loose), ...goals.flatMap(g => [g.title, g.body, g.why, ...kpis(g.kpis)])]
+    .filter(Boolean).join(' ').toLowerCase();
+}
+function goalTreeFilter(tree, q, text) {
+  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const rows = [...tree.children], depth = li => Number(li.style.getPropertyValue('--d')) || 0;
+  const keep = [], hit = [], up = [], at = [];
+  let inside = -1;   // the depth of a matching department whose rows are all kept, else -1
+  rows.forEach((li, i) => {
+    const d = depth(li);
+    if (li.classList.contains('gt-cont')) { keep[i] = hit[at[d]]; return; }
+    at.length = d + 1; at[d] = i; up[i] = d ? at[d - 1] : undefined;
+    if (inside >= 0 && d <= inside) inside = -1;
+    const group = li.classList.contains('gt-group');
+    const hay = (group ? li.querySelector('.gt-name')?.textContent || '' : text(li.dataset.owner)).toLowerCase();
+    hit[i] = inside >= 0 || words.every(w => hay.includes(w));
+    if (hit[i] && group && inside < 0) inside = d;
+    if (hit[i]) for (let j = i; j !== undefined && !keep[j]; j = up[j]) keep[j] = true;
+  });
+  rows.forEach((li, i) => { if (!keep[i]) li.remove(); });
+  return tree.children.length > 0;
+}
 function goalsRender(state) {
   const body = $('#goal-body');
   if (!body || !state.loaded) return;
@@ -859,7 +888,9 @@ function goalsRender(state) {
   // goals (someone gone from the roster), at the end.
   const rest = Object.keys(owned).filter(a => !seen.has(a)).map(a => rows(a, 0)).join('');
   body.innerHTML = goalNeedsLineHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}</ul>`;
-  goalTreeLines(body.querySelector('#goal-tree'));
+  const ul = body.querySelector('#goal-tree');
+  if (!goalTreeFilter(ul, state.q, a => goalSearchText(a, owned[a] || [], loose[a] || []))) ul.insertAdjacentHTML('afterend', '<p class="muted gt-none" id="goal-search-none">No goals or people match.</p>');
+  goalTreeLines(ul);
   // Tapping a line opens its goal on its own (goalSheetOpen), or a new one for its owner when they have none and the
   // viewer may add it; the name and avatar open the owner's panel, as does a line the viewer may only read.
   for (const li of body.querySelectorAll('.gt-row')) {

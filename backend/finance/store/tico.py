@@ -1,5 +1,6 @@
 """What Finance reads from and calls in the rest of Tico, typed at the border: the roster and org chart, the install
 owner, the audit log and approvals. Every function takes the caller's connection."""
+
 import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
@@ -7,6 +8,7 @@ from typing import Any, cast
 
 from ... import hubdb as _hubdb
 from ..core.org import Org, Team
+from ... import bot_settings as BS
 
 # Tico's own modules are untyped: Finance reaches them only through this file, typed at each call.
 _H: Any = _hubdb
@@ -50,6 +52,7 @@ def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
 def person_email(c: sqlite3.Connection, actor: str) -> str:
     """A teammate's email in lower case: their humans row, else their line on the people roster. A bot has none."""
     from ... import people
+
     P: Any = people
     if not actor.startswith("human:"):
         return ""
@@ -84,13 +87,14 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     """The org chart now: groups with their leads, who is in which group, and who reports to whom. Archived bots are
     off it."""
     from ... import groups, people
+
     G: Any = groups
     P: Any = people
     doc = _metadata(c, "people")
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
     archived = {str(r[0]) for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
-    for row in c.execute("SELECT bot, config, reports_to FROM bot_config"):
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config, reports_to FROM bot_config bc {BS.JOIN}"):
         if str(row[0]) in archived:
             continue
         try:
@@ -105,15 +109,16 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     teams: dict[str, Team] = {}
     for gid, group in groups.items():
         lead = str(G.lead_of(gid, roster, configs) or "")
-        teams[gid] = Team(id=gid, name=str(group.get("name") or gid), parent=str(group.get("parent") or ""),
-                          lead=_actor(lead, slugs))
+        teams[gid] = Team(
+            id=gid, name=str(group.get("name") or gid), parent=str(group.get("parent") or ""), lead=_actor(lead, slugs)
+        )
     team_of: dict[str, str] = {}
     reports: dict[str, str] = {}
     humans: set[str] = set()
     for person in cast(list[dict[str, Any]], roster.get("people") or []):
         actor = "human:" + str(person.get("id") or "")
         humans.add(actor)
-        if person.get("hidden"):      # left the company (access.leave): on no team and reporting to no one (spec 7.5)
+        if person.get("hidden"):  # left the company (access.leave): on no team and reporting to no one (spec 7.5)
             continue
         if person.get("team") in teams:
             team_of[actor] = str(person["team"])
@@ -128,8 +133,14 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
             team_of[actor] = team
         if config.get("reports_to"):
             reports[actor] = _actor(str(config["reports_to"]), slugs)
-    return Org(owner=owner, teams=teams, team_of=team_of, reports_to=reports, humans=frozenset(humans),
-               bots=frozenset("bot:" + s for s in slugs))
+    return Org(
+        owner=owner,
+        teams=teams,
+        team_of=team_of,
+        reports_to=reports,
+        humans=frozenset(humans),
+        bots=frozenset("bot:" + s for s in slugs),
+    )
 
 
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:
@@ -137,8 +148,7 @@ def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: M
     _H.event(c, actor, action, target, dict(detail))
 
 
-def approval_request(c: sqlite3.Connection, requester: str, kind: str, payload: Mapping[str, object],
-                     to: str) -> str:
+def approval_request(c: sqlite3.Connection, requester: str, kind: str, payload: Mapping[str, object], to: str) -> str:
     """A Tico approval with no task, decided by `to` (one person). The id."""
     row = cast(Row, _H.approval_request(c, requester, kind, dict(payload), to=to))
     return str(row["id"])
@@ -156,6 +166,54 @@ def approval_decide(c: sqlite3.Connection, actor: str, approval_id: str, decisio
     """A person's decision, recorded as theirs. Only a person can make it (hubdb refuses any other actor); Finance calls
     this only for an invoice email's send approval, decided by the person whose yes the action waited on."""
     _H.approval_decide(c, actor, approval_id, decision)
+
+
+def queue_email(
+    c: sqlite3.Connection,
+    requester: str,
+    addresses: list[str],
+    subject: str,
+    text: str,
+    ref: str,
+    metadata: dict[str, str],
+) -> str:
+    """Freeze Finance's email through the same gate as a connector, on this install's transaction."""
+    from pathlib import Path
+    from ...auth import Auth
+    from ... import email_sending
+    from connectors.mail import compose
+    from ...store import Problem
+
+    sending: Any = email_sending
+    mime: Any = compose
+    if not _VAULT:
+        raise Refused("Finance's email queue is not available")
+    vault = _VAULT[0]
+    store = vault.store
+    database = next((str(row[2]) for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+    if not database or Path(database).resolve() != Path(store.settings.db_path).resolve():
+        raise Refused("Finance's email queue belongs to another install")
+    auth: Any = vault.auth or Auth(store)
+    auth.sync_access(c)
+    try:
+        raw = str(mime.build(addresses, subject, text, from_addr=metadata["mailbox"]))
+        queued = cast(
+            Row,
+            sending.enqueue(
+                c,
+                auth,
+                requester,
+                sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
+                {"legal_or_money": None, "status": "finance_preview_required"},
+                via="finance",
+                approval_metadata=metadata,
+            ),
+        )
+        if queued["state"] == "blocked":
+            raise Refused("The email send policy refused this invoice email: " + str(queued["decision"]["reasons"]))
+    except Problem as exc:
+        raise Refused(str(exc)) from exc
+    return str(queued["approval_id"])
 
 
 def is_person(actor: str) -> bool:
@@ -195,6 +253,7 @@ _GATEWAY = _gateway()
 
 def _runs() -> str:
     from ... import usage_records
+
     return str(cast(Any, usage_records).RUNS)
 
 
@@ -207,14 +266,18 @@ def _video(models: Sequence[str], p: str = "") -> tuple[str, list[str]]:
     return f"({test} OR {p}model IN ({','.join('?' * len(models))}))", list(models)
 
 
-def gateway_run_costs(c: sqlite3.Connection, after: str, through: str,
-                      video_models: Sequence[str] = ()) -> dict[tuple[str, str], str]:
+def gateway_run_costs(
+    c: sqlite3.Connection, after: str, through: str, video_models: Sequence[str] = ()
+) -> dict[tuple[str, str], str]:
     """{(bot id, `ai` | `video`): USD as decimal text} for Gateway-billed runs that finished in (after, through]; a
     segment on an image model counts on `video`."""
     video, params = _video(video_models)
-    rows = c.execute(f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
-                     f"printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
-                     "AND finished_at > ? AND finished_at <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
+    rows = c.execute(
+        f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
+        f"printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
+        "AND finished_at > ? AND finished_at <= ? GROUP BY 1, 2",
+        (*params, after, through),
+    ).fetchall()
     return {(str(r[0] or ""), str(r[1])): str(r[2]) for r in rows}
 
 
@@ -223,10 +286,13 @@ def video_jobs(c: sqlite3.Connection, job_ids: Sequence[str], video_models: Sequ
     video, params = _video(video_models, "r.")
     out: set[str] = set()
     for i in range(0, len(job_ids), 500):
-        chunk = list(job_ids[i:i + 500])
-        rows = c.execute(f"SELECT a.job_id FROM attempts a JOIN {_runs()} r ON r.id = a.id WHERE a.job_id IN "
-                         f"({','.join('?' * len(chunk))}) AND {_gateway('r.')} GROUP BY a.job_id "
-                         f"HAVING sum(CASE WHEN {video} THEN 0 ELSE 1 END) = 0", (*chunk, *params)).fetchall()
+        chunk = list(job_ids[i : i + 500])
+        rows = c.execute(
+            f"SELECT a.job_id FROM attempts a JOIN {_runs()} r ON r.id = a.id WHERE a.job_id IN "
+            f"({','.join('?' * len(chunk))}) AND {_gateway('r.')} GROUP BY a.job_id "
+            f"HAVING sum(CASE WHEN {video} THEN 0 ELSE 1 END) = 0",
+            (*chunk, *params),
+        ).fetchall()
         out.update(str(r[0]) for r in rows)
     return out
 
@@ -239,10 +305,12 @@ def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int
     last = ""
     while True:
         rows = c.execute(
-            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished_at) FROM attempts a "
-            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(a.settled_at) FROM attempts a "
+            "WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished_at "
             "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
-            "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
+            "WHERE substr(finished_at, 1, 7)=? AND finished_at<=? ORDER BY id LIMIT ?",
+            (last, month, through, page),
+        ).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]
         if len(rows) < page:
             return out
@@ -252,35 +320,48 @@ def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int
 def live_expired_run_holds(c: sqlite3.Connection, at: str) -> list[str]:
     """Run holds past their expiry whose job is still out with a runner (leased, running, or not yet known to have
     ended)."""
-    return [str(r[0]) for r in c.execute(
-        "SELECT h.id FROM fin_holds h JOIN jobs j ON j.id = substr(h.source_id, 5) WHERE h.source='run' "
-        "AND h.status='held' AND h.expires_at IS NOT NULL AND h.expires_at<=? AND substr(h.source_id, 1, 4)='job:' "
-        "AND j.state IN ('leased', 'running', 'uncertain')", (at,))]
+    return [
+        str(r[0])
+        for r in c.execute(
+            "SELECT h.id FROM fin_holds h JOIN jobs j ON j.id = substr(h.source_id, 5) WHERE h.source='run' "
+            "AND h.status='held' AND h.expires_at IS NOT NULL AND h.expires_at<=? AND substr(h.source_id, 1, 4)='job:' "
+            "AND j.state IN ('leased', 'running', 'uncertain')",
+            (at,),
+        )
+    ]
 
 
 def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
     """{caller actor: USD as decimal text} for decision calls on the Gateway's model in (after, through], from the
     judge audit (`judge.call` rows name who asked)."""
-    rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail, '$.cost_usd'), 0))) "
-                     "FROM events WHERE action='judge.call' AND created_at > ? AND created_at <= ? "
-                     "AND json_extract(detail, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
+    rows = c.execute(
+        "SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail, '$.cost_usd'), 0))) "
+        "FROM events WHERE action='judge.call' AND created_at > ? AND created_at <= ? "
+        "AND json_extract(detail, '$.model') LIKE 'tico-%' GROUP BY actor",
+        (after, through),
+    ).fetchall()
     return {str(r[0] or ""): str(r[1]) for r in rows}
 
 
 def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
     """What one run cost on the Gateway (USD as decimal text), or None when no part of it was Gateway-billed."""
-    row = c.execute(f"SELECT count(*), printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE id=? "
-                    f"AND {_GATEWAY}", (turn_id,)).fetchone()
+    row = c.execute(
+        f"SELECT count(*), printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE id=? AND {_GATEWAY}",
+        (turn_id,),
+    ).fetchone()
     return str(row[1]) if row and int(row[0]) else None
 
 
 def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
     """A bot's average token-priced cost per run over its last `most` such runs started since `since`, or None. Runs
     count whichever key paid for them (the Gateway or the bot's own key); a flat subscription's run never does (§9)."""
-    row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
-                    f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL "
-                    "AND coalesce(billing, 'api') != 'subscription' GROUP BY id "
-                    "ORDER BY max(started_at) DESC LIMIT ?)", (bot, since, most)).fetchone()
+    row = c.execute(
+        f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
+        f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL "
+        "AND coalesce(billing, 'api') != 'subscription' GROUP BY id "
+        "ORDER BY max(started_at) DESC LIMIT ?)",
+        (bot, since, most),
+    ).fetchone()
     return str(row[1]) if row and int(row[0]) else None
 
 
@@ -288,16 +369,42 @@ def idle_bot_cards(c: sqlite3.Connection, at: str, days: int) -> dict[str, str]:
     """Each card a bot holds whose bot is archived, or has run no turn since `days` before `at`: card id -> the bot's
     slug (a holder is `bot:<id>`; the slug is what a person reads). A bot that never ran is idle; a holder with no bot
     row is not judged. The bot facts are the hub's (bots)."""
-    holders = {str(r[0]): str(r[1]).split(":", 1)[1] for r in c.execute(
-        "SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%' AND status <> 'canceled'")}
+    holders = {
+        str(r[0]): str(r[1]).split(":", 1)[1]
+        for r in c.execute("SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%' AND status <> 'canceled'")
+    }
     ids = sorted(set(holders.values()))
     if not ids:
         return {}
     cutoff = shift(at, -days)
-    idle = {str(r[0]): str(r[1] or r[0]) for r in c.execute(
-        f"SELECT id, slug, state, last_turn_at FROM bots WHERE id IN ({','.join('?' * len(ids))})", ids)
-        if str(r[2] or "") == "archived" or not r[3] or str(r[3]) < cutoff}
+    idle = {
+        str(r[0]): str(r[1] or r[0])
+        for r in c.execute(
+            f"SELECT id, slug, state, last_turn_at FROM bots WHERE id IN ({','.join('?' * len(ids))})", ids
+        )
+        if str(r[2] or "") == "archived" or not r[3] or str(r[3]) < cutoff
+    }
     return {card: idle[bot_id] for card, bot_id in holders.items() if bot_id in idle}
+
+
+def record_meter(c: sqlite3.Connection, month: str, as_of: str, charged: Mapping[str, int], at: str) -> int:
+    """Keep one read of the Gateway's meter as usage facts beside the install's estimates (backend/usage_facts.py):
+    {model: month-to-date charged nanodollars}. The facts added."""
+    from ... import usage_facts
+
+    return int(cast(Any, usage_facts).record_meter(c, month, as_of, dict(charged), at))
+
+
+def usage_reconciled(c: sqlite3.Connection, month: str) -> dict[str, dict[str, int | None]]:
+    """{model: {estimated_nano, metered_nano, amount_nano}} of a month's Gateway-billed usage; the amount is the meter's
+    where it has read the model."""
+    from ... import usage_facts
+
+    found = cast(dict[str, dict[str, Any]], cast(Any, usage_facts).reconciled(c, month))
+    return {
+        str(model): {key: (None if value is None else int(value)) for key, value in row.items()}
+        for model, row in found.items()
+    }
 
 
 def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
@@ -309,6 +416,17 @@ def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
 def notice(c: sqlite3.Connection, person: str, text: str) -> None:
     """A keeper notice to one person, the kind usage limits send."""
     _H.say(c, _H.KEEPER, person, text, kind="notice")
+
+
+def bot_note(c: sqlite3.Connection, bot: str, text: str) -> str:
+    """A keeper note for a bot's next run: the line it is given when its next turn starts. Its id."""
+    ident = str(_H.new_id())
+    c.execute(
+        "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
+        (ident, _H.KEEPER, bot, text[: int(_H.NOTE_MAX)], str(_H.now())),
+    )
+    _H.event(c, _H.KEEPER, "note.create", ident, {"to": bot, "finance": True})
+    return ident
 
 
 def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, private: bool | None = None) -> str | None:
@@ -327,27 +445,33 @@ def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, priv
 def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, object]) -> None:
     """A Finance event to Tico's rules (a sourceless `judge_event`) and automations, with ids only."""
     from ... import rules
+
     R: Any = rules
     facts = dict(data)
-    R.judge_event(c, name, {"subject": subject, "type": subject, "delivery": str(facts.get("event_id") or subject),
-                            "data": facts})
+    R.judge_event(
+        c, name, {"subject": subject, "type": subject, "delivery": str(facts.get("event_id") or subject), "data": facts}
+    )
     _H.hook(c, name, subject, lambda: facts, _H.KEEPER)
 
 
 def person_by_email(c: sqlite3.Connection, email: str) -> str:
-    row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email.strip().lower(),)).fetchone() if email else None
+    row = (
+        c.execute("SELECT id FROM humans WHERE lower(email)=?", (email.strip().lower(),)).fetchone() if email else None
+    )
     return "human:" + str(row[0]) if row else ""
 
 
 # ------------------------------------------------------------------------------------------------ the Gateway link
 def gateway_connected(c: sqlite3.Connection, settings: object) -> bool:
     from ... import gateway_connection
+
     return bool(cast(Any, gateway_connection).connected(c, settings))
 
 
 def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tuple[str, str]:
     """(key, base URL) for a call to the Gateway; key '' when none is set. Never logged."""
     from ... import gateway_connection
+
     secret, base, _ = cast(tuple[str, str, object], cast(Any, gateway_connection).target(c, vault, settings))
     return str(secret or ""), str(base or "")
 
@@ -381,6 +505,7 @@ def fingerprint(c: sqlite3.Connection, context: str, value: str) -> str:
     them, and cannot be guessed offline from the database alone."""
     import hashlib
     import hmac
+
     key = cast(bytes, _cipher().key(c))
     return hmac.new(key, f"tico-finance:{context}:".encode() + value.encode(), hashlib.sha256).hexdigest()
 
@@ -390,9 +515,11 @@ def seal_credential(c: sqlite3.Connection, name: str, value: str, preview: str, 
     cipher = _cipher()
     cid = new_id()
     ciphertext, nonce = cipher.encrypt(c, cid, value)
-    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
-              "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-              (cid, name[:150], SEALED_KIND, preview, ciphertext, nonce, SEALED_SOURCE, at, at, by, by))
+    c.execute(
+        "INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
+        "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (cid, name[:150], SEALED_KIND, preview, ciphertext, nonce, SEALED_SOURCE, at, at, by, by),
+    )
     return cid
 
 
@@ -406,14 +533,19 @@ def open_credential(c: sqlite3.Connection, credential_id: str) -> str:
 
 def drop_credential(c: sqlite3.Connection, credential_id: str) -> None:
     """Delete a vault row Finance sealed (an action that never ran: declined, withdrawn, expired or failed)."""
-    c.execute("DELETE FROM credential_grants WHERE credential_id=? AND credential_id IN "
-              "(SELECT id FROM credentials WHERE source=?)", (credential_id, SEALED_SOURCE))
+    c.execute(
+        "DELETE FROM credential_grants WHERE credential_id=? AND credential_id IN "
+        "(SELECT id FROM credentials WHERE source=?)",
+        (credential_id, SEALED_SOURCE),
+    )
     c.execute("DELETE FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE))
 
 
 def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:
-    return c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)
-                     ).fetchone() is not None
+    return (
+        c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)).fetchone()
+        is not None
+    )
 
 
 def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
@@ -428,36 +560,58 @@ def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
 # ------------------------------------------------------------------------------------------------ Finance's webhooks
 def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
     """Calls to Finance's triggers (consumer = finance, backend/triggers.py) still kept, newest first, bodies included."""
-    return list(c.execute(
-        "SELECT b.trigger_id, b.delivery, b.received_at, b.type, b.via, b.outcome, b.body FROM trigger_bodies b "
-        "JOIN triggers t ON t.id=b.trigger_id WHERE t.deleted_at IS NULL AND t.consumer='finance' "
-        "AND b.expires_at>? ORDER BY b.received_at DESC, b.delivery DESC LIMIT ?", (at, most)).fetchall())
+    return list(
+        c.execute(
+            "SELECT b.trigger_id, b.delivery, b.received_at, b.type, b.via, b.outcome, b.body FROM trigger_bodies b "
+            "JOIN triggers t ON t.id=b.trigger_id WHERE t.deleted_at IS NULL AND t.consumer='finance' "
+            "AND b.expires_at>? ORDER BY b.received_at DESC, b.delivery DESC LIMIT ?",
+            (at, most),
+        ).fetchall()
+    )
 
 
 # ------------------------------------------------------------------------------------------------ the view version
 # Who sees what follows the org chart, so a change to it moves `fin_view_versions` (what cached views key on). SQLite
 # triggers catch every writer: the roster document (groups, teams, people's managers), a bot's manager or team, a bot
 # joining, leaving or being archived. A roster edit that changes none of these moves it too; that only costs a cache.
-_BUMP = ("UPDATE fin_view_versions SET version=version+1, reason='{why}', "
-         "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
-_TEAM = ("CASE WHEN json_valid(OLD.config) AND json_valid(NEW.config) "
-         "THEN json_extract(OLD.config, '$.team') IS NOT json_extract(NEW.config, '$.team') "
-         "OR json_extract(OLD.config, '$.reports_to') IS NOT json_extract(NEW.config, '$.reports_to') "
-         "ELSE OLD.config IS NOT NEW.config END")
+_BUMP = (
+    "UPDATE fin_view_versions SET version=version+1, reason='{why}', "
+    "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1"
+)
+# A bot's declared team and manager are keys of its settings' `extra` (backend/bot_settings.py).
+_TEAM = (
+    "CASE WHEN json_valid(OLD.extra) AND json_valid(NEW.extra) "
+    "THEN json_extract(OLD.extra, '$.team') IS NOT json_extract(NEW.extra, '$.team') "
+    "OR json_extract(OLD.extra, '$.reports_to') IS NOT json_extract(NEW.extra, '$.reports_to') "
+    "ELSE OLD.extra IS NOT NEW.extra END"
+)
 ORG_TRIGGERS = (
     ("fin_view_roster_insert", "AFTER INSERT ON registry_metadata WHEN NEW.key = 'people'", "roster"),
-    ("fin_view_roster_update", "AFTER UPDATE OF value ON registry_metadata WHEN NEW.key = 'people' "
-     "AND OLD.value IS NOT NEW.value", "roster"),
+    (
+        "fin_view_roster_update",
+        "AFTER UPDATE OF value ON registry_metadata WHEN NEW.key = 'people' AND OLD.value IS NOT NEW.value",
+        "roster",
+    ),
     ("fin_view_bot_insert", "AFTER INSERT ON bot_config", "bot added"),
     ("fin_view_bot_delete", "AFTER DELETE ON bot_config", "bot removed"),
-    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config ON bot_config WHEN "
-     f"OLD.reports_to IS NOT NEW.reports_to OR {_TEAM}", "reports to"),
-    ("fin_view_bot_archive", "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT "
-     "(NEW.state = 'archived')", "bot archived"),
+    (
+        "fin_view_bot_update",
+        "AFTER UPDATE OF reports_to ON bot_config WHEN OLD.reports_to IS NOT NEW.reports_to",
+        "reports to",
+    ),
+    ("fin_view_bot_settings_insert", "AFTER INSERT ON bot_settings", "reports to"),
+    ("fin_view_bot_settings_update", f"AFTER UPDATE OF extra ON bot_settings WHEN {_TEAM}", "reports to"),
+    (
+        "fin_view_bot_archive",
+        "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT (NEW.state = 'archived')",
+        "bot archived",
+    ),
 )
 
 
 def watch_org(c: sqlite3.Connection) -> None:
-    """Make the org-chart triggers that move the view version. Idempotent."""
+    """Make the org-chart triggers that move the view version, and the version's row: a trigger's UPDATE moves nothing
+    while the row is absent, and view_version reads an absent row as 0, so the row starts at 0. Idempotent."""
+    c.execute("INSERT OR IGNORE INTO fin_view_versions(id, version, reason, updated_at) VALUES(1, 0, '', ?)", (now(),))
     for name, when, why in ORG_TRIGGERS:
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {_BUMP.format(why=why)}; END")

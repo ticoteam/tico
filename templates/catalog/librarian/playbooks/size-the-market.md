@@ -7,7 +7,7 @@ people check. You are not asked for one true number.
 The outcome is a market definition, a tree of segments, and for each segment two or more cited estimates with
 a range, plus the main players' dated figures. Nothing else counts as good.
 
-**Budget.** About 25 web searches and 40 `hub doc fetch` calls. Write as you go: the Spend view shows what is
+**Budget.** About 25 web searches and 40 `hub doc fetch` calls. Write as you go: the Market page shows what is
 filed.
 
 **Never invent a number.** Every figure comes from a source you read, with a row of evidence. A share you cannot
@@ -92,7 +92,7 @@ For the main players in each segment, dated and labelled:
 ## 8. File as proposed
 
 Estimates are filed `proposed`. Accept one (`hub market size accept <id>`) only when the task says the owner
-allowed it. Otherwise the owner decides on the Spend view. Never reject another person's estimate.
+allowed it. Otherwise the owner decides on the Market page. Never reject another person's estimate.
 
 ## 9. End with a note
 

@@ -56,9 +56,9 @@ QUESTION_SET = "stale-review"
 RULE = "stale_review"
 WATERMARK = "stale_review"
 STATUSES = ("open", "doing", "waiting", "review")
-EVERY_SECONDS = 3600            # the default schedule (Settings > Routines may space passes further)
+EVERY_SECONDS = 3600  # the default schedule (Settings > Routines may space passes further)
 CALLS_PER_HOUR = 30
-PASS_SECONDS = 50 * 60          # the pass stops asking here, so it never runs into the next one
+PASS_SECONDS = 50 * 60  # the pass stops asking here, so it never runs into the next one
 SUGGEST_EVERY_DAYS = 7
 QUIET_DAYS, QUIET_DOING_DAYS = 7, 3
 SNOOZE_GRACE_HOURS = 24
@@ -71,9 +71,12 @@ SUGGEST = {
     CLOSE: ("close", "close it", "Close it"),
     ASK_OWNER: (None, "check it is still needed, then update or close it", "Check it is still needed"),
 }
-ROUTES = {J.GATEWAY_PROVIDER: "gateway", J.TYPESAFE_PROVIDER: "own_key",
-          **{name: "team_llm" for name in J.LLM_PROVIDERS.values()}}
-_RUNNING = threading.Lock()     # one pass at a time in this process
+ROUTES = {
+    J.GATEWAY_PROVIDER: "gateway",
+    J.TYPESAFE_PROVIDER: "own_key",
+    **{name: "team_llm" for name in J.LLM_PROVIDERS.values()},
+}
+_RUNNING = threading.Lock()  # one pass at a time in this process
 
 
 # ----------------------------------------------------------------------------- the switch and the watermark
@@ -90,13 +93,16 @@ def last_pass(c):
 
 
 def _set_watermark(c, at):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (WATERMARK, json.dumps({"last_pass": at})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (WATERMARK, json.dumps({"last_pass": at})),
+    )
 
 
 def due(c, at):
     """Whether the saved schedule (Settings > Routines, hourly by default) says a pass is due since the last one."""
     from . import system_routines as SR
+
     last = last_pass(c)
     return SR.due(SR.config_of(c, RULE), H.parse_ts(at), H.parse_ts(last) if last else None)
 
@@ -120,9 +126,11 @@ def _pr_number(link):
 
 
 def _pr_reason(c, row):
-    links = H._rows(c.execute("SELECT * FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at", (row["id"],)))
+    links = H._rows(
+        c.execute("SELECT * FROM task_links WHERE task_id=? AND kind='pr' ORDER BY created_at", (row["id"],))
+    )
     if not links or any(link.get("state") not in FINISHED_PR for link in links):
-        return None                                  # no PR, or one still open
+        return None  # no PR, or one still open
     last = links[-1]
     number = _pr_number(last)
     when = _day(last.get("pr_merged_at")) if last.get("state") in ("merged", "shipped") else ""
@@ -138,16 +146,26 @@ def _parent_reason(c, row):
 
 
 def _blocker_reason(c, row):
-    statuses = [r[0] for r in c.execute("SELECT t.status FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-                                        "WHERE r.to_task=? AND r.kind='blocks'", (row["id"],))]
+    statuses = [
+        r[0]
+        for r in c.execute(
+            "SELECT t.status FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            "WHERE r.to_task=? AND r.kind='blocks'",
+            (row["id"],),
+        )
+    ]
     if statuses and all(status == "done" for status in statuses):
         return "Everything it was blocked by is done"
     return None
 
 
 def _snooze_reason(c, row, at):
-    ended = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='snoozed_until' AND note='snooze over' "
-                      "ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
+    ended = c.execute(
+        "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='snoozed_until' "
+        "AND note='snooze over' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (row["id"],),
+    ).fetchone()
     if not ended or ended[0] > H.shift(at, hours=-SNOOZE_GRACE_HOURS):
         return None
     # The wake itself writes `updated_at`; anything later is activity.
@@ -159,11 +177,18 @@ def _snooze_reason(c, row, at):
 def _twin_reason(c, row):
     marks = ",".join("?" * len(STATUSES))
     key = H.title_key(row["title"])
-    twin = next((r for r in c.execute(f"SELECT id,created_at,title FROM tasks WHERE owner_id=? AND id<>? AND status IN ({marks}) "
-                                      "AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at",
-                                      (row["owner_id"], row["id"], *STATUSES, row["created_at"] or "",
-                                       row["created_at"] or "", row["id"]))
-                 if H.title_key(r[2]) == key), None)
+    twin = next(
+        (
+            r
+            for r in c.execute(
+                f"SELECT id,created_at,title FROM tasks WHERE owner_id=? AND id<>? AND status IN ({marks}) "
+                "AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at",
+                (row["owner_id"], row["id"], *STATUSES, row["created_at"] or "", row["created_at"] or "", row["id"]),
+            )
+            if H.title_key(r[2]) == key
+        ),
+        None,
+    )
     return f"Same title as an older open task of the same owner (from {_day(twin[1])})" if twin else None
 
 
@@ -178,15 +203,25 @@ def _quiet_reason(row, at):
 
 def reason(c, row, at):
     """Why this task looks stale, in words a person reads, or None."""
-    return (_pr_reason(c, row) or _parent_reason(c, row) or _blocker_reason(c, row) or _snooze_reason(c, row, at)
-            or _twin_reason(c, row) or _quiet_reason(row, at))
+    return (
+        _pr_reason(c, row)
+        or _parent_reason(c, row)
+        or _blocker_reason(c, row)
+        or _snooze_reason(c, row, at)
+        or _twin_reason(c, row)
+        or _quiet_reason(row, at)
+    )
 
 
 def _live(c, task_id):
     try:
-        return c.execute("SELECT 1 FROM turns t JOIN attempts a ON a.id=t.id WHERE t.task_id=? "
-                         "AND a.state IN ('leased','running') LIMIT 1", (task_id,)).fetchone() is not None
-    except Exception:               # a local hub has no attempts table
+        return (
+            c.execute(
+                "SELECT 1 FROM attempts a WHERE a.task_id=? AND a.state IN ('leased','running') LIMIT 1", (task_id,)
+            ).fetchone()
+            is not None
+        )
+    except Exception:  # a local hub has no attempts table
         return False
 
 
@@ -201,8 +236,11 @@ def candidates(c, at):
     go to Decide."""
     marks = ",".join("?" * len(STATUSES))
     out = []
-    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
-                                 STATUSES)):
+    for row in H._rows(
+        c.execute(
+            f"SELECT * FROM {H.TASKS} tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id", STATUSES
+        )
+    ):
         if H.TS.snoozed(row, at) or not (H.is_bot(row["owner_id"]) or H.is_human(row["owner_id"])):
             continue
         why = reason(c, row, at)
@@ -215,10 +253,18 @@ def new_candidates(c, at):
     """The candidates Decide has not judged at their current mark, with no suggestion this week, whose owner can
     hear one."""
     judged = {r[0]: r[1] for r in c.execute("SELECT task_id,mark FROM stale_judged")}
-    recent = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM stale_suggestions WHERE created_at>?",
-                                      (H.shift(at, days=-SUGGEST_EVERY_DAYS),))}
-    return [(row, why) for row, why in candidates(c, at)
-            if judged.get(row["id"]) != mark(row) and row["id"] not in recent and _owner_reachable(c, row["owner_id"])]
+    recent = {
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT task_id FROM stale_suggestions WHERE created_at>?",
+            (H.shift(at, days=-SUGGEST_EVERY_DAYS),),
+        )
+    }
+    return [
+        (row, why)
+        for row, why in candidates(c, at)
+        if judged.get(row["id"]) != mark(row) and row["id"] not in recent and _owner_reachable(c, row["owner_id"])
+    ]
 
 
 # ----------------------------------------------------------------------------- what Decide sees
@@ -226,22 +272,41 @@ def _comments(c, row):
     out = []
     for msg in H.task_comments(c, row["id"])[-COMMENTS:]:
         text = str(msg.get("body") or "").strip()
-        out.append({"from": "a person" if H.is_human(msg.get("sender_id")) else "a bot",
-                    "at": str(msg.get("created_at") or "")[:16], "text": text[:COMMENT_CHARS]})
+        out.append(
+            {
+                "from": "a person" if H.is_human(msg.get("sender_id")) else "a bot",
+                "at": str(msg.get("created_at") or "")[:16],
+                "text": text[:COMMENT_CHARS],
+            }
+        )
     return out
 
 
 def state_of(c, row, why):
-    step = c.execute("SELECT name FROM task_steps WHERE id=?", (row["step_id"],)).fetchone() \
-        if row.get("step_id") else None
-    return {"task": {"title": row["title"] or "", "status": row["status"], "step": step[0] if step else "",
-                     "created_at": row.get("created_at") or "", "updated_at": row.get("updated_at") or "",
-                     "due_at": row.get("due_at") or "", "reason": why, "comments": _comments(c, row)}}
+    step = (
+        c.execute("SELECT name FROM task_steps WHERE id=?", (row["step_id"],)).fetchone()
+        if row.get("step_id")
+        else None
+    )
+    return {
+        "task": {
+            "title": row["title"] or "",
+            "status": row["status"],
+            "step": step[0] if step else "",
+            "created_at": row.get("created_at") or "",
+            "updated_at": row.get("updated_at") or "",
+            "due_at": row.get("due_at") or "",
+            "reason": why,
+            "comments": _comments(c, row),
+        }
+    }
 
 
 def calls_this_hour(c, at, label):
-    return c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND created_at>?",
-                     (label, H.shift(at, seconds=-EVERY_SECONDS))).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND created_at>?",
+        (label, H.shift(at, seconds=-EVERY_SECONDS)),
+    ).fetchone()[0]
 
 
 def route_of(result):
@@ -251,18 +316,24 @@ def route_of(result):
 # ----------------------------------------------------------------------------- outcomes
 def _record_outcomes(c, at):
     """A suggestion nobody answered whose task changed since: the task's next change is its outcome."""
-    for sid, task_id, was in c.execute("SELECT id,task_id,mark FROM stale_suggestions WHERE outcome IS NULL").fetchall():
+    for sid, task_id, was in c.execute(
+        "SELECT id,task_id,mark FROM stale_suggestions WHERE outcome IS NULL"
+    ).fetchall():
         row = H.task(c, task_id)
         if not row:
             c.execute("UPDATE stale_suggestions SET outcome='gone',outcome_at=? WHERE id=?", (at, sid))
         elif mark(row) != was or row["status"] not in STATUSES:
-            c.execute("UPDATE stale_suggestions SET outcome=?,outcome_at=? WHERE id=?", ("changed:" + row["status"], at, sid))
+            c.execute(
+                "UPDATE stale_suggestions SET outcome=?,outcome_at=? WHERE id=?", ("changed:" + row["status"], at, sid)
+            )
 
 
 def _judged(c, task_id, row, verdict, at):
-    c.execute("INSERT INTO stale_judged VALUES(?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET "
-              "mark=excluded.mark,verdict=excluded.verdict,judged_at=excluded.judged_at",
-              (task_id, mark(row), verdict, at))
+    c.execute(
+        "INSERT INTO stale_judged VALUES(?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET "
+        "mark=excluded.mark,verdict=excluded.verdict,judged_at=excluded.judged_at",
+        (task_id, mark(row), verdict, at),
+    )
 
 
 def _apply(c, row, why, verdict, confidence, at):
@@ -280,9 +351,11 @@ def _apply(c, row, why, verdict, confidence, at):
         suggest = bot_words
     else:
         after, suggest = row, person_words
-    c.execute("INSERT INTO stale_suggestions(id,task_id,owner,reason,verdict,action,suggest,confidence,mark,created_at) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?)",
-              (sid, row["id"], row["owner_id"], why, verdict, action, suggest, round(confidence, 3), mark(after), at))
+    c.execute(
+        "INSERT INTO stale_suggestions(id,task_id,owner,reason,verdict,action,suggest,confidence,mark,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (sid, row["id"], row["owner_id"], why, verdict, action, suggest, round(confidence, 3), mark(after), at),
+    )
     _judged(c, row["id"], after, verdict, at)
     return sid
 
@@ -293,9 +366,15 @@ def eligible(c, row, at):
     snoozed, nobody working it, and an owner who can hear a suggestion. Starting a turn does not change the task's
     mark, so a call in flight is checked again before its answer is used."""
     now = H.task(c, row["id"])
-    if (not now or mark(now) != mark(row) or now["status"] not in STATUSES or H.task_private(c, now)
-            or H.TS.snoozed(now, at)
-            or _live(c, now["id"]) or not _owner_reachable(c, now["owner_id"])):
+    if (
+        not now
+        or mark(now) != mark(row)
+        or now["status"] not in STATUSES
+        or H.task_private(c, now)
+        or H.TS.snoozed(now, at)
+        or _live(c, now["id"])
+        or not _owner_reachable(c, now["owner_id"])
+    ):
         return None
     return now
 
@@ -341,8 +420,19 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
     if engine is None and qset:
         with store.read() as c:
             engine = server_engine(store, c, primary_engine(settings, store))
-    summary = {"candidates": len(found), "new": len(found), "calls": 0, "suggested": 0, "left": 0,
-               "deferred": 0, "errors": 0, "changed": 0, "routes": {}, "cost_usd": 0.0, "fallback": None}
+    summary = {
+        "candidates": len(found),
+        "new": len(found),
+        "calls": 0,
+        "suggested": 0,
+        "left": 0,
+        "deferred": 0,
+        "errors": 0,
+        "changed": 0,
+        "routes": {},
+        "cost_usd": 0.0,
+        "fallback": None,
+    }
     if engine is None or qset is None:
         summary["deferred"], summary["why"] = len(found), "unavailable"
     else:
@@ -353,7 +443,8 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
             # as they are now, and the task still the candidate that was found.
             with store.read() as c:
                 stop = _stop(c, settings, at, label) or (
-                    "time" if clock() - started > PASS_SECONDS - CHAIN_SECONDS else None)
+                    "time" if clock() - started > PASS_SECONDS - CHAIN_SECONDS else None
+                )
                 now = None if stop else eligible(c, row, at)
                 state = state_of(c, now, why) if now else None
             if stop:
@@ -361,7 +452,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
                 summary["why"] = stop
                 break
             if now is None:
-                summary["changed"] += 1         # it moved or is being worked: the next pass sees it fresh
+                summary["changed"] += 1  # it moved or is being worked: the next pass sees it fresh
                 continue
             summary["calls"] += 1
             result, error = None, None
@@ -371,7 +462,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
                 verdict, confidence = J.choice(answers, "verdict")
             except J.JudgeError as exc:
                 error = J.error_code(exc)
-            except Exception as exc:    # a fake, a provider bug: the task waits for the next pass
+            except Exception as exc:  # a fake, a provider bug: the task waits for the next pass
                 LOG.warning("Stale ticket review call failed: %s", type(exc).__name__)
                 error = "error"
             detail = {"label": label, "questions": 1, "types": ["choice"], "task": row["id"]}
@@ -381,8 +472,10 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
                 route = route_of(result)
                 summary["routes"][route] = summary["routes"].get(route, 0) + 1
                 if result.get("fallback") and not summary["fallback"]:
-                    summary["fallback"] = {"code": result["fallback"],
-                                           "from": route_of({"provider": result.get("fallback_from")})}
+                    summary["fallback"] = {
+                        "code": result["fallback"],
+                        "from": route_of({"provider": result.get("fallback_from")}),
+                    }
             if error:
                 detail["error"] = error
                 summary["errors"] += 1
@@ -391,10 +484,10 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
                 if verdict not in SUGGEST or confidence < threshold:
                     verdict = LEAVE
                 detail["verdict"] = {"value": verdict, "confidence": round(confidence, 3)}
-                detail["answers"] = J.summary(answers)     # what Decide answered, before the threshold left it
+                detail["answers"] = J.summary(answers)  # what Decide answered, before the threshold left it
             off = False
             with store.transaction() as c:
-                H.event(c, H.KEEPER, "judge.call", label, detail)     # the call happened, whatever comes of it
+                H.event(c, H.KEEPER, "judge.call", label, detail)  # the call happened, whatever comes of it
                 if error:
                     continue
                 off = not enabled(c)
@@ -404,7 +497,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic, force=False):
                         summary["suggested"] += 1
                     else:
                         summary["left"] += 1
-            if off:                             # turned off while Decide was asked: nothing more is said or asked
+            if off:  # turned off while Decide was asked: nothing more is said or asked
                 summary["deferred"] += len(found) - n
                 summary["why"] = "switched_off"
                 break
@@ -432,6 +525,7 @@ def tick(store, at=None, force=False, engine=None):
 
     def work():
         from . import system_routines as SR
+
         run = SR.Run("stale_review")
         try:
             summary = run_pass(store, at, engine=engine, force=force)
@@ -445,21 +539,29 @@ def tick(store, at=None, force=False, engine=None):
             _RUNNING.release()
         if summary is not None:
             SR.write(store, run)
+
     thread = threading.Thread(target=work, name="stale-review", daemon=True)
     thread.start()
     return thread
 
 
-WHY_WORDS = {"unavailable": "Decide unavailable", "switched_off": "switched off", "hourly_cap": "hourly limit reached",
-             "daily_cap": "daily limit reached", "time": "out of time"}
+WHY_WORDS = {
+    "unavailable": "Decide unavailable",
+    "switched_off": "switched off",
+    "hourly_cap": "hourly limit reached",
+    "daily_cap": "daily limit reached",
+    "time": "out of time",
+}
 
 
 def words(run, summary):
     """A pass's summary as its System routines run: "9 checked, 2 suggestions", the route and the cost."""
     if not summary.get("candidates"):
         return run.did("No new candidates")
-    parts = [f"{summary.get('calls', 0)} checked",
-             f"{summary.get('suggested', 0)} suggestion{'' if summary.get('suggested') == 1 else 's'}"]
+    parts = [
+        f"{summary.get('calls', 0)} checked",
+        f"{summary.get('suggested', 0)} suggestion{'' if summary.get('suggested') == 1 else 's'}",
+    ]
     if summary.get("deferred"):
         why = WHY_WORDS.get(summary.get("why"), "")
         parts.append(f"{summary['deferred']} left for later" + (f" ({why})" if why else ""))
@@ -479,8 +581,13 @@ def pending(c, person):
     """The open suggestions made to the person whose task is still open, oldest first. A task handed to someone else
     since stays on their card until the next pass records the change: Accept is then refused as by hand."""
     out = []
-    for row in H._rows(c.execute("SELECT s.* FROM stale_suggestions s LEFT JOIN tasks t ON t.id=s.task_id "
-                                 "WHERE s.owner=? AND s.outcome IS NULL ORDER BY s.created_at,t.created_at,t.id", (person,))):
+    for row in H._rows(
+        c.execute(
+            "SELECT s.* FROM stale_suggestions s LEFT JOIN tasks t ON t.id=s.task_id "
+            "WHERE s.owner=? AND s.outcome IS NULL ORDER BY s.created_at,t.created_at,t.id",
+            (person,),
+        )
+    ):
         task = H.task(c, row["task_id"])
         if task and task["status"] in STATUSES:
             out.append((row, task))
@@ -493,12 +600,29 @@ def card(c, person):
     if not rows:
         return None
     n = len(rows)
-    return {"kind": "stale", "id": "stale:" + person, "title": TITLE.format(n=n, s="" if n == 1 else "s"),
-            "first_line": "", "created_at": rows[0][0]["created_at"], "requester_id": None, "origin_actor": None,
-            "from_person": None,
-            "rows": [{"id": s["id"], "task": t["id"], "title": t["title"], "status": t["status"],
-                      "reason": s["reason"], "suggest": s["suggest"], "action": s["action"],
-                      "version": t.get("version")} for s, t in rows]}
+    return {
+        "kind": "stale",
+        "id": "stale:" + person,
+        "title": TITLE.format(n=n, s="" if n == 1 else "s"),
+        "first_line": "",
+        "created_at": rows[0][0]["created_at"],
+        "requester_id": None,
+        "origin_actor": None,
+        "from_person": None,
+        "rows": [
+            {
+                "id": s["id"],
+                "task": t["id"],
+                "title": t["title"],
+                "status": t["status"],
+                "reason": s["reason"],
+                "suggest": s["suggest"],
+                "action": s["action"],
+                "version": t.get("version"),
+            }
+            for s, t in rows
+        ],
+    }
 
 
 def retitle(item):
@@ -508,8 +632,9 @@ def retitle(item):
 
 
 def _outcome(c, sid, outcome, actor):
-    c.execute("UPDATE stale_suggestions SET outcome=?,outcome_at=?,outcome_by=? WHERE id=?",
-              (outcome, H.now(), actor, sid))
+    c.execute(
+        "UPDATE stale_suggestions SET outcome=?,outcome_at=?,outcome_by=? WHERE id=?", (outcome, H.now(), actor, sid)
+    )
 
 
 def _accept_one(c, auth, who, row, version):
@@ -535,8 +660,9 @@ def _accept_one(c, auth, who, row, version):
 
 
 def _mine(c, who, sid):
-    row = c.execute("SELECT * FROM stale_suggestions WHERE id=? AND owner=? AND outcome IS NULL",
-                    (sid, who.actor)).fetchone()
+    row = c.execute(
+        "SELECT * FROM stale_suggestions WHERE id=? AND owner=? AND outcome IS NULL", (sid, who.actor)
+    ).fetchone()
     if not row:
         raise Problem("not_found", "No such suggestion waiting for you", 404)
     return dict(row)
@@ -571,8 +697,7 @@ def accept_all(c, auth, who, shown):
             did = _accept_one(c, auth, who, row, version)
         except (H.Refused, Problem) as exc:
             c.execute("ROLLBACK TO stale_accept")
-            refused.append({"id": row["id"], "task": row["task_id"],
-                            "reason": getattr(exc, "detail", "") or str(exc)})
+            refused.append({"id": row["id"], "task": row["task_id"], "reason": getattr(exc, "detail", "") or str(exc)})
         else:
             done.append({"id": row["id"], "task": row["task_id"], "did": did})
         c.execute("RELEASE stale_accept")
@@ -599,4 +724,3 @@ def install(app, store, auth, mutate):
         if body.decision not in ("accept", "skip"):
             raise Problem("invalid", "decision is accept or skip", 422)
         return mutate(request, body, lambda c: decide(c, auth, who, suggestion_id, body.decision, body.version))
-

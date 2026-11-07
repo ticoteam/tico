@@ -138,6 +138,18 @@
 .fin-grp td{padding-top:10px;font-weight:600}
 .fin-grp .fin-link{display:inline-flex;align-items:center;gap:6px;font-weight:600}
 .fin-caret{display:inline-block;width:12px;color:var(--muted)}
+/* Budgets: a tree, children indented; Used is a thin meter. */
+.fin-bud-t tbody td:first-child{padding-left:calc(var(--d,0) * 16px)}
+.fin-bud-t tr.fin-grp{cursor:default}
+.fin-bud-t .fin-bar-m{display:block;width:64px;margin:0}
+.fin-bud-t td.fin-edit{cursor:text;text-decoration:underline dotted color-mix(in srgb,var(--muted) 60%,transparent);text-underline-offset:3px}
+.fin-bud-t td.fin-edit:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.fin-bud-t .pill{margin:0}
+.fin-radios{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;border:0;min-width:0}
+.fin-radios legend{margin-bottom:6px;padding:0;font-size:var(--t-sm);color:var(--muted)}
+.fin-radios label.fin-check{white-space:normal}
+.fin-paste{display:contents}
+.fin-paste[hidden]{display:none}
 .fin-src-t tr[data-fin-src] td:first-child{padding-left:18px}
 .fin-ind{padding-left:calc(var(--d,0) * 16px)}
 .fin-acc-t td{white-space:normal}
@@ -262,4 +274,20 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
   .fin-il .fin-check{grid-column:1/-1}
   .fin-vpick{min-width:0}
   .fin-form label.fin-map-row{grid-template-columns:1fr}
+}
+/* Attribution: a split's chips, the share rows of its dialogs, the rules table's menu and the line's "Attributed to". */
+.fin-chip-muted{color:var(--muted)}
+.fin-share-rows{display:flex;flex-direction:column;gap:8px}
+.fin-share-row{display:grid;grid-template-columns:minmax(0,1fr) 84px 36px;gap:8px;align-items:center}
+.fin-share-row select,.fin-share-row input{min-width:0;height:var(--ctl)}
+.fin-share-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.fin-share-clear{display:flex;justify-content:flex-start}
+.fin-share-actions{display:flex;flex-wrap:wrap;gap:6px}
+.fin-share-actions:empty{display:none}
+.fin-share-hist{margin-top:10px}
+.fin-share-hist summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
+.fin-share-hist .fin-kv{margin-top:6px}
+.fin-confirm{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+@media (max-width:640px){
+  .fin-share-row{grid-template-columns:minmax(0,1fr) 76px 36px}
 }

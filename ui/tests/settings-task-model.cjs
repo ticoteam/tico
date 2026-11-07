@@ -22,7 +22,7 @@ const {unrouted} = require('./support/routes.cjs');
     const model = (id, harness, provider) => ({id, label: id.replace(/-/g, ' '), runtime: harness, provider,
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
-      models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), model('gpt-6-luna', 'codex', 'openai')],
+      models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}],
       default: {runtime: 'claude', model: 'claude-sonnet-5-5'},
     };
@@ -109,6 +109,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await task.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot', 'defaults to the same as the bot');
     assert.equal(await task.locator('[data-choice-model]').isDisabled(), true);
     await task.locator('[data-choice-harness]').selectOption('codex');
+    assert.equal(await task.locator('[data-choice-model] option[value="gpt-6-luna"]').innerText(), 'gpt 6 luna · 1.05M',
+      'the rendered task model option says its window');
     await task.locator('[data-choice-model]').selectOption('gpt-6-luna');
     await editor.locator('button[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
@@ -140,7 +142,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await pickers.locator('[data-choice-effort]').isVisible(), false, 'Task effort stands in for the Effort picker');
     const effortPick = row.locator('[data-task-effort]'), contextPick = row.locator('[data-task-context]');
     assert.equal(await effortPick.inputValue(), 'high');
-    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
+    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '100k', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
     // Same as bot for the model keeps the task effort: tasks still differ, so the mark stays on.
     calls = [];
     await pickers.locator('[data-choice-harness]').selectOption('');
@@ -191,7 +193,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await pickers.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot');
     assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['Same as bot', 'low', 'high'], "the bot's own model's efforts");
     assert.equal(await mark.innerText(), 'Tasks · 600k');
-    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low · 600k$/);
+    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low$/, 'the run line names no compaction length');
     assert.deepEqual(await savePart(effortPick, ''), {model: null, effort: null, compact_at: 600000});
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'context only still differs');
     assert.equal(await savePart(contextPick, ''), null, 'all three Same as bot');

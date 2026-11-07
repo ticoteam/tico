@@ -132,10 +132,11 @@ the rest wait for the next day. The server refuses a sixth.
 ## Asking it through your Assistant
 
 Nobody messages the Strategy Bot directly, the owner included: everyone's one DM is their
-[Assistant](assistant.md#helpers-through-the-assistant). Ask it for strategy advice or a goal change and it files the
+[Assistant](assistant.md#helpers-through-the-assistant). Ask it for strategy advice and it files the
 Strategy Bot a task citing your words. The Strategy Bot works that task in its own turn with its own rights, so a change
-that stays yours (below) comes back to you as a proposal or a Confirm card. Bots still message it, in its goals
-session.
+that stays yours (below) comes back to you as a proposal or a Confirm card. Your own goal changes do not go to it that way:
+the Assistant reads each one back in your chat, and only your plain yes saves it ([Goals, agreed in words](assistant.md#goals-agreed-in-words)). The Strategy Bot's goal suggestions are read back the same way: a plain yes in your chat confirms one, and it leaves **Needs you**.
+Bots still message it, in its goals session.
 
 Before this change the owner messaged the Strategy Bot itself. That DM stays yours as read-only history under
 **Earlier chats** on your Assistant page, and Confirm cards still waiting there moved to your Assistant DM once. If you
@@ -192,7 +193,7 @@ Only the owner sees **Undo**, and it asks once before it acts. Undo puts each ta
 decision: its owner, its status and step, its place in the queue and its note. A task the decision created is closed.
 Each bot whose task changed is told, including a bot that loses a task it was given. If someone changed a task after
 the decision, their change stays, and a task the decision created that someone has changed stays open. If Tico can't
-put one task back, the others are still put back. A task that has a guest now keeps its owner, so the guest keeps it.
+put one task back, the others are still put back.
 The entry then says, in plain words, what could not be restored. An entry is undone once. Your Undo stands: the
 Strategy Bot never makes a change you undid alone again (the same new task for the same bot, or the same reorder, reassign or
 close of a task); tried again, it becomes an item in your **Needs you**.

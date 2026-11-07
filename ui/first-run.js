@@ -32,7 +32,7 @@ function frParentOptions(state, slug) {
   const cat = state.catalog, out = [];
   const owner = frOwner();
   for (const person of frPeople()) out.push({value: 'human:' + person.id, label: (person.name || person.id) + (('human:' + person.id) === owner ? ' (you)' : ''), group: 'Humans'});
-  // Built-in and message bots are not on the chart, so nobody reports to one.
+  // Built-ins and explicit catalog helpers are off the chart, so nobody reports to one.
   for (const card of cat.cards) {
     if (!card.required && card.kind !== 'helper' && cat.picked.has(card.slug) && card.slug !== slug && !frDescends(state, card.slug, slug))
       out.push({value: card.slug, label: catalogName(cat, card), group: 'Bots on your team'});
@@ -80,7 +80,7 @@ function frSummaryTeamHTML(state) {
   const cat = state.catalog, org = state.org;
   // In the order they are set up: each department's head first, then its team.
   const rows = Object.keys(frSelection(state)).map(slug => catalogCard(cat, slug)).filter(card => card && !card.required && card.kind !== 'helper');
-  // Built-in and message bots stay outside the chart, in separate review rows.
+  // Built-ins and explicit catalog helpers stay outside the chart, in separate review rows.
   const helpers = cat.cards.filter(card => card.required)
     .map(card => esc(catalogName(cat, card))).join(', ');
   const messageBots = cat.cards.filter(card => !card.required && card.kind === 'helper' && cat.picked.has(card.slug))
@@ -182,8 +182,8 @@ function frNextHTML(state) {
         <div class="onb-actions"><button class="ghost" type="submit">Add admin</button><span class="muted" id="fr-admin-status" role="status"></span></div></form>
       <small class="muted">Tico sends no email: tell them.${S.config?.local ? ' Only you can sign in until you add a domain and sign-in.' : ''}</small></details>
     <details class="fr-connections"><summary>Connect tools and credentials</summary>
-      <p><a href="#/credentials" data-fr-link="credentials">Credentials</a> · <a href="#/integrations" data-fr-link="integrations">Tools</a></p>
-      <p class="fr-secrets" data-fr-secrets><strong>Enter credentials on the Credentials page, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
+      <p><a href="#/tools/keys" data-fr-link="credentials">Keys</a> · <a href="#/tools" data-fr-link="integrations">Tools</a></p>
+      <p class="fr-secrets" data-fr-secrets><strong>Enter credentials in Tools › Keys, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
 }
 
 function frWireDone(state) {

@@ -58,7 +58,7 @@ Use `hub_assistant_read` and `hub_assistant_send` for your private Assistant DM.
 for `hub_message_send`. These always use your own DM; another human's Assistant DM stays private.
 
 Tools that need a local repository or make a local network call are available only on a Computer: `hub_bot_copy`,
-`hub_bot_update_from_original`, `hub_bot_suggest_to_original`, `hub_skill_copy` and `hub_doc_fetch`. Run them on the Computer
+`hub_bot_update_from_original`, `hub_bot_suggest_to_original`, `hub_skill_copy`, `hub_skill_submit` (docs/skills.md) and `hub_doc_fetch`. Run them on the Computer
 holding the repository, or ask BotOps. The server explains this when one is called.
 
 For a complete Needs you walkthrough, see [Needs you batches](needs-you-batches.md).

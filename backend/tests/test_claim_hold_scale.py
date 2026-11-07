@@ -3,6 +3,7 @@
 Synthetic rows only. Twelve computers claim at once round after round while heartbeats run and a few leases lapse
 each round, as they do when renewals queue behind the lock. Prints a receipt of each claim phase under the lock,
 how often the claim's own expiry sent it to the full selection, and every write hold the claim route took."""
+
 import json
 import math
 import random
@@ -16,6 +17,8 @@ import pytest
 from backend import auto_tasks, execution, flight, org_turns
 from backend.store import H, encode, _pooled
 from backend.tests.test_api import api, assign, headers, post, runner  # noqa: F401
+from backend.enqueue import enqueue_stored
+from backend import bot_settings as BS
 
 BOTS, COMPUTERS, ROUTINES, ROUNDS, LAPSES = 102, 12, 291, 30, 3
 
@@ -26,8 +29,8 @@ def seed(api):
     with store.transaction() as c:
         H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}, [])
         for s in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (s, encode({"name": s, "runtime": "fake"})))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
+            BS.write(c, s, {'name': s, 'runtime': 'fake'})
     computers = [runner(api, label=f"Synthetic {n}") for n in range(COMPUTERS)]
     places = {}
     for i, s in enumerate(slugs):
@@ -35,26 +38,44 @@ def seed(api):
         assign(api, computer, s)
         places.setdefault(computer["runner_id"], []).append(s)
     for computer in computers:
-        post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-             "readiness": {s: True for s in places[computer["runner_id"]]}}, token=computer["token"])
+        post(
+            api,
+            "runners/heartbeat",
+            {"version": "test", "platform": "test", "readiness": {s: True for s in places[computer["runner_id"]]}},
+            token=computer["token"],
+        )
     now = H.now()
     with store.transaction() as c:
         for n in range(ROUTINES):
-            c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due_at,source,updated_at) "
-                      "VALUES(?,?,?,?,NULL,?,'',?,'synthetic',?)",
-                      (f"routine-{n}", slugs[n % BOTS], f"routine-{n}", "0 9 * * *", f"Routine {n}",
-                       H.shift(now, hours=6), now))
+            c.execute(
+                "INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due_at,source,updated_at) "
+                "VALUES(?,?,?,?,NULL,?,'',?,'synthetic',?)",
+                (
+                    f"routine-{n}",
+                    slugs[n % BOTS],
+                    f"routine-{n}",
+                    "0 9 * * *",
+                    f"Routine {n}",
+                    H.shift(now, hours=6),
+                    now,
+                ),
+            )
         # Work for every bot: a chat each and three tasks each, as a busy install's queue holds.
         for s in slugs:
             room = f"chat-{s}"
-            c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES(?,'chat',?,?)",
-                      (room, encode(["human:ana", "bot:" + s]), now))
+            c.execute(
+                "INSERT INTO conversations(id,kind,participants,created_at) VALUES(?,'chat',?,?)",
+                (room, encode(["human:ana", "bot:" + s]), now),
+            )
             for k in range(3):
-                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
-                          "VALUES(?,?,'human:ana',?,'say','Synthetic work',?,'{}')",
-                          (f"work-{s}-{k}", room, "bot:" + s, now))
+                c.execute(
+                    "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
+                    "VALUES(?,?,'human:ana',?,'say','Synthetic work',?,'{}')",
+                    (f"work-{s}-{k}", room, "bot:" + s, now),
+                )
+                enqueue_stored(c, f"work-{s}-{k}")
         # Room for many turns on each computer, and up long enough to be trusted with a lease.
-        c.execute("UPDATE runners SET capacity=40,awake_since=?,last_seen_at=?", (H.shift(now, minutes=-10), now))
+        c.execute("UPDATE runner_states SET capacity=40,awake_since=?,last_seen_at=?", (H.shift(now, minutes=-10), now))
     return computers, places
 
 
@@ -85,12 +106,13 @@ class Phases:
                 phases.add(label or name, (time.perf_counter() - start) * 1000)
                 if name == "expire" and conn is not None and conn.total_changes != before:
                     with phases.lock:
-                        phases.fallbacks += 1      # the claim's own expiry changed rows: the old code chose afresh
+                        phases.fallbacks += 1  # the claim's own expiry changed rows: the old code chose afresh
                 if name == "auto_tasks.missing" or label == "auto_tasks.missing":
-                    phases.local.backfill = True       # the backfill's own selection is not a repeat
+                    phases.local.backfill = True  # the backfill's own selection is not a repeat
                 elif name == "candidate" and k.get("job_id") is None and not getattr(phases.local, "backfill", False):
                     with phases.lock:
                         phases.full_under_lock += 1
+
         monkeypatch.setattr(owner, name, timed)
 
     def around_claim(self, monkeypatch, cls):
@@ -106,6 +128,7 @@ class Phases:
                 phases.local.inside = False
                 with phases.lock:
                     phases.claims.append((time.perf_counter() - start) * 1000)
+
         monkeypatch.setattr(cls, "claim", claim)
 
 
@@ -126,8 +149,13 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
         store.pool.clear()
     monkeypatch.setattr(flight, "LONG_HOLD_MS", 0)
     holds = []
-    monkeypatch.setattr(rec, "long_hold", lambda route, site, hold_ms, wait_ms: holds.append(
-        {"route": route, "site": site, "hold_ms": hold_ms, "wait_ms": wait_ms}))
+    monkeypatch.setattr(
+        rec,
+        "long_hold",
+        lambda route, site, hold_ms, wait_ms: holds.append(
+            {"route": route, "site": site, "hold_ms": hold_ms, "wait_ms": wait_ms}
+        ),
+    )
     phases = Phases()
     cls = type(ex)
     phases.around_claim(monkeypatch, cls)
@@ -147,18 +175,29 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
             flight.request_finished(token)
 
     def claim(computer):
-        r = routed("/api/v2/jobs/claim", lambda: api.post(
-            "/api/v2/jobs/claim", headers=headers(computer["token"]), json={"start_places": True}))
+        r = routed(
+            "/api/v2/jobs/claim",
+            lambda: api.post("/api/v2/jobs/claim", headers=headers(computer["token"]), json={"start_places": True}),
+        )
         if r.status_code != 200:
             errors.append((r.status_code, r.text[:200]))
             return None
         return r.json().get("attempt")
 
     def beat(computer):
-        r = routed("/api/v2/runners/heartbeat", lambda: api.post(
-            "/api/v2/runners/heartbeat", headers=headers(computer["token"]), json={
-                "version": "test", "platform": "test", "capacity": 40,
-                "readiness": {s: True for s in places[computer["runner_id"]]}}))
+        r = routed(
+            "/api/v2/runners/heartbeat",
+            lambda: api.post(
+                "/api/v2/runners/heartbeat",
+                headers=headers(computer["token"]),
+                json={
+                    "version": "test",
+                    "platform": "test",
+                    "capacity": 40,
+                    "readiness": {s: True for s in places[computer["runner_id"]]},
+                },
+            ),
+        )
         if r.status_code != 200:
             errors.append((r.status_code, r.text[:200]))
 
@@ -169,8 +208,10 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
             with store.transaction() as c:
                 live = [r[0] for r in c.execute("SELECT id FROM attempts WHERE state='leased'")]
                 lapsed = rng.sample(live, min(LAPSES, len(live)))
-                c.executemany("UPDATE attempts SET lease_until=? WHERE id=?",
-                              [(H.shift(H.now(), seconds=-1), aid) for aid in lapsed])
+                c.executemany(
+                    "UPDATE attempts SET lease_until=? WHERE id=?",
+                    [(H.shift(H.now(), seconds=-1), aid) for aid in lapsed],
+                )
             work = [pool.submit(claim, computer) for computer in computers]
             work += [pool.submit(beat, computer) for computer in computers]
             for pending in work[:COMPUTERS]:
@@ -184,18 +225,34 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
     for h in claim_holds:
         by_site.setdefault(h["site"], []).append(h["hold_ms"])
     receipt = {
-        "bots": BOTS, "computers": COMPUTERS, "routines": ROUTINES, "rounds": ROUNDS, "lapses_per_round": LAPSES,
-        "seconds": round(seconds, 1), "claims": len(phases.claims), "attempts_taken": taken,
-        "fallbacks": phases.fallbacks, "full_selection_under_lock": phases.full_under_lock,
-        "claim_under_lock_ms": {"p50": pct(phases.claims, .5), "p95": pct(phases.claims, .95),
-                                "max": pct(phases.claims, 1)},
-        "phases_ms": {name: {"n": len(v), "p95": pct(v, .95), "max": pct(v, 1), "total": round(sum(v), 1)}
-                      for name, v in sorted(phases.times.items())},
-        "claim_route_holds_ms": {site: {"n": len(v), "p95": pct(v, .95), "max": pct(v, 1)}
-                                 for site, v in sorted(by_site.items())},
-        "heartbeat_holds_ms": {"n": len(beats), "p95": pct(beats, .95), "max": pct(beats, 1)},
-        "all_claim_holds_ms": {"n": len(claim_holds), "p95": pct([h["hold_ms"] for h in claim_holds], .95),
-                               "max": pct([h["hold_ms"] for h in claim_holds], 1)},
+        "bots": BOTS,
+        "computers": COMPUTERS,
+        "routines": ROUTINES,
+        "rounds": ROUNDS,
+        "lapses_per_round": LAPSES,
+        "seconds": round(seconds, 1),
+        "claims": len(phases.claims),
+        "attempts_taken": taken,
+        "fallbacks": phases.fallbacks,
+        "full_selection_under_lock": phases.full_under_lock,
+        "claim_under_lock_ms": {
+            "p50": pct(phases.claims, 0.5),
+            "p95": pct(phases.claims, 0.95),
+            "max": pct(phases.claims, 1),
+        },
+        "phases_ms": {
+            name: {"n": len(v), "p95": pct(v, 0.95), "max": pct(v, 1), "total": round(sum(v), 1)}
+            for name, v in sorted(phases.times.items())
+        },
+        "claim_route_holds_ms": {
+            site: {"n": len(v), "p95": pct(v, 0.95), "max": pct(v, 1)} for site, v in sorted(by_site.items())
+        },
+        "heartbeat_holds_ms": {"n": len(beats), "p95": pct(beats, 0.95), "max": pct(beats, 1)},
+        "all_claim_holds_ms": {
+            "n": len(claim_holds),
+            "p95": pct([h["hold_ms"] for h in claim_holds], 0.95),
+            "max": pct([h["hold_ms"] for h in claim_holds], 1),
+        },
     }
     print("CLAIM_HOLD_RECEIPT " + json.dumps(receipt, indent=1), flush=True)
     assert not errors, errors[:5]

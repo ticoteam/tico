@@ -3,7 +3,8 @@
 - Lead with the outcome. Then what the reader must do, if anything.
 - Short sentences. No filler, no restating the request.
 - Task titles: verb first, under 70 characters. "Investigate organic traffic drop", not "SEO stuff".
-- Comments: only when they change what someone should do next.
+- Comments: only when they change what someone should do next. To get a person's attention on a task, @mention
+  them; otherwise the comment stays on the task.
 - Task notes and asks are plain sentences a teammate reads once: what happened, what is next, what you
   need. No raw IDs, hashes, operation IDs or counters ("split519475db", "count10 op…"); name the thing
   in words and give at most one link to it.

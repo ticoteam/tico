@@ -7,6 +7,7 @@ and refuses those that hand a secret back (`person_only`); the identity it lends
 own "always a click" rule asks too. Only the person's tap on the card runs it.
 Secrets go through Credentials, never arbitrary API request bodies.
 """
+
 import json
 import re
 
@@ -18,8 +19,16 @@ def request_task(c, auth, who, title, body):
     """
     from . import rooms
     from .store import H
-    task = H.task_create(c, who.actor, title, body, H.bot_actor(H.FLEET_MAINTAINER), allow_planned=True,
-                         conversation_id=rooms.task_conversation_id(c, auth, H.bot_actor(H.FLEET_MAINTAINER), who.actor))
+
+    task = H.task_create(
+        c,
+        who.actor,
+        title,
+        body,
+        H.bot_actor(H.FLEET_MAINTAINER),
+        allow_planned=True,
+        conversation_id=rooms.task_conversation_id(c, auth, H.bot_actor(H.FLEET_MAINTAINER), who.actor),
+    )
     if who.role in ("owner", "human") and who.via != "assistant":
         H.event(c, who.actor, "botops.task_requested", task["id"], {})
     return task
@@ -40,8 +49,15 @@ def own_run(c, auth, attempt_id):
     a watcher's task, a stopped job's request, a routine BotOps set itself while it worked for someone, a task someone
     commented on."""
     from .store import H
-    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot_id=?",
-                     (attempt_id, H.FLEET_MAINTAINER)).fetchone() if attempt_id else None
+
+    turn = (
+        c.execute(
+            "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot_id=?",
+            (attempt_id, H.FLEET_MAINTAINER),
+        ).fetchone()
+        if attempt_id
+        else None
+    )
     msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
     refs = (msg or {}).get("refs") or {}
     # A converted routine's task is opened by its automation as BotOps itself (backend/automation_actions.py).
@@ -64,17 +80,21 @@ def _owners_routine_task(c, auth, task):
     """A task the keeper opened for one of BotOps' timed routines, whose every word the owner or the product wrote:
     the routine (created and since changed only by them), the task itself, and anything said on it."""
     from .store import H
+
     keeper, botops = H.KEEPER, "bot:" + H.FLEET_MAINTAINER
     if not task or task["requester_id"] != keeper or task["owner_id"] != botops:
         return False
-    made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
-                     (task["id"],)).fetchone()
+    made = c.execute(
+        "SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1", (task["id"],)
+    ).fetchone()
     if not made or made["actor"] != keeper:
         return False
     # An event routine's task carries the event's content (a meeting's notes, say), so only timed and manual runs.
-    schedule = c.execute("SELECT o.schedule_id FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id "
-                         "WHERE o.task_id=? AND o.outcome<>'event' AND s.bot=? LIMIT 1",
-                         (task["id"], H.FLEET_MAINTAINER)).fetchone()
+    schedule = c.execute(
+        "SELECT o.schedule_id FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id "
+        "WHERE o.task_id=? AND o.outcome<>'event' AND s.bot=? LIMIT 1",
+        (task["id"], H.FLEET_MAINTAINER),
+    ).fetchone()
     if not schedule or not _owners_routine(c, auth, schedule["schedule_id"]):
         return False
     return _untouched(c, task, keeper)
@@ -85,18 +105,26 @@ def _owners_automation_task(c, auth, task, refs):
     wrote, not through the Assistant or a token. A converted routine counts only when the routine itself was the
     owner's (`_owners_routine`): one from a bot.yaml, or one BotOps set while it worked for someone, never does."""
     from .store import H
+
     botops = "bot:" + H.FLEET_MAINTAINER
     automation_id = str(refs.get("automation") or "")
     if not task or task["owner_id"] != botops or task["requester_id"] not in (H.KEEPER, botops):
         return False
-    row = c.execute("SELECT owner_id, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
-                    (automation_id,)).fetchone()
-    if not row or row["owner_id"] != botops or row["trigger_type"] != "schedule" \
-            or refs.get("trigger_source") != "automation:" + automation_id:
+    row = c.execute(
+        "SELECT owner_id, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL", (automation_id,)
+    ).fetchone()
+    if (
+        not row
+        or row["owner_id"] != botops
+        or row["trigger_type"] != "schedule"
+        or refs.get("trigger_source") != "automation:" + automation_id
+    ):
         return False
     # The run that opened this task is that automation's own, from its schedule or a Run now, not a chained event.
-    run = c.execute("SELECT 1 FROM automation_runs WHERE id=? AND automation_id=?",
-                    (str(refs.get("automation_run") or ""), automation_id)).fetchone()
+    run = c.execute(
+        "SELECT 1 FROM automation_runs WHERE id=? AND automation_id=?",
+        (str(refs.get("automation_run") or ""), automation_id),
+    ).fetchone()
     if not run or refs.get("automation_chain"):
         return False
     source = (H._json(row["flow"], {}) or {}).get("source")
@@ -117,10 +145,13 @@ def _owners_automation_task(c, auth, task, refs):
 def _owners_routine(c, auth, schedule_id):
     """A routine created through the API and since changed only by the owner (or the product)."""
     from .store import H
-    writers = c.execute("SELECT action,actor,detail FROM events WHERE target=? "
-                        "AND action IN ('routine.created','routine.updated')", (schedule_id,)).fetchall()
+
+    writers = c.execute(
+        "SELECT action,actor,detail FROM events WHERE target=? AND action IN ('routine.created','routine.updated')",
+        (schedule_id,),
+    ).fetchall()
     if not any(w["action"] == "routine.created" for w in writers):
-        return False                # a routine from a bot.yaml: whoever pushed that file wrote it
+        return False  # a routine from a bot.yaml: whoever pushed that file wrote it
     for w in writers:
         if w["actor"] == H.KEEPER:
             continue
@@ -132,17 +163,24 @@ def _owners_routine(c, auth, schedule_id):
 def _untouched(c, task, writer):
     """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
     from .store import H
+
     botops = "bot:" + H.FLEET_MAINTAINER
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
-                 (task["id"], writer, H.KEEPER)).fetchone():
+    if c.execute(
+        "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('title','body') "
+        "AND actor_id NOT IN (?,?) LIMIT 1",
+        (task["id"], writer, H.KEEPER),
+    ).fetchone():
         return False
-    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.sender_id NOT IN (?,?,?) "
-                     "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
+    said = c.execute(
+        "SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) LIMIT 1",
+        (task["id"], H.KEEPER, botops, writer),
+    ).fetchone()
     return not said
 
 
 def _is_owner(c, auth, actor):
     from .store import H, Problem
+
     if not H.is_human(actor):
         return False
     try:
@@ -156,27 +194,37 @@ def lend_lapsed(c, task):
     than the requester moved it back from done, closed or declined (the request it carried was finished), or the
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
+
     requester = task["requester_id"]
-    for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
-                         "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
+    for row in c.execute(
+        "SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+        "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)",
+        (task["id"], *TERMINAL, *TERMINAL),
+    ):
         if row["actor"] != requester or dict(row).get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).
-            return ("That task was finished and someone other than the person reopened it, so it never lends their rights "
-                    "again, even after they reply. Only a run their own comment on it or their message in their BotOps chat "
-                    "starts has their rights: in such a run, send no on_behalf_of; otherwise ask them there and end this run")
+            return (
+                "That task was finished and someone other than the person reopened it, so it never lends their rights "
+                "again, even after they reply. Only a run their own comment on it or their message in their BotOps chat "
+                "starts has their rights: in such a run, send no on_behalf_of; otherwise ask them there and end this run"
+            )
     spoke = []
-    made = c.execute("SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
-                     (task["id"],)).fetchone()
+    made = c.execute(
+        "SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
+        (task["id"],),
+    ).fetchone()
     if made and made["actor"] == requester and H._json(made["detail"], {}).get("via") != "assistant":
         spoke.append(task["created_at"])
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
     if origin and origin["sender_id"] == requester:
         spoke.append(origin["created_at"])
-    comment = c.execute("SELECT max(m.created_at) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
-                        "AND m.sender_id=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
-                        "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
-                        (task["id"], requester)).fetchone()[0]
+    comment = c.execute(
+        "SELECT max(m.created_at) FROM message_refs m WHERE m.ref_task_id=? "
+        "AND m.sender_id=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
+        "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
+        (task["id"], requester),
+    ).fetchone()[0]
     if comment:
         spoke.append(comment)
     if not spoke or max(spoke) < H.shift(H.now(), days=-LEND_MAX_DAYS):
@@ -197,12 +245,22 @@ def _routes(*rows):
 # who asked. The route checks that person's rights on the thread (backend/threads.py). `messages/` is in OWN for
 # BotOps' own messages, so `default_delegable` matches these routes before OWN.
 THREADS = _routes(
-    ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
-    ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
-    ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
-    ("PATCH", rf"messages/{_S}"), ("DELETE", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
-    ("PUT", rf"messages/{_S}/reactions/{_S}"), ("DELETE", rf"messages/{_S}/reactions/{_S}"),
-    ("POST", r"threads/dm"), ("POST", rf"threads/{_S}/open-earlier"), ("POST", rf"uploads/threads/{_S}/messages"),
+    ("POST", r"threads"),
+    ("PATCH", rf"threads/{_S}"),
+    ("POST", rf"threads/{_S}/(messages|read|read-all|members)"),
+    ("DELETE", rf"threads/{_S}/members/{_S}"),
+    ("PUT", rf"threads/{_S}/follow"),
+    ("DELETE", rf"threads/{_S}/follow"),
+    ("PUT", rf"threads/{_S}/pin"),
+    ("DELETE", rf"threads/{_S}/pin"),
+    ("PATCH", rf"messages/{_S}"),
+    ("DELETE", rf"messages/{_S}"),
+    ("POST", rf"threads/messages/{_S}/task"),
+    ("PUT", rf"messages/{_S}/reactions/{_S}"),
+    ("DELETE", rf"messages/{_S}/reactions/{_S}"),
+    ("POST", r"threads/dm"),
+    ("POST", rf"threads/{_S}/open-earlier"),
+    ("POST", rf"uploads/threads/{_S}/messages"),
 )
 
 
@@ -211,89 +269,133 @@ THREADS = _routes(
 # A credential grant to a bot runs at once when the person is a credential administrator (or stored it, for a bot they
 # manage) and is refused, with who to ask, when they are not; only a grant to a person or to every computer is a card (backend/credentials.py).
 DO = _routes(
-    ("POST", r"bots"), ("POST", r"bots/register"),
-    ("POST", rf"bots/{_S}/(definition|assignment|placement|place|go-live|model|fallback|transitions|control|owners|co-owners|"
-             rf"onboarded|goals|updates|tools|quarantine/clear|limit/retry)"),
-    ("POST", rf"bots/{_S}/tools/{_S}/(delete|update)"), ("DELETE", rf"bots/{_S}/tools/{_S}"),
+    ("POST", r"bots"),
+    ("POST", r"bots/register"),
+    (
+        "POST",
+        rf"bots/{_S}/(definition|assignment|placement|place|go-live|model|fallback|transitions|control|owners|co-owners|"
+        rf"onboarded|goals|updates|tools|quarantine/clear|limit/retry)",
+    ),
+    ("POST", rf"bots/{_S}/tools/{_S}/(delete|update)"),
+    ("DELETE", rf"bots/{_S}/tools/{_S}"),
     # Copying a bot or a skill, bringing a copy up to date and suggesting its changes back: each is checked with the requester's own
     # rights on the bots it names (backend/bot_copy.py).
-    ("POST", rf"bots/{_S}/(copy|copies|branches|update-from-original|suggest-to-original|skills/copy|repository-read-token)"),
+    (
+        "POST",
+        rf"bots/{_S}/(copy|copies|branches|update-from-original|suggest-to-original|skills/copy|repository-read-token)",
+    ),
     # A Hermes bot (docs/hermes-agents.md): restoring an archived bot, pairing its profile with the code the connector
     # prints, and rotating or revoking its agent credential. The token itself never comes back to BotOps (the route).
-    ("POST", rf"bots/{_S}/(archive|restore)"), ("POST", rf"bots/{_S}/agent-credential"), ("POST", rf"bots/{_S}/agent-credential/revoke"),
+    ("POST", rf"bots/{_S}/(archive|restore)"),
+    ("POST", rf"bots/{_S}/agent-credential"),
+    ("POST", rf"bots/{_S}/agent-credential/revoke"),
     ("POST", r"agents/pairings/(approve|decline)"),
-    ("POST", rf"bots/{_S}/access"), ("PUT", rf"bots/{_S}/access"),
+    ("POST", rf"bots/{_S}/access"),
+    ("PUT", rf"bots/{_S}/access"),
     # A person's or a group's access (backend/teammate_access.py): the route checks the person manages them.
-    ("POST", rf"(people|humans|groups)/{_S}/access"), ("PUT", rf"(people|humans|groups)/{_S}/access"),
-    ("PUT", rf"bots/{_S}/repositories"), ("PUT", rf"repositories/{_S}/{_S}"),
-    ("PUT", "repositories/settings"), ("POST", "repositories/refresh"),
-    ("PUT", rf"bots/{_S}/github-repos"), ("POST", r"github/repos"), ("DELETE", rf"github/repos/{_S}/{_S}"),
+    ("POST", rf"(people|humans|groups)/{_S}/access"),
+    ("PUT", rf"(people|humans|groups)/{_S}/access"),
+    ("PUT", rf"bots/{_S}/repositories"),
+    ("PUT", rf"repositories/{_S}/{_S}"),
+    ("PUT", "repositories/settings"),
+    ("POST", "repositories/refresh"),
+    ("PUT", rf"bots/{_S}/github-repos"),
+    ("POST", r"github/repos"),
+    ("DELETE", rf"github/repos/{_S}/{_S}"),
     # Automations (backend/automations.py): the route checks the person's place on the org chart.
     # Deleting one is CONFIRM below.
-    ("POST", r"automations"), ("PATCH", rf"automations/{_S}"),
-    ("POST", rf"automations/{_S}/run"), ("POST", rf"automations/{_S}/versions/{_S}/restore"),
-    ("DELETE", rf"automations/{_S}/versions/{_S}"), ("PATCH", rf"inboxes/{_S}"),
+    ("POST", r"automations"),
+    ("PATCH", rf"automations/{_S}"),
+    ("POST", rf"automations/{_S}/run"),
+    ("POST", rf"automations/{_S}/versions/{_S}/restore"),
+    ("DELETE", rf"automations/{_S}/versions/{_S}"),
+    ("PATCH", rf"inboxes/{_S}"),
     ("POST", rf"settings/history/{_S}/undo"),
     ("POST", rf"settings/transitions/{_S}/(apply-without-checkpoint|cancel)"),
     # Goals and KPIs: a goal's or KPI's own rules decide who may change what.
-    ("POST", r"goals"), ("POST", rf"goals/{_S}"), ("POST", rf"goals/{_S}/(status|status/auto|checkins|kpis)"),
-    ("POST", rf"goals/{_S}/kpis/{_S}"), ("POST", rf"goals/{_S}/kpis/{_S}/unlink"), ("POST", r"goals/refresh"),
-    ("POST", r"kpis"), ("POST", rf"kpis/{_S}"), ("POST", rf"kpis/{_S}/readings"), ("POST", r"(goal-proposals|proposals)"),
+    ("POST", r"goals"),
+    ("POST", rf"goals/{_S}"),
+    ("POST", rf"goals/{_S}/(status|status/auto|checkins|kpis)"),
+    ("POST", rf"goals/{_S}/kpis/{_S}"),
+    ("POST", rf"goals/{_S}/kpis/{_S}/unlink"),
+    ("POST", r"goals/refresh"),
+    ("POST", r"kpis"),
+    ("POST", rf"kpis/{_S}"),
+    ("POST", rf"kpis/{_S}/readings"),
+    ("POST", r"(goal-proposals|proposals)"),
     # Tasks, docs and what the people asked of BotOps.
-    ("POST", r"tasks"), ("POST", r"tasks/dry-run"), ("POST", rf"tasks/{_S}"),
+    ("POST", r"tasks"),
+    ("POST", r"tasks/dry-run"),
+    ("POST", rf"tasks/{_S}"),
     ("POST", rf"tasks/{_S}/(comments|links|ask|run-now)"),
     # Another bot's task worktrees: a person who moves tasks may add one or ask for one to be cleaned up (the route
     # checks); the computer removes it once the bot is idle.
-    ("POST", rf"tasks/{_S}/worktrees(/attach)?"), ("DELETE", rf"tasks/{_S}/links/{_S}"),
-    ("POST", r"docs"), ("PATCH", rf"docs/{_S}"), ("POST", rf"docs/{_S}/restore"),
+    ("POST", rf"tasks/{_S}/worktrees(/attach)?"),
+    ("DELETE", rf"tasks/{_S}/links/{_S}"),
+    ("POST", r"docs"),
+    ("PATCH", rf"docs/{_S}"),
+    ("POST", rf"docs/{_S}/restore"),
     # A page's cadence, data date, replacement, archive or restore: the route checks the person may manage its bot.
     ("PATCH", rf"pages/{_S}"),
-    ("POST", r"linked-docs"), ("PATCH", rf"linked-docs/{_S}"),
-    ("POST", rf"meetings/{_S}/delete"), ("POST", "meetings/granola/sync"),
-    ("POST", rf"meetings/{_S}/review"), ("POST", "meetings/review"), ("POST", "meetings/settings"),
-    ("POST", rf"(integrations|tools)/{_S}/learnings"), ("POST", rf"(integrations|tools)/{_S}/learnings/{_S}/delete"),
+    ("POST", r"linked-docs"),
+    ("PATCH", rf"linked-docs/{_S}"),
+    ("POST", rf"meetings/{_S}/delete"),
+    ("POST", "meetings/granola/sync"),
+    ("POST", rf"meetings/{_S}/review"),
+    ("POST", "meetings/review"),
+    ("POST", "meetings/settings"),
+    ("POST", rf"(integrations|tools)/{_S}/learnings"),
+    ("POST", rf"(integrations|tools)/{_S}/learnings/{_S}/delete"),
     ("POST", r"health/bot-access/dismiss"),
     # People and access. The route asks for the click on what needs it.
-    ("POST", r"access/(people|humans)"), ("POST", rf"access/(people|humans)/{_S}"),
+    ("POST", r"access/(people|humans)"),
+    ("POST", rf"access/(people|humans)/{_S}"),
     ("PUT", r"access/rules"),
     # Groups: an owner or an admin changes them (the route says so), and a delete moves what is in the group up.
-    ("POST", r"groups"), ("PATCH", rf"groups/{_S}"), ("DELETE", rf"groups/{_S}"),
+    ("POST", r"groups"),
+    ("PATCH", rf"groups/{_S}"),
+    ("DELETE", rf"groups/{_S}"),
     # The order of a manager's reports on the chart: whoever may put reports under that manager (the route checks).
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
-    ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
+    ("POST", r"slack/channels"),
+    ("POST", r"slack/channels/(remove|import)"),
     # Linking a thread to a Slack channel, taking the link away and checking a suspended one again: an owner's or an
     # admin's call, which the route checks (backend/slack_threads.py).
-    ("POST", r"slack/links"), ("DELETE", rf"slack/links/{_S}"), ("POST", rf"slack/links/{_S}/resume"),
+    ("POST", r"slack/links"),
+    ("DELETE", rf"slack/links/{_S}"),
+    ("POST", rf"slack/links/{_S}/resume"),
     # Calls: starting one, ending it, adding or removing its bots, asking again for action items and leaving. A join
     # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
-    ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
+    ("POST", rf"threads/{_S}/calls"),
+    ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
     ("DELETE", rf"calls/{_S}/bots/{_S}"),
-    # Peering with another company's Tico and what it shares: the owner's or an admin's call, and a thread's routes also
-    # ask for read and manage on that thread (backend/federation_routes.py).
-    ("POST", r"federation/keys(/rotate)?"), ("POST", r"federation/peerings"),
-    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
-    ("POST", rf"federation/threads/{_S}/(readers|installs)"), ("POST", rf"federation/threads/{_S}/installs/{_S}/retry"),
-    ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
     # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
     ("POST", rf"rule-holds/{_S}/withdraw"),
     # Who reads an inbox: the route checks the person may change it.
     ("PUT", rf"inbound/inboxes/{_S}/audience"),
-    ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
+    ("POST", rf"credentials/{_S}/grants"),
+    ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening
     # one is the person's own, in the app), inbox sharing where one owner runs
-    # everything (the route says where). Limits are spending: lowering one is always direct; raising one, and the providers,
+    # everything (the route says where), its name and how many turns it runs at once (owners and admins, which the routes check). Limits are spending: lowering one is always direct; raising one, and the providers,
     # are direct unless the owner's rule says otherwise (TIGHTENED).
-    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
-    ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
+    ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen|label|turns-at-once)"),
+    ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
+    ("PUT", r"providers"),
+    ("PUT", r"usage/limits"),
+    ("PUT", rf"usage/limits/{_S}"),
+    ("PUT", rf"usage/pools/(company|groups/{_S})"),
     # The Tico AI Gateway address, off or back to automatic is a provider change too (the owner's, which the route
     # checks). Saving its key is a secret, refused in the request; checking it changes nothing.
     ("PUT", r"providers/gateway"),
-    ("DELETE", r"providers/gateway"), ("POST", r"providers/gateway/automatic"),
+    ("DELETE", r"providers/gateway"),
+    ("POST", r"providers/gateway/automatic"),
     # Giving a computer a company subscription, or removing one: an owner's or an admin's call, which the route checks;
     # a Confirm card (backend/settings_entries.py), since it restarts that computer's runs. Saving a value is refused there.
-    ("PUT", r"computer-subscriptions"), ("DELETE", rf"model-subscriptions/{_S}"),
+    ("PUT", r"computer-subscriptions"),
+    ("DELETE", rf"model-subscriptions/{_S}"),
     # A message or chat to a bot stays in the team; a message to a person is a card (`classify`).
     ("POST", rf"chat/{_S}"),
     ("POST", r"system/update(/check)?"),
@@ -301,56 +403,98 @@ DO = _routes(
     ("POST", r"sleep"),
     # Incoming triggers and their Tico Gateway addresses: whoever manages the trigger (backend/triggers.py), never
     # BotOps' own right to manage every trigger while it works for someone.
-    ("POST", r"triggers"), ("POST", rf"triggers/{_S}"), ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
-    ("POST", rf"triggers/{_S}/deliveries/.+/replay"), ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
+    ("POST", r"triggers"),
+    ("POST", rf"triggers/{_S}"),
+    ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
+    ("POST", rf"triggers/{_S}/deliveries/.+/replay"),
+    ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
     # Task types and tags (movers, a tag's owner), the release schedule and Release now, screening's modes and Test,
     # the team's run budget and Tico's own jobs (an owner or an admin): each route checks the person.
-    ("POST", r"task-types"), ("POST", rf"task-types/{_S}(/delete)?"), ("DELETE", rf"task-types/{_S}"),
-    ("POST", r"tags"), ("POST", rf"tags/{_S}(/instances)?"),
-    ("PATCH", r"release-schedule"), ("POST", r"release/now"),
-    ("PUT", r"screening"), ("POST", r"screening/test"),
+    ("POST", r"task-types"),
+    ("POST", rf"task-types/{_S}(/delete)?"),
+    ("DELETE", rf"task-types/{_S}"),
+    ("POST", r"tags"),
+    ("POST", rf"tags/{_S}(/instances)?"),
+    ("PATCH", r"release-schedule"),
+    ("POST", r"release/now"),
+    ("PUT", r"screening"),
+    ("POST", r"screening/test"),
     ("POST", r"settings/turn-budgets"),
-    ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
+    ("PUT", rf"system-routines/{_S}"),
+    ("POST", rf"system-routines/{_S}/run"),
+    ("POST", r"task-manager/turn-(on|off)"),
     # The Company page's drafts, sources, stats and logo: the route checks the person is an owner or an admin. An
     # edition is only drafted here; publishing, approving, overriding, retracting and correcting are not listed, so they
     # are refused for BotOps (editions.require_person, require_own_click). Removing an audience's reader or invite is
     # a way out, so it is direct. Turning an audience on is a card (`enables_audience`), checked before this list.
-    ("POST", r"audiences"), ("PATCH", rf"audiences/{_S}"),
-    ("POST", rf"audiences/{_S}/sources"), ("DELETE", rf"audiences/{_S}/sources/{_S}"),
-    ("POST", r"company-page/stats"), ("PATCH", rf"company-page/stats/{_S}"), ("DELETE", rf"company-page/stats/{_S}"),
-    ("POST", r"company-page/logo"), ("DELETE", r"company-page/logo"),
-    ("POST", r"editions"), ("PATCH", rf"editions/{_S}"), ("POST", rf"editions/{_S}/check"),
-    ("DELETE", rf"readers/{_S}"), ("DELETE", rf"audiences/{_S}/invites/{_S}"),
+    ("POST", r"audiences"),
+    ("PATCH", rf"audiences/{_S}"),
+    ("POST", rf"audiences/{_S}/sources"),
+    ("DELETE", rf"audiences/{_S}/sources/{_S}"),
+    ("POST", r"company-page/stats"),
+    ("PATCH", rf"company-page/stats/{_S}"),
+    ("DELETE", rf"company-page/stats/{_S}"),
+    ("POST", r"company-page/logo"),
+    ("DELETE", r"company-page/logo"),
+    ("POST", r"editions"),
+    ("PATCH", rf"editions/{_S}"),
+    ("POST", rf"editions/{_S}/check"),
+    ("DELETE", rf"readers/{_S}"),
+    ("DELETE", rf"audiences/{_S}/invites/{_S}"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
 # still direct: app.py checks it against what is set.
-GATEWAY = _routes(("PUT", r"providers/gateway"), ("DELETE", r"providers/gateway"),
-                  ("POST", r"providers/gateway/automatic"))
-TIGHTENED = _routes(("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"),
-                    ("PUT", rf"usage/pools/(company|groups/{_S})")) + GATEWAY
+GATEWAY = _routes(
+    ("PUT", r"providers/gateway"), ("DELETE", r"providers/gateway"), ("POST", r"providers/gateway/automatic")
+)
+TIGHTENED = (
+    _routes(
+        ("PUT", r"providers"),
+        ("PUT", r"usage/limits"),
+        ("PUT", rf"usage/limits/{_S}"),
+        ("PUT", rf"usage/pools/(company|groups/{_S})"),
+    )
+    + GATEWAY
+)
 LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("PUT", rf"letters/bots/{_S}/settings"),
+    ("PUT", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"postal/addresses/{_S}/grants/(bot|person)/{_S}"),
+    ("PUT", r"postal/settings"),
     ("POST", rf"(people|humans)/{_S}"),
-    ("PUT", r"access/limits"), ("PUT", r"access/allow"),
-    ("DELETE", rf"automations/{_S}"), ("POST", rf"automations/{_S}/delete"),
+    ("PUT", r"access/limits"),
+    ("PUT", r"access/allow"),
+    ("DELETE", rf"automations/{_S}"),
+    ("POST", rf"automations/{_S}/delete"),
     ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke)"),
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
     ("PATCH", rf"files/{_S}"),
     # Deleting a file for good removes its bytes: always the owner's own tap.
     ("DELETE", rf"files/{_S}"),
-    ("PUT", r"directory"), ("POST", r"directory/sync"), ("POST", r"directory/preview"),
-    ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
+    ("PUT", r"directory"),
+    ("POST", r"directory/sync"),
+    ("POST", r"directory/preview"),
+    ("POST", r"slack/disconnect"),
+    ("POST", r"github/app/disconnect"),
     # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
     ("POST", rf"seats/{_S}/hire"),
     # The Company page (backend/company_page): what the page or a reader can see is the owner's own tap. Taking a
     # reader's access away is direct (below).
-    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"),
-    ("PUT", rf"audiences/{_S}/disclosure"), ("POST", rf"audiences/{_S}/disclosure/preset"),
-    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
+    ("PATCH", r"company-page"),
+    ("DELETE", rf"audiences/{_S}"),
+    ("PUT", rf"audiences/{_S}/disclosure"),
+    ("POST", rf"audiences/{_S}/disclosure/preset"),
+    ("POST", r"readers"),
+    ("POST", r"readers/import"),
+    ("PATCH", rf"readers/{_S}"),
 )
 
 # The messages route is a card unless it names a bot (`classify`).
@@ -358,12 +502,25 @@ MESSAGES = re.compile(API + r"messages")
 
 # Confirm-card routes only an owner or an admin may ask for: a member is told so at once, not handed a card that fails.
 ADMIN_ONLY = _routes(
-    ("PUT", r"providers"), ("PUT", r"access/(limits|allow)"), ("PUT", r"usage/limits"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
+    ("PUT", r"letters/settings"),
+    ("PUT", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("DELETE", rf"letters/outboxes/company/grants/(bot|person)/{_S}"),
+    ("PUT", r"providers"),
+    ("PUT", r"access/(limits|allow)"),
+    ("PUT", r"usage/limits"),
+    ("PUT", rf"usage/pools/(company|groups/{_S})"),
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
-    ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
-    ("POST", r"(slack|github/app)/disconnect"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
-    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"), ("PUT", rf"audiences/{_S}/disclosure"),
-    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
+    ("POST", r"system/update"),
+    ("PUT", r"directory"),
+    ("POST", r"directory/(sync|preview)"),
+    ("POST", r"(slack|github/app)/disconnect"),
+    ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
+    ("PATCH", r"company-page"),
+    ("DELETE", rf"audiences/{_S}"),
+    ("PUT", rf"audiences/{_S}/disclosure"),
+    ("POST", r"readers"),
+    ("POST", r"readers/import"),
+    ("PATCH", rf"readers/{_S}"),
 )
 
 # Always the person's own tap when BotOps acts for them, whatever they said in chat: handing over the company, updating
@@ -377,34 +534,56 @@ RULES = re.compile(API + r"access/rules")
 
 # Hand a secret's value back to whoever calls: BotOps acting for a person is refused, with where the person does it.
 PERSON_ONLY = [
-    ("POST", re.compile(API + rf"credentials/{_S}/reveal"), "A stored credential's value is shown only to a person, in Credentials"),
-    ("POST", re.compile(API + rf"access/(people|humans)/{_S}/password"), "A person makes someone a password in Settings > Humans"),
+    (
+        "POST",
+        re.compile(API + rf"credentials/{_S}/reveal"),
+        "A stored credential's value is shown only to a person, in Credentials",
+    ),
+    (
+        "POST",
+        re.compile(API + rf"access/(people|humans)/{_S}/password"),
+        "A person makes someone a password in Settings > Humans",
+    ),
     ("POST", re.compile(API + r"me/tokens"), "A person makes their own personal API token in Settings"),
     ("POST", re.compile(API + r"directory/scim-token"), "The owner makes a SCIM token in Settings > Humans"),
     # The invite's link is the only copy of its token (readers.create_invite), so it goes to the person, not the chat.
-    ("POST", re.compile(API + rf"audiences/{_S}/invites"), "A person makes a reader's invite link in Company page > Readers"),
+    (
+        "POST",
+        re.compile(API + rf"audiences/{_S}/invites"),
+        "A person makes a reader's invite link in Company page > Readers",
+    ),
 ]
 DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do this for you."
 
 # Read as the person, except what hands back a secret or is a computer's own channel.
-NO_READ = re.compile(API + r"(credential-runtime|runner-credential-(migration|grants)|me/tokens.*|mcp|agents/setup-script|jobs.*|attempts.*"
-                     r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)")
+NO_READ = re.compile(
+    API
+    + r"(credential-runtime|runner-credential-(migration|grants)|me/tokens.*|mcp|agents/setup-script|jobs.*|attempts.*"
+    r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)"
+)
 
 # Named like a secret: refused whatever route it is on.
-SECRET_KEYS = re.compile(r"^(secret|password|passwd|passphrase|token|access_token|refresh_token|api_key|apikey|"
-                         r"private_key|client_secret|authorization|bearer|bot_token|app_token)$", re.I)
+SECRET_KEYS = re.compile(
+    r"^(secret|password|passwd|passphrase|token|access_token|refresh_token|api_key|apikey|"
+    r"private_key|client_secret|authorization|bearer|bot_token|app_token)$",
+    re.I,
+)
 # Names that are a secret on one route only: elsewhere `key` names a setting, a field or an idempotency key.
 ROUTE_SECRETS = [(("PUT",), re.compile(API + r"providers/gateway"), ("key",))]
 
-DETAIL_SECRET = ("A secret does not go in a request. Ask the person for it with a credential card "
-                 "(`hub credential request`): the value goes straight to Credentials and never through you.")
-DETAIL_ROUTE = ("BotOps does not do this for a person. If the app can do it and this list should, say so with "
-                "`hub support file`.")
+DETAIL_SECRET = (
+    "A secret does not go in a request. Ask the person for it with a credential card "
+    "(`hub credential request`): the value goes straight to Credentials and never through you."
+)
+DETAIL_ROUTE = (
+    "BotOps does not do this for a person. If the app can do it and this list should, say so with `hub support file`."
+)
 
 
 def normalize(path):
     """The route as `/api/v2/...` with plain characters only, or None."""
     from .assistant import normalize_path
+
     path = str(path or "")
     if not path.startswith(API):
         path = API + path.lstrip("/")
@@ -420,6 +599,9 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return None
     if method == "GET":
         return None if NO_READ.fullmatch(path) else "do"
+    if method == "PUT" and path == API + "system/suggestions":
+        # Outcome reporting follows the owner's words; sharing counts needs the owner's own consent in Settings.
+        return "do" if isinstance(body, dict) and set(body) == {"report_suggestion_outcomes"} else None
     if any(m == method and p.fullmatch(path) for m, p in CONFIRM) or enables_audience(method, path, body):
         return "confirm"
     if method == "POST" and MESSAGES.fullmatch(path):
@@ -438,14 +620,21 @@ def enables_audience(method, path, body=None):
     """Turning an audience on (Public, or a reader's audience) serves what its approved content says, so it is the
     owner's own tap. Turning one off is a way out and stays direct."""
     path, method = normalize(path) or "", str(method or "").upper()
-    return (method == "PATCH" and bool(AUDIENCE.fullmatch(path)) and isinstance(body, dict) and "enabled" in body
-            and bool(body["enabled"]))
+    return (
+        method == "PATCH"
+        and bool(AUDIENCE.fullmatch(path))
+        and isinstance(body, dict)
+        and "enabled" in body
+        and bool(body["enabled"])
+    )
 
 
 def person_only(method, path):
     """Why BotOps acting for a person may not make this call (the route hands a secret's value back), or ""."""
     path, method = normalize(path), str(method or "").upper()
-    return next((why + DETAIL_PERSON_ONLY for m, p, why in PERSON_ONLY if path and m == method and p.fullmatch(path)), "")
+    return next(
+        (why + DETAIL_PERSON_ONLY for m, p, why in PERSON_ONLY if path and m == method and p.fullmatch(path)), ""
+    )
 
 
 def owner_only(method, path, body=None):
@@ -453,8 +642,9 @@ def owner_only(method, path, body=None):
     path, method = normalize(path), str(method or "").upper()
     if not path:
         return False
-    return (any(m == method and p.fullmatch(path) for m, p in OWNER_ONLY)
-            or (method == "PUT" and bool(RULES.fullmatch(path)) and own_powers(body)))
+    return any(m == method and p.fullmatch(path) for m, p in OWNER_ONLY) or (
+        method == "PUT" and bool(RULES.fullmatch(path)) and own_powers(body)
+    )
 
 
 AUTOMATION_DELETE = (re.compile(API + rf"automations/({_S})"), re.compile(API + rf"automations/({_S})/delete"))
@@ -497,7 +687,11 @@ def card_for_person(method, path, body=None, rules=None, lowers=None, *, force_c
 SUMMARIES = [
     ("POST", re.compile(API + r"access/owner"), "Hand ownership of the team to another person"),
     ("POST", re.compile(API + r"system/update"), "Update Tico now (the server restarts)"),
-    ("POST", re.compile(API + r"enrollments"), "Make a one-time code to add a computer: it shows here once you confirm"),
+    (
+        "POST",
+        re.compile(API + r"enrollments"),
+        "Make a one-time code to add a computer: it shows here once you confirm",
+    ),
     ("PUT", RULES, "Change the team's rules"),
     ("PUT", re.compile(API + r"providers"), "Change the team's AI providers"),
     ("PUT", re.compile(API + r"providers/gateway"), "Change the Tico AI Gateway address"),
@@ -523,10 +717,21 @@ def card_summary(method, path, body=None):
 # items, never who may do what or what it costs. Everything else runs with the asking bot's rights, and a refusal
 # becomes the person's Confirm card. An allow-list, so a new route lends nothing until it is added here.
 CARRIED = _routes(
-    ("POST", r"tasks"), ("POST", r"tasks/dry-run"), ("POST", rf"tasks/{_S}"), ("POST", rf"tasks/{_S}/(comments|links|ask)"),
-    ("POST", r"docs"), ("PATCH", rf"docs/{_S}"), ("POST", r"linked-docs"), ("PATCH", rf"linked-docs/{_S}"),
-    ("POST", r"goals"), ("POST", rf"goals/{_S}"), ("POST", rf"goals/{_S}/(status|checkins|kpis)"),
-    ("POST", rf"goals/{_S}/kpis/{_S}"), ("POST", r"kpis"), ("POST", rf"kpis/{_S}"), ("POST", rf"kpis/{_S}/readings"),
+    ("POST", r"tasks"),
+    ("POST", r"tasks/dry-run"),
+    ("POST", rf"tasks/{_S}"),
+    ("POST", rf"tasks/{_S}/(comments|links|ask)"),
+    ("POST", r"docs"),
+    ("PATCH", rf"docs/{_S}"),
+    ("POST", r"linked-docs"),
+    ("PATCH", rf"linked-docs/{_S}"),
+    ("POST", r"goals"),
+    ("POST", rf"goals/{_S}"),
+    ("POST", rf"goals/{_S}/(status|checkins|kpis)"),
+    ("POST", rf"goals/{_S}/kpis/{_S}"),
+    ("POST", r"kpis"),
+    ("POST", rf"kpis/{_S}"),
+    ("POST", rf"kpis/{_S}/readings"),
 )
 
 
@@ -580,11 +785,11 @@ def placeholder_only(value, env=None):
     """Whether a header value is one optional auth scheme (SCHEMES) and `${VAR}` placeholders, each for `env` when it is
     given: the shape clients/access_entry.clean_mcp writes, with no literal that could be a credential."""
     from clients.access_entry import PLACEHOLDER
+
     if not isinstance(value, str) or len(value) > 500 or "\n" in value or "\r" in value:
         return False
     names, bare = PLACEHOLDER.findall(value), PLACEHOLDER.sub("", value).strip()
-    return (bool(names) and (not bare or bare.lower() in SCHEMES)
-            and (env is None or all(name == env for name in names)))
+    return bool(names) and (not bare or bare.lower() in SCHEMES) and (env is None or all(name == env for name in names))
 
 
 def secret_in_request(method, path, body):
@@ -598,15 +803,19 @@ def secret_in_request(method, path, body):
                 if found:
                     return found
     mcp = body.get("mcp") if isinstance(body, dict) else None
-    if (not path or not isinstance(mcp, dict) or not isinstance(mcp.get("headers"), dict)
-            or not any(m == str(method).upper() and p.fullmatch(path) for m, p in TOOL_ROUTES)):
+    if (
+        not path
+        or not isinstance(mcp, dict)
+        or not isinstance(mcp.get("headers"), dict)
+        or not any(m == str(method).upper() and p.fullmatch(path) for m, p in TOOL_ROUTES)
+    ):
         return secret_in(body)
     found = secret_in({**body, "mcp": {k: v for k, v in mcp.items() if k != "headers"}})
     if found:
         return found
     env = body.get("env") if "env" in body else None
     for name, value in mcp["headers"].items():
-        if SECRET_KEYS.match(str(name).strip()):        # clean_mcp strips the name it stores
+        if SECRET_KEYS.match(str(name).strip()):  # clean_mcp strips the name it stores
             if not placeholder_only(value, None if env is None else str(env)):
                 return str(name)
         else:
@@ -628,16 +837,22 @@ def parse_body(raw):
 
 # BotOps' own: the run's plumbing and what BotOps says itself. Never switched to the requester by default.
 # Taking back its own Confirm card, and listing them (backend/assistant.py): BotOps' own cards, never run for a person.
-OWN = re.compile(API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
-                 r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)")
+OWN = re.compile(
+    API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
+    r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
+    r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)"
+)
 
 
 def default_delegable(method, path, body=None, query=None):
     """Whether a BotOps call with no explicit `on_behalf_of` acts as the person who asked: only the routes BotOps
     may do or propose for a person, and never its own plumbing or its own messages."""
     path = normalize(path)
-    if path and str(method).upper() in ("GET", "POST") and re.fullmatch(API + rf"(?:runners|computers)/{_S}/logins(?:/{_S}(?:/cancel)?)?", path):
+    if (
+        path
+        and str(method).upper() in ("GET", "POST")
+        and re.fullmatch(API + rf"(?:runners|computers)/{_S}/logins(?:/{_S}(?:/cancel)?)?", path)
+    ):
         return classify(method, path, body) == "do"
     if path and any(m == str(method).upper() and p.fullmatch(path) for m, p in THREADS):
         return classify(method, path, body) == "do"
@@ -645,7 +860,7 @@ def default_delegable(method, path, body=None, query=None):
         return False
     mine = str((query or {}).get("mine", "")).lower() in ("1", "true", "yes", "on")
     if path == API + "rules" and str(method).upper() == "GET" and mine:
-        return False      # BotOps's own rules and settings (`hub rules list --mine`): its own rights, not its requester's
+        return False  # BotOps's own rules and settings (`hub rules list --mine`): its own rights, not its requester's
     # The person's own card or plain refusal (`card_for_person`, `person_only`) reaches a client that sends no
     # header too, not BotOps' own 403.
     if any(m == str(method).upper() and p.fullmatch(path) for m, p in ALWAYS) or person_only(method, path):
@@ -656,18 +871,18 @@ def default_delegable(method, path, body=None, query=None):
 # What a person clicks when BotOps is refused: one plain sentence and a link to the exact place in the app. Whose
 # rights were used decides the sentence: BotOps' own (no person asked in this run), a requesting bot's, or the person's.
 def _place(path):
-    rest = (normalize(path) or "")[len(API):]
+    rest = (normalize(path) or "")[len(API) :]
     parts = rest.split("/")
     if parts[0] == "bots" and len(parts) > 1 and parts[1] not in ("register", ""):
         slug = parts[1]
         what = "its repository access" if parts[2:3] == ["repositories"] else "its settings"
         return "#/bot/" + slug + "/more", slug, what
     if parts[0] == "repositories":
-        return "#/repositories", "", "Settings > Repositories"
+        return "#/settings/general/set-repos", "", "Settings > General › Repositories"
     if parts[0] == "tasks" and len(parts) > 1 and parts[1]:
         return "#/task/" + parts[1], "", "the task"
     if parts[0] == "credentials":
-        return "#/credentials", "", "Credentials"
+        return "#/tools/keys?show=credentials", "", "Tools > Keys"
     if parts[0] in ("runners", "computers"):
         return "#/settings", "", "Settings > Computers"
     return "#/settings", "", "Settings"
@@ -683,11 +898,18 @@ def refusal_for_person(path, text, base=""):
 def mail_settings_hint(bot, slug=""):
     """Where a person turns a bot's mail sending on: the only fix for a refused write to its mail setting. `bot` is
     the name the app shows, `slug` the one `hub` takes."""
-    return ("A person who manages " + bot + " turns its mail sending on in Settings > Bots > " + bot
-            + " > Mail sending, or with `hub bot mail " + (slug or bot) + " --send`")
+    return (
+        "A person who manages "
+        + bot
+        + " turns its mail sending on in Settings > Bots > "
+        + bot
+        + " > Mail sending, or with `hub bot mail "
+        + (slug or bot)
+        + " --send`"
+    )
 
 
-ROLE_FIX = "Your role can't change this: "     # `fix` for a person's role refused (app.py words a setting's who may)
+ROLE_FIX = "Your role can't change this: "  # `fix` for a person's role refused (app.py words a setting's who may)
 
 
 def fix(path, code, status, acting, names, base=""):
@@ -697,8 +919,10 @@ def fix(path, code, status, acting, names, base=""):
     bot = names.get("bot:" + slug) or slug.replace("-", " ").title()
     where = (bot + "'s " + what[4:]) if slug and what.startswith("its ") else what
     if code == "runner_not_ready":
-        text = ("Sign in the bot's AI tool on its computer in Settings > Computers, or choose a model that computer "
-                "already runs")
+        text = (
+            "Sign in the bot's AI tool on its computer in Settings > Computers, or choose a model that computer "
+            "already runs"
+        )
         link = "#/settings"
     elif status != 403:
         return None
@@ -710,20 +934,28 @@ def fix(path, code, status, acting, names, base=""):
     elif re.fullmatch(API + rf"tasks/{_S}/worktrees(?:/attach)?", normalize(path) or ""):
         # A worktree is made with the task's owner bot's own repository access (backend/worktrees.py), so no one's
         # request lends it: say who gives that access.
-        text = ("The task's bot needs write access to that repository: an owner or admin gives it in Settings > "
-                "Repositories; then BotOps can add the worktree itself")
-        link = "#/repositories"
+        text = (
+            "The task's bot needs write access to that repository: an owner or admin gives it in Settings > "
+            "General › Repositories; then BotOps can add the worktree itself"
+        )
+        link = "#/settings/general/set-repos"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
-        text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "
-                "rights now, or change " + where + " yourself")
+        text = (
+            "BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "
+            "rights now, or change " + where + " yourself"
+        )
     elif acting.actor == "bot:botops":
-        text = ("No one's request was attached to this run, so BotOps used its own rights: say go ahead in your "
-                "BotOps chat, or change " + where + " yourself")
+        text = (
+            "No one's request was attached to this run, so BotOps used its own rights: say go ahead in your "
+            "BotOps chat, or change " + where + " yourself"
+        )
     elif acting.role == "bot":
         asker = names.get(acting.actor) or acting.actor.split(":", 1)[-1]
-        text = (asker + " asked for this without citing who wanted it, so BotOps had only " + asker + "'s rights: say "
-                "go ahead in your BotOps chat, or change " + where + " yourself")
+        text = (
+            asker + " asked for this without citing who wanted it, so BotOps had only " + asker + "'s rights: say "
+            "go ahead in your BotOps chat, or change " + where + " yourself"
+        )
     else:
         text = ROLE_FIX + "ask an owner or admin to change " + where
     return {"fix": text, "link": (base.rstrip("/") + "/" + link) if base else link}

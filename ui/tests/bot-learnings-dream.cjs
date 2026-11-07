@@ -25,7 +25,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       const row = (subject, task) => ({subject, author: 'ops', when: '2026-11-02T10:00:00Z', files: ['memory/learnings.md'],
         source: task ? {task, title: 'Dream'} : null});
       window.state = {
-        dream: {task: 't1', status: 'waiting', state: 'asking', questions: {message_id: 'm1', text: questions, mine: true},
+        dream: {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 'q1', text: questions, mine: true},
                 summary: null, closed_at: null, started_at: '2026-11-02T09:00:00Z'},
         posts: [], dreamReads: 0,
       };
@@ -53,7 +53,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     for (const width of [1280, 390]) {
       await page.setViewportSize({width, height: 800});
       await page.evaluate(text => {
-        state.dream = {task: 't1', status: 'waiting', state: 'asking', questions: {message_id: 'm1', text, mine: true},
+        state.dream = {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 'q1', text, mine: true},
                        summary: null, closed_at: null, started_at: '2026-11-02T09:00:00Z'};
         state.posts = [];
       }, QUESTIONS);
@@ -83,8 +83,8 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       // One numbered reply to the question itself; then the done view with this dream's commit only.
       await page.locator('[data-dream-wake]').waitFor();
       const answer = await page.evaluate(() => state.posts.find(p => p.url.includes('/answer')));
-      assert.equal(answer.url, '/v2/messages/m1/answer');
-      assert.equal(answer.body.text, '1. the whole team\n2. No, keep it');
+      assert.equal(answer.url, '/v2/tasks/q1/answers');
+      assert.equal(answer.body.other, '1. the whole team\n2. No, keep it');
       assert.equal(await page.locator('.learn-panel .dream-line').innerText(), 'Awake');
       assert.ok((await page.locator('.dream-summary').innerText()).includes('Merged two report rules'));
       assert.deepEqual(await page.locator('.dream-commits .lr-subject').allInnerTexts(), ['Dream: merged report rules']);

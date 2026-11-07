@@ -1,7 +1,8 @@
 // Strategy › Market › Listening's Settings fold (ui/app/settings-listening.js): the owner and admins read every
 // destination (a file one is read-only, marked "From listening.yaml"); only the owner adds, edits and removes the ones
 // saved in Settings; the form sends the category, receiver, threshold, readers, optional skip rule and what; the
-// server's refusal shows in the form; a member has no Listening view; a phone has no sideways scroll. Fixtures only.
+// server's refusal shows in the form; Settings sits on What are buyers saying? for admins even before anything is heard,
+// and a member with nothing heard has neither; a phone has no sideways scroll. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,6 +38,7 @@ async function open(browser, role, width = 1440) {
     if (p === '/api/v2/models') return json({models: [], harnesses: []});
     if (p === '/api/v2/access') return json({rules: {}});
     if (p === '/api/v2/listening/stats') return json({daily: [], recent: []});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], total: 1});
     if (p === '/api/v2/listening/destinations' && req.method() === 'GET')
       return json({destinations: dests, categories: CATEGORIES, receivers: RECEIVERS});
     const one = p.match(/^\/api\/v2\/listening\/destinations\/([^/]+)(\/remove)?$/);
@@ -129,10 +131,11 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
       await page.close();
     }
     {
-      // A member has no Listening view.
+      // A member, with nothing heard yet, has no What are buyers saying? and no Settings.
       const {page} = await open(browser, 'member');
-      await page.locator('.mkt-views').waitFor();
-      assert.equal(await page.locator('[data-market-view="listening"]').count(), 0);
+      await page.locator('.mkt-pg').waitFor();
+      assert.equal(await page.locator('#mkt-q-saying').count(), 0);
+      assert.equal(await page.locator('[data-rdm-settings]').count(), 0);
       await page.close();
     }
     console.log('listening-settings: ok');

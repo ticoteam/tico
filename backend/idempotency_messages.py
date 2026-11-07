@@ -1,5 +1,6 @@
-"""Which stored retry answers (the `idempotency` table) quote which message, so a comment edit or delete finds them
-by index instead of reading every stored answer while it holds the write lock.
+"""Which stored retry answers (the `idempotency` table, binding NULL) quote which message, so a comment edit or delete
+finds them by index instead of reading every stored answer while it holds the write lock. Operation bindings (binding
+set: backend/invites.py, backend/github_app.py, backend/github_reviews.py) are not answers and are never indexed.
 
 A retry gets back the answer its first try got. When a comment is edited or deleted, `hubdb._refresh_comment_replies`
 rewrites every stored answer that quotes it, so a retry never replays withdrawn words. A quoted message is any JSON
@@ -8,17 +9,18 @@ the comment's id took 35-37 s inside the write transaction on a 665k-row table (
 waited behind it. So each answer's quoted message ids are kept here:
 
 - triggers keep `idempotency_messages` in step with every insert, update and delete on `idempotency`, whoever writes
-  it (`Store.mutate`, credentials, the GitHub app, the retention sweep);
+  it (`Store.mutate`, credentials, the retention sweep); an insert of a binding is not indexed;
 - rows an older server wrote are filled in beside the running server (`backfill_store`, started with it), in short
   batches, reading outside the write lock; until that first pass has finished (`READY`), an edit reads the answers the
   old way. On 665k synthetic answers it took about 26 s; the server does not wait for it to start.
 """
+
 import json
 import sqlite3
 
 READY = "idempotency_messages.ready"
-BATCH = 500     # answers indexed per write transaction: about 0.15 s of lock on 665k synthetic answers
-SPAN = 20000    # rowids the backfill reads per look, outside the write lock
+BATCH = 500  # answers indexed per write transaction: about 0.15 s of lock on 665k synthetic answers
+SPAN = 20000  # rowids the backfill reads per look, outside the write lock
 
 # The ids of the objects with both an `id` (a string) and a sender key in one answer, in one pass over its JSON.
 # Object members carry their label in `key`, array elements their index, so `key='id'` is always an object's member.
@@ -32,14 +34,16 @@ def _quoted(row, where=""):
     """SELECT (message_id, actor, operation, key) for the answers `row` names: `NEW` in a trigger, or `i` with `where`
     choosing rows of `idempotency i`. One query for both, so the backfill indexes exactly what the triggers do."""
     text, source = f"{row}.response", f"idempotency {row} WHERE {where} AND" if where else "WHERE"
-    return (f"SELECT id, actor, operation, key FROM (SELECT {row}.actor AS actor, {row}.operation AS operation, "
-            f"{row}.key AS key, max(CASE WHEN t.key='id' AND t.type='text' THEN t.value END) AS id, "
-            f"max(t.key IN ('sender_id','from_actor')) AS sender FROM {f'idempotency {row}, ' if where else ''}"
-            f"json_tree(CASE WHEN json_valid({text}) THEN {text} ELSE 'null' END) t "
-            f"WHERE {f'{where} AND ' if where else ''}t.key IN ('id','sender_id','from_actor') "
-            f"GROUP BY {f'{row}.rowid, ' if where else ''}t.parent) WHERE sender AND id IS NOT NULL "
-            f"UNION SELECT '{UNREAD}', {row}.actor, {row}.operation, {row}.key "
-            f"{'FROM ' if where else ''}{source} NOT json_valid({text})")
+    return (
+        f"SELECT id, actor, operation, key FROM (SELECT {row}.actor AS actor, {row}.operation AS operation, "
+        f"{row}.key AS key, max(CASE WHEN t.key='id' AND t.type='text' THEN t.value END) AS id, "
+        f"max(t.key IN ('sender_id','from_actor')) AS sender FROM {f'idempotency {row}, ' if where else ''}"
+        f"json_tree(CASE WHEN json_valid({text}) THEN {text} ELSE 'null' END) t "
+        f"WHERE {f'{where} AND ' if where else ''}t.key IN ('id','sender_id','from_actor') "
+        f"GROUP BY {f'{row}.rowid, ' if where else ''}t.parent) WHERE sender AND id IS NOT NULL "
+        f"UNION SELECT '{UNREAD}', {row}.actor, {row}.operation, {row}.key "
+        f"{'FROM ' if where else ''}{source} NOT json_valid({text})"
+    )
 
 
 SCHEMA = (
@@ -47,7 +51,7 @@ SCHEMA = (
     "operation TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(message_id, actor, operation, key)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS idempotency_messages_answer ON idempotency_messages(actor, operation, key)",
     "CREATE TRIGGER IF NOT EXISTS idempotency_messages_insert AFTER INSERT ON idempotency "
-    f"WHEN {_MAY_QUOTE.format(src='NEW.response')} BEGIN "
+    f"WHEN NEW.binding IS NULL AND {_MAY_QUOTE.format(src='NEW.response')} BEGIN "
     f"INSERT OR IGNORE INTO idempotency_messages {_quoted('NEW')}; END",
     "CREATE TRIGGER IF NOT EXISTS idempotency_messages_update AFTER UPDATE ON idempotency BEGIN "
     "DELETE FROM idempotency_messages WHERE actor=OLD.actor AND operation=OLD.operation AND key=OLD.key; "
@@ -71,10 +75,12 @@ def quoting(conn, message_id):
     finished, when only reading every answer finds them all."""
     if not _get(conn, READY):
         return None
-    return conn.execute("SELECT i.rowid, i.response FROM idempotency_messages m JOIN idempotency i "
-                        "ON i.actor=m.actor AND i.operation=m.operation AND i.key=m.key WHERE m.message_id=? "
-                        "OR (m.message_id=? AND instr(i.response, ?)>0)",
-                        (message_id, UNREAD, message_id)).fetchall()
+    return conn.execute(
+        "SELECT i.rowid, i.response FROM idempotency_messages m JOIN idempotency i "
+        "ON i.actor=m.actor AND i.operation=m.operation AND i.key=m.key WHERE i.binding IS NULL "
+        "AND (m.message_id=? OR (m.message_id=? AND instr(i.response, ?)>0))",
+        (message_id, UNREAD, message_id),
+    ).fetchall()
 
 
 def backfill_store(store, stop):
@@ -82,8 +88,9 @@ def backfill_store(store, stop):
     try:
         with store.read() as conn:
             backfill(conn, stop=stop)
-    except Exception as exc:                # the next start tries again; edits read every answer meanwhile
+    except Exception as exc:  # the next start tries again; edits read every answer meanwhile
         import logging
+
         logging.getLogger("tico.idempotency").error("Indexing stored answers failed: %s", type(exc).__name__)
 
 
@@ -97,24 +104,33 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
         return 0
     done, after = 0, 0
     top = conn.execute("SELECT coalesce(max(rowid), 0) FROM idempotency").fetchone()[0]
+
     def stopped():
         return stop is not None and stop.is_set()
+
     while after < top:
         if stopped():
             return done
-        rowids = [r[0] for r in conn.execute(
-            f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND {_MAY_QUOTE.format(src='response')}",
-            (after, after + span))]
+        rowids = [
+            r[0]
+            for r in conn.execute(
+                f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND binding IS NULL "
+                f"AND {_MAY_QUOTE.format(src='response')}",
+                (after, after + span),
+            )
+        ]
         after += span
         for start in range(0, len(rowids), batch):
-            if stopped():                   # between batches too: shutdown waits for this thread
+            if stopped():  # between batches too: shutdown waits for this thread
                 return done + start
-            chunk = rowids[start:start + batch]
+            chunk = rowids[start : start + batch]
             chosen = f"i.rowid IN ({','.join('?' * len(chunk))})"
-            _write(conn, lambda: conn.execute(f"INSERT OR IGNORE INTO idempotency_messages {_quoted('i', chosen)}",
-                                              chunk * 2))
+            _write(
+                conn,
+                lambda: conn.execute(f"INSERT OR IGNORE INTO idempotency_messages {_quoted('i', chosen)}", chunk * 2),
+            )
         done += len(rowids)
-    if stopped():                           # every batch written, but ready is left to a pass that ends unstopped
+    if stopped():  # every batch written, but ready is left to a pass that ends unstopped
         return done
     _write(conn, lambda: _set(conn, READY, True))
     return done
@@ -122,6 +138,7 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
 
 def _write(conn, work):
     from .flight import begin
+
     done = begin(conn)
     try:
         work()
@@ -143,5 +160,7 @@ def _get(conn, key):
 
 def _set(conn, key, value):
     conn.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                 (key, json.dumps(value)))
+    conn.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, json.dumps(value)),
+    )

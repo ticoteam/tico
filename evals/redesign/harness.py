@@ -4,6 +4,7 @@ makes, and the Unmet marker that turns a missing route or refused behaviour into
 A scenario is setup + steps + checks. Steps run in order and keep what they got in a facts dict. A step the product
 cannot do yet keeps an Unmet there and the run goes on, so each check that reads it names the wave it waits on. A check
 passes only on a real reply; nothing is stubbed."""
+
 import json
 import re
 import time
@@ -21,7 +22,7 @@ W3 = "wave 3 · automations core"
 W4 = "wave 4 · branches"
 W5 = "wave 5 · migration"
 W6 = "wave 6 · strategy content"
-GAP = "CONTRACT gap"   # a check the CONTRACT cannot back yet: it names no route or read shape
+GAP = "CONTRACT gap"  # a check the CONTRACT cannot back yet: it names no route or read shape
 
 # Waves that have landed on main. The PR that merges a wave adds its label here: from then on a failing check prints
 # its detail instead of "not built yet".
@@ -70,8 +71,10 @@ class Scenario:
     about: str
     steps: Callable
     checks: list = field(default_factory=list)
-    bots: dict = field(default_factory=dict)   # extra org bots ({slug: (role, harness)}), e.g. the migration fixture's
-    first_tick: bool = True   # the owner's built-ins made on the first automations tick; False when the scenario cuts over
+    bots: dict = field(default_factory=dict)  # extra org bots ({slug: (role, harness)}), e.g. the migration fixture's
+    first_tick: bool = (
+        True  # the owner's built-ins made on the first automations tick; False when the scenario cuts over
+    )
 
 
 @dataclass
@@ -153,8 +156,13 @@ class Org(World):
         """`extra_bots` adds bots to the org (the migration fixture's Inbox Manager, Health Monitor, Librarian...), as
         {slug: (role, harness)} in the World's format. `first_tick` runs what a live server's first automations tick
         does once Dana owns the install (redesign_migration.catch_up: her built-ins)."""
-        bots = {LEAD_ID: ("lead", "claude"), OPENAI_ID: ("builder", "gpt"), CLAUDE_ID: ("builder", "claude"),
-                RELEASE_ID: ("release", "claude"), **(extra_bots or {})}
+        bots = {
+            LEAD_ID: ("lead", "claude"),
+            OPENAI_ID: ("builder", "gpt"),
+            CLAUDE_ID: ("builder", "claude"),
+            RELEASE_ID: ("release", "claude"),
+            **(extra_bots or {}),
+        }
         board = SimpleNamespace(name="Redesign scenarios", steps=[SimpleNamespace(name="Work", status="open")])
         super().__init__(board, bots)
         self.log = []
@@ -164,45 +172,62 @@ class Org(World):
         super().__enter__()
         from backend.auth import Identity
         from backend.store import H, encode
+
         identities = self.app.state.auth.settings.test_identities
-        identities.update({
-            DANA: Identity("human:dana", "owner", email="dana@acme.example"),
-            OMAR: Identity("human:omar", "human", email="omar@acme.example"),
-            PRIYA: Identity("human:priya", "human", email="priya@acme.example"),
-            LEAD: Identity(LEAD_REF, "bot", agent="test"),
-            CLAUDE: Identity(CLAUDE_REF, "bot", agent="test"),
-            OPENAI: Identity(OPENAI_REF, "bot", agent="test"),
-        })
-        people = [{"id": DANA_ID, "name": "Dana", "email": "dana@acme.example", "reports_to": "", "primary_for": ["*"]},
-                  {"id": OMAR_ID, "name": "Omar", "email": "omar@acme.example", "reports_to": DANA_ID, "primary_for": []},
-                  {"id": PRIYA_ID, "name": "Priya", "email": "priya@acme.example", "reports_to": DANA_ID,
-                   "primary_for": []}]
+        identities.update(
+            {
+                DANA: Identity("human:dana", "owner", email="dana@acme.example"),
+                OMAR: Identity("human:omar", "human", email="omar@acme.example"),
+                PRIYA: Identity("human:priya", "human", email="priya@acme.example"),
+                LEAD: Identity(LEAD_REF, "bot", agent="test"),
+                CLAUDE: Identity(CLAUDE_REF, "bot", agent="test"),
+                OPENAI: Identity(OPENAI_REF, "bot", agent="test"),
+            }
+        )
+        people = [
+            {"id": DANA_ID, "name": "Dana", "email": "dana@acme.example", "reports_to": "", "primary_for": ["*"]},
+            {"id": OMAR_ID, "name": "Omar", "email": "omar@acme.example", "reports_to": DANA_ID, "primary_for": []},
+            {"id": PRIYA_ID, "name": "Priya", "email": "priya@acme.example", "reports_to": DANA_ID, "primary_for": []},
+        ]
         reports = {LEAD_ID: DANA_ID, CLAUDE_ID: LEAD_ID, OPENAI_ID: LEAD_ID, RELEASE_ID: DANA_ID}
         with self.store.transaction() as c:
-            H.sync_registry(c, {}, {"people": people})   # the people rows the hub signs in and reports against
+            H.sync_registry(c, {}, {"people": people})  # the people rows the hub signs in and reports against
             c.execute("DELETE FROM registry_metadata WHERE key='people'")
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
-            for bot in (LEAD_ID, CLAUDE_ID, OPENAI_ID):   # the agent credentials the test tokens stand for
-                c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-                          (bot, "test", "x-" + bot, H.now(), "human:dana"))
+            for bot in (LEAD_ID, CLAUDE_ID, OPENAI_ID):  # the agent credentials the test tokens stand for
+                c.execute(
+                    "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+                    (bot, "test", "x-" + bot, H.now(), "human:dana"),
+                )
             for bot, boss in reports.items():
                 c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (boss, bot))
             # The factory seeds one owner and one operator for every bot and its runner. Dana is the owner here: the
             # stored owner (backend/access.py OWNER, read once at seed time) and those operators move to her.
             from backend.access import OWNER
+
             owner = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (OWNER,)).fetchone()[0])
             owner.update(email="dana@acme.example", updated_by="environment")
             c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(owner, sort_keys=True), OWNER))
             # Dana admits her team to the sign-in list (backend/access.py ACCESS). The Slack gateway hears only an admitted
             # sender (backend/slack_gateway.py verify_sender), so a teammate's channel message is heard once they are on it.
             from backend.access import ACCESS, _load_json, _store
+
             access = _load_json(c, ACCESS) or {}
-            _store(c, ACCESS, {**access, "allowed": sorted(set(access.get("allowed") or [])
-                                                          | {"omar@acme.example", "priya@acme.example"})})
+            _store(
+                c,
+                ACCESS,
+                {
+                    **access,
+                    "allowed": sorted(set(access.get("allowed") or []) | {"omar@acme.example", "priya@acme.example"}),
+                },
+            )
             c.execute("UPDATE bot_config SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID))
-            c.execute("UPDATE runners SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID))   # the runner the mail publish checks
-        if self.first_tick:   # startup's cutover ran before Dana was the owner: the first tick makes her built-ins
+            c.execute(
+                "UPDATE runners SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID)
+            )  # the runner the mail publish checks
+        if self.first_tick:  # startup's cutover ran before Dana was the owner: the first tick makes her built-ins
             from backend import redesign_migration
+
             redesign_migration.catch_up(self.store)
         return self
 
@@ -220,13 +245,14 @@ class Org(World):
     def api(self, method, path, payload=None, *, who=DANA, wave=W2):
         """One real API call as `who` (a test token, or the runner's). A route the app does not register is Unmet,
         not a 404, so the scenario names the wave that builds it."""
-        if not self._registered(method, path.split("?")[0]):   # the route is matched without its query string
+        if not self._registered(method, path.split("?")[0]):  # the route is matched without its query string
             raise Unmet(wave, f"no route {method.upper()} {path}")
         headers = {"Authorization": "Bearer " + who}
-        if method != "get":   # every write carries a key, as the hub requires
+        if method != "get":  # every write carries a key, as the hub requires
             headers["Idempotency-Key"] = str(uuid.uuid4())
         response = getattr(self.client, method)(
-            path, headers=headers, **({"json": payload} if payload is not None else {}))
+            path, headers=headers, **({"json": payload} if payload is not None else {})
+        )
         try:
             data = response.json()
         except ValueError:
@@ -251,21 +277,37 @@ class Org(World):
         own calls during the turn, as that bot), complete with `text` and its token use. None when the hub held the
         bot (no job was claimed)."""
         self.scheduler_pass()
-        claim = self.api("post", "/api/v2/jobs/claim", {"bot": slug, "start_places": True},
-                         who=self.runner["token"], wave=W2)
+        claim = self.api(
+            "post", "/api/v2/jobs/claim", {"bot": slug, "start_places": True}, who=self.runner["token"], wave=W2
+        )
         attempt = claim.body.get("attempt") if isinstance(claim.body, dict) else None
         if not attempt:
-            if claim.status in (200, 201, 204, 409, 423, 429):   # nothing handed out: held, or no job queued
+            if claim.status in (200, 201, 204, 409, 423, 429):  # nothing handed out: held, or no job queued
                 return None
-            if claim.status in (403, 404):   # the runner may not claim this bot yet: a product gap, not a harness bug
+            if claim.status in (403, 404):  # the runner may not claim this bot yet: a product gap, not a harness bug
                 raise Unmet(W2, f"claim {slug}: {claim.status} {claim.excerpt()}")
-            raise RuntimeError(f"claim {claim.status}: {claim.excerpt()}")   # a harness or auth bug, not a hold
+            raise RuntimeError(f"claim {claim.status}: {claim.excerpt()}")  # a harness or auth bug, not a hold
         base = f"/api/v2/attempts/{attempt['id']}"
-        for step, payload in (("started", {"thread_id": "redesign"}),
-                              ("complete", {"outcome": "completed", "text": text, "last_seq": 0, "limited": False,
-                                            "usage": {"input_tokens": tokens, "cached_tokens": 0,
-                                                      "output_tokens": 10_000, "model": "claude-opus-5-5",
-                                                      "runtime": "claude", "billing": "api"}})):
+        for step, payload in (
+            ("started", {"thread_id": "redesign"}),
+            (
+                "complete",
+                {
+                    "outcome": "completed",
+                    "text": text,
+                    "last_seq": 0,
+                    "limited": False,
+                    "usage": {
+                        "input_tokens": tokens,
+                        "cached_tokens": 0,
+                        "output_tokens": 10_000,
+                        "model": "claude-opus-5-5",
+                        "runtime": "claude",
+                        "billing": "api",
+                    },
+                },
+            ),
+        ):
             if step == "complete" and act:
                 act(attempt.get("token"), attempt)
             reply = self.api("post", f"{base}/{step}", payload, who=self.runner["token"], wave=W2)
@@ -277,8 +319,9 @@ class Org(World):
 # ---------------------------------------------------------------------------------------------- shared steps
 def send(org, who, owner, title):
     """A task from `who` to `owner` (a bare slug or person id), as the sender creates it."""
-    return org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner": owner}, who=who,
-                   wave=W2)
+    return org.api(
+        "post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner": owner}, who=who, wave=W2
+    )
 
 
 def work(org, slug, title):
@@ -290,8 +333,9 @@ def work(org, slug, title):
 
 
 def put_cap(org, sender, receiver, per_day, who=DANA):
-    return org.api("put", "/api/v2/task-caps", {"sender": sender, "receiver": receiver, "per_day": per_day},
-                   who=who, wave=W2)
+    return org.api(
+        "put", "/api/v2/task-caps", {"sender": sender, "receiver": receiver, "per_day": per_day}, who=who, wave=W2
+    )
 
 
 def get_caps(org):
@@ -316,7 +360,7 @@ def make_group(org, name, bots=(), parent=None, lead=None, who=DANA):
     if parent:
         payload["parent"] = parent
     if lead:
-        payload["lead"] = lead   # CONTRACT §3; GroupCreate has no lead field today
+        payload["lead"] = lead  # CONTRACT §3; GroupCreate has no lead field today
     reply = org.api("post", "/api/v2/groups", payload, who=who, wave=W2)
     if reply.status >= 300:
         raise Unmet(W2, f"group {name}: {reply.status} {reply.excerpt()}")
@@ -324,9 +368,14 @@ def make_group(org, name, bots=(), parent=None, lead=None, who=DANA):
 
 
 def automation(org, name, owner, trigger=None, steps=None, group=None, spend_cap=None, who=DANA):
-    payload = {"name": name, "owner": owner, "enabled": True, "builtin": False,
-               "trigger": trigger or {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
-               "steps": steps or [{"id": "gate", "type": "filter", "enabled": True, "rules": []}]}
+    payload = {
+        "name": name,
+        "owner": owner,
+        "enabled": True,
+        "builtin": False,
+        "trigger": trigger or {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+        "steps": steps or [{"id": "gate", "type": "filter", "enabled": True, "rules": []}],
+    }
     if group:
         payload["group"] = group
     if spend_cap:
@@ -348,31 +397,47 @@ def run_now(org, facts, key, sample=None, who=DANA):
 def mail_message(msg_id, sender, subject, body="", thread=""):
     """One received mail in the shape the mail sync publishes (MailMessage in backend/connectors.py)."""
     from backend.store import H
-    return {"msg_id": msg_id, "thread_id": thread or msg_id, "from_addr": sender, "from_header": sender,
-            "subject": subject, "snippet": body[:200], "body": body, "date": H.now(), "labels": ["INBOX"]}
+
+    return {
+        "msg_id": msg_id,
+        "thread_id": thread or msg_id,
+        "from_addr": sender,
+        "from_header": sender,
+        "subject": subject,
+        "snippet": body[:200],
+        "body": body,
+        "date": H.now(),
+        "labels": ["INBOX"],
+    }
 
 
 def publish_mail(org, mailbox, messages, deleted=()):
     """A mail sync batch through POST /api/v2/connectors/mail/messages, the route the runner's sync posts to. The
     runner's token only: it is the one caller allowed to publish (CONTRACT §2 Feeding input)."""
     from backend.store import H
+
     payload = {"mailbox": mailbox, "messages": list(messages), "deleted": list(deleted), "synced_at": H.now()}
     return org.api("post", "/api/v2/connectors/mail/messages", payload, who=org.runner["token"], wave=W3)
 
 
 def mail_computer(org, mailbox):
     """The mail computer's pass (CONTRACT §1 Mail actions): it claims every queued action for `mailbox` and reports
-    each done, as runner/connectors.py `mail_action_tick` does after Gmail took it. Returns the actions it claimed."""
-    claimed = org.api("post", "/api/v2/automations/mail-actions/claim", {"mailbox": mailbox},
-                      who=org.runner["token"], wave=W3)
+    each done, as runner_support/connectors.py `mail_action_tick` does after Gmail took it. Returns the actions it claimed."""
+    claimed = org.api(
+        "post", "/api/v2/automations/mail-actions/claim", {"mailbox": mailbox}, who=org.runner["token"], wave=W3
+    )
     actions = ((claimed.body or {}).get("actions") or []) if claimed.status == 200 else []
     for action in actions:
         kind = action.get("action")
-        done = {"ok": True, "detail": {"draft": "drafted", "send": "sent", "forward": "forwarded"}.get(kind, kind),
-                **({"draft": "d-" + action["id"][:8]} if kind == "draft" else {}),
-                **({"message": "s-" + action["id"][:8]} if kind in ("send", "forward") else {})}
-        org.api("post", f"/api/v2/automations/mail-actions/{action['id']}/result", done, who=org.runner["token"],
-                wave=W3)
+        done = {
+            "ok": True,
+            "detail": {"draft": "drafted", "send": "sent", "forward": "forwarded"}.get(kind, kind),
+            **({"draft": "d-" + action["id"][:8]} if kind == "draft" else {}),
+            **({"message": "s-" + action["id"][:8]} if kind in ("send", "forward") else {}),
+        }
+        org.api(
+            "post", f"/api/v2/automations/mail-actions/{action['id']}/result", done, who=org.runner["token"], wave=W3
+        )
     return actions
 
 
@@ -392,8 +457,11 @@ def assistant_of(org, person, who=DANA):
 
 def audit_of(org, obj=None, limit=None, before=None, who=DANA):
     """GET /api/v2/audit (CONTRACT §5): the owner reads every row, anyone else their own."""
-    query = [f"{key}={quote(str(value), safe='')}" for key, value in
-             (("object", obj), ("limit", limit), ("before", before)) if value is not None]
+    query = [
+        f"{key}={quote(str(value), safe='')}"
+        for key, value in (("object", obj), ("limit", limit), ("before", before))
+        if value is not None
+    ]
     return org.api("get", "/api/v2/audit" + ("?" + "&".join(query) if query else ""), who=who, wave=W2)
 
 
@@ -411,8 +479,11 @@ def hub_notices(org, slug, who=DANA):
     found = []
     for room in rooms.body.get("conversations") or []:
         page = org.api("get", f"/api/v2/conversations/{room['id']}/messages", who=who, wave=W2)
-        found += [m for m in (page.body.get("messages") or []) if isinstance(page.body, dict)
-                  and m.get("sender_id") == "keeper" and m.get("kind") == "notice"]
+        found += [
+            m
+            for m in (page.body.get("messages") or [])
+            if isinstance(page.body, dict) and m.get("sender_id") == "keeper" and m.get("kind") == "notice"
+        ]
     return found
 
 
@@ -463,8 +534,10 @@ def comment(org, facts, key, who, text):
 
 def untestable(what):
     """A check the CONTRACT cannot back yet. It fails as untestable until the contract names the route or read."""
+
     def check(facts):
         raise Unmet(GAP, what)
+
     return check
 
 

@@ -8,6 +8,7 @@
 .dash-head .spacer{flex:1}
 .dash-actions{display:flex;gap:4px;flex-wrap:wrap}
 .dash-actions[hidden]{display:none}
+.dash-actions button[hidden]{display:none}
 .dash-actions button{display:inline-flex;align-items:center;gap:4px}
 .dash-actions .nav-icon{font-size:16px;width:16px;height:16px}
 .dash-actions button{gap:6px}
@@ -30,6 +31,8 @@
 .dash-more{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
 .dash-more:hover,.dash-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .dash-more .nav-icon{font-size:18px;width:18px;height:18px}
+/* Grips and menus show only in edit mode (Edit … Done in the header). */
+.dash:not(.dash-editing) :is(.dash-grip,.dash-more,.dash-menu){display:none}
 .dash-menu{position:absolute;right:8px;top:36px;z-index:5;display:flex;flex-direction:column;min-width:140px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.2)}
 .dash-menu button{all:unset;box-sizing:border-box;padding:6px 10px;border-radius:5px;font-size:var(--t-base);color:var(--ink);cursor:pointer}
 .dash-menu button:hover,.dash-menu button:focus-visible{background:var(--surface2)}
@@ -40,6 +43,11 @@
 .dash-pin[data-size=small] .dash-pin-body{max-height:240px;overflow:auto}
 .dash-pin[data-size=medium] .dash-pin-body{max-height:420px;overflow:auto}
 .dash-pin-body>iframe,.dash-pin-body>.page-card{max-width:100%}
+/* A pinned page is its own widget (ui/app/pages.js pageCard): no box around it, and no empty title row outside edit mode. */
+.dash-pin-page{border:0;background:none}
+.dash-pin-page>.dash-pin-body{padding:0;max-height:none!important;overflow:visible!important}
+.dash:not(.dash-editing) .dash-pin-page>.dash-pin-head{display:none}
+.dash-editing .dash-pin-page>.dash-pin-head{padding:0 2px 4px}
 
 /* card bodies (also in a bot's sidebar) */
 .dash-none{margin:4px 0;font-size:var(--t-sm)}

@@ -39,9 +39,15 @@ function peopleMenu(p, view) {
   const check = (act, label, on) => `<button type="button" role="menuitemcheckbox" aria-checked="${on}" data-person-act="${act}"><span class="people-check" aria-hidden="true">${on ? '✓' : ''}</span>${label}</button>`;
   if (p.role === 'member') items.push(check('create_bots', 'Can add bots', !!p.create_bots), check('add_people', 'Can add people', !!p.add_people));
   if (owner && !p.owner && p.email && p.can_sign_in) items.push('<button type="button" role="menuitem" data-person-act="owner">Make owner</button>');
-  if (owner && !p.owner && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Mark as left</button>');
+  if (owner && !p.owner && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Remove</button>');
   if (owner && p.owner && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
   return items.join('');
+}
+// The Tico Recorder this person used last (backend/recorder_installs.py): its version, or nothing.
+function peopleRecorderCell(r) {
+  if (!r?.version) return '<div class="people-cell-recorder"></div>';
+  const seen = r.last_seen_at ? `Last seen ${ago(r.last_seen_at)}` : '';
+  return `<div class="people-cell-recorder${r.update_available ? ' is-old' : ''}" data-recorder-version title="${esc([seen, r.update_available ? 'Update available' : ''].filter(Boolean).join(' · '))}"><span class="people-recorder-label">Recorder </span><span class="tnum">${esc(r.version)}</span></div>`;
 }
 function peopleRow(p, view) {
   const owner = S.me?.role === 'owner', menu = peopleMenu(p, view), local = !!S.config?.local;
@@ -56,6 +62,7 @@ function peopleRow(p, view) {
     <div class="people-cell-role">${role}</div>
     ${p.owner ? '<div class="people-cell-signin"><span class="muted" title="The owner can always sign in">Always</span></div>'   /* the owner's own sign-in is not a switch */
       : `<label class="people-cell-signin">${peopleSwitch('data-person-signin', p.can_sign_in, locked, local ? 'Sign-in access when configured' : 'Can sign in')}<span class="people-switch-label">${local ? 'When configured' : 'Can sign in'}</span></label>`}
+    ${peopleRecorderCell(view?.recorders?.[p.id])}
     <div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div>
   </li>`;
 }
@@ -70,9 +77,13 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') peop
 async function renderSettingsPeople() {
   const el = $('#set-people'); if (!el) return;
   try {
-    const view = await get('/v2/access');
+    // HQ's switch for Tico support on cloud machines comes with it (ui/app/cloud-machines.ts), null off Tico Cloud.
+    const [view, support] = await Promise.all([get('/v2/access'), cloudSupportRead()]);
     if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;
+    // Only the owner changes it; anyone else on this page sees it read-only.
+    const supportLabel = 'Tico support can reach our cloud machines';
+    const supportLine = support ? `<label class="people-line">${peopleSwitch('id="people-cloud-support"', support.on, !owner, supportLabel)}<span>${supportLabel}</span></label>` : '';
     PEOPLE_ADDED = '';                                     // the reminder shows once, right after the add
     const mode = PEOPLE_MODE || (view.directory ? 'sync' : 'manual');
     const active = view.people.filter(p => !p.left), left = view.people.filter(p => p.left);
@@ -89,13 +100,15 @@ async function renderSettingsPeople() {
         ${mode === 'manual' ? `<form class="people-add" id="people-add" autocomplete="off" novalidate>
             <input name="email" type="text" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="Email" aria-label="Email">
             <input name="name" type="text" placeholder="Name (optional)" aria-label="Name">
-            ${view?.invite_email ? '<button class="primary" type="submit" data-people-add-invite>Add and send invite</button><button class="ghost" type="submit">Add</button>'
-              : '<button class="primary" type="submit">Add</button>'}</form>`
+            ${view?.invite_email ? '<button class="primary" type="submit" data-people-add-invite>Add and send invite</button><button class="ghost" type="submit">Add person</button>'
+              : '<button class="primary" type="submit">Add person</button>'}</form>`
           : owner ? '<div id="directory-sync"></div>'
           : `<p class="muted people-synced">Synced from ${esc(PEOPLE_SOURCE[view.directory] || view.directory)}</p>`}
         <p class="people-note">${view?.invite_email ? 'Add and send invite emails them a sign-in link from Tico. Add sends no email.' : 'No email is sent.'}${S.config?.local ? ` Only the owner can sign in locally. <a href="${GH}/blob/main/docs/install.md#add-a-domain-and-sign-in-later" target="_blank" rel="noopener noreferrer">Add a domain and sign-in</a> so people can join.` : ''}</p>
         ${proxy && added ? `<p class="people-note" id="people-proxy-note">Also allow ${esc(added)} in <a href="${esc(help)}" target="_blank" rel="noopener noreferrer">${esc(proxy)}</a></p>` : ''}
-        ${home ? `<label class="people-line">${peopleSwitch('id="people-domain"', view.domain_sign_in, !owner, `Anyone at ${home} has sign-in access`)}<span>Anyone at <b>${esc(home)}</b> ${S.config?.local ? 'has access when sign-in is configured' : 'can sign in'}</span></label>` : ''}
+        <div class="people-join-who" role="radiogroup" aria-label="Who can join"><div class="muted">Who can join</div>
+          <label class="people-line"><input type="radio" name="join" id="people-admin" value="admin"${view.join === 'domain' ? '' : ' checked'}${owner ? '' : ' disabled'}><span>Added by an admin</span></label>
+          <label class="people-line"><input type="radio" name="join" id="people-domain" value="domain"${view.join === 'domain' ? ' checked' : ''}${owner && home ? '' : ' disabled'}><span>Anyone with a <b>${esc(home || 'company')}</b> Google login</span></label></div>
         ${extras.length ? `<div class="people-line people-extras"><span class="muted">Also allowed</span><ul class="allow-chips">${extras.map(x =>
           `<li class="allow-chip" data-allow="${esc(x)}">${esc(x)}${owner ? `<button type="button" class="people-chip-x" data-allow-remove="${esc(x)}" aria-label="Remove ${esc(x)}">×</button>` : ''}</li>`).join('')}</ul></div>` : ''}
       </section>
@@ -103,16 +116,16 @@ async function renderSettingsPeople() {
       <section class="card people-list-card">
         <header><h2>People</h2><span class="muted tnum">${active.length}</span></header>
         ${owner ? '' : settingsWhoCanHTML('roles')}
-        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in access' : 'Can sign in'}</span><span></span></div>
+        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in access' : 'Can sign in'}</span><span>Recorder</span><span></span></div>
         <ul class="people-list">${active.map(p => peopleRow(p, view)).join('')}</ul>
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>
           <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
         <label class="people-line people-limit">Bot limit per member<input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}"></label>
-        ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}
+        ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}${supportLine}
           <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label>
           <label class="people-line"><span>Reports a manager may create a week (BotOps asks; over the limit, the person above decides)</span><input type="number" min="0" max="50" step="1" data-rule-count="report_creates_per_week" value="${esc(String(view.rules?.report_creates_per_week ?? 3))}" aria-label="Reports a manager may create a week"></label>
-          <label class="people-line"><span>Reports a manager may archive or restore a week</span><input type="number" min="0" max="50" step="1" data-rule-count="report_archives_per_week" value="${esc(String(view.rules?.report_archives_per_week ?? 3))}" aria-label="Reports a manager may archive or restore a week"></label></div>` : ''}
+          <label class="people-line"><span>Reports a manager may archive or restore a week</span><input type="number" min="0" max="50" step="1" data-rule-count="report_archives_per_week" value="${esc(String(view.rules?.report_archives_per_week ?? 3))}" aria-label="Reports a manager may archive or restore a week"></label></div>` : supportLine ? `<div class="people-rules">${supportLine}</div>` : ''}
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.js
     if (owner) void peopleFromSetup($('#people-from-setup'));
@@ -194,17 +207,19 @@ async function renderSettingsPeople() {
       if (failed) settingsFieldError(failed, PEOPLE_INVITE_FAILED.message); else toast(PEOPLE_INVITE_FAILED.message, true);
       PEOPLE_INVITE_FAILED = null;
     }
-    const domainSwitch = $('#people-domain');
-    if (domainSwitch) domainSwitch.onchange = async () => {
-      const on = domainSwitch.checked;
-      // Turning it off can lock people out, so it asks first.
+    // Who can join: "Anyone with a <domain> Google login" puts the company domain on the allow list (backend/access.py
+    // view `join`). Turning it off can lock people out, so it asks first; a declined change puts the radio back.
+    el.querySelectorAll('input[name=join]').forEach(radio => { radio.onchange = async () => {
+      const on = radio.value === 'domain';
       if (!on && !await settingsConfirm({title: `Stop sign-in for everyone at ${home}?`, ok: 'Turn off',
-        text: `Only people added here keep signing in. Anyone else at ${home} can no longer sign in.`})) { domainSwitch.checked = true; return; }
+        text: `Only people added here keep signing in. Anyone else at ${home} can no longer sign in.`})) {
+        el.querySelectorAll('input[name=join]').forEach(r => { r.checked = r.value === view.join; }); return;
+      }
       void change(async () => {
         await allow(view.allowed, on ? [...view.allowed_domains, home] : view.allowed_domains.filter(d => d !== home));
         PEOPLE_ADDED = on ? home : '';
-      }, S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', domainSwitch);
-    };
+      }, S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', radio);
+    }; });
     el.querySelectorAll('[data-allow-remove]').forEach(button => button.onclick = async () => {
       const x = button.dataset.allowRemove, domain = !x.includes('@');
       if (!await settingsConfirm({title: `Remove ${x}?`, ok: 'Remove',
@@ -212,6 +227,32 @@ async function renderSettingsPeople() {
       void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
     });
     el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved', box));
+    // A lost answer may still have reached HQ: read its state again before showing the result.
+    const supportSwitch = $('#people-cloud-support');
+    if (supportSwitch && owner) supportSwitch.onchange = async () => {
+      const on = supportSwitch.checked;
+      settingsFieldClear(supportSwitch);
+      supportSwitch.disabled = true;
+      try {
+        // Each press is a new choice; only this write's automatic retries share its key.
+        const answer = await put('/v2/cloud-machines/support', {on}, newRequestId());
+        cloudSupportSet(answer);
+        supportSwitch.checked = answer?.on === true;
+        toast('Saved');
+      } catch (error) {
+        const stale = error.body?.error?.code === 'stale_revision' && typeof error.body.error.on === 'boolean';
+        let current = await cloudSupportRead({fresh: true});
+        if (!current && stale) {
+          current = {available: true, on: error.body.error.on, machines: []};
+          cloudSupportSet(current);
+        }
+        if (error.signature) pendingWrites.delete(error.signature);
+        supportSwitch.checked = current?.on === true;
+        supportSwitch.indeterminate = !current;
+        const message = stale ? 'A newer change already reached Tico HQ.' : error.message;
+        settingsFieldError(supportSwitch, current ? message : `${message} Could not read the switch. Open Settings again to retry.`);
+      } finally { supportSwitch.disabled = !CLOUD_SUPPORT.view; }
+    };
     el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
       const days = Math.round(Number(box.value));
       if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);
@@ -246,8 +287,8 @@ async function renderSettingsPeople() {
         if (act === 'restore') void change(() => post(path, {left: false}), `${p.name} restored`, row);
         else if (act === 'create_bots') void change(() => post(path, {create_bots: !p.create_bots}), 'Saved', row);
         else if (act === 'add_people') void change(() => post(path, {add_people: !p.add_people}), 'Saved', row);
-        else if (act === 'left') confirmDialog(`Mark ${p.name} as left?`, 'Ends their sign-in and API tokens. Their history stays.', 'Mark as left',
-          async () => { await post(`/v2/humans/${encodeURIComponent(p.id)}`, {left: true}); await again(`${p.name} marked as left`); });
+        else if (act === 'left') confirmDialog(`Remove ${p.name}?`, 'Ends their sign-in and API tokens. Their history stays.', 'Remove',
+          async () => { await post(`/v2/humans/${encodeURIComponent(p.id)}`, {left: true}); await again(`${p.name} removed`); });
         // Only a left person with no history (backend/people_remove.py); anyone else stays as left.
         else if (act === 'remove') confirmDialog(`Remove ${p.name}?`, "This can't be undone.", 'Remove',
           async () => { await writeRequest('DELETE', `/v2/humans/${encodeURIComponent(p.id)}`); await again(`${p.name} removed`); });
@@ -347,7 +388,7 @@ async function peopleFromSetup(el) {
         : `<form class="people-add setup-invite" novalidate><input name="email" type="text" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="Email" aria-label="Email for ${esc(p.name)}"${p.person ? ' hidden' : ''}>
            <button class="primary" type="submit">Invite</button><span class="people-status" role="status"></span></form>`}</li>`;
   el.innerHTML = `<section class="card people-list-card" id="setup-people"><header><h2>From your setup</h2><span class="muted tnum">${people.length}</span></header>
-    <p class="people-note">Invites come from Tico's sign-in email, like sign-in codes, not your company's mailbox.</p>
+    <p class="people-note">Invites come from Tico's sign-in email.</p>
     <ul class="people-list">${people.map(row).join('')}</ul></section>`;
   el.querySelectorAll('.setup-invite').forEach(form => form.onsubmit = async event => {
     event.preventDefault();

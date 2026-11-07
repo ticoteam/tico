@@ -5,8 +5,8 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
-const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+// The page as the server sends it (the real bundle, TypeScript compiled), like every other browser script.
+const {html, uiFile} = require('./support/page.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const {unrouted} = require('./support/routes.cjs');
 
@@ -37,20 +37,26 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     const page = await ctx.newPage();
     const errors = [], asked = [];
     let empty = false;
-    const puts = [];
+    const puts = [], purges = [];
+    let mayPurge = true, purgeFails = false;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-      if (ui && fs.existsSync(path.join(__dirname, '..', ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(path.join(__dirname, '..', ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1])))
+        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.2.18', update: null, app_name: 'Tico', usage_count_notice: false};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json(LIMITS);
+      if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json({...LIMITS, may_edit_default: mayPurge});
+      if (p === '/api/v2/usage/queues/purge' && req.method() === 'POST') {
+        purges.push(JSON.parse(req.postData()));
+        return purgeFails ? json({error: {code: 'unavailable', detail: 'Try again.'}}, 503)
+          : json({scope: purges.at(-1).scope, cancelled: 3, kept_people: 2, still_running: 1});
+      }
       if (/^\/api\/v2\/usage\/(limits|pools)/.test(p) && req.method() === 'PUT') { puts.push([p, JSON.parse(req.postData())]); return json({ok: true}); }
       if (p === '/api/v2/usage') {
         const q = Object.fromEntries(url.searchParams);
@@ -95,6 +101,38 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     assert.ok(items.includes('usage') && items.indexOf('usage') > items.indexOf('runs'), 'Usage follows Runs: ' + items);
     await page.locator('#account-menu a[data-nav=usage]').click();
     await page.locator('.use-row').first().waitFor();
+
+    // Clearing is a confirmed write, scoped separately from the spend filter. Cancel sends nothing; failures stay open.
+    const purge = page.locator('#use-purge'), dialog = page.getByRole('dialog', {name: 'Clear automatic queue'});
+    await purge.waitFor();
+    await purge.click();
+    assert.equal(await dialog.locator('[name=scope]').inputValue(), 'company');
+    await dialog.getByRole('button', {name: 'Cancel', exact: true}).click();
+    assert.deepEqual(purges, []);
+    await page.setViewportSize({width: 390, height: 844});
+    await purge.click();
+    await dialog.locator('[name=scope]').selectOption('group:ops');
+    purgeFails = true;
+    await dialog.getByRole('button', {name: 'Clear queue', exact: true}).click();
+    await dialog.locator('[data-error]:not([hidden])').waitFor();
+    assert.equal(await dialog.getByRole('button', {name: 'Clear queue', exact: true}).isEnabled(), true);
+    const failedRequests = purges.length; // The shared request helper retries a temporary server failure.
+    assert.ok(failedRequests > 0);
+    purgeFails = false;
+    await dialog.getByRole('button', {name: 'Clear queue', exact: true}).click();
+    await dialog.waitFor({state: 'detached'});
+    assert.equal(purges.length, failedRequests + 1);
+    assert.ok(purges.every(body => Object.keys(body).length === 1 && body.scope === 'group:ops'));
+    assert.deepEqual(puts, [], 'clearing the queue never changes spending limits');
+    await page.setViewportSize({width: 1440, height: 900});
+
+    // Group leads may edit their limits, but only owners and administrators see the purge control.
+    mayPurge = false;
+    await page.evaluate(() => useLimits());
+    assert.equal(await purge.isHidden(), true);
+    mayPurge = true;
+    await page.evaluate(() => useLimits());
+    await purge.waitFor();
 
     // Seven days by default, sorted by API-equivalent (billed plus subscriptions), one figure each, billed in the hover.
     assert.deepEqual([asked[0].from, asked[0].to], [day(6), day(0)]);

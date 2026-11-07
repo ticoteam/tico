@@ -16,6 +16,7 @@ What stays where it is: task rules, system jobs and the Health Monitor show as r
 wakes from rules.py, which reads it from its "What wakes" automation (`wake_rows`), so an edit there (a rule's step
 turned off, deleted, its event or outcome changed) is what wakes the bot. Old tables keep their rows.
 """
+
 import json
 import logging
 import math
@@ -23,20 +24,31 @@ import sys
 
 from . import automation_flow as F
 from .store import H, Problem
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.redesign_migration")
-CUTOVER = "redesign_cutover"                 # registry_metadata: {state: running|done, migration, at, ...}
-WAKES_PREFIX = "auto_wakes_"                  # custom "What wakes" automations: rules.py reads its rows from these
-GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}   # CONTRACT §1 run guard defaults
+CUTOVER = "redesign_cutover"  # registry_metadata: {state: running|done, migration, at, ...}
+WAKES_PREFIX = "auto_wakes_"  # custom "What wakes" automations: rules.py reads its rows from these
+GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}  # CONTRACT §1 run guard defaults
 STRATEGY_NAME = "Strategy Bot"
-DEFAULT_PROMPT = ("Read this message for {name}. Archive what needs nothing, label what belongs somewhere, draft a "
-                  "reply where one is wanted, and leave the rest for {name}.")
-OUTCOME_DO = {"wake": "wake_bot", "batch": "wake_bot", "action": "wake_bot", "note": "note", "ignore": "archive",
-              "ask": "leave_for_you"}
+DEFAULT_PROMPT = (
+    "Read this message for {name}. Archive what needs nothing, label what belongs somewhere, draft a "
+    "reply where one is wanted, and leave the rest for {name}."
+)
+OUTCOME_DO = {
+    "wake": "wake_bot",
+    "batch": "wake_bot",
+    "action": "wake_bot",
+    "note": "note",
+    "ignore": "archive",
+    "ask": "leave_for_you",
+}
 # The message the inbox automation runs on, handed to the Assistant the way message automations do: each `{{field}}`
 # becomes a quoted data block after the instructions (automation_flow.render_prompt), never read as instructions.
-MESSAGE_PART = ("\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
-                "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}")
+MESSAGE_PART = (
+    "\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
+    "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"
+)
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS redesign_migrated(kind TEXT NOT NULL, id TEXT NOT NULL, migration TEXT NOT NULL, "
     "automation TEXT, PRIMARY KEY(kind, id))",
@@ -46,12 +58,8 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
-    # CONTRACT §1 30-minute limits (wave 2 adds the same columns; both are idempotent).
     from .hubdb import add_column
-    from . import usage_limits
-    usage_limits.ensure(c)
-    add_column(c, "usage_limits", "per_30m_usd", "REAL")
-    add_column(c, "usage_pools", "per_30m_usd", "REAL")
+
     # What became of each object (`outcome` converted | kept | failed, `why`), and when the owner was told of it.
     for column in ("outcome", "why", "title", "migrated_at", "told"):
         add_column(c, "redesign_migrated", column, "TEXT")
@@ -79,8 +87,9 @@ def _set_meta(c, key, raw):
     if raw is None:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
     else:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (key, raw))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, raw)
+        )
 
 
 def _table(c, name):
@@ -112,22 +121,38 @@ def _bot_name(c, slug):
 def _cron(preset, at):
     """A system job's preset as a five-field cron, in company time."""
     hour, minute = (int(p) for p in (at or "09:00").split(":"))
-    return {"15m": "*/15 * * * *", "hourly": "0 * * * *", "4h": "0 */4 * * *", "daily": f"{minute} {hour} * * *",
-            "business": "0 8-17 * * 1-5", "weekly": f"{minute} {hour} * * 1"}.get(preset or "hourly", "0 * * * *")
+    return {
+        "15m": "*/15 * * * *",
+        "hourly": "0 * * * *",
+        "4h": "0 */4 * * *",
+        "daily": f"{minute} {hour} * * *",
+        "business": "0 8-17 * * 1-5",
+        "weekly": f"{minute} {hour} * * 1",
+    }.get(preset or "hourly", "0 * * * *")
 
 
 def _zone():
     """Company time (system jobs run in it) as a zone name."""
     from . import system_routines as SR
+
     zone = SR.zone()
     return str(getattr(zone, "key", zone))
 
 
 def _mirror(name, owner, key, controls, source, words=""):
     """A read-only built-in automation that shows something Tico still runs from its own table."""
-    return {"name": name[:120], "owner": owner, "builtin": True, "readonly": True, "enabled": bool(controls.get("on", True)),
-            "trigger": {"type": "event", "name": "tico.builtin." + key},
-            "steps": [], "controls": controls, "source": source, **({"description": words[:500]} if words else {})}
+    return {
+        "name": name[:120],
+        "owner": owner,
+        "builtin": True,
+        "readonly": True,
+        "enabled": bool(controls.get("on", True)),
+        "trigger": {"type": "event", "name": "tico.builtin." + key},
+        "steps": [],
+        "controls": controls,
+        "source": source,
+        **({"description": words[:500]} if words else {}),
+    }
 
 
 # ---------------------------------------------------------------------------------------------------- the plan
@@ -153,9 +178,13 @@ def _routines(c, done, fresh=False):
     """The routines still to move. `fresh`: one written after the cutover (`adopt`), such as a template's routine Tico
     seeds while it builds the bot; a bot still `planned` (being set up, not away) keeps the routine's own switch."""
     from . import automations, event_catalog as CAT, routines, triggers
-    rows = c.execute("SELECT s.*, coalesce(sc.timezone, ?) AS timezone, coalesce(sc.enabled, 1) AS enabled "
-                     "FROM schedules s LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
-                     "WHERE s.deleted_at IS NULL ORDER BY s.bot, s.id", (routines.DEFAULT_ZONE,)).fetchall()
+
+    rows = c.execute(
+        "SELECT s.*, coalesce(sc.timezone, ?) AS timezone, coalesce(sc.enabled, 1) AS enabled "
+        "FROM schedules s LEFT JOIN schedule_config sc ON sc.schedule_id=s.id "
+        "WHERE s.deleted_at IS NULL ORDER BY s.bot, s.id",
+        (routines.DEFAULT_ZONE,),
+    ).fetchall()
     inbox_bots = {b["bot"] for b in routines.message_bot_mailboxes(c)}
     out = []
     for row in rows:
@@ -167,14 +196,19 @@ def _routines(c, done, fresh=False):
         found = H.bot(c, bot)
         event = row["event_name"] or ""
         if event.startswith(triggers.EVENT):
-            trigger = {"type": "webhook", "id": event[len(triggers.EVENT):]}
+            trigger = {"type": "webhook", "id": event[len(triggers.EVENT) :]}
             if not triggers.exists(c, event):
                 flags.append(_flag(sid, "no_trigger", "Its incoming webhook is gone; it stays a routine", keeps=True))
         elif event:
             trigger = {"type": "event", "name": event}
             if not CAT.canonical(event):
-                flags.append(_flag(sid, "unknown_event", f"Tico does not list the event {event}; the automation "
-                                                         "runs only if something sends it"))
+                flags.append(
+                    _flag(
+                        sid,
+                        "unknown_event",
+                        f"Tico does not list the event {event}; the automation runs only if something sends it",
+                    )
+                )
         else:
             trigger = {"type": "schedule", "cron": row["cron"], "tz": row["timezone"] or routines.DEFAULT_ZONE}
         enabled = bool(row["enabled"])
@@ -182,32 +216,69 @@ def _routines(c, done, fresh=False):
             flags.append(_flag(sid, "no_bot", f"Its bot {bot} is gone; it stays a routine", keeps=True))
         elif found.get("state") != "active" and not (fresh and found.get("state") == "planned"):
             # It keeps its own switch: the tick passes over a schedule whose bot is away (automations `_bot_away`).
-            flags.append(_flag(sid, "bot_not_active", f"{_bot_name(c, bot)} is {found.get('state')}: it runs again "
-                                                      "when the bot is back"))
+            flags.append(
+                _flag(
+                    sid,
+                    "bot_not_active",
+                    f"{_bot_name(c, bot)} is {found.get('state')}: it runs again when the bot is back",
+                )
+            )
         if bot in inbox_bots and enabled:
             enabled = False
-            flags.append(_flag(sid, "inbox_bot", f"{_bot_name(c, bot)} reads an inbox and retires with it: this "
-                                                 "routine starts off"))
+            flags.append(
+                _flag(
+                    sid, "inbox_bot", f"{_bot_name(c, bot)} reads an inbox and retires with it: this routine starts off"
+                )
+            )
         if len(text) > F.MAX_PROMPT:
             # Nothing runs a routine left behind, so it moves off, its text cut to fit, for its owner to finish.
-            text, enabled = text[:F.MAX_PROMPT], False
-            flags.append(_flag(sid, "too_long", f"Its text was longer than {F.MAX_PROMPT:,} characters: it moved "
-                                                "off with the text cut to fit; shorten it and turn it on"))
+            text, enabled = text[: F.MAX_PROMPT], False
+            flags.append(
+                _flag(
+                    sid,
+                    "too_long",
+                    f"Its text was longer than {F.MAX_PROMPT:,} characters: it moved "
+                    "off with the text cut to fit; shorten it and turn it on",
+                )
+            )
         if "{{" in text:
-            flags.append(_flag(sid, "placeholders", "Its text has {{placeholders}}: a Bot turn fills them from the "
-                                                    "automation's values, which may differ from the routine's"))
-        flow = {"name": (row["title"] or "Routine")[:120], "owner": "bot:" + bot, "enabled": enabled,
-                "trigger": trigger, "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + bot, "prompt": text}],
-                "source": {"kind": "routine", "id": sid}}
+            flags.append(
+                _flag(
+                    sid,
+                    "placeholders",
+                    "Its text has {{placeholders}}: a Bot turn fills them from the "
+                    "automation's values, which may differ from the routine's",
+                )
+            )
+        flow = {
+            "name": (row["title"] or "Routine")[:120],
+            "owner": "bot:" + bot,
+            "enabled": enabled,
+            "trigger": trigger,
+            "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + bot, "prompt": text}],
+            "source": {"kind": "routine", "id": sid},
+        }
         do = "routine"
         if automations.is_briefing_routine(row) and trigger["type"] == "schedule":
             # The hub's Market briefing does this now: the routine becomes that built-in, on the routine's own time
             # and words, so the two never both run.
-            flow = {**automations.briefing_flow(trigger["cron"], trigger["tz"], text), "builtin": True,
-                    "enabled": enabled, "source": flow["source"]}
+            flow = {
+                **automations.briefing_flow(trigger["cron"], trigger["tz"], text),
+                "builtin": True,
+                "enabled": enabled,
+                "source": flow["source"],
+            }
             do = "adopt_briefing"
-        out.append({"kind": "routine", "id": sid, "title": row["title"], "becomes": flow, "flags": flags,
-                    "_do": (do, {"next_due_at": row["next_due_at"]})})
+        out.append(
+            {
+                "kind": "routine",
+                "id": sid,
+                "title": row["title"],
+                "becomes": flow,
+                "flags": flags,
+                "_do": (do, {"next_due_at": row["next_due_at"]}),
+            }
+        )
     return out
 
 
@@ -220,27 +291,49 @@ def _rule_step(n, row):
     for key, value in sorted(when.items()):
         if isinstance(value, (str, int, float, bool)) and F.FIELD.fullmatch(str(key)) and len(conds) < F.MAX_CONDS:
             conds.append({"field": "task." + str(key), "op": "is", "value": value})
-    rule = {k: row[k] for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by",
-                                 "revision") if k in row.keys()}
+    rule = {
+        k: row[k]
+        for k in ("id", "scope_kind", "scope_id", "event", "position", "note", "created_by", "revision")
+        if k in row.keys()
+    }
     # Saved inside the automation's flow under these keys since the cutover; the columns are created_at and updated_at.
-    rule.update({saved: row[column] for saved, column in (("created", "created_at"), ("updated", "updated_at"))
-                 if column in row.keys()})
+    rule.update(
+        {
+            saved: row[column]
+            for saved, column in (("created", "created_at"), ("updated", "updated_at"))
+            if column in row.keys()
+        }
+    )
     rule["action_by"] = dict(row).get("action_by")
     rule["when"] = when
     do = OUTCOME_DO.get(row["then_outcome"], "wake_bot")
     if row["then_outcome"] == "action" and params.get("action") in F.ACTIONS:
         do = params["action"]
-    return {"id": f"r{n}", "type": "filter", "enabled": bool(row["enabled"]),
-            "rules": [{"when": conds, "match": "all", "stop": True,
-                       "then": [{"do": do, "args": {"outcome": row["then_outcome"], "params": params, "rule": rule}}]}]}
+    return {
+        "id": f"r{n}",
+        "type": "filter",
+        "enabled": bool(row["enabled"]),
+        "rules": [
+            {
+                "when": conds,
+                "match": "all",
+                "stop": True,
+                "then": [{"do": do, "args": {"outcome": row["then_outcome"], "params": params, "rule": rule}}],
+            }
+        ],
+    }
 
 
 def _wakes_name(c, scope, ident, me):
     """A "What wakes" automation's name and owner for one scope."""
     if scope == "bot" and H.bot(c, ident):
         return f"What wakes {_bot_name(c, ident)}", "bot:" + ident
-    words = {"team": "every bot", "department": f"the {ident} bots", "type": f"bots on {ident} tasks",
-             "task": f"bots on task {ident}"}.get(scope, f"{scope} {ident}".strip())
+    words = {
+        "team": "every bot",
+        "department": f"the {ident} bots",
+        "type": f"bots on {ident} tasks",
+        "task": f"bots on task {ident}",
+    }.get(scope, f"{scope} {ident}".strip())
     return f"What wakes {words}", me
 
 
@@ -248,8 +341,12 @@ def _wake_rules(c, done, me):
     """The table's wake rules, one "What wakes" automation per scope (a flow holds at most F.MAX_STEPS steps, so a
     longer list becomes more than one)."""
     from . import tico_notices
-    rows = [r for r in c.execute("SELECT * FROM rules ORDER BY scope_kind, scope_id, position, created_at, id").fetchall()
-            if not tico_notices.is_builtin_rule(r["id"]) and ("wake_rule", r["id"]) not in done]
+
+    rows = [
+        r
+        for r in c.execute("SELECT * FROM rules ORDER BY scope_kind, scope_id, position, created_at, id").fetchall()
+        if not tico_notices.is_builtin_rule(r["id"]) and ("wake_rule", r["id"]) not in done
+    ]
     groups = {}
     for row in rows:
         groups.setdefault((row["scope_kind"], row["scope_id"] or ""), []).append(row)
@@ -257,64 +354,117 @@ def _wake_rules(c, done, me):
     for (scope, ident), listed in groups.items():
         base, owner = _wakes_name(c, scope, ident, me)
         for part in range(0, len(listed), F.MAX_STEPS):
-            members = listed[part:part + F.MAX_STEPS]
+            members = listed[part : part + F.MAX_STEPS]
             name = f"{base[:110]} ({part // F.MAX_STEPS + 1})" if part else base
-            flow = {"name": name[:120], "owner": owner, "enabled": True,
-                    "wakes": {"scope_kind": scope, "scope_id": ident}, "trigger": {"type": "event", "name": "tico.wake"},
-                    "steps": [_rule_step(n + 1, row) for n, row in enumerate(members)],
-                    "source": [{"kind": "wake_rule", "id": row["id"]} for row in members]}
+            flow = {
+                "name": name[:120],
+                "owner": owner,
+                "enabled": True,
+                "wakes": {"scope_kind": scope, "scope_id": ident},
+                "trigger": {"type": "event", "name": "tico.wake"},
+                "steps": [_rule_step(n + 1, row) for n, row in enumerate(members)],
+                "source": [{"kind": "wake_rule", "id": row["id"]} for row in members],
+            }
             group = {"scope_kind": scope, "scope_id": ident, "part": part, "rules": [row["id"] for row in members]}
             for row in members:
                 flags = []
                 if owner != "bot:" + ident:
-                    flags.append(_flag(row["id"], "scope", f"A {scope} rule, not one bot's: it goes in \"{name}\", "
-                                                           "owned by you"))
+                    flags.append(
+                        _flag(row["id"], "scope", f"A {scope} rule, not one bot's: it goes in \"{name}\", owned by you")
+                    )
                 if not owner:
                     flags.append(_flag(row["id"], "no_owner", "No person to own it; it stays a rule", keeps=True))
-                out.append({"kind": "wake_rule", "id": row["id"], "title": f"{row['event']} → {row['then_outcome']}",
-                            "becomes": flow, "flags": flags, "_do": ("wakes", group)})
+                out.append(
+                    {
+                        "kind": "wake_rule",
+                        "id": row["id"],
+                        "title": f"{row['event']} → {row['then_outcome']}",
+                        "becomes": flow,
+                        "flags": flags,
+                        "_do": ("wakes", group),
+                    }
+                )
     return out
 
 
-WAKES_BUILTIN = "auto_builtin_wakes"   # the hub's own "What wakes bots" (automations.ensure_builtins)
+WAKES_BUILTIN = "auto_builtin_wakes"  # the hub's own "What wakes bots" (automations.ensure_builtins)
 
 
 def wakes_builtin(owner):
     """`What wakes bots`: the built-in wake rules (rules.py, which keeps deciding by them) shown read-only, a Filter
     step per ten rules. Its `event` trigger is never emitted and `readonly` keeps the engine off it."""
     from . import rules
+
     listed = rules._builtins()
     steps = []
     for start in range(0, len(listed), F.MAX_RULES):
-        chunk = listed[start:start + F.MAX_RULES]
-        steps.append({"id": f"b{start // F.MAX_RULES + 1}", "type": "filter", "rules": [
-            {"when": [] if r["event"] == "*" else [{"field": "event", "op": "is", "value": r["event"]}],
-             "then": [{"do": OUTCOME_DO.get(r["then"], "wake_bot"), "args": {"outcome": r["then"], "rule": r["id"],
-                                                                           "words": r.get("words", "")[:300]}}],
-             "stop": True} for r in chunk]})
-    return {**_mirror("What wakes bots", owner, "wakes", {"on": True}, {"kind": "builtin", "id": "wake-builtins"}),
-            "steps": steps}
+        chunk = listed[start : start + F.MAX_RULES]
+        steps.append(
+            {
+                "id": f"b{start // F.MAX_RULES + 1}",
+                "type": "filter",
+                "rules": [
+                    {
+                        "when": [] if r["event"] == "*" else [{"field": "event", "op": "is", "value": r["event"]}],
+                        "then": [
+                            {
+                                "do": OUTCOME_DO.get(r["then"], "wake_bot"),
+                                "args": {"outcome": r["then"], "rule": r["id"], "words": r.get("words", "")[:300]},
+                            }
+                        ],
+                        "stop": True,
+                    }
+                    for r in chunk
+                ],
+            }
+        )
+    return {
+        **_mirror("What wakes bots", owner, "wakes", {"on": True}, {"kind": "builtin", "id": "wake-builtins"}),
+        "steps": steps,
+    }
 
 
 def _builtins(c, done, me):
     """The built-in wake rules, task rules, system jobs and the Health Monitor: read-only built-ins. The hub makes
     `What wakes bots` itself once the redesign is on; the converter then only records it (`adopt`)."""
     from . import system_routines as SR
+
     out = []
     if ("builtin", "wake-builtins") not in done and me:
         # Always the hub's own `What wakes bots` (made here when the hub has not made it yet), never a second one.
-        out.append({"kind": "builtin", "id": "wake-builtins", "title": "Built-in wake rules", "becomes": wakes_builtin(me),
-                    "flags": [], "_do": ("adopt", {})})
+        out.append(
+            {
+                "kind": "builtin",
+                "id": "wake-builtins",
+                "title": "Built-in wake rules",
+                "becomes": wakes_builtin(me),
+                "flags": [],
+                "_do": ("adopt", {}),
+            }
+        )
     if _table(c, "task_rules"):
         for row in c.execute("SELECT * FROM task_rules ORDER BY created_at, id").fetchall():
             if ("task_rule", row["id"]) in done or not me:
                 continue
-            controls = {"on": bool(row["enabled"]), "preset": row["preset"], "daily_at": row["daily_at"],
-                        "department": row["department"], "triggers": _json(row["triggers"], []),
-                        "actions": _json(row["actions"], [])}
+            controls = {
+                "on": bool(row["enabled"]),
+                "preset": row["preset"],
+                "daily_at": row["daily_at"],
+                "department": row["department"],
+                "triggers": _json(row["triggers"], []),
+                "actions": _json(row["actions"], []),
+            }
             flow = _mirror(row["name"], me, "task_rule", controls, {"kind": "task_rule", "id": row["id"]})
-            out.append({"kind": "task_rule", "id": row["id"], "title": row["name"], "becomes": flow, "flags": [],
-                        "_do": ("mirror", {})})
+            out.append(
+                {
+                    "kind": "task_rule",
+                    "id": row["id"],
+                    "title": row["name"],
+                    "becomes": flow,
+                    "flags": [],
+                    "_do": ("mirror", {}),
+                }
+            )
     cfg = SR.config(c)
     for job in SR.JOBS:
         oid = "job:" + job.key
@@ -322,19 +472,43 @@ def _builtins(c, done, me):
             continue
         controls = {"on": True, "schedule": job.schedule, **(cfg.get(job.key) or {})}
         flow = _mirror(job.name, me, "job." + job.key, controls, {"kind": "system_job", "id": oid}, job.what)
-        out.append({"kind": "system_job", "id": oid, "title": job.name, "becomes": flow, "flags": [],
-                    "_do": ("mirror", {})})
+        out.append(
+            {"kind": "system_job", "id": oid, "title": job.name, "becomes": flow, "flags": [], "_do": ("mirror", {})}
+        )
     health = H.bot(c, "health-monitor")
     if health and ("health_monitor", "bot:health-monitor") not in done and me:
-        flow = _mirror("Health Monitor", me, "health", {"on": health.get("state") == "active", "bot": "health-monitor"},
-                       {"kind": "bot", "id": "health-monitor"}, "Finds install problems and files them for BotOps.")
-        out.append({"kind": "health_monitor", "id": "bot:health-monitor", "title": "Health Monitor", "becomes": flow,
-                    "flags": [], "_do": ("mirror", {})})
+        flow = _mirror(
+            "Health Monitor",
+            me,
+            "health",
+            {"on": health.get("state") == "active", "bot": "health-monitor"},
+            {"kind": "bot", "id": "health-monitor"},
+            "Finds install problems and files them for BotOps.",
+        )
+        out.append(
+            {
+                "kind": "health_monitor",
+                "id": "bot:health-monitor",
+                "title": "Health Monitor",
+                "becomes": flow,
+                "flags": [],
+                "_do": ("mirror", {}),
+            }
+        )
     return out
+
+
+def _instructions_text(size, bot_name):
+    """The flag an inbox whose Inbox Manager had its own instructions carries: what was not copied, and where it is."""
+    return (
+        f"The Inbox Manager's own instructions ({size:,} characters) are not in this automation: it runs on a "
+        f"short routing prompt. They stay with {bot_name}, as its mail instructions"
+    )
 
 
 def _inboxes(c, done):
     from . import people as P, routines, views
+
     roster = views.roster(c)
     out = []
     for box in routines.message_bot_mailboxes(c):
@@ -343,41 +517,81 @@ def _inboxes(c, done):
             continue
         person = P.person(box["person_id"], roster) or {}
         name = person.get("name") or box["person_id"]
-        found = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (box["bot"],)).fetchone() \
-            if _table(c, "mail_agent_instructions") else None
-        prompt = (found["content"] if found and (found["content"] or "").strip() else DEFAULT_PROMPT.format(name=name))
-        prompt = prompt.rstrip() + MESSAGE_PART
-        flags = []
-        if len(prompt) > F.MAX_PROMPT:
-            flags.append(_flag(oid, "too_long", f"The Inbox Manager's instructions are longer than {F.MAX_PROMPT:,} "
-                                                "characters; the inbox stays with its bot until they are shorter",
-                               keeps=True))
+        found = (
+            c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (box["bot"],)).fetchone()
+            if _table(c, "mail_agent_instructions")
+            else None
+        )
+        content = (found["content"] or "").strip() if found else ""
+        # Every inbox runs on the short routing prompt. The Inbox Manager's own instructions (written for the whole
+        # mailbox) made the turns wander and fail on one message, so they are not copied in; they stay on the bot.
+        prompt = DEFAULT_PROMPT.format(name=name) + MESSAGE_PART
+        flags = (
+            [_flag(oid, "instructions", _instructions_text(len(content), _bot_name(c, box["bot"])))] if content else []
+        )
         bot = H.bot(c, box["bot"]) or {}
-        flow = {"name": f"{name}'s inbox"[:120], "owner": "person:" + box["person_id"], "enabled": True,
-                "trigger": {"type": "message", "inbox": box["address"]},
-                "steps": [{"id": "read", "type": "llm", "as": "assistant:" + box["person_id"], "prompt": prompt[:F.MAX_PROMPT],
-                           "out": "triage"}],
-                "source": [{"kind": "inbox", "id": box["address"]}, {"kind": "bot", "id": box["bot"]}]}
-        out.append({"kind": "inbox", "id": oid, "title": f"{name}'s inbox ({_bot_name(c, box['bot'])})",
-                    "becomes": flow, "flags": flags,
-                    "_do": ("inbox", {"bot": box["bot"], "state": bot.get("state") or "active"})})
+        flow = {
+            "name": f"{name}'s inbox"[:120],
+            "owner": "person:" + box["person_id"],
+            "enabled": True,
+            "trigger": {"type": "message", "inbox": box["address"]},
+            "steps": [
+                {
+                    "id": "read",
+                    "type": "llm",
+                    "as": "assistant:" + box["person_id"],
+                    "prompt": prompt[: F.MAX_PROMPT],
+                    "out": "triage",
+                }
+            ],
+            "source": [{"kind": "inbox", "id": box["address"]}, {"kind": "bot", "id": box["bot"]}],
+        }
+        out.append(
+            {
+                "kind": "inbox",
+                "id": oid,
+                "title": f"{name}'s inbox ({_bot_name(c, box['bot'])})",
+                "becomes": flow,
+                "flags": flags,
+                "_do": ("inbox", {"bot": box["bot"], "state": bot.get("state") or "active"}),
+            }
+        )
     return out
 
 
 def _bots(c, done):
     from . import strategy_bot
+
     out = []
     row = H.bot(c, strategy_bot.SLUG)
     if row and ("bot", "bot:" + strategy_bot.SLUG) not in done:
         current = (row.get("display_name") or "").strip()
         default = current in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)
-        flags = [] if default else [_flag("bot:" + strategy_bot.SLUG, "custom_name",
-                                          f"Someone named it {current}; it keeps that name and becomes the Strategy "
-                                          "bot")]
-        out.append({"kind": "bot", "id": "bot:" + strategy_bot.SLUG, "title": current or strategy_bot.NAME,
-                    "becomes": {"slug": strategy_bot.SLUG, "display_name": STRATEGY_NAME if default else current,
-                                "role": "the strategy bot"},
-                    "flags": flags, "_do": ("rename", {"before": row.get("display_name"), "rename": default})})
+        flags = (
+            []
+            if default
+            else [
+                _flag(
+                    "bot:" + strategy_bot.SLUG,
+                    "custom_name",
+                    f"Someone named it {current}; it keeps that name and becomes the Strategy bot",
+                )
+            ]
+        )
+        out.append(
+            {
+                "kind": "bot",
+                "id": "bot:" + strategy_bot.SLUG,
+                "title": current or strategy_bot.NAME,
+                "becomes": {
+                    "slug": strategy_bot.SLUG,
+                    "display_name": STRATEGY_NAME if default else current,
+                    "role": "the strategy bot",
+                },
+                "flags": flags,
+                "_do": ("rename", {"before": row.get("display_name"), "rename": default}),
+            }
+        )
     return out
 
 
@@ -385,12 +599,28 @@ def _unchanged(c):
     out = []
     if _table(c, "listening_destinations"):
         for row in c.execute("SELECT key, receiver FROM listening_destinations ORDER BY key").fetchall():
-            out.append({"kind": "destination", "id": "destination:" + row["key"], "title": row["key"],
-                        "becomes": "unchanged", "flags": [], "_do": None})
+            out.append(
+                {
+                    "kind": "destination",
+                    "id": "destination:" + row["key"],
+                    "title": row["key"],
+                    "becomes": "unchanged",
+                    "flags": [],
+                    "_do": None,
+                }
+            )
     if _table(c, "goals"):
         for row in c.execute("SELECT id, title FROM goals ORDER BY created_at, id").fetchall():
-            out.append({"kind": "goal", "id": "goal:" + row["id"], "title": row["title"], "becomes": "unchanged",
-                        "flags": [], "_do": None})
+            out.append(
+                {
+                    "kind": "goal",
+                    "id": "goal:" + row["id"],
+                    "title": row["title"],
+                    "becomes": "unchanged",
+                    "flags": [],
+                    "_do": None,
+                }
+            )
     return out
 
 
@@ -398,30 +628,68 @@ def _limit(oid, title, hourly, where):
     amount = half(hourly)
     flags = []
     if amount * 2 > float(hourly) + 1e-9:
-        flags.append(_flag(oid, "rounding", f"${float(hourly):.2f} an hour is ${amount:.2f} per 30 minutes after "
-                                            f"rounding up: up to ${amount * 2:.2f} an hour"))
-    return {"kind": "spend_limit", "id": oid, "title": title, "becomes": {"per_30m_usd": amount, "hourly_usd": None},
-            "flags": flags, "_do": ("limit", {**where, "per_30m_usd": amount})}
+        flags.append(
+            _flag(
+                oid,
+                "rounding",
+                f"${float(hourly):.2f} an hour is ${amount:.2f} per 30 minutes after "
+                f"rounding up: up to ${amount * 2:.2f} an hour",
+            )
+        )
+    return {
+        "kind": "spend_limit",
+        "id": oid,
+        "title": title,
+        "becomes": {"per_30m_usd": amount, "hourly_usd": None},
+        "flags": flags,
+        "_do": ("limit", {**where, "per_30m_usd": amount}),
+    }
+
+
+def _hourly(c):
+    """{caps key: hourly USD} for every hourly limit: a bot's, a pool's and the company default's. A database an older
+    release wrote (read by `waiting` before any migration) still keeps them in usage_limits, usage_pools and the
+    default's registry entry."""
+    from . import usage_limits
+
+    if _table(c, "budget_nodes"):
+        return {key: caps["hourly_usd"] for key, caps in usage_limits.nodes(c).items() if caps.get("hourly_usd")}
+    out = {}
+    for table, column, kind in (("usage_limits", "bot", "bot"), ("usage_pools", "scope", "pool")):
+        if _table(c, table) and "hourly_usd" in _columns(c, table):
+            for row in c.execute(f"SELECT {column}, hourly_usd FROM {table} WHERE hourly_usd > 0"):
+                out[(kind, row[0])] = row[1]
+    hourly = usage_limits._amount(_json(_meta(c, usage_limits.KEY), {}).get("hourly_usd"))
+    if hourly:
+        out[usage_limits.DEFAULT] = hourly
+    return out
 
 
 def _limits(c, done):
     from . import usage_limits
+
     out = []
-    if _table(c, "usage_limits") and "hourly_usd" in _columns(c, "usage_limits"):
-        for row in c.execute("SELECT bot, hourly_usd FROM usage_limits WHERE hourly_usd IS NOT NULL ORDER BY bot"):
-            if ("spend_limit", "limit:" + row["bot"]) not in done and row["hourly_usd"] > 0:
-                out.append(_limit("limit:" + row["bot"], f"{row['bot']} hourly limit", row["hourly_usd"],
-                                  {"table": "usage_limits", "key": row["bot"]}))
-    if _table(c, "usage_pools"):
-        for row in c.execute("SELECT scope, hourly_usd FROM usage_pools WHERE hourly_usd IS NOT NULL ORDER BY scope"):
-            oid = "limit:pool:" + row["scope"]
-            if ("spend_limit", oid) not in done and row["hourly_usd"] > 0:
-                out.append(_limit(oid, f"{row['scope']} hourly limit", row["hourly_usd"],
-                                  {"table": "usage_pools", "key": row["scope"]}))
-    stored = _json(_meta(c, usage_limits.KEY), {})
-    hourly = usage_limits._amount(stored.get("hourly_usd"))
-    if hourly and ("spend_limit", "limit:company-default") not in done:
-        out.append(_limit("limit:company-default", "Company default hourly limit", hourly, {"table": "registry"}))
+    found = _hourly(c)
+    for key in sorted((k for k in found if k[0] == "bot"), key=lambda k: k[1]):
+        if ("spend_limit", "limit:" + key[1]) not in done:
+            out.append(
+                _limit(
+                    "limit:" + key[1], f"{key[1]} hourly limit", found[key], {"table": "usage_limits", "key": key[1]}
+                )
+            )
+    for key in sorted((k for k in found if k[0] == "pool"), key=lambda k: k[1]):
+        oid = "limit:pool:" + key[1]
+        if ("spend_limit", oid) not in done:
+            out.append(_limit(oid, f"{key[1]} hourly limit", found[key], {"table": "usage_pools", "key": key[1]}))
+    if usage_limits.DEFAULT in found and ("spend_limit", "limit:company-default") not in done:
+        out.append(
+            _limit(
+                "limit:company-default",
+                "Company default hourly limit",
+                found[usage_limits.DEFAULT],
+                {"table": "registry"},
+            )
+        )
     return out
 
 
@@ -432,27 +700,44 @@ def _raised(values):
 
 def _budgets(c, done):
     from . import turn_budgets as TB
+
     out = []
     stored = _json(_meta(c, TB.TEAM_KEY), {})
     team = TB.team(c)
     after = _raised(team)
     if ("turn_budget", "budget:team") not in done:
-        out.append({"kind": "turn_budget", "id": "budget:team", "title": "Team turn budgets", "becomes": after,
-                    "flags": [], "_do": ("budget_team", {"raise": after != team and bool(stored)})})
-    for row in c.execute("SELECT bot, config FROM bot_config ORDER BY bot").fetchall():
+        out.append(
+            {
+                "kind": "turn_budget",
+                "id": "budget:team",
+                "title": "Team turn budgets",
+                "becomes": after,
+                "flags": [],
+                "_do": ("budget_team", {"raise": after != team and bool(stored)}),
+            }
+        )
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot").fetchall():
         mine = {k: v for k, v in TB.own(_json(row["config"], {})).items() if v is not None}
         if not mine or ("turn_budget", "budget:" + row["bot"]) in done:
             continue
         raised = _raised(mine)
-        out.append({"kind": "turn_budget", "id": "budget:" + row["bot"], "title": f"{row['bot']} turn budget",
-                    "becomes": raised if raised != mine else "unchanged", "flags": [],
-                    "_do": ("budget_bot", {"bot": row["bot"], "values": raised}) if raised != mine else None})
+        out.append(
+            {
+                "kind": "turn_budget",
+                "id": "budget:" + row["bot"],
+                "title": f"{row['bot']} turn budget",
+                "becomes": raised if raised != mine else "unchanged",
+                "flags": [],
+                "_do": ("budget_bot", {"bot": row["bot"], "values": raised}) if raised != mine else None,
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------------------------------- convert
 def _save(c, who, flow):
     from . import automations
+
     aid = (WAKES_PREFIX if flow.get("wakes") else "auto_mig_") + H.new_id()
     checked = automations._checked(c, flow, wake_steps=False)
     via = "migration" if not who.via else f"{who.via}, migration"
@@ -464,24 +749,35 @@ def _adopt(c, who, flow):
     """The Librarian's briefing routine as the hub's Market briefing built-in: made if the hub has not made it yet
     (or a restore took it away), then given the routine's time, words and on/off."""
     from . import automations
+
     aid = "auto_builtin_" + automations.BRIEFING_KEY
     row = c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()
     if row and row["deleted_at"]:
         c.execute("UPDATE automations SET deleted_at=NULL WHERE id=?", (aid,))
     via = "migration" if not who.via else f"{who.via}, migration"
-    automations._save(c, who.actor, aid, automations._checked(c, flow, wake_steps=False),
-                      automations.flow_of(row) if row else None, via=via)
+    automations._save(
+        c,
+        who.actor,
+        aid,
+        automations._checked(c, flow, wake_steps=False),
+        automations.flow_of(row) if row else None,
+        via=via,
+    )
     return aid
 
 
 def _mark(c, kind, ident, mid, aid, outcome="converted", why="", title=""):
-    c.execute("INSERT OR REPLACE INTO redesign_migrated(kind, id, migration, automation, outcome, why, title, migrated_at) "
-              "VALUES(?,?,?,?,?,?,?,?)", (kind, ident, mid, aid, outcome, why[:1000], (title or "")[:300], _now()))
+    c.execute(
+        "INSERT OR REPLACE INTO redesign_migrated(kind, id, migration, automation, outcome, why, title, migrated_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (kind, ident, mid, aid, outcome, why[:1000], (title or "")[:300], _now()),
+    )
 
 
 def _convert_one(c, who, mid, obj, group_done):
     """One object, in the caller's transaction. Returns the automation id (or None) it made."""
     from . import strategy_bot, turn_budgets as TB, usage_limits
+
     kind, args = obj["_do"]
     now = _now()
     if kind in ("routine", "adopt_briefing"):
@@ -506,21 +802,37 @@ def _convert_one(c, who, mid, obj, group_done):
             _mark(c, "wake_rule", rid, mid, aid)
         group_done[key] = aid
         return aid
-    if kind == "adopt":   # the hub's own built-in, made under its own id if the hub has not made it yet
+    if kind == "adopt":  # the hub's own built-in, made under its own id if the hub has not made it yet
         from . import automations
-        automations.ensure_builtins(c, [{**obj["becomes"], "key": WAKES_BUILTIN[len("auto_builtin_"):]}])
+
+        automations.ensure_builtins(c, [{**obj["becomes"], "key": WAKES_BUILTIN[len("auto_builtin_") :]}])
         _mark(c, "builtin", obj["id"], mid, WAKES_BUILTIN)
         return WAKES_BUILTIN
     if kind == "mirror":
         aid = _save(c, who, obj["becomes"])
-        _mark(c, {"builtin": "builtin", "task_rule": "task_rule", "system_job": "system_job",
-                  "health_monitor": "health_monitor"}[obj["kind"]], obj["id"], mid, aid)
+        _mark(
+            c,
+            {
+                "builtin": "builtin",
+                "task_rule": "task_rule",
+                "system_job": "system_job",
+                "health_monitor": "health_monitor",
+            }[obj["kind"]],
+            obj["id"],
+            mid,
+            aid,
+        )
         return aid
     if kind == "inbox":
         aid = _save(c, who, obj["becomes"])
         if args["state"] == "active":
-            H.status_set(c, who.actor, args["bot"], state="paused",
-                         reason="Retired by the redesign: its inbox is an automation now")
+            H.status_set(
+                c,
+                who.actor,
+                args["bot"],
+                state="paused",
+                reason="Retired by the redesign: its inbox is an automation now",
+            )
         _mark(c, "inbox", obj["id"], mid, aid)
         return aid
     if kind == "rename":
@@ -529,14 +841,14 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "bot", obj["id"], mid, None)
         return None
     if kind == "limit":
-        if args["table"] == "registry":
-            stored = _json(_meta(c, usage_limits.KEY), {})
-            stored.update(per_30m_usd=args["per_30m_usd"], hourly_usd=None)
-            _set_meta(c, usage_limits.KEY, json.dumps(stored, sort_keys=True))
-        else:
-            column = "bot" if args["table"] == "usage_limits" else "scope"
-            c.execute(f"UPDATE {args['table']} SET per_30m_usd=?, hourly_usd=NULL WHERE {column}=?",
-                      (args["per_30m_usd"], args["key"]))
+        # A plan names where the limit lived before budget nodes (usage_limits, usage_pools, registry): the same caps.
+        key = (
+            usage_limits.DEFAULT
+            if args["table"] == "registry"
+            else ("bot" if args["table"] == "usage_limits" else "pool", args["key"])
+        )
+        caps = {**(usage_limits.nodes(c).get(key) or {}), "per_30m_usd": args["per_30m_usd"], "hourly_usd": None}
+        usage_limits.save_caps(c, key, caps, who.actor)
         _mark(c, "spend_limit", obj["id"], mid, None)
         return None
     if kind == "budget_team":
@@ -547,11 +859,11 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     if kind == "budget_bot":
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (args["bot"],)).fetchone()
+        row = c.execute(BS.ONE_SQL, (args["bot"],)).fetchone()
         declared = _json(row["config"] if row else None, {})
         declared.update(args["values"])
-        c.execute("UPDATE bot_config SET config=?, revision=revision+1 WHERE bot=?",
-                  (json.dumps(declared, sort_keys=True), args["bot"]))
+        BS.write(c, args["bot"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (args["bot"],))
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     raise AssertionError(kind)
@@ -561,12 +873,14 @@ def _convert_one(c, who, mid, obj, group_done):
 class _System:
     """Who the cutover acts as: the top of the org (owner rights, so scope rules have a person to own them), or the
     keeper on an install with nobody yet."""
+
     def __init__(self, actor, role):
         self.actor, self.role, self.via = actor, role, "cutover"
 
 
 def system_who(c):
     from . import automations
+
     top = automations.top_person(c)
     return _System("human:" + top, "owner") if top else _System(H.KEEPER, "keeper")
 
@@ -591,8 +905,10 @@ def _tell_owner(c, who, mid):
     person = H.actor_id(who.actor) if who.role == "owner" else ""
     if not person:
         return None
-    rows = [dict(r) for r in c.execute("SELECT * FROM redesign_migrated WHERE migration=? AND told IS NULL "
-                                       "ORDER BY rowid", (mid,))]
+    rows = [
+        dict(r)
+        for r in c.execute("SELECT * FROM redesign_migrated WHERE migration=? AND told IS NULL ORDER BY rowid", (mid,))
+    ]
     if not rows:
         return None
     c.execute("UPDATE redesign_migrated SET told=? WHERE migration=? AND told IS NULL", (_now(), mid))
@@ -605,18 +921,35 @@ def _tell_owner(c, who, mid):
     if not (kept or changed):
         if not moved:
             return None
-        found = H.notice(c, H.KEEPER, "human:" + person, "Routines and wake rules now run as Automations. " + summary,
-                         refs={"redesign_migration": mid})
+        found = H.notice(
+            c,
+            H.KEEPER,
+            "human:" + person,
+            "Routines and wake rules now run as Automations. " + summary,
+            refs={"redesign_migration": mid},
+        )
         return "message:" + found["id"]
     lines = [summary]
     for heading, listed in (("Not moved (no longer runs):", kept), ("Moved, with a change:", changed)):
         if listed:
-            lines += ["", heading, *[f"- {r.get('title') or r['kind'] + ' ' + r['id']}: {r.get('why') or 'it did not convert'}"
-                                     for r in listed[:100]]]
+            lines += [
+                "",
+                heading,
+                *[
+                    f"- {r.get('title') or r['kind'] + ' ' + r['id']}: {r.get('why') or 'it did not convert'}"
+                    for r in listed[:100]
+                ],
+            ]
             if len(listed) > 100:
                 lines.append(f"- and {len(listed) - 100} more")
-    title = (f"{len(kept)} routine{'s' if len(kept) != 1 else ''} or rule{'s' if len(kept) != 1 else ''} did not move "
-             "to Automations") if kept else "Check what moved to Automations"
+    title = (
+        (
+            f"{len(kept)} routine{'s' if len(kept) != 1 else ''} or rule{'s' if len(kept) != 1 else ''} did not move "
+            "to Automations"
+        )
+        if kept
+        else "Check what moved to Automations"
+    )
     task = H.task_create(c, H.KEEPER, title[:300], "\n".join(lines), "human:" + person, lint=False, deduplicate=False)
     return task["id"]
 
@@ -664,12 +997,14 @@ def _run(store, who, mid, objects):
                     continue
                 _convert_one(c, who, mid, obj, groups)
                 why = "; ".join(f["text"] for f in obj["flags"] if f["kind"] != "scope")
-                c.execute("UPDATE redesign_migrated SET why=?, title=? WHERE kind=? AND id=?",
-                          (why[:1000], _title(obj)[:300], obj["kind"], obj["id"]))
+                c.execute(
+                    "UPDATE redesign_migrated SET why=?, title=? WHERE kind=? AND id=?",
+                    (why[:1000], _title(obj)[:300], obj["kind"], obj["id"]),
+                )
             converted += 1
             if why:
                 changed.append({"kind": obj["kind"], "id": obj["id"], "title": _title(obj), "why": why})
-        except Exception as exc:   # one object's surprise must not stop the rest
+        except Exception as exc:  # one object's surprise must not stop the rest
             log.exception("redesign cutover: %s %s did not convert", obj["kind"], obj["id"])
             detail = exc.detail if isinstance(exc, Problem) else type(exc).__name__
             failed.append({"kind": obj["kind"], "id": obj["id"], "title": _title(obj), "why": _why(obj, detail)})
@@ -679,8 +1014,10 @@ def _run(store, who, mid, objects):
     with store.transaction() as c:
         for obj in objects:
             if obj["_do"] and obj["_do"][0] == "wakes":
-                c.execute("UPDATE redesign_migrated SET title=? WHERE kind=? AND id=? AND coalesce(title,'')=''",
-                          (_title(obj)[:300], obj["kind"], obj["id"]))
+                c.execute(
+                    "UPDATE redesign_migrated SET title=? WHERE kind=? AND id=? AND coalesce(title,'')=''",
+                    (_title(obj)[:300], obj["kind"], obj["id"]),
+                )
     return converted, kept, changed, failed, waiting
 
 
@@ -704,18 +1041,27 @@ def _finish(c, who, mid, waiting):
     previous = state(c)
     total = totals(c, mid)
     untold = c.execute("SELECT 1 FROM redesign_migrated WHERE migration=? AND told IS NULL LIMIT 1", (mid,)).fetchone()
-    record = {"state": "done", "migration": mid, "migrated_at": _now(), **total, "told": told or previous.get("told"),
-              "owner_wait": who.role != "owner" or bool(waiting) or bool(untold)}
+    record = {
+        "state": "done",
+        "migration": mid,
+        "migrated_at": _now(),
+        **total,
+        "told": told or previous.get("told"),
+        "owner_wait": who.role != "owner" or bool(waiting) or bool(untold),
+    }
     _set_meta(c, CUTOVER, json.dumps(record, sort_keys=True))
-    line = (f"redesign cutover {mid}: {total['converted']} moved to automations, {total['kept']} kept as they were, "
-            f"{total['failed']} failed, {waiting} wait for an owner; owner told: "
-            f"{told or ('no one yet' if record['owner_wait'] else 'nothing new')}")
+    line = (
+        f"redesign cutover {mid}: {total['converted']} moved to automations, {total['kept']} kept as they were, "
+        f"{total['failed']} failed, {waiting} wait for an owner; owner told: "
+        f"{told or ('no one yet' if record['owner_wait'] else 'nothing new')}"
+    )
     log.warning("%s", line)
     # The server's log handler is the in-app ring (diagnostics.py), so the operator's container log gets it from here.
     if not _printed_to_stderr():
         print("tico: " + line, file=sys.stderr, flush=True)
     if told:
         from . import audit_log
+
         audit_log.write(c, who.actor, "redesign_migration:" + mid, None, total, "cutover")
         H.event(c, who.actor, "redesign.cutover", mid, {**total, "told": told})
     return told
@@ -743,8 +1089,15 @@ def cutover(store):
     converted, kept, changed, failed, waiting = _run(store, who, mid, objects)
     with store.transaction() as c:
         told = _finish(c, who, mid, waiting)
-    return {"converted": converted, "kept": kept, "failed": failed, "changed": changed, "waiting": waiting,
-            "migration": mid, "told": told}
+    return {
+        "converted": converted,
+        "kept": kept,
+        "failed": failed,
+        "changed": changed,
+        "waiting": waiting,
+        "migration": mid,
+        "told": told,
+    }
 
 
 def catch_up(store):
@@ -771,11 +1124,18 @@ def catch_up(store):
     converted, kept, changed, failed, waiting = _run(store, who, mid, objects)
     with store.transaction() as c:
         told = _finish(c, who, mid, waiting)
-    return {"converted": converted, "kept": kept, "failed": failed, "changed": changed, "waiting": waiting,
-            "migration": mid, "told": told}
+    return {
+        "converted": converted,
+        "kept": kept,
+        "failed": failed,
+        "changed": changed,
+        "waiting": waiting,
+        "migration": mid,
+        "told": told,
+    }
 
 
-REPAIR = "stale_review_repair"   # registry_metadata: set once the converted Stale ticket review automation is undone
+REPAIR = "stale_review_repair"  # registry_metadata: set once the converted Stale ticket review automation is undone
 
 
 def repair_stale_review(c):
@@ -786,14 +1146,18 @@ def repair_stale_review(c):
     every built-in job has takes its place in the cutover's mark. Returns the removed automation ids. Later starts
     find the marker and do nothing; an install without the automation gets only the marker."""
     from . import automations, team_rules
+
     if _meta(c, REPAIR):
         return []
     # The no-op is the one with steps; a read-only mirror (steps []) is what a fixed cutover makes.
-    found = c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND "
-                      "json_extract(flow,'$.source.kind')='system_job' "
-                      "AND json_extract(flow,'$.source.id')='job:stale_review' "
-                      "AND json_array_length(json_extract(flow,'$.steps'))>0").fetchall()
+    found = c.execute(
+        "SELECT * FROM automations WHERE deleted_at IS NULL AND "
+        "json_extract(flow,'$.source.kind')='system_job' "
+        "AND json_extract(flow,'$.source.id')='job:stale_review' "
+        "AND json_array_length(json_extract(flow,'$.steps'))>0"
+    ).fetchall()
     from . import system_routines as SR
+
     removed = []
     for row in found:
         if row["enabled"]:
@@ -805,20 +1169,125 @@ def repair_stale_review(c):
         job = SR.BY_KEY["stale_review"]
         owner = (json.loads(row["flow"] or "{}") or {}).get("owner") or row["owner_id"]
         controls = {"on": True, "schedule": job.schedule, **(SR.config(c).get(job.key) or {})}
-        aid = _save(c, system_who(c), _mirror(job.name, owner, "job." + job.key, controls,
-                                              {"kind": "system_job", "id": "job:stale_review"}, job.what))
-        c.execute("UPDATE redesign_migrated SET outcome='converted', automation=?, why='' "
-                  "WHERE kind='system_job' AND id='job:stale_review'", (aid,))
+        aid = _save(
+            c,
+            system_who(c),
+            _mirror(
+                job.name, owner, "job." + job.key, controls, {"kind": "system_job", "id": "job:stale_review"}, job.what
+            ),
+        )
+        c.execute(
+            "UPDATE redesign_migrated SET outcome='converted', automation=?, why='' "
+            "WHERE kind='system_job' AND id='job:stale_review'",
+            (aid,),
+        )
     _set_meta(c, REPAIR, json.dumps({"at": _now(), "removed": removed}, sort_keys=True))
     return removed
+
+
+PROMPT_REPAIR = "inbox_prompt_repair"  # registry_metadata: set once the cutover's inbox prompts are repaired
+
+
+def repair_inbox_prompts(c):
+    """Move the inbox automations the cutover made with the Inbox Manager's whole instructions onto the short routing
+    prompt, once, at startup (backend/store.py). Only the ones nobody changed are moved: one version, one llm step,
+    whose prompt is exactly what the cutover built from the bot's instructions as they stand now. An edited automation,
+    or one whose bot's instructions changed since, is left alone. Each inbox is repaired in a savepoint of its own. One
+    whose owner or mailbox no longer validates stays as it is, and its mark's reason says why; one that fails for any
+    other reason is logged and left for the next start. The marker is set only when no inbox failed, so a failure is
+    tried again. Returns the automation ids it moved. Later starts find the marker and do nothing."""
+    from . import views
+
+    if _meta(c, PROMPT_REPAIR):
+        return []
+    moved, skipped, failed = [], [], []
+    # No marks on an install the cutover has not reached (its table is made there): nothing to move.
+    marks = (
+        c.execute("SELECT * FROM redesign_migrated WHERE kind='inbox' AND automation IS NOT NULL").fetchall()
+        if _table(c, "redesign_migrated")
+        else []
+    )
+    roster = views.roster(c) if marks else {}
+    for mark in marks:
+        c.execute("SAVEPOINT inbox_prompt")
+        try:
+            if _repair_inbox_prompt(c, mark, roster):
+                moved.append(mark["automation"])
+            c.execute("RELEASE inbox_prompt")
+        except Problem as exc:
+            c.execute("ROLLBACK TO inbox_prompt")
+            c.execute("RELEASE inbox_prompt")
+            log.warning(
+                "redesign prompt repair: %s keeps the Inbox Manager's instructions: %s", mark["automation"], exc
+            )
+            why = f"Not moved to the short routing prompt, so it keeps the Inbox Manager's instructions: {exc}"
+            c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?", (why[:1000], mark["id"]))
+            skipped.append(mark["automation"])
+        except Exception:  # startup goes on; the next start tries this inbox again
+            c.execute("ROLLBACK TO inbox_prompt")
+            c.execute("RELEASE inbox_prompt")
+            log.exception(
+                "redesign prompt repair failed for %s; it is tried again at the next start", mark["automation"]
+            )
+            failed.append(mark["automation"])
+    if not failed:
+        _set_meta(c, PROMPT_REPAIR, json.dumps({"at": _now(), "moved": moved, "skipped": skipped}, sort_keys=True))
+    return moved
+
+
+def _repair_inbox_prompt(c, mark, roster):
+    """Moves one inbox's automation onto the short routing prompt if it is still the cutover's own. Returns whether it
+    moved. Raises Problem when its owner or mailbox no longer validates (`_checked`)."""
+    from . import automations, people as P
+
+    row = c.execute("SELECT * FROM automations WHERE id=? AND deleted_at IS NULL", (mark["automation"],)).fetchone()
+    if not row or row["version"] != 1:
+        return False
+    flow = automations.flow_of(row)
+    steps = flow.get("steps") or []
+    bot = next((s.get("id") for s in flow.get("source") or [] if s.get("kind") == "bot"), None)
+    if len(steps) != 1 or steps[0].get("type") != "llm" or steps[0].get("choose") is not None or not bot:
+        return False
+    if c.execute("SELECT count(*) FROM automation_versions WHERE automation_id=?", (row["id"],)).fetchone()[0] != 1:
+        return False
+    found = (
+        c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
+        if _table(c, "mail_agent_instructions")
+        else None
+    )
+    if not found or not (found["content"] or "").strip():
+        return False  # no instructions were copied: the prompt it has is already the short one
+    if steps[0].get("prompt") != (found["content"].rstrip() + MESSAGE_PART)[: F.MAX_PROMPT]:
+        return False
+    person_id = str(flow.get("owner") or "").partition(":")[2]
+    name = (P.person(person_id, roster) or {}).get("name") or person_id
+    prompt = (DEFAULT_PROMPT.format(name=name) + MESSAGE_PART)[: F.MAX_PROMPT]
+    moved_flow = {**flow, "steps": [{**steps[0], "prompt": prompt}]}
+    automations._save(
+        c,
+        H.KEEPER,
+        row["id"],
+        automations._checked(c, moved_flow, wake_steps=False),
+        flow,
+        summary="Short routing prompt in place of the Inbox Manager's instructions",
+        via="migration repair",
+    )
+    c.execute(
+        "UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?",
+        (_instructions_text(len(found["content"].strip()), _bot_name(c, bot))[:1000], mark["id"]),
+    )
+    return True
 
 
 def _wakes_of(c, scope_kind, scope_id):
     """The "What wakes" automations of one scope, oldest first."""
     from . import automations
+
     out = []
-    for row in c.execute("SELECT * FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL ORDER BY created_at, id",
-                         (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`")).fetchall():
+    for row in c.execute(
+        "SELECT * FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL ORDER BY created_at, id",
+        (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`"),
+    ).fetchall():
         flow = automations.flow_of(row)
         if (flow.get("wakes") or {}) == {"scope_kind": scope_kind, "scope_id": scope_id}:
             out.append((row, flow))
@@ -834,6 +1303,7 @@ def adopt(c, kind, ident):
     if not record:
         return []
     from . import automations
+
     who, mid = system_who(c), record["migration"]
     done = {(r["kind"], r["id"]) for r in c.execute("SELECT kind, id FROM redesign_migrated")}
     if kind == "routine":
@@ -848,29 +1318,40 @@ def adopt(c, kind, ident):
         return [m for m in made if m]
     scope_kind, scope_id = ident
     me = _owner_person(who)
-    objects = [o for o in _wake_rules(c, done, me)
-               if (o["_do"][1]["scope_kind"], o["_do"][1]["scope_id"]) == (scope_kind, scope_id)]
+    objects = [
+        o
+        for o in _wake_rules(c, done, me)
+        if (o["_do"][1]["scope_kind"], o["_do"][1]["scope_id"]) == (scope_kind, scope_id)
+    ]
     if not objects:
         return []
     if any(f.get("keeps") for o in objects for f in o["flags"]):
-        return []                     # no person to own them: they stay rules, which rules.py still reads
-    rows = {r["id"]: r for r in c.execute("SELECT * FROM rules WHERE scope_kind=? AND coalesce(scope_id,'')=?",
-                                          (scope_kind, scope_id))}
+        return []  # no person to own them: they stay rules, which rules.py still reads
+    rows = {
+        r["id"]: r
+        for r in c.execute("SELECT * FROM rules WHERE scope_kind=? AND coalesce(scope_id,'')=?", (scope_kind, scope_id))
+    }
     ids = list(dict.fromkeys(rid for o in objects for rid in o["_do"][1]["rules"]))
     for row, flow in reversed(_wakes_of(c, scope_kind, scope_id)):
         if len(flow["steps"]) + len(ids) > F.MAX_STEPS:
             continue
         start = len(flow["steps"])
-        after = {**flow, "steps": [*flow["steps"], *[{**_rule_step(start + n + 1, rows[rid]), "id": f"r{start + n + 1}"}
-                                                      for n, rid in enumerate(ids)]],
-                 "source": [*(flow.get("source") or []), *[{"kind": "wake_rule", "id": rid} for rid in ids]]}
+        after = {
+            **flow,
+            "steps": [
+                *flow["steps"],
+                *[{**_rule_step(start + n + 1, rows[rid]), "id": f"r{start + n + 1}"} for n, rid in enumerate(ids)],
+            ],
+            "source": [*(flow.get("source") or []), *[{"kind": "wake_rule", "id": rid} for rid in ids]],
+        }
         taken = {s["id"] for s in flow["steps"]}
         for n, step in enumerate(after["steps"][start:]):
             while step["id"] in taken:
                 step["id"] = f"r{start + n + 1}x{H.new_id()[:4]}"
             taken.add(step["id"])
-        automations._save(c, who.actor, row["id"], automations._checked(c, after, wake_steps=False), flow,
-                          via="cutover, migration")
+        automations._save(
+            c, who.actor, row["id"], automations._checked(c, after, wake_steps=False), flow, via="cutover, migration"
+        )
         for rid in ids:
             c.execute("DELETE FROM rules WHERE id=?", (rid,))
             _mark(c, "wake_rule", rid, mid, row["id"])
@@ -885,19 +1366,27 @@ def drop_wake_rules(c, scope_kind, scope_id, created_by):
     """Take out of a scope's "What wakes" automations the rules `created_by` made (a Custom profile's copied rows,
     when the bot changes profile), the way deleting their table rows did before. Returns how many went."""
     from . import automations
+
     who, gone = system_who(c), 0
     for row, flow in _wakes_of(c, scope_kind, scope_id):
-        keep = [s for s in flow["steps"]
-                if not any(((t.get("args") or {}).get("rule") or {}).get("created_by") == created_by
-                           for r in s.get("rules") or [] for t in r.get("then") or []
-                           if isinstance((t.get("args") or {}).get("rule"), dict))]
+        keep = [
+            s
+            for s in flow["steps"]
+            if not any(
+                ((t.get("args") or {}).get("rule") or {}).get("created_by") == created_by
+                for r in s.get("rules") or []
+                for t in r.get("then") or []
+                if isinstance((t.get("args") or {}).get("rule"), dict)
+            )
+        ]
         if len(keep) == len(flow["steps"]):
             continue
         gone += len(flow["steps"]) - len(keep)
         if keep:
             kept = {**flow, "steps": keep}
-            automations._save(c, who.actor, row["id"], automations._checked(c, kept, wake_steps=False), flow,
-                              via="profile")
+            automations._save(
+                c, who.actor, row["id"], automations._checked(c, kept, wake_steps=False), flow, via="profile"
+            )
         else:
             c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (_now(), row["id"]))
     return gone
@@ -928,16 +1417,26 @@ def rename_steps(c, type_id, lower):
                         source["when"]["step"] = moved(source["when"]["step"])
         if after != flow:
             who = who or system_who(c)
-            automations._save(c, who.actor, row["id"], automations._checked(c, after, saved=flow, aid=row["id"]),
-                              flow, via="steps renamed")
+            automations._save(
+                c,
+                who.actor,
+                row["id"],
+                automations._checked(c, after, saved=flow, aid=row["id"]),
+                flow,
+                via="steps renamed",
+            )
 
 
 def wake_rules_by(c, scope_kind, scope_id, created_by):
     """How many rules `created_by` made are in a scope's "What wakes" automations."""
-    return sum(1 for _, flow in _wakes_of(c, scope_kind, scope_id) for s in flow["steps"]
-               for r in s.get("rules") or [] for t in r.get("then") or []
-               if isinstance((t.get("args") or {}).get("rule"), dict)
-               and t["args"]["rule"].get("created_by") == created_by)
+    return sum(
+        1
+        for _, flow in _wakes_of(c, scope_kind, scope_id)
+        for s in flow["steps"]
+        for r in s.get("rules") or []
+        for t in r.get("then") or []
+        if isinstance((t.get("args") or {}).get("rule"), dict) and t["args"]["rule"].get("created_by") == created_by
+    )
 
 
 # ---------------------------------------------------------------------------------------------------- hooks
@@ -946,7 +1445,7 @@ def holds(c, kind, ident):
     its key (a built-in routine re-seeded at startup), so it cannot fire beside its automation."""
     try:
         return c.execute("SELECT 1 FROM redesign_migrated WHERE kind=? AND id=?", (kind, ident)).fetchone() is not None
-    except Exception:   # sqlite3.OperationalError: a database from before the converter
+    except Exception:  # sqlite3.OperationalError: a database from before the converter
         return False
 
 
@@ -954,7 +1453,7 @@ def converted(c):
     """Whether the cutover started (it may still be going on)."""
     try:
         return bool(state(c))
-    except Exception:   # sqlite3.OperationalError: a database from before the converter
+    except Exception:  # sqlite3.OperationalError: a database from before the converter
         return False
 
 
@@ -974,13 +1473,19 @@ def wake_rules_of(aid, flow):
     trigger = flow.get("trigger") or {}
     if trigger.get("type") != "event" or trigger.get("name") != "tico.wake":
         raise ValueError("its trigger stays the wake rules' own (event tico.wake)")
+    if flow.get("destinations"):  # the wake executor (rules.py) runs one action per rule; it cannot run a destination
+        raise ValueError("a wake rule takes no destinations: its one action is its outcome")
     out = []
     for n, step in enumerate(flow.get("steps") or []):
         if step.get("type") != "filter":
-            raise ValueError(f"step {step.get('id')} is a {step.get('type')}: it holds wake rules, one Filter step each")
+            raise ValueError(
+                f"step {step.get('id')} is a {step.get('type')}: it holds wake rules, one Filter step each"
+            )
         for i, rule in enumerate(step.get("rules") or []):
             where = f"step {step.get('id')} rule {i + 1}"
             then = rule.get("then") or []
+            if rule.get("to") is not None or rule.get("next") is not None:
+                raise ValueError(f"{where}: a wake rule takes no 'to' or 'next': it does its one action and stops")
             if len(then) != 1:
                 raise ValueError(f"{where}: a wake rule does one thing (wake, note, archive or leave for you)")
             if rule.get("stop") is False:
@@ -1005,29 +1510,43 @@ def wake_rules_of(aid, flow):
             do, outcome = action.get("do"), args.get("outcome")
             params = args.get("params") if isinstance(args.get("params"), dict) else {}
             # What the converter showed for the rule's own outcome (_rule_step): kept, with its params, while shown.
-            was = params["action"] if outcome == "action" and params.get("action") in F.ACTIONS \
+            was = (
+                params["action"]
+                if outcome == "action" and params.get("action") in F.ACTIONS
                 else OUTCOME_DO.get(outcome, "wake_bot")
+            )
             if not (outcome and source and do == was):
                 if do not in DO_OUTCOME:
                     raise ValueError(f"{where}: a wake rule wakes, notes, archives or leaves for you, not {do}")
                 outcome, params = DO_OUTCOME[do], {}
-            out.append({"id": source.get("id") or f"{aid}.{step.get('id')}.{i + 1}",
-                        "scope_kind": scope.get("scope_kind") or source.get("scope_kind") or "bot",
-                        "scope_id": scope.get("scope_id") or source.get("scope_id") or "", "event": event or "*",
-                        "condition": json.dumps(when, sort_keys=True), "then_outcome": outcome,
-                        "params": json.dumps(params, sort_keys=True),
-                        "enabled": 0 if step.get("enabled") is False else 1,
-                        "position": source.get("position") if source.get("position") is not None else n + 1,
-                        "note": source.get("note") or "", "created_by": source.get("created_by") or "",
-                        "created_at": source.get("created") or "", "updated_at": source.get("updated") or "",
-                        "revision": source.get("revision") or 1, "action_by": source.get("action_by")})
+            out.append(
+                {
+                    "id": source.get("id") or f"{aid}.{step.get('id')}.{i + 1}",
+                    "scope_kind": scope.get("scope_kind") or source.get("scope_kind") or "bot",
+                    "scope_id": scope.get("scope_id") or source.get("scope_id") or "",
+                    "event": event or "*",
+                    "condition": json.dumps(when, sort_keys=True),
+                    "then_outcome": outcome,
+                    "params": json.dumps(params, sort_keys=True),
+                    "enabled": 0 if step.get("enabled") is False else 1,
+                    "position": source.get("position") if source.get("position") is not None else n + 1,
+                    "note": source.get("note") or "",
+                    "created_by": source.get("created_by") or "",
+                    "created_at": source.get("created") or "",
+                    "updated_at": source.get("updated") or "",
+                    "revision": source.get("revision") or 1,
+                    "action_by": source.get("action_by"),
+                }
+            )
     return out
 
 
 def _steps_of(c, type_id):
     """A task type's steps in board order, as (id, name)."""
-    return [(r[0], r[1]) for r in c.execute("SELECT id, name FROM task_steps WHERE type_id=? ORDER BY position, id",
-                                            (type_id,))]
+    return [
+        (r[0], r[1])
+        for r in c.execute("SELECT id, name FROM task_steps WHERE type_id=? ORDER BY position, id", (type_id,))
+    ]
 
 
 def _named(when):
@@ -1051,8 +1570,10 @@ def _missing_steps(c, scope, when):
 
 
 def _missing_why(value, names):
-    return f'The wake rule names step "{value}", which its task type does not have. Its steps are: ' \
-           f'{", ".join(names) or "none"}. Use one of those names, or its id.'
+    return (
+        f'The wake rule names step "{value}", which its task type does not have. Its steps are: '
+        f'{", ".join(names) or "none"}. Use one of those names, or its id.'
+    )
 
 
 def wake_problems(c, aid, flow):
@@ -1062,8 +1583,11 @@ def wake_problems(c, aid, flow):
         rows = wake_rules_of(aid, flow)
     except ValueError:
         return []
-    return [{"rule": row["id"], "step": value, "why": _missing_why(value, names)}
-            for row in rows for value, names in _missing_steps(c, flow.get("wakes") or {}, _json(row["condition"], {}))]
+    return [
+        {"rule": row["id"], "step": value, "why": _missing_why(value, names)}
+        for row in rows
+        for value, names in _missing_steps(c, flow.get("wakes") or {}, _json(row["condition"], {}))
+    ]
 
 
 def check_wakes(flow, c=None, saved=None, aid=None):
@@ -1082,8 +1606,11 @@ def check_wakes(flow, c=None, saved=None, aid=None):
     kept = set()
     if saved and aid and saved.get("wakes"):
         try:
-            kept = {(row["id"], value.lower()) for row in wake_rules_of(aid, saved)
-                    for value, _ in _missing_steps(c, saved["wakes"], _json(row["condition"], {}))}
+            kept = {
+                (row["id"], value.lower())
+                for row in wake_rules_of(aid, saved)
+                for value, _ in _missing_steps(c, saved["wakes"], _json(row["condition"], {}))
+            }
         except ValueError:
             kept = set()
     for row in rows:
@@ -1098,13 +1625,13 @@ def wakes_naming(c, type_id, steps):
     named = {str(s).lower() for step in steps for s in step}
     try:
         found = _wakes_of(c, "type", type_id)
-    except Exception:   # sqlite3.OperationalError: a database from before the automations table
+    except Exception:  # sqlite3.OperationalError: a database from before the automations table
         return []
     out = []
     for row, flow in found:
         try:
             rules = wake_rules_of(row["id"], flow)
-        except ValueError:      # not readable as wake rules: nothing it shows can run
+        except ValueError:  # not readable as wake rules: nothing it shows can run
             continue
         for rule in rules:
             for value in _named(_json(rule["condition"], {})) or []:
@@ -1117,15 +1644,17 @@ def wake_rows(c, event=None):
     """The converted wake rules, read back from the enabled "What wakes" automations as rules-table rows (rules.py adds
     them to its own). `event` keeps rows on that event or `*`; None keeps every row."""
     try:
-        found = c.execute("SELECT id, flow FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL "
-                          "AND enabled=1", (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`")).fetchall()
-    except Exception:   # sqlite3.OperationalError: no automations table yet
+        found = c.execute(
+            "SELECT id, flow FROM automations WHERE id>=? AND id<? AND deleted_at IS NULL AND enabled=1",
+            (WAKES_PREFIX, WAKES_PREFIX[:-1] + "`"),
+        ).fetchall()
+    except Exception:  # sqlite3.OperationalError: no automations table yet
         return []
     out = []
     for row in found:
         try:
             rows = wake_rules_of(row["id"], _json(row["flow"], {}))
-        except ValueError:   # saved before the check (or by hand): nothing it shows can run
+        except ValueError:  # saved before the check (or by hand): nothing it shows can run
             log.warning("redesign migration: %s cannot be read as wake rules", row["id"])
             continue
         out += [r for r in rows if r["enabled"] and (event is None or r["event"] in (event, "*"))]
@@ -1134,12 +1663,28 @@ def wake_rows(c, event=None):
 
 # ---------------------------------------------------------------------------------------------------- the report
 # What each kind still runs from once it moved: a mirror only shows a job Tico still runs from its own table.
-RUNS_FROM = {"routine": "Automations", "wake_rule": "rules.py, read from its What wakes automation",
-             "inbox": "Automations", "builtin": "rules.py (built in); shown read-only",
-             "task_rule": "the task rules engine; shown read-only", "system_job": "the scheduler; shown read-only",
-             "health_monitor": "its bot; shown read-only"}
-GONE_JOBS = {"job:routine_timer": "Bot routine timer: the automations tick runs schedules now",
-             "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor"}
+RUNS_FROM = {
+    "routine": "Automations",
+    "wake_rule": "rules.py, read from its What wakes automation",
+    "inbox": "Automations",
+    "builtin": "rules.py (built in); shown read-only",
+    "task_rule": "the task rules engine; shown read-only",
+    "system_job": "the scheduler; shown read-only",
+    "health_monitor": "its bot; shown read-only",
+}
+GONE_JOBS = {
+    "job:routine_timer": "Bot routine timer: the automations tick runs schedules now",
+    "job:task_roundup": "Task roundup: scheduled lists moved to Maintenance Find stuck",
+    "job:learnings": "Nightly learnings: Learn runs in Maintenance now",
+    "job:propose_demotions": "Suggest quieter rules: rule suggestions went with the rules editor",
+    "job:health_scan": "Health scan: Check health runs in Maintenance now",
+    "job:auto_dream": "Auto dream: Dream runs in Maintenance now",
+    "job:cleanup": "Cleanup: Clean up runs in Maintenance now",
+    "job:stall_triage": "Stall triage: Decide no longer reads a quiet task",
+    "job:engineering_exceptions": "Engineering exceptions: the task roundup lists them now",
+    "job:still_wanted": "Still wanted: no person is asked about an idle task any more",
+    "job:assignment_recovery": "Unstarted assignments: the task roundup lists them now",
+}
 
 
 def inventory(c):
@@ -1147,12 +1692,17 @@ def inventory(c):
     name, why}]. `now` is moved | kept | failed (both: no longer run, listed for the owner) | runs as before | pending
     (the cutover has not taken it yet: would move | would stay | waits for an owner) | unchanged | removed."""
     from . import rules, system_routines as SR, tico_notices
+
     out = []
     marked = []
     if _table(c, "redesign_migrated"):
-        marked = [dict(r) for r in c.execute(
-            "SELECT m.*, a.name AS automation_name, a.enabled AS automation_on, a.deleted_at AS automation_gone "
-            "FROM redesign_migrated m LEFT JOIN automations a ON a.id=m.automation ORDER BY m.rowid")]
+        marked = [
+            dict(r)
+            for r in c.execute(
+                "SELECT m.*, a.name AS automation_name, a.enabled AS automation_on, a.deleted_at AS automation_gone "
+                "FROM redesign_migrated m LEFT JOIN automations a ON a.id=m.automation ORDER BY m.rowid"
+            )
+        ]
     for m in marked:
         outcome = _outcome(m)
         now = {"converted": "moved"}.get(outcome, outcome)
@@ -1160,12 +1710,24 @@ def inventory(c):
             now = "runs as before"
         if m["id"] in GONE_JOBS:
             continue
-        state_of = "" if not m["automation"] else ("deleted" if m["automation_gone"] else
-                                                     "on" if m["automation_on"] else "off")
-        out.append({"kind": m["kind"], "id": m["id"], "title": m.get("title") or m["id"], "now": now,
-                    "automation": m["automation"], "name": m.get("automation_name"), "state": state_of,
-                    "runs_from": RUNS_FROM.get(m["kind"], "") if outcome == "converted" else "",
-                    "why": m.get("why") or ""})
+        state_of = (
+            ""
+            if not m["automation"]
+            else ("deleted" if m["automation_gone"] else "on" if m["automation_on"] else "off")
+        )
+        out.append(
+            {
+                "kind": m["kind"],
+                "id": m["id"],
+                "title": m.get("title") or m["id"],
+                "now": now,
+                "automation": m["automation"],
+                "name": m.get("automation_name"),
+                "state": state_of,
+                "runs_from": RUNS_FROM.get(m["kind"], "") if outcome == "converted" else "",
+                "why": m.get("why") or "",
+            }
+        )
     seen = {(m["kind"], m["id"]) for m in marked}
     who = system_who(c)
     for obj in plan(c, who):
@@ -1180,29 +1742,79 @@ def inventory(c):
         else:
             now, why = "pending: would move", "; ".join(f["text"] for f in obj["flags"] if f["kind"] != "scope")
         becomes = obj["becomes"] if isinstance(obj["becomes"], dict) else {}
-        out.append({"kind": obj["kind"], "id": obj["id"], "title": obj.get("title") or obj["id"], "now": now,
-                    "automation": None, "name": becomes.get("name") or "",
-                    "state": ("on" if becomes.get("enabled", True) else "off") if becomes.get("name") else "",
-                    "runs_from": "", "why": why})
+        out.append(
+            {
+                "kind": obj["kind"],
+                "id": obj["id"],
+                "title": obj.get("title") or obj["id"],
+                "now": now,
+                "automation": None,
+                "name": becomes.get("name") or "",
+                "state": ("on" if becomes.get("enabled", True) else "off") if becomes.get("name") else "",
+                "runs_from": "",
+                "why": why,
+            }
+        )
     seen |= {(r["kind"], r["id"]) for r in out}
     for job in SR.JOBS:
         if ("system_job", "job:" + job.key) not in seen:
-            out.append({"kind": "system_job", "id": "job:" + job.key, "title": job.name, "now": "runs as before",
-                        "automation": None, "name": "", "state": "", "runs_from": "the scheduler",
-                        "why": "its read-only automation waits for a person" if who.role != "owner" else ""})
+            out.append(
+                {
+                    "kind": "system_job",
+                    "id": "job:" + job.key,
+                    "title": job.name,
+                    "now": "runs as before",
+                    "automation": None,
+                    "name": "",
+                    "state": "",
+                    "runs_from": "the scheduler",
+                    "why": "its read-only automation waits for a person" if who.role != "owner" else "",
+                }
+            )
     for oid, why in GONE_JOBS.items():
-        out.append({"kind": "system_job", "id": oid, "title": why.split(":")[0], "now": "removed", "automation": None,
-                    "name": "", "state": "", "runs_from": "", "why": why.split(": ", 1)[1]})
+        out.append(
+            {
+                "kind": "system_job",
+                "id": oid,
+                "title": why.split(":")[0],
+                "now": "removed",
+                "automation": None,
+                "name": "",
+                "state": "",
+                "runs_from": "",
+                "why": why.split(": ", 1)[1],
+            }
+        )
     if _table(c, "rules"):
         for r in c.execute("SELECT id, event, then_outcome FROM rules ORDER BY id"):
             if tico_notices.is_builtin_rule(r["id"]):
-                out.append({"kind": "wake_rule", "id": r["id"], "title": f"{r['event']} → {r['then_outcome']}",
-                            "now": "runs as before", "automation": None, "name": "", "state": "",
-                            "runs_from": "rules.py (Tico Team notice rule)", "why": ""})
+                out.append(
+                    {
+                        "kind": "wake_rule",
+                        "id": r["id"],
+                        "title": f"{r['event']} → {r['then_outcome']}",
+                        "now": "runs as before",
+                        "automation": None,
+                        "name": "",
+                        "state": "",
+                        "runs_from": "rules.py (Tico Team notice rule)",
+                        "why": "",
+                    }
+                )
     if not any(r["kind"] == "builtin" for r in out):
-        out.append({"kind": "builtin", "id": "wake-builtins", "title": f"Built-in wake rules ({len(rules._builtins())})",
-                    "now": "runs as before", "automation": None, "name": "", "state": "", "runs_from": "rules.py",
-                    "why": "its read-only automation waits for a person" if who.role != "owner" else ""})
+        out.append(
+            {
+                "kind": "builtin",
+                "id": "wake-builtins",
+                "title": f"Built-in wake rules ({len(rules._builtins())})",
+                "now": "runs as before",
+                "automation": None,
+                "name": "",
+                "state": "",
+                "runs_from": "rules.py",
+                "why": "its read-only automation waits for a person" if who.role != "owner" else "",
+            }
+        )
     return out
 
 
@@ -1217,8 +1829,15 @@ def report(c):
 
 def _text(found):
     record, lines = found["cutover"], [found["error"]] if found.get("error") else []
-    lines.append("Cutover: " + (f"{record.get('state')} ({record.get('migration')}, {record.get('at')}); owner told: "
-                                f"{record.get('told') or 'not yet'}" if record else "not run on this database"))
+    lines.append(
+        "Cutover: "
+        + (
+            f"{record.get('state')} ({record.get('migration')}, {record.get('at')}); owner told: "
+            f"{record.get('told') or 'not yet'}"
+            if record
+            else "not run on this database"
+        )
+    )
     lines.append("Counts: " + ", ".join(f"{k} {v}" for k, v in sorted(found["counts"].items())))
     lines.append("")
     for item in found["items"]:
@@ -1240,6 +1859,7 @@ def _copy(source, directory):
     import sqlite3
     from pathlib import Path
     from urllib.parse import quote
+
     target = Path(directory) / "rehearsal.db"
     live = Path(str(source) + "-wal").exists()
     src = sqlite3.connect(f"file:{quote(str(source))}?{'mode=ro' if live else 'immutable=1'}", uri=True)
@@ -1268,6 +1888,7 @@ def main(argv=None):
     from pathlib import Path
     from .config import Settings
     from .store import Store
+
     parser = argparse.ArgumentParser(prog="python -m backend.redesign_migration")
     parser.add_argument("command", choices=("report",))
     parser.add_argument("--db", default=os.environ.get("TICO_DB"), help="the install's database (only read)")
@@ -1284,9 +1905,13 @@ def main(argv=None):
         try:
             with sqlite_ro(copy) as c:
                 before = report(c)
-        except Exception as exc:   # a database from an older version: its tables are not this version's yet
-            before = {"cutover": {}, "counts": {}, "items": [], "error": f"not readable as it is ({exc}); "
-                                                                         "the rehearsal below is the dry run"}
+        except Exception as exc:  # a database from an older version: its tables are not this version's yet
+            before = {
+                "cutover": {},
+                "counts": {},
+                "items": [],
+                "error": f"not readable as it is ({exc}); the rehearsal below is the dry run",
+            }
         waits = waiting(copy)
         registry = os_dir / "registry"
         registry.mkdir()
@@ -1301,10 +1926,11 @@ def main(argv=None):
         json.dump(found, sys.stdout, indent=2, default=str)
         sys.stdout.write("\n")
     else:
-        moves = ("nothing to move" if not waits
-                 else "moves " + ", ".join(f"{k} {v}" for k, v in sorted(waits.items())))
-        print(f"Database: {source}\nOn the next start: {moves}\n\n== As it is now ==\n"
-              f"{_text(before)}\n\n== After this version starts on it (rehearsed on a copy) ==\n{_text(after)}")
+        moves = "nothing to move" if not waits else "moves " + ", ".join(f"{k} {v}" for k, v in sorted(waits.items()))
+        print(
+            f"Database: {source}\nOn the next start: {moves}\n\n== As it is now ==\n"
+            f"{_text(before)}\n\n== After this version starts on it (rehearsed on a copy) ==\n{_text(after)}"
+        )
     return found
 
 
@@ -1314,11 +1940,15 @@ def pending(c):
     rules), inboxes, hourly spend limits, turn budgets below the guard, and the Strategy
     bot's rename. Nothing once the cutover started or finished; read-only mirrors of jobs Tico
     keeps running count for nothing."""
-    from . import strategy_bot, tico_notices, turn_budgets as TB, usage_limits
+    from . import strategy_bot, tico_notices, turn_budgets as TB
+
     if not _table(c, "registry_metadata") or state(c):
         return {}
-    done = ({(r[0], r[1]) for r in c.execute("SELECT kind, id FROM redesign_migrated")}
-            if _table(c, "redesign_migrated") else set())
+    done = (
+        {(r[0], r[1]) for r in c.execute("SELECT kind, id FROM redesign_migrated")}
+        if _table(c, "redesign_migrated")
+        else set()
+    )
     found = {}
 
     def add(kind, n):
@@ -1329,29 +1959,41 @@ def pending(c):
         live = " WHERE deleted_at IS NULL" if "deleted_at" in _columns(c, "schedules") else ""
         add("routine", sum(("routine", r[0]) not in done for r in c.execute("SELECT id FROM schedules" + live)))
     if _table(c, "rules"):
-        add("wake_rule", sum(not tico_notices.is_builtin_rule(r[0]) and ("wake_rule", r[0]) not in done
-                             for r in c.execute("SELECT id FROM rules")))
+        add(
+            "wake_rule",
+            sum(
+                not tico_notices.is_builtin_rule(r[0]) and ("wake_rule", r[0]) not in done
+                for r in c.execute("SELECT id FROM rules")
+            ),
+        )
     people = _json(_meta(c, "people"), {}).get("people") or []
-    bots = ({r[0]: r[1] for r in c.execute("SELECT id, state FROM bots")} if _table(c, "bots") else {})
-    add("inbox", sum(bool(p.get("inbox_bot")) and not p.get("hidden") and bots.get(p["inbox_bot"]) not in (None, "archived")
-                     for p in people if isinstance(p, dict)))
-    for table, key in (("usage_limits", "bot"), ("usage_pools", "scope")):
-        if _table(c, table) and "hourly_usd" in _columns(c, table):
-            add("spend_limit", c.execute(f"SELECT count(*) FROM {table} WHERE hourly_usd > 0").fetchone()[0])
-    if usage_limits._amount(_json(_meta(c, usage_limits.KEY), {}).get("hourly_usd")):
-        add("spend_limit", 1)
+    bots = {r[0]: r[1] for r in c.execute("SELECT id, state FROM bots")} if _table(c, "bots") else {}
+    add(
+        "inbox",
+        sum(
+            bool(p.get("inbox_bot")) and not p.get("hidden") and bots.get(p["inbox_bot"]) not in (None, "archived")
+            for p in people
+            if isinstance(p, dict)
+        ),
+    )
+    add("spend_limit", len(_hourly(c)))
 
     def low(values):
         return any(isinstance(values.get(k), int) and 0 < values[k] < GUARD[k] for k in GUARD)
 
     add("turn_budget", int(low(_json(_meta(c, TB.TEAM_KEY), {}))))
     if _table(c, "bot_config"):
-        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config FROM bot_config")))
+        add(
+            "turn_budget",
+            sum(low(_json(r[0], {})) for r in c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")),
+        )
     row = bots.get(strategy_bot.SLUG)
     if row and row != "archived" and ("bot", "bot:" + strategy_bot.SLUG) not in done:
-        name = (c.execute("SELECT "
-                          "display_name FROM bots WHERE id=?", (strategy_bot.SLUG,)).fetchone()[0] or "").strip() \
-            if "display_name" in _columns(c, "bots") else ""
+        name = (
+            (c.execute("SELECT display_name FROM bots WHERE id=?", (strategy_bot.SLUG,)).fetchone()[0] or "").strip()
+            if "display_name" in _columns(c, "bots")
+            else ""
+        )
         add("bot", int(name in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)))
     return found
 
@@ -1365,6 +2007,7 @@ def waiting(path):
     import tempfile
     from pathlib import Path
     from urllib.parse import quote
+
     path = Path(path)
     if str(path) == ":memory:" or not path.is_file() or path.stat().st_size == 0:
         return {}
@@ -1386,11 +2029,13 @@ def waiting(path):
 
 class sqlite_ro:
     """A read-only connection to `path` (the file is never written, a live server may hold it)."""
+
     def __init__(self, path):
         self.path = path
 
     def __enter__(self):
         import sqlite3
+
         self.c = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
         self.c.row_factory = sqlite3.Row
         return self.c

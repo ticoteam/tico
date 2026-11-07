@@ -23,16 +23,16 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from . import hubdb as H
 
-CADENCES = {"daily": 1, "weekly": 7, "monthly": 30}      # days in a period
+CADENCES = {"daily": 1, "weekly": 7, "monthly": 30}  # days in a period
 DIRECTIONS = ("up", "down", "range")
 QUALITIES = ("measured", "estimate", "partial")
 KINDS = ("none", "improve", "maintain")
 COLOURS = ("red", "yellow", "green", "gray")
-TOLERANCE = 0.10        # yellow: behind the needed pace by no more than this share of it
-FLOOR = 0.02            # ...and never tighter than this share of the whole climb, so day one is not red
-GRACE = 0.25            # a reading is due a quarter period late before it counts as missed
-AUTO = "auto:"          # the id prefix of a KPI Tico computes itself (backend/botkpis.py)
-SPARK = 24              # readings behind the sparkline
+TOLERANCE = 0.10  # yellow: behind the needed pace by no more than this share of it
+FLOOR = 0.02  # ...and never tighter than this share of the whole climb, so day one is not red
+GRACE = 0.25  # a reading is due a quarter period late before it counts as missed
+AUTO = "auto:"  # the id prefix of a KPI Tico computes itself (backend/botkpis.py)
+SPARK = 24  # readings behind the sparkline
 
 
 # ----------------------------------------------------------------------------- time and words
@@ -69,12 +69,48 @@ def slugify(text):
     return slug or "kpi"
 
 
-SYMBOLS = ("%", "pp", "$", "€", "£")    # written against the number: 52%, $1,200
+SYMBOLS = ("%", "pp", "$", "€", "£")  # written against the number: 52%, $1,200
 # A word unit that measures time or a score keeps one decimal (4.5 months); any other word unit counts things
 # (studios, demos, tickets), so its numbers are whole: 134.5 studios is 135.
-MEASURES = {"year", "years", "yr", "yrs", "month", "months", "mo", "mos", "week", "weeks", "wk", "wks", "day", "days",
-            "hour", "hours", "hr", "hrs", "h", "minute", "minutes", "min", "mins", "second", "seconds", "sec", "secs", "s",
-            "ms", "x", "point", "points", "pts", "score", "nps", "stars", "rating"}
+MEASURES = {
+    "year",
+    "years",
+    "yr",
+    "yrs",
+    "month",
+    "months",
+    "mo",
+    "mos",
+    "week",
+    "weeks",
+    "wk",
+    "wks",
+    "day",
+    "days",
+    "hour",
+    "hours",
+    "hr",
+    "hrs",
+    "h",
+    "minute",
+    "minutes",
+    "min",
+    "mins",
+    "second",
+    "seconds",
+    "sec",
+    "secs",
+    "s",
+    "ms",
+    "x",
+    "point",
+    "points",
+    "pts",
+    "score",
+    "nps",
+    "stars",
+    "rating",
+}
 
 
 def counts(unit):
@@ -212,7 +248,9 @@ def latest(readings, usable=False):
     """The newest effective reading by business time, then by when it was collected. `usable` skips a
     partial one: half a period is not a value to judge."""
     pool = [r for r in readings if not (usable and r.get("quality") == "partial")]
-    return max(pool, key=lambda r: (r["period_end"] or "", r["collected_at"] or "", r["created_at"] or ""), default=None)
+    return max(
+        pool, key=lambda r: (r["period_end"] or "", r["collected_at"] or "", r["created_at"] or ""), default=None
+    )
 
 
 def assess(kpi, link, readings, at=None):
@@ -224,8 +262,16 @@ def assess(kpi, link, readings, at=None):
     newest = latest(readings)
     used = latest(readings, usable=True)
     state, age = freshness(kpi.get("cadence") or "weekly", used and used["period_end"], at)
-    out = {"status": "gray", "reason": "", "freshness": state, "value": None, "expected": None, "basis": None,
-           "age_days": None if age is None else round(age, 1), "reading_id": used and used.get("id")}
+    out = {
+        "status": "gray",
+        "reason": "",
+        "freshness": state,
+        "value": None,
+        "expected": None,
+        "basis": None,
+        "age_days": None if age is None else round(age, 1),
+        "reading_id": used and used.get("id"),
+    }
     if newest and not used:
         out["reason"] = f"{name} has only partial data"
         return out
@@ -242,8 +288,7 @@ def assess(kpi, link, readings, at=None):
     out.update(value=value, basis=used.get("quality"))
     note = " (estimate)" if used.get("quality") == "estimate" else ""
     current = amount(value, unit)
-    if not link or link.get("kind") in (None, "none") or (
-            link["kind"] == "improve" and link.get("target") is None):
+    if not link or link.get("kind") in (None, "none") or (link["kind"] == "improve" and link.get("target") is None):
         out.update(status="none", reason=f"{name} {current}{note}")
         return out
     if link["kind"] == "maintain":
@@ -251,7 +296,7 @@ def assess(kpi, link, readings, at=None):
         span = range_label(link.get("min"), link.get("max"), unit)
         low, high = link.get("min"), link.get("max")
         where = "below" if low is not None and value < low else "above" if high is not None and value > high else "in"
-        if span.startswith(("min ", "max ")):            # the bound carries the unit: say it once
+        if span.startswith(("min ", "max ")):  # the bound carries the unit: say it once
             current = versus(value, low if low is not None else high, unit)[0]
         out.update(status=colour, reason=f"{name} {current} {where} {span}{note}")
         return out
@@ -260,20 +305,28 @@ def assess(kpi, link, readings, at=None):
     reached = (value <= target) if falling else (value >= target)
     mine, goal = versus(value, target, unit)
     if not link.get("deadline"):
-        out.update(status="green" if reached else "gray",
-                   reason=f"{name} {mine} reached {goal}{note}" if reached
-                   else f"{name} {mine}, target {goal} has no deadline{note}")
+        out.update(
+            status="green" if reached else "gray",
+            reason=f"{name} {mine} reached {goal}{note}"
+            if reached
+            else f"{name} {mine}, target {goal} has no deadline{note}",
+        )
         return out
     start = link.get("baseline")
     started = _dt(link.get("baseline_at"))
     if start is None:
         # No baseline set: the first usable reading is where the line starts.
-        first = min((r for r in readings if r.get("quality") != "partial"),
-                    key=lambda r: (r["period_end"] or "", r["collected_at"] or ""), default=used)
+        first = min(
+            (r for r in readings if r.get("quality") != "partial"),
+            key=lambda r: (r["period_end"] or "", r["collected_at"] or ""),
+            default=used,
+        )
         start, started = first["value"], _dt(first["period_end"])
     started = started or _dt(link.get("created_at")) or at
     deadline = _dt(utc(link["deadline"], end=True))
-    colour, expected = pace(start, started, target, deadline, value, _dt(used["period_end"]) or at, kpi.get("direction") or "up")
+    colour, expected = pace(
+        start, started, target, deadline, value, _dt(used["period_end"]) or at, kpi.get("direction") or "up"
+    )
     out["expected"] = expected
     if reached:
         reason = f"{name} {mine} reached {goal}{note}"
@@ -291,8 +344,15 @@ def validate_target(kpi, fields):
     kind = fields.get("kind") or "none"
     if kind not in KINDS:
         return None, f"a target is {'|'.join(KINDS)}, not {kind}"
-    out = {"kind": kind, "baseline": None, "baseline_at": None, "target": None, "deadline": None,
-           "min": None, "max": None}
+    out = {
+        "kind": kind,
+        "baseline": None,
+        "baseline_at": None,
+        "target": None,
+        "deadline": None,
+        "min": None,
+        "max": None,
+    }
     if kind == "improve":
         if fields.get("target") is None:
             return None, "an improvement needs a target value"
@@ -310,7 +370,7 @@ def validate_target(kpi, fields):
             if (direction == "up" and out["target"] < baseline) or (direction == "down" and out["target"] > baseline):
                 return None, f"the target is on the wrong side of the baseline for a KPI that should go {direction}"
             out["baseline"] = baseline
-            out["baseline_at"] = utc(fields.get("baseline_at"))  or H.now()
+            out["baseline_at"] = utc(fields.get("baseline_at")) or H.now()
     elif kind == "maintain":
         low, high = fields.get("min"), fields.get("max")
         if low is None and high is None:
@@ -329,6 +389,7 @@ def auto(kpi_id):
 def kpi(conn, kpi_id):
     if auto(kpi_id):
         from . import botkpis
+
         return botkpis.kpi(conn, kpi_id)
     return H._one(conn, "SELECT * FROM kpis WHERE id=?", (kpi_id,))
 
@@ -338,10 +399,15 @@ def readings(conn, kpi_id, effective=False, limit=500):
     leaves out the ones a correction replaced."""
     if auto(kpi_id):
         from . import botkpis
+
         return botkpis.readings(conn, kpi_id)
-    rows = H._rows(conn.execute(
-        "SELECT r.*, (SELECT s.id FROM kpi_readings s WHERE s.supersedes=r.id ORDER BY s.created_at LIMIT 1) AS superseded_by "
-        "FROM kpi_readings r WHERE r.kpi_id=? ORDER BY r.period_end, r.collected_at, r.created_at", (kpi_id,)))
+    rows = H._rows(
+        conn.execute(
+            "SELECT r.*, (SELECT s.id FROM kpi_readings s WHERE s.supersedes=r.id ORDER BY s.created_at LIMIT 1) AS superseded_by "
+            "FROM kpi_readings r WHERE r.kpi_id=? ORDER BY r.period_end, r.collected_at, r.created_at",
+            (kpi_id,),
+        )
+    )
     if effective:
         rows = [r for r in rows if not r["superseded_by"]]
     return rows[-limit:]
@@ -352,12 +418,14 @@ def effective_many(conn, kpi_ids):
     ids = [k for k in dict.fromkeys(kpi_ids) if not auto(k)]
     out = {k: [] for k in ids}
     for start in range(0, len(ids), 400):
-        chunk = ids[start:start + 400]
+        chunk = ids[start : start + 400]
         marks = ",".join("?" * len(chunk))
         for row in conn.execute(
-                f"SELECT * FROM kpi_readings r WHERE kpi_id IN ({marks}) AND NOT EXISTS "
-                "(SELECT 1 FROM kpi_readings s WHERE s.supersedes=r.id) "
-                "ORDER BY r.period_end, r.collected_at, r.created_at", chunk):
+            f"SELECT * FROM kpi_readings r WHERE kpi_id IN ({marks}) AND NOT EXISTS "
+            "(SELECT 1 FROM kpi_readings s WHERE s.supersedes=r.id) "
+            "ORDER BY r.period_end, r.collected_at, r.created_at",
+            chunk,
+        ):
             out[row["kpi_id"]].append(dict(row))
     return out
 
@@ -370,8 +438,12 @@ def links_of(conn, goal_id=None, kpi_id=None):
     if kpi_id:
         where.append("kpi_id=?")
         args.append(kpi_id)
-    return H._rows(conn.execute("SELECT * FROM goal_kpis" + (" WHERE " + " AND ".join(where) if where else "")
-                                + " ORDER BY created_at", args))
+    return H._rows(
+        conn.execute(
+            "SELECT * FROM goal_kpis" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created_at",
+            args,
+        )
+    )
 
 
 def link(conn, goal_id, kpi_id):
@@ -390,8 +462,20 @@ def spark(rows):
 def reading_brief(r):
     if not r:
         return None
-    keep = ("id", "value", "period_start", "period_end", "collected_at", "quality", "evidence", "note", "source",
-            "actor_id", "definition_version", "supersedes")
+    keep = (
+        "id",
+        "value",
+        "period_start",
+        "period_end",
+        "collected_at",
+        "quality",
+        "evidence",
+        "note",
+        "source",
+        "actor_id",
+        "definition_version",
+        "supersedes",
+    )
     return {k: r.get(k) for k in keep}
 
 
@@ -400,19 +484,53 @@ def view(record, rows, links=None, at=None):
     sparkline, and (for a goal's line) the link with its target and the status against it."""
     newest = latest(rows)
     state = assess(record, links, rows, at)
-    base = {**{k: record.get(k) for k in ("id", "slug", "name", "definition", "unit", "direction", "cadence", "owner_id",
-                                          "source_note", "definition_version", "created_at", "created_by_id", "updated_at",
-                                          "archived_at", "archived_by_id")},
-            "auto": auto(record["id"]), "latest": reading_brief(newest), "readings": len(rows),
-            "freshness": state["freshness"], "spark": spark(rows)}
+    base = {
+        **{
+            k: record.get(k)
+            for k in (
+                "id",
+                "slug",
+                "name",
+                "definition",
+                "unit",
+                "direction",
+                "cadence",
+                "owner_id",
+                "source_note",
+                "definition_version",
+                "created_at",
+                "created_by_id",
+                "updated_at",
+                "archived_at",
+                "archived_by_id",
+            )
+        },
+        "auto": auto(record["id"]),
+        "latest": reading_brief(newest),
+        "readings": len(rows),
+        "freshness": state["freshness"],
+        "spark": spark(rows),
+    }
     if links is not None:
-        base.update(link={k: links.get(k) for k in ("id", "goal_id", "kind", "baseline", "baseline_at", "target",
-                                                    "deadline", "min", "max")},
-                    target_label=target_label(record, links), status=state["status"], reason=state["reason"],
-                    expected=state["expected"])
+        base.update(
+            link={
+                k: links.get(k)
+                for k in ("id", "goal_id", "kind", "baseline", "baseline_at", "target", "deadline", "min", "max")
+            },
+            target_label=target_label(record, links),
+            status=state["status"],
+            reason=state["reason"],
+            expected=state["expected"],
+        )
         if record.get("archived_at"):
-            base.update(status=None, reason=f"Archived {day(record['archived_at'])}, not counting",
-                        freshness="archived", latest=None, spark=[], expected=None)
+            base.update(
+                status=None,
+                reason=f"Archived {day(record['archived_at'])}, not counting",
+                freshness="archived",
+                latest=None,
+                spark=[],
+                expected=None,
+            )
     else:
         base.update(status=state["status"], reason=state["reason"])
     return base
@@ -425,16 +543,22 @@ def goal_views(conn, goal_ids, at=None, include_archived=False):
     out = {g: [] for g in goal_ids}
     rows = []
     for start in range(0, len(goal_ids), 400):
-        chunk = goal_ids[start:start + 400]
-        rows.extend(H._rows(conn.execute(
-            f"SELECT * FROM goal_kpis WHERE goal_id IN ({','.join('?' * len(chunk))}) ORDER BY created_at", chunk)))
+        chunk = goal_ids[start : start + 400]
+        rows.extend(
+            H._rows(
+                conn.execute(
+                    f"SELECT * FROM goal_kpis WHERE goal_id IN ({','.join('?' * len(chunk))}) ORDER BY created_at",
+                    chunk,
+                )
+            )
+        )
     if not rows:
         return out
     ids = list({r["kpi_id"] for r in rows})
     real = [i for i in ids if not auto(i)]
     records = {}
     for start in range(0, len(real), 400):
-        chunk = real[start:start + 400]
+        chunk = real[start : start + 400]
         active = "" if include_archived else " AND archived_at IS NULL"
         for row in conn.execute(f"SELECT * FROM kpis WHERE id IN ({','.join('?' * len(chunk))})" + active, chunk):
             records[row["id"]] = dict(row)
@@ -442,6 +566,7 @@ def goal_views(conn, goal_ids, at=None, include_archived=False):
     for r in rows:
         if auto(r["kpi_id"]):
             from . import botkpis
+
             record = botkpis.kpi(conn, r["kpi_id"])
             series = botkpis.readings(conn, r["kpi_id"]) if record else []
         else:
@@ -453,8 +578,11 @@ def goal_views(conn, goal_ids, at=None, include_archived=False):
 
 def goal_link_status(conn, goal_id, at=None):
     """The linked KPIs of one goal that carry a target, judged: what a goal's automatic colour is made of."""
-    return [v for v in goal_views(conn, [goal_id], at)[goal_id]
-            if not v.get("archived_at") and (v.get("link") or {}).get("kind") in ("improve", "maintain")]
+    return [
+        v
+        for v in goal_views(conn, [goal_id], at)[goal_id]
+        if not v.get("archived_at") and (v.get("link") or {}).get("kind") in ("improve", "maintain")
+    ]
 
 
 # ----------------------------------------------------------------------------- writes
@@ -468,10 +596,23 @@ def _unique_slug(conn, name):
 
 
 def _version(conn, row, actor, ts):
-    conn.execute("INSERT OR IGNORE INTO kpi_definitions (id, kpi_id, version, created_at, actor, name, definition, unit, "
-                 "direction, cadence, source_note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                 (f"{row['id']}:{row['definition_version']}", row["id"], row["definition_version"], ts, actor,
-                  row["name"], row["definition"], row["unit"], row["direction"], row["cadence"], row["source_note"]))
+    conn.execute(
+        "INSERT OR IGNORE INTO kpi_definitions (id, kpi_id, version, created_at, actor, name, definition, unit, "
+        "direction, cadence, source_note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            f"{row['id']}:{row['definition_version']}",
+            row["id"],
+            row["definition_version"],
+            ts,
+            actor,
+            row["name"],
+            row["definition"],
+            row["unit"],
+            row["direction"],
+            row["cadence"],
+            row["source_note"],
+        ),
+    )
 
 
 def clean(fields):
@@ -501,15 +642,28 @@ def create(conn, actor, owner, fields, kid=None):
     if not values.get("name"):
         raise ValueError("name the measure, in words: what is counted, per what")
     ts = H.now()
-    row = {"id": kid or H.new_id(), "name": values["name"], "unit": values.get("unit", ""),
-           "created_at": ts, "created_by_id": actor, "slug": _unique_slug(conn, values["name"]),
-           "definition": values.get("definition", ""), "direction": values.get("direction", "up"),
-           "cadence": values.get("cadence", "weekly"), "owner_id": owner, "source_note": values.get("source_note", ""),
-           "definition_version": 1, "updated_at": ts}
-    conn.execute("INSERT INTO kpis (id, name, unit, created_at, created_by_id, slug, definition, direction, "
-                 "cadence, owner_id, source_note, definition_version, updated_at) VALUES (:id, :name, :unit, "
-                 ":created_at, :created_by_id, :slug, :definition, :direction, :cadence, :owner_id, :source_note, "
-                 ":definition_version, :updated_at)", row)
+    row = {
+        "id": kid or H.new_id(),
+        "name": values["name"],
+        "unit": values.get("unit", ""),
+        "created_at": ts,
+        "created_by_id": actor,
+        "slug": _unique_slug(conn, values["name"]),
+        "definition": values.get("definition", ""),
+        "direction": values.get("direction", "up"),
+        "cadence": values.get("cadence", "weekly"),
+        "owner_id": owner,
+        "source_note": values.get("source_note", ""),
+        "definition_version": 1,
+        "updated_at": ts,
+    }
+    conn.execute(
+        "INSERT INTO kpis (id, name, unit, created_at, created_by_id, slug, definition, direction, "
+        "cadence, owner_id, source_note, definition_version, updated_at) VALUES (:id, :name, :unit, "
+        ":created_at, :created_by_id, :slug, :definition, :direction, :cadence, :owner_id, :source_note, "
+        ":definition_version, :updated_at)",
+        row,
+    )
     _version(conn, row, actor, ts)
     return kpi(conn, row["id"])
 
@@ -549,12 +703,14 @@ def set_archived(conn, actor, kpi_id, archived):
         return row
     if archived:
         ts = H.now()
-        conn.execute("UPDATE kpis SET archived_at=?, archived_by_id=?, updated_at=? WHERE id=?",
-                     (ts, actor, ts, kpi_id))
+        conn.execute(
+            "UPDATE kpis SET archived_at=?, archived_by_id=?, updated_at=? WHERE id=?", (ts, actor, ts, kpi_id)
+        )
         H.event(conn, actor, "kpi.archive", kpi_id)
     else:
-        conn.execute("UPDATE kpis SET archived_at=NULL, archived_by_id=NULL, updated_at=? WHERE id=?",
-                     (H.now(), kpi_id))
+        conn.execute(
+            "UPDATE kpis SET archived_at=NULL, archived_by_id=NULL, updated_at=? WHERE id=?", (H.now(), kpi_id)
+        )
         H.event(conn, actor, "kpi.restore", kpi_id)
     return kpi(conn, kpi_id)
 
@@ -563,8 +719,21 @@ def definitions(conn, kpi_id):
     return H._rows(conn.execute("SELECT * FROM kpi_definitions WHERE kpi_id=? ORDER BY version DESC", (kpi_id,)))
 
 
-def add_reading(conn, actor, row, value, period_start=None, period_end=None, collected_at=None, evidence="",
-                quality=None, source="", note="", definition_version=None, supersedes=None):
+def add_reading(
+    conn,
+    actor,
+    row,
+    value,
+    period_start=None,
+    period_end=None,
+    collected_at=None,
+    evidence="",
+    quality=None,
+    source="",
+    note="",
+    definition_version=None,
+    supersedes=None,
+):
     """Append one reading. Returns it. Raises ValueError with what to fix."""
     if not math.isfinite(float(value)):
         raise ValueError("a reading is a number")
@@ -602,14 +771,30 @@ def add_reading(conn, actor, row, value, period_start=None, period_end=None, col
             raise ValueError(f"reading {supersedes} was already corrected by {newer[0]}; correct that one")
         if not (note or str(evidence or "").strip()):
             raise ValueError("say what the correction changes, in the note or the evidence")
-    reading = {"id": H.new_id(), "kpi_id": row["id"], "measured_at": end, "value": float(value), "actor_id": actor,
-               "source": source, "note": note, "created_at": now, "period_start": start, "period_end": end,
-               "collected_at": collected, "evidence": str(evidence or "").strip()[:2000], "quality": quality,
-               "definition_version": version, "supersedes": supersedes or None}
-    conn.execute("INSERT INTO kpi_readings (id, kpi_id, measured_at, value, actor_id, source, note, created_at, period_start, "
-                 "period_end, collected_at, evidence, quality, definition_version, supersedes) VALUES (:id, :kpi_id, "
-                 ":measured_at, :value, :actor_id, :source, :note, :created_at, :period_start, :period_end, :collected_at, "
-                 ":evidence, :quality, :definition_version, :supersedes)", reading)
+    reading = {
+        "id": H.new_id(),
+        "kpi_id": row["id"],
+        "measured_at": end,
+        "value": float(value),
+        "actor_id": actor,
+        "source": source,
+        "note": note,
+        "created_at": now,
+        "period_start": start,
+        "period_end": end,
+        "collected_at": collected,
+        "evidence": str(evidence or "").strip()[:2000],
+        "quality": quality,
+        "definition_version": version,
+        "supersedes": supersedes or None,
+    }
+    conn.execute(
+        "INSERT INTO kpi_readings (id, kpi_id, measured_at, value, actor_id, source, note, created_at, period_start, "
+        "period_end, collected_at, evidence, quality, definition_version, supersedes) VALUES (:id, :kpi_id, "
+        ":measured_at, :value, :actor_id, :source, :note, :created_at, :period_start, :period_end, :collected_at, "
+        ":evidence, :quality, :definition_version, :supersedes)",
+        reading,
+    )
     return reading
 
 
@@ -619,14 +804,18 @@ def set_link(conn, actor, goal_id, kpi_id, values):
     old = link(conn, goal_id, kpi_id)
     ts = H.now()
     if old:
-        conn.execute("UPDATE goal_kpis SET kind=:kind, baseline=:baseline, baseline_at=:baseline_at, target=:target, "
-                     "deadline=:deadline, min=:min, max=:max, updated_at=:ts, updated_by_id=:actor WHERE id=:id",
-                     {**values, "ts": ts, "actor": actor, "id": old["id"]})
+        conn.execute(
+            "UPDATE goal_kpis SET kind=:kind, baseline=:baseline, baseline_at=:baseline_at, target=:target, "
+            "deadline=:deadline, min=:min, max=:max, updated_at=:ts, updated_by_id=:actor WHERE id=:id",
+            {**values, "ts": ts, "actor": actor, "id": old["id"]},
+        )
     else:
-        conn.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, "
-                     "created_at, created_by_id, updated_at, updated_by_id) VALUES (:id, :goal_id, :kpi_id, :kind, :baseline, "
-                     ":baseline_at, :target, :deadline, :min, :max, :ts, :actor, :ts, :actor)",
-                     {**values, "id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id, "ts": ts, "actor": actor})
+        conn.execute(
+            "INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, "
+            "created_at, created_by_id, updated_at, updated_by_id) VALUES (:id, :goal_id, :kpi_id, :kind, :baseline, "
+            ":baseline_at, :target, :deadline, :min, :max, :ts, :actor, :ts, :actor)",
+            {**values, "id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id, "ts": ts, "actor": actor},
+        )
     return link(conn, goal_id, kpi_id), old
 
 

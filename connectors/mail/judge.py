@@ -25,19 +25,19 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HUB = Path(__file__).resolve().parents[2]
-if str(HUB) not in sys.path:                             # `python -m connectors.mail` already has it
+if str(HUB) not in sys.path:  # `python -m connectors.mail` already has it
     sys.path.insert(0, str(HUB))
-from clients import judge as J                           # noqa: E402
+from clients import judge as J
 from . import db
 
 ENV_VAR = "MAIL_DECISIONS"
-OLD_ENV_VAR = "MAIL_JUDGE"          # deprecated spelling, still read
+OLD_ENV_VAR = "MAIL_JUDGE"  # deprecated spelling, still read
 TRIAGE, GATE = "mail-triage", "mail-draft-gate"
 PARALLEL = 8
 SNIPPET_CHARS = 400
 THREAD_CHARS = 6000
 DRAFT_CHARS = 6000
-ENGINE = None                                            # the test seam: a callable, or None
+ENGINE = None  # the test seam: a callable, or None
 
 
 def engine(env=None):
@@ -51,21 +51,33 @@ def engine(env=None):
 
 
 def unavailable_hint():
-    return ("Decisions run inside a bot turn through the hub (HUB_API_URL and HUB_TOKEN, which the "
-            "runner sets) or with TYPESAFE_API_KEY in the environment; MAIL_DECISIONS=none turns it off.")
+    return (
+        "Decisions run inside a bot turn through the hub (HUB_API_URL and HUB_TOKEN, which the "
+        "runner sets) or with TYPESAFE_API_KEY in the environment; MAIL_DECISIONS=none turns it off."
+    )
 
 
 # ---------------------------------------------------------------- the listing
 
+
 def message_state(m, mailbox=""):
     """What `mail-triage` judges: the brief listing's fields, never the body."""
-    return {"mailbox": mailbox, "from": m.get("from") or "", "from_name": m.get("from_header") or "",
-            "to": list(m.get("to") or []), "cc": list(m.get("cc") or []), "date": m.get("date") or "",
-            "subject": m.get("subject") or "", "snippet": str(m.get("snippet") or "")[:SNIPPET_CHARS],
-            "unsubscribe": bool(m.get("unsubscribe")), "list_id": bool(str(m.get("list_id") or "").strip()),
-            "attachments": [a.get("name") for a in (m.get("attachments") or []) if isinstance(a, dict)],
-            "is_internal": bool(m.get("is_internal")), "is_calendar_invite": bool(m.get("is_calendar_invite")),
-            "labels": list(m.get("labels") or [])}
+    return {
+        "mailbox": mailbox,
+        "from": m.get("from") or "",
+        "from_name": m.get("from_header") or "",
+        "to": list(m.get("to") or []),
+        "cc": list(m.get("cc") or []),
+        "date": m.get("date") or "",
+        "subject": m.get("subject") or "",
+        "snippet": str(m.get("snippet") or "")[:SNIPPET_CHARS],
+        "unsubscribe": bool(m.get("unsubscribe")),
+        "list_id": bool(str(m.get("list_id") or "").strip()),
+        "attachments": [a.get("name") for a in (m.get("attachments") or []) if isinstance(a, dict)],
+        "is_internal": bool(m.get("is_internal")),
+        "is_calendar_invite": bool(m.get("is_calendar_invite")),
+        "labels": list(m.get("labels") or []),
+    }
 
 
 def suggest(j, t):
@@ -96,9 +108,16 @@ def _judgment(result, chosen):
     a = result["answers"]
     bucket, conf = J.choice(a, "bucket")
     urgency, _ = J.score(a, "urgency")
-    j = {"set": chosen["label"], "bucket": bucket, "confidence": round(conf, 2),
-         "is_ask": round(J.noul(a, "is_ask"), 2), "money": round(J.noul(a, "money"), 2),
-         "legal": round(J.noul(a, "legal"), 2), "urgency": round(urgency, 2), "ms": result.get("ms", 0)}
+    j = {
+        "set": chosen["label"],
+        "bucket": bucket,
+        "confidence": round(conf, 2),
+        "is_ask": round(J.noul(a, "is_ask"), 2),
+        "money": round(J.noul(a, "money"), 2),
+        "legal": round(J.noul(a, "legal"), 2),
+        "urgency": round(urgency, 2),
+        "ms": result.get("ms", 0),
+    }
     j["suggest"] = suggest(j, chosen["thresholds"])
     return j
 
@@ -112,8 +131,7 @@ def judge_message(m, chosen, engine, mailbox=""):
 
 
 def _cache_key(m, chosen, mailbox):
-    payload = [mailbox, m.get("id"), chosen["label"], chosen["questions"],
-               message_state(m, mailbox)]
+    payload = [mailbox, m.get("id"), chosen["label"], chosen["questions"], message_state(m, mailbox)]
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -151,9 +169,12 @@ def triage(msgs, engine, mailbox="", conn=None):
     Returns the summary the audit and the JSON carry."""
     chosen = J.load_set(TRIAGE)
     results = _run(msgs, chosen, engine, mailbox, conn)
-    judged = [_judgment(result, chosen) if result is not None else
-              {"set": chosen["label"], "error": error.code, "detail": error.detail[:200]}
-              for result, error, _cached in results]
+    judged = [
+        _judgment(result, chosen)
+        if result is not None
+        else {"set": chosen["label"], "error": error.code, "detail": error.detail[:200]}
+        for result, error, _cached in results
+    ]
     for m, j in zip(msgs, judged):
         m["judgment"] = j
     errors = sum(1 for j in judged if j.get("error"))
@@ -161,10 +182,15 @@ def triage(msgs, engine, mailbox="", conn=None):
     for j in judged:
         if not j.get("error"):
             counts[j["suggest"]] = counts.get(j["suggest"], 0) + 1
-    return {"set": chosen["label"], "count": len(judged) - errors, "errors": errors,
-            "cached": sum(cached for _result, _error, cached in results),
-            "suggested": counts, "ms": max([j.get("ms", 0) for j in judged] or [0]),
-            "by_message": {m["id"]: (j.get("suggest") or "error") for m, j in zip(msgs, judged)}}
+    return {
+        "set": chosen["label"],
+        "count": len(judged) - errors,
+        "errors": errors,
+        "cached": sum(cached for _result, _error, cached in results),
+        "suggested": counts,
+        "ms": max([j.get("ms", 0) for j in judged] or [0]),
+        "by_message": {m["id"]: (j.get("suggest") or "error") for m, j in zip(msgs, judged)},
+    }
 
 
 def render_judgment(j):
@@ -173,11 +199,14 @@ def render_judgment(j):
         return ""
     if j.get("error"):
         return f"  decision: unavailable ({j['error']})"
-    return (f"  decision: {j['suggest']}  ({j['bucket']} {j['confidence']:.2f}; ask {j['is_ask']:.2f}, "
-            f"money {j['money']:.2f}, legal {j['legal']:.2f}, urgency {j['urgency']:.1f})")
+    return (
+        f"  decision: {j['suggest']}  ({j['bucket']} {j['confidence']:.2f}; ask {j['is_ask']:.2f}, "
+        f"money {j['money']:.2f}, legal {j['legal']:.2f}, urgency {j['urgency']:.1f})"
+    )
 
 
 # ---------------------------------------------------------------- the rules
+
 
 def judge_sets(msgs, set_ids, engine, mailbox="", conn=None):
     """What a `judge` rule condition reads (rules.py): for every set the rules name, judge every
@@ -196,28 +225,51 @@ def judge_sets(msgs, set_ids, engine, mailbox="", conn=None):
                 m.setdefault("judge_errors", {})[sid] = error.code
             else:
                 m.setdefault("judgments", {})[sid] = J.summary(result["answers"])
-        stats[sid] = {"label": chosen["label"], "count": len(results) - errors, "errors": errors,
-                      "cached": sum(cached for _result, _error, cached in results)}
+        stats[sid] = {
+            "label": chosen["label"],
+            "count": len(results) - errors,
+            "errors": errors,
+            "cached": sum(cached for _result, _error, cached in results),
+        }
     return stats
 
 
 # ---------------------------------------------------------------- the draft
 
+
 def draft_gate(engine, body, subject="", thread="", mailbox="", employee=""):
     """`mail-draft-gate` over the draft and the thread it answers. Advisory; never raises."""
     chosen = J.load_set(GATE)
-    state = {"mailbox": mailbox, "employee": employee, "subject": subject or "",
-             "thread": (thread or "")[:THREAD_CHARS], "draft": (body or "")[:DRAFT_CHARS]}
+    state = {
+        "mailbox": mailbox,
+        "employee": employee,
+        "subject": subject or "",
+        "thread": (thread or "")[:THREAD_CHARS],
+        "draft": (body or "")[:DRAFT_CHARS],
+    }
     try:
         result = engine(state, chosen["questions"], chosen["label"])
     except J.JudgeError as exc:
-        return {"set": chosen["label"], "available": False, "error": exc.code, "ok": None,
-                "flags": [], "probabilities": {}}
+        return {
+            "set": chosen["label"],
+            "available": False,
+            "error": exc.code,
+            "ok": None,
+            "flags": [],
+            "probabilities": {},
+        }
     probabilities = {qid: round(J.noul(result["answers"], qid), 2) for qid in chosen["questions"]}
     flag = chosen["thresholds"].get("flag", 0.5)
     flags = [qid for qid, p in probabilities.items() if p >= flag]
-    return {"set": chosen["label"], "available": True, "ok": not flags, "flags": flags,
-            "probabilities": probabilities, "flag_at": flag, "ms": result.get("ms", 0)}
+    return {
+        "set": chosen["label"],
+        "available": True,
+        "ok": not flags,
+        "flags": flags,
+        "probabilities": probabilities,
+        "flag_at": flag,
+        "ms": result.get("ms", 0),
+    }
 
 
 def render_gate(g):

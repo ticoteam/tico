@@ -21,13 +21,15 @@ files:
   - contracts/runner/**
   - runner-rs/*                   # the Rust runner reads and sends the wire names (contracts/runner)
   - runner-rs/**
-  - runner/worktrees.py           # reads runners/me/worktrees rows, which keep the wire's detail_json
+  - runner_support/worktrees.py           # reads runners/me/worktrees rows, which keep the wire's detail_json
   # Wave 2 on: the Python runner's side of the wire and its own state file keep their names (started, updated...).
-  - runner/*.py
-  - runner/importers/**
-  - runner/harnesses/**
-  - runner/tests/conformance/**  # fake harnesses speaking the runner's side
-  - runner/tests/test_hq_tickets.py             # a fake Tico HQ: another system's ticket fields
+  - runner_support/*.py
+  - runner/*.py                  # forwards old `python -m runner ...` commands and imports to runner_support
+  - runner/**
+  - runner_support/importers/**
+  - runner-rs/harnesses/**
+  - runner_support/tests/conformance/**  # fake harnesses speaking the runner's side
+  - backend/tests/test_hq_tickets.py             # a fake Tico HQ: another system's ticket fields
   - backend/runner_wire.py        # puts the runner wire's old names back on runner bodies
   - backend/tests/test_runner_wire_names.py
   - backend/migrations/0*         # applied migration files are history: they ran on the shape of their day
@@ -48,7 +50,7 @@ names:
   examples/custom-frontend/app.js: [next, bot, state, actor]
 keys:
   backend/tests/test_memory_tidy_keep.py: [edits_json]   # a Keep request as runners get it
-  backend/memory_tidy_cards.py: [edits_json]   # the Keep reply's runner-wire field (runner/memory_tidy_keep.py) and the Result attribute
+  backend/memory_tidy_cards.py: [edits_json]   # the Keep reply's runner-wire field (runner_support/memory_tidy_keep.py) and the Result attribute
   backend/strategy_setup.py: [started, finished]
   clients/hubtools.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
   clients/remotecli.py: [owner, due]
@@ -66,7 +68,7 @@ keys:
   backend/sample_company.py: [dept, owner]
   backend/tests/test_company_file.py: [dept, owner, due]
   backend/tests/test_company_import.py: [dept, owner]   # the jobs saved in registry_metadata (strategy.draft_from)
-  runner/tests/test_worktree*.py: [detail_json, created, updated]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
+  runner_support/tests/test_worktree*.py: [detail_json, created, updated]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
   backend/company_billing.py: [created, expires]   # Tico HQ's billing answer: another system's fields
   backend/tests/test_company_billing.py: [created, expires]
   backend/tico_storage.py: [expires]   # HQ's storage answer (credentials.expires): the stored column is expires_at
@@ -91,7 +93,7 @@ keys:
 # Request models a runner (or another separately updated client) sends: their fields keep the wire names.
 wire_models:
   - WatcherReport      # POST /api/v2/runners/watchers (runner-rs watchers.rs)
-  - ImportCreate       # POST /api/v2/imports/transcripts (runner/close_calls.py)
+  - ImportCreate       # POST /api/v2/imports/transcripts (runner_support/close_calls.py)
   - TranscriptImport
 # API paths a runner sends bodies to: a dict literal posted to one (in tests too) keeps its keys.
 wire_paths:

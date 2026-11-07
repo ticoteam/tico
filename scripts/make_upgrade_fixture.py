@@ -11,6 +11,7 @@ The result is gzipped (an initialized database is about 1.2 MB, the gzip about 1
 `--into DB` adds the same rows to a database a running install made instead (scripts/journey-test.sh seeds the
 previous release with them before it upgrades), so it needs nothing but the standard library.
 """
+
 import gzip
 import shutil
 import sqlite3
@@ -33,7 +34,7 @@ def seed(c, bots="INSERT"):
     """Bots, a conversation with messages and tasks, written as an older release wrote them: the rows an upgrade
     must keep."""
     created = ("created_at", "created")
-    keyed = "id" in {row[1] for row in c.execute("PRAGMA table_info(bots)")}   # bots gained an id in the cleanup
+    keyed = "id" in {row[1] for row in c.execute("PRAGMA table_info(bots)")}  # bots gained an id in the cleanup
     coo = "bot:coo"
     for slug in ("coo", "cmo", "seo"):
         have = c.execute(f"SELECT {'id' if keyed else 'slug'} FROM bots WHERE slug=?", (slug,)).fetchone()
@@ -50,25 +51,60 @@ def seed(c, bots="INSERT"):
         # a bot's id is its slug (hubdb.new_bot_id for product bots), and actors are `bot:<id>`, so `bot:coo` resolves
         values = ([slug] if keyed else []) + [slug, slug.upper(), *(["codex"] if runtime else []), "active", TS]
         c.execute(f"{bots} INTO bots({names}) VALUES({','.join('?' * len(values))})", values)
-    names = _cols(c, "conversations", "id", "kind", "subject", ("participants", "participants_json"), created,
-                  "last_message_at")
-    c.execute(f"INSERT INTO conversations({names}) VALUES('c1','direct','Launch plan',?,?,?)",
-              (f'["{coo}","human:ana"]', TS, TS))
-    names = _cols(c, "messages", "id", "conversation_id", ("sender_id", "from_actor"), ("recipient_id", "to_actor"), "kind",
-                  "body", created)
+    names = _cols(
+        c, "conversations", "id", "kind", "subject", ("participants", "participants_json"), created, "last_message_at"
+    )
+    c.execute(
+        f"INSERT INTO conversations({names}) VALUES('c1','direct','Launch plan',?,?,?)",
+        (f'["{coo}","human:ana"]', TS, TS),
+    )
+    names = _cols(
+        c,
+        "messages",
+        "id",
+        "conversation_id",
+        ("sender_id", "from_actor"),
+        ("recipient_id", "to_actor"),
+        "kind",
+        "body",
+        created,
+    )
     for n in (1, 2):
-        c.execute(f"INSERT INTO messages({names}) VALUES(?,?,?,?,?,?,?)",
-                  (f"m{n}", "c1", "human:ana", coo, "message", f"hello {n}", TS))
-    names = _cols(c, "tasks", "id", "title", "body", ("requester_id", "requester"), ("owner_id", "owner"), "status",
-                  "conversation_id", created, ("updated_at", "updated"))
+        c.execute(
+            f"INSERT INTO messages({names}) VALUES(?,?,?,?,?,?,?)",
+            (f"m{n}", "c1", "human:ana", coo, "message", f"hello {n}", TS),
+        )
+    # The job each message to the bot queued: an older release's trigger made it, and a database that still has the
+    # trigger makes its own. On one without it (a fresh build), backend/enqueue.py makes them, as the writers do.
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='queue_bot_message'").fetchone():
+        from backend.enqueue import enqueue_stored
+
+        for n in (1, 2):
+            enqueue_stored(c, f"m{n}")
+    names = _cols(
+        c,
+        "tasks",
+        "id",
+        "title",
+        "body",
+        ("requester_id", "requester"),
+        ("owner_id", "owner"),
+        "status",
+        "conversation_id",
+        created,
+        ("updated_at", "updated"),
+    )
     for n in (1, 2, 3):
-        c.execute(f"INSERT INTO tasks({names}) VALUES(?,?,?,?,?,?,?,?,?)",
-                  (f"t{n}", f"Task {n}", "", "human:ana", coo, "open", "c1", TS, TS))
+        c.execute(
+            f"INSERT INTO tasks({names}) VALUES(?,?,?,?,?,?,?,?,?)",
+            (f"t{n}", f"Task {n}", "", "human:ana", coo, "open", "c1", TS, TS),
+        )
 
 
 def build(out):
     from backend.config import Settings
     from backend.store import Store
+
     work = Path(tempfile.mkdtemp())
     db = work / "hub.sqlite"
     Store(Settings(db_path=db, registry_dir=Path("registry"))).initialize(seed_market=False)
@@ -82,9 +118,9 @@ def build(out):
 
 
 def seed_into(db):
-    c = sqlite3.connect(db, timeout=30)   # the install's server is running and writes too
+    c = sqlite3.connect(db, timeout=30)  # the install's server is running and writes too
     with c:
-        seed(c, bots="INSERT OR IGNORE")   # a fresh install already has the starter bots coo, cmo and seo
+        seed(c, bots="INSERT OR IGNORE")  # a fresh install already has the starter bots coo, cmo and seo
     c.close()
 
 

@@ -66,7 +66,7 @@ Without a decision model (no gateway key, no TypeSafe key of your own and no AI 
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
 reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
 order, one short HTTP attempt each with no client-side retries on top of the gateway's own: the Tico AI Gateway
-(`tico-decide-1.0`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
+(`tico-decide-low`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
 the next, so an outage costs at most eleven attempts per provider per question batch for a message.
 
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap
@@ -112,9 +112,9 @@ except that a person's message, a new thread or a reply in one, to a paused or q
 bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
 
-A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that line is an
-unanswered `ask`, the follow-up is written as its `answer`, which is what `hub question ask --wait`
-polls for, so the ask closes.
+A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that bot has one open
+question task to that person, the follow-up answers it (`question_tasks.answer_from_reply`), so the
+question task closes.
 
 The bot's run gets the text, and in the message's `refs.slack` the channel or DM name, the
 thread permalink, the sender's email, the last twelve exchanges of the thread and a note that
@@ -201,6 +201,33 @@ record is `uncertain` and waits for a human.
 Thread replies are solicited: turning bot posting off for a channel does not stop them, and they
 grant no bot any posting right there; `connectors/slack.py` and its gates are unchanged.
 
+## Link previews
+
+A link to a task pasted in Slack gets a preview under the message, the way Slack's own links do:
+the task's number and title linked to the pasted URL, the start of its description, its column (or
+status), owner and due date, and an open button. The links that get one, on the server's own host
+and any in `TICO_SLACK_UNFURL_HOSTS`:
+
+- `/task/<id>` and `/ticket/<number>`, each optionally with a readable slug after it
+  (`/ticket/42/fix-the-login-page`) and optionally under `/open/`; the slug is never read, so a
+  renamed task keeps its old links;
+- `/#/task/<id>`, the web app's task page.
+
+The host must be in the app's `unfurl_domains` (the manifest Settings > Slack hands out lists them).
+Slack sends `link_shared` over the same socket; the gateway answers with `chat.unfurl` at once and
+stores nothing. A preview is shown only when the person who pasted the link passes the same sender
+checks as a message (workspace member, not a guest, admitted, on the roster) and may read the task,
+and only for a task that is not private: nothing of a private task goes to Slack. A channel shared
+outside the workspace gets none, and so does a channel whose info Slack will not give Tico (a private
+channel it is not in) and a link still in the composer, whose channel is not known yet. A DM gets one
+either way: the sender is verified there. Everyone in the conversation then sees the preview; each one is
+recorded as a `slack.unfurl` event with the task and the person.
+
+The button opens `TICO_SLACK_OPEN_URL` (`{id}` is the task id; default the task in the web app) and
+reads `TICO_SLACK_OPEN_LABEL` (default "Open in Tico"), so a team with its own desktop client can
+open the task there. Slack does not take every URL scheme on a button; when it refuses the blocks,
+the preview is sent again with the same link as text.
+
 ## Tables
 
 | Table | One row per | States |
@@ -222,6 +249,7 @@ Settings: `TICO_SLACK_GATEWAY_ENABLED` (the kill switch), `SLACK_TEAM_ID`
 must name), `TICO_SLACK_SECRET_ARN` (the JSON credential `{"bot_token","app_token","team_id","app_id"}`;
 `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment or `/etc/tico/slack` also work), and the
 three thresholds above, `TICO_SLACK_DIGEST_MINUTES` and `TICO_SLACK_DIGEST_CAP` (Channels,
+above), and `TICO_SLACK_UNFURL_HOSTS`, `TICO_SLACK_OPEN_LABEL` and `TICO_SLACK_OPEN_URL` (Link previews,
 above). Only the gateway process reads it; the API never holds a Slack token. Change them in `.env` and run `docker compose up -d`, which restarts only the gateway.
 
 Start-up verifies `auth.test` (the workspace) and `bots.info` (the app) and refuses to run on a
@@ -232,14 +260,15 @@ only that verification and prints it. A post that was mid-flight at the last sto
 Kill switch: `TICO_SLACK_GATEWAY_ENABLED=0` (through `configure`) stops ingress, egress and
 the readers' pass; the tables stay for audit. `TICO_SLACK_DIGEST_MINUTES=0` pauses only the
 readers' pass. Rollback beyond that is removing the `app_mention`, `message.im`,
-`message.channels` and `message.groups` subscriptions from the app manifest; nothing in
+`message.channels`, `message.groups` and `link_shared` subscriptions from the app manifest; nothing in
 Tico needs undoing.
 
 ## Installing or reinstalling the app
 
 `connectors/slack-app-manifest.yaml` is the app: the scopes `connectors/slack.py` uses, plus
-`app_mentions:read` and `chat:write.customize`, Socket Mode on, and the `app_mention`,
-`message.im`, `message.channels` and `message.groups` events. When the installed app lacks any of these (the gateway log says which):
+`app_mentions:read`, `chat:write.customize`, `links:read` and `links:write`, Socket Mode and
+interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.groups` and
+`link_shared` events, and the link-preview hosts in `unfurl_domains`. When the installed app lacks any of these (the gateway log says which):
 
 1. On <https://api.slack.com/apps>, open the Tico app, **App Manifest**, paste the manifest over
    the old one, save.
@@ -294,7 +323,7 @@ reply should still go out. Parameterize values; never interpolate Slack text.
 `backend/tests/test_slack_gateway.py`, with a fake Slack and a fake decision model: start-up verification,
 every deny path, dedupe, the Legal reply case (Legal's open ask in the thread, the answer
 reaches Legal in the same conversation), an explicit address, a message for two bots, a
-four-way tie capped at three, the low-confidence fallback, a no-ask message that wakes nobody,
+four-way tie capped at three, the low-confidence fallback, a message with no question that wakes nobody,
 a refused recipient, at-most-once posting with the `uncertain`, `rate_limited` and `failed`
 states, restart recovery, the customize fallback, a DM, and the kill switch. For the channels:
 a stored message reaching every reader once and the cursors moving with it, the fast lane and
