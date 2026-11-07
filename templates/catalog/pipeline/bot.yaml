@@ -1,0 +1,29 @@
+name: pipeline                      # the slug: it matches the repository bot-pipeline and the label owner:pipeline
+display_name: "Pipeline Owner"
+labels: [owner:pipeline]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-delivery-pipeline-report
+    title: Weekly delivery pipeline report
+    cron: "30 9 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-delivery-report.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. The team's GitHub App gives the bot a short-lived
+# token for the repositories the owner lists for it in Settings (docs/github-app.md).
+tools:
+  - service: github
+    identity: "the product repositories the owner lists for this bot"
+    can: [read]
+    note: "reads merge timings, workflow runs, check results, deployments and releases; never reruns, cancels, triggers or edits a workflow, never deploys, rolls back or merges"
+# The token can trigger workflows, so the only thing between this bot and a rerun or a deploy is this entry and
+# .claude/settings.json, which denies every run, workflow, cache, credential, api, merge and release command. Keep it read only.

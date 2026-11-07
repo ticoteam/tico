@@ -532,7 +532,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 98 role templates, by group, each with a card. `templates/catalog/` also holds the four built-in bots and three helper bots, 105 cards in all. [Starter bots](starter-bots.md) lists the 98.
+Tico ships 104 role templates, by group, each with a card. `templates/catalog/` holds 114 folders in all, the role templates plus the built-in and helper bots. [Starter bots](starter-bots.md) lists the 104.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
