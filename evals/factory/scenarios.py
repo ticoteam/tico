@@ -606,6 +606,6 @@ SCENARIOS = [
 ]
 
 
-from .cases import SCENARIOS as _CASES  # evals/factory/cases/: one file per scenario
-
-SCENARIOS += _CASES
+# evals/factory/cases/: one file per scenario. The package adds its scenarios to SCENARIOS itself once its list is
+# complete (see its last lines), so the result is the same whichever of the two modules is imported first.
+from .cases import SCENARIOS as _CASES  # noqa: F401  (imported for that side effect)

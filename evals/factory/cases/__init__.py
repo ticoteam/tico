@@ -29,3 +29,10 @@ SCENARIOS += _verdict_past_open_sibling
 from .source_outages import SCENARIOS as _source_outages
 
 SCENARIOS += _source_outages
+
+# The cases join scenarios.SCENARIOS here, once this list is complete, and only here. The case modules import
+# evals.factory.scenarios, so if scenarios.py copied this list itself it would copy a half-filled one whenever a case
+# module is imported first (a test importing one directly got 21 of 41 scenarios). Either import order now gives all.
+from .. import scenarios as _scenarios
+
+_scenarios.SCENARIOS += SCENARIOS
