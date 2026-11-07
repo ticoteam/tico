@@ -239,7 +239,7 @@ function sessionReturn() {
   const start = () => { if (!fill()) watch.observe(document.body, {childList: true, subtree: true}); };
   if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
 }
-// Called once the first page is drawn (boot.js): the task that was open opens again over it.
+// Called once the first page is drawn (boot.ts): the task that was open opens again over it.
 function sessionResume() {
   const t = SESSION.reopen;
   SESSION.reopen = null;

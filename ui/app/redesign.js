@@ -17,7 +17,7 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // What waits on an answer starts as this browser last heard it (ui/theme.js marks <html> before the paint) and is set
 // right here once the answer is in: Finance (finance.js finNavSync) and Finish setup (notices.js renderOnboardingNav).
 // The answers are kept for whoever signed in here last (snapWho: this server, its owner, the person); /me answering as
-// anyone else drops them before the config is applied (boot.js), and so does a sign-out (boot-snap.js bootSnapDrop).
+// anyone else drops them before the config is applied (boot.ts), and so does a sign-out (boot-snap.js bootSnapDrop).
 // A kept answer only stands in until this visit's own arrives.
 // A sign-out in any tab stops every tab writing, as the boot snapshot's epoch does (boot-snap.js): the kept entry
 // carries an `epoch` a sign-out (or another person's /me) moves on, each tab notes the epoch its /me read, and a tab

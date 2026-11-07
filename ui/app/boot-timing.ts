@@ -5,7 +5,7 @@
 // User Timing marks, each set once per page load, in the order an open passes them (ms since navigation start):
 //   tico:head          theme.js ran in the head: the page's HTML has arrived
 //   tico:bundle-start  the bundle's first statement (backend/ui_bundle.py BUNDLE_MARK); not set with the files unbundled
-//   tico:boot          every script has run and boot.js starts
+//   tico:boot          every script has run and boot.ts starts
 //   tico:paint-cached  the last screen this person saw here is shown again (boot-snap.js), when there is one
 //   tico:roster        the roster, /me and the people answered
 //   tico:route         the opening page is drawn (its shell and any skeleton)

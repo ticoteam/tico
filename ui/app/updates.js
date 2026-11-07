@@ -133,7 +133,7 @@ function updFeedPath(state, more = false) {
   if (more && state.data?.next_before) q.set('before', state.data.next_before);
   return '/v2/updates?' + q;
 }
-// Startup asks for the feed beside the roster when Updates is the page it opens on, a round trip sooner (boot.js).
+// Startup asks for the feed beside the roster when Updates is the page it opens on, a round trip sooner (boot.ts).
 function updPrefetch() {
   if (!(location.hash === UPDATES || location.hash.startsWith(UPDATES + '?'))) return;
   const params = new URLSearchParams(location.hash.split('?')[1] || '');

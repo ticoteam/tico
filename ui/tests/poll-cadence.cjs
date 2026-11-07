@@ -1,4 +1,4 @@
-// The app's polls while the live stream is down (ui/app/boot.js, ui/app/notices.js, ui/health.js): status, config and
+// The app's polls while the live stream is down (ui/app/boot.ts, ui/app/notices.js, ui/health.js): status, config and
 // Health each read every 2 minutes, not every 30 s or minute, so many open tabs do not multiply the load on a hub that
 // is already busy. A Health tab shown again reads once at once, and that read restarts its 2-minute timer, so the
 // next tick does not read again. Every request is intercepted; the page's clock is faked.

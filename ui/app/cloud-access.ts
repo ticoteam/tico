@@ -43,7 +43,7 @@ async function cloudAccessPoll() {
 function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
 }
-// The status poll (refresh.js, boot.js) carries it on every page.
+// The status poll (refresh.js, boot.ts) carries it on every page.
 function cloudAccessFromStatus() {
   if (S.status && 'cloud_access' in S.status) cloudAccessApply(S.status.cloud_access);
 }
