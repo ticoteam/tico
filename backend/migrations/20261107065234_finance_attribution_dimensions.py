@@ -32,9 +32,16 @@ def up(conn):
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_attribution_rules'").fetchone()
     if row is None or "'project'" in str(row[0]):
         return
+    # The rename re-parses every trigger, and an earlier migration's trigger names a table the module code makes after
+    # the migrations (presences_meeting_delete names task_roles), so the triggers step aside for the rebuild.
+    triggers = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL").fetchall()
+    for name, _ in triggers:
+        conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
     conn.execute(_TABLE.format(name="fin_attribution_rules_new"))
     conn.execute(f"INSERT INTO fin_attribution_rules_new({_COLUMNS}) SELECT {_COLUMNS} FROM fin_attribution_rules")
     conn.execute("DROP TABLE fin_attribution_rules")  # its indexes go with it
     conn.execute("ALTER TABLE fin_attribution_rules_new RENAME TO fin_attribution_rules")
     for statement in _INDEXES:
         conn.execute(statement)
+    for _, sql in triggers:
+        conn.execute(sql)
