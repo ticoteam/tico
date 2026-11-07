@@ -940,12 +940,119 @@ def changed_lines(root, anc, head, name):
     return old, new
 
 
-def py_tests_for(name, py_map, root, anc, head, graph, added, known):
-    """Rule 6 for one changed Python file: the tests that executed the functions its diff touches, as the measured map
-    says. {"static": reason} when the static map decides for this file instead: it is not in the map, its diff touches
-    module code, a decorator, a class body or a signature, it removes or renames a function (its importers break, and
-    the map does not see them), or it does not parse at either commit. A function the map lacks, or whose body changed
-    since the measurement, runs the tests of the file's other functions ("stale")."""
+CALLER_LIMIT = 50  # rule 6: a signature or decorator change that more functions use than this keeps the static answer
+MODULE_RULE_ERRORS = (subprocess.CalledProcessError, OSError, SyntaxError, ValueError, tokenize.TokenError)
+
+
+def grep_files(root, rev, word):
+    """Python files at `rev` that contain `word` as a whole word. git grep reads the commit, not the checkout."""
+    found = subprocess.run(
+        ["git", "grep", "-l", "-w", "-F", word, rev, "--", "*.py"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if found.returncode == 1:
+        return []
+    found.check_returncode()
+    return sorted({line.split(":", 1)[1] for line in found.stdout.splitlines()})
+
+
+def module_users(root, rev, path, wanted, trees):
+    """Every (file, qual) at `rev` that uses one of the module-level names `wanted` that `path` binds: its own functions
+    and module code, the functions and module code of the modules that import the names (`import m` then `m.NAME`,
+    `from m import NAME`, `as` aliases), and, through the modules that re-export them, the modules that import those.
+    qual is py_test_map.MODULE for module code. None when a use cannot be resolved (see py_test_map.uses)."""
+    users, seen, pending = set(), set(), [(path, frozenset(wanted))]
+    while pending:
+        module, names = pending.pop()
+        if (module, names) in seen:
+            continue
+        seen.add((module, names))
+        dotted = py_test_map.module_name(module)
+        quals, module_level, bad = py_test_map.uses(trees(module), names, {n: n for n in names}, same_file=True)
+        if bad:
+            return None
+        users |= {(module, q) for q in quals} | ({(module, py_test_map.MODULE)} if module_level else set())
+        for other in grep_files(root, rev, dotted.split(".")[-1]):
+            if other == module:
+                continue
+            modules, local, reexports = py_test_map.links(trees(other), other, dotted, names)
+            if not modules and not local:
+                continue
+            quals, module_level, bad = py_test_map.uses(trees(other), names, local, modules, dotted=dotted)
+            if bad:
+                return None
+            users |= {(other, q) for q in quals} | ({(other, py_test_map.MODULE)} if module_level else set())
+            if reexports:
+                pending.append((other, frozenset(reexports)))
+    return users
+
+
+def attribute_users(root, rev, leaf, trees):
+    """Every (file, qual) at `rev` that reads `leaf` as a name or as an attribute of any object: the callers of a method
+    (`obj.leaf(...)`) or of a nested function. None when a use cannot be resolved."""
+    users = set()
+    for rel in grep_files(root, rev, leaf):
+        quals, module_level, bad = py_test_map.uses(trees(rel), {leaf}, {leaf: leaf}, attr_any=True)
+        if bad:
+            return None
+        users |= {(rel, q) for q in quals} | ({(rel, py_test_map.MODULE)} if module_level else set())
+    return users
+
+
+def _function_tests(py_map, rel, qual, digest, assume_base):
+    """The measured tests of one function, or None when the map does not hold it: unmeasured, or measured on a body
+    other than its body at the base (`digest`). assume_base takes the map as measured at the base (replays only)."""
+    per_function = py_map["files"].get(rel, {})
+    if qual not in per_function:
+        return None
+    if not assume_base and (digest is None or py_map["hashes"].get(rel, {}).get(qual) != digest):
+        return None
+    return per_function[qual]
+
+
+def _file_tests(py_map, rel, listed):
+    """Every measured test of a file's functions (module code excepted): the answer for a file the map cannot split."""
+    return {listed[i] for qual, ran in py_map["files"].get(rel, {}).items() if qual != py_test_map.MODULE for i in ran}
+
+
+def module_change_names(pairs):
+    """The names a change to module-level code binds or unbinds, or (None, reason) when it keeps the static answer.
+    `pairs` holds (tree, changed line numbers) for each side of the change."""
+    names = set()
+    for tree, lines in pairs:
+        statements, uncovered = py_test_map.top_statements(tree, lines)
+        if uncovered:
+            return None, "module code no statement holds"
+        for stmt in statements:
+            if isinstance(stmt, ast.ClassDef):
+                return None, "a class body changed"
+            found, runs = py_test_map.bindings(stmt)
+            if found is None:
+                return None, "a name cannot be resolved (a star import)"
+            if runs:
+                return None, "module code runs at import (a call, if, try, with, for or similar)"
+            names |= found
+    return names, ""
+
+
+def py_tests_for(name, py_map, root, anc, head, graph, added, known, assume_base=False):
+    """Rule 6 for one changed Python file: the tests that executed the functions its change reaches, as the measured map
+    says. {"static": reason} when the static map decides for this file instead: it is not in the map, it does not parse
+    at one commit, it removes or renames a function, a class line or class body changed, module code runs at import, a
+    name it binds cannot be resolved, or too many functions use a changed signature (CALLER_LIMIT). Otherwise the change
+    reaches:
+
+    - the functions whose bodies changed, and the functions whose signature or decorators changed (rule 3), with their
+      own measured tests;
+    - the functions and module code that use the names a module-level statement binds (rule 2), here and in the modules
+      that import or re-export them, and, for a signature change, the functions that use the changed function (rule 3).
+
+    A reached function the map lacks, or measured on another body than its body at the base, runs its file's other tests
+    ("stale"). A test file that uses the names runs itself. Tests the map does not know keep the static answer.
+    """
     per_function = py_map["files"].get(name)
     if per_function is None:
         return {"static": "not in the measured map"}
@@ -956,48 +1063,110 @@ def py_tests_for(name, py_map, root, anc, head, graph, added, known):
         base_own, head_own = py_test_map.owners(before), py_test_map.owners(after)
         base_hashes, head_hashes = py_test_map.function_hashes(before), py_test_map.function_hashes(after)
         inert = {"old": py_test_map.inert_lines(before), "new": py_test_map.inert_lines(after)}
-    except (subprocess.CalledProcessError, OSError, SyntaxError, ValueError, tokenize.TokenError):
+        base_tree, head_tree = ast.parse(before), ast.parse(after)
+    except MODULE_RULE_ERRORS:
         return {"static": "does not parse at one commit"}
     if not old and not new:
         return {"static": "no changed lines"}
-    base_defs = {qual for kind, qual in base_own if kind == "header"}
-    touched = set()
-    for lines, own, blank in ((old, base_own, inert["old"]), (new, head_own, inert["new"])):
+    touched, signatures, module_lines = set(), set(), {"base": [], "head": []}
+    for side, lines, own, blank in (("base", old, base_own, inert["old"]), ("head", new, head_own, inert["new"])):
         for line in lines:
             if line in blank:
                 continue  # a blank or comment-only line runs nothing
             kind, qual = own[line] if line < len(own) else ("module", "")
             if kind == "function":
                 touched.add(qual)
-            elif kind == "header" and qual in base_defs:
-                return {"static": "a decorator, class line or signature changed"}
-            elif kind == "header" and qual in head_hashes:
-                touched.add(qual)  # a new function: its body was never measured
-            elif kind != "header":
-                return {"static": "module code changed"}
+            elif kind == "header":
+                if qual in base_hashes and qual in head_hashes:
+                    signatures.add(qual)  # a decorator or signature of a function that stays
+                elif qual in base_hashes or qual in head_hashes:
+                    touched.add(qual)  # a function the change adds or removes
+                else:
+                    return {"static": "a class line changed"}
+            else:
+                module_lines[side].append(line)
     if not touched <= set(head_hashes):
         # A function the diff removes or renames: its importers break, and the map does not see them.
         return {"static": "a function was removed or renamed"}
-    hashes = py_map["hashes"].get(name, {})
-    stale = sorted(
-        qual
-        for qual in touched
-        if per_function.get(qual) is None or qual not in base_hashes or hashes.get(qual) != base_hashes[qual]
-    )
+    parsed, texts, digests = {name: base_tree}, {name: before}, {}
+
+    def source(rel):
+        if rel not in texts:
+            texts[rel] = git_output(root, "show", f"{anc}:{rel}")
+        return texts[rel]
+
+    def trees(rel):
+        if rel not in parsed:
+            parsed[rel] = ast.parse(source(rel))
+        return parsed[rel]
+
+    listed = py_map["tests"]
+    reach, users, via = set(touched) | signatures, set(), []
+    try:
+        if module_lines["base"] or module_lines["head"]:
+            names, why = module_change_names([(base_tree, module_lines["base"]), (head_tree, module_lines["head"])])
+            if names is None:
+                return {"static": why}
+            if names:
+                found = module_users(root, anc, name, names, trees)
+                if found is None:
+                    return {"static": "a name cannot be resolved"}
+                users |= found
+                via.append("module names")
+        for qual in sorted(signatures):
+            leaf = qual.split(".")[-1]
+            if "." in qual:
+                found = attribute_users(root, anc, leaf, trees)
+            else:
+                found = module_users(root, anc, name, {leaf}, trees)
+            if found is None:
+                return {"static": "a name cannot be resolved"}
+            if len(found) > CALLER_LIMIT:
+                return {"static": f"a signature or decorator changed and more than {CALLER_LIMIT} places use the name"}
+            users |= found
+            via.append("signature")
+    except MODULE_RULE_ERRORS:
+        return {"static": "does not parse at one commit"}
     tests, uncertain = set(), []
-    names = py_map["tests"]
+    for rel, qual in sorted(users):
+        if py_test_map.is_test(rel):
+            tests.add(rel)  # a test that uses the names runs itself: its own functions are not measured
+        elif rel == name:
+            if qual == py_test_map.MODULE:
+                tests |= {listed[i] for i in per_function.get(py_test_map.MODULE, [])}
+            else:
+                reach.add(qual)
+        else:
+            other = py_map["files"].get(rel)
+            if other is None:
+                return {"static": "a user is not in the measured map"}
+            if qual == py_test_map.MODULE:
+                tests |= {listed[i] for i in other.get(py_test_map.MODULE, [])}
+                continue
+            if rel not in digests:
+                digests[rel] = py_test_map.function_hashes(source(rel))
+            ran = _function_tests(py_map, rel, qual, digests[rel].get(qual), assume_base)
+            if ran is None:
+                uncertain.append(
+                    f"rule 6: {rel} {qual} uses names of {name} and is new or changed since the measured map: the tests "
+                    "of its file"
+                )
+                tests |= _file_tests(py_map, rel, listed)
+            else:
+                tests |= {listed[i] for i in ran}
+    stale = sorted(
+        qual for qual in reach if _function_tests(py_map, name, qual, base_hashes.get(qual), assume_base) is None
+    )
     if stale:
         # The map cannot say what the stale functions run: every function's tests in this file, module code excepted.
         uncertain.append(
             f"rule 6: {name} {', '.join(stale)} is new or changed since the measured map: the tests of its file's "
             "other functions"
         )
-        for qual, ran in per_function.items():
-            if qual != py_test_map.MODULE:
-                tests |= {names[i] for i in ran}
+        tests |= _file_tests(py_map, name, listed)
     else:
-        for qual in touched:
-            tests |= {names[i] for i in per_function[qual]}
+        for qual in sorted(reach):
+            tests |= {listed[i] for i in _function_tests(py_map, name, qual, base_hashes.get(qual), assume_base)}
     # What the map does not vouch for keeps the static answer: the tests that import the file, transitively, minus the
     # tests the map knows (new, partial, changed since the measurement, or not in it). Importers the map knows are left
     # out: they ran the file's module code, which this change does not touch. The tests that read the file's text, and
@@ -1008,10 +1177,10 @@ def py_tests_for(name, py_map, root, anc, head, graph, added, known):
         tests |= {t for t in graph.affected(sorted(readers), added) if is_test(t)}
     tests |= {t for t in graph.everything if is_test(t)}
     tests = {t for t in tests if (root / t).is_file()}
-    return {"tests": tests, "uncertain": uncertain, "stale": bool(stale)}
+    return {"tests": tests, "uncertain": uncertain, "stale": bool(stale), "via": sorted(set(via))}
 
 
-def measured_tests(py_map, root, base, head, graph, added, names, notes):
+def measured_tests(py_map, root, base, head, graph, added, names, notes, assume_base=False):
     """Rule 6: for each changed Python source file in `names`, the tests the measured map ties to its change, and the
     reason each other one keeps the static map. A map whose commit this checkout lacks is not used (static for all)."""
     try:
@@ -1030,7 +1199,7 @@ def measured_tests(py_map, root, base, head, graph, added, names, notes):
     for name in names:
         if not name.endswith(".py") or is_test(name) or Path(name).name == "conftest.py":
             continue  # test files run themselves, conftests are rule 2, and other files are not Python
-        found = py_tests_for(name, py_map, root, anc, head, graph, added, known)
+        found = py_tests_for(name, py_map, root, anc, head, graph, added, known, assume_base)
         if "static" in found:
             static[name] = found["static"]
         else:
@@ -1056,6 +1225,7 @@ def selection(
     py_map=None,
     head="HEAD",
     map_note="",
+    assume_base=False,
 ):
     """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
@@ -1074,10 +1244,14 @@ def selection(
        browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
     6. A changed Python file the measured map (py_test_map.py) covers runs the tests that executed the functions its
-       diff touches, instead of every test that imports it. A diff that touches module code, a decorator or a signature
-       keeps the static answer for that file; a function the map lacks, or whose body changed since the measurement,
-       runs its file's other tests. Tests the map does not know (new, partial, or changed since it) keep the static
-       answer. `py_map` is the loaded map (None: static), `head` the commit under test.
+       change reaches, instead of every test that imports it: the functions whose bodies changed; a function whose
+       signature or decorators changed, and the functions that use it (at most CALLER_LIMIT); the functions and module
+       code that use the names a module-level statement binds, here and through the modules that import or re-export
+       them. A class line or body, module code that runs at import, a removed or renamed function, or a name that cannot
+       be resolved keeps the static answer for that file. A function the map lacks, or measured on another body than
+       its body at the base, runs its file's other tests. Tests the map does not know (new, partial, or changed since
+       it) keep the static answer. `py_map` is the loaded map (None: static), `head` the commit under test, and
+       `assume_base` takes the map as measured at the base (replays only: the upper bound).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cjs).
@@ -1198,7 +1372,7 @@ def selection(
     rule6 = {"narrowed": [], "stale": [], "static": {}}
     if py_map is not None and base is not None:
         everyone = set(changed) if added is None else set(added)  # None: any changed file may be new
-        narrowed, static = measured_tests(py_map, root, base, head, graph, everyone, sorted(seeds), notes)
+        narrowed, static = measured_tests(py_map, root, base, head, graph, everyone, sorted(seeds), notes, assume_base)
         for name, found in narrowed.items():
             seeds.discard(name)
             python |= found["tests"]

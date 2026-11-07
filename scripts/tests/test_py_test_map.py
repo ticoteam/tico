@@ -1,5 +1,6 @@
 """The measured Python test map: function scopes, drift hashes, the shard plan, the build's refusals, and staleness."""
 
+import ast
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -223,3 +224,44 @@ def test_coverage_lines_refuses_a_line_under_another_test_context(tmp_path, monk
 def test_inert_lines_are_blank_or_comment_lines_outside_strings():
     source = 'x = """\n\n# not a comment\n"""\n\n# a comment\ny = 1\n'
     assert pm.inert_lines(source) == {5, 6}
+
+
+def test_bindings_names_what_a_module_statement_binds_and_whether_it_runs():
+    def of(text):
+        return pm.bindings(ast.parse(text).body[0])
+
+    assert of("LIMIT = 3") == ({"LIMIT"}, False)
+    assert of("a, (b, *c) = f()") == ({"a", "b", "c"}, False)
+    assert of("cfg['k'] = 1") == ({"cfg"}, False)
+    assert of("import os.path") == ({"os"}, False)
+    assert of("from a.b import c as d") == ({"d"}, False)
+    assert of("__all__ = ['f', 'g']") == ({"__all__", "f", "g"}, False)
+    assert of('"""docstring"""') == (set(), False)
+    assert of("print('x')") == (set(), True)
+    assert of("if X:\n    pass") == (set(), True)
+    assert of("from os import *") == (None, True)
+
+
+def test_uses_finds_functions_module_code_attributes_and_strings_and_refuses_dynamic_lookups():
+    tree = ast.parse(
+        "import backend.hub as h\nX = LIMIT\n\ndef f():\n    return LIMIT\n\ndef g():\n    return h.LIMIT\n\n"
+        "def k():\n    return 1\n"
+    )
+    assert pm.uses(tree, {"LIMIT"}, {"LIMIT": "LIMIT"}, modules={"h"}, same_file=True) == ({"f", "g"}, True, False)
+
+    strings = ast.parse("def f():\n    return 'backend.hub.LIMIT'\n")
+    assert pm.uses(strings, {"LIMIT"}, {}, dotted="backend.hub") == ({"f"}, False, False)
+    assert pm.uses(strings, {"OTHER"}, {}, dotted="backend.hub") == (set(), False, False)
+
+    dynamic = ast.parse("def f():\n    return globals()['LIMIT']\n")
+    assert pm.uses(dynamic, {"LIMIT"}, {"LIMIT": "LIMIT"}, same_file=True)[2] is True
+    assert pm.uses(ast.parse("def f():\n    return getattr(h, 'LIMIT')\n"), {"LIMIT"}, {}, modules={"h"})[2] is True
+
+
+def test_links_reads_how_an_importer_reaches_a_module_and_what_it_re_exports():
+    tree = ast.parse("from backend.hub import LIMIT as L\nfrom backend import hub\n")
+    assert pm.links(tree, "backend/reader.py", "backend.hub", {"LIMIT"}) == ({"hub"}, {"L": "LIMIT"}, {"L"})
+    relative = ast.parse("from . import hub\n")
+    assert pm.links(relative, "backend/x.py", "backend.hub", {"LIMIT"}) == ({"hub"}, {}, set())
+    plain = ast.parse("import backend.hub\n")
+    assert pm.links(plain, "backend/x.py", "backend.hub", {"LIMIT"})[0] == {"backend.hub"}

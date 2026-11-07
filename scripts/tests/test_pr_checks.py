@@ -1243,22 +1243,28 @@ def test_a_function_body_change_runs_only_the_tests_that_ran_that_function(tmp_p
     assert "rule 6" in plan["reason"]
 
 
-def test_a_module_level_change_keeps_the_static_answer_for_its_file(tmp_path):
+def test_a_module_level_change_runs_the_functions_that_read_the_name(tmp_path):
     git, base, py_map = measured_hub(tmp_path)
     source(tmp_path, "backend/hub.py", HUB.replace("LIMIT = 3", "LIMIT = 4"))
     head = git_commit(git)
-    assert select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])["python"] == sorted(MEASURED)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_top.py"]
+    assert plan["rule6"]["static"] == {}
 
 
-def test_a_removed_function_or_a_changed_signature_keeps_the_static_answer(tmp_path):
+def test_a_removed_function_keeps_the_static_answer(tmp_path):
     git, base, py_map = measured_hub(tmp_path)
     source(tmp_path, "backend/hub.py", HUB.split("\n\ndef other")[0] + "\n")
     removed = git_commit(git, "remove other")
     assert select_measured(tmp_path, base, removed, py_map, ["backend/hub.py"])["python"] == sorted(MEASURED)
 
+
+def test_a_changed_signature_runs_the_function_and_the_tests_that_call_it(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
     source(tmp_path, "backend/hub.py", HUB.replace("def top(x):", "def top(x, y=0):"))
     signature = git_commit(git, "signature")
-    assert select_measured(tmp_path, base, signature, py_map, ["backend/hub.py"])["python"] == sorted(MEASURED)
+    plan = select_measured(tmp_path, base, signature, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_top.py"]
 
 
 def test_a_new_function_runs_the_tests_of_its_file_and_blank_lines_run_nothing(tmp_path):
@@ -1305,3 +1311,94 @@ def test_a_changed_test_file_runs_itself(tmp_path):
     assert select_measured(tmp_path, base, head, py_map, ["backend/tests/test_import.py"])["python"] == [
         "backend/tests/test_import.py"
     ]
+
+
+READER = "from backend.reexport import LIMIT\n\ndef read():\n    return LIMIT\n"
+CALLER = "from backend.hub import top\n\ndef call():\n    return top(1)\n"
+
+
+def measured_modules(tmp_path):
+    """measured_hub plus a re-export of LIMIT, a reader of the re-export (measured by test_read), and a caller of top
+    (measured by test_call). The map measured every one of them at the base."""
+    git, _base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/reexport.py", "from backend.hub import LIMIT\n")
+    source(tmp_path, "backend/reader.py", READER)
+    source(tmp_path, "backend/caller.py", CALLER)
+    source(tmp_path, "backend/tests/test_read.py", "from backend.reader import read\n\ndef test_read():\n    read()\n")
+    source(tmp_path, "backend/tests/test_call.py", "from backend.caller import call\n\ndef test_call():\n    call()\n")
+    base = git_commit(git, "modules")
+    py_map = {
+        **py_map,
+        "sha": base,
+        "tests": [*MEASURED, "backend/tests/test_read.py", "backend/tests/test_call.py"],
+        "files": {
+            **py_map["files"],
+            "backend/reader.py": {"read": [4]},
+            "backend/caller.py": {"call": [5]},
+        },
+        "hashes": {
+            **py_map["hashes"],
+            "backend/reader.py": pm.function_hashes(READER),
+            "backend/caller.py": pm.function_hashes(CALLER),
+        },
+    }
+    return git, base, py_map
+
+
+def test_an_import_only_change_runs_nothing_when_no_function_uses_the_import(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", "import os\n" + HUB)
+    head = git_commit(git)
+    assert select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])["python"] == []
+
+
+@pytest.mark.parametrize(
+    "edit, reason",
+    [
+        (HUB + "\nprint('loaded')\n", "module code runs at import"),
+        ("from os import *\n" + HUB, "a name cannot be resolved"),
+        (HUB + "\n\nclass Box:\n    size = 1\n", "a class line changed"),
+    ],
+)
+def test_module_code_that_runs_or_cannot_be_resolved_keeps_the_static_answer(tmp_path, edit, reason):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", edit)
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == sorted(MEASURED)
+    assert any(reason in why for why in plan["rule6"]["static"].values())
+
+
+def test_a_name_read_through_a_reexport_runs_the_functions_that_read_it(tmp_path):
+    git, base, py_map = measured_modules(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.replace("LIMIT = 3", "LIMIT = 4"))
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_read.py", "backend/tests/test_top.py"]
+
+
+def test_a_changed_signature_runs_the_functions_that_call_it_in_other_files(tmp_path):
+    git, base, py_map = measured_modules(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.replace("def top(x):", "def top(x, y=0):"))
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_call.py", "backend/tests/test_top.py"]
+
+
+def test_a_decorator_change_runs_the_callers_like_a_signature_change(tmp_path):
+    git, base, py_map = measured_modules(tmp_path)
+    decorated = HUB.replace("def top(x):", "import functools\n\n\n@functools.cache\ndef top(x):")
+    source(tmp_path, "backend/hub.py", decorated)
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_call.py", "backend/tests/test_top.py"]
+
+
+def test_a_signature_that_too_many_places_use_keeps_the_static_answer(tmp_path, monkeypatch):
+    monkeypatch.setattr(checks, "CALLER_LIMIT", 1)
+    git, base, py_map = measured_modules(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.replace("def top(x):", "def top(x, y=0):"))
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == sorted([*MEASURED, "backend/tests/test_call.py", "backend/tests/test_read.py"])
+    assert any("more than 1 places" in why for why in plan["rule6"]["static"].values())

@@ -44,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAP_ENV = "TICO_PY_TEST_MAP"
 VERSION = 1
 MODULE = "<module>"
+HARNESS = "scripts/py_test_map.py"
 # A map measured longer ago than this is not used: the selector runs the static map instead.
 MAX_AGE = timedelta(days=3)
 FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -179,6 +180,198 @@ def function_hashes(source):
     return {qual: "|".join(sorted(values)) for qual, values in digests.items()}
 
 
+class Unresolved(Exception):
+    """A binding the static rules cannot name: a star import, or a target that is not a name or an attribute of one."""
+
+
+DYNAMIC_GLOBALS = ("globals", "locals")
+DYNAMIC_MODULE = ("getattr", "setattr", "hasattr", "delattr", "vars", "dir")
+
+
+def top_statements(tree, lines):
+    """The top-level statements of `tree` that hold any of `lines` (1-based), and the lines none of them holds."""
+    holding, uncovered = {}, []
+    for line in lines:
+        found = [stmt for stmt in tree.body if stmt.lineno <= line <= stmt.end_lineno]
+        if not found:
+            uncovered.append(line)
+        for stmt in found:
+            holding[id(stmt)] = stmt
+    return list(holding.values()), uncovered
+
+
+def _targets(target):
+    """The names a binding target binds or changes: a name, the names in a tuple or list, the root of an attribute or
+    subscript (`cfg["k"] = 1` changes cfg)."""
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return set().union(*(_targets(element) for element in target.elts))
+    if isinstance(target, ast.Starred):
+        return _targets(target.value)
+    if isinstance(target, (ast.Attribute, ast.Subscript)):
+        root = target
+        while isinstance(root, (ast.Attribute, ast.Subscript)):
+            root = root.value
+        if isinstance(root, ast.Name):
+            return {root.id}
+    raise Unresolved(type(target).__name__)
+
+
+def bindings(stmt):
+    """(names, runs) for a module-level statement: the names it binds or unbinds, and whether it runs code of its own.
+
+    `names` is None when they cannot be resolved (a star import, an unusual target). `runs` is True for a call or any
+    other expression, a def with decorators, a class (its body runs), a compound statement (if, try, with, for, while,
+    match), an assert or a raise. An assignment whose value calls a function does not run by this rule: its value is
+    what the names it binds hold.
+    """
+    names, runs = set(), False
+    try:
+        if isinstance(stmt, ast.Import):
+            names = {alias.asname or alias.name.split(".")[0] for alias in stmt.names}
+        elif isinstance(stmt, ast.ImportFrom):
+            if any(alias.name == "*" for alias in stmt.names):
+                raise Unresolved("star import")
+            names = {alias.asname or alias.name for alias in stmt.names}
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                names |= _targets(target)
+        elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):
+            names |= _targets(stmt.target)
+        elif isinstance(stmt, ast.Delete):
+            for target in stmt.targets:
+                names |= _targets(target)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names, runs = {stmt.name}, bool(stmt.decorator_list)
+        elif isinstance(stmt, ast.Expr):
+            runs = not isinstance(stmt.value, ast.Constant)
+        elif not isinstance(stmt, (ast.Pass, ast.Global, ast.Nonlocal)):
+            runs = True
+    except Unresolved:
+        return None, True
+    if "__all__" in names:  # the names a module exports are the strings in its __all__ value
+        names |= {
+            node.value for node in ast.walk(stmt) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+    names |= {node.target.id for node in ast.walk(stmt) if isinstance(node, ast.NamedExpr)}
+    return names, runs
+
+
+def module_name(path):
+    """The dotted module a repository path imports as; a package's __init__.py is the package itself."""
+    name = path[: -len(".py")].replace("/", ".")
+    return name[: -len(".__init__")] if name.endswith(".__init__") else name
+
+
+def _dotted(node):
+    """The dotted text of a name or attribute chain (`a.b.c`), or None."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *reversed(parts)])
+
+
+def import_source(importer, node):
+    """The dotted module an ImportFrom reads, with its relative dots resolved against the importer's package."""
+    if not node.level:
+        return node.module or ""
+    package = module_name(importer).split(".")
+    if not importer.endswith("__init__.py"):
+        package = package[:-1]
+    package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])])
+
+
+def links(tree, importer, target, wanted):
+    """How `importer` reaches the module `target` (dotted): the names its code can use for the module, the names of
+    `wanted` it imports (local alias -> imported name), and the names it re-exports at module level."""
+    modules, local = set(), {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname is None and (alias.name == target or alias.name.startswith(target + ".")):
+                    modules.add(target)  # `import pkg.mod` binds pkg, and pkg.mod is then reachable as dotted text
+                elif alias.asname and alias.name == target:
+                    modules.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom):
+            source = import_source(importer, node)
+            for alias in node.names:
+                if source == target:
+                    if alias.name == "*":
+                        local.update({name: name for name in wanted})
+                    elif alias.name in wanted:
+                        local[alias.asname or alias.name] = alias.name
+                elif f"{source}.{alias.name}" == target:
+                    modules.add(alias.asname or alias.name)
+    reexports = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ImportFrom) and import_source(importer, stmt) == target:
+            for alias in stmt.names:
+                if alias.name == "*":
+                    reexports |= set(wanted)
+                elif alias.name in wanted:
+                    reexports.add(alias.asname or alias.name)
+    return modules, local, reexports
+
+
+def _module_nodes(stmt):
+    """The nodes a module-level statement evaluates when it runs: all of it, except a def's body (its decorators,
+    defaults and return annotation run with the statement)."""
+    stack = [stmt]
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(node.decorator_list)
+            stack.extend(node.args.defaults)
+            stack.extend(default for default in node.args.kw_defaults if default is not None)
+            if node.returns is not None:
+                stack.append(node.returns)
+        else:
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def uses(tree, names, local, modules=(), dotted=None, attr_any=False, same_file=False):
+    """Where `tree` uses one of `names`, a set of module-level names: (the functions that do, by qualname; whether module
+    code does; whether a use cannot be resolved).
+
+    A load of a name in `local` (local alias -> imported name) is a use, and so is `m.NAME` when `m` is one of
+    `modules` (dotted text), or any `x.NAME` with attr_any. A string `dotted + ".NAME..."` names NAME (a monkeypatch
+    target). Unresolved: the module's own dotted name as a string, a dynamic lookup into the module (globals() in the
+    module's own file, getattr(m, ...) on one of its modules).
+    """
+    unresolved = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if same_file and node.func.id in DYNAMIC_GLOBALS:
+                unresolved = True
+            if modules and node.func.id in DYNAMIC_MODULE and node.args and _dotted(node.args[0]) in modules:
+                unresolved = True
+        if dotted and isinstance(node, ast.Constant) and node.value == dotted:
+            unresolved = True
+
+    def use(node):
+        if isinstance(node, ast.Name):
+            return isinstance(node.ctx, ast.Load) and node.id in local
+        if isinstance(node, ast.Attribute):
+            return node.attr in names and (attr_any or _dotted(node.value) in modules)
+        if dotted and isinstance(node, ast.Constant) and isinstance(node.value, str):
+            prefix = dotted + "."
+            return node.value.startswith(prefix) and node.value[len(prefix) :].split(".")[0] in names
+        return False
+
+    quals = set()
+    for kind, qual, *_rest, node in _scopes(tree):
+        if kind == "function" and any(use(child) for child in ast.walk(node)):
+            quals.add(qual)
+    module_level = any(use(child) for stmt in tree.body for child in _module_nodes(stmt))
+    return quals, module_level, unresolved
+
+
 def check_map(data):
     """Raise MapError unless `data` is a map this version of the selector reads."""
     if not isinstance(data, dict) or set(data) != KEYS:
@@ -273,6 +466,8 @@ def coverage_lines(data_dir, test):
                     raise MapError(f"{test}: line {line} of {name} ran under context {sorted(stray)}")
             rel = _relative(name)
             if rel is None or not rel.endswith(".py") or is_test(rel) or rel.endswith("conftest.py"):
+                continue
+            if rel == HARNESS:  # the driver that runs the test runs in this process: its lines are not the test's code
                 continue
             lines[rel].update(contexts.keys())
     return lines
