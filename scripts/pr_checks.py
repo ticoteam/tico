@@ -15,6 +15,9 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ui_test_map  # beside this module; stdlib only
+
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
     "ui/app/chat.js": ["chat", "imported-history"],
@@ -937,7 +940,24 @@ def script_changes(base, head, changed, root=ROOT):
     return sorted(found)
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
+def measured_ui(names, root=ROOT, map_path=None):
+    """The UI files among `names` that the measured UI test map lists, as {file: (browser scripts, shared)}, and a message
+    when the map is there but does not validate. No map (or an unlisted file) gives no entry: that file keeps the selector's
+    rule for files it does not know, so a missing map never selects nothing."""
+    try:
+        data = ui_test_map.load_map(root, map_path)
+    except ui_test_map.MapError as error:
+        return {}, f"the UI test map does not validate, so UI files keep today's rule: {error}"
+    found = {}
+    for name in names:
+        if name.startswith("ui/") and not is_browser(name):
+            entry = ui_test_map.lookup(data, name)
+            if entry is not None:
+                found[name] = entry
+    return found, None
+
+
+def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None, map_path=None):
     """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
     from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
@@ -953,11 +973,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
        it directly or run a module that lists its folder (a test that globs ui/*.js is reached through the module it
        runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
-       a missing one runs the smoke set's browser scripts instead.
+       a missing one runs the smoke set's browser scripts instead. A UI file the measured UI test map lists runs its own
+       measured scripts (ui_test_map) and the browser scripts that link to it, not the smoke set; a shared one also runs
+       the core scripts. A UI file with no entry keeps the rule above (the smoke set).
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
 
-    `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
-    scripts/ui-tests.cjs).
+    `added` names the new files (None: any changed file may be new), `core` the core browser scripts (None: read from
+    scripts/ui-tests.cjs) and `map_path` the UI test map (None: TICO_UI_TEST_MAP).
     """
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
@@ -1054,15 +1076,25 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             uncertain.append(f"rule 3: unknown {name}: smoke set")
     if unknown:
         notes.append("rule 3: unknown files")
+    measured, problem = measured_ui(live, root, map_path)
+    if problem:
+        uncertain.append(f"rule 4: {problem}")
+    if measured:
+        notes.append("rule 4: measured UI test map")
+    uses_core = False  # a shared UI file also runs the core scripts
     unmapped = [n for n in live if n not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
     seeds -= set(unmapped)
-    for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
+    for name in live:  # rule 4: a UI_MAP file runs its mapped scripts, and a file the measured map lists its own
         if name in UI_MAP:
             missing = [s for s in UI_MAP[name] if not (root / "ui/tests" / f"{s}.cjs").is_file()]
             browser |= set(UI_MAP[name]) - set(missing)
             if missing:
                 smoke_browser = True
                 uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
+        if name in measured:
+            scripts_of, shared = measured[name]
+            browser |= set(scripts_of)
+            uses_core |= shared
     for name in unmapped:  # rule 4: a UI file the map does not list
         linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
         browser |= {Path(p).stem for p in linked if is_browser(p)}
@@ -1071,9 +1103,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         python |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
         if is_browser(name):  # a changed browser script runs itself: it is the check that changed
             browser.add(Path(name).stem)
-        smoke_browser = True
-        uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
-        notes.append("rule 4: ui outside UI_MAP")
+        if name not in measured:
+            smoke_browser = True
+            uncertain.append(
+                f"rule 4: {name} is not in UI_MAP or the measured map: the scripts that name it, its readers and the smoke set"
+            )
+            notes.append("rule 4: ui outside UI_MAP")
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1098,6 +1133,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         except (OSError, subprocess.CalledProcessError, RuntimeError):
             core = scripts
     browser |= scripts & set(core)
+    if uses_core:
+        browser |= set(core)
     if smoke_python or smoke_browser:
         smoke_tests, smoke_scripts = smoke(root)
         if smoke_python:

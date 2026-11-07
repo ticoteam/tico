@@ -70,9 +70,10 @@ walks its routes (no server), and counts the calls that match no route per file 
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
 `python3 scripts/check_ui_routes.py --write`.
 Which browser scripts run each UI file is data, not code: `.github/workflows/ui-test-map.yml` measures it weekly and publishes
-it as the only file on the `ci/ui-test-map` branch (`ui-test-map.json`). Never edit it by hand. The plan job fetches it;
-a file it does not list, CSS included, runs the core scripts (`node scripts/ui-tests.cjs --list`), and so does a shared
-one. A deleted file or script is dropped when the map loads, so nothing needs pruning. `python3 scripts/ui_test_map.py
+it as the only file on the `ci/ui-test-map` branch (`ui-test-map.json`). Never edit it by hand. The plan job fetches it. A
+UI file it lists runs its own scripts; a shared one also runs the core scripts. A file it does not list (CSS, a new file,
+or no map at all) keeps the selector's rule for files it does not know. A file is keyed without `.js` or `.ts`, so a
+conversion keeps its entry, and a deleted file or script is dropped when the map loads. `python3 scripts/ui_test_map.py
 check --map PATH` validates a published map's schema.
 
 ## Profiling API test setup

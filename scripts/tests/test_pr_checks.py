@@ -1427,3 +1427,63 @@ def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder
     assert "backend/tests/test_icon_font.py" in plan["python"]
     assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
+
+
+def measured_tree(root, shared=False, broken=False):
+    """A temporary tree whose UI test map lists ui/app/extra (the map's key, with no extension) for one browser script."""
+    smoke_tree(root)
+    source(root, "ui/app/extra.js", "export {};\n")
+    source(root, "ui/tests/measured.cjs", "// a browser script\n")
+    data = {
+        "version": checks.ui_test_map.VERSION,
+        "source": {"main": "a" * 40, "run": "https://example.invalid/actions/runs/1"},
+        "scripts": 1,
+        "shared_share": 0.9,
+        "shared": ["ui/app/extra"] if shared else [],
+        "files": {"ui/app/extra": ["measured"]},
+        "unexercised": [],
+        "partial": [],
+    }
+    if broken:
+        data["version"] = 1
+    path = root / "published-map.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_a_ui_file_the_measured_map_lists_runs_its_scripts_and_not_the_smoke_set(tmp_path):
+    map_path = measured_tree(tmp_path)
+    plan = checks.selection(["ui/app/extra.js"], root=tmp_path, core=["core-one"], map_path=map_path)
+    assert plan["browser"] == ["measured"], plan["browser"]
+    assert not any("is not in UI_MAP" in line for line in plan["uncertain"]), plan["uncertain"]
+
+
+def test_a_shared_ui_file_runs_the_core_scripts_and_its_own(tmp_path):
+    map_path = measured_tree(tmp_path, shared=True)
+    plan = checks.selection(["ui/app/extra.js"], root=tmp_path, core=["core-one"], map_path=map_path)
+    assert plan["browser"] == ["core-one", "measured"], plan["browser"]
+
+
+def test_a_ui_file_with_no_entry_keeps_the_smoke_browser_set_when_the_map_is_missing_or_broken(tmp_path):
+    measured_tree(tmp_path)
+    smoke_scripts = checks.smoke(tmp_path)[1]
+    missing = checks.selection(["ui/app/extra.js"], root=tmp_path, core=["core-one"], map_path=tmp_path / "none.json")
+    assert set(smoke_scripts) <= set(missing["browser"]) and "measured" not in missing["browser"], missing["browser"]
+    broken = checks.selection(
+        ["ui/app/extra.js"], root=tmp_path, core=["core-one"], map_path=measured_tree(tmp_path, broken=True)
+    )
+    assert set(smoke_scripts) <= set(broken["browser"]) and "--all" not in broken["browser"]
+    assert any("does not validate" in line for line in broken["uncertain"]), broken["uncertain"]
+
+
+def test_a_renamed_typescript_file_finds_the_entry_its_javascript_had(tmp_path):
+    map_path = measured_tree(tmp_path)
+    (tmp_path / "ui/app/extra.js").rename(tmp_path / "ui/app/extra.ts")
+    plan = checks.selection(["ui/app/extra.ts"], root=tmp_path, core=["core-one"], map_path=map_path)
+    assert plan["browser"] == ["measured"], plan["browser"]
+
+
+def test_a_changed_browser_script_runs_itself_even_when_its_file_is_measured(tmp_path):
+    map_path = measured_tree(tmp_path, shared=True)
+    plan = checks.selection(["ui/tests/measured.cjs"], root=tmp_path, core=[], map_path=map_path)
+    assert "measured" in plan["browser"]

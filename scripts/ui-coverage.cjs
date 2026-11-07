@@ -4,9 +4,11 @@
 // NODE_OPTIONS (.github/workflows/ui-test-map.yml); a normal run never loads it.
 //
 // Each script writes <folder>/<name>.json:
-//   {"script": "chat", "pages": 3, "loads": 4, "files": {"ui/app/chat.js": {"120-398": 31, "402-611": 2}}}
-// "files" maps each UI file to the functions that ran, by their source range ("start-end"), with how many times each ran
-// across all of the script's pages. The top-level code of a file runs at every load and is left out. "loads" counts the
+//   {"script": "chat", "pages": 3, "loads": 4, "files": {"ui/app/chat": {"120-398": 31, "402-611": 2}}}
+// "files" maps each UI file to the functions that ran, by their source range ("start-end", offsets in the script the page
+// loaded), with how many times each ran across all of the script's pages. A UI file is keyed by its path without .js or
+// .ts: the page loads ui/app/chat.ts as /tico/ui/app/chat.ts (served compiled), and a file converted from .js keeps its
+// key, so a rename does not stale the map. The top-level code of a file runs at every load and is left out. "loads" counts the
 // page loads (the load event) of those pages: the boot baseline loads the app once, so counts are compared per load.
 // Chromium's precise coverage is read from each page every FLUSH_MS, after each navigation, and before a page, context or
 // browser closes, so a script that fails or is stopped still leaves what it ran.
@@ -21,7 +23,7 @@ const SERVED = /^\/tico\/ui\/((?!app\.bundle)[^?#]+\.(?:js|ts))$/;
 // The files this hook measures when it is preloaded: a browser script, or the boot baseline.
 const MEASURED = /[\\/](?:ui[\\/]tests[\\/][^\\/]+\.cjs|scripts[\\/]ui-boot-baseline\.cjs)$/;
 
-// Adds one reading (the scripts of Profiler.takePreciseCoverage) to files: a Map from "ui/app/chat.js" to a Map from each
+// Adds one reading (the scripts of Profiler.takePreciseCoverage) to files: a Map from "ui/app/chat" to a Map from each
 // function's key to the calls it has had. A key is the function's source range, the same in every page of the file.
 function fold(files, scripts) {
   for (const entry of scripts) {
@@ -33,7 +35,7 @@ function fold(files, scripts) {
     // The top-level code is the function whose range covers the whole script.
     let end = 0;
     for (const fn of functions) for (const range of fn.ranges || []) end = Math.max(end, range.endOffset);
-    const file = `ui/${match[1]}`;
+    const file = `ui/${match[1].replace(/\.(?:js|ts)$/, '')}`;
     for (const fn of functions) {
       const first = (fn.ranges || [])[0];
       if (!first || !(first.count > 0) || (first.startOffset === 0 && first.endOffset === end)) continue;
