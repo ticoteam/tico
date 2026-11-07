@@ -1,7 +1,7 @@
 """Ratchet for scripts/check_types.sh: the basedpyright baseline and the legacy module list only shrink, and every backend
 module added since the legacy list was written is strict.
 
-basedpyright itself fails on new errors, and (run with --baselinemode=lock) on baseline entries that no longer fire.
+basedpyright itself fails on new errors; check_types.sh only warns on baseline entries that no longer fire (flaky inference).
 This script adds what it does not do:
 
     python3 scripts/check_pyright_ratchet.py            fail on a stale legacy entry, and on a module that is neither
