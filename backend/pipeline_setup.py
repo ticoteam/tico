@@ -161,8 +161,6 @@ PRESETS: dict[str, dict[str, Any]] = {
         ],
         "links": [
             {"from": "Product", "stage": "Review", "to": "Engineering", "mode": "spawn"},
-            {"from": "Marketing", "stage": "Qualified", "to": "Sales", "mode": "move"},
-            {"from": "Sales", "stage": "Won", "to": "Success", "mode": "move"},
         ],
     }
 }

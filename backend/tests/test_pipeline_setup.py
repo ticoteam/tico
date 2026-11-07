@@ -41,8 +41,13 @@ def test_setup_makes_the_factories_pipelines_links_and_goals(tmp_path):
         s["name"]
         for s in rows(c, "SELECT name FROM task_steps WHERE type_id=? ORDER BY position", by_name["Sales"]["id"])
     ] == ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost"]
-    won = step_id(c, by_name["Sales"]["id"], "Won")
-    assert L.link_for_stage(c, won)["to_pipeline_id"] == by_name["Success"]["id"]
+    # Leads and customers live in the CRM, so no revenue link crosses Marketing, Sales and Success (only Product spawns).
+    crossed = rows(
+        c,
+        "SELECT f.name AS f, t.name AS t FROM pipeline_links l JOIN task_types f ON f.id = l.from_pipeline_id "
+        "JOIN task_types t ON t.id = l.to_pipeline_id WHERE l.retired_at IS NULL",
+    )
+    assert [(r["f"], r["t"]) for r in crossed] == [("Product", "Engineering")]
     assert all(by_name[n]["manager"] is None for n in out["pipelines"] if n not in ("Product", "Engineering"))
 
 
@@ -108,8 +113,7 @@ def test_replace_clears_open_cards_only_when_asked(tmp_path):
 
 def test_replace_on_a_booted_hub_makes_every_declared_link_and_a_second_run_changes_nothing(tmp_path):
     c = fresh(tmp_path)
-    # The booted Marketing type has no Qualified stage, so the preset's Qualified -> Sales link is named, not made.
-    assert S.apply_factory_setup(c, ANA)["unresolved"] == ["Marketing Qualified to Sales"]
+    assert S.apply_factory_setup(c, ANA)["unresolved"] == []
     out = S.apply_factory_setup(c, ANA, replace=True)
     assert out["unresolved"] == []
     ids = {r["name"]: r["id"] for r in rows(c, "SELECT id, name FROM task_types")}
@@ -156,7 +160,7 @@ def test_the_setup_and_requirements_routes(tmp_path):
         assert "Sales" in done.json()["pipelines"]
         assert post("ana-test", "/api/v2/pipelines/setup").json()["changes"] == []
         links = client.get("/api/v2/pipeline-links", headers={"Authorization": "Bearer ana-test"}).json()["links"]
-        assert len(links) == 2
+        assert len(links) == 1  # the Product to Engineering spawn only
         retired = post("ana-test", f"/api/v2/pipeline-links/{links[0]['id']}/retire")
         assert retired.status_code == 200, retired.text
         with app.state.store.transaction() as c:
