@@ -454,14 +454,22 @@ def _field_state(task: Row, requirement: Row, facts: _Facts) -> str:
     return "met" if have else "none"
 
 
+def verdict_binds_attachment(decision: Row, attachment: Row | None) -> bool:
+    """The one verdict-binding rule, shared by the engine and the review reader: a verdict on one attachment (an approval or
+    a judge's) stands only while that attachment is the one still attached. An override names no attachment, so it stands
+    on the work version alone (its freshness is checked by the caller, as for any met)."""
+    if decision.get("verdict") == "override" or not decision.get("requirement_attachment_id"):
+        return True
+    return attachment is not None and str(attachment["id"]) == str(decision["requirement_attachment_id"])
+
+
 def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts) -> Standing:
     task = facts.tasks.get(task_id) or {"id": task_id, "work_revision": 0}
     revision = int(task.get("work_revision") or 0)
     key = (task_id, str(requirement["id"]))
     decision, attachment = facts.decisions.get(key), facts.attachments.get(key)
-    if decision is not None and decision.get("requirement_attachment_id"):
-        if attachment is None or attachment["id"] != decision["requirement_attachment_id"]:
-            decision = None  # the evidence it judged was replaced or taken away
+    if decision is not None and not verdict_binds_attachment(decision, attachment):
+        decision = None  # the evidence it judged was replaced or taken away
     if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
         decision = None  # no override stands in for a named person's approval (D10, D34)
     if decision is not None:

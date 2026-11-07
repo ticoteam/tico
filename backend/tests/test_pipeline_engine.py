@@ -487,3 +487,32 @@ def test_a_bot_reviewed_field_or_run_is_read_as_the_rule_so_no_card_waits_for_no
     c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
     assert states(c, task) == {"Due date": "met", "Checks": "none"}
     assert refused(lambda: H.task_update(c, ANA, task, step="Review")).rule == "requirement"
+
+
+def test_a_mark_met_survives_its_attachment_being_removed_and_still_goes_out_of_date_with_the_work(tmp_path):
+    from backend import pipeline_review as RV
+
+    c, board = pipeline(tmp_path)
+    req = requirement(c, board, "Drafting", "Mockup", kind="attachment")
+    task = card(c, board)["id"]
+    insert(
+        c,
+        "requirement_attachments",
+        id="att1",
+        task_id=task,
+        stage_requirement_id=req,
+        source="link",
+        url="u",
+        digest="d",
+        work_version=E.work_version(c, task),
+        created_at=T0,
+    )
+    RV.mark_met(c, ANA, task, req, "Lead has the mockup")
+    assert states(c, task) == {"Mockup": "met"}
+    c.execute("UPDATE requirement_attachments SET removed_at=? WHERE id='att1'", (T0,))
+    assert states(c, task) == {"Mockup": "met"}
+    with pytest.raises(RV.Declined) as again:
+        RV.mark_met(c, ANA, task, req, "Still met")
+    assert again.value.code == "already_met"
+    E.work_changed(c, task)
+    assert states(c, task) == {"Mockup": "out_of_date"}
