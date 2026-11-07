@@ -57,9 +57,11 @@ function rdoMoveTargets(from) {
 // The top person's own group is the top of the chart, not an outline: whoever is in it hangs from them. `leadOf` gives a
 // group's lead (Rules › Internal reads the groups itself).
 function rdoTree(leadOf = id => rdoGroup(id)?.lead || '') {
+  /** @type {Record<string, any[]>} */
   const by = {};
   for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
   orgChartShape(by, rdoKey, leadOf);
+  orgSetupLift(by, ORG_FAC_BOTS);   // the Factories section draws these bots (org-factories.ts); their reports stay here
   by[''] = by[''] || [];
   return by;
 }
@@ -250,7 +252,9 @@ async function pageRdOrg() {
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
   rdoDraw();
-  orgFactoriesMount($('#org-fac-host'));   // the locked Factories section below the chart (ui/app/org-factories.ts)
+  // The locked Factories section below the chart (ui/app/org-factories.ts). Its bots leave the people chart, so the chart
+  // is drawn again once they are known.
+  orgFactoriesMount($('#org-fac-host')).then(changed => { if (changed && seq === RDO_SEQ && $('#rdo-cv')) rdoDraw(); });
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
