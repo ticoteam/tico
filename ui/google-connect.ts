@@ -8,6 +8,71 @@
    server; the computer that syncs mail keeps the grant. No token, key or client secret stays in the browser once it
    is sent, and nothing here messages anyone. */
 'use strict';
+
+// A key row of GET /v2/google (workspace or pending), as backend/google_workspace.py's _view sends it.
+interface GoogleKeyRow {
+  status: string;
+  domain?: string | null;
+  project_id?: string | null;
+  client_id?: string | null;
+  scopes?: string[];
+  delegation_url?: string | null;
+  connected_at?: string | null;
+  checked_at?: string | null;
+  last_error?: string | null;
+  generation?: number;
+  narrowable?: boolean;
+}
+interface GoogleConnectOAuth { configured?: boolean; source?: string | null; redirect_uri?: string; client_id?: string | null }
+// GET /v2/google. Every field is optional, so a caller's `{}` stands for a view not read yet.
+interface GoogleConnectView {
+  can_admin?: boolean;
+  workspace?: GoogleKeyRow | null;
+  pending?: GoogleKeyRow | null;
+  oauth?: GoogleConnectOAuth;
+  me?: {mailbox?: string; covered_by_workspace?: boolean} | null;
+  permissions?: Record<string, boolean>;
+  setup?: {base?: string; reachable?: boolean; newest?: number};
+}
+// The setup command this page made: POST /v2/google/workspace/setup-code plus the domain it names.
+interface GoogleConnectCommand { command: string; expires_at: string; domain: string; generation: number }
+interface GoogleConnectActs { mail?: boolean; calendar?: boolean }
+// GET /v2/mail/google (backend/google_connect.py's view), or the error its read failed with.
+interface GoogleConnectPersonal {
+  error?: string;
+  configured?: boolean;
+  app?: string;
+  mailbox?: string;
+  syncing?: boolean;
+  status?: string;
+  acts?: GoogleConnectActs;
+  message?: string | null;
+  hint?: string | null;
+  stalled?: boolean;
+}
+interface GoogleConnectState { g: GoogleConnectView; personal: GoogleConnectPersonal | null }
+interface GoogleConnectRows { active: GoogleKeyRow | null; pend: GoogleKeyRow | null; replacing: boolean; flash: string }
+interface GoogleConnectWatch { until: number; mailbox: string; timer: number | null; ended: boolean; generation: number; paused?: boolean }
+interface GoogleConnectCheck { ok?: boolean; mailbox?: string | null; error_kind?: string | null; message?: string | null }
+// The element the card paints into, with what it keeps between paints.
+interface GoogleConnectHost extends Element {
+  _googleReplacing?: {since: number} | null;
+  _googleWatch?: GoogleConnectWatch | null;
+  _googleHow?: Record<string, string | undefined>;
+  _googleState?: GoogleConnectState;
+  _googleCheck?: {html: string} | null;
+  _googleKeep?: Record<string, string>;
+  _googleFlash?: string;
+  _googlePick?: string | undefined;
+  _googleBound?: boolean;
+  _googleTurn?: number;
+  _googlePoll?: number;
+  _googleSnap?: string;
+}
+// A clicked button or link; `disabled` only does anything on a button.
+interface GoogleConnectControl extends HTMLElement { disabled?: boolean }
+interface Window { mountGoogleConnect: (host: GoogleConnectHost | null, options?: {force?: boolean}) => Promise<void> }
+
 (function () {
   'use strict';
   const POLL_MS = 5000, CHECK_EVERY_MS = 20000, CHECK_FOR_MS = 600000, KEY_MAX_BYTES = 65536;
@@ -21,40 +86,40 @@
     'The organization needs a second super admin to approve it.',
   ];
   // The newest setup command this page made. Only New command and Make prompt make one, never a render or a poll.
-  let command = null;
+  let command: GoogleConnectCommand | null = null;
 
-  const dateOf = iso => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d : null; };
-  const clock = iso => dateOf(iso)?.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) || '';
+  const dateOf = (iso: string | null | undefined) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d : null; };
+  const clock = (iso: string) => dateOf(iso)?.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) || '';
   const live = () => !!command && Date.parse(command.expires_at) > Date.now();
-  const domainOf = address => String(address || '').split('@')[1]?.trim().toLowerCase() || '';
-  const defaultDomain = g => domainOf(g.me?.mailbox) || domainOf((typeof S === 'object' && S?.me?.email) || '');
-  const watchable = host => host.isConnected && !host.closest('[hidden]');
+  const domainOf = (address: unknown) => String(address || '').split('@')[1]?.trim().toLowerCase() || '';
+  const defaultDomain = (g: GoogleConnectView) => domainOf(g.me?.mailbox) || domainOf((typeof S === 'object' && S?.me?.email) || '');
+  const watchable = (host: GoogleConnectHost) => host.isConnected && !host.closest('[hidden]');
   // This tab's address on the server's public URL, for a teammate or an agent to open.
   const googleLink = () => `${String((typeof publicUrl === 'function' && publicUrl()) || location.origin).replace(/\/+$/, '')}/#/tools/settings/email`;
-  const unchecked = row => (row ? {...row, checked_at: null} : null);
+  const unchecked = (row: GoogleKeyRow | null | undefined) => (row ? {...row, checked_at: null} : null);
   // The active row (connected or failing) and the one pending row, which is a replacement while a key is active.
-  const rowsOf = g => {
+  const rowsOf = (g: GoogleConnectView) => {
     const ws = g.workspace || null;
     return {active: ws && ws.status !== 'pending' ? ws : null, pend: g.pending || (ws && ws.status === 'pending' ? ws : null)};
   };
   // Every key view carries the server's generation, which counts up with each key. A view without one counts as -1.
-  const generationOf = row => (Number.isInteger(row?.generation) ? row.generation : -1);
-  const newestGeneration = g => Math.max(generationOf(g.workspace), generationOf(g.pending));
+  const generationOf = (row: GoogleKeyRow | null | undefined) => (typeof row?.generation === 'number' && Number.isInteger(row.generation) ? row.generation : -1);
+  const newestGeneration = (g: GoogleConnectView) => Math.max(generationOf(g.workspace), generationOf(g.pending));
   // A replacement ends when a key (pending or active) arrives with a generation newer than the newest one seen at the
   // Replace click. Until then it keeps polling. It never sticks.
-  const replacingNow = (host, g) => {
+  const replacingNow = (host: GoogleConnectHost, g: GoogleConnectView) => {
     const r = host._googleReplacing;
     const match = !!r && newestGeneration(g) <= r.since;
     if (!match) host._googleReplacing = null;
     return match;
   };
-  const checkLabel = host => (host._googleWatch?.ended ? 'Check again' : 'Check');
-  const causesHtml = watching => `<p>Google hasn't accepted the key yet. Check these:</p>
+  const checkLabel = (host: GoogleConnectHost) => (host._googleWatch?.ended ? 'Check again' : 'Check');
+  const causesHtml = (watching: boolean) => `<p>Google hasn't accepted the key yet. Check these:</p>
     <ul class="google-causes">${CAUSES.map(cause => `<li>${esc(cause)}</li>`).join('')}</ul>
     <p class="muted" role="status">${watching ? 'Checking again every 20 seconds for 10 minutes.' : 'Still not accepted. Finish the steps above, then check again.'}</p>`;
 
   // The in-page confirm for Disconnect. An uploaded key that never connected is removed, and nothing is read yet.
-  const disconnectConfirm = (domain, reading) => `<div class="google-confirm" data-ws-disconnect-confirm hidden>
+  const disconnectConfirm = (domain: string | null | undefined, reading: boolean) => `<div class="google-confirm" data-ws-disconnect-confirm hidden>
         <p>${reading ? `Disconnect Google for ${esc(domain || 'this domain')}? Tico stops reading every covered mailbox.`
           : `Remove the uploaded key for ${esc(domain || 'this domain')}? Nothing is read until Google is connected.`}</p>
         <div class="row"><button type="button" class="primary danger" data-ws-disconnect-yes>Disconnect</button>
@@ -63,7 +128,7 @@
 
   // A failing key, a pending replacement or a key still to narrow shows step 3 (Check) under this, so the line's own
   // Check connection (and its result) is only for a working key with nothing else to check.
-  function connectedBlock(row, stepped) {
+  function connectedBlock(row: GoogleKeyRow, stepped: boolean) {
     const failing = row.status === 'failing';
     const own = !failing && !stepped;
     const checked = row.checked_at || row.connected_at;
@@ -78,22 +143,22 @@
   }
 
   // The two ways to do a path's setup: a prompt for the person's own coding agent (the default), or the steps by hand.
-  const howOf = (host, path) => host._googleHow?.[path] || 'agent';
-  const howToggle = (path, how) => `<div class="google-how" role="group" aria-label="How to set it up">
+  const howOf = (host: GoogleConnectHost, path: string) => host._googleHow?.[path] || 'agent';
+  const howToggle = (path: string, how: string) => `<div class="google-how" role="group" aria-label="How to set it up">
       <button type="button" data-google-how="agent" data-google-path="${path}" aria-pressed="${how === 'agent'}">Have my agent do it</button>
       <button type="button" data-google-how="self" data-google-path="${path}" aria-pressed="${how === 'self'}">Set it up myself</button></div>`;
-  const promptBlock = (name, text, more = '') => `<div class="google-prompt" data-google-prompt="${name}">
+  const promptBlock = (name: string, text: string, more = '') => `<div class="google-prompt" data-google-prompt="${name}">
       <textarea readonly rows="9" spellcheck="false" aria-label="Prompt for your agent">${esc(text)}</textarea>
       <div class="row"><button type="button" class="ghost" data-copy-prompt>Copy</button>${more}</div></div>`;
 
   // The Workspace prompt holds the setup command, so it lives exactly as long as the command does (only in this page).
   // What Tico asks Google for follows What Tico may do (its card in Tools › Settings › Email, the company's one setting).
-  const MAY = [['organize_mail', 'Organize mail'], ['send_mail', 'Send mail'], ['change_calendar', 'Create and change calendar events']];
-  const allows = (g, name) => g?.permissions?.[name] !== false;
-  const asksFor = g => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
+  const MAY: [string, string][] = [['organize_mail', 'Organize mail'], ['send_mail', 'Send mail'], ['change_calendar', 'Create and change calendar events']];
+  const allows = (g: GoogleConnectView | undefined, name: string) => g?.permissions?.[name] !== false;
+  const asksFor = (g: GoogleConnectView | undefined) => ['read mail and calendar', ...MAY.filter(([name]) => allows(g, name)).map(([, label]) => label.toLowerCase())]
     .join(', ');
 
-  function workspacePrompt(made, g) {
+  function workspacePrompt(made: GoogleConnectCommand, g: GoogleConnectView | undefined) {
     const domain = made.domain || 'your domain';
     const minutes = Math.max(1, Math.round((Date.parse(made.expires_at) - Date.now()) / 60000));
     return [
@@ -108,7 +173,7 @@
     ].join('\n');
   }
 
-  function accountsPrompt(g) {
+  function accountsPrompt(g: GoogleConnectView) {
     const domain = defaultDomain(g) || 'our Google Workspace';
     return [
       `Set up Google sign-in for Tico. Use a browser signed in to Google Cloud as an admin of ${domain}.`,
@@ -129,7 +194,7 @@
 
   // The part of step 1 that shows the setup command (inside the prompt, or bare), in its own box so a Domain edit can
   // drop it in place without a repaint taking the cursor out of the field.
-  function madePart(how, made, g) {
+  function madePart(how: string, made: GoogleConnectCommand | null, g?: GoogleConnectView) {
     const inner = how === 'agent'
       ? (made ? promptBlock('workspace', workspacePrompt(made, g), '<button type="button" class="ghost" data-ws-prompt>New prompt</button>')
         : '<div class="row"><button type="button" class="primary" data-ws-prompt>Make prompt</button></div>')
@@ -141,18 +206,18 @@
 
   // A setup command names its domain, so a different Domain makes it wrong: drop it, and the next click makes one for
   // the new domain.
-  function domainEdited(host, input) {
+  function domainEdited(host: GoogleConnectHost, input: HTMLInputElement) {
     if (!command || input.value.trim().toLowerCase() === command.domain) return;
     command = null;
     const box = input.closest('[data-ws-step="create"]')?.querySelector('[data-ws-made]');
     if (box) box.outerHTML = madePart(howOf(host, 'workspace'), null);
   }
 
-  function createStep(host, g, {reachable, cancel, domainValue}) {
+  function createStep(host: GoogleConnectHost, g: GoogleConnectView, {reachable, cancel, domainValue}: {reachable: boolean; cancel: boolean; domainValue: string}) {
     const made = live() ? command : null;
     const domain = `<label class="google-field"><span>Domain</span>
         <input type="text" data-keep="domain" data-ws-domain value="${esc(domainValue)}" autocomplete="off" spellcheck="false"></label>`;
-    const upload = label => `<label class="google-upload"><span>${label}</span>
+    const upload = (label: string) => `<label class="google-upload"><span>${label}</span>
         <input type="file" accept="application/json,.json" data-ws-file></label>`;
     const back = cancel ? '<div class="row"><button type="button" class="ghost" data-ws-replace-cancel>Cancel</button></div>' : '';
     if (!reachable) {
@@ -170,7 +235,7 @@
       ${howToggle('workspace', how)}${body}${back}</div>`;
   }
 
-  function allowStep(row) {
+  function allowStep(row: GoogleKeyRow) {
     const scopes = (row.scopes || []).join(',');
     const link = DELEGATION.test(row.delegation_url || '')
       ? `<a class="primary" href="${esc(row.delegation_url)}" target="_blank" rel="noopener">Open Google Admin</a>` : '';
@@ -184,7 +249,7 @@
     </div>`;
   }
 
-  function checkStep(g) {
+  function checkStep(g: GoogleConnectView) {
     const probe = g.me?.mailbox || '';
     return `<div class="google-step" data-ws-step="check"><h4>3 Check</h4>
       <label class="google-field"><span>Mailbox to check</span>
@@ -196,9 +261,9 @@
     </div>`;
   }
 
-  function workspaceCard(host, g, {active, pend, replacing, flash}) {
+  function workspaceCard(host: GoogleConnectHost, g: GoogleConnectView, {active, pend, replacing, flash}: GoogleConnectRows) {
     const reachable = g.setup?.reachable !== false;
-    const parts = [];
+    const parts: string[] = [];
     // A key authorized before the read-only scopes: step 2 again with every scope, then Check, keeping the key.
     const legacy = !!active && !pend && !replacing && active.narrowable === false;
     if (active && !replacing) parts.push(connectedBlock(active, !!pend || legacy));
@@ -221,7 +286,7 @@
       <p class="muted" role="status" data-ws-status>${esc(flash)}</p></section>`;
   }
 
-  function setupPanel(g) {
+  function setupPanel(g: GoogleConnectView) {
     const project = (g.workspace || g.pending)?.project_id || '';
     return `<div class="google-step" data-oauth-setup>
       <label class="google-field"><span>Google Cloud project ID</span>
@@ -259,19 +324,19 @@
       </div>`;
   }
 
-  function personalBody(state) {
+  function personalBody(state: GoogleConnectPersonal | null) {
     if (!state) return '';
     if (state.error) return `<div class="empty">${esc(state.error)}</div>`;
     const box = `<strong>${esc(state.mailbox)}</strong>`;
     const reads = !state.configured ? '' : state.app === 'own'
       ? '<p class="muted">With your company\'s Google app, Connect Google can also label, archive and draft mail, and add calendar events. Tico\'s shared app only reads your mail and calendar. Sending stays off.</p>'
       : '<p class="muted">Tico asks Google only to read your mail and calendar. It can\'t send, label, archive or change anything, and sending stays off.</p>';
-    const busy = ['ready', 'finishing', 'disconnecting', 'revoking'].includes(state.status);
+    const busy = ['ready', 'finishing', 'disconnecting', 'revoking'].includes(state.status ?? '');
     // What the grant can write beyond reading: per service (state.acts = {mail, calendar}), named in the connected line.
-    const acts = state.acts || {};
+    const acts: GoogleConnectActs = state.acts || {};
     const writes = [acts.mail && 'label, archive and draft mail', acts.calendar && 'add calendar events'].filter(Boolean);
     const extra = writes.length === 2 ? `${writes[0]}, and ${writes[1]}` : writes[0];
-    let body;
+    let body: string;
     if (!state.configured) {
       body = '<p>Connect Google isn\'t available on this Tico server yet: whoever runs it has not set up its Google app.</p>';
     } else if (state.status === 'connected') {
@@ -284,7 +349,7 @@
         <p class="muted">If Google said <strong>Access blocked</strong> or <strong>admin_policy_enforced</strong>, your Google Workspace administrator has a policy that blocks Tico. Only they can allow it (Admin console &gt; Security &gt; API controls &gt; App access control); Tico won't ask for more access to get around it.</p>
         <div class="row"><button type="button" class="primary" data-google-connect>Connect Google again</button></div>`;
     } else if (busy) {
-      body = `<p>${state.status.startsWith('dis') || state.status === 'revoking' ? 'Disconnecting' : 'Finishing the connection for'} ${box}…</p>
+      body = `<p>${state.status?.startsWith('dis') || state.status === 'revoking' ? 'Disconnecting' : 'Finishing the connection for'} ${box}…</p>
         ${state.stalled ? `<p role="alert"><strong>${esc(state.message)}</strong></p>
         <p class="muted">Remove Tico now at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>. The computer finishes the disconnect when it is back online.</p>`
           : '<p class="muted">The computer that syncs your mail finishes this, usually within two minutes.</p>'}`;
@@ -298,7 +363,7 @@
   }
 
   // Your own mailbox: the Connect Google card, or why there is none.
-  function yourAccount(g, personal) {
+  function yourAccount(g: GoogleConnectView, personal: GoogleConnectPersonal | null) {
     const covered = g.me?.covered_by_workspace ? '<p class="muted">Covered by the Workspace connection.</p>' : '';
     if (!g.me) return '<p class="muted">Sign in as a person to connect your own mailbox.</p>';
     return covered + personalBody(personal);
@@ -306,9 +371,9 @@
 
   // Each person signs in, for an admin: Google sign-in for the server once, then your own mailbox. Everyone else's is
   // in the Inboxes list.
-  function accountsCard(host, g, personal) {
-    const oauth = g.oauth || {};
-    let first;
+  function accountsCard(host: GoogleConnectHost, g: GoogleConnectView, personal: GoogleConnectPersonal | null) {
+    const oauth: GoogleConnectOAuth = g.oauth || {};
+    let first: string;
     if (oauth.configured) {
       first = oauth.source === 'env' ? '<p class="muted">Done. Set on the server.</p>' : `<p class="muted">Done.</p>${removeBlock()}`;
     } else {
@@ -324,7 +389,7 @@
 
   // Everyone who isn't an admin: Connect Google for their own mailbox, never the setup; nothing when the company's
   // key covers it (Tools › Settings › Email says so).
-  function memberCard(g, personal) {
+  function memberCard(g: GoogleConnectView, personal: GoogleConnectPersonal | null) {
     if (g.me?.covered_by_workspace) return '';
     const body = g.oauth?.configured ? yourAccount(g, personal) : '<p>Ask an admin to connect Google in Tools › Settings.</p>';
     return `<section class="google-card" data-google-card="account">${body}
@@ -333,7 +398,7 @@
 
   // The way an admin sees: the one picked, else the one set up (the Workspace when both are, since it covers the
   // mailboxes), else neither until one is picked. A way once shown stays shown when it is taken down again.
-  function modeOf(host, g) {
+  function modeOf(host: GoogleConnectHost, g: GoogleConnectView) {
     const {active, pend} = rowsOf(g);
     const set = active || pend ? 'workspace' : g.oauth?.configured ? 'accounts' : '';
     if (!host._googlePick && set) host._googlePick = set;
@@ -341,71 +406,73 @@
   }
 
   const MODES = [['workspace', 'Whole company'], ['accounts', 'Each person signs in']];
-  const modeToggle = mode => `<div class="theme-seg google-mode" role="radiogroup" aria-label="How Tico connects" data-google-mode>${
+  const modeToggle = (mode: string) => `<div class="theme-seg google-mode" role="radiogroup" aria-label="How Tico connects" data-google-mode>${
     MODES.map(([key, label]) => `<button type="button" role="radio" data-google-pick="${key}" aria-checked="${mode === key}">${label}</button>`).join('')}</div>`;
 
-  function adminView(host, g, personal, rows) {
+  function adminView(host: GoogleConnectHost, g: GoogleConnectView, personal: GoogleConnectPersonal | null, rows: GoogleConnectRows) {
     const mode = modeOf(host, g);
     const body = mode === 'workspace' ? workspaceCard(host, g, rows) : mode === 'accounts' ? accountsCard(host, g, personal) : '';
     return modeToggle(mode) + body;
   }
 
-  function paintCheck(host) {
+  function paintCheck(host: GoogleConnectHost) {
     const result = host.querySelector('[data-ws-check-result]');
     if (result) {
-      const {pend} = rowsOf(host._googleState.g);
+      const {pend} = rowsOf(host._googleState?.g || {});
       result.innerHTML = host._googleCheck?.html ?? (pend?.last_error ? `<p class="muted">${esc(pend.last_error)}</p>` : '');
     }
     const button = host.querySelector('[data-ws-check]');
     if (button) button.textContent = checkLabel(host);
   }
 
-  function projectLinks(host) {
-    const input = host.querySelector('[data-oauth-project]');
+  function projectLinks(host: GoogleConnectHost) {
+    const input = host.querySelector<HTMLInputElement>('[data-oauth-project]');
     if (!input) return;
     const project = input.value.trim();
     const valid = PROJECT_ID.test(project);
     const id = encodeURIComponent(project);
-    const urls = {
+    const urls: Record<string, string> = {
       overview: `https://console.cloud.google.com/auth/overview?project=${id}`,
       clients: `https://console.cloud.google.com/auth/clients/create?project=${id}`,
       gmail: `https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=${id}`,
       calendar: `https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=${id}`,
     };
-    host.querySelectorAll('[data-oauth-link]').forEach(link => {
-      if (valid) { link.href = urls[link.dataset.oauthLink]; link.removeAttribute('aria-disabled'); }
+    host.querySelectorAll<HTMLAnchorElement>('[data-oauth-link]').forEach(link => {
+      if (valid) { link.href = urls[link.dataset.oauthLink ?? ''] ?? ''; link.removeAttribute('aria-disabled'); }
       else { link.removeAttribute('href'); link.setAttribute('aria-disabled', 'true'); }
     });
   }
 
-  function paint(host) {
+  function paint(host: GoogleConnectHost) {
+    if (!host._googleState) return;
     const {g, personal} = host._googleState;
     const {active, pend} = rowsOf(g);
     const replacing = replacingNow(host, g);
     // Typed values live on the host, in memory only, so a field that leaves the page (Have my agent do it) comes back
     // as it was. saveOAuth drops the client secret once Google sign-in is saved.
-    const kept = host._googleKeep = host._googleKeep || {};
-    host.querySelectorAll('[data-keep]').forEach(el => { kept[el.dataset.keep] = el.value; });
+    host._googleKeep = host._googleKeep || {};
+    const kept = host._googleKeep;
+    host.querySelectorAll<HTMLInputElement>('[data-keep]').forEach(el => { kept[el.dataset.keep ?? ''] = el.value; });
     const flash = host._googleFlash || '';
     host._googleFlash = '';
     host.innerHTML = g.can_admin ? adminView(host, g, personal, {active, pend, replacing, flash}) : memberCard(g, personal);
-    host.querySelectorAll('[data-keep]').forEach(el => { if (kept[el.dataset.keep] !== undefined) el.value = kept[el.dataset.keep]; });
+    host.querySelectorAll<HTMLInputElement>('[data-keep]').forEach(el => { const value = kept[el.dataset.keep ?? '']; if (value !== undefined) el.value = value; });
     paintCheck(host);
     projectLinks(host);
   }
 
-  function setWsStatus(host, message, isErr = false) {
+  function setWsStatus(host: GoogleConnectHost, message: string, isErr = false) {
     const el = host.querySelector('[data-ws-status]');
     if (!el) return;
     el.textContent = message;
     el.classList.toggle('google-error', isErr);
   }
 
-  const toggle = (host, selector, show) => { const el = host.querySelector(selector); if (el) el.hidden = !show; };
+  const toggle = (host: GoogleConnectHost, selector: string, show: boolean) => { const el = host.querySelector<HTMLElement>(selector); if (el) el.hidden = !show; };
 
-  async function copy(el) {
+  async function copy(el: HTMLElement) {
     const area = el.hasAttribute('data-copy-prompt') ? el.closest('.google-prompt')?.querySelector('textarea') : null;
-    try { await copyText(area ? area.value : el.dataset.copy); toast(el.hasAttribute('data-copy-link') ? 'Link copied' : 'Copied'); }
+    try { await copyText(area ? area.value : el.dataset.copy ?? ''); toast(el.hasAttribute('data-copy-link') ? 'Link copied' : 'Copied'); }
     catch (error) {
       const code = el.closest('.machine-command')?.querySelector('code');
       if (area) area.select();
@@ -413,30 +480,30 @@
         const range = document.createRange();
         range.selectNodeContents(code);
         const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
       }
       toast('Could not copy. The text is selected.', true);
     }
   }
 
   // New command and Make prompt: each click makes a fresh setup code, the newest generation, so any older one is superseded.
-  async function newCommand(host, button) {
-    const domain = (host.querySelector('[data-ws-domain]')?.value || '').trim().toLowerCase();
+  async function newCommand(host: GoogleConnectHost, button: GoogleConnectControl) {
+    const domain = (host.querySelector<HTMLInputElement>('[data-ws-domain]')?.value || '').trim().toLowerCase();
     if (!domain) return setWsStatus(host, 'Enter the domain first.', true);
     button.disabled = true;
     try {
-      const made = await post('/v2/google/workspace/setup-code', {domain});
+      const made: {command: string; expires_at: string; generation: number} = await post('/v2/google/workspace/setup-code', {domain});
       // The key this command brings in carries this generation, so any key at or past it uses the command up.
       command = {command: made.command, expires_at: made.expires_at, domain, generation: made.generation};
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
-      setWsStatus(host, error.message, true);
+      setWsStatus(host, errorMessage(error, ''), true);
     }
   }
 
-  async function uploadKey(host, input) {
+  async function uploadKey(host: GoogleConnectHost, input: HTMLInputElement) {
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
@@ -444,35 +511,35 @@
     let key = null;
     try { key = JSON.parse(await file.text()); } catch (error) { key = null; }
     if (!key || typeof key !== 'object' || Array.isArray(key)) return setWsStatus(host, 'That isn\'t a Google key file.', true);
-    const domain = (host.querySelector('[data-ws-domain]')?.value || '').trim().toLowerCase();
+    const domain = (host.querySelector<HTMLInputElement>('[data-ws-domain]')?.value || '').trim().toLowerCase();
     setWsStatus(host, 'Uploading the key…');
     try {
       await post('/v2/google/workspace/key', domain ? {key, domain} : {key});
       host._googleReplacing = null;
       command = null; // the uploaded key supersedes the setup command
       await window.mountGoogleConnect(host, {force: true});
-    } catch (error) { setWsStatus(host, error.message, true); }
+    } catch (error) { setWsStatus(host, errorMessage(error, ''), true); }
   }
 
   // One check, by hand or on the 20 s timer. An unauthorized answer keeps the timer going for 10 minutes.
-  async function check(host, auto) {
+  async function check(host: GoogleConnectHost, auto: boolean) {
     let watch = host._googleWatch;
     if (auto) {
       if (!watch || watch.ended) return;
     } else {
-      clearTimeout(watch?.timer);
-      const mailbox = (host.querySelector('[data-ws-probe]')?.value || '').trim();
+      clearTimeout(watch?.timer ?? undefined);
+      const mailbox = (host.querySelector<HTMLInputElement>('[data-ws-probe]')?.value || '').trim();
       watch = host._googleWatch = {until: Date.now() + CHECK_FOR_MS, mailbox, timer: null, ended: false,
         generation: newestGeneration(host._googleState?.g || {})};
       host._googleCheck = {html: '<p class="muted">Checking…</p>'};
       paintCheck(host);
     }
-    let answer;
+    let answer: GoogleConnectCheck;
     try { answer = await post('/v2/google/workspace/check', watch.mailbox ? {mailbox: watch.mailbox} : {}); }
     catch (error) {
       if (host._googleWatch !== watch) return;
       host._googleWatch = null;
-      host._googleCheck = {html: `<p role="alert">${esc(error.message)}</p>`};
+      host._googleCheck = {html: `<p role="alert">${esc(errorMessage(error, ''))}</p>`};
       return paintCheck(host);
     }
     if (host._googleWatch !== watch) return;
@@ -487,7 +554,7 @@
       watch.ended = !going;
       host._googleCheck = {html: causesHtml(going)};
       if (going) {
-        clearTimeout(watch.timer);
+        clearTimeout(watch.timer ?? undefined);
         watch.timer = setTimeout(() => {
           watch.timer = null;
           if (host._googleWatch !== watch) return;
@@ -506,11 +573,11 @@
     paintCheck(host);
   }
 
-  async function disconnectWorkspace(host, button) {
+  async function disconnectWorkspace(host: GoogleConnectHost, button: GoogleConnectControl) {
     button.disabled = true;
     try {
-      await writeRequest('DELETE', '/v2/google/workspace');
-      clearTimeout(host._googleWatch?.timer);
+      await writeRequest('DELETE', '/v2/google/workspace', undefined);
+      clearTimeout(host._googleWatch?.timer ?? undefined);
       host._googleWatch = null;
       host._googleCheck = null;
       host._googleReplacing = null;
@@ -518,16 +585,18 @@
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
-      setWsStatus(host, error.message, true);
+      setWsStatus(host, errorMessage(error, ''), true);
     }
   }
 
-  async function saveOAuth(host, form) {
+  async function saveOAuth(host: GoogleConnectHost, form: HTMLFormElement) {
     const status = form.querySelector('[data-oauth-status]');
-    const clientId = (form.querySelector('[name=client_id]')?.value || '').trim();
-    const clientSecret = (form.querySelector('[name=client_secret]')?.value || '').trim();
+    if (!status) return;
+    const clientId = (form.querySelector<HTMLInputElement>('[name=client_id]')?.value || '').trim();
+    const clientSecret = (form.querySelector<HTMLInputElement>('[name=client_secret]')?.value || '').trim();
     if (!clientId || !clientSecret) { status.textContent = 'Paste the client ID and the client secret.'; return; }
-    const button = form.querySelector('button[type=submit]');
+    const button = form.querySelector<HTMLButtonElement>('button[type=submit]');
+    if (!button) return;
     button.disabled = true;
     status.textContent = 'Saving…';
     try {
@@ -537,38 +606,39 @@
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
-      status.textContent = error.message;
+      status.textContent = errorMessage(error, '');
     }
   }
 
-  async function removeOAuth(host, button) {
+  async function removeOAuth(host: GoogleConnectHost, button: GoogleConnectControl) {
     button.disabled = true;
     try {
-      await writeRequest('DELETE', '/v2/google/oauth-client');
+      await writeRequest('DELETE', '/v2/google/oauth-client', undefined);
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
       button.disabled = false;
       const status = host.querySelector('[data-google-status]');
-      if (status) status.textContent = error.message;
+      if (status) status.textContent = errorMessage(error, '');
     }
   }
 
-  async function connectPersonal(host, button) {
+  async function connectPersonal(host: GoogleConnectHost, button: GoogleConnectControl) {
     const status = host.querySelector('[data-google-status]');
     button.disabled = true;
     try {
-      const started = await post('/v2/mail/google/connect', {});
+      const started: {auth_url: string; mailbox: string} = await post('/v2/mail/google/connect', {});
       // Only Google's own sign-in page, never an address from anywhere else.
       if (!/^https:\/\/accounts\.google\.com\//.test(started.auth_url || '')) throw new Error('Unexpected sign-in address');
       location.href = started.auth_url;
     } catch (error) {
-      if (status) status.textContent = error.message;
+      if (status) status.textContent = errorMessage(error, '');
       button.disabled = false;
     }
   }
 
-  async function disconnectPersonal(host, button) {
-    const personal = host._googleState.personal;
+  async function disconnectPersonal(host: GoogleConnectHost, button: GoogleConnectControl) {
+    const personal = host._googleState?.personal;
+    if (!personal) return;
     if (!confirm(`Disconnect ${personal.mailbox}? Tico's access is revoked at Google, and your message bot stops reading this inbox.`)) return;
     const status = host.querySelector('[data-google-status]');
     button.disabled = true;
@@ -576,16 +646,16 @@
       await post('/v2/mail/google/disconnect', {});
       await window.mountGoogleConnect(host, {force: true});
     } catch (error) {
-      if (status) status.textContent = error.message;
+      if (status) status.textContent = errorMessage(error, '');
       button.disabled = false;
     }
   }
 
-  async function onClick(host, el) {
+  async function onClick(host: GoogleConnectHost, el: GoogleConnectControl) {
     if (el.hasAttribute('data-copy') || el.hasAttribute('data-copy-prompt')) return copy(el);
     if (el.hasAttribute('data-google-pick')) { host._googlePick = el.dataset.googlePick; return paint(host); }
     if (el.hasAttribute('data-google-how')) {
-      host._googleHow = {...host._googleHow, [el.dataset.googlePath]: el.dataset.googleHow};
+      host._googleHow = {...host._googleHow, [String(el.dataset.googlePath)]: el.dataset.googleHow};
       return paint(host);
     }
     if (el.hasAttribute('data-ws-prompt')) return newCommand(host, el);
@@ -593,7 +663,7 @@
     if (el.hasAttribute('data-google-disconnect')) return disconnectPersonal(host, el);
     if (el.hasAttribute('data-ws-command')) return newCommand(host, el);
     if (el.hasAttribute('data-ws-replace')) {
-      host._googleReplacing = {since: newestGeneration(host._googleState.g)};
+      host._googleReplacing = {since: newestGeneration(host._googleState?.g || {})};
       // A mount, not a paint: it re-reads the key state and starts the poll that waits for the new key.
       return window.mountGoogleConnect(host, {force: true});
     }
@@ -607,43 +677,44 @@
     if (el.hasAttribute('data-oauth-remove-yes')) return removeOAuth(host, el);
   }
 
-  function bind(host) {
+  function bind(host: GoogleConnectHost) {
     if (host._googleBound) return;
     host._googleBound = true;
     host.addEventListener('click', event => {
-      const el = event.target.closest?.('button, a');
+      const el = eventElement(event)?.closest<GoogleConnectControl>('button, a');
       if (el) void onClick(host, el);
     });
     host.addEventListener('submit', event => {
-      if (!event.target.matches?.('[data-oauth-form]')) return;
+      if (!(event.target instanceof HTMLFormElement) || !event.target.matches('[data-oauth-form]')) return;
       event.preventDefault();
       void saveOAuth(host, event.target);
     });
     host.addEventListener('change', event => {
-      if (event.target.matches?.('[data-ws-file]')) void uploadKey(host, event.target);
+      if (event.target instanceof HTMLInputElement && event.target.matches('[data-ws-file]')) void uploadKey(host, event.target);
     });
     host.addEventListener('input', event => {
-      if (event.target.matches?.('[data-oauth-project]')) projectLinks(host);
-      if (event.target.matches?.('[data-ws-domain]')) domainEdited(host, event.target);
+      if (eventElement(event)?.matches('[data-oauth-project]')) projectLinks(host);
+      if (event.target instanceof HTMLInputElement && event.target.matches('[data-ws-domain]')) domainEdited(host, event.target);
     });
   }
 
   // Loads GET /v2/google (and the person's own state when Connect Google is set up), then paints. A render that
   // changes nothing is skipped, so typed values and the open confirm stay put. Inboxes calls this on every
   // visit to the tab; it never makes a setup code.
-  async function mountGoogleConnect(host, {force = false} = {}) {
+  async function mountGoogleConnect(host: GoogleConnectHost | null, {force = false}: {force?: boolean} = {}) {
     if (!host) return;
-    const turn = host._googleTurn = (host._googleTurn || 0) + 1;
+    host._googleTurn = (host._googleTurn || 0) + 1;
+    const turn = host._googleTurn;
     clearTimeout(host._googlePoll);
-    let g, personal = null;
+    let g: GoogleConnectView, personal: GoogleConnectPersonal | null = null;
     try {
       g = await get('/v2/google', {fresh: true});
       if (g.oauth?.configured && g.me) {
         try { personal = await get('/v2/mail/google', {fresh: true}); }
-        catch (error) { personal = {error: error.message}; }
+        catch (error) { personal = {error: errorMessage(error, '')}; }
       }
     } catch (error) {
-      if (turn === host._googleTurn && host.isConnected) host.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+      if (turn === host._googleTurn && host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(error, ''))}</div>`;
       return;
     }
     if (turn !== host._googleTurn || !host.isConnected) return;
@@ -667,12 +738,12 @@
     const watch = host._googleWatch;
     if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())
         && (replacing || newestGeneration(g) !== watch.generation)) {
-      clearTimeout(watch.timer);
+      clearTimeout(watch.timer ?? undefined);
       host._googleWatch = null;
       host._googleCheck = null;
       paintCheck(host);
     } else if (watch && !watch.ended && watchable(host) && (watch.paused || watch.until <= Date.now())) {
-      clearTimeout(watch.timer);
+      clearTimeout(watch.timer ?? undefined);
       watch.timer = null;
       watch.paused = false;
       watch.ended = watch.until <= Date.now();
@@ -685,7 +756,7 @@
         void check(host, true);
       }
     }
-    const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status);
+    const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status ?? '');
     // Polls for the whole replacement, and while a live command waits for a first key.
     const waitingForKey = !!g.can_admin && (replacing || (isLive && !active));
     if ((personalBusy || waitingForKey) && watchable(host)) {

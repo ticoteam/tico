@@ -3,19 +3,39 @@
    credentials are never typed here: they are files on that computer (docs/meetings.md).
    `only` shows one importer (the setup dialog on the Meetings page) and `onChange` runs after a save. */
 'use strict';
+
+// One importer as GET /v2/meeting-importers lists it, the computers it may run on, and the options the mount takes.
+// get() and post() are untyped JS, so these shapes are declared here, not checked.
+interface MeetingImporter {
+  source: string; name: string; status: string; enabled: boolean; runner_id?: string | null;
+  last_succeeded_at?: string | null; last_import?: string | null; imported_total?: number | null; error?: string | null;
+  setup: {file: string; keys: string[]; doc: string};
+}
+interface MeetingMachine { id: string; label?: string | null; platform?: string | null; online?: boolean; }
+interface MeetingImportersState { importers?: MeetingImporter[]; computers?: MeetingMachine[]; }
+interface MeetingImporterOptions { only?: string; onChange?: () => void; }
+interface Window {
+  mountMeetingImporters: (host: HTMLElement | null, options?: MeetingImporterOptions) => Promise<void>;
+  openMeetingImporter: (source: string, name: string, onChange: () => void) => void;
+}
+
+// The `!`: the markup this file just drew always has the element; a missing one throws on first use, as the old lookup did.
+function meetEl<T extends Element>(root: ParentNode, selector: string): T { return root.querySelector<T>(selector)!; }
+
 window.mountMeetingImporters = async function (host, options) {
   if (!host) return;
-  const {only = '', onChange} = options || {};
-  const esc = value => { const s = document.createElement('span'); s.textContent = value ?? ''; return s.innerHTML; };
-  const when = value => value ? (typeof ago === 'function' ? ago(value) : new Date(value).toLocaleString()) : 'never';
-  const labels = {off: 'Off', waiting: 'Waiting for the computer', syncing: 'Syncing', delayed: 'Delayed', error: 'Error'};
+  const only = options?.only ?? '';
+  const onChange = options?.onChange;
+  const esc = (value: unknown) => { const s = document.createElement('span'); s.textContent = String(value ?? ''); return s.innerHTML; };
+  const when = (value: string | null | undefined) => value ? (typeof ago === 'function' ? ago(value) : new Date(value).toLocaleString()) : 'never';
+  const labels: Record<string, string> = {off: 'Off', waiting: 'Waiting for the computer', syncing: 'Syncing', delayed: 'Delayed', error: 'Error'};
   if (only === 'fireflies') {
     host.innerHTML = '<div class="empty">Fireflies is no longer available as an importer. Existing meetings and files remain available.</div>';
     return;
   }
-  let state;
+  let state: MeetingImportersState;
   try { state = await get('/v2/meeting-importers'); }
-  catch (error) { host.innerHTML = `<div class="empty">${esc(error.message)}</div>`; return; }
+  catch (error) { host.innerHTML = `<div class="empty">${esc(errorMessage(error, ''))}</div>`; return; }
   if (!host.isConnected) return;
   const machines = state.computers || [];
   if (!Array.isArray(state.importers)) { host.innerHTML = '<div class="empty">Meeting importers are unavailable.</div>'; return; }
@@ -36,17 +56,17 @@ window.mountMeetingImporters = async function (host, options) {
         <p class="muted">Steps: ${esc(i.setup.doc)}. Check, from the Tico folder: <code>runtime/runner-venv/bin/python -m runner_support importers-doctor</code></p></details>
       <p role="status" data-imp-message></p></form>`;
   }).join('') + (machines.length ? '' : '<p class="empty">Add a computer under Computers first.</p>');
-  host.querySelectorAll('form[data-importer]').forEach(form => {
+  host.querySelectorAll<HTMLFormElement>('form[data-importer]').forEach(form => {
     form.onsubmit = async event => {
       event.preventDefault();
-      const message = form.querySelector('[data-imp-message]'), button = form.querySelector('button[type=submit]');
+      const message = meetEl<HTMLElement>(form, '[data-imp-message]'), button = meetEl<HTMLButtonElement>(form, 'button[type=submit]');
       message.textContent = '';
       button.disabled = true;
       try {
-        await post('/v2/meeting-importers/' + form.dataset.importer, {enabled: form.enabled.checked, runner_id: form.runner.value});
+        await post('/v2/meeting-importers/' + form.dataset.importer, {enabled: meetEl<HTMLInputElement>(form, '[name=enabled]').checked, runner_id: meetEl<HTMLSelectElement>(form, '[name=runner]').value});
         window.mountMeetingImporters(host, options);
         if (onChange) onChange();
-      } catch (error) { message.textContent = error.message; button.disabled = false; }
+      } catch (error) { message.textContent = errorMessage(error, ''); button.disabled = false; }
     };
   });
 };

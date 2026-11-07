@@ -3,12 +3,27 @@
 'use strict';
 const LOST_KEY_CONFIRM = 'The key for the saved GitHub App and directory sync secrets is lost, so they cannot be opened. Replace them? Any saved GitHub App and all directory sync credentials are removed, and you enter them again.';
 
+// The state /v2/github/app answers with, and the setup /v2/github/app/manifest answers with. get() and post() are
+// untyped JS, so these shapes are declared here, not checked.
+interface GithubWaitingBot { bot?: string; repository?: string; create_url?: string | null; }
+interface GithubAppState {
+  connected?: boolean; org?: string; slug?: string; installed?: boolean; administration?: boolean;
+  waiting?: GithubWaitingBot[]; permissions_url?: string | null; install_url?: string | null; uninstall_url?: string | null;
+}
+interface GithubManifestSetup { action: string; manifest: unknown; }
+interface Window {
+  mountGithubConnect: (host: HTMLElement | null) => Promise<void>;
+}
+
+// The `!`: the markup this file just drew always has the element; a missing one throws on first use, as the old lookup did.
+function ghEl<T extends Element>(root: ParentNode, selector: string): T { return root.querySelector<T>(selector)!; }
+
 window.mountGithubConnect = async function (host) {
   if (!host) return;
-  const text = value => { const s = document.createElement('span'); s.textContent = value ?? ''; return s.innerHTML; };
-  let state;
+  const text = (value: unknown) => { const s = document.createElement('span'); s.textContent = String(value ?? ''); return s.innerHTML; };
+  let state: GithubAppState;
   try { state = await get('/v2/github/app'); }
-  catch (error) { host.innerHTML = `<div class="empty">${text(error.message)}</div>`; return; }
+  catch (error) { host.innerHTML = `<div class="empty">${text(errorMessage(error, ''))}</div>`; return; }
   if (!host.isConnected) return;
   if (state.connected) {
     host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
@@ -28,24 +43,25 @@ window.mountGithubConnect = async function (host) {
       <p class="muted">Disconnect forgets the app here; delete it on GitHub to revoke access.</p>
       <p role="status" data-gh-status></p>`;
     // The server's GitHub links are set as properties, and only when they point at GitHub over https.
-    const link = (node, url) => { if (node && /^https:\/\/github\.com\//.test(url || '')) node.href = url; };
-    link(host.querySelector('[data-gh-permissions]'), state.permissions_url);
-    host.querySelectorAll('[data-gh-create]').forEach(node => link(node, (state.waiting || [])[Number(node.dataset.ghCreate)]?.create_url));
-    const recheck = host.querySelector('[data-gh-recheck]');
+    const link = (node: HTMLAnchorElement | null, url: string | null | undefined) => { if (node && url && /^https:\/\/github\.com\//.test(url)) node.href = url; };
+    link(host.querySelector<HTMLAnchorElement>('[data-gh-permissions]'), state.permissions_url);
+    host.querySelectorAll<HTMLAnchorElement>('[data-gh-create]').forEach(node => { link(node, (state.waiting || [])[Number(node.dataset.ghCreate)]?.create_url); });
+    const recheck = host.querySelector<HTMLButtonElement>('[data-gh-recheck]');
     if (recheck) recheck.onclick = async () => {
       recheck.disabled = true;
-      const status = host.querySelector('[data-gh-status]');
+      const status = ghEl<HTMLElement>(host, '[data-gh-status]');
       try {
-        const now = await post('/v2/github/app/check-permissions', {});
+        const now: GithubAppState = await post('/v2/github/app/check-permissions', {});
         if (now.administration) window.mountGithubConnect(host);
         else { status.textContent = 'GitHub still reports no Administration permission. Accept it for the organisation, then check again.'; recheck.disabled = false; }
-      } catch (error) { status.textContent = error.message; recheck.disabled = false; }
+      } catch (error) { status.textContent = errorMessage(error, ''); recheck.disabled = false; }
     };
-    host.querySelector('[data-gh-disconnect]').onclick = async event => {
+    const disconnect = ghEl<HTMLButtonElement>(host, '[data-gh-disconnect]');
+    disconnect.onclick = async () => {
       if (!confirm('Forget the GitHub app?')) return;
-      event.target.disabled = true;
+      disconnect.disabled = true;
       try { await post('/v2/github/app/disconnect', {}); window.mountGithubConnect(host); }
-      catch (error) { host.querySelector('[data-gh-status]').textContent = error.message; event.target.disabled = false; }
+      catch (error) { ghEl<HTMLElement>(host, '[data-gh-status]').textContent = errorMessage(error, ''); disconnect.disabled = false; }
     };
     return;
   }
@@ -56,17 +72,19 @@ window.mountGithubConnect = async function (host) {
       <label><input type="checkbox" name="administration" checked> Let Tico create bot repositories (recommended; without it a person creates each new bot's repository)</label>
       <button class="primary" type="submit">Connect GitHub</button>
       <p role="status" data-gh-status></p></form>`;
-  host.querySelector('[data-gh-form]').onsubmit = async event => {
+  const form = ghEl<HTMLFormElement>(host, '[data-gh-form]');
+  form.onsubmit = async event => {
     event.preventDefault();
-    const form = event.target, status = host.querySelector('[data-gh-status]');
-    const query = new URLSearchParams({org: form.org.value.trim(), administration: String(form.administration.checked)});
-    if (form.name.value.trim()) query.set('name', form.name.value.trim());
+    const status = ghEl<HTMLElement>(host, '[data-gh-status]');
+    const org = ghEl<HTMLInputElement>(form, '[name=org]'), name = ghEl<HTMLInputElement>(form, '[name=name]');
+    const query = new URLSearchParams({org: org.value.trim(), administration: String(ghEl<HTMLInputElement>(form, '[name=administration]').checked)});
+    if (name.value.trim()) query.set('name', name.value.trim());
     try {
-      let setup;
+      let setup: GithubManifestSetup;
       try { setup = await get('/v2/github/app/manifest?' + query); }
       catch (error) {
         // github-app.key is lost with no backup copy: only an explicit confirm drops what it sealed (docs/install.md).
-        if (error.body?.error?.code !== 'github_key_missing' || !confirm(LOST_KEY_CONFIRM)) throw error;
+        if (errorCode(error) !== 'github_key_missing' || !confirm(LOST_KEY_CONFIRM)) throw error;
         await post('/v2/github/app/replace-lost-key', {});
         setup = await get('/v2/github/app/manifest?' + query);
       }
@@ -75,6 +93,6 @@ window.mountGithubConnect = async function (host) {
       const field = document.createElement('input');
       field.type = 'hidden'; field.name = 'manifest'; field.value = JSON.stringify(setup.manifest);
       post_form.append(field); document.body.append(post_form); post_form.submit();
-    } catch (error) { status.textContent = error.message; }
+    } catch (error) { status.textContent = errorMessage(error, ''); }
   };
 };

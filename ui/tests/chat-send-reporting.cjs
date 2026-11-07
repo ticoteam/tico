@@ -1,7 +1,6 @@
 // Exercise the real pinned Sentry browser SDK and final wire scrubber with synthetic config only.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 const {chromium} = require('playwright');
 const {scrubSentry} = require('../../build/ui/observability.js');
 

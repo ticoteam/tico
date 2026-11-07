@@ -5,6 +5,38 @@
    The value lives only in the input (and in `typed` while the chat repaints around it): never in storage, a URL,
    a toast, the console or an error message. */
 'use strict';
+
+// One credential request as GET and POST /v2/credential-requests/{id} send it (api.d.ts has no type for it).
+interface CredentialCardView {
+  id?: string;
+  status?: string;
+  label?: string;
+  env?: string;
+  bot?: string;
+  bot_name?: string;
+  title?: string;
+  help_url?: string;
+  can_save?: boolean;
+  note?: string;
+  format?: string | null;
+}
+
+// The deps mount() takes from its page.
+interface CredentialCardsDeps {
+  get: <T>(path: string) => Promise<T>;
+  post: <T>(path: string, body?: unknown) => Promise<T>;
+  esc: (s: unknown) => string;
+  toast?: (msg: string, isErr?: boolean) => unknown;
+  reload?: () => unknown;
+}
+
+interface Window {
+  credentialCards?: {
+    mount(root: ParentNode | null, deps: CredentialCardsDeps): Promise<void>;
+    problem(raw: string, format?: string | null): string;
+  };
+}
+
 (function () {
   const css = `
 .cc-card{align-self:flex-start;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:6px 0;background:var(--surface)}
@@ -17,8 +49,8 @@
 .cc-err{font-size:12.5px;color:var(--fail);margin:6px 0 0}
 .cc-done{font-size:12.5px;color:var(--muted);padding:6px 0}`;
 
-  const typed = new Map();      // request id -> what was typed so far, so a repaint of the chat keeps it
-  const settled = new Map();    // request id -> its final view
+  const typed = new Map<string, string>();      // request id -> what was typed so far, so a repaint of the chat keeps it
+  const settled = new Map<string, CredentialCardView>();    // request id -> its final view
 
   function style() {
     if (document.getElementById('cc-style')) return;
@@ -29,7 +61,7 @@
   }
 
   // A local check that never echoes the value: what is wrong, or ''.
-  function problem(raw, format) {
+  function problem(raw: string, format?: string | null): string {
     const value = String(raw || '').trim();
     if (!value) return 'Enter the value.';
     if (/\s/.test(value)) return 'No spaces or line breaks.';
@@ -40,7 +72,7 @@
     return '';
   }
 
-  function view(v, esc) {
+  function view(v: CredentialCardView, esc: (s: unknown) => string): string {
     if (v.status === 'saved') return `<div class="cc-done" data-status="saved">Saved. ${esc(v.label || v.env)} is set for ${esc(v.bot_name || v.bot)}.</div>`;
     if (v.status === 'canceled') return '<div class="cc-done" data-status="canceled">Not now.</div>';
     const help = /^https:\/\//i.test(v.help_url || '')
@@ -59,19 +91,21 @@
       <p class="cc-note">Goes straight to Credentials. The bot never sees it.</p></div>`;
   }
 
-  async function mount(root, deps) {
+  async function mount(root: ParentNode | null, deps: CredentialCardsDeps): Promise<void> {
     if (!root) return;
     style();
     const {get, post, esc, toast, reload} = deps;
-    const paint = (host, v) => {
-      const id = v.id || host.dataset.credentialHost;
+    const paint = (host: HTMLElement, v: CredentialCardView): void => {
+      const id = v.id || (host.dataset.credentialHost ?? '');
       if (v.status !== 'pending') { settled.set(id, v); typed.delete(id); }
       host.innerHTML = view(v, esc);
-      const form = host.querySelector('[data-cc-form]');
+      const form = host.querySelector<HTMLFormElement>('[data-cc-form]');
       if (!form) return;
-      const input = form.elements.value, error = host.querySelector('[data-cc-error]');
-      const show = text => { error.textContent = text; error.hidden = !text; };
-      if (typed.has(id)) input.value = typed.get(id);
+      // The input and the error line are drawn by view() just above, inside this form.
+      const input = form.querySelector<HTMLInputElement>('input[name="value"]')!, error = host.querySelector<HTMLElement>('[data-cc-error]')!;
+      const show = (text: string): void => { error.textContent = text; error.hidden = !text; };
+      // Only strings are ever kept in `typed`, so a kept entry is always a value.
+      if (typed.has(id)) input.value = typed.get(id) ?? '';
       input.oninput = () => { typed.set(id, input.value); show(''); };
       form.onsubmit = async event => {
         event.preventDefault();
@@ -80,27 +114,30 @@
         const buttons = form.querySelectorAll('button');
         buttons.forEach(b => { b.disabled = true; });
         try {
-          const saved = await post(`/v2/credential-requests/${encodeURIComponent(id)}/save`, {value: input.value.trim()});
+          const saved = await post<CredentialCardView>(`/v2/credential-requests/${encodeURIComponent(id)}/save`, {value: input.value.trim()});
           input.value = '';
           paint(host, saved);
           reload?.();
         } catch (e) {
           buttons.forEach(b => { b.disabled = false; });
-          // The server's words about the format, never the value.
-          if ((e?.body?.error?.code || e?.code) === 'format') show(e.message || 'That does not look right.');
-          else toast?.(e?.message || 'Could not save', true);
+          // The server's words about the format, never the value. The code is the API's body.error.code, or a top-level code.
+          const code = errorCode(e) || (e instanceof Object && 'code' in e ? e.code : undefined);
+          if (code === 'format') show(errorMessage(e, 'That does not look right.'));
+          else toast?.(errorMessage(e, 'Could not save'), true);
           input.focus();
         }
       };
-      host.querySelector('[data-cc-cancel]').onclick = async () => {
-        try { paint(host, await post(`/v2/credential-requests/${encodeURIComponent(id)}/cancel`, {})); reload?.(); }
-        catch (e) { toast?.(e?.message || 'Could not cancel', true); }
+      // The cancel button is drawn by view() above, inside the same form.
+      host.querySelector<HTMLButtonElement>('[data-cc-cancel]')!.onclick = async () => {
+        try { paint(host, await post<CredentialCardView>(`/v2/credential-requests/${encodeURIComponent(id)}/cancel`, {})); reload?.(); }
+        catch (e) { toast?.(errorMessage(e, 'Could not cancel'), true); }
       };
     };
-    for (const host of root.querySelectorAll('[data-credential-host]')) {
-      const id = host.dataset.credentialHost;
-      if (settled.has(id)) { paint(host, settled.get(id)); continue; }
-      try { paint(host, await get(`/v2/credential-requests/${encodeURIComponent(id)}`)); }
+    for (const host of root.querySelectorAll<HTMLElement>('[data-credential-host]')) {
+      const id = host.dataset.credentialHost ?? '';
+      const done = settled.get(id);
+      if (done) { paint(host, done); continue; }
+      try { paint(host, await get<CredentialCardView>(`/v2/credential-requests/${encodeURIComponent(id)}`)); }
       catch { host.innerHTML = '<div class="cc-done">This card is not yours to see.</div>'; }
     }
   }
