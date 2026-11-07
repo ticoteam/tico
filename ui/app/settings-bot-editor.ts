@@ -594,7 +594,7 @@ function settingsTransitionDialog() {
 }
 function settingsConfirmTransition(e, kind, target) {
   const dialog = settingsTransitionDialog();
-  clearInterval(SETTINGS_TRANSITION_TIMER);
+  clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
   const label = kind === 'model' ? 'Change model settings' : 'Move bot';
   return new Promise(resolve => {
     let settled = false;
@@ -655,7 +655,7 @@ function settingsTransitionHTML(t) {
 }
 function settingsWatchTransition(id, origin = {}) {
   const dialog = settingsTransitionDialog();
-  clearInterval(SETTINGS_TRANSITION_TIMER);
+  clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
   const paint = async () => {
     let t;
     try { t = await get(`/v2/settings/transitions/${encodeURIComponent(id)}`); }
@@ -678,7 +678,7 @@ function settingsWatchTransition(id, origin = {}) {
       catch (error) {toast(error.message, true); button.currentTarget.disabled = false;}
     });
     if (['applied','canceled'].includes(t.state)) {
-      clearInterval(SETTINGS_TRANSITION_TIMER);
+      clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
       await loadSettings();
       if (t.state === 'applied') {
         const suffix = t.without_checkpoint ? ' · changed without checkpoint' : t.progress.total ? ' · checkpoint saved' : '';
@@ -688,7 +688,7 @@ function settingsWatchTransition(id, origin = {}) {
   };
   dialog.onclose = () => {
     if (dialog.open) return;
-    clearInterval(SETTINGS_TRANSITION_TIMER);
+    clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
     const input = settingsControlInput(origin.control);
     if (input && !input.disabled) input.value = input.defaultValue || origin.current;
   };

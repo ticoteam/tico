@@ -169,9 +169,9 @@ document.addEventListener('change', async event => {
   }
   if (t.name === 'repos_new_bot') {
     const before = REPOS.new_bot_default || 'own';
-    settingsFieldClear(t);
+    settingsFieldClear(eventElement(event));
     try { await put('/v2/repositories/settings', {new_bot_default: t.value}); REPOS.new_bot_default = t.value; toast('Saved'); }
-    catch (error) { settingsFieldError(t, error.message); t.value = before; }
+    catch (error) { settingsFieldError(eventElement(event), error.message); t.value = before; }
   }
 });
 document.addEventListener('input', event => {
