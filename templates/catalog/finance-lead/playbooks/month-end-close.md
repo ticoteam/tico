@@ -38,7 +38,7 @@ Each is done, open or blocked, with who owes it:
 
 ## 3. Unblock
 
-For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task ask <id>`. Create the requested
+For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task question "<question>" --on <person> --parent <id>`. Create the requested
 follow-through with `hub task create --owner <slug or person> --parent <id>` and the evidence.
 
 ## 4. Report

@@ -43,6 +43,11 @@
 .dash-pin[data-size=small] .dash-pin-body{max-height:240px;overflow:auto}
 .dash-pin[data-size=medium] .dash-pin-body{max-height:420px;overflow:auto}
 .dash-pin-body>iframe,.dash-pin-body>.page-card{max-width:100%}
+/* A pinned page is its own widget (ui/app/pages.js pageCard): no box around it, and no empty title row outside edit mode. */
+.dash-pin-page{border:0;background:none}
+.dash-pin-page>.dash-pin-body{padding:0;max-height:none!important;overflow:visible!important}
+.dash:not(.dash-editing) .dash-pin-page>.dash-pin-head{display:none}
+.dash-editing .dash-pin-page>.dash-pin-head{padding:0 2px 4px}
 
 /* card bodies (also in a bot's sidebar) */
 .dash-none{margin:4px 0;font-size:var(--t-sm)}

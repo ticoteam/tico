@@ -380,6 +380,9 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
     const letIn = v.page.locator('dialog[aria-label="Let the Tico team in"]');
     assert.equal(await letIn.locator('[name=tier][value=full]').isDisabled(), true, "full access is the owner's to give");
+    assert.equal(await letIn.locator('[name=hours]').inputValue(), '72');
+    assert.deepEqual(await letIn.locator('[name=hours] option').evaluateAll(options => options.map(o => [o.value, o.textContent])),
+      [['1', '1 hour'], ['4', '4 hours'], ['24', '24 hours'], ['72', '3 days'], ['168', '7 days'], ['720', '30 days'], ['2160', '90 days'], ['8760', '365 days'], ['custom', 'Other…']]);
     await letIn.locator('[name=hours]').selectOption('4');
     await letIn.locator('[type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();
@@ -397,7 +400,47 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
     await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
     releaseAccess(); v.hq.accessGate = null;
+    // Every longer preset sends its duration in hours, and Stop still ends it immediately.
+    for (const hours of ['720', '2160', '8760']) {
+      await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
+      await letIn.locator('[name=hours]').selectOption(hours);
+      await letIn.locator('[type=submit]').click();
+      await v.page.locator('#support-access-banner:not([hidden])').waitFor();
+      assert.ok(v.calls.includes(`POST access {"ticket_id":"sup_9","tier":"app","hours":${hours}}`));
+      await strip.getByRole('button', {name: 'Stop'}).click();
+      await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
+    }
     assert.equal(await v.page.evaluate(() => window.__pwned), undefined);
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // The phone uses the same custom control: both native and JS validation allow 8760, refuse 8761.
+    v = await visit({viewport: {width: 390, height: 844},
+      seed: [{id: 'sup_10', created_at: at(1), status: 'open', message: 'Help with setup', messages: [], sent: {}}],
+      access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: true}});
+    await openSupport(v.page);
+    await v.page.locator('[data-access-start]').click();
+    const customDialog = v.page.locator('dialog[aria-label="Let the Tico team in"]');
+    await customDialog.locator('[name=hours]').selectOption('custom');
+    const customHours = customDialog.locator('[name=custom]');
+    assert.equal(await customHours.getAttribute('max'), '8760');
+    await customHours.fill('8761');
+    assert.equal(await customHours.evaluate(el => el.validity.rangeOverflow), true);
+    await customDialog.locator('[type=submit]').click();
+    assert.ok(!v.calls.some(c => c.startsWith('POST access ')), 'native validation sends no grant');
+    await customDialog.locator('form').evaluate(el => { el.noValidate = true; });
+    await customDialog.locator('[type=submit]').click();
+    await customDialog.locator('[data-error]:not([hidden])').waitFor();
+    assert.match(await customDialog.locator('[data-error]').innerText(), /8760/);
+    assert.ok(!v.calls.some(c => c.startsWith('POST access ')), 'JS validation sends no grant');
+    await customDialog.locator('form').evaluate(el => { el.noValidate = false; });
+    await customHours.fill('8760');
+    assert.equal(await customHours.evaluate(el => el.checkValidity()), true);
+    await customDialog.locator('[type=submit]').click();
+    await v.page.locator('#support-access-banner:not([hidden])').waitFor();
+    assert.ok(v.calls.includes('POST access {"ticket_id":"sup_10","tier":"app","hours":8760}'));
+    await v.page.locator('#support-pop [data-access-stop]').click();
+    await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 

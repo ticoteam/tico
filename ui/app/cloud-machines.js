@@ -1,13 +1,15 @@
-/* ui/app/cloud-machines.js — A bot's cloud machine on Tico Cloud, shared or its own: where it runs, size, Always on, state
+/* ui/app/cloud-machines.js — A bot's cloud machine on Tico Cloud, shared or its own: where it runs, size, Always on,
+   Grow storage automatically, state
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // `cloud_machine` on a bot's row (/api/employees, backend/cloud_machines.py), null off Tico Cloud, so nothing here
 // shows there. `mode` cloud runs the bot on a cloud machine, started when there is work and stopped when idle;
 // `placement` says which: the company's shared one or its own. The size, Always on and state are that machine's. Any
-// other computer is a machine transition, as before. A size applies at the machine's next start; the shared machine's
-// size and Always on are the company's, changed by owners and admins. The sizes are HQ's (GET /v2/cloud-machines),
-// read once; before they come the four names stand alone.
+// other computer is a machine transition, as before. A running machine restarts at a new size once its turns finish;
+// the shared machine's size, Always on and Grow storage are the company's, changed by owners and admins (an own machine
+// grows as the company's does until its bot chooses). The sizes are HQ's (GET /v2/cloud-machines), read once; before
+// they come the four names stand alone.
 const CLOUD_SIZE_NAMES = ['small', 'default', 'large', 'xlarge'];
 const CLOUD_STATES = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
@@ -36,15 +38,19 @@ async function cloudMachineSizes() {
 function cloudSizeLabel(size) {
   if (!size.cpu) return cloudSizeName(size.name);
   const hourly = Number(size.usd_per_hour).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
-  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB · $${hourly}/h`;
+  const disk = size.disk_gb ? ` · ${size.disk_gb} GB disk` : '';
+  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h`;
 }
-// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the next start; a problem replaces the state.
+// "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and a grow note only while it
+// needs someone ("Disk 96% full: XLarge is the largest size"); a problem replaces the state.
 function cloudMachineStatus(m) {
   const parts = [m.problem || CLOUD_STATES[m.state] || m.state, cloudSizeName(m.machine_size || m.size)];
   if (m.cost_month_usd) parts.push(`$${Number(m.cost_month_usd).toFixed(2)} this month`);
   if (m.starts_month) parts.push(`${m.starts_month} start${m.starts_month === 1 ? '' : 's'}`);
-  if (m.machine_size && m.size !== m.machine_size) parts.push(`${cloudSizeName(m.size)} at next start`);
+  if (m.machine_size && m.size !== m.machine_size)
+    parts.push(`${cloudSizeName(m.size)} ${m.resizing ? 'once its turns finish' : 'at next start'}`);
   if (m.always_on) parts.push('Always on');
+  if (m.grow_note) parts.push(m.grow_note);
   return parts.filter(Boolean).join(' · ');
 }
 // The Computer value on the bot's page and in its Info for a bot on a cloud machine; '' for any other.
@@ -58,9 +64,9 @@ function cloudMachineFacts(machine) {
   if (!m) return '';
   return m.shared ? `Cloud machine · ${cloudSizeName(m.size)}` : `Cloud machine · ${empName(m.bot)} · ${cloudSizeName(m.size)}`;
 }
-// The bot editor's rows under Computer: its machine's size, Pause after and Always on, all held until Save bot
-// (`stage`). The shared machine's are the company's: only owners and admins change them. Always on never pauses, so
-// Pause after is off while it is on.
+// The bot editor's rows under Computer: its machine's size, Pause after, Always on and Grow storage, all
+// held until Save bot (`stage`). The shared machine's are the company's: only owners and admins change them. Always on
+// never pauses, so Pause after is off while it is on.
 function cloudMachineRowHTML(e) {
   if (!cloudMachineOn(e)) return '';
   const m = e.cloud_machine, scope = cloudMachineShared(e) ? 'shared' : 'own';
@@ -69,28 +75,83 @@ function cloudMachineRowHTML(e) {
   const what = scope === 'shared' ? 'the shared cloud machine' : `${esc(e.display_name)}'s cloud machine`;
   const pauseOff = (may || m.always_on) ? 'disabled' : '';
   return `<div class="sb-row" data-bot-cloud-row><span>Size</span><div class="rel-line">
-      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
-        ${names.map(size => `<option value="${esc(size.name)}" ${size.name === m.size ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('')}
+      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" data-machine-size="${esc(m.machine_size || '')}" aria-label="Size of ${what}" ${may}>
+        ${cloudSizeOptions(names, m.size, m.machine_size)}
       </select>
       <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
+      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-grow="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.grow_storage !== false}" ${m.grow_storage !== false ? 'checked' : ''} ${may}> Grow storage</label>
     </div><span></span></div>
     <div class="sb-row"><span>Pause after</span><div class="rel-line">
       <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
       <span class="muted">min</span>
     </div><span></span></div>
-    <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>`;
+    <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
+    ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state) || (m.state === 'deleted' && m.problem)) ? `<div class="sb-row"><span></span><div>
+      <button type="button" class="ghost" data-bot-cloud-replace="${esc(e.id)}">Replace machine</button>
+    </div><span></span></div>` : ''}`;
 }
 // HQ's sizes, with their prices, once they are read; the choice in the select stays as it is.
 async function cloudMachineMount(rows, slug) {
   const select = rows?.querySelector(`[data-bot-cloud-size="${CSS.escape(slug)}"]`); if (!select) return;
   const sizes = await cloudMachineSizes();
   if (!sizes.length || !select.isConnected) return;
-  const value = select.value;
-  select.innerHTML = sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
+  select.innerHTML = cloudSizeOptions(sizes, select.value, select.dataset.machineSize);
+}
+// A size with less disk than the machine has now is off: a disk cannot shrink.
+function cloudSizeOptions(sizes, value, machineSize) {
+  const floor = sizes.find(size => size.name === machineSize)?.disk_gb || 0;
+  return sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''} ${size.disk_gb && size.disk_gb < floor ? 'disabled' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
 }
 // One change to a cloud machine: the bot's (`/bots/<bot>/cloud-machine`), or the shared one's for a control whose
 // scope is shared. It moves no revision, so the next held row keeps the one it has.
 function cloudMachineRun(slug, body, control) {
   const path = control?.dataset.cloudScope === 'shared' ? '/v2/cloud-machines/shared' : `/v2/bots/${encodeURIComponent(slug)}/cloud-machine`;
   return async rev => { await post(path, body); return rev; };
+}
+async function cloudMachineReplace(slug, button) {
+  if (!await settingsConfirm({title: 'Replace machine?', ok: 'Replace machine',
+    text: 'Deletes this machine and its disk. The next task starts a fresh one.'})) return;
+  settingsFieldClear(button);
+  button.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(slug)}/cloud-machine/replace`, {});
+    await loadSettings();
+    const status = button.closest('[data-bot-people]')?.querySelector('[data-bot-cloud-status]');
+    const machine = S.emps.find(e => e.id === slug)?.cloud_machine;
+    if (status && machine) { status.textContent = cloudMachineStatus(machine); button.remove(); }
+    toast('Machine replaced');
+  } catch (error) { settingsFieldError(button, error.message); }
+  finally { button.disabled = false; }
+}
+
+// Tico support on cloud machines (GET /v2/cloud-machines/support): HQ's switch for the company and each machine's
+// support helper, shared by the Settings panes until the next entry. A failed read shows no cached state.
+const CLOUD_SUPPORT = {view: null, read: null};
+function cloudSupportRead({fresh = false} = {}) {
+  if (fresh) CLOUD_SUPPORT.read = null;
+  if (!CLOUD_SUPPORT.read) {
+    const read = get('/v2/cloud-machines/support', {fresh: true}).then(view => view?.available ? view : null, () => null)
+      .then(view => {
+        // An older read may finish after a new entry or a write. Only the newest answer can replace the switch.
+        if (CLOUD_SUPPORT.read !== read) return CLOUD_SUPPORT.read;
+        CLOUD_SUPPORT.view = view;
+        return view;
+      });
+    CLOUD_SUPPORT.read = read;
+  }
+  return CLOUD_SUPPORT.read;
+}
+// The answer to a change is the whole state again; it replaces what was read.
+function cloudSupportSet(view) {
+  CLOUD_SUPPORT.view = view?.available ? view : null;
+  CLOUD_SUPPORT.read = Promise.resolve(CLOUD_SUPPORT.view);
+}
+// "Tico support: on", "off" or "offline" for a computer that is a cloud machine, matched by HQ's key (the shared
+// machine's `_shared`, else its bot); '' for a helper that is not there, any other computer, or before the read.
+function cloudSupportWords(machine) {
+  const m = machine?.cloud_machine;
+  if (!m || !CLOUD_SUPPORT.view) return '';
+  const key = m.shared ? '_shared' : m.bot;
+  const helper = CLOUD_SUPPORT.view.machines.find(row => row.key === key)?.helper;
+  return ['on', 'off', 'offline'].includes(helper) ? `Tico support: ${helper}` : '';
 }

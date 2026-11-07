@@ -43,19 +43,20 @@ function fixtures() {
   const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:engineer', requester_id: 'human:ana', status: 'doing',
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
     created_at: at(60 * 30), updated_at: at(30), ...over});
-  const ask = (from, body) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'}});
+  const ask = (from, body, pick) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'},
+    recommend: {ask: 'q-' + from, do: pick, option: pick, kind: 'reversible'}});
   const pr = (repo, n, title, state = 'open') => ({id: `pr-${repo}-${n}`, kind: 'pr', repo, number: n, url: `https://github.com/${repo}/pull/${n}`, title, state,
     checks: state === 'merged' ? 'passing' : 'pending'});
   return [
     // Needs you
     t('t-copy', 'Approve the Q4 pricing page copy', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(120), labels: ['pricing'],
-      ...ask('bot:writer', 'Two headline options are in the doc. Pick one so the page can ship Friday.')}),
+      ...ask('bot:writer', 'Two headline options are in the doc. Pick one so the page can ship Friday.', 'The first headline')}),
     t('t-refund', 'Choose a refund policy for annual plans', {owner_id: 'human:ana', requester_id: 'bot:support', status: 'open', updated_at: at(300), labels: ['billing'],
-      ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?')}),
-    t('t-access', 'Review Engineer access to the billing repo', {owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open', updated_at: at(60 * 26)}),
-    t('t-terms', 'Approve the new checkout terms', {owner_id: 'human:ana', requester_id: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150)}),
-    t('t-onboard', 'Sign off the onboarding email sequence', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due_at: inDays(1)}),
-    t('t-deck', 'Review the launch deck', {owner_id: 'human:ana', requester_id: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch']}),
+      ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?', 'Prorated')}),
+    t('t-access', 'Review Engineer access to the billing repo', {owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open', updated_at: at(60 * 26), person_ask: 'Can Engineer keep access to the billing repo?'}),
+    t('t-terms', 'Approve the new checkout terms', {owner_id: 'human:ana', requester_id: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150), person_ask: 'Can we use the new checkout terms?'}),
+    t('t-onboard', 'Sign off the onboarding email sequence', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due_at: inDays(1), person_ask: 'Can we send the onboarding email sequence?'}),
+    t('t-deck', 'Review the launch deck', {owner_id: 'human:ana', requester_id: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch'], person_ask: 'Can we use the launch deck?'}),
     // Needs Sam
     t('t-demo', 'Record the product demo video', {owner_id: 'human:sam', requester_id: 'human:ana', status: 'open', updated_at: at(60 * 50), due_at: inDays(-1), labels: ['launch']}),
     // Waits on a person this install does not know: Needs someone
@@ -89,8 +90,20 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null, needsLive = false, waitForNeeds = true} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
+  const needsSnapshot = () => {
+    const items = tasks.filter(t => !['done', 'closed'].includes(t.status)
+      && !(t.holds || []).some(h => h.kind === 'snoozed')
+      && (t.status === 'declined' ? t.requester_id === 'human:ana' && !t.owner_id?.startsWith('human:')
+        && Date.now() - Date.parse(t.updated_at) < 24 * 3600e3
+        : t.owner_id === 'human:ana' || t.waiting_on === 'human:ana' || t.ask?.recipient_id === 'human:ana'))
+      .sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)))
+      .map(t => ({...withRelations(t, tasks), kind: t.status === 'declined' ? 'declined' : t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
+    const folded = new Set(items.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]));
+    return {items, count: items.length, plate_count: new Set(items.filter(it => !folded.has(it.id)).map(it => it.id)).size,
+      folded_task_ids: [...folded]};
+  };
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
   const posts = [];
@@ -125,6 +138,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/needs-you') return json(needsSnapshot());
     if (p === '/api/v2/tasks/labels') return json({labels: [...new Set(tasks.flatMap(x => x.labels))].sort(), tags: []});
     if (p === '/api/v2/task-types') return json({types});
     if (p.startsWith('/api/v2/preferences/')) {
@@ -176,6 +190,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         if (fields.due === '') delete task.due_at;
         if (fields.type) { const type = types.find(x => x.id === fields.type); task.type_id = fields.type; task.type = type ? {id: type.id, name: type.name} : null; }
         if ('step' in fields) { const step = types.flatMap(x => x.steps).find(s => s.id === fields.step); task.step_id = fields.step || null; task.step = step || null; if (step) task.status = step.status; }
+        // Membership follows the server's Needs you event, independently of the task-list reload.
+        if (needsLive) await page.evaluate(d => liveEmit('needs', d), needsSnapshot());
         return json({task: withRelations(task, tasks)});
       }
       return json({task: withRelations(task, tasks), children: tasks.filter(x => x._parent === id).map(x => withRelations(x, tasks)),
@@ -191,6 +207,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
     .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
+  if (waitForNeeds) await page.waitForFunction(() => needsFirstIn());
+  await page.evaluate(() => tasksRender(TASKS_ST));
   return {page, errors, posts, tasks, pref: () => pref, conflictNextUpdate: id => conflictNextUpdate.add(id)};
 }
 const shot = async (page, name) => {
@@ -204,11 +222,38 @@ const shot = async (page, name) => {
 const rowKeys = page => page.locator('#task-body .tl-row').evaluateAll(rows => rows.map(r => r.dataset.taskKey));
 const groupNames = page => page.locator('#task-body .tl-gname').allInnerTexts();
 const taskWrites = posts => posts.filter(x => /\/api\/v2\/tasks\/t-/.test(x.p));
+// Group is at the top of the filter menu.
 const groupBy = async (page, by) => {
-  await page.locator('#task-group').click();
+  await page.locator('#task-filter').click();
   await page.locator(`#task-filter-pop [data-pick-group="${by}"]`).click();
   await page.waitForFunction(by => document.querySelector('#task-body .tl')?.dataset.groupBy === by, by);
 };
+// Snoozed, Done and Closed are behind the archive button.
+const moreView = async (page, view) => {
+  if (!await page.evaluate(() => tasksArchived(TASKS_ST.view))) await page.locator('#task-archive').click();
+  await page.locator(`#task-finished [data-view="${view}"]`).click();
+  await page.waitForFunction(view => TASKS_ST.view === view, view);
+};
+// The scope menu: 'you', or a type's id.
+const scope = async (page, pick) => {
+  await page.locator('#task-scope').click();
+  await page.locator(pick === 'you' ? '#task-filter-pop [data-scope="you"]' : `#task-filter-pop [data-task-type="${pick}"]`).click();
+  await page.waitForFunction(pick => pick === 'you' ? TASKS_ST.view === 'foryou' : TASKS_ST.view !== 'foryou' && TASKS_ST.type === pick, pick);
+};
+const layout = async (page, view) => {
+  await page.locator(`#task-layout [data-layout="${view}"]`).click();
+  await page.waitForFunction(view => TASKS_ST.view === view, view);
+};
+// The header's visible controls, by the middle of each box, and whether the page scrolls sideways.
+const headRows = page => page.evaluate(() => {
+  const head = document.querySelector('#tasks-pane .tl-head');
+  const shown = [...head.querySelectorAll('h1, button, .tl-search')].filter(el => el.getBoundingClientRect().width > 2 && !el.closest('[hidden]'));
+  const mids = shown.map(el => { const r = el.getBoundingClientRect(); return Math.round(r.top + r.height / 2); });
+  const rows = [];
+  for (const m of mids.sort((a, b) => a - b)) if (!rows.length || m - rows[rows.length - 1] > 6) rows.push(m);
+  return {rows: rows.length, spread: Math.max(...mids) - Math.min(...mids), ids: shown.map(el => el.id || el.className),
+    scroll: document.documentElement.scrollWidth > innerWidth + 1, fold: head.classList.contains('s-fold'), bar: !document.querySelector('#task-bar').hidden};
+});
 const peekTitle = (page, text) => page.locator('#task-peek .tmodal-title', {hasText: text}).waitFor();
 const focusedKey = page => page.evaluate(() => document.activeElement?.closest('[data-task-key]')?.dataset.taskKey || document.activeElement?.className);
 // Runs the poll n times (refresh(false)) and waits for every list load it starts to finish drawing.
@@ -229,17 +274,25 @@ async function prefSaved(page, pref) {
 }
 async function listAndTabs(browser) {
   const {page, errors, pref} = await open(browser);
-  // Labelled tabs with counts, as a tab list; the count is part of each tab's name, after a comma.
-  const tabs = await page.locator('#task-view [role=tab]').evaluateAll(ts => ts.map(t => [t.dataset.view, t.firstChild.textContent, t.querySelector('.cnt')?.textContent ?? null, t.getAttribute('aria-selected')]));
-  assert.deepEqual(tabs, [['foryou', 'Needs you', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false'],
-    ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
-  assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `Needs you, ${NEEDS_YOU}`);
-  assert.equal(await page.locator('#task-view [data-view="routines"], #task-view [data-view="recurring"]').count(), 0, 'no Routines tab: routines are Automations');
-  assert.equal(await page.locator('#task-view').getAttribute('role'), 'tablist');
+  // The scope button names the type in view; its menu is You with its count, then the types. The layout pair says
+  // which layout is on.
+  assert.equal(await page.locator('#task-scope').getAttribute('aria-label'), 'General');
+  assert.deepEqual(await page.locator('#task-layout [data-layout]').evaluateAll(bs => bs.map(b => [b.dataset.layout, b.getAttribute('aria-pressed'), b.getAttribute('aria-label'), b.title])),
+    [['list', 'true', 'List', 'List'], ['board', 'false', 'Board', 'Board']]);
+  await page.locator('#task-scope').click();
+  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild.textContent, b.querySelector('.tl-mi-n')?.textContent ?? null, b.getAttribute('aria-checked')])),
+    [['you', 'You', String(NEEDS_YOU), 'false'], ['general', 'General', null, 'true']]);
+  await page.keyboard.press('Escape');
+  // Done and Closed are behind the archive button; Snoozed joins them only while something is snoozed.
+  await page.locator('#task-archive').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'done');
+  assert.deepEqual(await page.locator('#task-finished [data-view]').evaluateAll(b => b.map(x => x.dataset.view)), ['done', 'closed']);
+  await page.locator('#task-archive').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'list');
   // "Needs you", then one "Needs <Name>" per other person a task waits on, "Needs someone", then Waiting and Doing.
   assert.deepEqual((await groupNames(page)).map(s => s.toLowerCase()), ['needs you', 'needs sam', 'needs someone', 'waiting', 'doing']);
   assert.deepEqual(await page.locator('#task-body .tl-gcount').allInnerTexts(), [String(NEEDS_YOU), '1', '1', '3', '8']);
-  assert.equal(await page.locator('[data-group="needsme"] .tl-gcount').innerText(), await page.locator('[data-view="foryou"] .cnt').innerText(), 'the tab and the group agree');
+  assert.equal(await page.locator('[data-group="needsme"] .tl-gcount').innerText(), String(NEEDS_YOU), 'the You count and the group agree');
   const keys = await rowKeys(page);
   assert.equal(keys.length, OPEN_COUNT, 'every open task once');
   assert.equal(new Set(keys).size, keys.length, 'no task twice');
@@ -311,14 +364,15 @@ async function listAndTabs(browser) {
   assert.equal(await page.locator('#task-create select[name=owner]').inputValue(), 'human:sam');
   await page.locator('#task-create [data-modal-close]').click();
 
-  // Group by is a chip with a menu (↑/↓, Enter) like the filters. Owner: You first; subtasks nest under a parent of the same owner.
-  assert.equal(await page.locator('#task-group').getAttribute('aria-label'), 'Group by: Status. Change');
-  await page.locator('#task-group').click();
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.pickGroup), 'status', 'the menu opens on the current choice');
+  // Group is the top of the filter menu (↑/↓, Enter), then the fields. Owner: You first; subtasks nest under a parent of the same owner.
+  await page.locator('#task-filter').click();
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.pickGroup), 'status', 'the menu opens on the current grouping');
+  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => b.dataset.pickGroup || b.dataset.pickField)),
+    ['status', 'owner', 'team', 'parent', 'tag', 'requester', 'owner', 'team', 'tag', 'repo', 'pr', 'due', 'asked']);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-body .tl')?.dataset.groupBy === 'owner');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-group', 'the focus comes back to the chip');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter', 'the focus comes back to Filter');
   assert.deepEqual(await groupNames(page), ['YOU', 'JO', 'SAM', 'ANALYST', 'BOTOPS', 'ENGINEER', 'SUPPORT', 'WRITER']);
   assert.equal(await page.locator('[data-task-key="tt-checkout"] > .task-status').getAttribute('data-status'), 'waiting', 'owner groups still need task status');
   assert.equal(new Set(await rowKeys(page)).size, OPEN_COUNT);
@@ -340,7 +394,7 @@ async function listAndTabs(browser) {
   assert.equal(await page.locator('[data-group-toggle="list:status:waiting"]').getAttribute('aria-expanded'), 'false', 'a folded group stays folded');
   await page.locator('[data-group-toggle="list:status:waiting"]').click();
   assert.deepEqual(errors, []);
-  console.log('rows, tabs, groups: ok');
+  console.log('rows, scope, groups: ok');
   await page.close();
 }
 
@@ -379,21 +433,28 @@ async function filters(browser) {
   await page.waitForFunction(() => !location.hash.includes('owner='));
   assert.equal(await page.locator('[data-chip="owner"]').count(), 0);
   assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter', 'focus lands on Filter');
-  // A filtered address always names its view, so a Needs-you link made on the board reopens as Needs you.
+  // A Needs-you link made on the board reopens as the complete personal queue, retaining the board's filters.
   await page.goto('https://tico-ui.test/#/board');
   await page.waitForFunction(() => TASKS_ST?.view === 'board' && !TASKS_ST.loading);
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await layout(page, 'list');
   await page.locator('#task-filter').click();
   await page.locator('#task-filter-pop [data-pick-field="tag"]').click();
   await page.locator('#task-filter-pop input[value="pricing"]').check();
   await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#task-filter .tl-fbadge').innerText(), '1', 'the filter icon counts the filters on');
+  assert.equal(await page.locator('#task-filter').getAttribute('aria-label'), 'Filter, 1 active');
+  await scope(page, 'you');
   await page.waitForFunction(() => location.hash === '#/tasks?tag=pricing&type=general&view=foryou');
   await page.reload();
   await page.waitForFunction(() => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 6);
+  assert.equal(await page.locator('#task-bar').isHidden(), true, 'no chips on your own queue');
+  assert.equal(await page.locator('#task-filter .tl-fbadge').isHidden(), true);
   // A shared address opens with its filters.
   await page.goto('https://tico-ui.test/#/tasks?owner=me&tag=pricing,billing&view=list');
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row'));
-  assert.equal(await page.locator('[role=tab][aria-selected=true]').getAttribute('data-view'), 'list');
+  assert.equal(await page.evaluate(() => TASKS_ST.view), 'list');
+  assert.equal(await page.locator('#task-layout [data-layout="list"]').getAttribute('aria-pressed'), 'true');
   assert.match(await page.locator('[data-chip="owner"]').innerText(), /You/);
   assert.deepEqual((await rowKeys(page)).sort(), ['tt-copy', 'tt-refund']);
   // Nothing matches: one quiet line and a way out.
@@ -417,26 +478,35 @@ async function typeSelection(browser) {
   const extraTasks = types.slice(1).map(type => ({...fixtures()[0], id: type.id + '-task', title: type.name + ' only',
     type_id: type.id, type: {id: type.id, name: type.name}, step_id: type.steps[0].id, status: 'open'}));
   const {page, errors, posts, pref} = await open(browser, {types, extraTasks});
-  assert.equal(await page.locator('#task-type [aria-pressed=true]').innerText(), 'General');
+  assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'General');
   assert.equal(await page.locator('[data-task-key="tdev-123-task"]').count(), 0);
   await page.locator('#task-filter').click();
   assert.equal(await page.locator('[data-pick-field=type]').count(), 0);
   await page.keyboard.press('Escape');
-  await page.locator('[data-task-type=dev-123]').click();
+  await page.locator('#task-scope').click();
+  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild.textContent])),
+    [['you', 'You'], ['general', 'General'], ['dev-123', 'Dev tickets'], ['marketing', 'Marketing']]);
+  await page.keyboard.press('Escape');
+  await scope(page, 'dev-123');
   assert.deepEqual(await rowKeys(page), ['tdev-123-task']);
-  await page.locator('[data-view=board]').click();
+  await layout(page, 'board');
   assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['Backlog']);
   await page.locator('#task-q').fill('General');
   await page.waitForFunction(() => !document.querySelector('#task-body .bcard'));
   await page.locator('#task-q').fill('');
   await page.waitForFunction(() => document.querySelector('#task-body .bcard'));
   await shot(page, 'type-selector-board-dark');
-  await page.locator('#task-type-more').click();
-  assert.equal(await page.locator('#task-type-more').getAttribute('aria-expanded'), 'true');
-  await page.keyboard.press('Enter');
-  assert.equal(await page.locator('#task-type-more').innerText(), 'Marketing');
-  assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['Draft']);
-  await page.locator('[data-view=list]').click();
+  await page.locator('#task-scope').click();
+  assert.equal(await page.locator('#task-scope').getAttribute('aria-expanded'), 'true');
+  await page.locator('#task-filter-pop [data-task-type="marketing"]').click();
+  assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'Marketing');
+  assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['Draft'], 'a type keeps the layout in use');
+  // You is always a list: no layout there; the next type picked opens in the layout last used.
+  await scope(page, 'you');
+  assert.equal(await page.locator('#task-layout').isHidden(), true);
+  await scope(page, 'marketing');
+  assert.equal(await page.evaluate(() => TASKS_ST.view), 'board');
+  await layout(page, 'list');
   assert.deepEqual(await rowKeys(page), ['tmarketing-task']);
   await page.locator('#task-q').fill('no matching task');
   await page.locator('[data-clear-filters]').click();
@@ -461,13 +531,13 @@ async function typeSelection(browser) {
   await prefSaved(page, pref);                // Marketing is saved with the account before the page opens again
   await page.goto('https://tico-ui.test/#/issues');
   await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.type === 'marketing');
-  assert.equal(await page.locator('#task-type-more').innerText(), 'Marketing');
+  assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'Marketing');
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await shot(page, 'type-selector-list-light');
   await page.setViewportSize({width: 390, height: 844});
   await shot(page, 'type-selector-phone-light');
   const fits = await page.locator('.tl-head').evaluate(el => el.scrollWidth <= el.clientWidth + 1);
-  assert.equal(fits, true, 'type and search fit the phone toolbar');
+  assert.equal(fits, true, 'the scope and the icons fit the phone header');
   // A late saved preference must not replace the choice just made in the header. The read is held until the choice is
   // made; its Owner grouping shows when the page has applied it.
   let releasePref;
@@ -483,7 +553,8 @@ async function typeSelection(browser) {
     return url.pathname === '/api/v2/preferences/tasks.view' && response.request().method() === 'GET';
   });
   await page.goto('https://tico-ui.test/#/issues');
-  await page.locator('[data-task-type=dev-123]').click();
+  await page.locator('#task-scope').click();
+  await page.locator('#task-filter-pop [data-task-type="dev-123"]').click();
   releasePref();
   await delayedPreferenceRead;
   await page.waitForFunction(() => TASKS_ST.group.list === 'owner');   // the late preference was applied
@@ -602,11 +673,11 @@ async function peekAndKeys(browser) {
   assert.equal(await page.locator('[data-task-key="tt-triage"]').count(), 0);
   assert.deepEqual(taskWrites(posts).map(x => [x.p, x.body]), [['/api/v2/tasks/t-triage', {version: 3, status: 'done'}]]);
   await page.keyboard.press('Escape');
-  // Tabs: arrow keys move between them; the view follows.
-  await page.locator('#task-view [data-view="list"]').focus();
-  await page.keyboard.press('ArrowRight');
+  // The layout pair works from the keyboard.
+  await page.locator('#task-layout [data-layout="board"]').focus();
+  await page.keyboard.press('Enter');
   await page.waitForFunction(() => TASKS_ST.view === 'board');
-  assert.equal(await page.locator('#task-view [data-view="board"]').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#task-layout [data-layout="board"]').getAttribute('aria-pressed'), 'true');
   assert.deepEqual(errors, []);
   console.log('peek and keys: ok');
   await page.close();
@@ -621,7 +692,7 @@ async function properties(browser) {
   await peek.locator('.task-subs .sub-bar').waitFor();
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
-  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
+  assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Who can see', 'Public'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
@@ -893,7 +964,10 @@ async function snoozing(browser) {
   const {page, errors, posts} = await open(browser);
   const shown = async () => (await rowKeys(page)).includes('tt-deck');
   assert.ok(await shown());
-  assert.equal(await page.locator('#task-view [data-view="snoozed"]').count(), 0, 'no Snoozed tab while nothing is snoozed');
+  await page.locator('#task-archive').click();
+  assert.equal(await page.locator('#task-finished [data-view="snoozed"]').count(), 0, 'no Snoozed while nothing is snoozed');
+  await page.locator('#task-archive').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'list');
   await page.locator('#task-body .tl-row[data-task-key="tt-deck"] [data-open-task]').click();
   await peekTitle(page, 'Review the launch deck');
   const peek = page.locator('#task-peek'), menu = peek.locator('.prop-pop');
@@ -904,7 +978,7 @@ async function snoozing(browser) {
   const sent = taskWrites(posts).at(-1);
   assert.equal(sent.p, '/api/v2/tasks/t-deck/snooze');
   assert.ok(Date.parse(sent.body.until) > Date.now(), 'tomorrow, at the start of the day');
-  await page.locator('#task-view [data-view="snoozed"]').click();
+  await moreView(page, 'snoozed');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
   assert.match(await page.locator('#task-body .tl-row .tl-due').innerText(), /^Snoozed to /);
   await page.locator('#task-body .tl-row [data-open-task]').click();
@@ -925,7 +999,7 @@ async function wakeNotes(browser) {
     {...base, id: 't-noted', title: 'Noted snooze', holds: [{kind: 'snoozed', reason: long, since: null, until: inDays(3), by: 'human:ana'}],
       milestone_waits: [wait('Check the migration')]},
     {...base, id: 't-bare', title: 'Bare snooze', holds: [{kind: 'snoozed', reason: null, since: null, until: inDays(3), by: 'human:ana'}], milestone_waits: [wait()]}]});
-  await page.locator('#task-view [data-view="snoozed"]').click();
+  await moreView(page, 'snoozed');
   const chips = async (key, title) => {
     await page.locator(`#task-body [data-task-key="${key}"] [data-open-task]`).click();
     await peekTitle(page, title);
@@ -1004,12 +1078,13 @@ async function privateParent(browser) {
   await page.close();
 }
 async function views(browser) {
-  // Needs you: what waits on you, grouped by what it takes, or by who asks. A bot's heading has a visible Chat link; a
+  // You: what waits on you, grouped by kind, or by who asks. A bot's heading has a visible Chat link; a
   // person's has none.
   const {page, errors} = await open(browser, {hash: '#/tasks', byNeed: true});
-  assert.equal(await page.locator('[role=tab][aria-selected=true]').getAttribute('data-view'), 'foryou');
-  assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
-  await page.locator('#task-group').click();
+  assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'You');
+  await page.locator('#task-filter').click();
+  assert.equal(await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').innerText(), 'Kind');
+  assert.equal(await page.locator('#task-filter-pop [data-pick-field]').count(), 0, 'filters never narrow your own queue');
   await page.locator('[data-pick-group="requester"]').click();
   assert.deepEqual(await groupNames(page), ['WRITER', 'ENGINEER', 'SUPPORT', 'SAM', 'BOTOPS'], 'whoever asked most recently first');
   assert.equal(await page.locator('#task-body .tl-row').count(), NEEDS_YOU);
@@ -1019,21 +1094,27 @@ async function views(browser) {
   assert.equal(await chat.isVisible(), true, 'shown without hovering');
   assert.equal(await page.locator('.tl-group[data-group="a:human:sam"] .tl-gchat').count(), 0, 'no chat link for a person');
   await shot(page, 'needs-you-dark');
-  await page.locator('#task-view [data-view="done"]').click();
+  await moreView(page, 'done');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Done /);
   assert.match(await page.locator('#task-body .tl-age').first().innerText(), /^\d+h$/, 'the same short ages as every other row');
-  assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
+  assert.equal(await page.locator('#task-archive').getAttribute('aria-pressed'), 'true');
+  await page.locator('#task-filter').click();
+  assert.equal(await page.locator('#task-filter-pop [data-pick-group]').count(), 0, 'finished tasks are not grouped');
+  await page.keyboard.press('Escape');
   await shot(page, 'done-dark');
   // Closed, right after Done: only closed work, laid out the same.
-  await page.locator('#task-view [data-view="closed"]').click();
+  await moreView(page, 'closed');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
-  assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
+  assert.equal(await page.locator('#task-finished [data-view="closed"]').getAttribute('aria-pressed'), 'true');
+  // Pressed again, the archive goes back to You, where it came from.
+  await page.locator('#task-archive').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'foryou');
   assert.deepEqual(errors, []);
-  console.log('Needs you, Done, Closed: ok');
+  console.log('You, Done, Closed: ok');
   await page.close();
 }
 
@@ -1048,44 +1129,47 @@ async function plates(browser) {
   await page.fill('#task-filter-pop .tl-menu-q', 'sa');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => location.hash.includes('who=human:sam'));
-  assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), 'Needs Sam, 2');
+  assert.equal(await page.locator('#task-scope').getAttribute('aria-label'), 'Needs Sam, 2');
   assert.equal(await page.locator('[data-task-key="tt-demo"]').count(), 1);
   assert.equal(await page.locator('.tl-group[data-group="blocked"] [data-task-key="tt-cut"]').count(), 1);
   assert.equal(await page.locator('.tl-group[data-group="blocked"] .tl-rows').isHidden(), true, 'blocked folds away');
   await page.reload();
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('[data-task-key="tt-demo"]'));
-  assert.equal(await page.locator('#task-who .v').innerText(), 'Sam');
+  assert.equal(await page.locator('#task-who').getAttribute('aria-label'), 'Showing: Sam');
   await page.click('[data-task-key="tt-demo"] [data-row-status]');
   await page.click('.prop-pop [data-prop-pick="doing"]');
   await page.waitForFunction(() => document.querySelector('[data-task-key="tt-demo"] .task-status')?.dataset.status === 'doing');
   assert.equal(posts.find(x => x.p.endsWith('/t-demo'))?.body.status, 'doing');
   await page.evaluate(() => { location.hash = '#/tasks?who=human:zed'; });
-  await page.waitForFunction(() => document.querySelector('#task-view [data-view="foryou"]')?.firstChild.textContent === 'Needs you');
+  await page.waitForFunction(() => document.querySelector('#task-scope .tl-scope-l')?.textContent === 'You');
+  assert.equal(await page.locator('#task-who').getAttribute('aria-label'), 'Showing: Me');
   assert.deepEqual(errors, []);
   console.log('plates: ok');
   await page.close();
 }
 
 async function waitingOnYou(browser) {
-  // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
-  // and no buttons other rows lack.
+  // A bot's task set waiting on you (`--on`) is in You under that bot, whoever filed it: one face (the bot), what it
+  // waits for as a muted line under the title, no status or "Waiting" chip, and no buttons other rows lack.
   const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner_id: 'bot:engineer',
-    requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated_at: at(5)};
+    requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', person_ask: 'Can you restart the build host?', updated_at: at(5)};
   const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
-  // A question nobody answered in three days (the server marks it `older`) folds into Older questions, uncounted.
+  // An old open question stays in Needs you even when it opens the full task.
   const stale = {...host, id: 't-stale', title: 'Pick the build host region', waiting_on: null,
     ask: {id: 'q-stale', body: 'East or west?', sender_id: 'bot:engineer', recipient_id: 'human:ana', older: true}};
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host, sams, stale]});
-  assert.equal((await groupNames(page)).at(-1).toLowerCase(), 'older questions');
+  assert.equal(await page.locator('.tl-group[data-group="older"]').count(), 1);
   assert.equal(await page.locator('.tl-group[data-group="older"] .tl-rows').isHidden(), true, 'folded until opened');
-  assert.equal(await page.locator('#task-view [data-view="foryou"] .cnt').innerText(), String(NEEDS_YOU + 1), 'not counted');
+  assert.equal(await page.locator('#task-scope .cnt').innerText(), String(NEEDS_YOU + 2), 'both waits and open questions count');
   const row = page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]');
   assert.equal(await row.count(), 1);
-  assert.equal(await row.locator('.tl-waiting').innerText(), 'Waiting');
-  assert.equal(await page.locator('#task-body .tl-waiting').count(), 1, 'only on what waits on you');
-  assert.equal(await row.locator('.task-status').count(), 0, 'the chip is its status: "Waiting" once');
-  assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your Needs you');
-  // (the status chip aside: this row's "Waiting" chip stands in for it)
+  assert.equal(await page.locator('#task-body .tl-waiting, #task-body .task-status, #task-body .tl-status-pad').count(), 0, 'no status in You');
+  assert.equal(await row.locator('.tl-ask').innerText(), 'It refuses SSH since the update.');
+  assert.equal(await row.locator('.tl-note').count(), 0, 'not inline');
+  const tokens = await page.evaluate(() => ['--muted', '--wait'].map(v => { const d = document.createElement('i'); d.style.color = `var(${v})`; document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; }));
+  assert.equal(await row.locator('.tl-ask').evaluate(n => getComputedStyle(n).color), tokens[0], 'muted, not amber');
+  assert.deepEqual(await row.locator('.tl-people .tl-face').evaluateAll(f => f.map(x => x.title)), ['Engineer'], 'one face: whoever asks');
+  assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your You list');
   const buttons = r => page.locator(`[data-task-key="${r}"] button:not(.tl-status)`).evaluateAll(b => b.map(x => x.className));
   assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
   assert.deepEqual(errors, []);
@@ -1177,12 +1261,15 @@ async function phone(browser) {
   // Tasks has its own button in the bottom bar, current here instead of More.
   assert.deepEqual(await page.locator('#mobile-nav .cur').evaluateAll(els => els.map(el => el.dataset.nav)), ['tasks']);
   await shot(page, 'phone-list-dark');
-  // Select mode: a tap selects; the bar works.
+  // Select mode (in ⋯): a tap selects; the bar works.
+  await page.locator('#task-more').click();
   await page.locator('#task-select-mode').click();
   await page.locator('[data-task-key="tt-triage"] .tl-title').click();
   await page.locator('[data-task-key="tt-rotate"] .tl-title').click();
   assert.equal(await page.locator('.tl-bulk-n').innerText(), '2 selected');
   assert.equal(await page.locator('#task-peek[open]').count(), 0);
+  await page.locator('#task-more').click();
+  assert.equal(await page.locator('#task-select-mode').getAttribute('aria-checked'), 'true');
   await page.locator('#task-select-mode').click();
   assert.equal(await page.locator('#task-bulk').isHidden(), true);
   // The peek is a full-screen modal sheet; Back closes it and stays on Tasks. Long titles wrap or end in "…".
@@ -1211,6 +1298,113 @@ async function phone(browser) {
   assert.match(new URL(page.url()).hash, /^#\/issues/);
   assert.deepEqual(errors, []);
   console.log('phone: ok');
+  await page.close();
+}
+
+async function phoneViews(browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
+  // You rows on a phone: the face, the title (with its ask), the age; no chips squeeze the title.
+  assert.ok(await page.locator('#task-body .tl-queue .tl-row').count() > 0);
+  assert.equal(await page.locator('#task-body .tl-queue .tl-chips:visible, #task-body .tl-queue .task-status').count(), 0);
+  // ...on one line: nothing in a row (an ask's row too) wraps below the title.
+  assert.deepEqual(await page.locator('#task-body .tl-queue .tl-row').evaluateAll(rows => rows.filter(r => {
+    const open = r.querySelector('.tl-open').getBoundingClientRect();
+    return [...r.children].some(c => { const b = c.getBoundingClientRect(); return !c.matches('.tl-note') && b.height && b.top >= open.bottom - 1; });
+  }).map(r => r.querySelector('.tl-title').textContent)), []);
+  await shot(page, 'phone-you-dark');
+  assert.deepEqual(errors, []);
+  console.log('phone views: ok');
+  await page.close();
+}
+
+// The header is one row on a desktop at rest, whatever the scope; a phone takes at most two, and nothing scrolls
+// sideways. Old ?view= addresses open the scope, layout or finished view they named.
+async function header(browser) {
+  const {page, errors, tasks} = await open(browser, {hash: '#/tasks?view=list', types: [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}]});
+  const go = async hash => { await page.evaluate(h => { location.hash = h; }, hash); await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading); };
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({width, height: 900});
+    for (const [hash, view] of [['#/tasks?view=list', 'list'], ['#/tasks?view=foryou', 'foryou'], ['#/tasks?view=board', 'board'], ['#/tasks?view=done', 'done']]) {
+      await go(hash);
+      await page.waitForFunction(view => TASKS_ST.view === view, view);
+      await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const r = await headRows(page);
+      assert.equal(r.rows, 1, `${width} ${view}: one row ${JSON.stringify(r)}`);
+      assert.ok(r.spread <= 4 && !r.scroll && !r.bar, `${width} ${view}: ${JSON.stringify(r)}`);
+      assert.equal(r.fold, false, `${width} ${view}: the search keeps its field`);
+    }
+  }
+  // Old addresses: the scope, the layout and the archive follow what they named.
+  await go('#/tasks?view=board');
+  assert.deepEqual(await page.evaluate(() => [TASKS_ST.view, document.querySelector('#task-scope .tl-scope-l').textContent,
+    document.querySelector('#task-layout [data-layout="board"]').getAttribute('aria-pressed'), document.querySelector('#task-archive').getAttribute('aria-pressed')]),
+    ['board', 'General', 'true', 'false']);
+  await go('#/tasks?view=foryou');
+  assert.equal(await page.locator('#task-layout').isHidden(), true, 'no layout on You');
+  assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'You');
+  for (const view of ['done', 'closed', 'snoozed']) {
+    await go(`#/tasks?view=${view}&type=support`);
+    await page.waitForFunction(view => TASKS_ST.view === view, view);
+    assert.deepEqual(await page.evaluate(() => [TASKS_ST.type, document.querySelector('#task-archive').getAttribute('aria-pressed'),
+      document.querySelector('#task-finished [aria-pressed=true]')?.dataset.view, document.querySelector('#task-layout').hidden]), ['support', 'true', view, true], view);
+  }
+  // The archive toggle reaches Done, Closed and Snoozed (listed while something is snoozed), and goes back.
+  tasks.find(x => x.id === 't-deck').holds = [{kind: 'snoozed', until: new Date(Date.now() + 86400e3).toISOString()}];
+  await go('#/tasks?view=list&type=general');
+  await page.evaluate(() => tasksLoad(TASKS_ST));
+  await layout(page, 'board');
+  await moreView(page, 'done');
+  await moreView(page, 'closed');
+  await moreView(page, 'snoozed');
+  assert.ok((await rowKeys(page)).includes('tt-deck'), 'the snoozed task is under Snoozed');
+  await page.locator('#task-archive').click();
+  await page.waitForFunction(() => TASKS_ST.view === 'board');
+  // Group changes from the filter menu; Select tasks is in ⋯.
+  await layout(page, 'list');
+  await groupBy(page, 'owner');
+  await page.locator('#task-more').click();
+  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => b.id)), ['task-select-mode', 'task-stats', 'task-pin']);
+  await page.keyboard.press('Escape');
+  // Filters on: their chips take a second row, with Clear; the header stays one row.
+  await page.locator('#task-filter').click();
+  await page.locator('#task-filter-pop [data-pick-field="pr"]').click();
+  await page.locator('#task-filter-pop input[value="yes"]').check();
+  await page.keyboard.press('Escape');
+  const on = await headRows(page);
+  assert.ok(on.rows === 1 && on.bar, 'chips under a one-row header: ' + JSON.stringify(on));
+  assert.equal(await page.locator('#task-filter-clear').isVisible(), true);
+  await shot(page, 'header-filters-dark');
+  await page.locator('#task-filter-clear').click();
+  assert.equal(await page.locator('#task-bar').isHidden(), true);
+  // A narrow list (the peek open, a small window): the search folds to its icon first; / opens it over the row.
+  await go('#/tasks?view=list');
+  await page.evaluate(() => { document.querySelector('#tasks-pane').style.maxWidth = '560px'; });
+  await page.waitForFunction(() => document.querySelector('#tasks-pane .tl-head').classList.contains('s-fold'));
+  assert.ok((await page.locator('.tl-search').boundingBox()).width <= 34, 'the search is an icon');
+  assert.equal((await headRows(page)).rows, 1);
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press('/');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-q');
+  assert.ok((await page.locator('.tl-search').boundingBox()).width > 300, '/ opens it over the row');
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { document.querySelector('#tasks-pane').style.maxWidth = ''; });
+  // A phone: at most two rows (the chips row counted), no sideways scroll, the search an icon.
+  await page.setViewportSize({width: 390, height: 844});
+  for (const hash of ['#/tasks?view=list', '#/tasks?view=foryou', '#/tasks?view=board', '#/tasks?view=done', '#/tasks?view=snoozed']) {
+    await go(hash);
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const r = await headRows(page);
+    assert.ok(r.rows + r.bar <= 2 && !r.scroll, `phone ${hash}: ${JSON.stringify(r)}`);
+    assert.ok((await page.locator('.tl-search').boundingBox() || {width: 0}).width <= 34, `phone ${hash}: the search is an icon`);
+  }
+  await go('#/tasks?view=list');
+  await page.locator('#task-filter').click();
+  assert.equal(await page.locator('#task-filter-pop').evaluate(el => Math.round(el.getBoundingClientRect().bottom)), 844, 'a bottom sheet');
+  assert.ok(await page.locator('#task-filter-pop [data-pick-group]').count() > 0, 'Group at the top of the sheet');
+  await shot(page, 'header-filter-phone-dark');
+  await page.keyboard.press('Escape');
+  assert.deepEqual(errors, []);
+  console.log('header: ok');
   await page.close();
 }
 
@@ -1311,7 +1505,7 @@ async function recheckLists(browser) {
   // N4 / R2-4: Done keeps its own paging. While it shows, the poll fetches only its first page (picking up newly finished
   // tasks), never the rest; its selection survives.
   await page.locator('#task-bulk [data-bulk="clear"]').click();
-  await page.locator('#task-view [data-view="done"]').click();
+  await moreView(page, 'done');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   await page.locator('[data-task-key="tt-sso"] .tl-check').click();
   const doneAsks = [];
@@ -1326,8 +1520,8 @@ async function recheckLists(browser) {
   assert.deepEqual(errors, []);
   await page.close();
   // N9: handing a Needs-you task to someone else moves the list and the peek on to the next row.
-  const second = await open(browser, {hash: '#/tasks'});
-  await second.page.locator('[data-task-key="tt-access"] .tl-title').click();
+  const second = await open(browser, {hash: '#/tasks', needsLive: true});
+  await second.page.evaluate(() => taskPeekOpen(TASKS_ST, 'tt-access'));
   await second.page.locator('#task-peek [data-prop="owner"]').click();
   await second.page.locator('#task-peek .prop-pop [data-prop-pick="writer"]').click();
   await second.page.waitForFunction(() => !document.querySelector('[data-task-key="tt-access"]') && TASKS_ST.peek && TASKS_ST.peek !== 'tt-access');
@@ -1405,7 +1599,7 @@ async function recheckFinal(browser) {
   assert.deepEqual(errors, []);
   await page.close();
   // R2-2: a poll that overtakes a save's reload still moves the list and the peek on when the task leaves the view.
-  const second = await open(browser, {hash: '#/tasks'});
+  const second = await open(browser, {hash: '#/tasks', needsLive: true});
   // List reads are held, then let through in the order they were asked.
   const held = [];
   let holding = true;
@@ -1413,7 +1607,7 @@ async function recheckFinal(browser) {
     if (holding && new URL(route.request().url()).pathname === '/api/v2/tasks') await new Promise(r => held.push(r));
     await route.fallback();
   });
-  await second.page.locator('[data-task-key="tt-access"] .tl-title').click();
+  await second.page.evaluate(() => taskPeekOpen(TASKS_ST, 'tt-access'));
   await second.page.locator('#task-peek [data-prop="owner"]').click();
   await second.page.locator('#task-peek .prop-pop [data-prop-pick="writer"]').click();
   await until(() => held.length >= 1);
@@ -1481,12 +1675,12 @@ async function taskCheckBack(browser) {
   console.log('task follow-up date and expected result: ok');
 }
 
-module.exports = {open, fixtures};
+module.exports = {open, fixtures, moreView};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot, taskCheckBack}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, phoneViews, header, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot, taskCheckBack}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

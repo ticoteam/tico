@@ -134,6 +134,10 @@
    "session_epoch": 0,
    "start_reservation_seconds": 180,
    "task": null,
+   "task_context": {
+    "meetings": [],
+    "pages": []
+   },
    "token": "turn-token",
    "updates": null,
    "worktrees": []

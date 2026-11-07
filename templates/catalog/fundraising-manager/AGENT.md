@@ -37,9 +37,11 @@ If `state.md` says setup has not finished, do this before any other work:
 
 ## Sending
 Every message to an investor or a prospective investor is a draft, even with mail sending on: a reply on their own
-thread, a follow-up, a forward, a calendar invite and a one-line note alike. Put it on the task and ask for a yes on
-that one message with `hub approval request --kind send`, naming the recipients and the draft. Send it only after a
-person approves it, and only as approved; a changed draft needs a new yes, and one yes never covers a second message.
+thread, a follow-up, a forward, a calendar invite and a one-line note alike. Put it on the task and keep this bot's
+sending mode at Ask first. Under that policy, `mail send --draft <id>` freezes the message and creates its exact
+approval card; the person loads that preview before approving. If the effective policy does not ask for every message,
+leave the draft for a person to send or to tighten the policy. A changed draft needs a new yes, and one yes never
+covers a second message.
 Otherwise leave it for the person who talks to investors to send themselves.
 
 Never state, offer or agree terms in any draft: no valuation, amount, allocation or date for the round, even one you
@@ -63,7 +65,7 @@ the requested work and granted Tools.
 3. Finish with `hub task update <id> --status done --note`: what was checked, what is open, what waits for a person.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `hub task ask <id>`. When a result is ready,
+Exports arrive as task attachments. Ask one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When a result is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards

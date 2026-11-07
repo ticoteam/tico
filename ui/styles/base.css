@@ -68,7 +68,7 @@ html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility
 *{box-sizing:border-box}
 html,body{height:100%}
 /* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
-:root{--rail-left:236px;--rail-right:320px;--rail-chat:360px}
+:root{--rail-left:236px;--rail-right:320px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
 /* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
@@ -93,7 +93,7 @@ h3{font-size:var(--t-base);line-height:var(--lh-tight);letter-spacing:var(--trac
    badges. */
 table,time,kbd,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[type=number],
 .kpi-big,.kpi-val,.upd-kpi-val,.dash-big,.dash-stat,.flow-tile-n,.goal-metric,.settings-num,
-.mkt-total,.mkt-num,.mkt-n,.bt-val,.bt-spent,.bt-n,.bt-hot-n,.bd-money,.bt-cap,.billing-total,.gw-price,
+.mkt-num,.mkt-n,.bt-val,.bt-spent,.bt-n,.bt-hot-n,.bd-money,.bt-cap,.billing-total,.gw-price,
 .use-cost,.use-total,.use-money,.use-limit,.run-cost,.machine-chip-pct,.au-pct,.au-n,
 .run-when,.rp-clock,.rp-when,.tl-age,.tmodal-age,.rail-age,.bcard-step-age,.chat-time,.side-rec-time,.sh-when,
 .docs-recent-when,.lens-past-when,.cat-when,.goal-fin-when,.code-num,
@@ -109,14 +109,14 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 @keyframes tico-pop{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
 @keyframes tico-fade{from{opacity:0}to{opacity:1}}
 /* menus settle from 98% on a desktop; dialogs, and a phone's menus (bottom sheets there), only fade, so their box never moves */
-:where(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation:tico-fade var(--dur) var(--ease)}
-@media (min-width:761px){:where(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation-name:tico-pop}}
+:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation:tico-fade var(--dur) var(--ease)}
+@media (min-width:761px){:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation-name:tico-pop}}
 :where(dialog[open]){animation:tico-fade var(--dur) var(--ease)}
 :where(.slash-menu,#account-menu,#new-version-pop){transform-origin:bottom center}
-:where(.p-menu,.people-menu,.mg-menu){transform-origin:top right}
+:where(.p-menu,.people-menu){transform-origin:top right}
 :where(dialog[open])::backdrop{animation:tico-fade var(--dur) var(--ease)}
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
-  .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,.section-head,
+  .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.people-menu button,.section-toggle,.section-head,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
 /* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
    alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still

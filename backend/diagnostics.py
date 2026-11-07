@@ -10,6 +10,7 @@ The preview is the bundle. `GET /api/v2/support/diagnostics` builds one and reme
 SHA-256; the request that files the ticket names that digest and the server sends the remembered bytes, so what a person
 looked at is what leaves, not a second build that could differ.
 """
+
 import collections
 import hashlib
 import json
@@ -24,18 +25,38 @@ import time
 import httpx
 
 from . import releases
+
 # The text rules live in redaction.py, standard library only, so the setup wizard applies the same ones.
-from .redaction import (ACTOR, AUTHORITY, CONTROL, EMAIL, HOST, IPV4, IPV6, KNOWN_HOSTS, LONG, QUERY, SECRET_FIELD,  # noqa: F401
-                        SECRETS, TLDS, UUID, WORD_MIN, Redactor, _ipv6, _looks_secret, known_host)
+from .redaction import (
+    ACTOR,  # noqa: F401
+    AUTHORITY,  # noqa: F401
+    CONTROL,  # noqa: F401
+    EMAIL,  # noqa: F401
+    HOST,  # noqa: F401
+    IPV4,  # noqa: F401
+    IPV6,  # noqa: F401
+    KNOWN_HOSTS,  # noqa: F401
+    LONG,  # noqa: F401
+    QUERY,  # noqa: F401
+    SECRET_FIELD,  # noqa: F401
+    SECRETS,  # noqa: F401
+    TLDS,  # noqa: F401
+    UUID,  # noqa: F401
+    WORD_MIN,  # noqa: F401
+    Redactor,
+    _ipv6,  # noqa: F401
+    _looks_secret,  # noqa: F401
+    known_host,  # noqa: F401
+)
 from .store import H
 
 FORMAT = 1
-MAX_BYTES = 256 * 1024            # HQ refuses more (docs/telemetry.md, Support tickets)
-LOG_LINES = 200                   # server WARN and ERROR lines
+MAX_BYTES = 256 * 1024  # HQ refuses more (docs/telemetry.md, Support tickets)
+LOG_LINES = 200  # server WARN and ERROR lines
 RUNNER_LINES = 50
-APP_LINES = 200                   # the end of the desktop app's log, when the page runs in the app
-LINE = 300                        # characters of one log line
-KEEP_S = 15 * 60                  # a preview may be sent for this long
+APP_LINES = 200  # the end of the desktop app's log, when the page runs in the app
+LINE = 300  # characters of one log line
+KEEP_S = 15 * 60  # a preview may be sent for this long
 KEEP_N = 20
 UPDATER_WAIT = 3
 
@@ -63,7 +84,7 @@ class LogRing(logging.Handler):
                         frames.append("%s:%s" % (module, tb.tb_lineno))
                     tb = tb.tb_next
                 message += " " + " > ".join(frames[-3:])
-            message = message.replace("\n", " ")[:LINE - 65]
+            message = message.replace("\n", " ")[: LINE - 65]
             stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(record.created))
             self.total += 1
             if self.lines and self.previous == message:
@@ -80,9 +101,13 @@ class LogRing(logging.Handler):
 
     def snapshot(self):
         with self.lock:
-            return list(self.lines), {"server_started": self.started, "server_events": self.total,
-                                     "server_repeats": self.repeated, "server_evicted": self.dropped,
-                                     "retention": "Memory only; resets on server restart"}
+            return list(self.lines), {
+                "server_started": self.started,
+                "server_events": self.total,
+                "server_repeats": self.repeated,
+                "server_evicted": self.dropped,
+                "retention": "Memory only; resets on server restart",
+            }
 
 
 RING = LogRing()
@@ -98,11 +123,19 @@ def watch_logs():
 def request_failure(request, status, exc=None):
     """Only server failures, using a registered route template; no URLs, request data or exception messages."""
     route = getattr(request.scope.get("route"), "path", "unmatched")
-    method = request.method if request.method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") else "OTHER"
+    method = (
+        request.method if request.method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") else "OTHER"
+    )
     # Capture in the bounded ring only: a failing poll must not flood the ordinary process log.
-    record = logging.LogRecord("tico.request", logging.ERROR, "", 0, "%s %s HTTP %d%s",
+    record = logging.LogRecord(
+        "tico.request",
+        logging.ERROR,
+        "",
+        0,
+        "%s %s HTTP %d%s",
         (method, route, status, " " + type(exc).__name__ if exc else ""),
-        (type(exc), exc, exc.__traceback__) if exc else None)
+        (type(exc), exc, exc.__traceback__) if exc else None,
+    )
     RING.handle(record)
 
 
@@ -110,18 +143,41 @@ def request_failure(request, status, exc=None):
 # Every path a bundle may hold. A key that is not here is dropped by `allowed()`, whatever a builder put there; the
 # tests read this table to prove no content field can appear.
 ALLOWED = {
-    "format": None, "created_at": None,
-    "capture": {"server_started": None, "server_events": None, "server_repeats": None,
-                "server_evicted": None, "retention": None, "truncated": None, "edited": None},
+    "format": None,
+    "created_at": None,
+    "capture": {
+        "server_started": None,
+        "server_events": None,
+        "server_repeats": None,
+        "server_evicted": None,
+        "retention": None,
+        "truncated": None,
+        "edited": None,
+    },
     "versions": {"tico": None, "server": None, "runners": None, "updater": None, "app": None},
     "system": {"os": None, "arch": None, "docker": None, "compose": None, "in_docker": None},
     "containers": [{"name": None, "state": None, "health": None, "restarts": None}],
     "update": {"state": None, "from": None, "to": None, "message": None, "restored": None},
     "health": [{"name": None, "status": None}],
-    "runners": [{"label": None, "online": None, "last_seen_at": None, "platform": None, "kind": None, "release": None, "update": None,
-                 "update_error": None, "runtimes": [{"name": None, "installed": None, "version": None, "ready": None,
-                                                     "state": None, "detail": None}],
-                 "bots": None, "bots_ready": None, "problems": None, "log": None}],
+    "runners": [
+        {
+            "label": None,
+            "online": None,
+            "last_seen_at": None,
+            "platform": None,
+            "kind": None,
+            "release": None,
+            "update": None,
+            "update_error": None,
+            "runtimes": [
+                {"name": None, "installed": None, "version": None, "ready": None, "state": None, "detail": None}
+            ],
+            "bots": None,
+            "bots_ready": None,
+            "problems": None,
+            "log": None,
+        }
+    ],
     "database": {"migration": None, "cloud_migration": None},
     "features": {},
     # The Beta features this install has on or in use (backend/beta.py), by id.
@@ -131,29 +187,95 @@ ALLOWED = {
     "browser": [{"kind": None, "at": None, "file": None, "line": None, "column": None, "count": None}],
     # The flight recorder's file, last 24 hours (backend/flight_file.py `bundle`): route templates, timings, sizes,
     # stall classes and code locations (file:line function); no paths with ids, no values.
-    "flight": {"since": None, "drops": None, "stalls_total": None,
-               "routes": [{"route": None, "n": None, "errors": None, "total_ms": None, "p95": None, "max_ms": None,
-                           "sql_ms": None, "wait_ms": None, "avg_bytes": None, "bytes_max": None}],
-               "slow": [{"ts": None, "route": None, "ms": None, "status": None, "sql_ms": None, "wait_ms": None}],
-               "stalls": [{"ts": None, "seconds": None, "class": None, "usage": None, "threads": None}],
-               "hours": [{"ts": None, "cpu_max": None, "rss_max": None, "lag_max": None, "wait_max": None,
-                          "locked": None, "requests": None}]},
+    "flight": {
+        "since": None,
+        "drops": None,
+        "stalls_total": None,
+        "routes": [
+            {
+                "route": None,
+                "n": None,
+                "errors": None,
+                "total_ms": None,
+                "p95": None,
+                "max_ms": None,
+                "sql_ms": None,
+                "wait_ms": None,
+                "avg_bytes": None,
+                "bytes_max": None,
+            }
+        ],
+        "slow": [{"ts": None, "route": None, "ms": None, "status": None, "sql_ms": None, "wait_ms": None}],
+        "stalls": [{"ts": None, "seconds": None, "class": None, "usage": None, "threads": None}],
+        "hours": [
+            {
+                "ts": None,
+                "cpu_max": None,
+                "rss_max": None,
+                "lag_max": None,
+                "wait_max": None,
+                "locked": None,
+                "requests": None,
+            }
+        ],
+    },
 }
 # A computer's performance window, when the person attaching diagnostics keeps it (backend/performance.py): numbers,
 # process names, bot labels and models; `points` rows follow performance.COLUMNS.
-ALLOWED["performance"] = {"hours": None, "computers": [{
-    "label": None, "scope": None, "mem_total": None, "disk_total": None, "span": None, "points": None, "summary": None,
-    "overloads": [{"started_at": None, "ended_at": None, "minutes": None, "reasons": None, "cpu_max": None, "mem_max": None,
-                   "runs_max": None, "bots": [{"bot": None, "model": None, "runs": None}],
-                   "procs": [{"name": None, "cpu": None, "mem": None}]}],
-    "bots": [{"bot": None, "model": None, "runs": None}],
-    "processes": [{"name": None, "cpu_minutes": None, "cpu_max": None, "mem_max": None}]}]}
+ALLOWED["performance"] = {
+    "hours": None,
+    "computers": [
+        {
+            "label": None,
+            "scope": None,
+            "mem_total": None,
+            "disk_total": None,
+            "span": None,
+            "points": None,
+            "summary": None,
+            "overloads": [
+                {
+                    "started_at": None,
+                    "ended_at": None,
+                    "minutes": None,
+                    "reasons": None,
+                    "cpu_max": None,
+                    "mem_max": None,
+                    "runs_max": None,
+                    "bots": [{"bot": None, "model": None, "runs": None}],
+                    "procs": [{"name": None, "cpu": None, "mem": None}],
+                }
+            ],
+            "bots": [{"bot": None, "model": None, "runs": None}],
+            "processes": [{"name": None, "cpu_minutes": None, "cpu_max": None, "mem_max": None}],
+        }
+    ],
+}
 # What a person reports from a screen (Report this) or from Help's Setup check (backend/support.py Report): the kind
 # of problem, what the screen said and the check rows. Every string goes through the redactor like the rest.
-ALLOWED["report"] = {"kind": None, "title": None, "detail": None, "ref": None, "group": None,
-                     "checks": [{"name": None, "status": None, "detail": None, "fix": None, "source": None}]}
-FEATURES = ("demo", "updater", "update_check", "usage_count", "backups", "github_app", "slack", "sign_in_proxy",
-            "blob_storage", "scheduler", "observability", "assistant", "librarian")
+ALLOWED["report"] = {
+    "kind": None,
+    "title": None,
+    "detail": None,
+    "ref": None,
+    "group": None,
+    "checks": [{"name": None, "status": None, "detail": None, "fix": None, "source": None}],
+}
+FEATURES = (
+    "demo",
+    "updater",
+    "update_check",
+    "usage_count",
+    "backups",
+    "github_app",
+    "slack",
+    "sign_in_proxy",
+    "blob_storage",
+    "scheduler",
+    "observability",
+    "assistant",
+    "librarian",
+)
 
 
 def allowed(value, shape=ALLOWED):
@@ -163,7 +285,7 @@ def allowed(value, shape=ALLOWED):
     if isinstance(shape, dict):
         if not isinstance(value, dict):
             return {}
-        if shape == {} and value is not None:            # a map of booleans
+        if shape == {} and value is not None:  # a map of booleans
             return {str(k): bool(v) for k, v in value.items() if k in FEATURES}
         return {k: allowed(v, shape[k]) for k, v in value.items() if k in shape}
     return value
@@ -171,8 +293,10 @@ def allowed(value, shape=ALLOWED):
 
 def fit(bundle):
     """Bound the preview and wire representation; explicitly report missing evidence."""
+
     def size():
         return len(canonical(bundle).encode())
+
     capture = bundle.setdefault("capture", {})
     capture.setdefault("truncated", 0)
     while size() > MAX_BYTES:
@@ -303,6 +427,7 @@ def runner_label(c, runner_id):
 def _runner_rows(c, fleet, online_ids):
     from .store import readiness_document
     from . import runner_versions
+
     rows = []
     for index, row in enumerate(c.execute(RUNNERS_SQL), 1):
         doc = readiness_document(row["readiness"])
@@ -310,7 +435,9 @@ def _runner_rows(c, fleet, online_ids):
         problems = []
         for slug, b in bots.items():
             for text in (b or {}).get("problems") or []:
-                if str(text).startswith(str(slug) + ": "):        # the runner leads a bot's problem with its slug: an exact reference
+                if str(text).startswith(
+                    str(slug) + ": "
+                ):  # the runner leads a bot's problem with its slug: an exact reference
                     text = "bot:" + str(text)
                 if text not in problems:
                     problems.append(text)
@@ -319,14 +446,33 @@ def _runner_rows(c, fleet, online_ids):
         for name, v in sorted((doc.get("runtimes") or {}).items()):
             if not (v or {}).get("installed"):
                 continue
-            runtimes.append({"name": name, "installed": True, "version": _version(v.get("version")) or str(v.get("version") or "")[:60],
-                             "ready": v.get("authenticated") == "ready", "state": str(v.get("authenticated") or ""),
-                             "detail": str(v.get("detail") or "")[:200]})
-        rows.append({"label": "runner-%d" % index, "online": row["id"] in online_ids, "last_seen_at": row["last_seen_at"], "platform": str(row["platform"] or ""),
-                     "kind": update["kind"], "release": update["release"] or _version(row["version"]),
-                     "update": update["state"], "update_error": update["error"][:200], "runtimes": runtimes,
-                     "bots": len(bots), "bots_ready": sum(1 for b in bots.values() if (b or {}).get("ready")),
-                     "problems": problems[:20], "log": _lines(doc.get("recent_errors"), RUNNER_LINES)})
+            runtimes.append(
+                {
+                    "name": name,
+                    "installed": True,
+                    "version": _version(v.get("version")) or str(v.get("version") or "")[:60],
+                    "ready": v.get("authenticated") == "ready",
+                    "state": str(v.get("authenticated") or ""),
+                    "detail": str(v.get("detail") or "")[:200],
+                }
+            )
+        rows.append(
+            {
+                "label": "runner-%d" % index,
+                "online": row["id"] in online_ids,
+                "last_seen_at": row["last_seen_at"],
+                "platform": str(row["platform"] or ""),
+                "kind": update["kind"],
+                "release": update["release"] or _version(row["version"]),
+                "update": update["state"],
+                "update_error": update["error"][:200],
+                "runtimes": runtimes,
+                "bots": len(bots),
+                "bots_ready": sum(1 for b in bots.values() if (b or {}).get("ready")),
+                "problems": problems[:20],
+                "log": _lines(doc.get("recent_errors"), RUNNER_LINES),
+            }
+        )
     return rows
 
 
@@ -334,6 +480,7 @@ def _performance(c, hours):
     """Each computer's performance window, labelled like `_runner_rows` (`runner-N`) and with bots as `bot:<id>`,
     which the redactor turns into `bot-N`. Ten-minute points for a day or two, hourly ones beyond."""
     from . import performance
+
     out = []
     for index, row in enumerate(c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY id"), 1):
         seen = performance.view(c, row["id"], hours, label=lambda b: "bot:" + b if b else "")
@@ -341,14 +488,24 @@ def _performance(c, hours):
             continue
         span = 600 if hours <= 48 else 3600
         points, last = [], None
-        for p in seen["points"]:             # the bucket's first point stands for it: a support window is a sketch
+        for p in seen["points"]:  # the bucket's first point stands for it: a support window is a sketch
             if last is None or p[0] // span != last:
                 points.append(p)
                 last = p[0] // span
-        out.append({"label": "runner-%d" % index, "scope": seen["scope"], "mem_total": seen["mem_total"],
-                    "disk_total": seen["disk_total"], "span": span, "points": points, "summary": seen["summary"],
-                    "overloads": seen["overloads"][-20:], "bots": seen["busiest"]["bots"][:10],
-                    "processes": seen["busiest"]["processes"][:10]})
+        out.append(
+            {
+                "label": "runner-%d" % index,
+                "scope": seen["scope"],
+                "mem_total": seen["mem_total"],
+                "disk_total": seen["disk_total"],
+                "span": span,
+                "points": points,
+                "summary": seen["summary"],
+                "overloads": seen["overloads"][-20:],
+                "bots": seen["busiest"]["bots"][:10],
+                "processes": seen["busiest"]["processes"][:10],
+            }
+        )
     return {"hours": hours, "computers": out}
 
 
@@ -360,12 +517,18 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     from . import beta, health, onboarding, replication, runner_versions
     from .getting_started import _online_runners
     from .views import roster
+
     updater = _updater_report(settings)
     result = _update_result()
     with store.read() as c:
         people = roster(c)
-        bot_rows = [(b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)]     # the id: `bot:<id>` in the bundle
-        humans = [((p or {}).get("id") or "", [(p or {}).get("name"), (p or {}).get("email")]) for p in people.get("people") or []]
+        bot_rows = [
+            (b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)
+        ]  # the id: `bot:<id>` in the bundle
+        humans = [
+            ((p or {}).get("id") or "", [(p or {}).get("name"), (p or {}).get("email")])
+            for p in people.get("people") or []
+        ]
         redactor = Redactor(_domains(settings, people), bot_rows, humans)
         config = config or onboarding.config_view(c, settings, who)
         checks = health.view(c, who, settings, auth, github, config)["checks"]
@@ -376,22 +539,32 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         migration = c.execute("PRAGMA user_version").fetchone()[0]
         cloud = c.execute("SELECT coalesce(max(version),0) FROM cloud_migrations").fetchone()[0]
         backup = replication.status()
-        slack = bool(c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
-                     and c.execute("SELECT 1 FROM slack_credentials WHERE id='app'").fetchone())
+        slack = bool(
+            c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
+            and c.execute("SELECT 1 FROM slack_credentials WHERE id='app'").fetchone()
+        )
         assistant = H.bot(c, settings.assistant_bot)
         librarian = H.bot(c, "librarian")
         github_on = bool(github and github.row(c) and github.row(c)["installation_id"])
         perf = _performance(c, performance_hours) if performance_hours else None
         beta_on = beta.turned_on(c, settings, shell)
-    features = {"demo": bool(settings.demo), "updater": bool(releases._updater()[0]),
-                "update_check": releases.Checker.enabled(), "usage_count": census.enabled(),
-                "backups": backup.get("mode") not in (None, "off"), "github_app": github_on, "slack": slack,
-                "sign_in_proxy": bool(settings.proxy_kind), "blob_storage": bool(settings.blob_bucket),
-                "scheduler": bool(settings.scheduler_enabled),
-                "observability": bool(settings.sentry_dsn or settings.posthog_key),
-                "assistant": bool(assistant and assistant.get("state") == "active"),
-                "librarian": bool(librarian and librarian.get("state") == "active")}
+    features = {
+        "demo": bool(settings.demo),
+        "updater": bool(releases._updater()[0]),
+        "update_check": releases.Checker.enabled(),
+        "usage_count": census.enabled(),
+        "backups": backup.get("mode") not in (None, "off"),
+        "github_app": github_on,
+        "slack": slack,
+        "sign_in_proxy": bool(settings.proxy_kind),
+        "blob_storage": bool(settings.blob_bucket),
+        "scheduler": bool(settings.scheduler_enabled),
+        "observability": bool(settings.sentry_dsn or settings.posthog_key),
+        "assistant": bool(assistant and assistant.get("state") == "active"),
+        "librarian": bool(librarian and librarian.get("state") == "active"),
+    }
     from . import flight_file
+
     try:
         folder = flight_file.directory(settings.db_path)
         flight = flight_file.bundle(folder) if folder.is_dir() else {}
@@ -401,27 +574,50 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     capture["truncated"] = max(0, len(server_lines) - LOG_LINES)
     bundle = {
         "capture": capture,
-        "format": FORMAT, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "versions": {"tico": _version(releases.version()), "server": _version(releases.version()),
-                     "runners": sorted({r["release"] for r in runners if r["release"]}),
-                     "updater": _version(updater.get("version")),
-                     **({"app": _version(shell.get("version"))} if shell else {})},
-        "system": {"os": platform.system(), "arch": platform.machine(), "docker": _version(updater.get("docker")),
-                   "compose": _version(updater.get("compose")), "in_docker": onboarding.running_in_docker()},
-        "containers": [{"name": str(x.get("name") or ""), "state": str(x.get("state") or ""),
-                        "health": str(x.get("health") or ""), "restarts": int(x.get("restarts") or 0)}
-                       for x in (updater.get("containers") or [])[:50] if isinstance(x, dict)],
-        "update": {"state": str(result.get("state") or ""), "from": _version(result.get("from")),
-                   "to": _version(result.get("to")), "message": str(result.get("message") or "")[:300],
-                   "restored": bool(result.get("restored"))},
+        "format": FORMAT,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "versions": {
+            "tico": _version(releases.version()),
+            "server": _version(releases.version()),
+            "runners": sorted({r["release"] for r in runners if r["release"]}),
+            "updater": _version(updater.get("version")),
+            **({"app": _version(shell.get("version"))} if shell else {}),
+        },
+        "system": {
+            "os": platform.system(),
+            "arch": platform.machine(),
+            "docker": _version(updater.get("docker")),
+            "compose": _version(updater.get("compose")),
+            "in_docker": onboarding.running_in_docker(),
+        },
+        "containers": [
+            {
+                "name": str(x.get("name") or ""),
+                "state": str(x.get("state") or ""),
+                "health": str(x.get("health") or ""),
+                "restarts": int(x.get("restarts") or 0),
+            }
+            for x in (updater.get("containers") or [])[:50]
+            if isinstance(x, dict)
+        ],
+        "update": {
+            "state": str(result.get("state") or ""),
+            "from": _version(result.get("from")),
+            "to": _version(result.get("to")),
+            "message": str(result.get("message") or "")[:300],
+            "restored": bool(result.get("restored")),
+        },
         "health": [{"name": x["label"], "status": x["status"]} for x in checks],
         "runners": runners,
         "database": {"migration": migration, "cloud_migration": cloud},
         "features": features,
         "beta": [x for x in beta_on if x in beta.IDS],
         "counts": {"bots": bots_total, "people": len(people.get("people") or []), "routines": routines},
-        "logs": {"server": _lines(server_lines, LOG_LINES), "updater": _lines(updater.get("errors"), RUNNER_LINES),
-                 **({"app": _lines(shell.get("lines"), APP_LINES)} if shell else {})},
+        "logs": {
+            "server": _lines(server_lines, LOG_LINES),
+            "updater": _lines(updater.get("errors"), RUNNER_LINES),
+            **({"app": _lines(shell.get("lines"), APP_LINES)} if shell else {}),
+        },
         "flight": flight,
         **({"performance": perf} if perf else {}),
         **({"report": report} if report else {}),

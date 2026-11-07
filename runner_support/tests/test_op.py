@@ -1,4 +1,5 @@
 """op:// values in a secrets file are read from 1Password before a turn; the token stays home."""
+
 import unittest
 from unittest.mock import MagicMock
 
@@ -16,14 +17,23 @@ class OnePassword(unittest.TestCase):
                 r.returncode, r.stdout, r.stderr = 1, "", "[ERROR] 2026/09/06 could not find item"
             self.seen.append((cmd, kw.get("env", {}).get("OP_SERVICE_ACCOUNT_TOKEN")))
             return r
+
         self.seen = []
         return run
 
     def test_references_resolve_and_the_token_is_stripped(self):
-        env = {"OP_SERVICE_ACCOUNT_TOKEN": "ops_secret", "UPFLUENCE_EMAIL": "op://vault/Upfluence/username",
-               "UPFLUENCE_PASSWORD": "op://vault/Upfluence/password", "PANGRAM_API_KEY": "plain"}
-        out = op.resolve_op_refs(env, run=self.fake_op({"op://vault/Upfluence/username": "bots@acme.example",
-                                                         "op://vault/Upfluence/password": "hunter2"}))
+        env = {
+            "OP_SERVICE_ACCOUNT_TOKEN": "ops_secret",
+            "UPFLUENCE_EMAIL": "op://vault/Upfluence/username",
+            "UPFLUENCE_PASSWORD": "op://vault/Upfluence/password",
+            "PANGRAM_API_KEY": "plain",
+        }
+        out = op.resolve_op_refs(
+            env,
+            run=self.fake_op(
+                {"op://vault/Upfluence/username": "bots@acme.example", "op://vault/Upfluence/password": "hunter2"}
+            ),
+        )
         self.assertEqual(out, {"UPFLUENCE_EMAIL": "ok", "UPFLUENCE_PASSWORD": "ok"})
         self.assertEqual(env["UPFLUENCE_EMAIL"], "bots@acme.example")
         self.assertEqual(env["UPFLUENCE_PASSWORD"], "hunter2")
@@ -32,6 +42,7 @@ class OnePassword(unittest.TestCase):
         for k in op.SECRET_KEYS:
             env.pop(k, None)
         self.assertNotIn("OP_SERVICE_ACCOUNT_TOKEN", env)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

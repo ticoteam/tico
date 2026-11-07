@@ -2,7 +2,7 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.js; see base.css), so they never flash as words. */
-@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=39b2d0e13e8a) format("woff2")}
+@font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=7a828c2a2f46) format("woff2")}
 /* Text: Inter, self-hosted (ui/vendor/fonts/inter-variable.woff2, built by scripts/build-text-font.py; OFL, see
    LICENSE-inter.txt). One variable file: weights 400-700, optical sizes 14-32, Latin and Latin Extended.
    optional, not swap: a page that does not have the font within ~100ms (a cold cache) keeps the fallback for its whole
@@ -18,7 +18,7 @@
    and a phone's text fields a literal 16px (iOS zooms into anything smaller). */
 :root{
   --t-2xs:10px;   /* filled chips and badges */
-  --t-xs:11px;    /* meta, counts, hints */
+  --t-xs:12px;    /* meta, counts, hints */
   --t-sm:12px;    /* secondary text, tables' small print, code */
   --t-base:13px;  /* body text, rows, buttons, fields */
   --t-md:14px;    /* card titles, reading text */
@@ -36,7 +36,7 @@
   /* the one uppercase label: section heads, table heads, field keys */
   /* long-form reading (Docs): its own small scale, larger than the UI's */
   --prose:15px;--prose-h1:22px;--prose-h2:18px;--prose-h3:16px;--prose-title:24px;
-  --t-label:11px;--track-caps:.06em;
+  --t-label:12px;--track-caps:.06em;
   /* motion: short and decelerating; nothing animates layout */
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
   /* the house rules these serve are at the top of components.css */

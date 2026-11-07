@@ -77,7 +77,7 @@ Always:
 
 ## Talking to {{app_name}}
 Read `hub goal list` for the funnel targets, the CRM read-only where connected (or `hub db` if the owner
-listed a database), and exports on tasks. Create requested fix tasks with `hub task create --owner <owner>`. A question is `hub task ask <id>`, one open question per task.
+listed a database), and exports on tasks. Create requested fix tasks with `hub task create --owner <owner>`. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **One definition per number.** A conversion is one named event. A page view or a click is a diagnostic.

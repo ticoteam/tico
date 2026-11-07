@@ -18,7 +18,13 @@ def test_a_task_reader_links_a_page_without_sharing_it_with_other_task_readers(a
     assert [p["file_id"] for p in get(api, "pages?task=" + tid, "cara-test")["pages"]] == [fid]
     for who in ("ana-test", "ben-test"):
         assert place(api, "task:" + tid, who) == {
-            "place": "task:" + tid, "kind": "task", "saved": True, "can_edit": True, "can_link": True, "pins": []}
+            "place": "task:" + tid,
+            "kind": "task",
+            "saved": True,
+            "can_edit": True,
+            "can_link": True,
+            "pins": [],
+        }
         assert get(api, "pages?task=" + tid, who) == {"pages": [], "has_more": False, "next_cursor": None}
         assert get(api, "files/search?q=Private&kind=page", who) == {"results": []}
         assert read(api, fid, who).status_code == 404
@@ -45,8 +51,7 @@ def test_linking_a_page_does_not_let_a_reader_manage_task_cards_or_pins(api):
     own_card = post(api, "cards", {"template": "tasks_by_status"}, "cara-test")["card"]["id"]
     post(api, "pins", {"place": location, "item": "card:" + own_card}, "cara-test", expected=403)
     remaining = place(api, location, "cara-test")["pins"]
-    assert [(p["id"], p["size"], p["position"]) for p in remaining] == [
-        (pid, "medium", 0), (linked["id"], "medium", 1)]
+    assert [(p["id"], p["size"], p["position"]) for p in remaining] == [(pid, "medium", 0), (linked["id"], "medium", 1)]
     assert remaining[0]["card"]["title"] == made["card"]["title"]
 
 
@@ -58,8 +63,9 @@ def test_a_bot_reader_can_link_readable_pages_but_cannot_manage_the_task_or_link
     machine, attempt = turn(api)
     bot = attempt["token"]
     identities = api.app.state.store.settings.test_identities
-    identities["ops-via"] = Identity("bot:ops", "bot", runner_id=machine["runner_id"],
-                                     attempt_id=attempt["id"], via="botops")
+    identities["ops-via"] = Identity(
+        "bot:ops", "bot", runner_id=machine["runner_id"], attempt_id=attempt["id"], via="botops"
+    )
     view = place(api, location, bot)
     assert view["can_link"] is True and view["can_edit"] is False
     linked = post(api, "pins", {"place": location, "item": "page:" + fid}, bot)
@@ -124,8 +130,9 @@ def test_task_page_listing_pages_over_filed_and_linked_pages_once(api):
     page(api, attempt, name="unlinked.html")
     found, cursor = [], ""
     while True:
-        response = api.get("/api/v2/pages", params={"task": tid, "limit": 2, "cursor": cursor},
-                           headers=headers("ben-test"))
+        response = api.get(
+            "/api/v2/pages", params={"task": tid, "limit": 2, "cursor": cursor}, headers=headers("ben-test")
+        )
         assert response.status_code == 200, response.text
         body = response.json()
         assert "total" not in body and len(body["pages"]) <= 2
@@ -160,8 +167,14 @@ def test_pin_insert_and_delete_invalidate_only_task_places_without_page_metadata
     with store.read() as c:
         rows = c.execute("SELECT topic,kind,subject_id FROM changes WHERE seq>?", (cursor,)).fetchall()
         assert [tuple(r) for r in rows] == [("tasks", "files", tid)]
-        events, cursor, _, _ = E.read(c, auth, Identity("human:cara", "human"), cursor, topics=("tasks",),
-                                    task_views=lambda rows, *_: [{"id": row["id"]} for row in rows])
+        events, cursor, _, _ = E.read(
+            c,
+            auth,
+            Identity("human:cara", "human"),
+            cursor,
+            topics=("tasks",),
+            task_views=lambda rows, *_: [{"id": row["id"]} for row in rows],
+        )
         assert len(events) == 1
         assert events[0][1] == "tasks" and events[0][2]["kind"] == "files"
         assert events[0][2]["kinds"] == ["files"]
@@ -169,7 +182,8 @@ def test_pin_insert_and_delete_invalidate_only_task_places_without_page_metadata
     delete(api, "pins/" + pin["id"])
     with store.read() as c:
         assert [tuple(r) for r in c.execute("SELECT topic,kind,subject_id FROM changes WHERE seq>?", (cursor,))] == [
-            ("tasks", "files", tid)]
+            ("tasks", "files", tid)
+        ]
         cursor = E.latest(c)
     pin = post(api, "pins", {"place": "person:me", "item": "page:" + fid})
     delete(api, "pins/" + pin["id"])
@@ -191,8 +205,14 @@ def test_task_updates_in_a_batch_preserve_pin_insert_and_delete_invalidations(ap
             c.execute("UPDATE tasks SET title=? WHERE id=?", ("After " + action, tid))
             c.execute("UPDATE tasks SET body='Updated details' WHERE id=?", (tid,))
         with store.read() as c:
-            events, cursor, _, _ = E.read(c, auth, Identity("human:cara", "human"), cursor, topics=("tasks",),
-                                        task_views=lambda rows, *_: [{"id": row["id"]} for row in rows])
+            events, cursor, _, _ = E.read(
+                c,
+                auth,
+                Identity("human:cara", "human"),
+                cursor,
+                topics=("tasks",),
+                task_views=lambda rows, *_: [{"id": row["id"]} for row in rows],
+            )
         assert len(events) == 1 and events[0][1] == "tasks"
         assert events[0][2]["id"] == tid and events[0][2]["kind"] == "update"
         assert events[0][2]["kinds"] == ["files", "update"]

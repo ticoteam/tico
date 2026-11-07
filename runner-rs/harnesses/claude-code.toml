@@ -67,6 +67,9 @@ resume_command = "claude --resume"
 model_list = "host"
 repo_permission_lint = true
 repo_commands = true
+# Every skill the model uses is a Skill tool call the runner reports with its name; Codex reports only the skills its
+# input names, so its silence proves nothing.
+skill_events = true
 
 [capabilities.sign_in_status]
 check = "json"

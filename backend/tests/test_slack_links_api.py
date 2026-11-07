@@ -10,15 +10,17 @@ from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
 
 THREAD = "T-marketing"
-ADMIN, MEMBER = "ana-test", "cara-test"          # ana is the owner; cara is an ordinary person (test_api.api_settings)
+ADMIN, MEMBER = "ana-test", "cara-test"  # ana is the owner; cara is an ordinary person (test_api.api_settings)
 
 
 @pytest.fixture
 def thread(api):
     """A company thread: the root a Slack channel can be linked to."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
-                  (THREAD, "thread", "Marketing", H.now(), "company", THREAD))
+        c.execute(
+            "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+            (THREAD, "thread", "Marketing", H.now(), "company", THREAD),
+        )
     return THREAD
 
 
@@ -38,11 +40,13 @@ def test_a_person_who_is_not_an_admin_is_refused_on_every_link_route(api, thread
     link = request_link(api)
     member = headers(MEMBER)
     assert api.get("/api/v2/slack/links", params={"thread": THREAD}, headers=member).status_code == 403
-    assert api.post("/api/v2/slack/links", json={"thread_id": THREAD, "channel": "#marketing"},
-                    headers=member).status_code == 403
+    assert (
+        api.post("/api/v2/slack/links", json={"thread_id": THREAD, "channel": "#marketing"}, headers=member).status_code
+        == 403
+    )
     assert api.delete("/api/v2/slack/links/" + link["id"], headers=member).status_code == 403
     assert api.post("/api/v2/slack/links/" + link["id"] + "/resume", headers=member).status_code == 403
-    assert [row["state"] for row in listed(api)] == ["requested"]     # the refused calls changed nothing
+    assert [row["state"] for row in listed(api)] == ["requested"]  # the refused calls changed nothing
 
 
 def test_a_request_names_a_thread_and_a_channel_and_nothing_else(api, thread):
@@ -69,20 +73,30 @@ def test_only_a_suspended_or_refused_link_is_checked_again(api, thread):
 
 
 def test_a_thread_that_does_not_exist_is_not_found(api):
-    r = api.post("/api/v2/slack/links", json={"thread_id": "no-such-thread", "channel": "#marketing"}, headers=headers())
+    r = api.post(
+        "/api/v2/slack/links", json={"thread_id": "no-such-thread", "channel": "#marketing"}, headers=headers()
+    )
     assert r.status_code == 404, r.text
 
 
 def test_the_list_pages_newest_first_and_every_link_is_read_once(api):
     with api.app.state.store.transaction() as c:
         for n in range(5):
-            c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
-                      (f"T-{n}", "thread", f"Thread {n}", H.now(), "company", f"T-{n}"))
-    made = [api.post("/api/v2/slack/links", json={"thread_id": f"T-{n}", "channel": f"#c{n}"}, headers=headers()).json()["id"]
-            for n in range(5)]
+            c.execute(
+                "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+                (f"T-{n}", "thread", f"Thread {n}", H.now(), "company", f"T-{n}"),
+            )
+    made = [
+        api.post("/api/v2/slack/links", json={"thread_id": f"T-{n}", "channel": f"#c{n}"}, headers=headers()).json()[
+            "id"
+        ]
+        for n in range(5)
+    ]
     seen, cursor = [], ""
     for _ in range(5):
-        r = api.get("/api/v2/slack/links", params={"limit": 2, **({"cursor": cursor} if cursor else {})}, headers=headers())
+        r = api.get(
+            "/api/v2/slack/links", params={"limit": 2, **({"cursor": cursor} if cursor else {})}, headers=headers()
+        )
         assert r.status_code == 200, r.text
         page = r.json()
         assert len(page["links"]) <= 2
@@ -98,5 +112,7 @@ def test_the_list_says_whether_slack_is_set_up(api, thread):
     assert read() is False
     with api.app.state.store.transaction() as c:
         c.executescript(slack_app.SCHEMA)
-        c.execute("INSERT INTO slack_credentials VALUES('app',?,?,'','',?,?)", (b"sealed", b"nonce", H.now(), "human:ana"))
+        c.execute(
+            "INSERT INTO slack_credentials VALUES('app',?,?,'','',?,?)", (b"sealed", b"nonce", H.now(), "human:ana")
+        )
     assert read() is True

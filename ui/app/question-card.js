@@ -18,7 +18,7 @@ function qcardQuestion(it) {
   return q;
 }
 // Who really asks: the bot by its name, or Tico for its own checks. Never the assistant's name or "You asked".
-const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? 'Tico' : actorLabel(actor);
+const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? KEEPER_LABEL : actorLabel(actor);
 function qcardAge(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
   if (!iso || isNaN(s)) return '';
@@ -149,7 +149,7 @@ function qcardDetailsHTML(it, q, {link = true} = {}) {
   const asked = text(it.ask?.body), body = text(it.body);
   const parts = [asked && asked !== text(q.question) ? `<div class="dc-rest md">${safeMd(plainActors(asked))}</div>` : '',
     body && body !== asked && body !== text(it.title) ? `<div class="dc-rest md">${safeMd(plainActors(body))}</div>` : '',
-    link && it.kind !== 'ask' && it.id ? `<p><a href="#/task/${encodeURIComponent(it.id)}">Open the task: ${esc(plainActors(it.title || ''))}</a></p>` : ''];
+    link && it.id ? `<p><a href="#/task/${encodeURIComponent(it.id)}">Open the task: ${esc(plainActors(it.title || ''))}</a></p>` : ''];
   const inner = parts.join('');
   return inner ? `<details class="dc-details qc-details"><summary>Details</summary>${inner}</details>` : '';
 }
@@ -158,7 +158,8 @@ function qcardDetailsHTML(it, q, {link = true} = {}) {
 // takes one, else a comment). `labels` are the picks said yes to; the rest of several picks are "not this one".
 function qcardWrites(it, q, labels, note) {
   const ask = it.ask, id = encodeURIComponent(it.id), t = ask.refs?.target;
-  const target = t?.file ? {file: t.file, version: Number(t.version)} : {comment: ask.id};
+  // A question task (its ask is the task itself) answers with {task}; its answer closes it.
+  const target = t?.task ? {task: t.task} : t?.file ? {file: t.file, version: Number(t.version)} : {comment: ask.id};
   const other = note && q.other !== false;
   const writes = [{path: `/v2/tasks/${id}/answers`, body: {target, answers: {[q.id]: labels}, ...(other ? {other: note} : {})}}];
   if (note && !other) writes.push({path: `/v2/tasks/${id}/comments`, body: {text: note}});

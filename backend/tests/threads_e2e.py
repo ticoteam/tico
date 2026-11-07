@@ -19,6 +19,7 @@ def home_id(api, slug):
     """The id of a bot's Home. Contract gap: section 10 names no HTTP route for a Home (threads.home makes it lazily),
     so the id is asked of the core here; every read of the Home after that goes through GET /api/v2/threads/{id}."""
     from backend import threads
+
     with api.app.state.store.transaction() as c:
         return threads.home(c, "bot:" + slug)["id"]
 
@@ -43,11 +44,16 @@ def ok(r):
     return r.json()
 
 
-def create_thread(api, token="ana-test", *, title=None, audience="members", group=None, members=(), body=None,
-                  parent_message_id=None):
+def create_thread(
+    api, token="ana-test", *, title=None, audience="members", group=None, members=(), body=None, parent_message_id=None
+):
     """A thread, as the new-thread sheet makes it. Roots default to private (`members`) with the starter as owner."""
-    payload = {"title": title or "Thread " + uuid.uuid4().hex[:6], "audience": audience,
-               "audience_group_id": group, "members": list(members)}
+    payload = {
+        "title": title or "Thread " + uuid.uuid4().hex[:6],
+        "audience": audience,
+        "audience_group_id": group,
+        "members": list(members),
+    }
     if body is not None:
         payload["body"] = body
     if parent_message_id is not None:
@@ -100,4 +106,6 @@ def remove_member(api, token, thread_id, actor):
 
 def make_group(api, name, people=(), bots=()):
     """A team, made by an admin (Ben is one in the api fixture)."""
-    return ok(call(api, "POST", "groups", "ben-test", {"name": name, "add": {"people": list(people), "bots": list(bots)}}))
+    return ok(
+        call(api, "POST", "groups", "ben-test", {"name": name, "add": {"people": list(people), "bots": list(bots)}})
+    )

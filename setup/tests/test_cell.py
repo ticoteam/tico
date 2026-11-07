@@ -1,4 +1,5 @@
 """`python3 -m setup cell`: the multi-company host, run with a fake System (no Docker, no network, no root)."""
+
 import fcntl
 import io
 import json
@@ -33,16 +34,16 @@ class FakeSystem:
 
     def __init__(self):
         self.calls, self.chowns, self.t = [], [], 0.0
-        self.ps = {}                       # slug -> (State, Status)
+        self.ps = {}  # slug -> (State, Status)
         self.images = set()
-        self.health = {}                   # host -> status; default 200 while its container runs
+        self.health = {}  # host -> status; default 200 while its container runs
         self.busy_ports, self.fail = set(), {}
-        self.imds = True                   # the metadata block is DOCKER-USER's first rule
-        self.docker_user = None            # or the chain's rules as `iptables -S` prints them
+        self.imds = True  # the metadata block is DOCKER-USER's first rule
+        self.docker_user = None  # or the chain's rules as `iptables -S` prints them
         self.release = "v1.2.3"
-        self.hosts = {}                    # host -> slug, for a host that is not <slug>.<anything>
-        self.unpublished = set()           # tags GitHub has no release for; None: GitHub does not answer
-        self.probes = []                   # (host, port) of each health probe
+        self.hosts = {}  # host -> slug, for a host that is not <slug>.<anything>
+        self.unpublished = set()  # tags GitHub has no release for; None: GitHub does not answer
+        self.probes = []  # (host, port) of each health probe
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -51,8 +52,11 @@ class FakeSystem:
             if key in joined:
                 return res
         if argv[:2] == ["iptables", "-S"]:
-            rules = self.docker_user if self.docker_user is not None else \
-                ([cell.IMDS_LINE] if self.imds else []) + ["-A DOCKER-USER -j RETURN"]
+            rules = (
+                self.docker_user
+                if self.docker_user is not None
+                else ([cell.IMDS_LINE] if self.imds else []) + ["-A DOCKER-USER -j RETURN"]
+            )
             return Result(0, "-N DOCKER-USER\n" + "".join(r + "\n" for r in rules))
         if argv[:2] == ["docker", "pull"]:
             self.images.add(argv[-1])
@@ -60,14 +64,26 @@ class FakeSystem:
         if argv[:2] == ["docker", "ps"]:
             flt = argv[argv.index("--filter") + 1]
             want = flt.split("=", 2)[2] if flt.count("=") == 2 else ""
-            return Result(0, "".join(json.dumps({"Labels": f"com.docker.compose.service=server,{cell.LABEL}={s}",
-                                                 "State": state, "Status": status}) + "\n"
-                                     for s, (state, status) in self.ps.items() if not want or s == want))
+            return Result(
+                0,
+                "".join(
+                    json.dumps(
+                        {
+                            "Labels": f"com.docker.compose.service=server,{cell.LABEL}={s}",
+                            "State": state,
+                            "Status": status,
+                        }
+                    )
+                    + "\n"
+                    for s, (state, status) in self.ps.items()
+                    if not want or s == want
+                ),
+            )
         if argv[:3] == ["docker", "image", "inspect"]:
             return Result(0 if argv[-1] in self.images else 1)
         if "--project-name" in argv:
             proj = argv[argv.index("--project-name") + 1]
-            slug = proj[len(cell.PROJECT_PREFIX):]
+            slug = proj[len(cell.PROJECT_PREFIX) :]
             if proj == cell.EDGE_PROJECT:
                 return Result(0)
             if "up" in argv:
@@ -122,7 +138,9 @@ def host(tmp_path):
 
     def call(*argv):
         out = io.StringIO()
-        rc = cell.main(list(argv), system=system, root=root, host_root=etc, compose_source=ROOT / "compose.yaml", out=out)
+        rc = cell.main(
+            list(argv), system=system, root=root, host_root=etc, compose_source=ROOT / "compose.yaml", out=out
+        )
         lines = out.getvalue().splitlines()
         assert len(lines) == 1, "exactly one JSON object on stdout"
         answer = json.loads(lines[0])
@@ -141,9 +159,27 @@ def secret_file(tmp_path, name, text, mode=0o600):
 
 
 def add_args(host, slug="boatyard", *extra):
-    return ["add", "--company", slug, "--domain", f"{slug}.tico.team", "--owner-email", "owner@boatyard.example",
-            "--auth", "oidc", "--issuer", "https://accounts.tico.team", "--client-id", "tc_" + "0" * 24,
-            "--client-secret-file", secret_file(host.tmp, "client-secret", SECRET), "--version", "v1.2.3", *extra, "--json"]
+    return [
+        "add",
+        "--company",
+        slug,
+        "--domain",
+        f"{slug}.tico.team",
+        "--owner-email",
+        "owner@boatyard.example",
+        "--auth",
+        "oidc",
+        "--issuer",
+        "https://accounts.tico.team",
+        "--client-id",
+        "tc_" + "0" * 24,
+        "--client-secret-file",
+        secret_file(host.tmp, "client-secret", SECRET),
+        "--version",
+        "v1.2.3",
+        *extra,
+        "--json",
+    ]
 
 
 @pytest.fixture
@@ -154,11 +190,14 @@ def ready(host):
 
 # --- arguments and the contract ----------------------------------------------------------------------------------
 
+
 def test_argument_errors_answer_in_json(host):
     assert host("add", "--company", "boatyard") == {
-        "ok": False, "error": "bad_args",
+        "ok": False,
+        "error": "bad_args",
         "detail": "the following arguments are required: --domain, --owner-email, --auth, --issuer, --client-id, "
-                  "--client-secret-file"}
+        "--client-secret-file",
+    }
     assert host("frobnicate")["error"] == "bad_args"
     assert host()["error"] == "bad_args"
     assert host("status", "--company", "boatyard", "--bogus")["error"] == "bad_args"
@@ -182,8 +221,28 @@ def test_reserved_names_are_never_given_to_a_company(ready, slug):
 
 
 def test_the_brief_reserved_list_is_complete():
-    assert cell.RESERVED == {"hub", "admin", "accounts", "updates", "preview", "runner", "www", "api", "app", "mail",
-                             "status", "docs", "help", "support", "hq", "gateway", "hooks", "cloud", "tico", "team"}
+    assert cell.RESERVED == {
+        "hub",
+        "admin",
+        "accounts",
+        "updates",
+        "preview",
+        "runner",
+        "www",
+        "api",
+        "app",
+        "mail",
+        "status",
+        "docs",
+        "help",
+        "support",
+        "hq",
+        "gateway",
+        "hooks",
+        "cloud",
+        "tico",
+        "team",
+    }
 
 
 def test_domain_must_be_the_slug_under_the_cell_domain(ready):
@@ -192,10 +251,17 @@ def test_domain_must_be_the_slug_under_the_cell_domain(ready):
     assert ready(*args)["error"] == "bad_domain"
 
 
-@pytest.mark.parametrize("flag,value,error", [
-    ("--owner-email", "not-an-email", "bad_args"), ("--owner-email", "a$b@c.de", "bad_args"),
-    ("--issuer", "http://accounts.tico.team", "bad_args"), ("--client-id", "bad id", "bad_args"),
-    ("--version", "latest", "bad_args"), ("--auth", "google", "bad_args")])
+@pytest.mark.parametrize(
+    "flag,value,error",
+    [
+        ("--owner-email", "not-an-email", "bad_args"),
+        ("--owner-email", "a$b@c.de", "bad_args"),
+        ("--issuer", "http://accounts.tico.team", "bad_args"),
+        ("--client-id", "bad id", "bad_args"),
+        ("--version", "latest", "bad_args"),
+        ("--auth", "google", "bad_args"),
+    ],
+)
 def test_add_checks_every_value_before_it_changes_anything(ready, flag, value, error):
     args = add_args(ready)
     args[args.index(flag) + 1] = value
@@ -203,8 +269,19 @@ def test_add_checks_every_value_before_it_changes_anything(ready, flag, value, e
     assert not (ready.root / "companies" / "boatyard").exists()
 
 
-@pytest.mark.parametrize("memory,ok", [("2g", True), ("1536m", True), ("512m", True), ("16g", True), ("256m", False),
-                                       ("17g", False), ("2gb", False), ("two", False)])
+@pytest.mark.parametrize(
+    "memory,ok",
+    [
+        ("2g", True),
+        ("1536m", True),
+        ("512m", True),
+        ("16g", True),
+        ("256m", False),
+        ("17g", False),
+        ("2gb", False),
+        ("two", False),
+    ],
+)
 def test_memory_limits(memory, ok):
     if ok:
         assert cell.check_memory(memory) == memory
@@ -218,6 +295,7 @@ def test_backup_options_go_together(ready):
 
 
 # --- secrets ---------------------------------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("mode", [0o644, 0o640, 0o604])
 def test_secret_files_others_can_read_are_refused(ready, mode):
@@ -242,23 +320,51 @@ def test_secrets_never_reach_argv_or_stdout_and_live_only_in_0600_files(tmp_path
     out = io.StringIO()
 
     def call(*argv):
-        cell.main(list(argv), system=system, root=root, host_root=tmp_path / "host",
-                  compose_source=ROOT / "compose.yaml", out=out)
+        cell.main(
+            list(argv),
+            system=system,
+            root=root,
+            host_root=tmp_path / "host",
+            compose_source=ROOT / "compose.yaml",
+            out=out,
+        )
 
     call("init", "--tunnel-token-file", secret_file(tmp_path, "token", TOKEN), "--json")
-    host_args = ["add", "--company", "boatyard", "--domain", "boatyard.tico.team", "--owner-email", "o@boatyard.example",
-                 "--auth", "oidc", "--issuer", "https://accounts.tico.team", "--client-id", "tc_1",
-                 "--client-secret-file", secret_file(tmp_path, "cs", SECRET),
-                 "--gateway-invite-file", secret_file(tmp_path, "invite", INVITE),
-                 "--backup-url", "s3://tico-hosting-backups/boatyard", "--backup-region", "us-west-2",
-                 "--backup-credentials-file", secret_file(tmp_path, "keys", json.dumps(
-                     {"AccessKey": {"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET}})),
-                 "--version", "v1.2.3", "--json"]
+    host_args = [
+        "add",
+        "--company",
+        "boatyard",
+        "--domain",
+        "boatyard.tico.team",
+        "--owner-email",
+        "o@boatyard.example",
+        "--auth",
+        "oidc",
+        "--issuer",
+        "https://accounts.tico.team",
+        "--client-id",
+        "tc_1",
+        "--client-secret-file",
+        secret_file(tmp_path, "cs", SECRET),
+        "--gateway-invite-file",
+        secret_file(tmp_path, "invite", INVITE),
+        "--backup-url",
+        "s3://tico-hosting-backups/boatyard",
+        "--backup-region",
+        "us-west-2",
+        "--backup-credentials-file",
+        secret_file(
+            tmp_path, "keys", json.dumps({"AccessKey": {"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET}})
+        ),
+        "--version",
+        "v1.2.3",
+        "--json",
+    ]
     call(*host_args)
     call(*host_args)
     call("status", "--company", "boatyard")
     call("update", "--company", "boatyard", "--version", "v1.2.4")
-    system.health["boatyard.tico.team"] = 503       # an error path that prints log lines
+    system.health["boatyard.tico.team"] = 503  # an error path that prints log lines
     system.fail["logs"] = Result(0, f"server: TICO_OIDC_CLIENT_SECRET={SECRET} leaked by a bad log line\n")
     call("update", "--company", "boatyard", "--version", "v1.2.5", "--timeout", "1")
     printed, argv = out.getvalue(), system.argv_text()
@@ -280,17 +386,22 @@ def test_secrets_never_reach_argv_or_stdout_and_live_only_in_0600_files(tmp_path
 def test_an_unexpected_failure_is_still_one_scrubbed_json_answer(ready):
     def boom(*a, **k):
         raise RuntimeError(f"surprise with {SECRET} inside")
+
     ready.system.port_free = boom
     answer = ready(*add_args(ready))
     assert answer["ok"] is False and answer["error"] == "internal" and set(answer) == {"ok", "error", "detail"}
     assert SECRET not in answer["detail"] and "********" in answer["detail"]
 
 
-@pytest.mark.parametrize("text", [
-    f"LITESTREAM_ACCESS_KEY_ID={BACKUP_KEY}\nLITESTREAM_SECRET_ACCESS_KEY={BACKUP_SECRET}",
-    f"AWS_ACCESS_KEY_ID={BACKUP_KEY}\nAWS_SECRET_ACCESS_KEY={BACKUP_SECRET}",
-    json.dumps({"AccessKey": {"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET}}),
-    json.dumps({"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET})])
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"LITESTREAM_ACCESS_KEY_ID={BACKUP_KEY}\nLITESTREAM_SECRET_ACCESS_KEY={BACKUP_SECRET}",
+        f"AWS_ACCESS_KEY_ID={BACKUP_KEY}\nAWS_SECRET_ACCESS_KEY={BACKUP_SECRET}",
+        json.dumps({"AccessKey": {"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET}}),
+        json.dumps({"AccessKeyId": BACKUP_KEY, "SecretAccessKey": BACKUP_SECRET}),
+    ],
+)
 def test_backup_credential_formats(text):
     assert cell.backup_keys(text) == (BACKUP_KEY, BACKUP_SECRET)
 
@@ -303,11 +414,19 @@ def test_backup_credentials_without_keys_are_refused():
 
 # --- add, and adding again ---------------------------------------------------------------------------------------
 
+
 def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
     answer = ready(*add_args(ready))
-    assert answer == {"ok": True, "company": "boatyard", "url": "https://boatyard.tico.team", "port": 20000,
-                      "ready_ms": answer["ready_ms"], "version": "v1.2.3", "changed": True,
-                      "owner_link_file": str(ready.root / "companies" / "boatyard" / "owner-link.txt")}
+    assert answer == {
+        "ok": True,
+        "company": "boatyard",
+        "url": "https://boatyard.tico.team",
+        "port": 20000,
+        "ready_ms": answer["ready_ms"],
+        "version": "v1.2.3",
+        "changed": True,
+        "owner_link_file": str(ready.root / "companies" / "boatyard" / "owner-link.txt"),
+    }
     assert isinstance(answer["ready_ms"], int)
     d = ready.root / "companies" / "boatyard"
     assert (d / "compose.yaml").read_text() == (ROOT / "compose.yaml").read_text()
@@ -328,8 +447,8 @@ def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
     assert env["TICO_UPDATER_URL"] == "http://10.208.0.1:8090" and env["TICO_CELL"] == "1"
     assert "TICO_UPDATES" not in env
     override = (d / "compose.cell.yaml").read_text()
-    assert "    environment:\n      TICO_CELL:\n" in override        # passed to the server from .env
-    assert f"{d / 'control'}:/control" in override                    # where it reads the token its updater checks
+    assert "    environment:\n      TICO_CELL:\n" in override  # passed to the server from .env
+    assert f"{d / 'control'}:/control" in override  # where it reads the token its updater checks
     assert "mem_limit: 2g" in override and "memswap_limit: 2g" in override and f"{d / 'data'}:/data" in override
     assert "subnet: 10.208.0.0/24" in override and f"{cell.LABEL}: boatyard" in override
     assert (str(d / "data"), 10001, 10001) in ready.system.chowns
@@ -337,7 +456,10 @@ def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
     assert "--project-name tico-boatyard" in calls and "up -d" in calls
     assert f"docker pull --quiet {cell.SERVER_IMAGE}:v1.2.3" in calls
     assert "caddy reload" in calls
-    assert "http://boatyard.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000" in (ready.root / "router" / "Caddyfile").read_text()
+    assert (
+        "http://boatyard.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000"
+        in (ready.root / "router" / "Caddyfile").read_text()
+    )
 
 
 def test_adding_again_with_the_same_settings_changes_nothing(ready):
@@ -346,17 +468,20 @@ def test_adding_again_with_the_same_settings_changes_nothing(ready):
     files = {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()}
     calls = len(ready.system.calls)
     second = ready(*add_args(ready))
-    assert second["changed"] is False and {k: v for k, v in second.items() if k not in ("ready_ms", "changed")} == \
-        {k: v for k, v in first.items() if k not in ("ready_ms", "changed")}
-    assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == files      # the owner link hash is kept
+    assert second["changed"] is False and {k: v for k, v in second.items() if k not in ("ready_ms", "changed")} == {
+        k: v for k, v in first.items() if k not in ("ready_ms", "changed")
+    }
+    assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == files  # the owner link hash is kept
     again = " ".join(" ".join(c) for c in ready.system.calls[calls:])
     assert "pull" not in again and "caddy reload" not in again
 
 
 def test_adding_again_keeps_what_was_saved_when_an_option_is_left_out(ready):
-    ready(*add_args(ready, "boatyard", "--memory", "3g", "--gateway-invite-file", secret_file(ready.tmp, "inv", INVITE)))
+    ready(
+        *add_args(ready, "boatyard", "--memory", "3g", "--gateway-invite-file", secret_file(ready.tmp, "inv", INVITE))
+    )
     args = add_args(ready)
-    del args[args.index("--version"):args.index("--version") + 2]
+    del args[args.index("--version") : args.index("--version") + 2]
     answer = ready(*args)
     assert answer["changed"] is False and answer["version"] == "v1.2.3"
     d = ready.root / "companies" / "boatyard"
@@ -375,7 +500,7 @@ def test_adding_again_with_a_new_secret_converges(ready):
 
 def test_default_version_is_the_installers_release(ready):
     args = add_args(ready)
-    del args[args.index("--version"):args.index("--version") + 2]
+    del args[args.index("--version") : args.index("--version") + 2]
     ready.system.release = "v7.0.1"
     assert ready(*args)["version"] == (cell._installer_version() or "v7.0.1")
 
@@ -398,6 +523,7 @@ def test_add_refuses_when_containers_could_reach_the_metadata_service(ready):
 
 def test_a_company_file_becomes_the_servers_starter_plan(ready):
     from backend import company_file as C
+
     draft = C.Turn(C.blank()).finish()
     draft["bots"] = draft["bots"][:5]
     draft["company"]["name"] = "Boatyard Marine"
@@ -410,7 +536,7 @@ def test_a_company_file_becomes_the_servers_starter_plan(ready):
     assert env["TICO_TEAM_NAME"] == "Boatyard Marine" and env["TICO_SAMPLE_COMPANY"] == "off"
     assert env["TICO_COMPANY_FILE"] == "/run/tico/company-file/plan.b64" and "TICO_COMPANY_FILE_B64" not in env
     assert stat.S_IMODE(plan.stat().st_mode) == 0o600 and (str(plan), 10001, 10001) in ready.system.chowns
-    assert ready(*add_args(ready))["changed"] is False          # left out again: the saved plan stays
+    assert ready(*add_args(ready))["changed"] is False  # left out again: the saved plan stays
 
 
 def test_a_bad_company_file_is_refused(ready):
@@ -421,23 +547,32 @@ def test_a_bad_company_file_is_refused(ready):
 
 # --- ports and networks ---------------------------------------------------------------------------------------
 
+
 def test_ports_never_collide_and_survive_restarts(ready):
     assert [ready(*add_args(ready, s))["port"] for s in ("alpha", "bravo", "charlie")] == [20000, 20001, 20002]
     assert ready("remove", "--company", "alpha")["removed"] is True
-    ready.system.busy_ports.add(20000)       # something else on the host took it meanwhile
+    ready.system.busy_ports.add(20000)  # something else on the host took it meanwhile
     assert ready(*add_args(ready, "delta"))["port"] == 20003
     ready.system.busy_ports.clear()
     assert ready(*add_args(ready, "echo"))["port"] == 20000
     # A new process (a host restart) reads the same ports back from disk.
-    assert {c["company"]: c["port"] for c in ready("list")["companies"]} == \
-        {"bravo": 20001, "charlie": 20002, "delta": 20003, "echo": 20000}
+    assert {c["company"]: c["port"] for c in ready("list")["companies"]} == {
+        "bravo": 20001,
+        "charlie": 20002,
+        "delta": 20003,
+        "echo": 20000,
+    }
 
 
 def test_remove_keep_data_keeps_the_port_for_a_later_add(ready):
     ready(*add_args(ready, "alpha"))
     ready(*add_args(ready, "bravo"))
     assert ready("remove", "--company", "alpha", "--keep-data") == {
-        "ok": True, "company": "alpha", "removed": True, "kept_data": True}
+        "ok": True,
+        "company": "alpha",
+        "removed": True,
+        "kept_data": True,
+    }
     assert (ready.root / "companies" / "alpha" / "data").is_dir()
     assert ready(*add_args(ready, "charlie"))["port"] == 20002
     assert ready(*add_args(ready, "alpha"))["port"] == 20000
@@ -450,12 +585,14 @@ def test_each_index_has_its_own_networks():
         assert n["default_subnet"] not in seen and n["edge_subnet"] not in seen
         seen |= {n["default_subnet"], n["edge_subnet"]}
     import ipaddress
+
     last = cell.networks(cell.MAX_COMPANIES - 1)
     assert ipaddress.ip_network(last["default_subnet"]).subnet_of(cell.DEFAULT_NETS)
     assert ipaddress.ip_network(last["edge_subnet"]).subnet_of(cell.EDGE_NETS)
 
 
 # --- the router ------------------------------------------------------------------------------------------------
+
 
 def test_router_config_routes_each_host_and_refuses_the_rest():
     text = cell.router_config([{"domain": "b.tico.team", "port": 20001}, {"domain": "a.tico.team", "port": 20000}])
@@ -489,26 +626,30 @@ def test_edge_images_are_the_ones_compose_yaml_pins():
 
 def test_the_router_holds_requests_while_a_server_is_down():
     text = cell.router_config([{"slug": "a", "domain": "a.tico.team", "port": 20000}])
-    site = text[text.index("http://a.tico.team:8080"):text.index("http://:8080")]
+    site = text[text.index("http://a.tico.team:8080") : text.index("http://:8080")]
     assert "lb_try_duration 30s" in site and "lb_try_interval 250ms" in site and "stream_close_delay 5m" in site
     # what still fails is a plain 503 with Retry-After, never Caddy's 502
     assert "handle_errors {" in site and "header Retry-After 5" in site and f'respond "{cell.HOLD_BODY}" 503' in site
-    assert "lb_retry_match" not in site      # a write that reached the server is never sent twice
+    assert "lb_retry_match" not in site  # a write that reached the server is never sent twice
 
 
 def test_a_sleeping_company_goes_to_the_wake_service_and_a_stopped_one_is_a_503():
-    text = cell.router_config([{"slug": "a", "domain": "a.tico.team", "port": 20000, "state": "sleeping",
-                                "aliases": ["a.example.com"]},
-                               {"slug": "b", "domain": "b.tico.team", "port": 20001, "state": "stopped"}])
-    a = text[text.index("http://a.tico.team:8080"):text.index("http://b.tico.team")]
+    text = cell.router_config(
+        [
+            {"slug": "a", "domain": "a.tico.team", "port": 20000, "state": "sleeping", "aliases": ["a.example.com"]},
+            {"slug": "b", "domain": "b.tico.team", "port": 20001, "state": "stopped"},
+        ]
+    )
+    a = text[text.index("http://a.tico.team:8080") : text.index("http://b.tico.team")]
     assert a.startswith("http://a.tico.team:8080, http://a.example.com:8080 {")
     assert "reverse_proxy 127.0.0.1:8082" in a and "header_up X-Tico-Cell-Wake a\n" in a and "20000" not in a
-    assert "lb_try_duration 30s" in a and "handle_errors" in a     # the hold covers the wake service's own restart
-    b = text[text.index("http://b.tico.team"):text.index("http://:8080")]
+    assert "lb_try_duration 30s" in a and "handle_errors" in a  # the hold covers the wake service's own restart
+    b = text[text.index("http://b.tico.team") : text.index("http://:8080")]
     assert 'respond "This Tico company is stopped." 503' in b and "reverse_proxy" not in b
 
 
 # --- init ------------------------------------------------------------------------------------------------------
+
 
 def test_init_sets_up_the_host_once(host):
     daemon = host.etc / "etc/docker/daemon.json"
@@ -533,9 +674,10 @@ def test_init_sets_up_the_host_once(host):
     second = host("init", "--json")
     assert second["ok"] and second["changed"] == [] and second["tunnel"] is True
     # Only a look at whether the updater runs: nothing restarts or is reinstalled.
-    assert [c for c in host.system.calls[n:] if c[0] == "systemctl"] == \
-        [["systemctl", "is-active", "--quiet", "tico-cell-updater.service"],
-         ["systemctl", "is-active", "--quiet", "tico-cell-wake.service"]]
+    assert [c for c in host.system.calls[n:] if c[0] == "systemctl"] == [
+        ["systemctl", "is-active", "--quiet", "tico-cell-updater.service"],
+        ["systemctl", "is-active", "--quiet", "tico-cell-wake.service"],
+    ]
 
 
 def test_init_without_a_token_runs_only_the_router(host):
@@ -585,12 +727,18 @@ def test_init_cannot_move_a_cell_with_companies(ready):
 
 # --- the other commands ----------------------------------------------------------------------------------------
 
+
 def test_list_status_stop_start(ready):
     assert ready("list") == {"ok": True, "companies": []}
     ready(*add_args(ready))
     status = ready("status", "--company", "boatyard", "--json")
     assert status["state"] == "running" and status["healthy"] is True and status["port"] == 20000
-    assert ready("stop", "--company", "boatyard") == {"ok": True, "company": "boatyard", "state": "stopped", "changed": True}
+    assert ready("stop", "--company", "boatyard") == {
+        "ok": True,
+        "company": "boatyard",
+        "state": "stopped",
+        "changed": True,
+    }
     assert ready("stop", "--company", "boatyard")["changed"] is False
     assert ready("status", "--company", "boatyard")["state"] == "stopped"
     assert ready("list")["companies"][0]["state"] == "stopped"
@@ -610,7 +758,7 @@ def test_update_snapshots_then_runs_the_new_release(ready):
     assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["changed"] is False
     # A later add without --version keeps the updated release.
     args = add_args(ready)
-    del args[args.index("--version"):args.index("--version") + 2]
+    del args[args.index("--version") : args.index("--version") + 2]
     assert ready(*args) | {"ready_ms": 0} == answer | {"ready_ms": 0, "changed": False}
 
 
@@ -622,7 +770,7 @@ def test_a_failed_update_puts_the_old_release_and_database_back(ready):
 
     real_run = ready.system.run
 
-    def migrating(argv, **kw):          # the new release migrates the database, then never gets healthy
+    def migrating(argv, **kw):  # the new release migrates the database, then never gets healthy
         if "up" in argv and "--project-name" in argv:
             env = envfile.parse((d / ".env").read_text())
             if env["TICO_TAG"] == "v2.0.0":
@@ -652,16 +800,25 @@ def test_a_release_that_cannot_be_pulled_changes_nothing(ready):
 def test_remove_cleans_up_and_is_idempotent(ready):
     ready(*add_args(ready))
     assert ready("remove", "--company", "boatyard", "--json") == {
-        "ok": True, "company": "boatyard", "removed": True, "kept_data": False}
+        "ok": True,
+        "company": "boatyard",
+        "removed": True,
+        "kept_data": False,
+    }
     assert "down --remove-orphans --volumes" in ready.system.argv_text()
     assert not (ready.root / "companies" / "boatyard").exists()
     assert "boatyard" not in (ready.root / "router" / "Caddyfile").read_text()
-    assert ready("remove", "--company", "boatyard") == {"ok": True, "company": "boatyard", "removed": False,
-                                                        "kept_data": False}
+    assert ready("remove", "--company", "boatyard") == {
+        "ok": True,
+        "company": "boatyard",
+        "removed": False,
+        "kept_data": False,
+    }
 
 
 def test_the_setup_cli_hands_cell_commands_over(monkeypatch):
     from setup import cli
+
     seen = []
     monkeypatch.setattr(cell, "main", lambda argv: seen.append(argv) or 0)
     assert cli.main(["cell", "list", "--json"]) == 0 and seen == [["list", "--json"]]
@@ -682,19 +839,23 @@ def caddyfile(host):
 
 def test_sleep_routes_to_the_wake_service_and_wake_routes_back(ready):
     ready(*add_args(ready))
-    assert ready("sleep", "--company", "boatyard") == {"ok": True, "company": "boatyard", "state": "sleeping",
-                                                        "changed": True}
+    assert ready("sleep", "--company", "boatyard") == {
+        "ok": True,
+        "company": "boatyard",
+        "state": "sleeping",
+        "changed": True,
+    }
     assert ready.system.ps["boatyard"][0] == "exited" and record(ready)["state"] == "sleeping"
     assert "reverse_proxy 127.0.0.1:8082" in caddyfile(ready) and "127.0.0.1:20000" not in caddyfile(ready)
     assert ready("sleep", "--company", "boatyard")["changed"] is False
     ready.system.probes.clear()
     status = ready("status", "--company", "boatyard")
     assert status["state"] == "sleeping" and status["healthy"] is False
-    assert ready.system.probes == []                          # a probe through the router would wake it
+    assert ready.system.probes == []  # a probe through the router would wake it
     assert ready("list")["companies"][0]["state"] == "sleeping"
     woke = ready("wake", "--company", "boatyard")
     assert woke["ok"] and woke["changed"] is True and record(ready)["state"] == "running"
-    assert ready.system.probes == [("boatyard.tico.team", 20000)]    # on its own port: the route still led to wake
+    assert ready.system.probes == [("boatyard.tico.team", 20000)]  # on its own port: the route still led to wake
     assert "reverse_proxy 127.0.0.1:20000" in caddyfile(ready) and "8082" not in caddyfile(ready)
     ready.system.probes.clear()
     again = ready("wake", "--company", "boatyard")
@@ -705,7 +866,7 @@ def test_stop_answers_503_and_start_routes_back(ready):
     ready(*add_args(ready))
     ready("stop", "--company", "boatyard")
     assert 'respond "This Tico company is stopped." 503' in caddyfile(ready)
-    assert ready("wake", "--company", "boatyard")["error"] == "not_sleeping"     # staff stopped it: wake leaves it
+    assert ready("wake", "--company", "boatyard")["error"] == "not_sleeping"  # staff stopped it: wake leaves it
     assert ready.system.ps["boatyard"][0] == "exited"
     ready("start", "--company", "boatyard")
     assert "reverse_proxy 127.0.0.1:20000" in caddyfile(ready)
@@ -745,7 +906,7 @@ def test_sleep_sets_a_timed_wake_and_a_sleep_without_one_clears_it(ready):
     at = utc_in(2 * 86400)
     assert ready("sleep", "--company", "boatyard", "--wake-at", at)["changed"] is True
     assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == at
-    later = utc_in(3 * 86400)               # already asleep: the time changes, nothing is stopped again
+    later = utc_in(3 * 86400)  # already asleep: the time changes, nothing is stopped again
     assert ready("sleep", "--company", "boatyard", "--wake-at", later)["changed"] is False
     assert record(ready)["wake_at"] == later and ready.system.ps["boatyard"][0] == "exited"
     assert ready("sleep", "--company", "boatyard")["changed"] is False
@@ -764,8 +925,9 @@ def test_a_timed_wake_is_cleared_by_any_path_that_starts_or_stops_the_company(re
     assert "wake_at" not in record(ready)
 
 
-@pytest.mark.parametrize("value", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", "2026-10-30", "",
-                                   "2099-01-01T00:00:00Z"])
+@pytest.mark.parametrize(
+    "value", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", "2026-10-30", "", "2099-01-01T00:00:00Z"]
+)
 def test_a_wake_at_that_is_not_utc_or_is_too_far_out_changes_nothing(ready, value):
     ready(*add_args(ready))
     answer = ready("sleep", "--company", "boatyard", "--wake-at", value)
@@ -780,8 +942,17 @@ def test_wake_at_is_stored_in_utc_and_may_be_up_to_31_days_out():
     assert cell.wake_at_text("2026-10-30T18:00Z") == "2026-10-30T18:00:00Z"
     later = utc_in(30 * 86400)
     assert cell.wake_at_text(later) == later
-    for bad in ("2026-10-30T18:00:00", "2026-10-30T18:00:00 Z", "2026-10-30 18:00:00Z", "2026-10-30t18:00:00z",
-                "20261030T180000Z", "2026-10-30T18:00:00+0200", "2026-10-30", 1761847200, ["2026-10-30T18:00:00Z"]):
+    for bad in (
+        "2026-10-30T18:00:00",
+        "2026-10-30T18:00:00 Z",
+        "2026-10-30 18:00:00Z",
+        "2026-10-30t18:00:00z",
+        "20261030T180000Z",
+        "2026-10-30T18:00:00+0200",
+        "2026-10-30",
+        1761847200,
+        ["2026-10-30T18:00:00Z"],
+    ):
         with pytest.raises(cell.CellError) as e:
             cell.wake_at_text(bad)
         assert e.value.code == "bad_wake_at"
@@ -801,21 +972,33 @@ def test_sleep_minutes_must_be_a_whole_number_from_0_to_1440(ready, value):
 def test_add_stores_the_sleep_policy_and_set_sleep_changes_it(ready, value):
     assert ready(*add_args(ready, "boatyard", "--sleep-minutes", str(value)))["ok"]
     assert record(ready)["sleep_minutes"] == value
-    assert ready("set-sleep", "--company", "boatyard", "--minutes", "45") == \
-        {"ok": True, "company": "boatyard", "sleep_minutes": 45, "changed": True}
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "45") == {
+        "ok": True,
+        "company": "boatyard",
+        "sleep_minutes": 45,
+        "changed": True,
+    }
     assert record(ready)["sleep_minutes"] == 45
     assert ready("set-sleep", "--company", "boatyard", "--minutes", "45")["changed"] is False
 
 
 def test_set_sleep_zero_is_never_and_default_removes_the_policy(ready):
     ready(*add_args(ready))
-    assert "sleep_minutes" not in record(ready)                       # no policy until staff set one
+    assert "sleep_minutes" not in record(ready)  # no policy until staff set one
     assert ready("set-sleep", "--company", "boatyard", "--minutes", "default")["changed"] is False
-    assert ready("set-sleep", "--company", "boatyard", "--minutes", "0") == \
-        {"ok": True, "company": "boatyard", "sleep_minutes": 0, "changed": True}
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "0") == {
+        "ok": True,
+        "company": "boatyard",
+        "sleep_minutes": 0,
+        "changed": True,
+    }
     assert record(ready)["sleep_minutes"] == 0
-    assert ready("set-sleep", "--company", "boatyard", "--minutes", "default") == \
-        {"ok": True, "company": "boatyard", "sleep_minutes": None, "changed": True}
+    assert ready("set-sleep", "--company", "boatyard", "--minutes", "default") == {
+        "ok": True,
+        "company": "boatyard",
+        "sleep_minutes": None,
+        "changed": True,
+    }
     assert "sleep_minutes" not in record(ready)
 
 
@@ -831,7 +1014,7 @@ def test_add_again_keeps_the_saved_sleep_policy_unless_the_flag_is_given(ready):
     ready(*add_args(ready, "boatyard", "--sleep-minutes", "30"))
     assert ready(*add_args(ready))["changed"] is False and record(ready)["sleep_minutes"] == 30
     ready("set-sleep", "--company", "boatyard", "--minutes", "90")
-    assert ready(*add_args(ready))["ok"] and record(ready)["sleep_minutes"] == 90          # set by staff, kept
+    assert ready(*add_args(ready))["ok"] and record(ready)["sleep_minutes"] == 90  # set by staff, kept
     assert ready(*add_args(ready, "boatyard", "--sleep-minutes", "0"))["ok"] and record(ready)["sleep_minutes"] == 0
     assert ready(*add_args(ready, "boatyard", "--sleep-minutes", "12", "--memory", "3g"))["ok"]
     assert record(ready)["sleep_minutes"] == 12 and record(ready)["memory"] == "3g"
@@ -846,6 +1029,7 @@ def test_init_installs_the_wake_service(host):
 
 
 # --- review fixes: remove, the metadata block, updates and locks ---------------------------------------------------
+
 
 def held(root, name):
     """Whether some command holds the lock `name` now (another open file's flock conflicts, in this process too)."""
@@ -864,7 +1048,6 @@ def record(host, slug="boatyard"):
     return json.loads((host.root / "companies" / slug / "company.json").read_text())
 
 
-
 def test_remove_frees_the_slot_only_after_the_router_dropped_the_route(ready):
     ready(*add_args(ready, "alpha"))
     seen, real = [], ready.system.run
@@ -873,9 +1056,10 @@ def test_remove_frees_the_slot_only_after_the_router_dropped_the_route(ready):
         if "reload" in argv and "caddy" in argv:
             seen.append((held(ready.root, "cell"), (ready.root / "companies" / "alpha").exists()))
         return real(argv, **kw)
+
     ready.system.run = watch
     assert ready("remove", "--company", "alpha")["removed"] is True
-    assert seen == [(True, True)]           # reloaded under the cell lock, while alpha still held its port
+    assert seen == [(True, True)]  # reloaded under the cell lock, while alpha still held its port
 
 
 def test_a_router_that_refuses_the_removal_keeps_the_slot_taken(ready):
@@ -917,9 +1101,14 @@ sys.exit(2)
 """
 
 
-@pytest.mark.parametrize("rules,inserted", [
-    (["-A DOCKER-USER -s 10.0.0.0/8 -j ACCEPT", cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"], True),
-    ([], True), ([cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"], False)])
+@pytest.mark.parametrize(
+    "rules,inserted",
+    [
+        (["-A DOCKER-USER -s 10.0.0.0/8 -j ACCEPT", cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"], True),
+        ([], True),
+        ([cell.IMDS_LINE, "-A DOCKER-USER -j RETURN"], False),
+    ],
+)
 def test_the_firewall_script_puts_the_block_first(ready, tmp_path, rules, inserted):
     bindir, state = tmp_path / "bin", tmp_path / "rules.json"
     bindir.mkdir()
@@ -927,7 +1116,7 @@ def test_the_firewall_script_puts_the_block_first(ready, tmp_path, rules, insert
     os.chmod(bindir / "iptables", 0o755)
     state.write_text(json.dumps(rules))
     env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "RULES": str(state)}
-    for _ in range(2):                  # the second run (Docker started again) finds it first and adds nothing
+    for _ in range(2):  # the second run (Docker started again) finds it first and adds nothing
         subprocess.run(["sh", str(ready.etc / cell.FIREWALL_SCRIPT)], env=env, check=True)
     after = json.loads(state.read_text())
     assert after[0] == cell.IMDS_LINE and len(after) == len(rules) + inserted
@@ -947,6 +1136,7 @@ def migrate_then_fail(host, bad="v2.0.0"):
             else:
                 host.system.health.clear()
         return real(argv, **kw)
+
     host.system.run = run
     return d
 
@@ -962,9 +1152,12 @@ def test_updating_a_stopped_company_is_guarded_when_it_next_starts(ready, how):
     assert record(ready)["pending"]["from"] == "v1.2.3"
     migrate_then_fail(ready)
     args = add_args(ready)
-    del args[args.index("--version"):args.index("--version") + 2]
-    answer = ready("start", "--company", "boatyard", "--timeout", "1") if how == "start" else \
-        ready(*args[:-1], "--timeout", "1", "--json")
+    del args[args.index("--version") : args.index("--version") + 2]
+    answer = (
+        ready("start", "--company", "boatyard", "--timeout", "1")
+        if how == "start"
+        else ready(*args[:-1], "--timeout", "1", "--json")
+    )
     assert answer["error"] == "update_failed" and answer["version"] == "v1.2.3"
     assert (d / "data" / "hub.sqlite").read_text() == "db v1"
     assert envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.2.3" and "pending" not in record(ready)
@@ -985,7 +1178,7 @@ def test_going_back_while_an_update_is_pending_restores_the_database(ready):
     (d / "data" / "hub.sqlite").write_text("db v1")
     ready("stop", "--company", "boatyard")
     ready("update", "--company", "boatyard", "--version", "v2.0.0")
-    ready("update", "--company", "boatyard", "--version", "v2.1.0")     # still pending: the same snapshot
+    ready("update", "--company", "boatyard", "--version", "v2.1.0")  # still pending: the same snapshot
     assert len(list((d / "snapshots").iterdir())) == 1 and record(ready)["pending"]["from"] == "v1.2.3"
     answer = ready("update", "--company", "boatyard", "--version", "v1.2.3")
     assert answer["ok"] and answer["version"] == "v1.2.3" and "pending" not in record(ready)
@@ -1001,17 +1194,20 @@ def test_a_rollback_never_replaces_the_database_under_a_running_server(ready, st
     inner = ready.system.run
 
     def run(argv, **kw):
-        new_up = any(c[-3:] == ["up", "-d", "--remove-orphans"] for c in ready.system.calls[-30:]) and \
-            envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v2.0.0"
+        new_up = (
+            any(c[-3:] == ["up", "-d", "--remove-orphans"] for c in ready.system.calls[-30:])
+            and envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v2.0.0"
+        )
         if "stop" in argv and new_up:
             ready.system.calls.append(list(argv))
-            return Result(1, "", "cannot stop") if stop == "fails" else Result(0)   # "ignored": still running
+            return Result(1, "", "cannot stop") if stop == "fails" else Result(0)  # "ignored": still running
         return inner(argv, **kw)
+
     ready.system.run = run
     answer = ready("update", "--company", "boatyard", "--version", "v2.0.0", "--timeout", "1")
     assert answer["error"] == "rollback_failed" and "left as it is" in answer["detail"]
     assert answer["version"] == "v2.0.0"
-    assert (d / "data" / "hub.sqlite").read_text() == "db v2"           # untouched while it may still run
+    assert (d / "data" / "hub.sqlite").read_text() == "db v2"  # untouched while it may still run
 
 
 @pytest.mark.parametrize("old_up", ["fails", "unhealthy"])
@@ -1019,14 +1215,19 @@ def test_a_rollback_says_when_the_old_release_does_not_come_back(ready, old_up):
     ready(*add_args(ready))
     d = ready.root / "companies" / "boatyard"
     (d / "data" / "hub.sqlite").write_text("db v1")
-    ready.system.health["boatyard.tico.team"] = 503        # neither release answers
+    ready.system.health["boatyard.tico.team"] = 503  # neither release answers
     inner = ready.system.run
 
     def run(argv, **kw):
-        if old_up == "fails" and "up" in argv and "--project-name" in argv \
-                and envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.2.3":
+        if (
+            old_up == "fails"
+            and "up" in argv
+            and "--project-name" in argv
+            and envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.2.3"
+        ):
             return Result(1, "", "no space left on device")
         return inner(argv, **kw)
+
     ready.system.run = run
     answer = ready("update", "--company", "boatyard", "--version", "v2.0.0", "--timeout", "1")
     assert answer["error"] == "rollback_failed" and answer["version"] == "v1.2.3"
@@ -1054,8 +1255,10 @@ def test_a_failed_stop_or_snapshot_leaves_the_old_release_running(ready, monkeyp
     if step == "stop":
         ready.system.fail["stop server"] = Result(1, "", "daemon busy")
     else:
+
         def full(*a, **k):
             raise OSError(28, "No space left on device")
+
         monkeypatch.setattr(cell.shutil, "copy2", full)
     answer = ready("update", "--company", "boatyard", "--version", "v2.0.0")
     assert answer["error"] == f"{step}_failed" and "still on v1.2.3" in answer["detail"]
@@ -1072,7 +1275,7 @@ def test_commands_read_the_record_once_they_hold_its_lock(ready, argv):
     fcntl.flock(fd, fcntl.LOCK_EX)
     real = ready.system.sleep
 
-    def sleep(seconds):                 # while it waits for the lock, another command removes the company
+    def sleep(seconds):  # while it waits for the lock, another command removes the company
         nonlocal fd
         if fd is not None:
             path = ready.root / "companies" / "boatyard" / "company.json"
@@ -1080,12 +1283,14 @@ def test_commands_read_the_record_once_they_hold_its_lock(ready, argv):
             os.close(fd)
             fd = None
         real(seconds)
+
     ready.system.sleep = sleep
     answer = ready(argv[0], "--company", "boatyard", *argv[1:])
     assert answer["error"] == "not_found" and record(ready)["state"] == "removed"
 
 
 # --- moving an existing install in: own domain, aliases, carried settings, its data -------------------------------
+
 
 def move_args(host, *extra, slug="ticoteam", domain="hub.tico.team"):
     host.system.hosts[domain] = slug
@@ -1103,7 +1308,10 @@ def test_an_own_domain_needs_the_flag(ready):
     assert answer["ok"] and answer["url"] == "https://hub.tico.team"
     env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
     assert env["TICO_DOMAIN"] == "hub.tico.team"
-    assert "http://hub.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000" in (ready.root / "router" / "Caddyfile").read_text()
+    assert (
+        "http://hub.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000"
+        in (ready.root / "router" / "Caddyfile").read_text()
+    )
 
 
 def test_an_own_domain_company_can_be_hosted_own(ready):
@@ -1114,8 +1322,20 @@ def test_an_own_domain_company_can_be_hosted_own(ready):
     assert env["TICO_AUTH_PROXY"] == "oidc" and len(env["TICO_OWNER_LINK_HASH"]) == 64
 
 
-@pytest.mark.parametrize("bad", ["tico.team", "10.0.0.1", "localhost", "*.tico.team", "hub_x.example.com",
-                                 "hub-.example.com", "hub..example.com", "cell-health.invalid", "https://hub.example.com"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "tico.team",
+        "10.0.0.1",
+        "localhost",
+        "*.tico.team",
+        "hub_x.example.com",
+        "hub-.example.com",
+        "hub..example.com",
+        "cell-health.invalid",
+        "https://hub.example.com",
+    ],
+)
 def test_own_domains_and_aliases_are_plain_hostnames(ready, bad):
     args = move_args(ready)
     args[args.index("--domain") + 1] = bad
@@ -1126,7 +1346,9 @@ def test_own_domains_and_aliases_are_plain_hostnames(ready, bad):
 
 def test_alias_rules(ready):
     assert ready(*move_args(ready, "--alias", "hub.tico.team"))["error"] == "bad_domain"
-    assert ready(*move_args(ready, "--alias", "runner.tico.team", "--alias", "runner.tico.team"))["error"] == "bad_domain"
+    assert (
+        ready(*move_args(ready, "--alias", "runner.tico.team", "--alias", "runner.tico.team"))["error"] == "bad_domain"
+    )
     six = [x for i in range(6) for x in ("--alias", f"a{i}.example.com")]
     assert ready(*move_args(ready, *six))["error"] == "bad_args"
     assert not (ready.root / "companies" / "ticoteam").exists()
@@ -1150,35 +1372,49 @@ def test_aliases_are_kept_replaced_and_shown(ready):
     assert ready(*first)["ok"]
     assert record(ready, "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
     caddy = (ready.root / "router" / "Caddyfile").read_text()
-    assert ("http://hub.tico.team:8080, http://runner.tico.team:8080, http://hub.ticofiles.com:8080 {\n"
-            "\treverse_proxy 127.0.0.1:20000") in caddy
-    again = ready(*move_args(ready))                                # left out: kept
-    assert again["changed"] is False and record(ready, "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
+    assert (
+        "http://hub.tico.team:8080, http://runner.tico.team:8080, http://hub.ticofiles.com:8080 {\n"
+        "\treverse_proxy 127.0.0.1:20000"
+    ) in caddy
+    again = ready(*move_args(ready))  # left out: kept
+    assert again["changed"] is False and record(ready, "ticoteam")["aliases"] == [
+        "runner.tico.team",
+        "hub.ticofiles.com",
+    ]
     assert ready("list")["companies"][0]["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
     assert ready("status", "--company", "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
-    ready(*move_args(ready, "--alias", "runner.tico.team"))         # given: replaces
+    ready(*move_args(ready, "--alias", "runner.tico.team"))  # given: replaces
     assert record(ready, "ticoteam")["aliases"] == ["runner.tico.team"]
     assert "hub.ticofiles.com" not in (ready.root / "router" / "Caddyfile").read_text()
-    ready(*move_args(ready, "--alias", ""))                         # "" alone: none
+    ready(*move_args(ready, "--alias", ""))  # "" alone: none
     assert "aliases" not in record(ready, "ticoteam")
     assert ready("status", "--company", "ticoteam")["aliases"] == []
 
 
 # the tunnel
 
+
 def test_tunnel_config_lists_hosts_the_wildcard_misses_first():
-    companies = [{"domain": "hub.tico.team", "aliases": ["runner.tico.team", "hub.ticofiles.com"]},
-                 {"domain": "tidy.rocks", "aliases": ["a.b.tico.team"]}, {"domain": "boatyard.tico.team"}]
+    companies = [
+        {"domain": "hub.tico.team", "aliases": ["runner.tico.team", "hub.ticofiles.com"]},
+        {"domain": "tidy.rocks", "aliases": ["a.b.tico.team"]},
+        {"domain": "boatyard.tico.team"},
+    ]
     hosts = cell.tunnel_hosts("tico.team", companies)
     assert hosts == ["a.b.tico.team", "hub.ticofiles.com", "tidy.rocks"]
     text = cell.tunnel_config("tico.team", hosts)
-    assert text.index('"hub.ticofiles.com"') < text.index('"tidy.rocks"') < text.index('"*.tico.team"') \
+    assert (
+        text.index('"hub.ticofiles.com"')
+        < text.index('"tidy.rocks"')
+        < text.index('"*.tico.team"')
         < text.index("http_status:404")
+    )
     assert text.count("service: http://127.0.0.1:8080") == 4
     # Without such hosts: the file every cell already has, so upgrading restarts nothing.
     assert cell.tunnel_config("tico.team") == (
         "# Written by `python3 -m setup cell init`: every company's name to the router; anything else a 404.\n"
-        "ingress:\n  - hostname: \"*.tico.team\"\n    service: http://127.0.0.1:8080\n  - service: http_status:404\n")
+        "ingress:\n  - hostname: \"*.tico.team\"\n    service: http://127.0.0.1:8080\n  - service: http_status:404\n"
+    )
 
 
 @pytest.fixture
@@ -1195,7 +1431,7 @@ def test_the_tunnel_restarts_only_when_its_routes_change(tunneled):
     routes = tunneled.root / "tunnel" / "cloudflared.yml"
     plain = routes.read_text()
     n = len(tunneled.system.calls)
-    tunneled(*add_args(tunneled, "boatyard"))                       # under the wildcard: nothing to add
+    tunneled(*add_args(tunneled, "boatyard"))  # under the wildcard: nothing to add
     assert restarts(tunneled, n) == 0 and routes.read_text() == plain
     n = len(tunneled.system.calls)
     tunneled.system.chowns.clear()
@@ -1205,8 +1441,8 @@ def test_the_tunnel_restarts_only_when_its_routes_change(tunneled):
     assert text.index('"hub.ticofiles.com"') < text.index('"*.tico.team"')
     assert restarts(tunneled, n) == 1 and (str(routes), 65532, 65532) in tunneled.system.chowns
     n = len(tunneled.system.calls)
-    assert tunneled(*move_args(tunneled))["changed"] is False       # the same again
-    assert tunneled("init", "--json")["changed"] == []               # init writes the same routes
+    assert tunneled(*move_args(tunneled))["changed"] is False  # the same again
+    assert tunneled("init", "--json")["changed"] == []  # init writes the same routes
     assert restarts(tunneled, n) == 0 and routes.read_text() == text
     tunneled("remove", "--company", "ticoteam")
     assert routes.read_text() == plain and restarts(tunneled, n) == 1
@@ -1221,7 +1457,7 @@ def test_a_tunnel_that_fails_to_restart_gets_its_old_routes_back(tunneled):
     assert routes.read_text() == plain
     tunneled.system.fail.clear()
     n = len(tunneled.system.calls)
-    assert tunneled(*move_args(tunneled))["ok"] and restarts(tunneled, n) == 1     # the next run tries again
+    assert tunneled(*move_args(tunneled))["ok"] and restarts(tunneled, n) == 1  # the next run tries again
     assert '"hub.ticofiles.com"' in routes.read_text()
 
 
@@ -1233,19 +1469,33 @@ def test_without_a_tunnel_the_routes_are_written_but_nothing_restarts(ready):
 
 # routes: a service on the host that is not a company (the public demo)
 
-DEMO = ["route", "set", "--name", "demo", "--host", "demo.tico.team", "--host", "demo.tico.dev",
-        "--port", "19081", "--port", "19082", "--noindex", "--json"]
+DEMO = [
+    "route",
+    "set",
+    "--name",
+    "demo",
+    "--host",
+    "demo.tico.team",
+    "--host",
+    "demo.tico.dev",
+    "--port",
+    "19081",
+    "--port",
+    "19082",
+    "--noindex",
+    "--json",
+]
 
 
 def test_a_route_goes_to_its_first_healthy_port_and_is_never_indexed():
     route = {"name": "demo", "hosts": ["demo.tico.team", "demo.tico.dev"], "ports": [19081, 19082], "noindex": True}
     plain = cell.router_config([{"domain": "a.tico.team", "port": 20000}])
     text = cell.router_config([{"domain": "a.tico.team", "port": 20000}], [route])
-    block = text[text.index("http://demo.tico.team:8080, http://demo.tico.dev:8080 {"):text.index("http://:8080 {")]
-    assert text.replace(block, "") == plain                       # the companies' blocks are untouched
+    block = text[text.index("http://demo.tico.team:8080, http://demo.tico.dev:8080 {") : text.index("http://:8080 {")]
+    assert text.replace(block, "") == plain  # the companies' blocks are untouched
     assert "reverse_proxy 127.0.0.1:19081 127.0.0.1:19082 {" in block and "lb_policy first" in block
     assert "health_uri /healthz" in block and "lb_try_duration 30s" in block
-    assert block.count('header X-Robots-Tag "noindex, nofollow"') == 2          # answers and the hold's 503
+    assert block.count('header X-Robots-Tag "noindex, nofollow"') == 2  # answers and the hold's 503
     assert 'respond "User-agent: *\nDisallow: /\n" 200' in block
     one = cell.router_config([], [{**route, "ports": [19081], "noindex": False}])
     assert "lb_policy" not in one and "X-Robots-Tag" not in one and "robots.txt" not in one
@@ -1256,12 +1506,18 @@ def test_route_set_is_kept_by_every_later_router_write_and_remove_drops_it(tunne
     plain = routes.read_text()
     n = len(tunneled.system.calls)
     answer = tunneled(*DEMO[:-1], "--router-only", "--json")
-    assert answer == {"ok": True, "route": "demo", "changed": True, "router": True, "tunnel": False,
-                      "tunnel_pending": True}
-    assert routes.read_text() == plain and restarts(tunneled, n) == 0     # --router-only: no tunnel restart
+    assert answer == {
+        "ok": True,
+        "route": "demo",
+        "changed": True,
+        "router": True,
+        "tunnel": False,
+        "tunnel_pending": True,
+    }
+    assert routes.read_text() == plain and restarts(tunneled, n) == 0  # --router-only: no tunnel restart
     caddy = tunneled.root / "router" / "Caddyfile"
     assert "http://demo.tico.team:8080, http://demo.tico.dev:8080" in caddy.read_text()
-    tunneled(*add_args(tunneled, "alpha"))                                 # a company's add keeps the route
+    tunneled(*add_args(tunneled, "alpha"))  # a company's add keeps the route
     assert "demo.tico.dev" in caddy.read_text() and '"demo.tico.dev"' in routes.read_text()
     assert tunneled("route", "list", "--json")["routes"][0]["ports"] == [19081, 19082]
     n = len(tunneled.system.calls)
@@ -1273,16 +1529,18 @@ def test_route_set_is_kept_by_every_later_router_write_and_remove_drops_it(tunne
 
 def test_route_and_company_hosts_never_overlap(ready):
     ready(*add_args(ready, "alpha"))
-    assert ready("route", "set", "--name", "demo", "--host", "alpha.tico.team", "--port", "19081",
-                 "--json")["error"] == "domain_taken"
+    assert (
+        ready("route", "set", "--name", "demo", "--host", "alpha.tico.team", "--port", "19081", "--json")["error"]
+        == "domain_taken"
+    )
     assert ready(*DEMO)["ok"]
     args = add_args(ready, "demo")
-    assert ready(*args)["error"] == "domain_taken"                         # demo.tico.team is the route's
+    assert ready(*args)["error"] == "domain_taken"  # demo.tico.team is the route's
 
 
 def test_if_router_current_refuses_a_router_this_checkout_did_not_write(ready):
     ready(*add_args(ready, "alpha"))
-    assert ready(*DEMO, "--if-router-current")["ok"]                     # this checkout's file, with or without routes
+    assert ready(*DEMO, "--if-router-current")["ok"]  # this checkout's file, with or without routes
     path = ready.root / "router" / "Caddyfile"
     newer = path.read_text() + "# a newer core's block\n"
     path.write_text(newer)
@@ -1298,17 +1556,29 @@ def test_route_ports_stay_clear_of_the_cells_own(ready, extra):
 
 # carried settings
 
-CARRIED = ("# from hub.tico.team's .env\n"
-           "TICO_RUNNER_URL=https://runner.tico.team\nTICO_VISUAL_ORIGIN=https://hub.ticofiles.com\n"
-           "TICO_BLOB_BUCKET=tico-team-blobs\nTICO_BLOB_REGION=us-west-2\nTICO_INBOUND_KEY=inbound-" + "k" * 30 + "\n"
-           "TYPESAFE_API_KEY=ts-" + "y" * 30 + "\nTICO_STALE_REVIEW=48\nTICO_SUPPORT_ACCESS=on\n"
-           "TICO_MIGRATE_TO_AUTOMATIONS=1\nTICO_OIDC_ALLOWED_DOMAINS=tico.team\n"
-           # the cell's own, or a single-company install's: never kept
-           "TICO_DOMAIN=old.example.com\nTICO_OIDC_LABEL=Google\nTICO_TAG=v0.0.1\nTICO_PORT=8765\nCOMPOSE_PROFILES=caddy\n"
-           "CLOUDFLARE_TUNNEL_TOKEN=" + "c" * 40 + "\nTICO_CADDY_VISUALS=1\nTICO_TUNNEL_X=1\n"
-           "TICO_EXPECTED_AWS_ACCOUNT=123456789012\nTICO_OWNER_LINK_HASH=" + "0" * 64 + "\n")
-IGNORED = ["CLOUDFLARE_TUNNEL_TOKEN", "COMPOSE_PROFILES", "TICO_CADDY_VISUALS", "TICO_DOMAIN",
-           "TICO_EXPECTED_AWS_ACCOUNT", "TICO_OIDC_LABEL", "TICO_OWNER_LINK_HASH", "TICO_PORT", "TICO_TAG", "TICO_TUNNEL_X"]
+CARRIED = (
+    "# from hub.tico.team's .env\n"
+    "TICO_RUNNER_URL=https://runner.tico.team\nTICO_VISUAL_ORIGIN=https://hub.ticofiles.com\n"
+    "TICO_BLOB_BUCKET=tico-team-blobs\nTICO_BLOB_REGION=us-west-2\nTICO_INBOUND_KEY=inbound-" + "k" * 30 + "\n"
+    "TYPESAFE_API_KEY=ts-" + "y" * 30 + "\nTICO_STALE_REVIEW=48\nTICO_SUPPORT_ACCESS=on\n"
+    "TICO_MIGRATE_TO_AUTOMATIONS=1\nTICO_OIDC_ALLOWED_DOMAINS=tico.team\n"
+    # the cell's own, or a single-company install's: never kept
+    "TICO_DOMAIN=old.example.com\nTICO_OIDC_LABEL=Google\nTICO_TAG=v0.0.1\nTICO_PORT=8765\nCOMPOSE_PROFILES=caddy\n"
+    "CLOUDFLARE_TUNNEL_TOKEN=" + "c" * 40 + "\nTICO_CADDY_VISUALS=1\nTICO_TUNNEL_X=1\n"
+    "TICO_EXPECTED_AWS_ACCOUNT=123456789012\nTICO_OWNER_LINK_HASH=" + "0" * 64 + "\n"
+)
+IGNORED = [
+    "CLOUDFLARE_TUNNEL_TOKEN",
+    "COMPOSE_PROFILES",
+    "TICO_CADDY_VISUALS",
+    "TICO_DOMAIN",
+    "TICO_EXPECTED_AWS_ACCOUNT",
+    "TICO_OIDC_LABEL",
+    "TICO_OWNER_LINK_HASH",
+    "TICO_PORT",
+    "TICO_TAG",
+    "TICO_TUNNEL_X",
+]
 
 
 def test_carried_settings_are_kept_and_the_cells_own_win(ready):
@@ -1344,8 +1614,9 @@ def test_a_new_env_file_replaces_the_carried_settings(ready):
     assert env["TICO_STALE_REVIEW"] == "24" and "TICO_BLOB_BUCKET" not in env and "TICO_RUNNER_URL" not in env
 
 
-@pytest.mark.parametrize("text", ["lower_case=1", "TICO_X", "1TICO=1", "TICO X=1", "TICO_X=a\x07b",
-                                  "K" + "X" * 64 + "=1"])
+@pytest.mark.parametrize(
+    "text", ["lower_case=1", "TICO_X", "1TICO=1", "TICO X=1", "TICO_X=a\x07b", "K" + "X" * 64 + "=1"]
+)
 def test_bad_env_files_are_refused_without_their_values(ready, text):
     answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "bad.env", "TICO_OK=1\n" + text)))
     assert answer["error"] == "secret_file" and "--env-file" in answer["detail"] and "a\x07b" not in answer["detail"]
@@ -1373,10 +1644,18 @@ import tarfile  # noqa: E402
 def data_tar(tmp_path, name="data.tar.gz", extra=None, mode=0o600, hub=True):
     """An install's /data as `tar -C /data -czf ... .` makes it, plus `extra` (TarInfo, bytes) members."""
     import io as _io
+
     path = tmp_path / name
-    files = {"hub.sqlite": b"db", "hub.sqlite-wal": b"wal", "credential.key": b"k" * 32, "github-app.key": b"pem",
-             "tico-session-secret": b"s", "visual-secret": b"v", "registry/bots/a.yaml": b"name: a\n",
-             "blobs/ab/abcdef": b"x" * 100}
+    files = {
+        "hub.sqlite": b"db",
+        "hub.sqlite-wal": b"wal",
+        "credential.key": b"k" * 32,
+        "github-app.key": b"pem",
+        "tico-session-secret": b"s",
+        "visual-secret": b"v",
+        "registry/bots/a.yaml": b"name: a\n",
+        "blobs/ab/abcdef": b"x" * 100,
+    }
     if not hub:
         files.pop("hub.sqlite")
     with tarfile.open(path, "w:gz" if name.endswith("gz") else "w") as tar:
@@ -1412,10 +1691,11 @@ def test_import_fills_a_new_companys_data_before_its_first_start(ready):
         if "up" in argv and "--project-name" in argv:
             seen.append((d / "data" / "hub.sqlite").read_bytes())
         return real(argv, **kw)
+
     ready.system.run = run
     answer = ready(*move_args(ready, "--import-data", archive))
     assert answer["ok"] and answer["imported"] is True and answer["imported_bytes"] == size and answer["changed"]
-    assert seen == [b"db"]                                          # in place before the server first started
+    assert seen == [b"db"]  # in place before the server first started
     assert (d / "data" / "registry" / "bots" / "a.yaml").read_text() == "name: a\n"
     assert (d / "data" / "registry" / "b.yaml").read_text() == "name: a\n"
     assert not (d / cell.IMPORT_STAGING).exists() and stat.S_IMODE((d / "data").stat().st_mode) == 0o700
@@ -1452,12 +1732,22 @@ def test_import_into_a_kept_but_empty_data_folder(ready):
     assert (ready.root / "companies" / "boatyard" / "data" / "hub.sqlite").read_bytes() == b"db"
 
 
-@pytest.mark.parametrize("bad", [
-    member("/etc/cron.d/x", body=b"x"), member("./../escape", body=b"x"), member("./a/../../escape", body=b"x"),
-    member("./link", tarfile.SYMTYPE, "../../etc/passwd"), member("./link", tarfile.SYMTYPE, "hub.sqlite"),
-    member("./hard", tarfile.LNKTYPE, "/etc/passwd"), member("./hard", tarfile.LNKTYPE, "../outside"),
-    member("./hard", tarfile.LNKTYPE, "./not-in-the-archive"),
-    member("./tty", tarfile.CHRTYPE), member("./disk", tarfile.BLKTYPE), member("./pipe", tarfile.FIFOTYPE)])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        member("/etc/cron.d/x", body=b"x"),
+        member("./../escape", body=b"x"),
+        member("./a/../../escape", body=b"x"),
+        member("./link", tarfile.SYMTYPE, "../../etc/passwd"),
+        member("./link", tarfile.SYMTYPE, "hub.sqlite"),
+        member("./hard", tarfile.LNKTYPE, "/etc/passwd"),
+        member("./hard", tarfile.LNKTYPE, "../outside"),
+        member("./hard", tarfile.LNKTYPE, "./not-in-the-archive"),
+        member("./tty", tarfile.CHRTYPE),
+        member("./disk", tarfile.BLKTYPE),
+        member("./pipe", tarfile.FIFOTYPE),
+    ],
+)
 def test_a_bad_archive_is_refused_whole_and_leaves_nothing(ready, bad):
     archive, _ = data_tar(ready.tmp, extra=[bad])
     answer = ready(*move_args(ready, "--import-data", archive))
@@ -1497,14 +1787,29 @@ def test_a_whole_move_is_idempotent(tunneled):
     archive, _ = data_tar(tunneled.tmp)
     env_file = secret_file(tunneled.tmp, "old.env", CARRIED)
     aliases = ["--alias", "runner.tico.team", "--alias", "hub.ticofiles.com"]
-    first = tunneled(*move_args(tunneled, *aliases, "--env-file", env_file, "--import-data", archive,
-                                "--company-name", "Tico Team", "--signin-label", "Google"))
+    first = tunneled(
+        *move_args(
+            tunneled,
+            *aliases,
+            "--env-file",
+            env_file,
+            "--import-data",
+            archive,
+            "--company-name",
+            "Tico Team",
+            "--signin-label",
+            "Google",
+        )
+    )
     assert first["ok"] and first["imported"] is True
     d = tunneled.root / "companies" / "ticoteam"
     files = {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()}
     n = len(tunneled.system.calls)
-    second = tunneled(*move_args(tunneled, *aliases, "--env-file", env_file, "--company-name", "Tico Team",
-                                 "--signin-label", "Google"))
+    second = tunneled(
+        *move_args(
+            tunneled, *aliases, "--env-file", env_file, "--company-name", "Tico Team", "--signin-label", "Google"
+        )
+    )
     assert second["changed"] is False and second["ignored"] == first["ignored"]
     assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == files
     assert restarts(tunneled, n) == 0
@@ -1522,9 +1827,15 @@ UPDATER_SOURCE = ROOT / "docker" / "updater.py"
 def service(host, core="v9.0.0", **kw):
     def never(*a):
         pytest.fail("a core was fetched or run")
+
     kw = {"cores": host.tmp / "cores", "fetch": never, "run_core": never, **kw}
-    return U.Service(host.root, host.system, core=lambda: core, **kw,
-                     make_cell=lambda: cell.Cell(host.root, host.system, host.etc, ROOT / "compose.yaml"))
+    return U.Service(
+        host.root,
+        host.system,
+        core=lambda: core,
+        **kw,
+        make_cell=lambda: cell.Cell(host.root, host.system, host.etc, ROOT / "compose.yaml"),
+    )
 
 
 def token(host, slug="boatyard"):
@@ -1532,7 +1843,7 @@ def token(host, slug="boatyard"):
 
 
 def peer(index=0):
-    return f"10.208.{index}.5"            # a container on company `index`'s default network
+    return f"10.208.{index}.5"  # a container on company `index`'s default network
 
 
 def ask(svc, slug="boatyard", body=None, index=0, auth=None, method="POST", path="/update"):
@@ -1542,8 +1853,11 @@ def ask(svc, slug="boatyard", body=None, index=0, auth=None, method="POST", path
     refused = svc.gate(slug, index, peer(index), auth)
     if refused:
         return refused
-    answer = svc.get(slug, path) if method == "GET" else \
-        svc.post(slug, index, path, json.dumps(body if body is not None else {"version": "v1.3.0"}).encode())
+    answer = (
+        svc.get(slug, path)
+        if method == "GET"
+        else svc.post(slug, index, path, json.dumps(body if body is not None else {"version": "v1.3.0"}).encode())
+    )
     for worker in list(svc.workers):
         worker.join(10)
     return answer
@@ -1561,10 +1875,10 @@ def test_each_company_has_its_own_updater_token_only_its_server_reads(ready):
     for slug in ("alpha", "bravo"):
         path = ready.root / "companies" / slug / "control" / cell.TOKEN_NAME
         assert stat.S_IMODE(path.stat().st_mode) == 0o600 and (str(path), 10001, 10001) in ready.system.chowns
-    assert ready(*add_args(ready, "alpha"))["changed"] is False and token(ready, "alpha") == a    # kept, once made
+    assert ready(*add_args(ready, "alpha"))["changed"] is False and token(ready, "alpha") == a  # kept, once made
     assert a not in ready.system.argv_text() and a not in json.dumps(ready("status", "--company", "alpha"))
     env = envfile.parse((ready.root / "companies" / "bravo" / ".env").read_text())
-    assert env["TICO_UPDATER_URL"] == "http://10.208.1.1:8090"             # bravo's own network, not alpha's
+    assert env["TICO_UPDATER_URL"] == "http://10.208.1.1:8090"  # bravo's own network, not alpha's
 
 
 def test_a_companys_updater_answers_only_that_company(ready):
@@ -1573,10 +1887,10 @@ def test_a_companys_updater_answers_only_that_company(ready):
     svc = service(ready)
     mine, theirs = "Bearer " + token(ready, "alpha"), "Bearer " + token(ready, "bravo")
     assert svc.gate("alpha", 0, peer(0), mine) is None
-    assert svc.gate("alpha", 0, peer(0), theirs) == (401, {"error": "unauthorized"})   # bravo's token at alpha's
-    assert svc.gate("alpha", 0, peer(1), mine)[0] == 403        # bravo's container, even holding alpha's token
+    assert svc.gate("alpha", 0, peer(0), theirs) == (401, {"error": "unauthorized"})  # bravo's token at alpha's
+    assert svc.gate("alpha", 0, peer(1), mine)[0] == 403  # bravo's container, even holding alpha's token
     assert svc.gate("alpha", 0, "127.0.0.1", mine)[0] == 403
-    assert svc.gate("alpha", 1, peer(1), mine)[0] == 403        # a listener whose slot is no longer alpha's
+    assert svc.gate("alpha", 1, peer(1), mine)[0] == 403  # a listener whose slot is no longer alpha's
     ready("remove", "--company", "alpha", "--keep-data")
     assert svc.gate("alpha", 0, peer(0), mine)[0] == 403
 
@@ -1586,7 +1900,7 @@ def test_a_missing_or_wrong_token_is_refused(ready, auth):
     ready(*add_args(ready))
     svc = service(ready)
     assert ask(svc, auth=auth) == (401, {"error": "unauthorized"})
-    assert ready.system.images == {f"{cell.SERVER_IMAGE}:v1.2.3"}          # nothing pulled
+    assert ready.system.images == {f"{cell.SERVER_IMAGE}:v1.2.3"}  # nothing pulled
 
 
 @pytest.mark.parametrize("bad", ["missing", "empty", "short", "symlink"])
@@ -1600,7 +1914,7 @@ def test_no_usable_token_file_refuses_every_request(ready, bad):
         path.write_text("")
     elif bad == "short":
         path.write_text("abc\n")
-    elif bad == "symlink":                  # the server owns the folder: a link to a file it can guess is no token
+    elif bad == "symlink":  # the server owns the folder: a link to a file it can guess is no token
         (ready.tmp / "guessable").write_text(old + "\n")
         path.symlink_to(ready.tmp / "guessable")
     assert svc.token("boatyard") == ""
@@ -1618,8 +1932,9 @@ def test_the_body_never_chooses_the_company(ready):
     assert status(svc, "bravo")["state"] == "idle"
 
 
-@pytest.mark.parametrize("version", ["1.3.0-rc.1", "v1.3", "1.3.0.1", "nightly", "", "../../etc", 130, None,
-                                     "v1.3.0\n", "LATEST"])
+@pytest.mark.parametrize(
+    "version", ["1.3.0-rc.1", "v1.3", "1.3.0.1", "nightly", "", "../../etc", 130, None, "v1.3.0\n", "LATEST"]
+)
 def test_only_a_stable_release_or_latest_is_accepted(ready, version):
     ready(*add_args(ready))
     svc = service(ready)
@@ -1644,7 +1959,7 @@ def test_a_release_it_may_not_run_changes_nothing(ready, case):
         ready.system.unpublished.add("v1.3.0")
     elif case == "github down":
         ready.system.unpublished = None
-    svc = service(ready, core="v1.2.9" if "newer" in case else "v9.0.0")     # no core fetched for an unpublished tag
+    svc = service(ready, core="v1.2.9" if "newer" in case else "v9.0.0")  # no core fetched for an unpublished tag
     assert ask(svc)[0] == 202
     s = status(svc)
     assert s["state"] == "failed" and s["message"].startswith("Not updated: ")
@@ -1658,7 +1973,7 @@ def test_an_older_release_is_refused_as_the_sidecar_refuses_it(ready):
     ready(*add_args(ready))
     svc = service(ready)
     assert ask(svc, body={"version": "1.2.2"}) == (409, {"error": "older than the running version"})
-    assert ask(svc, body={"version": "1.2.3"})[0] == 202 and status(svc)["state"] == "healthy"   # the same is fine
+    assert ask(svc, body={"version": "1.2.3"})[0] == 202 and status(svc)["state"] == "healthy"  # the same is fine
 
 
 def test_a_second_request_while_one_runs_gets_409(ready):
@@ -1670,6 +1985,7 @@ def test_a_second_request_while_one_runs_gets_409(ready):
         if argv[:2] == ["docker", "pull"]:
             release.wait(10)
         return real(argv, **kw)
+
     ready.system.run = run
     auth = "Bearer " + token(ready)
     assert svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')[0] == 202
@@ -1686,7 +2002,7 @@ def test_staff_holding_the_company_gets_its_request_a_409(ready):
     ready(*add_args(ready))
     svc = service(ready)
     fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)          # `cell update` (or add, stop...) run by staff, under way
+    fcntl.flock(fd, fcntl.LOCK_EX)  # `cell update` (or add, stop...) run by staff, under way
     try:
         code, body = ask(svc)
         assert code == 409 and "Another cell command" in body["message"] and status(svc)["state"] == "idle"
@@ -1699,8 +2015,10 @@ def test_a_sleep_request_sleeps_the_company_with_its_wake_at(ready):
     ready(*add_args(ready))
     svc = service(ready, lead=0)
     at = utc_in(2 * 86400)
-    assert ask(svc, path="/sleep", body={"wake_at": at, "reason": "idle"}) == \
-        (202, {"state": "sleeping", "wake_at": at})
+    assert ask(svc, path="/sleep", body={"wake_at": at, "reason": "idle"}) == (
+        202,
+        {"state": "sleeping", "wake_at": at},
+    )
     assert record(ready)["state"] == "sleeping" and record(ready)["wake_at"] == at
     assert ready.system.ps["boatyard"][0] == "exited" and "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
 
@@ -1718,7 +2036,7 @@ def test_the_answer_gets_back_before_the_company_stops(ready):
     ready(*add_args(ready))
     svc = service(ready, lead=0.5)
     assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
-    assert record(ready)["state"] == "running"              # the work waits its lead
+    assert record(ready)["state"] == "running"  # the work waits its lead
     for worker in list(svc.workers):
         worker.join(10)
     assert record(ready)["state"] == "sleeping" and ready.system.ps["boatyard"][0] == "exited"
@@ -1741,8 +2059,9 @@ def test_a_sleep_with_a_missing_or_wrong_token_is_refused_as_update_is(ready, au
     assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
 
 
-@pytest.mark.parametrize("wake_at", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", 12345,
-                                     "2099-01-01T00:00:00Z"])
+@pytest.mark.parametrize(
+    "wake_at", ["2026-10-30 18:00:00Z", "tomorrow", "2026-10-30T18:00:00", 12345, "2099-01-01T00:00:00Z"]
+)
 def test_a_bad_wake_at_is_422_and_changes_nothing(ready, wake_at):
     ready(*add_args(ready))
     svc = service(ready, lead=0)
@@ -1765,7 +2084,7 @@ def test_a_sleep_while_an_update_runs_or_staff_hold_the_company_is_busy(ready):
     assert ask(svc, path="/sleep", body={"wake_at": None}) == (409, {"error": "busy"})
     svc.set("boatyard", state="idle")
     fd = os.open(ready.root / "locks" / "company-boatyard.lock", os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)          # `cell update` (or stop, start...) run by staff, under way
+    fcntl.flock(fd, fcntl.LOCK_EX)  # `cell update` (or stop, start...) run by staff, under way
     try:
         assert ask(svc, path="/sleep", body={"wake_at": None}) == (409, {"error": "busy"})
     finally:
@@ -1777,6 +2096,7 @@ def test_a_sleep_while_an_update_runs_or_staff_hold_the_company_is_busy(ready):
 def held_sleep(svc):
     """The service with each sleep's work held before its lead ends: (release, the sleep threads started so far)."""
     import threading
+
     lead, real = threading.Event(), svc.sleep_work
     svc.sleep_work = lambda slug, mine: (lead.wait(10), real(slug, mine))
     return lead, lambda: [w for w in list(svc.workers) if w.name.startswith("sleep-")]
@@ -1784,15 +2104,16 @@ def held_sleep(svc):
 
 def test_an_update_admitted_during_a_sleeps_lead_cancels_the_sleep(ready):
     import threading
+
     ready(*add_args(ready))
     svc = service(ready, lead=0)
     lead, sleepers = held_sleep(svc)
     checked, real = threading.Event(), ready.system.release_published
-    ready.system.release_published = lambda tag: checked.wait(10) and real(tag)     # the update held at its check
+    ready.system.release_published = lambda tag: checked.wait(10) and real(tag)  # the update held at its check
     assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
     held = sleepers()
     assert svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')[0] == 202 and svc.sleeps == {}
-    lead.set()                                                  # the sleep's lead ends while the update is under way
+    lead.set()  # the sleep's lead ends while the update is under way
     for worker in held:
         worker.join(10)
     assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
@@ -1806,6 +2127,7 @@ def test_an_update_admitted_during_a_sleeps_lead_cancels_the_sleep(ready):
 
 def test_an_update_while_a_sleep_stops_the_server_is_refused_until_it_is_done(ready):
     import threading
+
     ready(*add_args(ready))
     svc = service(ready, lead=0)
     stopping, go, real = threading.Event(), threading.Event(), ready.system.run
@@ -1815,9 +2137,10 @@ def test_an_update_while_a_sleep_stops_the_server_is_refused_until_it_is_done(re
             stopping.set()
             go.wait(10)
         return real(argv, **kw)
+
     ready.system.run = run
     assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}')[0] == 202
-    assert stopping.wait(10)                                    # committed: the server is stopping
+    assert stopping.wait(10)  # committed: the server is stopping
     code, body = svc.post("boatyard", 0, "/update", b'{"version": "v1.3.0"}')
     assert code == 409 and "going to sleep" in body["message"] and status(svc)["state"] == "idle"
     assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (409, {"error": "busy"})
@@ -1825,7 +2148,7 @@ def test_an_update_while_a_sleep_stops_the_server_is_refused_until_it_is_done(re
     for worker in list(svc.workers):
         worker.join(10)
     assert record(ready)["state"] == "sleeping" and svc.sleeps == {}
-    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"   # the reservation is gone: updated, still asleep
+    assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy"  # the reservation is gone: updated, still asleep
     assert record(ready)["version"] == "v1.3.0" and record(ready)["state"] == "sleeping"
 
 
@@ -1856,6 +2179,7 @@ def test_a_sleep_that_fails_releases_its_reservation(ready):
 
 def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
     import http.client
+
     ready(*add_args(ready))
     svc = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
     listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
@@ -1869,6 +2193,7 @@ def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
             out = (r.status, json.loads(r.read()))
             c.close()
             return out
+
         assert call(b'{"wake_at": null}', auth="Bearer nope") == (401, {"error": "unauthorized"})
         assert call(b"x" * (U.MAX_BODY + 1))[0] == 413
         assert call(b'{"wake_at": "soon"}') == (422, {"error": "bad_wake_at"})
@@ -1879,7 +2204,7 @@ def test_sleep_over_http_is_gated_and_sized_as_update_is(ready):
     finally:
         listener.shutdown()
         listener.server_close()
-    strict = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    strict = service(ready, lead=0, bind=lambda index: ("127.0.0.1", 0))  # the real subnet: loopback is not boatyard
     listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
     try:
         c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
@@ -1895,16 +2220,16 @@ def test_get_sleep_answers_the_company_policy(ready):
     ready(*add_args(ready, "boatyard"))
     ready(*add_args(ready, "alpha"))
     svc = service(ready)
-    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})            # no policy yet
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})  # no policy yet
     ready("set-sleep", "--company", "boatyard", "--minutes", "30")
     assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
     ready("set-sleep", "--company", "boatyard", "--minutes", "0")
-    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 0})               # never sleeps
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 0})  # never sleeps
     ready("set-sleep", "--company", "boatyard", "--minutes", "default")
     assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})
     ready("set-sleep", "--company", "alpha", "--minutes", "1440")
     assert ask(svc, "alpha", index=1, path="/sleep", method="GET") == (200, {"minutes": 1440})
-    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})            # its own record only
+    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": None})  # its own record only
 
 
 @pytest.mark.parametrize("value", [5000, -1, "30", True, None])
@@ -1929,18 +2254,20 @@ def test_get_sleep_is_gated_as_status_is(ready, auth):
     assert ask(svc, path="/sleep", method="GET", auth=auth) == (401, {"error": "unauthorized"})
     assert ask(svc, path="/status", method="GET", auth=auth) == (401, {"error": "unauthorized"})
     mine = "Bearer " + token(ready)
-    assert svc.gate("boatyard", 0, peer(1), mine)[0] == 403          # another company's container
-    assert svc.gate("boatyard", 1, peer(1), mine)[0] == 403          # a listener whose slot is not boatyard's
+    assert svc.gate("boatyard", 0, peer(1), mine)[0] == 403  # another company's container
+    assert svc.gate("boatyard", 1, peer(1), mine)[0] == 403  # a listener whose slot is not boatyard's
     assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
 
 
 def test_get_sleep_over_http_is_gated_as_status_is(ready):
     import http.client
+
     ready(*add_args(ready))
     ready("set-sleep", "--company", "boatyard", "--minutes", "30")
     svc = service(ready, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
     listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
     try:
+
         def call(auth):
             c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
             c.request("GET", "/sleep", headers={"Authorization": auth})
@@ -1948,12 +2275,13 @@ def test_get_sleep_over_http_is_gated_as_status_is(ready):
             out = (r.status, json.loads(r.read()))
             c.close()
             return out
+
         assert call("Bearer nope") == (401, {"error": "unauthorized"})
         assert call("Bearer " + token(ready)) == (200, {"minutes": 30})
     finally:
         listener.shutdown()
         listener.server_close()
-    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))  # the real subnet: loopback is not boatyard
     listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
     try:
         c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
@@ -1967,8 +2295,14 @@ def test_get_sleep_over_http_is_gated_as_status_is(ready):
 
 def load_sidecar(monkeypatch, tmp_path):
     import importlib.util
-    for key, value in {"TICO_UPDATER_MODE": "", "TICO_PROJECT_DIR": str(tmp_path), "TICO_UPDATER_SELF": "never",
-                       "TICO_UPDATER_TOKEN_FILE": str(tmp_path / "token"), "TICO_UPDATER_BUNDLE": "never"}.items():
+
+    for key, value in {
+        "TICO_UPDATER_MODE": "",
+        "TICO_PROJECT_DIR": str(tmp_path),
+        "TICO_UPDATER_SELF": "never",
+        "TICO_UPDATER_TOKEN_FILE": str(tmp_path / "token"),
+        "TICO_UPDATER_BUNDLE": "never",
+    }.items():
         monkeypatch.setenv(key, value)
     spec = importlib.util.spec_from_file_location("tico_updater_for_cell", UPDATER_SOURCE)
     module = importlib.util.module_from_spec(spec)
@@ -1980,22 +2314,29 @@ def test_status_and_diagnostics_have_the_sidecars_shape(ready, monkeypatch):
     sidecar = load_sidecar(monkeypatch, ready.tmp / "sidecar")
     ready(*add_args(ready))
     svc = service(ready)
-    assert set(status(svc)) == set(sidecar.status)                          # idle, before any update
+    assert set(status(svc)) == set(sidecar.status)  # idle, before any update
     code, accepted = svc.post("boatyard", 0, "/update", b'{"version": "1.3.0", "from": "1.2.3"}')
     for worker in list(svc.workers):
         worker.join(10)
-    assert code == 202 and accepted["state"] == "pulling" and accepted["to"] == "v1.3.0" and accepted["from"] == "v1.2.3"
+    assert (
+        code == 202 and accepted["state"] == "pulling" and accepted["to"] == "v1.3.0" and accepted["from"] == "v1.2.3"
+    )
     sidecar.status.update(state="pulling", to="v1.3.0", message="", snapshot="", restored=False, **{"from": "v1.2.3"})
     assert set(accepted) == set(sidecar.status)
     monkeypatch.setattr(sidecar, "compose", lambda *a, **k: "c1\n")
-    monkeypatch.setattr(sidecar.subprocess, "run", lambda argv, **k: subprocess.CompletedProcess(
-        argv, 0, "server|running|healthy|0" if "inspect" in argv else "27.0", ""))
+    monkeypatch.setattr(
+        sidecar.subprocess,
+        "run",
+        lambda argv, **k: subprocess.CompletedProcess(
+            argv, 0, "server|running|healthy|0" if "inspect" in argv else "27.0", ""
+        ),
+    )
     theirs = sidecar.diagnostics()
     ready.system.fail["ps -a -q"] = Result(0, "c1\n")
     ready.system.fail["docker inspect"] = Result(0, "server|running|healthy|2\n")
     ours = svc.diagnostics("boatyard")
     assert set(ours) == set(theirs) | {"note"} and ours["mode"] == "cell" and ours["version"] == "v9.0.0"
-    assert ours["note"] == ""                                     # the company runs a release this core has
+    assert ours["note"] == ""  # the company runs a release this core has
     assert ours["containers"] == [{"name": "server", "state": "running", "health": "healthy", "restarts": 2}]
     assert set(ours["containers"][0]) == set(theirs["containers"][0])
     # Only this company's project is asked about.
@@ -2033,7 +2374,9 @@ def test_a_release_that_does_not_come_up_is_rolled_back_with_its_database(ready)
     s = status(svc)
     assert s["state"] == "rolled_back" and s["restored"] is True and "did not come up" in s["message"]
     assert "back on v1.2.3" in s["message"] and (d / "data" / "hub.sqlite").read_text() == "db v1"
-    assert record(ready)["version"] == "v1.2.3" and svc.diagnostics("boatyard")["errors"][0].endswith(s["message"][:250])
+    assert record(ready)["version"] == "v1.2.3" and svc.diagnostics("boatyard")["errors"][0].endswith(
+        s["message"][:250]
+    )
 
 
 def test_an_update_left_running_by_a_stopped_service_says_so(ready):
@@ -2048,7 +2391,7 @@ def test_a_symlinked_database_is_never_snapshotted(ready):
     ready(*add_args(ready))
     d = ready.root / "companies" / "boatyard"
     (ready.tmp / "host-secret").write_text("root's file")
-    (d / "data" / "hub.sqlite").symlink_to(ready.tmp / "host-secret")   # a server that turned on its host
+    (d / "data" / "hub.sqlite").symlink_to(ready.tmp / "host-secret")  # a server that turned on its host
     answer = ready("update", "--company", "boatyard", "--version", "v1.3.0")
     assert answer["error"] == "snapshot_failed" and "still on v1.2.3" in answer["detail"]
     assert not (d / "snapshots").exists() or not any((d / "snapshots").rglob("*"))
@@ -2065,20 +2408,24 @@ def test_an_older_cores_company_picks_up_its_updater_at_its_next_update(ready):
     (d / "compose.cell.yaml").write_text("\n".join(l for l in override.splitlines() if ":/control" not in l) + "\n")
     (d / "control" / cell.TOKEN_NAME).unlink()
     n = len(ready.system.calls)
-    answer = ready("update", "--company", "boatyard", "--version", "v1.2.3")      # the release it runs
+    answer = ready("update", "--company", "boatyard", "--version", "v1.2.3")  # the release it runs
     assert answer["ok"] and answer["changed"] is True and answer["version"] == "v1.2.3"
     env = envfile.parse((d / ".env").read_text())
     assert env["TICO_UPDATER_URL"] == "http://10.208.0.1:8090" and env["TICO_CELL"] == "1" and "TICO_UPDATES" not in env
     assert "TICO_CELL:" in (d / "compose.cell.yaml").read_text() and len(token(ready)) >= 32
     assert any(c[-3:] == ["up", "-d", "--remove-orphans"] for c in ready.system.calls[n:])
-    assert not (d / "snapshots").exists()                  # the same release: no migration, no snapshot
+    assert not (d / "snapshots").exists()  # the same release: no migration, no snapshot
     n = len(ready.system.calls)
     assert ready("update", "--company", "boatyard", "--version", "v1.2.3")["changed"] is False
-    assert not any("up" in c or "stop" in c for c in ready.system.calls[n:])   # nothing changed: no restart
+    assert not any("up" in c or "stop" in c for c in ready.system.calls[n:])  # nothing changed: no restart
 
 
 def test_a_carried_tico_updates_cannot_turn_the_updater_off(ready):
-    args = move_args(ready, "--env-file", secret_file(ready.tmp, "extra", "TICO_UPDATES=tico\nTICO_CELL=0\nTICO_RUNNER_URL=https://runner.tico.team"))
+    args = move_args(
+        ready,
+        "--env-file",
+        secret_file(ready.tmp, "extra", "TICO_UPDATES=tico\nTICO_CELL=0\nTICO_RUNNER_URL=https://runner.tico.team"),
+    )
     answer = ready(*args)
     assert {"TICO_UPDATES", "TICO_CELL"} <= set(answer["ignored"])
     env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
@@ -2092,12 +2439,13 @@ def test_init_runs_the_updater_from_its_own_core(host):
     assert "KillMode=mixed" in unit and "TimeoutStopSec=" in unit
     host.system.fail["is-active --quiet tico-cell-updater"] = Result(3, "inactive")
     n = len(host.system.calls)
-    assert host("init", "--json")["changed"] == ["updater"]          # stopped by hand: started again, not reinstalled
+    assert host("init", "--json")["changed"] == ["updater"]  # stopped by hand: started again, not reinstalled
     assert ["systemctl", "start", "--no-block", cell.UPDATER_SERVICE] in host.system.calls[n:]
 
 
 def test_the_listener_speaks_http_with_a_size_cap(ready):
     import http.client
+
     ready(*add_args(ready))
     svc = service(ready, bind=lambda index: ("127.0.0.1", 0), subnet=lambda index: "127.0.0.0/8")
     listener = U.Listener(svc, "boatyard", 0, svc.bind(0))
@@ -2111,6 +2459,7 @@ def test_the_listener_speaks_http_with_a_size_cap(ready):
             out = (r.status, json.loads(r.read()))
             c.close()
             return out
+
         assert call("GET", "/status") == (200, {"state": "idle", "from": "", "to": "", "message": ""})
         assert call("GET", "/status", auth="Bearer nope")[0] == 401
         assert call("POST", "/update", body=b"x" * (U.MAX_BODY + 1))[0] == 413
@@ -2122,7 +2471,7 @@ def test_the_listener_speaks_http_with_a_size_cap(ready):
     finally:
         listener.shutdown()
         listener.server_close()
-    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))     # the real subnet: loopback is not boatyard
+    strict = service(ready, bind=lambda index: ("127.0.0.1", 0))  # the real subnet: loopback is not boatyard
     listener = U.Listener(strict, "boatyard", 0, strict.bind(0))
     try:
         c = http.client.HTTPConnection("127.0.0.1", listener.server_address[1], timeout=5)
@@ -2152,15 +2501,18 @@ def test_scan_gives_each_live_company_a_listener_and_drops_removed_ones(ready):
 
 # --- a release newer than the host's core runs with its own core --------------------------------------------------
 
+
 def core_archive(path, tag="v1.3.0", extra=()):
     """GitHub's tag archive, as small as it can be: one top folder, the core's setup/ and compose.yaml (the stock one,
     marked, so a test can see which core's file the company got)."""
     top = f"tico-{tag[1:]}"
     with tarfile.open(path, "w:gz") as t:
+
         def add(name, data=b"", kind=tarfile.REGTYPE, link="", mode=0o644):
             info = tarfile.TarInfo(f"{top}/{name}" if name else top)
             info.type, info.linkname, info.mode, info.size = kind, link, mode, len(data)
             t.addfile(info, io.BytesIO(data) if data else None)
+
         add("", kind=tarfile.DIRTYPE, mode=0o755)
         add("setup", kind=tarfile.DIRTYPE, mode=0o755)
         add("setup/cell.py", b"# the core's cell\n")
@@ -2186,9 +2538,16 @@ def child(host, answers=None):
         if answers is not None:
             return answers
         out = io.StringIO()
-        code = cell.main(argv[4:], system=host.system, root=env["TICO_CELL_ROOT"], host_root=host.etc,
-                         compose_source=Path(cwd) / "compose.yaml", out=out)
+        code = cell.main(
+            argv[4:],
+            system=host.system,
+            root=env["TICO_CELL_ROOT"],
+            host_root=host.etc,
+            compose_source=Path(cwd) / "compose.yaml",
+            out=out,
+        )
         return code, "a line that is not JSON\n" + out.getvalue()
+
     run.runs = runs
     return run
 
@@ -2199,6 +2558,7 @@ def fetcher(archive):
     def fetch(url, dest):
         fetched.append(url)
         Path(dest).write_bytes(Path(archive).read_bytes())
+
     fetch.fetched = fetched
     return fetch
 
@@ -2216,12 +2576,12 @@ def test_a_release_newer_than_the_core_installs_its_core_and_runs_its_update(rea
     assert s["snapshot"] and (d / "snapshots" / s["snapshot"] / "hub.sqlite").read_text() == "db v1"
     folder = ready.tmp / "cores" / "core-v1.3.0"
     assert fetch.fetched == [U.CORE_URL % "v1.3.0"] and (folder / "setup" / "cell.py").is_file()
-    assert (folder / "CLAUDE.md").is_symlink() and not (folder / "tico-1.3.0").exists()          # the top folder stripped
-    assert sorted(p.name for p in (ready.tmp / "cores").iterdir()) == ["core-v1.3.0"]            # no staging left
-    (argv, cwd, env, timeout), = run.runs
+    assert (folder / "CLAUDE.md").is_symlink() and not (folder / "tico-1.3.0").exists()  # the top folder stripped
+    assert sorted(p.name for p in (ready.tmp / "cores").iterdir()) == ["core-v1.3.0"]  # no staging left
+    ((argv, cwd, env, timeout),) = run.runs
     assert argv[4:] == ["update", "--company", "boatyard", "--version", "v1.3.0", "--json"] and cwd == folder
     assert env["TICO_CELL_ROOT"] == str(ready.root) and timeout == U.CORE_RUN_S
-    assert (d / "compose.yaml").read_text().endswith("# core v1.3.0\n")       # the company's file is that core's
+    assert (d / "compose.yaml").read_text().endswith("# core v1.3.0\n")  # the company's file is that core's
     assert record(ready)["version"] == "v1.3.0" and envfile.parse((d / ".env").read_text())["TICO_TAG"] == "v1.3.0"
     assert svc.diagnostics("boatyard")["note"] == "updated with core v1.3.0; host init still at v1.2.9"
     # Never `cell init` (it would restart this service; the router and tunnel are staff's): no systemctl, no init.
@@ -2235,14 +2595,14 @@ def test_an_installed_core_folder_is_used_as_it_is(ready):
     (folder / "setup" / "cell.py").write_text("# HQ's\n")
     shutil.copy(ROOT / "compose.yaml", folder / "compose.yaml")
     run = child(ready)
-    svc = service(ready, core="v1.2.9", run_core=run)                          # fetch: never
+    svc = service(ready, core="v1.2.9", run_core=run)  # fetch: never
     assert ask(svc)[0] == 202 and status(svc)["state"] == "healthy" and run.runs[0][1] == folder
     assert (folder / "setup" / "cell.py").read_text() == "# HQ's\n"
 
 
 def test_a_core_folder_with_no_cell_is_not_run(ready):
     ready(*add_args(ready))
-    (ready.tmp / "cores" / "core-v1.3.0").mkdir(parents=True)                  # half of someone else's install
+    (ready.tmp / "cores" / "core-v1.3.0").mkdir(parents=True)  # half of someone else's install
     svc = service(ready, core="v1.2.9")
     assert ask(svc)[0] == 202
     s = status(svc)
@@ -2254,22 +2614,37 @@ def _member(name, kind, link="", data=b""):
         info = tarfile.TarInfo(name.replace("TOP", top))
         info.type, info.linkname, info.size = kind, link.replace("TOP", top), len(data)
         t.addfile(info, io.BytesIO(data) if data else None)
+
     return add
 
 
-@pytest.mark.parametrize("bad", [
-    _member("/etc/cron.d/x", tarfile.REGTYPE),
-    _member("TOP/../outside", tarfile.REGTYPE),
-    _member("TOP/setup/../../outside", tarfile.REGTYPE),
-    _member("TOP/up", tarfile.SYMTYPE, "../../etc"),
-    _member("TOP/abs", tarfile.SYMTYPE, "/etc/passwd"),
-    _member("TOP/hard", tarfile.LNKTYPE, "/etc/passwd"),
-    _member("TOP/dev", tarfile.CHRTYPE),
-    _member("TOP/blk", tarfile.BLKTYPE),
-    _member("TOP/fifo", tarfile.FIFOTYPE),
-    _member("elsewhere/x", tarfile.REGTYPE),
-], ids=["absolute", "dotdot", "nested dotdot", "link up", "link absolute", "hard link out", "char device",
-        "block device", "fifo", "second top folder"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        _member("/etc/cron.d/x", tarfile.REGTYPE),
+        _member("TOP/../outside", tarfile.REGTYPE),
+        _member("TOP/setup/../../outside", tarfile.REGTYPE),
+        _member("TOP/up", tarfile.SYMTYPE, "../../etc"),
+        _member("TOP/abs", tarfile.SYMTYPE, "/etc/passwd"),
+        _member("TOP/hard", tarfile.LNKTYPE, "/etc/passwd"),
+        _member("TOP/dev", tarfile.CHRTYPE),
+        _member("TOP/blk", tarfile.BLKTYPE),
+        _member("TOP/fifo", tarfile.FIFOTYPE),
+        _member("elsewhere/x", tarfile.REGTYPE),
+    ],
+    ids=[
+        "absolute",
+        "dotdot",
+        "nested dotdot",
+        "link up",
+        "link absolute",
+        "hard link out",
+        "char device",
+        "block device",
+        "fifo",
+        "second top folder",
+    ],
+)
 def test_a_core_archive_with_a_bad_member_installs_nothing(ready, bad):
     ready(*add_args(ready))
     before = (ready.root / "companies" / "boatyard" / ".env").read_text()
@@ -2278,7 +2653,7 @@ def test_a_core_archive_with_a_bad_member_installs_nothing(ready, bad):
     assert ask(svc)[0] == 202
     s = status(svc)
     assert s["state"] == "failed" and s["message"].startswith("Not updated: could not install the v1.3.0 core: ")
-    assert list((ready.tmp / "cores").iterdir()) == []                          # no folder, no staging
+    assert list((ready.tmp / "cores").iterdir()) == []  # no folder, no staging
     assert (ready.root / "companies" / "boatyard" / ".env").read_text() == before
     assert not (ready.tmp / "outside").exists() and ready.system.calls[n:] == []
 
@@ -2289,19 +2664,27 @@ def test_a_core_download_is_capped(ready, monkeypatch):
     class Answer(io.BytesIO):
         def __exit__(self, *a):
             self.close()
+
     monkeypatch.setattr(U.urllib.request, "urlopen", lambda request, timeout: Answer(b"x" * 11))
     with pytest.raises(U.Refused, match="over"):
         U.fetch_archive(U.CORE_URL % "v1.3.0", ready.tmp / "a.tar.gz")
 
 
-@pytest.mark.parametrize("answer, state, restored, starts", [
-    ({"ok": False, "error": "update_failed", "detail": "v1.3.0 did not come up; back on v1.2.3"}, "rolled_back", True,
-     "v1.3.0 did not come up"),
-    ({"ok": False, "error": "rollback_failed", "detail": "putting v1.2.3 back failed"}, "failed", False, "putting"),
-    ({"ok": False, "error": "unhealthy", "detail": "no /healthz"}, "failed", False, "no /healthz"),
-    ({"ok": False, "error": "busy", "detail": "another command holds boatyard"}, "failed", False, "Not updated: "),
-    (None, "failed", False, "The v1.3.0 core's `cell update` gave no answer (exit 124, stopped after"),
-])
+@pytest.mark.parametrize(
+    "answer, state, restored, starts",
+    [
+        (
+            {"ok": False, "error": "update_failed", "detail": "v1.3.0 did not come up; back on v1.2.3"},
+            "rolled_back",
+            True,
+            "v1.3.0 did not come up",
+        ),
+        ({"ok": False, "error": "rollback_failed", "detail": "putting v1.2.3 back failed"}, "failed", False, "putting"),
+        ({"ok": False, "error": "unhealthy", "detail": "no /healthz"}, "failed", False, "no /healthz"),
+        ({"ok": False, "error": "busy", "detail": "another command holds boatyard"}, "failed", False, "Not updated: "),
+        (None, "failed", False, "The v1.3.0 core's `cell update` gave no answer (exit 124, stopped after"),
+    ],
+)
 def test_a_cores_update_answer_becomes_the_status(ready, answer, state, restored, starts):
     ready(*add_args(ready))
     folder = ready.tmp / "cores" / "core-v1.3.0"
@@ -2318,17 +2701,18 @@ def test_a_cores_update_answer_becomes_the_status(ready, answer, state, restored
 def test_latest_beyond_the_core_is_checked_as_published_before_any_install(ready):
     ready(*add_args(ready))
     ready.system.release = "v1.4.0"
-    ready.system.unpublished.add("v1.4.0")                    # a release GitHub lists but whose files are not up yet
-    svc = service(ready, core="v1.2.9")                       # fetch: never
+    ready.system.unpublished.add("v1.4.0")  # a release GitHub lists but whose files are not up yet
+    svc = service(ready, core="v1.2.9")  # fetch: never
     assert ask(svc, body={"version": "latest"})[0] == 202 and "not a published release" in status(svc)["message"]
 
 
 def test_the_cores_release_is_its_folders_name_when_it_has_no_installer_file():
     assert U.host_core(Path("/opt/tico-cell/core-v1.4.0")) == "v1.4.0"
-    assert U.host_core(Path("/opt/tico-cell/core")) == ""      # the pre-versioned folder: every newer release gets its own
+    assert U.host_core(Path("/opt/tico-cell/core")) == ""  # the pre-versioned folder: every newer release gets its own
 
 
 # --- company page hosts (docs/company-page.md) -------------------------------------------------------------------
+
 
 def page_company(state="running", slug="acme", page="acme.tico.page", port=20000):
     return {"slug": slug, "domain": f"{slug}.tico.team", "port": port, "page_host": page, "state": state}
@@ -2338,7 +2722,7 @@ def site_of(text, host):
     """One site block of a rendered Caddyfile: from its address line to the next block's."""
     start = text.index(f"http://{host}:{cell.ROUTER_PORT} {{")
     end = text.find(f"\nhttp://", start + 1)
-    return text[start:end if end != -1 else len(text)]
+    return text[start : end if end != -1 else len(text)]
 
 
 def test_a_page_host_serves_the_public_paths_from_its_own_folder_and_nothing_else():
@@ -2389,8 +2773,18 @@ def test_the_router_mounts_the_page_folders_read_only_and_nothing_else_of_the_ce
     assert "/opt/cell/companies" not in text
 
 
-@pytest.mark.parametrize("bad", ["acme.tico.team", "tico.team", "10.0.0.1", "*.tico.page", "https://acme.tico.page",
-                                 "localhost", "acme_page.tico.page"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "acme.tico.team",
+        "tico.team",
+        "10.0.0.1",
+        "*.tico.page",
+        "https://acme.tico.page",
+        "localhost",
+        "acme_page.tico.page",
+    ],
+)
 def test_a_page_host_must_be_a_plain_hostname_that_is_not_the_companys_own_or_the_cells(ready, bad):
     assert ready(*add_args(ready, "acme", "--page-host", bad))["error"] == "bad_domain"
     assert not (ready.root / "companies" / "acme" / "company.json").exists()
@@ -2401,19 +2795,27 @@ def test_a_page_host_another_company_uses_is_refused(ready):
     ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
     assert ready(*add_args(ready, "bravo", "--page-host", "alpha.tico.page"))["error"] == "domain_taken"
     assert ready(*add_args(ready, "bravo", "--page-host", "alpha.tico.team"))["error"] == "domain_taken"
-    assert ready(*add_args(ready, "bravo", "--domain", "bravo.tico.team", "--alias", "alpha.tico.page"))["error"] == "domain_taken"
+    assert (
+        ready(*add_args(ready, "bravo", "--domain", "bravo.tico.team", "--alias", "alpha.tico.page"))["error"]
+        == "domain_taken"
+    )
 
 
 def test_add_with_a_page_host_makes_its_folder_and_names_it_to_the_server(ready):
     assert ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))["ok"]
     folder = ready.root / "pages" / "acme"
-    assert stat.S_IMODE(folder.stat().st_mode) == 0o755              # the router reads it as nobody
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o755  # the router reads it as nobody
     assert (str(folder), cell.SERVER_UID, cell.SERVER_UID) in ready.system.chowns
     assert record(ready, "acme")["page_host"] == "acme.tico.page"
     env = (ready.root / "companies" / "acme" / ".env").read_text()
-    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    assert (
+        "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    )
     override = (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
-    assert f"      - {folder}:/company-page-public\n" in override and "TICO_READER_ORIGIN: https://acme.tico.page" in override
+    assert (
+        f"      - {folder}:/company-page-public\n" in override
+        and "TICO_READER_ORIGIN: https://acme.tico.page" in override
+    )
     assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
 
 
@@ -2440,9 +2842,11 @@ def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_oth
     assert answer["ok"] and answer["changed"] and answer["page_host"] == "acme.tico.page"
     assert record(ready, "acme")["page_host"] == "acme.tico.page"
     env = (env_dir / ".env").read_text()
-    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    assert (
+        "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
+    )
     kept = [line for line in before.splitlines() if not line.startswith("#")]
-    assert all(line in env.splitlines() for line in kept)            # sign-in, backups and the rest are untouched
+    assert all(line in env.splitlines() for line in kept)  # sign-in, backups and the rest are untouched
     folder = ready.root / "pages" / "acme"
     assert stat.S_IMODE(folder.stat().st_mode) == 0o755
     assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
@@ -2465,6 +2869,7 @@ def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(r
 
     def broken(self, *a, **k):
         raise cell.CellError("compose_failed", "up failed")
+
     monkeypatch.setattr(cell.Cell, "up", broken)
     assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["ok"] is False
     assert record(ready, "acme")["page_pending"] is True
@@ -2478,7 +2883,10 @@ def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(r
 def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
     ready(*add_args(ready, "acme"))
     env = ready.root / "companies" / "acme" / ".env"
-    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n")
+    env.write_text(
+        env.read_text()
+        + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n"
+    )
     for taken in ("vis.acme.example", "run.acme.example", "app.acme.example"):
         assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
     assert "page_host" not in record(ready, "acme")
@@ -2545,14 +2953,17 @@ def test_init_page_domain_is_one_wildcard_route_for_every_page_host(tunneled):
     text = routes.read_text()
     assert text.index('"*.tico.team"') < text.index('"*.tico.page"') < text.index("http_status:404")
     assert tunneled(*add_args(tunneled, "acme", "--page-host", "acme.tico.page"))["ok"]
-    assert '"acme.tico.page"' not in routes.read_text()              # under the page wildcard: no route of its own
+    assert '"acme.tico.page"' not in routes.read_text()  # under the page wildcard: no route of its own
     assert tunneled(*add_args(tunneled, "beta", "--page-host", "beta.example.com"))["ok"]
-    assert '"beta.example.com"' in routes.read_text()                # outside it: a route of its own
+    assert '"beta.example.com"' in routes.read_text()  # outside it: a route of its own
     assert tunneled("init", "--json")["page_domain"] == "tico.page"  # kept when left out
     assert tunneled("init", "--page-domain", "", "--json").get("page_domain") is None
     text = routes.read_text()
-    assert "*.tico.page" not in text and '"acme.tico.page"' in text and "page_domain" not in json.loads(
-        (tunneled.root / "cell.json").read_text())
+    assert (
+        "*.tico.page" not in text
+        and '"acme.tico.page"' in text
+        and "page_domain" not in json.loads((tunneled.root / "cell.json").read_text())
+    )
 
 
 @pytest.mark.parametrize("bad", ["tico.team", "*.tico.page", "10.0.0.1", "tico.page/x"])
@@ -2562,22 +2973,56 @@ def test_init_page_domain_must_be_a_plain_domain_of_its_own(tunneled, bad):
 
 
 def test_page_hosts_under_the_page_domain_need_no_route_and_others_do():
-    companies = [page_company(), page_company(slug="beta", page="beta.example.com", port=20001),
-                 page_company(slug="gamma", page="a.b.tico.page", port=20002)]
+    companies = [
+        page_company(),
+        page_company(slug="beta", page="beta.example.com", port=20001),
+        page_company(slug="gamma", page="a.b.tico.page", port=20002),
+    ]
     assert cell.tunnel_hosts("tico.team", companies, "tico.page") == ["a.b.tico.page", "beta.example.com"]
     text = cell.tunnel_config("tico.team", ["a.b.tico.page", "beta.example.com"], "tico.page")
-    assert text.index('"beta.example.com"') < text.index('"*.tico.team"') < text.index('"*.tico.page"') \
+    assert (
+        text.index('"beta.example.com"')
+        < text.index('"*.tico.team"')
+        < text.index('"*.tico.page"')
         < text.index("http_status:404")
+    )
     assert cell.tunnel_config("tico.team", [], None) == cell.tunnel_config("tico.team")
 
 
 def test_the_pinned_router_accepts_the_page_config(tmp_path):
     # Caddy's own parser, on the image this cell pins: a page block the router refuses would take down every company.
     import subprocess, shutil
-    if not shutil.which("docker") or subprocess.run(
-            ["docker", "image", "inspect", cell.ROUTER_IMAGE], capture_output=True).returncode:
+
+    if (
+        not shutil.which("docker")
+        or subprocess.run(["docker", "image", "inspect", cell.ROUTER_IMAGE], capture_output=True).returncode
+    ):
         pytest.skip("the pinned caddy image is not on this machine")
-    (tmp_path / "Caddyfile").write_text(cell.router_config([page_company(), page_company(slug="beta", page="beta.tico.page", port=20001), page_company(slug="gamma", page="gamma.tico.page", port=20002)]))
-    run = subprocess.run(["docker", "run", "--rm", "-v", f"{tmp_path}:/etc/caddy:ro", cell.ROUTER_IMAGE, "caddy", "validate",
-                          "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"], capture_output=True, text=True)
+    (tmp_path / "Caddyfile").write_text(
+        cell.router_config(
+            [
+                page_company(),
+                page_company(slug="beta", page="beta.tico.page", port=20001),
+                page_company(slug="gamma", page="gamma.tico.page", port=20002),
+            ]
+        )
+    )
+    run = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{tmp_path}:/etc/caddy:ro",
+            cell.ROUTER_IMAGE,
+            "caddy",
+            "validate",
+            "--config",
+            "/etc/caddy/Caddyfile",
+            "--adapter",
+            "caddyfile",
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert run.returncode == 0, run.stderr[-800:]

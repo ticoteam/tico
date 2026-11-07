@@ -18,7 +18,7 @@ recipients have their one-line note, and the task note carries the headline, the
 
 Read `knowledge/coverage.md`. If the meeting is outside coverage, on the restricted list, or has a
 transcript with nothing readable in it, finish the task with one line that says which and stop. A
-skipped meeting is a stated decision, never silence. If the transcript and the invite show no recording notice, ask the human who ran the meeting once with `hub task ask <id>` and stop until they answer (`knowledge/recording-notice.md`).
+skipped meeting is a stated decision, never silence. If the transcript and the invite show no recording notice, ask the human who ran the meeting once with `hub task question "<question>" --on <person> --parent <id>` and stop until they answer (`knowledge/recording-notice.md`).
 
 ## 2. Read it properly
 

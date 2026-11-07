@@ -1,6 +1,7 @@
 """The Finance tab's reads beyond the P&L (spec §12): the balance sheet, transactions, cards, sources and access. Each
 resolves the viewer's view first and cuts rows to it; the balance sheet and sources are owner-only unless granted
 (§7.5), and transactions and cards follow the lines a teammate sees. Re-exported by finance/reads, the only door."""
+
 import base64
 import json
 import sqlite3
@@ -11,12 +12,14 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
+from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
 from .core.org import Org
 from .store import access as SA
 from .store import ap as SAP
+from .store import attribution as SATT
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
@@ -24,12 +27,30 @@ from .store import raw_totals as SR
 
 Row = dict[str, object]
 MAX_PAGE = 200
-SCAN = 2000                       # rows a page may look through before it stops and hands back a cursor
+SCAN = 2000  # rows a page may look through before it stops and hands back a cursor
 GROUPS = ("banks", "cards", "payments", "payroll", "bills_invoices", "tico", "accounting", "manual")
-GROUP_NAMES = {"banks": "Banks", "cards": "Cards", "payments": "Payments", "payroll": "Payroll",
-               "bills_invoices": "Bills and invoices", "tico": "Tico", "accounting": "Accounting", "manual": "Manual"}
+GROUP_NAMES = {
+    "banks": "Banks",
+    "cards": "Cards",
+    "payments": "Payments",
+    "payroll": "Payroll",
+    "bills_invoices": "Bills and invoices",
+    "tico": "Tico",
+    "accounting": "Accounting",
+    "manual": "Manual",
+}
 OTHER_CODE = "6900"
-BILLS_EMAIL_KEY = "finance_bills_email"     # the install's bills address (actions.set_bills_email writes it)
+BILLS_EMAIL_KEY = "finance_bills_email"  # the install's bills address (actions.set_bills_email writes it)
+
+
+def _split_rows(row: Any | None) -> list[dict[str, object]]:
+    """A line's in-force attribution shares, as a transaction's `split`: none when the line counts as its tags."""
+    if row is None:
+        return []
+    return [
+        {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
+        for x in SATT.parse_splits(str(row["splits"]))
+    ]
 
 
 def page_size(limit: int) -> int:
@@ -55,12 +76,22 @@ def decode_cursor(cursor: str | None) -> list[str]:
 
 def _money_account_row(r: Any, accounts: Mapping[str, Account]) -> Row:
     gl = accounts.get(str(r["account_id"] or ""))
-    return {"id": str(r["id"]), "kind": str(r["kind"]), "subtype": str(r["subtype"] or ""), "name": str(r["name"]),
-            "provider": str(r["provider"] or ""), "last4": r["last4"], "holds_cash": bool(r["holds_cash"]),
-            "balance": r["balance"], "available_balance": r["available_balance"],
-            "currency": r["balance_currency"], "balance_as_of": r["balance_as_of"], "status": str(r["status"]),
-            "account": {"id": gl.id, "code": gl.code, "name": gl.name} if gl else None,
-            "connection_id": r["connection_id"]}
+    return {
+        "id": str(r["id"]),
+        "kind": str(r["kind"]),
+        "subtype": str(r["subtype"] or ""),
+        "name": str(r["name"]),
+        "provider": str(r["provider"] or ""),
+        "last4": r["last4"],
+        "holds_cash": bool(r["holds_cash"]),
+        "balance": r["balance"],
+        "available_balance": r["available_balance"],
+        "currency": r["balance_currency"],
+        "balance_as_of": r["balance_as_of"],
+        "status": str(r["status"]),
+        "account": {"id": gl.id, "code": gl.code, "name": gl.name} if gl else None,
+        "connection_id": r["connection_id"],
+    }
 
 
 def sees_money_account(ctx: Ctx, view: VW.View, r: Any) -> bool:
@@ -73,8 +104,11 @@ def feed_scope(ctx: Ctx, view: VW.View) -> tuple[list[str], list[str]]:
     """The money accounts and cards whose feed rows this viewer sees (before the private cut)."""
     money = [str(r["id"]) for r in SK.money_accounts(ctx.c, ctx.book.id) if sees_money_account(ctx, view, r)]
     accounts = _card_accounts(ctx)
-    cards = [str(r["id"]) for r in SK.cards(ctx.c, most=5000)
-             if sees_card(ctx, view, r, accounts.get(str(r["budget_id"] or ""), ""))]
+    cards = [
+        str(r["id"])
+        for r in SK.cards(ctx.c, most=5000)
+        if sees_card(ctx, view, r, accounts.get(str(r["budget_id"] or ""), ""))
+    ]
     return money, cards
 
 
@@ -85,8 +119,11 @@ def imported_months(c: sqlite3.Connection, ctx: Ctx, view: VW.View, first: str, 
     read the same report lines and need the label to read the numbers; it carries months and bases, never amounts."""
     if not view.everything:
         return []
-    return [{"month": str(r["month"]), "basis": str(r["basis"])}
-            for r in SR.live_months(c, ctx.book.id, first, last) if str(r["basis"]) != basis]
+    return [
+        {"month": str(r["month"]), "basis": str(r["basis"])}
+        for r in SR.live_months(c, ctx.book.id, first, last)
+        if str(r["basis"]) != basis
+    ]
 
 
 def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, at: str | None = None) -> Row:
@@ -112,7 +149,7 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
     kinds = SK.sources_by_account(c, ctx.book.id, day, detail)
     money = [r for r in SK.money_accounts(c, ctx.book.id) if str(r["account_id"] or "") in set(detail)]
     owed: dict[str, tuple[int, int]] = {}
-    for r in SK.live_payments(c, ctx.book.id):          # what is on its way out, as far as this viewer sees payments
+    for r in SK.live_payments(c, ctx.book.id):  # what is on its way out, as far as this viewer sees payments
         if payment_seen(ctx, view, cut, r):
             n, total = owed.get(str(r["money_account_id"]), (0, 0))
             owed[str(r["money_account_id"])] = (n + 1, total + int(r["amount"]))
@@ -123,26 +160,63 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
         under = descendants(ctx.accounts, a.id)
         balance = sign * sums.get(a.id, 0)
         totals[a.type] += balance
-        sections[a.type].append({
-            "account_id": a.id, "code": a.code, "name": a.name, "subtype": a.subtype, "parent_id": a.parent_id or None,
-            "balance": balance, "entry_sources": sorted(kinds.get(a.id, [])),
-            "sources": [{"money_account_id": str(r["id"]), "name": str(r["name"]), "provider": str(r["provider"]),
-                         "last4": r["last4"], "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"],
-                         "due_out": {"count": owed.get(str(r["id"]), (0, 0))[0],
-                                     "amount": owed.get(str(r["id"]), (0, 0))[1]}}
-                        for r in money if str(r["account_id"]) in under]})
+        sections[a.type].append(
+            {
+                "account_id": a.id,
+                "code": a.code,
+                "name": a.name,
+                "subtype": a.subtype,
+                "parent_id": a.parent_id or None,
+                "balance": balance,
+                "entry_sources": sorted(kinds.get(a.id, [])),
+                "sources": [
+                    {
+                        "money_account_id": str(r["id"]),
+                        "name": str(r["name"]),
+                        "provider": str(r["provider"]),
+                        "last4": r["last4"],
+                        "provider_balance": r["balance"],
+                        "balance_as_of": r["balance_as_of"],
+                        "due_out": {
+                            "count": owed.get(str(r["id"]), (0, 0))[0],
+                            "amount": owed.get(str(r["id"]), (0, 0))[1],
+                        },
+                    }
+                    for r in money
+                    if str(r["account_id"]) in under
+                ],
+            }
+        )
     if whole:
         pnl_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES]
         earned = -sum(SK.balances(c, ctx.book.id, day, pnl_ids).values())
-        sections["equity"].append({"account_id": None, "code": "", "name": "Net income to date", "subtype": "earnings",
-                                   "parent_id": None, "balance": earned, "entry_sources": ["pnl"], "sources": []})
+        sections["equity"].append(
+            {
+                "account_id": None,
+                "code": "",
+                "name": "Net income to date",
+                "subtype": "earnings",
+                "parent_id": None,
+                "balance": earned,
+                "entry_sources": ["pnl"],
+                "sources": [],
+            }
+        )
         totals["equity"] += earned
-    return {"as_of": day, "assets": sections["asset"], "liabilities": sections["liability"],
-            "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
-            "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version,
-            # The sheet has no basis of its own: it is stated in the book's.
-            "imported": imported_months(c, ctx, view, "0001-01", day[:7], ctx.book.basis),
-            "snapshot": snap}
+    return {
+        "as_of": day,
+        "assets": sections["asset"],
+        "liabilities": sections["liability"],
+        "equity": sections["equity"],
+        "totals": totals,
+        "scoped": not whole,
+        "currency": ctx.book.base_currency,
+        "closed_through": SL.closed_through(c, ctx.book.id),
+        "view_version": view.version,
+        # The sheet has no basis of its own: it is stated in the book's.
+        "imported": imported_months(c, ctx, view, "0001-01", day[:7], ctx.book.basis),
+        "snapshot": snap,
+    }
 
 
 # ------------------------------------------------------------------------------------------------ transactions
@@ -169,13 +243,24 @@ def _card_accounts(ctx: Ctx) -> dict[str, str]:
 
 def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, list[Row]]) -> Row:
     m = money.get(str(r["money_account_id"]))
-    return {"kind": "feed", "id": str(r["id"]), "date": str(r["txn_date"]), "amount": int(r["amount"]),
-            "currency": str(r["currency"]), "counterparty": str(r["counterparty"]),
-            "description": str(r["description"]), "status": str(r["status"]), "pending": bool(r["pending"]),
-            "provider_status": str(r["provider_status"] or ""), "provider_kind": str(r["kind"] or ""),
-            "card_id": r["card_id"], "entry_id": r["entry_id"], "reconciled": bool(r["reconciliation_id"]),
-            "money_account": {"id": str(m["id"]), "name": str(m["name"]), "last4": m["last4"]} if m else None,
-            "lines": lines.get(str(r["entry_id"] or ""), [])}
+    return {
+        "kind": "feed",
+        "id": str(r["id"]),
+        "date": str(r["txn_date"]),
+        "amount": int(r["amount"]),
+        "currency": str(r["currency"]),
+        "counterparty": str(r["counterparty"]),
+        "description": str(r["description"]),
+        "status": str(r["status"]),
+        "pending": bool(r["pending"]),
+        "provider_status": str(r["provider_status"] or ""),
+        "provider_kind": str(r["kind"] or ""),
+        "card_id": r["card_id"],
+        "entry_id": r["entry_id"],
+        "reconciled": bool(r["reconciliation_id"]),
+        "money_account": {"id": str(m["id"]), "name": str(m["name"]), "last4": m["last4"]} if m else None,
+        "lines": lines.get(str(r["entry_id"] or ""), []),
+    }
 
 
 def private_cut(ctx: Ctx, view: VW.View) -> list[str]:
@@ -201,6 +286,7 @@ def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: s
     """A bill's payment (posted to AP) shows only to who sees that bill: a payables view, and no line of the bill on
     a private account they lack full detail for (so AP never carries a hidden Payroll bill's amount or payee)."""
     from .tab_ap import sees_side
+
     return sees_side(ctx, view, "bill") and not hidden_bills(ctx, cut, [bill_id])
 
 
@@ -225,7 +311,7 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
         return set()
     entries = SL.entries_touching(ctx.c, sorted({str(r["entry_id"]) for r in rows if r["entry_id"]}), cut)
     out = {str(r["id"]) for r in rows if r["entry_id"] and str(r["entry_id"]) in entries}
-    bills: dict[str, list[str]] = {}         # feed row id: the bills it is the bank side of
+    bills: dict[str, list[str]] = {}  # feed row id: the bills it is the bank side of
     # The row's payment, by its request or by the row it settled on (a lost send matched by its note has no request).
     pays: dict[str, list[Any]] = {}
     for pay in SK.payments_by_txn(ctx.c, [str(r["id"]) for r in rows if str(r["id"]) not in out]):
@@ -247,8 +333,10 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
             continue
         # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share). Voided
         # settlements count: reversing a "Pays bill" entry must not make its row's amounts visible again.
-        found = [*SAP.settlements_from(ctx.c, "feed", fid, voided=True),
-                 *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"]), voided=True) if r["entry_id"] else [])]
+        found = [
+            *SAP.settlements_from(ctx.c, "feed", fid, voided=True),
+            *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"]), voided=True) if r["entry_id"] else []),
+        ]
         got = [str(s["to_id"]) for s in found if s["to_kind"] == "bill"]
         if got:
             bills.setdefault(fid, []).extend(got)
@@ -292,6 +380,7 @@ def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str,
     open, whose memo and description must not show: its own entry, an entry that ever paid it (a voided settlement
     still names it) and either one's reversal."""
     from .tab_ap import sees_side
+
     cut = set(private_cut(ctx, view))
     out: dict[str, str] = {}
     named: dict[str, list[tuple[str, str]]] = {}
@@ -305,15 +394,21 @@ def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str,
         for d in [*paid.get(eid, []), *paid.get(str(r["reverses_id"] or ""), [])]:
             mine.append((str(d["to_kind"]), str(d["to_id"])))
     kinds = {k for docs in named.values() for k, _ in docs}
-    hidden = {(k, i) for k in kinds if sees_side(ctx, view, k)
-              for i in hidden_documents(ctx, cut, k, sorted({i for docs in named.values() for x, i in docs if x == k}))}
-    closed = {eid for eid, docs in named.items()
-              if any(not sees_side(ctx, view, k) or (k, i) in hidden for k, i in docs)}
+    hidden = {
+        (k, i)
+        for k in kinds
+        if sees_side(ctx, view, k)
+        for i in hidden_documents(ctx, cut, k, sorted({i for docs in named.values() for x, i in docs if x == k}))
+    }
+    closed = {
+        eid for eid, docs in named.items() if any(not sees_side(ctx, view, k) or (k, i) in hidden for k, i in docs)
+    }
     for eid in named:
         live = [d for d in paid.get(eid, []) if d["voided_at"] is None]
         if live and eid not in closed and len({str(d["to_kind"]) for d in live}) == 1:
-            out[eid] = f"{str(live[0]['to_kind']).capitalize()} " + \
-                ", ".join(str(d["number"] or d["to_id"])[:40] for d in live)
+            out[eid] = f"{str(live[0]['to_kind']).capitalize()} " + ", ".join(
+                str(d["number"] or d["to_id"])[:40] for d in live
+            )
     return out, closed
 
 
@@ -321,6 +416,7 @@ def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[st
     """The P&L lines of these entries the viewer sees (private lines without full detail never show), each vendor
     with the name it shows as (tab_ap.vendor_labels)."""
     from .tab_ap import vendor_labels
+
     out: dict[str, list[Row]] = {}
     cut = set(private_cut(ctx, view))
     for eid in entry_ids:
@@ -331,9 +427,16 @@ def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[st
             if account.id in cut:
                 continue
             if view.sees(account, line.tags):
-                out.setdefault(eid, []).append({"line_id": str(r["id"]), "account_id": account.id,
-                                                "account": account.name, "amount": line.amount,
-                                                "vendor": line.contact_id, "tags": dict(line.tags)})
+                out.setdefault(eid, []).append(
+                    {
+                        "line_id": str(r["id"]),
+                        "account_id": account.id,
+                        "account": account.name,
+                        "amount": line.amount,
+                        "vendor": line.contact_id,
+                        "tags": dict(line.tags),
+                    }
+                )
     names = vendor_labels(ctx, view, [str(x["vendor"]) for xs in out.values() for x in xs])
     for xs in out.values():
         for x in xs:
@@ -345,8 +448,9 @@ Fetch = Callable[[tuple[str, str] | None, int], list[Any]]
 Visible = Callable[[list[Any]], list[tuple[tuple[str, str], Row]]]
 
 
-def _stream(fetch: Fetch, visible: Visible, mark: tuple[str, str] | None, most: int
-            ) -> tuple[list[tuple[tuple[str, str], Row]], tuple[str, str] | None, bool]:
+def _stream(
+    fetch: Fetch, visible: Visible, mark: tuple[str, str] | None, most: int
+) -> tuple[list[tuple[tuple[str, str], Row]], tuple[str, str] | None, bool]:
     """Up to `most` visible rows after `mark` (newest first), where the scan stopped, and whether the source ran out.
     It looks through at most SCAN rows, so a viewer who sees few of many rows still gets an answer quickly."""
     out: list[tuple[tuple[str, str], Row]] = []
@@ -379,10 +483,22 @@ def _key_of(r: Any) -> tuple[str, str]:
     return (str(r["txn_date"]), str(r["id"])) if "txn_date" in r.keys() else (str(r["entry_date"]), str(r["line_id"]))
 
 
-def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", money_account_id: str | None = None,
-                 status: str | None = None, account_id: str | None = None, start: str | None = None,
-                 end: str | None = None, q: str | None = None, cursor: str | None = None, limit: int = 50,
-                 at: str | None = None, org: Callable[[str, str], bool] | None = None) -> Row:
+def transactions(
+    c: sqlite3.Connection,
+    viewer: str,
+    *,
+    source: str = "all",
+    money_account_id: str | None = None,
+    status: str | None = None,
+    account_id: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    q: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+    at: str | None = None,
+    org: Callable[[str, str], bool] | None = None,
+) -> Row:
     """Feed rows and entries as plain rows, newest first. A feed row shows to whoever sees its money account or
     follows its card (with the lines of its posted entry they see); an entry shows as the P&L lines the viewer sees,
     unless a feed row they see stands for it. A feed row standing for a private line the viewer has no full detail for
@@ -391,6 +507,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     the following page."""
     ctx = load(c, at)
     from .tab_ap import vendor_labels
+
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
         raise invalid("source is all|feed|entry")
@@ -408,8 +525,11 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         raise FinanceError(NOT_FOUND, "no such money account")
     seen_money = {i for i, r in money.items() if sees_money_account(ctx, view, r)}
     budget_accounts = _card_accounts(ctx)
-    seen_cards = {str(r["id"]) for r in SK.cards(c, most=5000)
-                  if sees_card(ctx, view, r, budget_accounts.get(str(r["budget_id"] or ""), ""))}
+    seen_cards = {
+        str(r["id"])
+        for r in SK.cards(c, most=5000)
+        if sees_card(ctx, view, r, budget_accounts.get(str(r["budget_id"] or ""), ""))
+    }
     wanted: set[str] = set()
     if account_id:
         root = ctx.accounts.get(account_id)
@@ -422,8 +542,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
 
     def fetch_feed(mark: tuple[str, str] | None, n: int) -> list[Any]:
         accounts = [money_account_id] if money_account_id else sorted(money)
-        return SK.feed_page(c, before=mark, most=n, money_account_ids=accounts, status=status or "",
-                            start=start_day, end=end_day, q=text)
+        return SK.feed_page(
+            c,
+            before=mark,
+            most=n,
+            money_account_ids=accounts,
+            status=status or "",
+            start=start_day,
+            end=end_day,
+            q=text,
+        )
 
     def show_feed(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         rows = [r for r in batch if feed_seen(r)]
@@ -443,19 +571,32 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         return out
 
     hidden = set(private_cut(ctx, view))
-    seen_lines = [a for a in ctx.accounts.values() if view.sees_account(a) and (not wanted or a.id in wanted) and
-                  a.id not in hidden]
+    seen_lines = [
+        a
+        for a in ctx.accounts.values()
+        if view.sees_account(a) and (not wanted or a.id in wanted) and a.id not in hidden
+    ]
     # Every entry shows (§12): by its income and expense lines, or by its balance sheet lines when it has no others.
     # Asked for by line, a balance sheet line shows all of its own.
     line_ids = [a.id for a in seen_lines if wanted or a.type in PNL_TYPES]
     balance_ids = [a.id for a in seen_lines if not wanted and a.type not in PNL_TYPES]
 
     def fetch_lines(mark: tuple[str, str] | None, n: int) -> list[Any]:
-        return SK.lines_page(c, ctx.book.id, account_ids=line_ids, before=mark, most=n, start=start_day, end=end_day,
-                             q=text, balance_only_ids=balance_ids)
+        return SK.lines_page(
+            c,
+            ctx.book.id,
+            account_ids=line_ids,
+            before=mark,
+            most=n,
+            start=start_day,
+            end=end_day,
+            q=text,
+            balance_only_ids=balance_ids,
+        )
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
+        held = SATT.in_force_rows(c, [str(r["line_id"]) for r in batch])
         stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in batch}))
         origins = {str(r["line_id"]): feed_origin(r) for r in batch}
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
@@ -468,23 +609,41 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
             tagged = tags.get(str(r["line_id"]), {})
             fed = stands.get(str(r["entry_id"]))
             shown = fed is not None and feed_seen(fed) and str(fed["id"]) not in cut
-            if not view.sees(account, tagged) or shown or origins[str(r["line_id"])] in cut or \
-                    (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id)) or \
-                    (org is not None and not org(tagged.get("team", ""), tagged.get("teammate", ""))):
+            if (
+                not view.sees(account, tagged)
+                or shown
+                or origins[str(r["line_id"])] in cut
+                or (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id))
+                or (org is not None and not org(tagged.get("team", ""), tagged.get("teammate", "")))
+            ):
                 continue
             if text and str(r["entry_id"]) in closed and text.casefold() not in str(r["contact_id"]).casefold():
-                continue        # matched only on the memo or description it can't show
-            out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
-                                     "amount": int(r["amount"]), "currency": ctx.book.base_currency,
-                                     "entry_id": str(r["entry_id"]), "account_id": account.id,
-                                     "account": pays.get(str(r["entry_id"]), account.name)
-                                     if origins[str(r["line_id"])] else account.name,
-                                     "vendor": str(r["contact_id"]),
-                                     "vendor_name": names.get(str(r["contact_id"]), ""),
-                                     "description": "" if str(r["entry_id"]) in closed else str(r["description"]),
-                                     "memo": "" if str(r["entry_id"]) in closed else str(r["memo"]),
-                                     "source": str(r["source"]),
-                                     "reversed": str(r["entry_status"]) == "reversed", "tags": tagged}))
+                continue  # matched only on the memo or description it can't show
+            out.append(
+                (
+                    _key_of(r),
+                    {
+                        "kind": "entry",
+                        "id": str(r["line_id"]),
+                        "date": str(r["entry_date"]),
+                        "amount": int(r["amount"]),
+                        "currency": ctx.book.base_currency,
+                        "entry_id": str(r["entry_id"]),
+                        "account_id": account.id,
+                        "account": pays.get(str(r["entry_id"]), account.name)
+                        if origins[str(r["line_id"])]
+                        else account.name,
+                        "vendor": str(r["contact_id"]),
+                        "vendor_name": names.get(str(r["contact_id"]), ""),
+                        "description": "" if str(r["entry_id"]) in closed else str(r["description"]),
+                        "memo": "" if str(r["entry_id"]) in closed else str(r["memo"]),
+                        "source": str(r["source"]),
+                        "reversed": str(r["entry_status"]) == "reversed",
+                        "tags": tagged,
+                        **({"split": split} if (split := _split_rows(held.get(str(r["line_id"])))) else {}),
+                    },
+                )
+            )
         return out
 
     streams: list[tuple[str, list[tuple[tuple[str, str], Row]], tuple[str, str] | None, bool]] = []
@@ -511,8 +670,12 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         cursor_parts += list(mark or ("", ""))
         flags.append("1" if done else "0")
     more = "0" in flags
-    return {"rows": [row for _, _, row in page], "next": encode_cursor([*cursor_parts, *flags]) if more else None,
-            "currency": ctx.book.base_currency, "view_version": view.version}
+    return {
+        "rows": [row for _, _, row in page],
+        "next": encode_cursor([*cursor_parts, *flags]) if more else None,
+        "currency": ctx.book.base_currency,
+        "view_version": view.version,
+    }
 
 
 # ------------------------------------------------------------------------------------------------ cards
@@ -521,19 +684,32 @@ def _frozen_by(r: Any) -> str | None:
     return str(r["freeze_by"]) if str(r["status"]) == "frozen" and r["freeze_by"] else None
 
 
-def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None,
-             excluded: bool = False) -> Row:
+def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None, excluded: bool = False) -> Row:
     """A card as anyone sees it: last 4 only, never the number or CVC (Tico never has them). `excluded` marks a spent
     total with its settled private part taken out, as the budget rows are marked."""
     budget = ctx.budgets().get(str(r["budget_id"] or ""))
-    return {"id": str(r["id"]), "provider": str(r["provider"]), "holder": str(r["holder"]),
-            "nickname": str(r["nickname"] or ""), "last4": r["last4"], "kind": str(r["kind"]),
-            "status": str(r["status"]), "frozen_by": _frozen_by(r), "limit": r["limit_amount"],
-            "limit_interval": r["limit_interval"],
-            "provider_limit": r["provider_limit"], "sync_status": str(r["sync_status"] or ""),
-            "currency": str(r["currency"]), "money_account_id": r["money_account_id"],
-            "budget": {"id": budget.id, "name": budget.name} if budget else None, "allocation": allocation,
-            "spent": spent, "excluded": excluded, "expires_at": r["expires_at"], "created_at": str(r["created_at"])}
+    return {
+        "id": str(r["id"]),
+        "provider": str(r["provider"]),
+        "holder": str(r["holder"]),
+        "nickname": str(r["nickname"] or ""),
+        "last4": r["last4"],
+        "kind": str(r["kind"]),
+        "status": str(r["status"]),
+        "frozen_by": _frozen_by(r),
+        "limit": r["limit_amount"],
+        "limit_interval": r["limit_interval"],
+        "provider_limit": r["provider_limit"],
+        "sync_status": str(r["sync_status"] or ""),
+        "currency": str(r["currency"]),
+        "money_account_id": r["money_account_id"],
+        "budget": {"id": budget.id, "name": budget.name} if budget else None,
+        "allocation": allocation,
+        "spent": spent,
+        "excluded": excluded,
+        "expires_at": r["expires_at"],
+        "created_at": str(r["created_at"]),
+    }
 
 
 def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
@@ -543,7 +719,7 @@ def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
     return not any(str(x["account_id"]) in cut for x in lines)
 
 
-SAVED_ON_MOST = 10      # vendor accounts shown per card; `vendor=` on the cards read finds every one
+SAVED_ON_MOST = 10  # vendor accounts shown per card; `vendor=` on the cards read finds every one
 
 
 def _saved_on(c: sqlite3.Connection, card_ids: Sequence[str]) -> dict[str, list[Row]]:
@@ -553,19 +729,35 @@ def _saved_on(c: sqlite3.Connection, card_ids: Sequence[str]) -> dict[str, list[
     for r in SK.card_saves(c, card_ids):
         saved = out.setdefault(str(r["card_id"]), [])
         if len(saved) < SAVED_ON_MOST:
-            saved.append({"vendor": str(r["vendor_key"]), "label": str(r["vendor_label"]),
-                          "saved_by": str(r["saved_by"]), "saved_at": str(r["saved_at"])})
+            saved.append(
+                {
+                    "vendor": str(r["vendor_key"]),
+                    "label": str(r["vendor_label"]),
+                    "saved_by": str(r["saved_by"]),
+                    "saved_at": str(r["saved_at"]),
+                }
+            )
     return out
 
 
-def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, holder: str | None = None,
-          vendor: str | None = None, q: str | None = None, cursor: str | None = None, limit: int = 100,
-          at: str | None = None) -> Row:
+def cards(
+    c: sqlite3.Connection,
+    viewer: str,
+    *,
+    status: str | None = None,
+    holder: str | None = None,
+    vendor: str | None = None,
+    q: str | None = None,
+    cursor: str | None = None,
+    limit: int = 100,
+    at: str | None = None,
+) -> Row:
     """The cards the viewer follows (their own, their teams', or all for the owner), with each card's allocation, what
     it spent this budget period and the vendor accounts it is saved on (`saved_on`). `vendor` keeps the cards saved on
     that vendor (a contact's id or a name); `q` matches a card's nickname, last 4 or holder."""
     from . import budgeting
     from .store import budgets as SB
+
     ctx = load(c, at)
     view = ctx.view(viewer)
     if status and status not in ("active", "frozen", "canceled"):
@@ -600,15 +792,22 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
                 row = SB.allocation(c, bid, "card", str(r["id"]))
                 alloc = int(row["amount"]) if row else None
                 st = budgeting.state(ctx, bid, today)
-                spent = SB.target_used(c, budgeting.subtree(ctx, bid), st.period_start, st.period_end,
-                                       f"card:{r['id']}", absorbed=True)
-                if cut and not _card_spend_seen(cut, SB.card_lines(c, str(r["id"]), st.period_start,
-                                                                   st.period_end)):
+                spent = SB.target_used(
+                    c, budgeting.subtree(ctx, bid), st.period_start, st.period_end, f"card:{r['id']}", absorbed=True
+                )
+                if cut and not _card_spend_seen(cut, SB.card_lines(c, str(r["id"]), st.period_start, st.period_end)):
                     spent = None
-                elif cut:       # the settled private part comes out, as the P&L's and the budgets' do
+                elif cut:  # the settled private part comes out, as the P&L's and the budgets' do
                     netted = budgeting.Netted(view)
-                    spent -= budgeting.settled_used(ctx, netted, budgeting.subtree(ctx, bid),
-                                                    st.period_start, st.period_end, f"card:{r['id']}", absorbed=True)
+                    spent -= budgeting.settled_used(
+                        ctx,
+                        netted,
+                        budgeting.subtree(ctx, bid),
+                        st.period_start,
+                        st.period_end,
+                        f"card:{r['id']}",
+                        absorbed=True,
+                    )
                     excluded = netted.excluded
             out.append(card_row(ctx, r, spent, alloc, excluded))
             if len(out) > most:
@@ -631,10 +830,18 @@ def _access_to(ctx: Ctx, account_id: str) -> list[Row]:
     for g in SA.grants(ctx.c):
         if not VW.live(g, ctx.at):
             continue
-        if g.what in ("everything", "balance_sheet", "sources") or (g.what == "bs_lines" and any(
-                account_id in descendants(ctx.accounts, x) for x in g.account_ids)):
-            out.append({"who": g.subject, "subject_kind": g.subject_kind, "via": g.what, "grant_id": g.id,
-                        "expires_at": g.expires_at or None})
+        if g.what in ("everything", "balance_sheet", "sources") or (
+            g.what == "bs_lines" and any(account_id in descendants(ctx.accounts, x) for x in g.account_ids)
+        ):
+            out.append(
+                {
+                    "who": g.subject,
+                    "subject_kind": g.subject_kind,
+                    "via": g.what,
+                    "grant_id": g.id,
+                    "expires_at": g.expires_at or None,
+                }
+            )
     return out
 
 
@@ -642,12 +849,28 @@ def _sync(conn: Any | None) -> Row | None:
     if conn is None:
         return None
     settings = SK.loads(conn["settings"])
-    return {"connection_id": str(conn["id"]), "provider": str(conn["provider"]), "status": str(conn["status"]),
-            "last_ok_at": conn["last_ok_at"], "last_sync_at": conn["last_sync_at"], "last_error": conn["last_error"],
-            "egress_ip": settings.get("egress_ip"),
-            # A bank or Stripe connection's first history import: "importing" until it ends (no opening balance yet).
-            "history": ("done" if settings.get("backfilled") else "importing")
-            if str(conn["provider"]) in ("mercury", "stripe") else None}
+    return {
+        "connection_id": str(conn["id"]),
+        "provider": str(conn["provider"]),
+        "status": str(conn["status"]),
+        "last_ok_at": conn["last_ok_at"],
+        "last_sync_at": conn["last_sync_at"],
+        "last_error": conn["last_error"],
+        "egress_ip": settings.get("egress_ip"),
+        "history": _history(str(conn["provider"]), settings),
+    }
+
+
+def _history(provider: str, settings: Mapping[str, Any]) -> str | None:
+    """A bank, Stripe or Brex connection's first history import: "importing" until it ends (no opening balance yet). A Brex
+    connection whose cash amounts' sign is not checked yet is "checking": its cash rows wait, unposted, for a balance to agree."""
+    if provider not in ("mercury", "stripe", "brex"):
+        return None
+    if not settings.get("backfilled"):
+        return "importing"
+    if provider == "brex" and settings.get("sign") == "unverified":
+        return "checking"
+    return "done"
 
 
 def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> str:
@@ -660,14 +883,17 @@ def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> s
     export = SX.as_map(SX.mirror_state(c, cid).get("export"))
     return "mirror" if not export or export.get("done") else "exporting"
 
+
 def _direct_on(c: sqlite3.Connection) -> bool:
     """The owner's company switch for direct send (payments.DIRECT_KEY)."""
     from .payments import DIRECT_KEY
+
     return SL.setting(c, DIRECT_KEY) is True
 
 
-def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gateway: bool = False,
-            at: str | None = None) -> Row:
+def sources(
+    c: sqlite3.Connection, viewer: str, *, group: str | None = None, gateway: bool = False, at: str | None = None
+) -> Row:
     """Every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
     manual) with a count per group, so a card program with 500 cards is one row. Each source shows its account
     mapping, sync state and who can see it. Tico's own sources show whenever they exist, entries or not: the Gateway
@@ -690,8 +916,12 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gat
         base = _money_account_row(r, ctx.accounts)
         conn = conns.get(str(r["connection_id"] or ""))
         gl = str(r["account_id"] or "")
-        item: Row = {**base, "sync": _sync(conn), "feed": feed_by.get(str(r["id"]), {}),
-                     "access": _access_to(ctx, gl) if gl else []}
+        item: Row = {
+            **base,
+            "sync": _sync(conn),
+            "feed": feed_by.get(str(r["id"]), {}),
+            "access": _access_to(ctx, gl) if gl else [],
+        }
         kind = str(r["kind"])
         if kind == "card_program":
             item["cards"] = cards_by.get(str(r["id"]), {})
@@ -705,36 +935,57 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gat
     for r in conns.values():
         if str(r["purpose"]) == "payments" or str(r["provider"]) == "mercury":
             s = SK.loads(r["settings"])
-            rows["payments"].append({"id": str(r["id"]), "kind": "connection", "name": str(r["name"] or r["provider"]),
-                                     "provider": str(r["provider"]), "sync": _sync(r),
-                                     "payments": {"mode": "approval_queue",
-                                                  "eligible": bool(s.get("approval_eligible")),
-                                                  "enabled": bool(s.get("payments_enabled")),
-                                                  "direct_send": _direct_on(c),
-                                                  "why_not": s.get("approval_note")}})
+            rows["payments"].append(
+                {
+                    "id": str(r["id"]),
+                    "kind": "connection",
+                    "name": str(r["name"] or r["provider"]),
+                    "provider": str(r["provider"]),
+                    "sync": _sync(r),
+                    "payments": {
+                        "mode": "approval_queue",
+                        "eligible": bool(s.get("approval_eligible")),
+                        "enabled": bool(s.get("payments_enabled")),
+                        "direct_send": _direct_on(c),
+                        "why_not": s.get("approval_note"),
+                    },
+                }
+            )
         elif str(r["purpose"]) == "books":
             cid = str(r["id"])
-            rows["accounting"].append({"id": cid, "kind": "connection", "name": str(r["name"] or r["provider"]),
-                                       "provider": str(r["provider"]), "sync": _sync(r),
-                                       "mirror": _books_mirror(c, ctx.book, cid, str(r["status"])),
-                                       "outbox": SX.outbox_counts(c, cid)})
+            rows["accounting"].append(
+                {
+                    "id": cid,
+                    "kind": "connection",
+                    "name": str(r["name"] or r["provider"]),
+                    "provider": str(r["provider"]),
+                    "sync": _sync(r),
+                    "mirror": _books_mirror(c, ctx.book, cid, str(r["status"])),
+                    "outbox": SX.outbox_counts(c, cid),
+                }
+            )
     used = entries.get("usage", 0)
     if gateway or used:
-        rows["tico"].append({"id": "tico-usage", "kind": "usage", "name": "Tico Gateway", "entries": used,
-                             "connected": gateway})
+        rows["tico"].append(
+            {"id": "tico-usage", "kind": "usage", "name": "Tico Gateway", "entries": used, "connected": gateway}
+        )
     address = SL.setting(c, BILLS_EMAIL_KEY)
     if isinstance(address, str) and address:
-        rows["bills_invoices"].append({"id": "bills-inbox", "kind": "inbox", "name": "Bills inbox", "address": address,
-                                       "bills": docs["bills"]})
+        rows["bills_invoices"].append(
+            {"id": "bills-inbox", "kind": "inbox", "name": "Bills inbox", "address": address, "bills": docs["bills"]}
+        )
     elif docs["bills"]:
         rows["bills_invoices"].append({"id": "bills", "kind": "documents", "name": "Bills", "bills": docs["bills"]})
-    rows["bills_invoices"].append({"id": "documents", "kind": "documents", "name": "Tico invoices",
-                                   "invoices": docs["invoices"]})
+    rows["bills_invoices"].append(
+        {"id": "documents", "kind": "documents", "name": "Tico invoices", "invoices": docs["invoices"]}
+    )
     manual = {k: entries.get(k, 0) for k in ("manual", "import")}
     if any(manual.values()):
         rows["manual"].append({"id": "manual", "kind": "entries", "name": "Journal entries and imports", **manual})
-    groups = [{"group": g, "name": GROUP_NAMES[g], "count": len(rows[g]), "rows": rows[g] if group in (None, g) else []}
-              for g in GROUPS]
+    groups = [
+        {"group": g, "name": GROUP_NAMES[g], "count": len(rows[g]), "rows": rows[g] if group in (None, g) else []}
+        for g in GROUPS
+    ]
     return {"groups": groups, "view_version": view.version}
 
 
@@ -744,7 +995,8 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
         return "everything"
     if org_led and defaults.manager == "team_expenses":
         return "team_expenses"
-    return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
+    manages = org_led and defaults.manager != "none"  # "none": a manager sees what everyone else does
+    return "own_expenses" if manages or defaults.member == "own_expenses" else "none"
 
 
 def default_team(org: Org, manager: str) -> str | None:
@@ -768,10 +1020,20 @@ def default_team(org: Org, manager: str) -> str | None:
 
 
 def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
-    return {"id": g.id, "subject_kind": g.subject_kind, "subject": g.subject, "what": g.what, "whose": g.whose,
-            "whose_team": g.whose_team or None, "account_ids": sorted(g.account_ids), "new_members": g.new_members,
-            "granted_by": g.granted_by, "expires_at": g.expires_at or None, "status": g.status,
-            "live": VW.live(g, ctx.at)}
+    return {
+        "id": g.id,
+        "subject_kind": g.subject_kind,
+        "subject": g.subject,
+        "what": g.what,
+        "whose": g.whose,
+        "whose_team": g.whose_team or None,
+        "account_ids": sorted(g.account_ids),
+        "new_members": g.new_members,
+        "granted_by": g.granted_by,
+        "expires_at": g.expires_at or None,
+        "status": g.status,
+        "live": VW.live(g, ctx.at),
+    }
 
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
@@ -796,6 +1058,10 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     visible = {t.id for t in org.teams.values() if admin or t.id in led or t.id in shown_teams}
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
+    own: dict[str, int] = {}  # each teammate's own budgets (handlers.theirs): what their My budget page lists
+    for b in ctx.budgets().values():
+        if b.active and b.teammate:
+            own[b.teammate] = own.get(b.teammate, 0) + 1
     teammates: list[Row] = []
     for m in shown:
         mine = [g for g in grants if VW.applies(org, g, m)]
@@ -803,22 +1069,55 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         rights = sorted(ctx.rights(m)) if admin or m == viewer else None
         default = _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner)
         team = default_team(org, m) if default == "team_expenses" else None
-        teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
-                          "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
-                          "default": default,
-                          "default_team": team if team in visible else None,
-                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights,
-                          "may_grant": _may_grant(ctx, viewer, m, defaults)})
-    teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
-             for t in sorted(org.teams.values(), key=lambda x: x.name) if t.id in visible]
-    private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
-                "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
-               for a, p in sorted(ctx.private().items())] if admin else []
-    return {"teams": teams, "teammates": teammates, "private_lines": private,
-            "defaults": {"manager": defaults.manager, "member": defaults.member,
-                         "manager_payroll": defaults.manager_payroll},
-            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version,
-            "finance_approver": (ctx.approver_setting() or None) if owner else None}
+        teammates.append(
+            {
+                "teammate": m,
+                "kind": "bot" if m in org.bots else "person",
+                "team": org.team_of.get(m) or None,
+                "reports_to": org.reports_to.get(m) or None,
+                "default": default,
+                "default_team": team if team in visible else None,
+                "grants": [_grant_row(g, ctx) for g in mine],
+                "rights": rights,
+                # Whether the teammate may change attribution (finance.attribution; admin and owner imply it), shown
+                # where their rights are.
+                "attribute": R.has(org, m, R.ATTRIBUTION, ctx.rights(m)) if admin or m == viewer else None,
+                "may_grant": _may_grant(ctx, viewer, m, defaults),
+                "budgets": own.get(m, 0),
+            }
+        )
+    teams = [
+        {"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
+        for t in sorted(org.teams.values(), key=lambda x: x.name)
+        if t.id in visible
+    ]
+    private = (
+        [
+            {
+                "account_id": a,
+                "name": ctx.accounts[a].name if a in ctx.accounts else a,
+                "others_see": p.others_see,
+                "full_detail": sorted(p.full_detail) if owner else None,
+            }
+            for a, p in sorted(ctx.private().items())
+        ]
+        if admin
+        else []
+    )
+    return {
+        "teams": teams,
+        "teammates": teammates,
+        "private_lines": private,
+        "defaults": {
+            "manager": defaults.manager,
+            "member": defaults.member,
+            "manager_payroll": defaults.manager_payroll,
+        },
+        "can_view_as": owner,
+        "can_edit_defaults": owner,
+        "view_version": ctx.view(viewer).version,
+        "finance_approver": (ctx.approver_setting() or None) if owner else None,
+    }
 
 
 def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bool:

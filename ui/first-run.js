@@ -182,8 +182,8 @@ function frNextHTML(state) {
         <div class="onb-actions"><button class="ghost" type="submit">Add admin</button><span class="muted" id="fr-admin-status" role="status"></span></div></form>
       <small class="muted">Tico sends no email: tell them.${S.config?.local ? ' Only you can sign in until you add a domain and sign-in.' : ''}</small></details>
     <details class="fr-connections"><summary>Connect tools and credentials</summary>
-      <p><a href="#/credentials" data-fr-link="credentials">Credentials</a> · <a href="#/integrations" data-fr-link="integrations">Tools</a></p>
-      <p class="fr-secrets" data-fr-secrets><strong>Enter credentials on the Credentials page, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
+      <p><a href="#/tools/keys" data-fr-link="credentials">Keys</a> · <a href="#/tools" data-fr-link="integrations">Tools</a></p>
+      <p class="fr-secrets" data-fr-secrets><strong>Enter credentials in Tools › Keys, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
 }
 
 function frWireDone(state) {

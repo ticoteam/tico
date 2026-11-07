@@ -1,4 +1,5 @@
 """Generated SQL/Python migrations load and run, without reusing timestamps or overwriting files."""
+
 from datetime import datetime, timezone
 import sqlite3
 
@@ -21,8 +22,9 @@ def test_generator_uses_utc_and_skips_occupied_seconds_across_both_formats(tmp_p
     occupied.write_text("def up(conn): pass\n")
     assert new_migration.main(["first"]) == 0
     assert new_migration.main(["second", "--py"]) == 0
-    assert capsys.readouterr().out.splitlines() == [str(tmp_path / name) for name in (
-        "20270101000000_first.sql", "20270101000001_second.py")]
+    assert capsys.readouterr().out.splitlines() == [
+        str(tmp_path / name) for name in ("20270101000000_first.sql", "20270101000001_second.py")
+    ]
     assert occupied.read_text() == "def up(conn): pass\n"
     found = migrations.files(tmp_path)
     assert [m.version for m in found] == ["20261231235959_existing", "20270101000000_first", "20270101000001_second"]
@@ -31,7 +33,8 @@ def test_generator_uses_utc_and_skips_occupied_seconds_across_both_formats(tmp_p
     try:
         migrations.apply(conn, tmp_path)
         assert conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall() == [
-            (m.version,) for m in found]
+            (m.version,) for m in found
+        ]
     finally:
         conn.close()
 

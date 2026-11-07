@@ -177,6 +177,118 @@ function sendWayHold(btn, open, can = () => true) {
   }, true);
 }
 
+// ----------------------------------------------------------------- "Who it reaches"
+// The line under a thread's or a task's composer: who the message would reach and how (GET /v2/threads/{id}/reach).
+// Posting never follows (D4); following lives on the task's Followers row and the Threads page, not under the box.
+const COMPOSE_REACHES = new Set();                     // the reach lines on screen
+const composeFootHTML = () => `<div class="p-foot" hidden>
+    <span class="p-reach-wrap"><button type="button" class="p-reach" aria-haspopup="dialog" aria-expanded="false" title="Who it reaches" hidden></button>
+      <div class="p-menu p-reach-pop" role="dialog" aria-label="Who it reaches" hidden></div></span></div>`;
+// The line shows only with something on it.
+const composeFootShow = foot => { foot.hidden = foot.querySelector('.p-reach').hidden; };
+
+// What each one gets, in a word or two: a bot by the way, a person notified (threads.plan).
+function reachWord(r) {
+  if (r.mode === 'digest') return 'Digest';
+  if (!String(r.actor).startsWith('bot:')) return 'Notified';
+  if (r.mode === 'steer') return 'Now';
+  if (r.mode === 'queue') return 'After its turn';
+  if (r.mode === 'defer') return r.defer_for && r.defer_for !== 'never' ? `Next turn, within ${r.defer_for}` : 'Next turn';
+  return String(r.mode || '');
+}
+// The server reads only the @mentions in the words, so only the bit after each @ goes: typing elsewhere asks nothing,
+// and a long message never makes a long URL.
+function reachMentions(text) {
+  const t = String(text || ''), out = [];
+  for (let i = t.indexOf('@'); i >= 0 && out.length < 20; i = t.indexOf('@', i + 1)) out.push(t.slice(i, i + 64));
+  return out.join('\n');
+}
+// One composer's reach line. `src` gives the thread id, the way (a send_way mode, '' for the server's Steer, 'goal'
+// for no message), the words and the message replied to; `update()` after any of them changes: a short wait, then one
+// read at a time.
+function composeReach(foot, src) {
+  const R = {foot, src, want: '', got: '', busy: false, timer: 0, data: null, html: ''};
+  const btn = foot.querySelector('.p-reach'), pop = foot.querySelector('.p-reach-pop');
+  btn.onclick = () => composeReachOpen(R, pop.hidden);
+  foot.querySelector('.p-reach-wrap').addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || pop.hidden) return;
+    ev.preventDefault(); ev.stopPropagation();
+    composeReachOpen(R, false); btn.focus();
+  }, true);
+  R.update = () => composeReachUpdate(R);
+  COMPOSE_REACHES.add(R);
+  return R;
+}
+// A press outside an open list closes it.
+document.addEventListener('pointerdown', ev => {
+  for (const R of COMPOSE_REACHES) {
+    if (!R.foot.isConnected) { COMPOSE_REACHES.delete(R); continue; }
+    if (!R.foot.querySelector('.p-reach-pop').hidden && !R.foot.querySelector('.p-reach-wrap').contains(ev.target)) composeReachOpen(R, false);
+  }
+});
+function composeReachKey(R) {
+  const id = R.src.thread(), mode = R.src.mode() || '';
+  if (!id || mode === 'goal') return '';
+  return JSON.stringify([id, mode, reachMentions(R.src.text()), R.src.reply?.() || '']);
+}
+function composeReachUpdate(R) {
+  const key = composeReachKey(R);
+  if (key === R.want) return;
+  R.want = key;
+  clearTimeout(R.timer);
+  if (!key) { R.data = null; R.got = ''; composeReachPaint(R); return; }
+  R.timer = setTimeout(() => void composeReachRead(R), R.got ? 350 : 0);
+}
+async function composeReachRead(R) {
+  if (R.busy || !R.want || R.want === R.got) return;
+  R.busy = true;
+  const key = R.want, [id, mode, text, reply] = JSON.parse(key), way = deliveryBody(mode);
+  const q = new URLSearchParams();
+  if (text) q.set('text', text);
+  if (way.delivery) q.set('delivery', way.delivery);
+  if (way.defer_for) q.set('defer_for', way.defer_for);
+  if (reply) q.set('in_reply_to', reply);
+  let data = null;
+  try { data = await get(`/v2/threads/${encodeURIComponent(id)}/reach${q.size ? '?' + q : ''}`, {fresh: true}); } catch {}
+  R.busy = false;
+  if (!R.foot.isConnected) { COMPOSE_REACHES.delete(R); return; }
+  R.got = key;
+  if (key !== R.want) { void composeReachRead(R); return; }     // the words or the way changed while it was out
+  R.data = Array.isArray(data?.reaches) ? data : null;
+  composeReachPaint(R);
+}
+// The reach line names who gets the message (spec: "lists the followers and addressed by name"): "To Omar and Builder 2",
+// "To Omar, Ana +3". The list opened from it adds each one's way.
+function composeReachSays(d) {
+  const names = d.reaches.map(r => r.actor_name || actorName(r.actor));
+  if (!names.length) return 'No one gets this';
+  if (names.length <= 2) return 'To ' + names.join(' and ');
+  return `To ${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+}
+function composeReachRowHTML(actor, word) {
+  return `<div class="p-reach-row" role="listitem">${actorAvatar(actor, 18)}<span class="p-reach-name">${esc(actorName(actor))}</span><span class="p-reach-mode">${esc(word)}</span></div>`;
+}
+function composeReachPaint(R) {
+  const btn = R.foot.querySelector('.p-reach'), pop = R.foot.querySelector('.p-reach-pop'), d = R.data;
+  // A bot's Home reaching only that bot says what the composer's "Message <bot>" already says: nothing to show.
+  const onlyHome = !!d && d.reaches.length === 1 && d.reaches[0].reason === 'home' && !(d.outside || []).length;
+  btn.hidden = !d || onlyHome;
+  composeFootShow(R.foot);
+  if (!d || onlyHome) { composeReachOpen(R, false); return; }
+  const says = composeReachSays(d);
+  if (btn.textContent !== says) btn.textContent = says;
+  const rows = [...d.reaches.map(r => composeReachRowHTML(r.actor, reachWord(r) + (r.adds_reader ? ', can now see it' : ''))),
+    ...(d.outside || []).map(a => composeReachRowHTML(a, 'Not reached'))];
+  const html = rows.length ? `<div role="list">${rows.join('')}</div>` : '<p class="p-reach-none">No one gets this</p>';
+  if (R.html !== html) { pop.innerHTML = html; R.html = html; }
+}
+function composeReachOpen(R, open) {
+  const btn = R.foot.querySelector('.p-reach'), pop = R.foot.querySelector('.p-reach-pop');
+  if (!open && pop.hidden) return;
+  pop.hidden = !open || btn.hidden;
+  btn.setAttribute('aria-expanded', String(!pop.hidden));
+}
+
 // A phone or tablet typing on its screen keyboard: a coarse pointer, or touch on a narrow screen.
 const touchKeyboard = () => matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints > 0 && innerWidth <= 760);
 // cfg.send replaces where Send goes (the Assistant page posts to /v2/assistant/messages); cfg.files === false
@@ -184,13 +296,13 @@ const touchKeyboard = () => matchMedia('(pointer: coarse)').matches || (navigato
 function makePill(cfg) {
   const P = {
     mode: cfg.mode, slug: cfg.slug || null, dest: cfg.slug,
-    action: 'chat', needsIssue: null,
+    action: 'chat',
     el: null, files: [], send: cfg.send || null,
   };
   const attach = cfg.files !== false;
   const el = P.el = document.createElement('div');
   el.className = 'ask pill-' + P.mode;
-  el.innerHTML = `<div class="p-hint muted" hidden></div>
+  el.innerHTML = `
     <div class="p-pill">
       ${P.mode === 'chat' && P.slug ? pillBotHTML(P.slug) : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="${esc(cfg.label || 'Message this bot')}" placeholder="${esc(cfg.placeholder || 'Type a message…')}"></textarea>
@@ -204,7 +316,7 @@ function makePill(cfg) {
     <div class="p-cmd" hidden></div>`;
 
   const q = sel => el.querySelector(sel);
-  const box = q('.p-text'), pill = q('.p-pill');
+  const box = q('.p-text');
   // The cap is the textarea's CSS max-height: 120px, or up to 300px in a desktop bot chat (#524).
   // IPhone autocorrect never landed in the composer. Collapsing the box to
   // height:auto on every keystroke re-lays it out mid-word, which drops iOS's pending correction.
@@ -395,7 +507,7 @@ const pillGoalMode = P => !!P.goalMode && P.action === 'chat' && !P.send && !P.f
 function pillLabel(P) {
   const btn = pq(P, '.p-send'); if (!btn) return;
   const goal = pillGoalMode(P);
-  const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : P.action === 'reply' ? `Reply on #${P.needsIssue}` : 'Send';
+  const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : 'Send';
   // A redraw that replaces the arrow between press and release loses the click in every engine, so the
   // contents change only when goal mode swaps the arrow for words (and ui/styles/chat.css makes the button itself
   // the press target).
@@ -409,20 +521,9 @@ function pillLabel(P) {
   if (box) {
     box.dataset.placeholder ??= box.placeholder;
     box.placeholder = goal ? `Goal for ${botDisplayName(P.slug)}…` : box.dataset.placeholder;
+    // The placeholder names where the message goes; the accessible name says the same, so the two never disagree.
+    if (box.placeholder) box.setAttribute('aria-label', box.placeholder.replace(/…$/, ''));
   }
-  const hint = pq(P, '.p-hint');
-  const waiting = P.needsIssue && P.action === 'reply';
-  hint.hidden = !waiting;
-  if (waiting) hint.innerHTML = `<strong>${empName(P.slug)}</strong> needs you — your answer goes there and clears "Needs you".`;
-}
-// the bot page tells the pill when the newest task needs the viewer
-function pillNeeds(P, issue) {
-  if (!P) return;
-  const was = P.needsIssue;
-  P.needsIssue = issue || null;
-  if (issue && !was && P.action === 'chat') P.action = 'reply';        // default to answering
-  if (!issue && P.action === 'reply') P.action = 'chat';
-  pillLabel(P);
 }
 function pillMenu(P, open) {
   const menu = pq(P, '.p-menu'); if (!menu) return;
@@ -431,8 +532,7 @@ function pillMenu(P, open) {
   if (!open) return;
   const row = (val, label, art, on) => `<button type="button" role="menuitemradio" data-val="${esc(val)}" aria-checked="${on}">${art}<span>${label}</span>${on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
   menu.innerHTML = row('chat', 'Send <span class="muted">(chat)</span>', '<span class="auto" aria-hidden="true">✦</span>', P.action === 'chat')
-      + row('task', 'Send as task', '<span class="auto" aria-hidden="true">＋</span>', P.action === 'task')
-      + (P.needsIssue ? row('reply', `Reply on #${esc(P.needsIssue)}`, '<span class="auto" aria-hidden="true">↩</span>', P.action === 'reply') : '');
+      + row('task', 'Send as task', '<span class="auto" aria-hidden="true">＋</span>', P.action === 'task');
   menu.querySelectorAll('[data-val]').forEach(b => b.onclick = () => {
     P.action = b.dataset.val;
     pillLabel(P); pillButtons(P); pillMenu(P, false); pq(P, '.p-text').focus();
@@ -456,73 +556,6 @@ function pillClear(P, keepText) {
   P.files.length = 0; pillChips(P); chatDraftSave(P);
   if (keepText) pillButtons(P);
 }
-// a chat message: the run starts at once and the thread tails it
-async function pillChat(P, text) {
-  const btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Sending…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  const names = files.map(f => f.name);
-  try {
-    const fd = new FormData();
-    fd.append('text', text);
-    P.files.forEach(f => fd.append('files', f, f.name));
-    const res = await fetch(`${API}/employees/${encodeURIComponent(P.slug)}/chat`, {method: 'POST', body: await memoryBody(fd)});
-    const j = await res.json().catch(() => ({}));
-    if (res.status === 409) { pillBusy(P, j, text); return; }
-    if (!res.ok) throw new Error(j.error || res.statusText);
-    convChatStarted(P.slug, j, text, names);
-    pillAcknowledge(P, text, files, scope);
-  } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P); }
-}
-function pillBusy(P, j, text) {
-  const out = pq(P, '.p-cmd'); if (!out) return;
-  const name = empName(P.slug);
-  out.hidden = false;
-  out.innerHTML = j.error === 'busy' && j.issue
-    ? `<div class="cmd-out"><span>${name} is busy on  — send this as a task instead, or wait.</span>
-       <div class="row" style="margin-top:7px"><button class="primary" type="button" data-busy="task">Send as task</button>
-       <button class="ghost" type="button" data-busy="wait">Wait</button></div></div>`
-    : `<div class="cmd-out"><span>${name} cannot take a chat message right now${j.error ? ` (${esc(j.error)})` : ''}. Send it as a task instead, or wait.</span>
-       <div class="row" style="margin-top:7px"><button class="primary" type="button" data-busy="task">Send as task</button>
-       <button class="ghost" type="button" data-busy="wait">Wait</button></div></div>`;
-  out.querySelector('[data-busy="wait"]').onclick = () => { out.hidden = true; out.innerHTML = ''; };
-  out.querySelector('[data-busy="task"]').onclick = () => {
-    out.hidden = true; out.innerHTML = '';
-    P.action = 'task'; pillLabel(P);
-    if (text) { pq(P, '.p-text').value = text; pillButtons(P); }
-    pillSend(P);
-  };
-}
-async function pillTask(P, text) {
-  const slug = P.slug, btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Creating…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  try {
-    const fd = new FormData();
-    fd.append('slug', slug); fd.append('title', text.split('\n')[0].trim().slice(0, 80));
-    fd.append('body', text); fd.append('priority', 'p2'); fd.append('type', 'task');
-    P.files.forEach(f => fd.append('files', f, f.name));
-    const res = await fetch(`${API}/issues`, {method: 'POST', body: await memoryBody(fd)});
-    const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || res.statusText);
-    if (CONV?.slug === slug) { CONV.pending.push({text, number: j.number, url: j.url}); CONV.sent = true; convRender(CONV); }
-    pillAcknowledge(P, text, files, scope); toast(`Queued as #${j.number}`);
-    await refresh(true); if (BOT?.slug === slug) loadBotIssues(slug);
-  } catch (e) { toast(e.message, true); }
-  btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P);
-}
-async function pillReply(P, text) {
-  const n = P.needsIssue, btn = pq(P, '.p-send'), label = btn.textContent;
-  btn.disabled = true; pillBtnSay(btn, 'Replying…');
-  const files = P.files.slice(), scope = sessionScope(pq(P, '.p-text'));
-  try {
-    await post(`/issues/${n}/comment`, {body: text, clear_needs_human: true});
-    toast(`Replied on #${n}`);
-    pillAcknowledge(P, text, files, scope); await refresh(true);
-    if (CONV?.slug === P.slug) loadConversation(P.slug, CONV);
-  } catch (e) { toast(e.message, true); }
-  btn.disabled = false; pillBtnSay(btn, label); pillLabel(P); pillButtons(P);
-}
 async function pillSend(P) {
   if (!P.el) return;
   const box = pq(P, '.p-text'), text = box.value.trim();
@@ -540,10 +573,5 @@ async function pillSend(P) {
   if (slash !== 'plain' && runCommand(text, pq(P, '.p-cmd'), P.slug)) {
     sessionAcknowledge(box); pillClear(P, true); return;
   }
-  if (isKeeper(P.slug)) {                                     // hub.db, not an Issue comment
-    return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
-  }
-  if (P.action === 'task') return pillTask(P, text);
-  if (P.action === 'reply' && P.needsIssue) return pillReply(P, text);
-  return pillChat(P, text);
+  return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
 }

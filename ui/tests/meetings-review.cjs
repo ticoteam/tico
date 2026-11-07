@@ -103,9 +103,8 @@ async function shot(page, name) {
         await page.locator('[data-note-row=two] .note-title').click();
         await page.locator('#meet-review-private').waitFor();
         assert.equal(await page.locator('#meet-review-private').inputValue(), 'private');
-        assert.match(await page.locator('#notes-detail').innerText(), /From Tico Recorder/);
-        assert.equal(await page.locator('#meet-send, #meet-sections').count(), 0, 'Pending has no Send or Push controls');
-        await page.locator('[data-note-section=transcript]').click();
+        assert.match(await page.locator('#notes-detail').innerText(), /Tico Recorder/);
+        assert.equal(await page.locator('#meet-share, #meet-sections').count(), 0, 'Pending has no Share or task controls');
         assert.match(await page.locator('#notes-detail').innerText(), /The plan is ready/);
         await shot(page, `${size}-review-${scheme}`);
         await page.locator('#meet-review-private').selectOption('team');

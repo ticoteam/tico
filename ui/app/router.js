@@ -32,6 +32,7 @@ function route(hash = location.hash) {
   const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
   const botHere = botOf(S.route);
   document.body.classList.toggle('bot-page', !!botHere);   // a phone gives the bot page the whole screen
+  if (!botHere) pageTitle();
   window.TicoObservability?.route(S.route);
   document.body.classList.remove('mobile-composer-focus');
   // Every page starts from a bare #main: a layout class left behind (the bot page's bot-split-layout made #main a
@@ -56,12 +57,12 @@ function route(hash = location.hash) {
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
   decideStop();     // the Needs you card closes with its page; its waiting answer goes now
   window.liveMeetingsStop?.();
-  convStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); tasksKeep(TASKS_ST); TASKS_ST = null; // page-local work never outlives its page
+  v2ChatStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); tasksKeep(TASKS_ST); TASKS_ST = null; // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
   if (!/^#\/computers\/[^/?]+\/screen$/.test(S.route)) screenStop();
   if (!/^#\/computers\/[^/?]+\/performance$/.test(S.route)) perfStop();
-  if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } updcStop(); }
+  if (!(S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) { if (UPD) { UPD.io?.disconnect(); void updFlush(UPD); UPD = null; } }
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
   threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.js)
@@ -105,6 +106,7 @@ function route(hash = location.hash) {
   else if (S.route.startsWith('#/seat/')) { const [id, template] = S.route.slice(7).split('?')[0].split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
   else if (S.route === ASSISTANT) pageAssistant();
   else if (S.route === LEARNED) pageLearned();
+  else if (S.route === SKILLS_CONNECT || S.route.startsWith(SKILLS_CONNECT + '?')) pageSkillsConnect();   // the skills helper's approve page
   else if (S.route.startsWith('#/person/')) {
     const parts = S.route.slice(9).split('/').map(decodeURIComponent);
     pagePerson(parts[0], parts[1]);
@@ -116,48 +118,38 @@ function route(hash = location.hash) {
   }
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
   else if (S.route === SETTINGS) pageSettings();
-  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
+  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
-  else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
-  // Settings > Webhooks (it was Triggers); #/settings/webhooks/outgoing and /gateway open that tab.
+  else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > General › Repositories
+  // Settings > Webhooks (it was Triggers) and its parts: incoming on Automations, outgoing on Tools, through the
+  // Gateway on Models (ui/app/settings-webhooks.js whOldAddress).
   else if (['#/triggers', '#/webhooks', '#/settings/triggers', '#/settings/webhooks'].includes(S.route) || S.route.startsWith('#/settings/webhooks/')) {
-    const tab = S.route.split('/')[3];
-    if (WH_TABS.some(([k]) => k === tab)) Object.assign(WH, {tab, trigger: '', hook: '', shown: null, hookShown: null});
-    SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
+    location.replace(whOldAddress(S.route)); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
-  // Settings > Inboxes (ui/app/inboxes.js): the list, Inboxes > Settings and its sections, or one inbox.
-  else if (/^#\/settings\/inboxes\/[A-Za-z0-9_.@%:-]+(?:\/[A-Za-z0-9_.@%:-]+)?\/?$/.test(S.route)) {
-    INBOXES_VIEW = inboxesRoute(S.route.slice('#/settings/inboxes/'.length)); SETTINGS_TAB = 'inboxes'; location.replace(SETTINGS); return;
-  }
-  // The tabs Inboxes replaced: Mailboxes and one mailbox, Email & Phone, Mail, and Google's sign-in return
-  // (backend/google_connect.py INBOX), which lands on the Connection card in Inboxes > Settings > Email.
-  else if (/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(\/[A-Za-z0-9-]+)?\/?$/.test(S.route)) {
-    const [, old, rest] = S.route.match(/^#\/settings\/([a-z-]+)(?:\/([A-Za-z0-9-]+))?/);
-    INBOXES_VIEW = old === 'mailboxes' ? (rest ? 'mailbox/' + rest : '') : old === 'mail' ? 'settings/letters-in'
-      : ['inbox', 'google'].includes(old) ? 'settings/email' : rest === 'set-inbound' ? 'settings/email' : '';
-    SETTINGS_TAB = 'inboxes'; SETTINGS_REVEAL = ''; location.replace(SETTINGS); return;
-  }
+  // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
-  // Settings > System (it was Rules, before that Routines): Tico's own jobs. Wake rules and routines are Automations now.
-  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { SETTINGS_TAB = 'system'; location.replace(SETTINGS); return; }
+  // Settings > System (it was Rules, before that Routines): Tico's own jobs are Automations' System jobs now.
+  else if (['#/settings/rules', '#/settings/routines'].includes(S.route.split('?')[0])) { location.replace(settingsMovedOut('system')); return; }
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (S.route === '#/settings/computers') { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }
   else if (['#/settings/subscriptions', '#/subscriptions'].includes(S.route)) { SETTINGS_TAB = 'models'; location.replace(SETTINGS); return; }   // Subscriptions are on Models
-  // Old links and bookmarks to the Strategy Bot's settings address still open its card (Settings > System).
+  // Old links and bookmarks to the Strategy Bot's settings address still open its card (its bot page's Settings).
   else if (S.route === '#/settings/ceo') { location.replace(SETTINGS + '/strategy-bot'); return; }
   // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
   // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
-  // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
+  // the bar, so a tab can be bookmarked and shared: #/settings/people, #/settings/models, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [path, query] = S.route.slice(11).split('?'), [tab, card] = path.split('/');
+    // A System card (or the tab) that moved out of Settings opens where it went; Releases reads its bot first.
+    const moved = settingsMovedOut(tab, card);
+    if (moved) { if (moved !== 'wait') location.replace(moved); return; }
     if (tab === 'history') settingsHistoryAddress(query);   // History's view and filters (ui/app/settings-history.js)
-    SETTINGS_REVEAL = card ? '#' + card : ''; INBOXES_VIEW = '';
+    SETTINGS_REVEAL = card ? '#' + card : '';
     // The Models card and Company turn levels moved from Computers to Models.
     SETTINGS_TAB = tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL) ? 'models' : tab; location.replace(SETTINGS); return;
   }
-  else if (S.route === CREDENTIALS) pageCredentials();
   else if (S.route === SQL_PAGE) pageSql();
   else if (S.route === MAIL || S.route.startsWith(MAIL + '?')) pageMail();
   else if (S.route === MESSAGING || S.route.startsWith(MESSAGING + '?')) pageMessaging();
@@ -173,7 +165,6 @@ function route(hash = location.hash) {
     return;
   }
   else if (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) pageCompanyDocs();
-  else if (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/')) pageIntegrations();
   else if (S.route === '#/runs') { SETTINGS_TAB = 'runs'; location.replace(SETTINGS); return; }   // Runs moved into Settings > History
   else if (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?')) pageLearnings();
   else if (S.route === '#/usage') pageUsage();

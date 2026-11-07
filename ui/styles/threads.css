@@ -43,19 +43,20 @@
 .th-msg:hover .th-cont-time,.th-msg:focus-within .th-cont-time{opacity:1}
 .th-main{flex:1;min-width:0}
 .th-head{display:flex;align-items:baseline;gap:var(--s2);min-width:0;font-size:var(--t-sm)}
-.th-who{font-weight:600;color:var(--ink)}
+.th-who{display:inline-block;min-height:24px;line-height:24px;font-weight:600;color:var(--ink)}
 a.th-who:hover{text-decoration:underline}
-.th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em;line-height:1.3}
+.th-bot{align-self:center;padding:1px 5px;border-radius:4px;background:var(--surface2);color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:.02em;line-height:1.3}
 .th-head time,.th-edited{color:var(--muted);font-size:var(--t-xs)}
 .th-body{overflow-wrap:anywhere}
+@media (max-width:760px){.th-who{padding-block:10px;margin-block:-10px}.pill-thread .p-text{box-sizing:border-box;min-height:44px;padding-block:11px;line-height:22px}.th-body,.th-body.md{font-size:16px}.pill-thread .p-icon{min-width:44px;height:44px;padding:0 12px}}   /* messages are reading text on a phone */
 .th-body.md>:first-child{margin-top:0}.th-body.md>:last-child{margin-bottom:0}
 .th-main>.run-did{margin:2px 0 4px}
 .th-deleted .th-body{font-style:italic}
 /* a quoted message, scrolled to */
 .th-flash,.th-flash:hover{background:var(--accent-quiet);transition:background .3s}
 /* .th-new / .th-new-quiet mark unread messages for read tracking; one "New" line goes above the first, never a bar per row. */
-.th-newline{display:flex;align-items:center;gap:10px;padding:10px 6px 4px;color:var(--fail);font-size:var(--t-xs);font-weight:600}
-.th-newline::before{content:"";flex:1;height:1px;background:var(--fail);opacity:.55}
+.th-newline{display:flex;align-items:center;gap:10px;padding:10px 6px 4px;color:var(--accent);font-size:var(--t-xs);font-weight:600}
+.th-newline::before{content:"";flex:1;height:1px;background:var(--accent);opacity:.55}
 .th-fold{display:flex;align-items:center;gap:var(--s2);padding:6px;color:var(--muted);font-size:var(--t-sm)}
 .th-fold::before{content:"";width:18px;height:1px;background:var(--line)}
 a.th-more:hover{color:var(--ink);text-decoration:none}
@@ -114,6 +115,32 @@ a.th-status-act:hover{text-decoration:none}
 .th-upd-btn:hover{color:var(--ink)}
 .th-upd-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 
+/* A row no person or bot wrote (rowSource, ui/app/hub-v2.js): a small gray line, no avatar or sender row. A built-in's
+   name leads in bold, an automation's is a link; a run of task updates is one "N task updates" row, shut until opened.
+   Lines sit tight together; the next message keeps its own spacing. Shared by threads, the chat and a task's thread. */
+.src-line{display:flex;align-items:baseline;gap:0 6px;min-width:0;padding:1px 6px;color:var(--muted);font-size:var(--t-sm);line-height:1.45}
+.src-name{color:inherit;font-weight:600}
+a.src-name:hover{color:var(--ink);text-decoration:underline}
+.src-name{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-time{margin-left:auto;flex:none;font-size:var(--t-xs);color:var(--muted)}
+.src-line>button{flex:none}
+.src-group>summary{list-style:none;cursor:pointer;align-items:center}
+.src-group>summary::-webkit-details-marker{display:none}
+.src-group>summary:hover{color:var(--ink)}
+.src-group>summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.src-chev{display:inline-block;font-size:10px;transition:transform .15s}
+.src-group[open] .src-chev{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){.src-chev{transition:none}}
+.src-group>.src-line:not(summary){padding-left:18px}
+/* in a thread the words line up with the messages' text, past the avatar */
+.thv-list .src-line{padding-left:48px}
+.thv-list .src-group>.src-line:not(summary){padding-left:60px}
+.th-line.th-flash{border-radius:8px}
+/* the chat and a task's thread */
+.chat-line{margin:2px 0}
+.task-comments .tcomment.tline,.tcomment.tline.src-line{display:flex;background:none;border:0;border-radius:0;padding:1px 4px;font-size:var(--t-sm);line-height:1.45}
+
 /* sending, held, failed */
 .th-pending .th-body{color:var(--muted)}
 .th-state{color:var(--muted);font-size:var(--t-xs)}
@@ -153,7 +180,7 @@ a.th-status-act:hover{text-decoration:none}
 /* a phone's bot page has the composer on the bottom edge (ui/styles/chat.css): a little room under it. The bot being
    talked to sits at the bar's left edge, before Attach; a tap opens the switcher (org-fan.js). A computer has none. */
 @media (max-width:760px){.thv-attach-menu{right:auto;left:0}#bot-thread .thv-composer{padding-bottom:max(6px,env(safe-area-inset-bottom))}
-  .pill-thread .p-pill>.p-bot{display:inline-flex;order:-2;flex:none;width:36px;height:36px;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}}
+  .pill-thread .p-pill>.p-bot{display:inline-flex;order:-2;flex:none;width:44px;height:44px;margin:-4px 0;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}}
 .thv-composer .p-cmd[hidden]{display:none}
 .thv-mentions{position:absolute;top:auto;left:0;bottom:calc(100% + 6px);z-index:5;min-width:220px;max-height:240px;overflow-y:auto}
 .thv-mentions [aria-selected="true"]{background:var(--surface2)}
@@ -171,18 +198,21 @@ a.th-status-act:hover{text-decoration:none}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
-/* Home | DM above the thread on a desktop; narrower, the top line's tabs do it */
-.bot-talk-bar{display:none;align-items:center;gap:8px;margin:0 0 4px}
 /* the thread's call, Members and menu, in the page's top line */
 .bot-top-acts{order:3;flex:none;align-self:center;display:inline-flex}
 .bot-top-acts[hidden]{display:none}
 .bot-top-acts .thv-titleline{gap:4px;padding:0}
 @media (max-width:1099px){.bot-top-acts{order:2}}
-#main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
-.bot-talk-switch{display:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
-.bot-talk-switch button{border:0;border-radius:7px;background:none;padding:3px 10px;color:var(--muted);font-weight:600;font-size:var(--t-sm);cursor:pointer}
-.bot-talk-switch button.cur{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
-@media (min-width:1100px){.bot-talk-bar,.bot-talk-switch{display:flex}}
+/* Incognito (a private DM, not the team's Home): a lock in the top line beside More; it says Incognito only while on */
+.bot-incognito{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:32px;height:32px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.bot-incognito[hidden],.bot-incognito:not([aria-pressed=true]) .bi-label{display:none}
+.bot-incognito .nav-icon{font-size:18px}
+@media (max-width:1099px){.bot-incognito{order:2}}
+.pill-thread .p-pill{border-color:#656766}   /* the composer's edge reads against the page (3:1) */
+@media (max-width:760px){.bot-incognito{min-width:44px;height:44px}}
+.bot-incognito:hover{color:var(--ink);background:var(--hover)}
+.bot-incognito[aria-pressed=true]{color:var(--ink);background:var(--raised);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.bot-incognito:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 
 /* a person's or a team's Home */
 .home-card .thv-head{display:none}
@@ -259,6 +289,9 @@ button.ths-link:hover .ths-val{color:var(--ink)}
   /* a finger's room: the quote, the reactions, Stop and Fix, the × on a reply, an update line */
   .th-quote{min-height:44px}
   .th-upd-btn{min-height:44px;display:inline-flex;align-items:center}
+  .thv-list .src-line{padding-left:46px}
+  .thv-list .src-group>.src-line:not(summary){padding-left:56px}
+  .src-group>summary{min-height:44px}
   .th-react{height:36px;padding:0 10px}
   .th-status-act{min-height:44px;display:inline-flex;align-items:center}
   .thv-replying-x{width:44px;height:44px}

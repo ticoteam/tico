@@ -17,7 +17,7 @@ sentence. If there is no story for press, say so and suggest the team's own chan
 ## 2. Check the rules
 
 Read `knowledge/rules.md`: what may be named, who may speak, what must wait. Anything not cleared is
-marked "needs clearance" and a question goes to the owner with `hub task ask <id>`.
+marked "needs clearance" and a question goes to the owner with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 3. Write the release
 

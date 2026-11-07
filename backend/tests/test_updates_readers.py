@@ -18,9 +18,11 @@ NOTE = "Synthetic meeting note alpha"
 def draft(store, author, body):
     """Run one person's draft the way the queue does, returning (the posted update, the facts the model saw)."""
     with store.transaction() as c:
-        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,sent_at) VALUES(?,?,'daily',?,0,'sent',?) "
-                  "ON CONFLICT(bot,kind,day) DO UPDATE SET state='sent', sent_at=excluded.sent_at",
-                  (H.new_id(), author, DAY, H.now()))
+        c.execute(
+            "INSERT INTO update_queue(id,bot,kind,day,rank,state,sent_at) VALUES(?,?,'daily',?,0,'sent',?) "
+            "ON CONFLICT(bot,kind,day) DO UPDATE SET state='sent', sent_at=excluded.sent_at",
+            (H.new_id(), author, DAY, H.now()),
+        )
     seen = []
     posted = updates.write_draft(store, author, lambda system, user: seen.append(user) or {"body": body}, "coo")
     return posted, seen[0]
@@ -39,22 +41,28 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
     with store.transaction() as c:
         restrict(c, "finance", people=["ana"])
         c.execute("INSERT INTO humans(id,name,email) VALUES('dan','Dan',NULL)")
-        c.execute("INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) "
-                  "VALUES('m1','Synthetic sync','zed@acme.example',?,?,?,?,'live')",
-                  (json.dumps({"kind": "meeting", "calendar": {"attendees": ["ben@acme.example"]}}), NOTE, H.now(), H.now()))
+        c.execute(
+            "INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) "
+            "VALUES('m1','Synthetic sync','zed@acme.example',?,?,?,?,'live')",
+            (json.dumps({"kind": "meeting", "calendar": {"attendees": ["ben@acme.example"]}}), NOTE, H.now(), H.now()),
+        )
     ben, facts = draft(store, "human:ben", "- Synthetic draft bullet one")
     assert NOTE in facts and flag(store, ben["id"]) == 1
     cara, facts = draft(store, "human:cara", "- Synthetic draft bullet two")
     assert NOTE not in facts and flag(store, cara["id"]) == 0, "no meeting summary, no flag"
     ana, facts = draft(store, "human:ana", "- Synthetic draft bullet three")
-    assert NOTE not in facts and "Synthetic draft bullet one" in facts and flag(store, ana["id"]) == 1, \
+    assert NOTE not in facts and "Synthetic draft bullet one" in facts and flag(store, ana["id"]) == 1, (
         "a report's flag carries up"
+    )
     # Ana replaces her draft with her own words: unflagged, still linked to Ben's update it was written from.
     own = post(api, "updates", {"body": "- Synthetic own words", "replace_draft": True})["update"]
     assert own["id"] == ana["id"] and flag(store, ana["id"]) == 0
 
-    tokens = {"bot": setup_attempt(api, "ops")[2]["token"], "restricted bot": setup_attempt(api, "finance")[2]["token"],
-              "member with no email": "dan-test"}
+    tokens = {
+        "bot": setup_attempt(api, "ops")[2]["token"],
+        "restricted bot": setup_attempt(api, "finance")[2]["token"],
+        "member with no email": "dan-test",
+    }
     missing = api.get("/api/v2/updates/" + H.new_id(), headers={"Authorization": "Bearer ana-test"})
     for who, token in tokens.items():
         auth = {"Authorization": "Bearer " + token}
@@ -73,7 +81,7 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
     post(api, "updates/archive", {"ids": [ben["id"]], "archived": True}, token="dan-test", expected=404)
     assert post(api, "updates/read", {"all": True}, token="dan-test")["marked"] == 2, "mark all skips it too"
 
-    for token in ("ana-test", "ben-test", "cara-test"):                 # the owner and people with an email
+    for token in ("ana-test", "ben-test", "cara-test"):  # the owner and people with an email
         assert get(api, "updates/" + ben["id"], token=token)["update"]["body"] == "- Synthetic draft bullet one"
         assert ben["id"] in [u["id"] for u in get(api, "updates", token=token)["updates"]]
         assert [i["id"] for i in get(api, "updates/" + ana["id"], token=token)["update"]["inputs"]] == [ben["id"]]
@@ -83,7 +91,7 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
     assert flag(store, ben["id"]) == 1
     get(api, "updates/" + ben["id"], token=tokens["bot"], expected=404)
     with store.transaction() as c:
-        c.execute("UPDATE updates SET edited_by=NULL WHERE id=?", (ben["id"],))   # as if never edited
+        c.execute("UPDATE updates SET edited_by=NULL WHERE id=?", (ben["id"],))  # as if never edited
         c.execute("DELETE FROM meetings WHERE id='m1'")
     again, facts = draft(store, "human:ben", "- Synthetic redraft bullet")
     assert again["id"] == ben["id"] and NOTE not in facts and flag(store, ben["id"]) == 0
@@ -97,8 +105,9 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
 def test_a_bot_managers_request_names_a_flagged_report_without_its_text(api, monkeypatch):
     """No person reports to a bot today (org_parent never puts one there), so the chart is forced."""
     monkeypatch.setattr(updates, "today", lambda at=None: DAY)
-    monkeypatch.setattr(updates, "direct_reports",
-                        lambda c, author, chart=None: ["human:ben", "human:cara"] if author == "ops" else [])
+    monkeypatch.setattr(
+        updates, "direct_reports", lambda c, author, chart=None: ["human:ben", "human:cara"] if author == "ops" else []
+    )
     with api.app.state.store.transaction() as c:
         updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="coo", meetings=True)
         updates.post(c, "human:cara", "- Synthetic plain report", day=DAY, drafted_by="coo")
@@ -115,15 +124,24 @@ def test_the_migration_flags_every_existing_assistant_drafted_person_update(tmp_
     c.executescript(updates.SCHEMA)
     for column in ("slides", "drafted_by", "edited_by", "inputs"):
         c.execute(f"ALTER TABLE updates ADD COLUMN {column} TEXT")
-    rows = [("d", "human:ben", "coo", None), ("e", "human:cara", "coo", "human:cara"), ("o", "human:ana", None, None),
-            ("b", "ops", None, None)]
+    rows = [
+        ("d", "human:ben", "coo", None),
+        ("e", "human:cara", "coo", "human:cara"),
+        ("o", "human:ana", None, None),
+        ("b", "ops", None, None),
+    ]
     for uid, bot, drafted, edited in rows:
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,edited_by) "
-                  "VALUES(?,?,'daily',?,'h','- b','t','t',?,?)", (uid, bot, uid, drafted, edited))
+        c.execute(
+            "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,edited_by) "
+            "VALUES(?,?,'daily',?,'h','- b','t','t',?,?)",
+            (uid, bot, uid, drafted, edited),
+        )
     updates.ensure_schema(c)
     assert dict(c.execute("SELECT id, meetings FROM updates")) == {"d": 1, "e": 1, "o": 0, "b": 0}
-    c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,meetings) "
-              "VALUES('n','human:dan','daily','n','h','- b','t','t','coo',0)")
+    c.execute(
+        "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,meetings) "
+        "VALUES('n','human:dan','daily','n','h','- b','t','t','coo',0)"
+    )
     updates.ensure_schema(c)
     assert c.execute("SELECT meetings FROM updates WHERE id='n'").fetchone()[0] == 0, "it runs once, not on every start"
 
@@ -133,8 +151,9 @@ def test_a_member_with_no_email_posts_over_a_flagged_draft_in_their_own_words(ap
     reply links no flagged input. The chart opens on the latest day they may read, not a later flagged one."""
     monkeypatch.setattr(updates, "today", lambda at=None: DAY)
     monkeypatch.setitem(api.app.state.auth.settings.test_identities, "cara-test", Identity("human:cara", "human", ""))
-    monkeypatch.setattr(updates, "direct_reports",
-                        lambda c, author, chart=None: ["human:ben"] if author == "human:cara" else [])
+    monkeypatch.setattr(
+        updates, "direct_reports", lambda c, author, chart=None: ["human:ben"] if author == "human:cara" else []
+    )
     store = api.app.state.store
     with store.transaction() as c:
         ben = updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="coo", meetings=True)

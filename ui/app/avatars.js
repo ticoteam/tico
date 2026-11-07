@@ -157,11 +157,11 @@ function botAvatar(bot, size = 18, state) {
   const meta = BOT_AVATARS[slug], hue = avHue(slug);
   const icon = !meta?.tico && TEMPLATE_ICON.test(row?.icon || '') ? row.icon : '';
   const kind = meta?.tico ? 'bot-tico' : icon ? 'bot-glyph' : meta?.icon ? 'bot-symbol' : 'av-initials';
-  const fill = meta?.tico ? '#172221' : meta?.color || `hsl(${hue} 38% 45%)`;
+  const fill = meta?.tico ? '#172221' : meta?.color || `hsl(${hue} 38% 33%)`;
   const vars = kind === 'bot-symbol' ? `;--bot-color:${meta.color};--bot-icon:url('/assets/bot-symbols/${meta.icon}.svg')`
     : kind === 'av-initials' ? `;--hue:${hue};font-size:${Math.round(size * 0.42)}px` : '';
   const inner = kind === 'bot-glyph' ? `<span class="av-glyph" style="font-size:${Math.round(size * 0.7)}px">${esc(icon)}</span>`
-    : kind === 'av-initials' ? esc(avInitials(row?.slug || slug)) : '';
+    : kind === 'av-initials' ? esc(avInitials(row?.display_name || row?.slug || slug)) : '';
   const breathes = size >= BLOB_MORPH_MIN, shape = blobShape(slug, size);
   const working = breathes && (state === 'running' || state === 'working' || botWorking(slug));
   return `<span class="av blob ${kind} ${state || ''}${working ? ' morph' : ''}" data-av="${esc(slug)}"${breathes ? ' data-breathe' : ''} style="width:${size}px;height:${size}px;--av-fill:${fill}${vars}" aria-hidden="true">`

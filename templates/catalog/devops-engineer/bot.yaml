@@ -11,10 +11,6 @@ max_run_minutes: 60
 gateway:
   level: high
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every plan on the task and a human acts on it.
-outbound_send: false
-
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
 # (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:

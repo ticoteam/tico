@@ -18,12 +18,24 @@ impl VisualOrigin {
     /// The visual origin `raw` and Tico file hosting's origin `files`: either may be empty, not both, and an
     /// invalid one refuses the whole allowance.
     pub fn with_files(hub: &Url, raw: &str, files: &str) -> Option<Self> {
-        let origin = if raw.is_empty() { None } else { Some(separate_origin(hub, raw)?) };
-        let files = if files.is_empty() { None } else { Some(separate_origin(hub, files)?) };
+        let origin = if raw.is_empty() {
+            None
+        } else {
+            Some(separate_origin(hub, raw)?)
+        };
+        let files = if files.is_empty() {
+            None
+        } else {
+            Some(separate_origin(hub, files)?)
+        };
         if origin.is_none() && files.is_none() {
             return None;
         }
-        Some(Self { hub: hub.clone(), origin, files })
+        Some(Self {
+            hub: hub.clone(),
+            origin,
+            files,
+        })
     }
 
     /// Whether this allowance belongs to the page on `hub`.
@@ -33,7 +45,8 @@ impl VisualOrigin {
 
     pub fn permits(&self, hub: Option<&Url>, url: &Url) -> bool {
         hub == Some(&self.hub)
-            && (is_visual_navigation(self.origin.as_ref(), url) || is_files_visual_navigation(self.files.as_ref(), url))
+            && (is_visual_navigation(self.origin.as_ref(), url)
+                || is_files_visual_navigation(self.files.as_ref(), url))
     }
 }
 
@@ -41,8 +54,12 @@ fn separate_origin(hub: &Url, raw: &str) -> Option<Url> {
     // Inspect the origin spelling before URL parsing can remove credentials, dot paths or whitespace.
     let (scheme, authority) = raw.split_once("://")?;
     let authority = authority.strip_suffix('/').unwrap_or(authority);
-    if !scheme.eq_ignore_ascii_case("https") || authority.is_empty()
-        || authority.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\' | '@' | '%' | '?' | '#')) {
+    if !scheme.eq_ignore_ascii_case("https")
+        || authority.is_empty()
+        || authority.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\' | '@' | '%' | '?' | '#')
+        })
+    {
         return None;
     }
     let origin = Url::parse(raw).ok()?;
@@ -53,13 +70,26 @@ fn separate_origin(hub: &Url, raw: &str) -> Option<Url> {
 }
 
 fn https_origin(url: &Url) -> bool {
-    url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
-        && url.query().is_none() && url.fragment().is_none() && url.path() == "/" && url.port() != Some(0)
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.path() == "/"
+        && url.port() != Some(0)
         && match url.host() {
-            Some(Host::Domain(host)) => host.len() <= 253 && host.split('.').all(|label| {
-                !label.is_empty() && label.len() <= 63 && !label.starts_with('-') && !label.ends_with('-')
-                    && label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-            }),
+            Some(Host::Domain(host)) => {
+                host.len() <= 253
+                    && host.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                    })
+            }
             Some(Host::Ipv4(_) | Host::Ipv6(_)) => true,
             None => false,
         }
@@ -69,16 +99,51 @@ fn https_origin(url: &Url) -> bool {
 /// no escapes or additional segments. Its spelling matches backend/visuals.py: unpadded base64url
 /// payload, a dot, then an unpadded SHA256 MAC. This checks syntax, not the MAC or the reader's access.
 pub fn is_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
-    let Some(allowed) = allowed.filter(|origin| https_origin(origin)) else { return false };
-    if url.scheme() != "https" || url.origin() != allowed.origin() || !url.username().is_empty()
-        || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+    let Some(allowed) = allowed.filter(|origin| https_origin(origin)) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.origin() != allowed.origin()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || !view_marker(url.fragment())
+    {
         return false;
     }
-    let Some(token) = url.path().strip_prefix("/visuals/") else { return false };
-    let Some((body, mac)) = token.split_once('.') else { return false };
-    let base64url = |value: &str| !value.is_empty()
-        && value.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'));
+    let Some(token) = url.path().strip_prefix("/visuals/") else {
+        return false;
+    };
+    let Some((body, mac)) = token.split_once('.') else {
+        return false;
+    };
+    let base64url = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+    };
     base64url(body) && mac.len() == 43 && base64url(mac)
+}
+
+/// No fragment, or the frame's view marker (ui/app/pages.js pageViewSrc, read by backend/visuals.py's reporter):
+/// `tico-view=card|full&tico-size=small|medium|large|full`. A fragment never reaches the server; only this one is
+/// allowed so the allowance stays a fixed shape.
+fn view_marker(fragment: Option<&str>) -> bool {
+    let Some(fragment) = fragment else {
+        return true;
+    };
+    let Some((view, size)) = fragment
+        .strip_prefix("tico-view=")
+        .and_then(|rest| rest.split_once("&tico-size="))
+    else {
+        return false;
+    };
+    match view {
+        "card" => matches!(size, "small" | "medium" | "large"),
+        "full" => size == "full",
+        _ => false,
+    }
 }
 
 /// Tico file hosting's signed link to the cleaned copy of a page or SVG (backend/tico_storage.py `_signed`, checked
@@ -86,23 +151,46 @@ pub fn is_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
 /// exactly `e`, `k` and `s`. The server's own `/visuals/<token>` route sends a frame here after checking the reader.
 /// This checks syntax, not the signature, which the edge checks.
 pub fn is_files_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
-    let Some(allowed) = allowed.filter(|origin| https_origin(origin)) else { return false };
-    if url.scheme() != "https" || url.origin() != allowed.origin() || !url.username().is_empty()
-        || url.password().is_some() || url.fragment().is_some() {
+    let Some(allowed) = allowed.filter(|origin| https_origin(origin)) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.origin() != allowed.origin()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !view_marker(url.fragment())
+    {
         return false;
     }
-    let Some((folder, name)) = url.path().strip_prefix("/visuals/").and_then(|rest| rest.split_once('/')) else { return false };
-    if folder.len() != 2 || name.len() != 64 || !name.starts_with(folder)
-        || !name.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
+    let Some((folder, name)) = url
+        .path()
+        .strip_prefix("/visuals/")
+        .and_then(|rest| rest.split_once('/'))
+    else {
+        return false;
+    };
+    if folder.len() != 2
+        || name.len() != 64
+        || !name.starts_with(folder)
+        || !name.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+    {
         return false;
     }
     let base64url = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_');
     let mut seen = [false; 3];
     for pair in url.query().unwrap_or("").split('&') {
-        let Some((key, value)) = pair.split_once('=') else { return false };
+        let Some((key, value)) = pair.split_once('=') else {
+            return false;
+        };
         let (slot, valid) = match key {
-            "e" => (0, (1..=12).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_digit())),
-            "k" => (1, (1..=32).contains(&value.len()) && value.bytes().all(base64url)),
+            "e" => (
+                0,
+                (1..=12).contains(&value.len()) && value.bytes().all(|c| c.is_ascii_digit()),
+            ),
+            "k" => (
+                1,
+                (1..=32).contains(&value.len()) && value.bytes().all(base64url),
+            ),
             "s" => (2, value.len() == 43 && value.bytes().all(base64url)),
             _ => return false,
         };
@@ -121,19 +209,40 @@ mod tests {
     const HUB: &str = "https://team.example.com/tico/";
     const ASSETS: &str = "https://team.files.example.com";
     // The same URL-safe encoding and SHA256 MAC length used by the server; not an authenticated token.
-    pub const TOKEN: &str = "WyJodW1hbjphIiwiZjEiLDEsIiIsMjAwMDAwMDAwMF0.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn-_0";
+    pub const TOKEN: &str =
+        "WyJodW1hbjphIiwiZjEiLDEsIiIsMjAwMDAwMDAwMF0.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn-_0";
 
     #[test]
     fn origin_updates_accept_only_a_separate_https_origin() {
         let hub = Url::parse(HUB).unwrap();
-        for origin in [ASSETS, "https://TEAM.files.example.com:443/", "https://[::1]:8443", "https://127.0.0.1:8443"] {
+        for origin in [
+            ASSETS,
+            "https://TEAM.files.example.com:443/",
+            "https://[::1]:8443",
+            "https://127.0.0.1:8443",
+        ] {
             assert!(VisualOrigin::new(&hub, origin).is_some(), "{origin}");
         }
-        for origin in ["", HUB, "https://team.example.com", "http://team.files.example.com", "https://@team.files.example.com",
-                       "https://user:pass@team.files.example.com", "https://team.files.example.com/visuals", "https://team.files.example.com/..",
-                       "https://team.files.example.com?", "https://team.files.example.com#", "https://team.files.example.com\\",
-                       " https://team.files.example.com", "https://team.files.example.com\n", "https://team%2efiles.example.com",
-                       "https://*.files.example.com", "https://bad_host.example.com", "https://team..example.com", "https://team.files.example.com:0"] {
+        for origin in [
+            "",
+            HUB,
+            "https://team.example.com",
+            "http://team.files.example.com",
+            "https://@team.files.example.com",
+            "https://user:pass@team.files.example.com",
+            "https://team.files.example.com/visuals",
+            "https://team.files.example.com/..",
+            "https://team.files.example.com?",
+            "https://team.files.example.com#",
+            "https://team.files.example.com\\",
+            " https://team.files.example.com",
+            "https://team.files.example.com\n",
+            "https://team%2efiles.example.com",
+            "https://*.files.example.com",
+            "https://bad_host.example.com",
+            "https://team..example.com",
+            "https://team.files.example.com:0",
+        ] {
             assert!(VisualOrigin::new(&hub, origin).is_none(), "{origin}");
         }
     }
@@ -144,8 +253,25 @@ mod tests {
         let allowance = VisualOrigin::new(&hub, ASSETS).unwrap();
         let valid = Url::parse(&format!("{ASSETS}/visuals/{TOKEN}")).unwrap();
         assert!(allowance.permits(Some(&hub), &valid));
+        for marker in [
+            "tico-view=card&tico-size=small",
+            "tico-view=card&tico-size=medium",
+            "tico-view=card&tico-size=large",
+            "tico-view=full&tico-size=full",
+        ] {
+            assert!(
+                allowance.permits(
+                    Some(&hub),
+                    &Url::parse(&format!("{ASSETS}/visuals/{TOKEN}#{marker}")).unwrap()
+                ),
+                "{marker}"
+            );
+        }
         assert!(!allowance.permits(None, &valid));
-        assert!(!allowance.permits(Some(&Url::parse("https://other.example.com/").unwrap()), &valid));
+        assert!(!allowance.permits(
+            Some(&Url::parse("https://other.example.com/").unwrap()),
+            &valid
+        ));
         assert!(!is_visual_navigation(None, &valid));
         for address in [
             format!("https://team.files.example.com.evil.example/visuals/{TOKEN}"),
@@ -155,6 +281,11 @@ mod tests {
             format!("https://user@team.files.example.com/visuals/{TOKEN}"),
             format!("{ASSETS}/visuals/{TOKEN}?download=1"),
             format!("{ASSETS}/visuals/{TOKEN}#part"),
+            format!("{ASSETS}/visuals/{TOKEN}#"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-view=card&tico-size=full"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-view=full&tico-size=small"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-view=card&tico-size=small&x=1"),
+            format!("{ASSETS}/visuals/{TOKEN}#tico-size=small&tico-view=card"),
             format!("{ASSETS}/other/{TOKEN}"),
             format!("{ASSETS}/visuals/{TOKEN}/other"),
             format!("{ASSETS}/visuals/{TOKEN}.extra"),
@@ -165,9 +296,13 @@ mod tests {
             format!("{ASSETS}/visuals/{TOKEN}="),
             format!("{ASSETS}/visuals/.{TOKEN}"),
             format!("blob:{ASSETS}/visuals/{TOKEN}"),
-            "about:blank".into(), "data:text/html,hello".into(),
+            "about:blank".into(),
+            "data:text/html,hello".into(),
         ] {
-            assert!(!allowance.permits(Some(&hub), &Url::parse(&address).unwrap()), "{address}");
+            assert!(
+                !allowance.permits(Some(&hub), &Url::parse(&address).unwrap()),
+                "{address}"
+            );
         }
     }
 
@@ -181,18 +316,43 @@ mod tests {
         let link = format!("{FILES}/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}");
         let hosted = VisualOrigin::with_files(&hub, "", FILES).unwrap();
         assert!(hosted.permits(Some(&hub), &Url::parse(&link).unwrap()));
-        assert!(hosted.permits(Some(&hub), &Url::parse(&format!("{FILES}/visuals/ab/{NAME}?s={SIG}&k=k1&e=1")).unwrap()));
-        assert!(!hosted.permits(Some(&Url::parse("https://other.example.com/").unwrap()), &Url::parse(&link).unwrap()));
+        assert!(
+            hosted.permits(
+                Some(&hub),
+                &Url::parse(&format!("{link}#tico-view=card&tico-size=medium")).unwrap()
+            ),
+            "a redirect keeps the marker"
+        );
+        assert!(!hosted.permits(Some(&hub), &Url::parse(&format!("{link}#part")).unwrap()));
+        assert!(hosted.permits(
+            Some(&hub),
+            &Url::parse(&format!("{FILES}/visuals/ab/{NAME}?s={SIG}&k=k1&e=1")).unwrap()
+        ));
+        assert!(!hosted.permits(
+            Some(&Url::parse("https://other.example.com/").unwrap()),
+            &Url::parse(&link).unwrap()
+        ));
         // The visual origin's token route is not the files address's, nor the other way round.
-        assert!(!hosted.permits(Some(&hub), &Url::parse(&format!("{FILES}/visuals/{TOKEN}")).unwrap()));
+        assert!(!hosted.permits(
+            Some(&hub),
+            &Url::parse(&format!("{FILES}/visuals/{TOKEN}")).unwrap()
+        ));
         let both = VisualOrigin::with_files(&hub, ASSETS, FILES).unwrap();
-        assert!(both.permits(Some(&hub), &Url::parse(&format!("{ASSETS}/visuals/{TOKEN}")).unwrap()));
+        assert!(both.permits(
+            Some(&hub),
+            &Url::parse(&format!("{ASSETS}/visuals/{TOKEN}")).unwrap()
+        ));
         assert!(both.permits(Some(&hub), &Url::parse(&link).unwrap()));
-        assert!(!VisualOrigin::new(&hub, ASSETS).unwrap().permits(Some(&hub), &Url::parse(&link).unwrap()));
+        assert!(!VisualOrigin::new(&hub, ASSETS)
+            .unwrap()
+            .permits(Some(&hub), &Url::parse(&link).unwrap()));
         for address in [
             format!("{FILES}/blobs/ab/{NAME}?e=1793250000&k=k1&s={SIG}"),
             format!("{FILES}/visuals/ac/{NAME}?e=1793250000&k=k1&s={SIG}"),
-            format!("{FILES}/visuals/AB/{}?e=1793250000&k=k1&s={SIG}", NAME.to_uppercase()),
+            format!(
+                "{FILES}/visuals/AB/{}?e=1793250000&k=k1&s={SIG}",
+                NAME.to_uppercase()
+            ),
             format!("{FILES}/visuals/ab/{NAME}0?e=1793250000&k=k1&s={SIG}"),
             format!("{FILES}/visuals/ab/{NAME}/x?e=1793250000&k=k1&s={SIG}"),
             format!("{FILES}/visuals/ab/{NAME}"),
@@ -201,17 +361,35 @@ mod tests {
             format!("{FILES}/visuals/ab/{NAME}?e=1793250000&e=1&k=k1&s={SIG}"),
             format!("{FILES}/visuals/ab/{NAME}?e=soon&k=k1&s={SIG}"),
             format!("{FILES}/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}#x"),
-            format!("{FILES}/visuals/ab/%61b{}?e=1793250000&k=k1&s={SIG}", &NAME[2..]),
-            format!("https://user@acme-files.ticofiles.com/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"),
-            format!("https://other-files.ticofiles.com/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"),
+            format!(
+                "{FILES}/visuals/ab/%61b{}?e=1793250000&k=k1&s={SIG}",
+                &NAME[2..]
+            ),
+            format!(
+                "https://user@acme-files.ticofiles.com/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"
+            ),
+            format!(
+                "https://other-files.ticofiles.com/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"
+            ),
             format!("http://acme-files.ticofiles.com/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"),
-            format!("https://acme-files.ticofiles.com:8443/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"),
+            format!(
+                "https://acme-files.ticofiles.com:8443/visuals/ab/{NAME}?e=1793250000&k=k1&s={SIG}"
+            ),
         ] {
-            assert!(!hosted.permits(Some(&hub), &Url::parse(&address).unwrap()), "{address}");
+            assert!(
+                !hosted.permits(Some(&hub), &Url::parse(&address).unwrap()),
+                "{address}"
+            );
         }
         assert!(VisualOrigin::with_files(&hub, "", "").is_none());
         assert!(VisualOrigin::with_files(&hub, "", "http://acme-files.ticofiles.com").is_none());
-        assert!(VisualOrigin::with_files(&hub, ASSETS, "https://acme-files.ticofiles.com/x").is_none(), "one bad value refuses both");
-        assert!(VisualOrigin::with_files(&hub, "", "https://team.example.com").is_none(), "never the hub itself");
+        assert!(
+            VisualOrigin::with_files(&hub, ASSETS, "https://acme-files.ticofiles.com/x").is_none(),
+            "one bad value refuses both"
+        );
+        assert!(
+            VisualOrigin::with_files(&hub, "", "https://team.example.com").is_none(),
+            "never the hub itself"
+        );
     }
 }

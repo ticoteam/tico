@@ -36,7 +36,7 @@ nobody. Report the queue, never a seller's name.
 
 Write `reports/YYYY-MM-DD-marketing-data.md` in the shape of `knowledge/examples/marketing-data-check.md`:
 the three shares first, then fixes (what, where, should be, owner), then the four-week trend. Then
-`hub file publish reports/YYYY-MM-DD-marketing-data.md`. Ask once with `hub task ask <id>` whether to
+`hub file publish reports/YYYY-MM-DD-marketing-data.md`. Ask once with `hub task question "<question>" --on <person> --parent <id>` whether to
 create the fix tasks. Commit, and `hub task update <id> --status done --note`.
 
 Done when: the report is published with the three shares, every error has an owner, the four-week trend is in,

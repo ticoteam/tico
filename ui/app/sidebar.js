@@ -739,7 +739,7 @@ $('#org-history').onclick = () => {
 // `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Bot is an Assistant helper.
 const isHelperBot = e => isBuiltInBot(e.id) || !!e.helper;
 // The order here and on Goals: the Assistant, then the other built-ins, then other helpers.
-const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'inbox'];
+const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'brand', 'inbox'];
 const helperRank = e => e.id === assistantBot() ? -1 : HELPER_ORDER.includes(e.id) ? HELPER_ORDER.indexOf(e.id) : 99;
 function orgTreeWithHelpers(byParent) {
   const out = {}, bot = {}, parentOf = {};
@@ -929,7 +929,7 @@ function renderTree() {
   };
   document.querySelectorAll('[data-nav]').forEach(a => {
     // More is current only for pages the bottom bar does not have its own button for.
-    const inOverview = S.route === HOME || S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === OVERVIEW_COMPANY || rdUnder(S.route, CP_ROUTE);
+    const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company's tabs, Graph included
     const mobilePrimary = inOverview || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
       || S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE);
     const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||

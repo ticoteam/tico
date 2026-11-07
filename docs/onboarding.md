@@ -425,6 +425,12 @@ and a computer is enrolled). Its routines start paused: the server arms the dail
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
 **Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
 
+The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
+team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
+like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
+keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
+`hub bot setup-done` at the end of its setup; one a person turned off stays off.
+
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
 Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
@@ -487,6 +493,10 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
   of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
+  A seat under another open seat lists that seat in **Reports to**, marked *not hired yet*, and a line inside the box,
+  under **Reports to**, names who the bot reports to until it is hired: *Reports to Ana until Head of Marketing is hired.*
+  When the viewer cannot see that person or bot, the line says *the person or bot above* in place of the name. Choosing
+  any other entry in **Reports to** hides the line.
 - **Hire** (`POST /api/v2/seats/{id}/hire`, `{template, model, name?, runner_id?}`) creates the bot through the same checks
   as any new bot: named as given (the seat's title by default), in the seat's place on the chart and group, owned by the
   person who hired, with the template's instructions plus the job description, and **Onboarding**. A bot reports to a
@@ -512,7 +522,7 @@ session on that site grants no access to your Tico. Older installs can select th
   every run's environment.
 - **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
   becomes a bot with a pairing code, no template; see [Connect an external agent](connect-an-agent.md#an-agent-that-is-a-bot-not-you).
-- **By hand on the Mac**: `scripts/tico -e <env> bot create <slug> --template <template>`. This
+- **By hand on the Mac**: `scripts/tico-computer -e <env> bot create <slug> --template <template>`. This
   materializes from the same templates with the environment's names but without the wizard
   answers, so `knowledge/company.md` says nobody has answered them. Register the bot in
   **Settings → Bots** afterwards.

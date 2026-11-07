@@ -11,12 +11,12 @@ pub mod codex;
 pub mod cursor;
 pub mod gemini;
 pub mod grok;
-mod native;
-pub mod musecode;
-mod oneshot;
-pub mod pi;
 #[cfg(test)]
 mod isolationtests;
+pub mod musecode;
+mod native;
+mod oneshot;
+pub mod pi;
 #[cfg(test)]
 mod replay;
 
@@ -49,14 +49,18 @@ struct AllocationState {
 impl Allocation {
     fn track(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         let mut state = self.0.lock().unwrap();
-        if state.allocated { turn.store(true, std::sync::atomic::Ordering::SeqCst); }
+        if state.allocated {
+            turn.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         state.turn = Some(turn);
     }
 
     fn mark(&self) {
         let mut state = self.0.lock().unwrap();
         state.allocated = true;
-        if let Some(turn) = &state.turn { turn.store(true, std::sync::atomic::Ordering::SeqCst); }
+        if let Some(turn) = &state.turn {
+            turn.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -151,9 +155,22 @@ pub fn is_auth_retryable(text: &str) -> bool {
 
 /// One line of the provider's refusal for people to read; keys and tokens are never kept.
 pub fn rejection_reason(text: &str) -> String {
-    let line = text.lines().map(str::trim).find(|row| is_auth_rejected(row)).map(String::from).unwrap_or_default();
-    let line = if line.is_empty() { text.trim().to_string() } else { line };
-    secretish_re().replace_all(&line, "[redacted]").chars().take(200).collect()
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|row| is_auth_rejected(row))
+        .map(String::from)
+        .unwrap_or_default();
+    let line = if line.is_empty() {
+        text.trim().to_string()
+    } else {
+        line
+    };
+    secretish_re()
+        .replace_all(&line, "[redacted]")
+        .chars()
+        .take(200)
+        .collect()
 }
 
 pub const DEFAULT_COMPACT_AT: i64 = 250_000;
@@ -188,8 +205,9 @@ pub struct Settings {
     pub gateway_inputs: Value,
     /// The task's worktrees in other repos the session may work in (Claude `--add-dir`; others ignore it).
     pub add_dirs: Vec<String>,
-    /// A bot with branches: Claude reads only the project's settings and MCP servers (hosts/claude.py).
-    pub shared: bool,
+    /// The turn's staged company skills folder (crate::company_skills::stage): Codex loads its skills as the app
+    /// server's extra skill root. Claude reads the same folder through `add_dirs`.
+    pub company_skills: Option<String>,
     /// The bot's own MCP servers from bot.yaml, this harness's transports only (crate::perbot::mcp_for_run).
     pub mcp_servers: Vec<Value>,
     /// How long a Claude turn that has answered may wait on nothing but its background shells before it ends and
@@ -206,15 +224,26 @@ pub const BACKGROUND_WAIT_S: f64 = 300.0;
 
 pub fn background_wait(config: &Value) -> Option<std::time::Duration> {
     let v = &config["background_wait_s"];
-    let s = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse().ok())).unwrap_or(BACKGROUND_WAIT_S);
+    let s = v
+        .as_f64()
+        .or_else(|| v.as_str().and_then(|t| t.trim().parse().ok()))
+        .unwrap_or(BACKGROUND_WAIT_S);
     (s > 0.0 && s.is_finite()).then(|| std::time::Duration::from_secs_f64(s))
 }
 
-const HUB_MCP_ENV: &[&str] = &["HUB_API_URL", "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR"];
+const HUB_MCP_ENV: &[&str] = &[
+    "HUB_API_URL",
+    "HUB_TOKEN",
+    "HUB_BOT",
+    "HUB_EMPLOYEE",
+    "HUB_DIR",
+];
 
 /// The hub as a stdio MCP server for one turn (`hub_mcp_server`), or None outside a turn.
 pub fn hub_mcp_server(env: &Env) -> Option<Value> {
-    if env.get("HUB_API_URL").is_none_or(|v| v.is_empty()) || env.get("HUB_TOKEN").is_none_or(|v| v.is_empty()) {
+    if env.get("HUB_API_URL").is_none_or(|v| v.is_empty())
+        || env.get("HUB_TOKEN").is_none_or(|v| v.is_empty())
+    {
         return None;
     }
     let mut vars = Map::new();
@@ -224,7 +253,9 @@ pub fn hub_mcp_server(env: &Env) -> Option<Value> {
         }
     }
     let script = crate::env::root().join("clients").join("hubmcp.py");
-    Some(json!({"command": crate::env::python().display().to_string(), "args": [script.display().to_string()], "env": vars}))
+    Some(
+        json!({"command": crate::env::python().display().to_string(), "args": [script.display().to_string()], "env": vars}),
+    )
 }
 
 /// An event dict: `kind`, `thread_id`, `turn_id`, then its own fields.
@@ -259,8 +290,16 @@ pub const TOOL_SUMMARY_CHARS: usize = 120;
 /// What a tool call acts on, without its arguments: the file it names, or the program its command runs. Run logs
 /// show this to everyone who can see the run, and arguments can carry tokens or private text.
 pub fn tool_summary(input: &Value) -> String {
-    let text = |k: &str| input.get(k).and_then(Value::as_str).filter(|s| !s.trim().is_empty());
-    if let Some(path) = ["file_path", "notebook_path", "path"].iter().find_map(|k| text(k)) {
+    let text = |k: &str| {
+        input
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    };
+    if let Some(path) = ["file_path", "notebook_path", "path"]
+        .iter()
+        .find_map(|k| text(k))
+    {
         return clip(path);
     }
     text("command").map(command_program).unwrap_or_default()
@@ -270,163 +309,1214 @@ pub fn tool_summary(input: &Value) -> String {
 /// while a program-only display summary cannot distinguish `gh pr view` from `gh pr merge`.
 pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
     static RULES: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
-    let rules = RULES.get_or_init(|| [
-        ("merge pull request", r"\bgh\s+(?:pr\s+merge\b|api\b[^\n]*\bmerg(?:e|ed|ing)\b)"),
-        ("publish release", r"\bgh\s+release\s+create\b|\bhub\s+release\s+now\b"),
-        ("publish package", r"\b(?:npm|cargo)\s+publish\b|\btwine\s+upload\b|\bdocker\s+(?:image\s+)?push\b"),
-        ("consume approval", r"\b(?:hub\s+)?approval\s+consume\b"),
-        ("send email", r"\b(?:hub\s+)?(?:mail|email)\s+send\b|\bsendmail\b"),
-        ("send webhook", r"\b(?:hub\s+)?webhook\s+(?:send|retry|recover)\b"),
-        ("send support report", r"\bhub\s+support\s+send\b"),
-        ("make payment", r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b"),
-    ].into_iter().map(|(label, pattern)| (label, Regex::new(&format!("(?i){pattern}")).unwrap())).collect());
+    let rules = RULES.get_or_init(|| {
+        [
+            (
+                "merge pull request",
+                r"\bgh\s+(?:pr\s+merge\b|api\b[^\n]*\bmerg(?:e|ed|ing)\b)",
+            ),
+            (
+                "publish release",
+                r"\bgh\s+release\s+create\b|\bhub\s+release\s+now\b",
+            ),
+            (
+                "publish package",
+                r"\b(?:npm|cargo)\s+publish\b|\btwine\s+upload\b|\bdocker\s+(?:image\s+)?push\b",
+            ),
+            ("consume approval", r"\b(?:hub\s+)?approval\s+consume\b"),
+            (
+                "send email",
+                r"\b(?:hub\s+)?(?:mail|email)\s+send\b|\bsendmail\b",
+            ),
+            (
+                "send webhook",
+                r"\b(?:hub\s+)?webhook\s+(?:send|retry|recover)\b",
+            ),
+            ("send support report", r"\bhub\s+support\s+send\b"),
+            (
+                "make payment",
+                r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b",
+            ),
+        ]
+        .into_iter()
+        .map(|(label, pattern)| (label, Regex::new(&format!("(?i){pattern}")).unwrap()))
+        .collect()
+    });
     // Normalize shell quoting as well as scanning the raw command: quoted subcommands and nested shell
     // wrappers must retain their action. Matching mentions can conservatively hold; it never exports them.
-    let normalized = shell_words(command).map(|words| words.join(" ")).unwrap_or_default();
-    rules.iter().filter(|(_, pattern)| pattern.is_match(command) || pattern.is_match(&normalized))
-        .map(|(label, _)| *label).collect()
+    let normalized = shell_words(command)
+        .map(|words| words.join(" "))
+        .unwrap_or_default();
+    rules
+        .iter()
+        .filter(|(_, pattern)| pattern.is_match(command) || pattern.is_match(&normalized))
+        .map(|(label, _)| *label)
+        .collect()
+}
+
+/// Whether a shell line only reads, judged on the whole line: every run of it (`|`, `;`, `&&`, `||`, newlines) is setup
+/// (`cd <dir>`, `export NAME=value`, `env NAME=value ...`, bare `NAME=value`), a program from READ_ONLY_PROGRAMS, or
+/// `hub` with a command path from HUB_READ_PATHS. Output may go only to `/dev/null` or another descriptor (`2>&1`), and
+/// input only from a plain file. False for anything it cannot read whole: a heredoc, `$` or backtick expansion, a
+/// subshell, a background `&`, `xargs`, `eval`, `source`, any other program, or a shell wrapper whose script is not
+/// plainly one word (`bash -lc '...'` is read as its script, as Codex sends every command). The backend requeues a turn
+/// whose lease lapsed only when every shell call it ran says true here (backend/execution.py read_only_shells).
+pub fn shell_reads_only(command: &str) -> bool {
+    if let Some(script) = shell_script(command) {
+        return shell_reads_only(&script);
+    }
+    if command.contains("<<") || outer_expands(command) {
+        return false;
+    }
+    let runs: Vec<&str> = command_runs(command)
+        .into_iter()
+        .filter(|run| !run.trim().is_empty())
+        .collect();
+    !runs.is_empty() && runs.into_iter().all(run_reads_only)
+}
+
+/// Programs that only read files or print, with no flag that runs another program or writes a file
+/// (the few that have one are refused in `run_reads_only`).
+const READ_ONLY_PROGRAMS: &[&str] = &[
+    "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "jq", "stat", "which", "date", "sort",
+    "uniq", "diff", "tree", "du", "df", "echo", "printf",
+];
+
+/// `hub` command paths that only read: each is a leaf in HUB_PATHS (tested here) and parses to a leaf command in
+/// clients/hubcli.py (backend/tests/test_hub_command_tree.py). Left out on purpose: reads that mark something (`inbox`,
+/// `message list`, `update read`, `changelog list`), reads with a writing flag (`rule read --from`), paid lookups
+/// (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
+const HUB_READ_PATHS: &[&str] = &[
+    "agent pair show",
+    "alerts show",
+    "approval list",
+    "approval show",
+    "approvals list",
+    "approvals show",
+    "assistant change list",
+    "audiences list",
+    "automation guide",
+    "automation list",
+    "automation runs",
+    "automation show",
+    "automation stats",
+    "automation templates",
+    "automation versions",
+    "automations guide",
+    "automations list",
+    "automations runs",
+    "automations show",
+    "automations stats",
+    "automations templates",
+    "automations versions",
+    "board",
+    "bot recent",
+    "bot show",
+    "bot status history",
+    "bot status list",
+    "bots recent",
+    "bots show",
+    "bots status history",
+    "bots status list",
+    "brand show",
+    "brand summary",
+    "calendar list",
+    "calendar status",
+    "calendar upcoming",
+    "call list",
+    "call show",
+    "card list",
+    "catalog",
+    "computer list",
+    "computer performance",
+    "computers",
+    "context search",
+    "context show",
+    "conversation show",
+    "credential list",
+    "doc history",
+    "doc list",
+    "doc read",
+    "doc search",
+    "docs links",
+    "editions list",
+    "editions show",
+    "email inbox",
+    "email mailboxes",
+    "email search",
+    "email sends",
+    "feedback list",
+    "feedback markers",
+    "feedback reasons",
+    "file list",
+    "file read",
+    "file search",
+    "finance search",
+    "goal checkin list",
+    "goal list",
+    "goal show",
+    "goals",
+    "group list",
+    "growth channel list",
+    "growth channel show",
+    "growth cohort list",
+    "growth source list",
+    "gtm show",
+    "gtm summary",
+    "history",
+    "human list",
+    "inbound list",
+    "inbound search",
+    "integrations",
+    "kpi list",
+    "kpi show",
+    "lens list",
+    "lens runs",
+    "lens show",
+    "letter list",
+    "letter show",
+    "listening item list",
+    "listening runs",
+    "listening show",
+    "listening stats",
+    "live stats",
+    "mail list",
+    "maintenance runs",
+    "maintenance status",
+    "market find",
+    "market segment tree",
+    "market show",
+    "market size list",
+    "market watch list",
+    "mcp stats",
+    "meeting granola status",
+    "meeting read",
+    "meeting search",
+    "needs-you show",
+    "note list",
+    "notes",
+    "notice list",
+    "origin show",
+    "page list",
+    "page show",
+    "proposal list",
+    "readers list",
+    "recent",
+    "relay status",
+    "relay wake-url show",
+    "replay show",
+    "repo list",
+    "rule due list",
+    "rule list",
+    "rules due list",
+    "rules list",
+    "run list",
+    "seat list",
+    "service-key list",
+    "settings find",
+    "settings show",
+    "slack channel list",
+    "sleep status",
+    "strategy show",
+    "strategy summary",
+    "strategy versions",
+    "tag list",
+    "tag show",
+    "task answers",
+    "task caps",
+    "task context",
+    "task deleted",
+    "task followers",
+    "task list",
+    "task meetings",
+    "task readers list",
+    "task requesters",
+    "task show",
+    "task tree",
+    "tasks answers",
+    "tasks caps",
+    "tasks context",
+    "tasks deleted",
+    "tasks followers",
+    "tasks list",
+    "tasks meetings",
+    "tasks readers list",
+    "tasks requesters",
+    "tasks show",
+    "tasks tree",
+    "team show",
+    "template list",
+    "thread list",
+    "thread members list",
+    "thread search",
+    "thread show",
+    "tool list",
+    "tool show",
+    "trigger list",
+    "trigger show",
+    "turns",
+    "update list",
+    "update show",
+    "updates",
+    "webhook list",
+    "webhook sends",
+    "webhook show",
+    "whoami",
+];
+
+/// Whether one run of a shell line only reads (`shell_reads_only`).
+fn run_reads_only(run: &str) -> bool {
+    static REDIRECT: OnceLock<Regex> = OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| {
+        Regex::new(concat!(
+            r"(?:(?:&|[0-9]*)>>?[ \t]*/dev/null|[0-9]*>&(?:[0-9]+|-)|[0-9]*<[ \t]*[A-Za-z0-9._/~+-]+)",
+            r"(?:[ \t]|$)"
+        ))
+        .unwrap()
+    });
+    // What the shell itself reads, with quoted and escaped text blanked out: past the allowed redirections, no
+    // redirection, background `&`, subshell or group may be left.
+    let Some(bare) = unquoted(run) else {
+        return false;
+    };
+    if redirect
+        .replace_all(&bare, " ")
+        .contains(['&', '>', '<', '(', ')', '{', '}'])
+    {
+        return false;
+    }
+    let Some(words) = shell_words(run) else {
+        return false;
+    };
+    let words: Vec<String> = words.into_iter().skip_while(|w| is_assignment(w)).collect();
+    words_read_only(&words)
+}
+
+/// Whether a run's words (past its leading assignments) only set up or read.
+fn words_read_only(words: &[String]) -> bool {
+    let Some((first, args)) = words.split_first() else {
+        return true;
+    };
+    let short = |letters: &str| {
+        args.iter().any(|a| {
+            a.starts_with('-') && !a.starts_with("--") && a.contains(|c| letters.contains(c))
+        })
+    };
+    let long = |names: &[&str]| args.iter().any(|a| names.iter().any(|n| a.starts_with(n)));
+    let globbed = args.iter().any(|a| a.contains(['*', '?', '[']));
+    match first.as_str() {
+        "cd" => args.len() <= 1,
+        "export" => !args.is_empty() && args.iter().all(|w| is_assignment(w)),
+        "env" => {
+            let rest: Vec<String> = args
+                .iter()
+                .skip_while(|w| is_assignment(w) || *w == "-i" || *w == "-0")
+                .cloned()
+                .collect();
+            rest.first().is_none_or(|w| !w.starts_with('-')) && words_read_only(&rest)
+        }
+        "hub" => hub_summary(words)
+            .strip_prefix("hub ")
+            .is_some_and(|path| HUB_READ_PATHS.contains(&path)),
+        // A file name that expands to a flag could turn on one of the flags refused below.
+        "sort" | "tree" | "uniq" | "date" | "rg" if globbed => false,
+        "sort" => !short("o") && !long(&["--output", "--compress"]),
+        "tree" => !short("oR") && !long(&["--output"]),
+        // `uniq IN OUT` writes OUT: only flags (reading standard input) are taken.
+        "uniq" => args.iter().all(|a| a.starts_with('-')),
+        "date" => !short("s") && !long(&["--set"]),
+        "rg" => !long(&["--pre", "--hostname-bin"]),
+        program => READ_ONLY_PROGRAMS.contains(&program),
+    }
+}
+
+/// A shell run as the shell reads it, with the text of every quote and escape replaced by `x`; None when a quote is left
+/// open.
+fn unquoted(run: &str) -> Option<String> {
+    let (mut out, mut quote) = (String::with_capacity(run.len()), None::<char>);
+    let mut chars = run.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), _) if c == q => {
+                quote = None;
+                out.push('x');
+            }
+            (Some('"'), '\\') => {
+                chars.next();
+                out.push_str("xx");
+            }
+            (Some(_), _) => out.push('x'),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                out.push('x');
+            }
+            (None, '\\') => {
+                chars.next();
+                out.push_str("xx");
+            }
+            _ => out.push(c),
+        }
+    }
+    quote.is_none().then_some(out)
 }
 
 /// Every command path the hub CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
 /// space-joined words such as `task close` or `needs-you show`. backend/tests/test_hub_command_tree.py fails when
 /// this list and the CLI differ, so a command added or renamed there is added here too.
 const HUB_PATHS: &[&str] = &[
-    "ack", "agent", "agent pair", "agent pair approve", "agent pair decline", "agent pair show", "answer",
-    "alerts", "alerts company", "alerts confirm", "alerts remove", "alerts set", "alerts show", "alerts test",
+    "ack",
+    "agent",
+    "agent pair",
+    "agent pair approve",
+    "agent pair decline",
+    "agent pair show",
+    "alerts",
+    "alerts company",
+    "alerts confirm",
+    "alerts remove",
+    "alerts set",
+    "alerts show",
+    "alerts test",
     "alerts verify",
-    "api", "approval", "approval approve", "approval decline", "approval list", "approval read-back",
-    "approval request", "approval show", "approvals", "approvals approve", "approvals decline",
-    "approvals list", "approvals read-back", "approvals request", "approvals show", "ask", "assistant",
-    "assistant change", "assistant change list", "assistant change restore", "assistant learn",
-    "assistant learned", "assistant proposals", "assistant propose", "assistant read", "assistant send",
-    "assistant withdraw", "audiences", "audiences list", "audit", "automation", "automation create",
-    "automation delete", "automation discard", "automation guide", "automation held", "automation inbox",
-    "automation list", "automation question-sets", "automation recent-runs", "automation restore",
-    "automation run", "automation runs", "automation show", "automation stats", "automation template",
-    "automation templates", "automation update", "automation versions", "automations", "automations create",
-    "automations delete", "automations discard", "automations guide", "automations held", "automations inbox",
-    "automations list", "automations question-sets", "automations recent-runs", "automations restore",
-    "automations run", "automations runs", "automations show", "automations stats", "automations template",
-    "automations templates", "automations update", "automations versions", "batch", "board", "bot",
-    "bot access", "bot archive", "bot branch", "bot browser-exit", "bot budget", "bot check", "bot check-names",
-    "bot copy", "bot create", "bot go-live", "bot keep-tasks-going", "bot mail", "bot model", "bot onboarded",
-    "bot owners", "bot pause", "bot place", "bot profile", "bot ready", "bot recent", "bot register",
-    "bot release", "bot repo-create", "bot repos", "bot restore", "bot resume", "bot scope", "bot set",
-    "bot setup-done", "bot show", "bot status", "bot status history", "bot status list", "bot status set",
-    "bot suggest-to-original", "bot task-model", "bot turns-at-once", "bot update", "bot update-from-original",
-    "bots", "bots access", "bots archive", "bots branch", "bots browser-exit", "bots budget", "bots check",
-    "bots check-names", "bots copy", "bots create", "bots go-live", "bots keep-tasks-going", "bots mail",
-    "bots model", "bots owners", "bots pause", "bots place", "bots profile", "bots ready", "bots recent",
-    "bots release", "bots repo-create", "bots repos", "bots restore", "bots resume", "bots scope",
-    "bots setup-done", "bots show", "bots status", "bots status history", "bots status list", "bots status set",
-    "bots suggest-to-original", "bots task-model", "bots turns-at-once", "bots update",
-    "bots update-from-original", "brand", "brand check", "brand draft", "brand publish", "brand show",
-    "brand summary", "brief", "calendar", "calendar list", "calendar schedule", "calendar status",
-    "calendar upcoming", "call", "call bot", "call bot add", "call bot remove", "call end", "call join",
-    "call leave", "call list", "call retry", "call show", "call start", "call token", "card", "card add",
-    "card list", "card remove", "card update", "catalog", "changelog", "changelog list", "changelog mark-read",
-    "chat", "chat goal", "chat send", "classify", "company-page", "computer", "computer browser-exit",
-    "computer list", "computer performance", "computer turns-at-once", "computers", "connections",
-    "connections list", "context", "context search", "context show", "conversation", "conversation show",
-    "credential", "credential delete", "credential grant", "credential import", "credential list",
-    "credential request", "credential revoke", "credential set", "db", "decision", "decision ask",
-    "decision outcome", "decision readout", "decisions", "doc", "doc archive", "doc ask", "doc ask-status",
-    "doc fetch", "doc history", "doc link-list", "doc list", "doc read", "doc search", "doc write", "docs",
-    "docs links", "editions", "editions list", "editions show", "email", "email inbox", "email mailboxes",
-    "email message", "email search", "email thread", "event-types", "external", "external sync",
-    "feedback", "feedback give", "feedback list", "feedback markers", "feedback reasons", "feedback remove",
-    "feedback rule", "feedback rule-draft", "file", "file approved", "file archive", "file delete",
-    "file import", "file link", "file list", "file publish", "file read", "file review", "file search",
-    "file touch", "files", "files add-link", "finance", "finance act", "finance action", "finance card-fill",
-    "finance inbox", "finance metric", "finance report", "finance search", "fleet", "fleet-check", "gateway",
-    "gateway catalog", "gateway fetch", "gateway image", "gateway search", "github", "github create-bot-repo",
-    "goal", "goal auto", "goal checkin", "goal checkin list", "goal checkin-list", "goal checkins",
-    "goal company", "goal create", "goal list", "goal needs-you", "goal read-back", "goal refresh", "goal save",
-    "goal show", "goal status", "goal strategy-bot", "goal strategy-bot-decide",
-    "goal strategy-bot-level3-offer", "goal strategy-bot-log", "goal strategy-bot-merge", "goal update",
-    "goals", "grokbot", "grokbot sync", "group", "group access", "group delete", "group list", "group update",
-    "growth", "growth channel", "growth channel add", "growth channel list", "growth channel retire",
-    "growth channel show", "growth channel update", "growth cohort", "growth cohort list", "growth cohort set",
-    "growth economics", "growth kpis", "growth numbers", "growth settings", "growth source",
-    "growth source add", "growth source list", "growth source retire", "growth source update", "gtm",
-    "gtm show", "gtm sources", "gtm summary", "health", "health check", "health findings", "health metrics",
-    "health report", "history", "human", "human access", "human add",
-    "human list", "inbound", "inbound audience", "inbound code", "inbound create-email", "inbound cursor",
-    "inbound inboxes", "inbound list", "inbound read", "inbound search", "inbound wait", "inbox", "intake",
-    "integration", "integrations", "judge", "kpi", "kpi add", "kpi archive", "kpi create", "kpi link",
-    "kpi list", "kpi log", "kpi readings", "kpi restore", "kpi show", "kpi target", "kpi unlink", "kpi update",
-    "learn", "lens", "lens list", "lens run", "lens runs", "lens show", "listen", "listen judge", "listening",
-    "listening decide", "listening item", "listening item list", "listening item resolve", "listening runs",
-    "listening save", "listening show", "listening stats", "live", "live brief", "live stats", "mail",
-    "mail list", "mail read", "maintenance", "maintenance run", "maintenance runs",
-    "maintenance set", "maintenance status", "market", "market apply", "market ask", "market briefing",
-    "market briefing latest", "market briefing post", "market define", "market delta", "market edges",
-    "market figure", "market figure add", "market find", "market import", "market page", "market refresh",
-    "market report", "market research", "market resolve", "market segment", "market segment add",
-    "market segment tree", "market show", "market size", "market size accept", "market size add",
-    "market size list", "market size params", "market size reject", "market sources", "market spend",
-    "market sweep", "market watch", "market watch add", "market watch check", "market watch list",
-    "market watch stop", "mcp", "mcp stats", "meeting", "meeting approve", "meeting delete", "meeting dismiss",
-    "meeting granola", "meeting granola status", "meeting granola sync", "meeting import", "meeting link", "meeting pending",
-    "meeting read", "meeting restore", "meeting search", "meeting unlink", "meetings", "meetings transcript", "message",
-    "message list", "message mark-read", "message redact", "message send", "needs-you", "needs-you abandon",
-    "needs-you commit", "needs-you next", "needs-you respond", "needs-you show", "needs-you start", "note",
-    "note create", "note delete", "note list", "notes", "notice", "notice list", "org", "org models",
-    "org order", "org reports-to", "origin", "origin show", "page", "page archive", "page list", "page publish",
-    "page show", "people", "person", "pin", "pin add", "pin remove", "pin update", "pipeline", "proposal",
-    "proposal create", "proposal decide", "proposal list", "queries", "question", "question answer",
-    "question ask", "readers", "readers list", "recent", "relay", "relay set", "relay status", "relay wake-url",
-    "relay wake-url off", "relay wake-url set", "relay wake-url show", "release", "release now",
-    "release schedule", "replay", "replay show", "repo", "repo list", "repo product-create", "repo review",
-    "repo tick", "repo untick", "roadmap", "roadmap settings", "roadmap tasks", "rule", "rule accept",
-    "rule add", "rule appeal", "rule ask", "rule check", "rule due", "rule due add", "rule due edit",
-    "rule due list", "rule due satisfied", "rule edit", "rule list", "rule read", "rule retire", "rule skip",
-    "rule suggested", "rule withdraw", "rules", "rules accept", "rules add", "rules appeal", "rules ask",
-    "rules check", "rules due", "rules due add", "rules due edit", "rules due list", "rules due satisfied",
-    "rules edit", "rules list", "rules read", "rules retire", "rules skip", "rules suggested", "rules withdraw",
-    "run", "run export", "run list", "say", "seat", "seat close", "seat create", "seat list", "seat update",
-    "service-key", "service-key create", "service-key list", "service-key revoke", "settings", "settings ask",
-    "settings find", "settings set", "settings show", "skill", "skill copy", "slack", "slack channel",
-    "slack channel add", "slack channel import", "slack channel list", "slack channel remove", "sleep",
-    "sleep set", "sleep status", "sql", "status", "strategy", "strategy bet",
-    "strategy bet add", "strategy bet retire", "strategy bet update", "strategy diff", "strategy draft",
-    "strategy guides", "strategy publish", "strategy show", "strategy summary", "strategy versions", "support",
-    "support file", "support report", "support send", "tag", "tag create", "tag list", "tag show", "tag update",
-    "task", "task answers", "task ask", "task ask-resolve", "task attach", "task bulk", "task cap",
-    "task cap set", "task caps", "task check-back", "task child", "task close", "task comment",
-    "task comment-delete", "task comment-edit", "task comment-moderate", "task create", "task defer",
-    "task delete", "task deleted", "task done", "task label", "task later", "task link", "task list",
-    "task meetings", "task model", "task publication-preview", "task question", "task relate", "task requester-remove",
-    "task requester-save", "task requesters", "task restore", "task run", "task show", "task snooze",
-    "task stuck", "task tree", "task type", "task type create", "task type delete", "task type update",
-    "task types", "task unsnooze", "task update", "task wait", "task waive-qa", "task worktree",
-    "task worktree add", "task worktree attach", "task worktree setup", "task-manager", "task-manager bot",
-    "task-manager off", "task-manager on", "task-manager run", "task-manager schedule", "task-manager status",
-    "tasks", "tasks answers", "tasks ask", "tasks ask-resolve", "tasks attach", "tasks bulk", "tasks cap",
-    "tasks cap set", "tasks caps", "tasks check-back", "tasks child", "tasks close", "tasks comment",
-    "tasks comment-delete", "tasks comment-edit", "tasks comment-moderate", "tasks create", "tasks defer",
-    "tasks delete", "tasks deleted", "tasks done", "tasks label", "tasks later", "tasks link", "tasks list",
-    "tasks meetings", "tasks model", "tasks publication-preview", "tasks question", "tasks relate", "tasks requester-remove",
-    "tasks requester-save", "tasks requesters", "tasks restore", "tasks run", "tasks show", "tasks snooze",
-    "tasks tree", "tasks type", "tasks type create", "tasks type delete", "tasks type update", "tasks types",
-    "tasks unsnooze", "tasks update", "tasks wait", "tasks waive-qa", "tasks worktree", "tasks worktree add",
-    "tasks worktree attach", "tasks worktree setup", "team", "team budget", "team icon", "team show",
-    "template", "template list", "thread", "thread bot-status", "thread catch-up", "thread catchup",
-    "thread create", "thread delete", "thread dm", "thread dm-group", "thread edit", "thread follow",
-    "thread home", "thread link-slack", "thread list", "thread members", "thread members add",
-    "thread members list", "thread members remove", "thread open-earlier", "thread pin", "thread post",
-    "thread react", "thread read", "thread reply", "thread search", "thread show", "thread slack-resume",
-    "thread sub", "thread task", "thread unfollow", "thread unpin", "thread unreact", "thread update",
-    "thread upload", "tool", "tool add", "tool learn", "tool list", "tool query-search", "tool remove",
-    "tool report", "tool show", "tool update", "tools", "trigger", "trigger create", "trigger delete",
-    "trigger deliveries", "trigger delivery", "trigger list", "trigger recover", "trigger relay",
-    "trigger relay create", "trigger relay delete", "trigger relay rotate", "trigger replay", "trigger rotate",
-    "trigger show", "trigger sign", "trigger update", "turns", "unnote", "update", "update create",
-    "update list", "update mark-read", "update post", "update read", "update redo", "update reply",
-    "update settings", "update show", "updates", "webhook", "webhook create", "webhook delete",
-    "webhook enable", "webhook example", "webhook list", "webhook pause", "webhook recover", "webhook replay",
-    "webhook resume", "webhook retry", "webhook rotate", "webhook send", "webhook sends", "webhook show",
-    "webhook update", "whoami",
+    "api",
+    "approval",
+    "approval approve",
+    "approval decline",
+    "approval list",
+    "approval read-back",
+    "approval request",
+    "approval show",
+    "approvals",
+    "approvals approve",
+    "approvals decline",
+    "approvals list",
+    "approvals read-back",
+    "approvals request",
+    "approvals show",
+    "assistant",
+    "assistant change",
+    "assistant change list",
+    "assistant change restore",
+    "assistant learn",
+    "assistant learned",
+    "assistant morning",
+    "assistant proposals",
+    "assistant propose",
+    "assistant read",
+    "assistant send",
+    "assistant withdraw",
+    "audiences",
+    "audiences list",
+    "audit",
+    "automation",
+    "automation create",
+    "automation delete",
+    "automation discard",
+    "automation guide",
+    "automation held",
+    "automation inbox",
+    "automation list",
+    "automation question-sets",
+    "automation recent-runs",
+    "automation restore",
+    "automation run",
+    "automation runs",
+    "automation show",
+    "automation stats",
+    "automation template",
+    "automation templates",
+    "automation update",
+    "automation versions",
+    "automations",
+    "automations create",
+    "automations delete",
+    "automations discard",
+    "automations guide",
+    "automations held",
+    "automations inbox",
+    "automations list",
+    "automations question-sets",
+    "automations recent-runs",
+    "automations restore",
+    "automations run",
+    "automations runs",
+    "automations show",
+    "automations stats",
+    "automations template",
+    "automations templates",
+    "automations update",
+    "automations versions",
+    "batch",
+    "board",
+    "bot",
+    "bot access",
+    "bot archive",
+    "bot branch",
+    "bot browser-exit",
+    "bot budget",
+    "bot check",
+    "bot check-names",
+    "bot copy",
+    "bot create",
+    "bot go-live",
+    "bot keep-tasks-going",
+    "bot mail",
+    "bot model",
+    "bot onboarded",
+    "bot owners",
+    "bot pause",
+    "bot place",
+    "bot profile",
+    "bot ready",
+    "bot recent",
+    "bot register",
+    "bot release",
+    "bot repo-create",
+    "bot repos",
+    "bot restore",
+    "bot resume",
+    "bot scope",
+    "bot set",
+    "bot setup-done",
+    "bot show",
+    "bot status",
+    "bot status history",
+    "bot status list",
+    "bot status set",
+    "bot suggest-to-original",
+    "bot task-model",
+    "bot turns-at-once",
+    "bot update",
+    "bot update-from-original",
+    "bots",
+    "bots access",
+    "bots archive",
+    "bots branch",
+    "bots browser-exit",
+    "bots budget",
+    "bots check",
+    "bots check-names",
+    "bots copy",
+    "bots create",
+    "bots go-live",
+    "bots keep-tasks-going",
+    "bots mail",
+    "bots model",
+    "bots owners",
+    "bots pause",
+    "bots place",
+    "bots profile",
+    "bots ready",
+    "bots recent",
+    "bots release",
+    "bots repo-create",
+    "bots repos",
+    "bots restore",
+    "bots resume",
+    "bots scope",
+    "bots setup-done",
+    "bots show",
+    "bots status",
+    "bots status history",
+    "bots status list",
+    "bots status set",
+    "bots suggest-to-original",
+    "bots task-model",
+    "bots turns-at-once",
+    "bots update",
+    "bots update-from-original",
+    "brand",
+    "brand check",
+    "brand draft",
+    "brand publish",
+    "brand show",
+    "brand summary",
+    "brief",
+    "calendar",
+    "calendar list",
+    "calendar schedule",
+    "calendar status",
+    "calendar upcoming",
+    "call",
+    "call bot",
+    "call bot add",
+    "call bot remove",
+    "call end",
+    "call join",
+    "call leave",
+    "call list",
+    "call retry",
+    "call show",
+    "call start",
+    "call token",
+    "card",
+    "card add",
+    "card list",
+    "card remove",
+    "card update",
+    "catalog",
+    "changelog",
+    "changelog list",
+    "changelog mark-read",
+    "chat",
+    "chat goal",
+    "chat send",
+    "classify",
+    "company-page",
+    "computer",
+    "computer browser-exit",
+    "computer list",
+    "computer performance",
+    "computer turns-at-once",
+    "computers",
+    "context",
+    "context search",
+    "context show",
+    "conversation",
+    "conversation show",
+    "credential",
+    "credential delete",
+    "credential grant",
+    "credential import",
+    "credential list",
+    "credential request",
+    "credential revoke",
+    "credential set",
+    "db",
+    "decision",
+    "decision ask",
+    "decision outcome",
+    "decision readout",
+    "decisions",
+    "doc",
+    "doc archive",
+    "doc ask",
+    "doc ask-status",
+    "doc fetch",
+    "doc history",
+    "doc link-list",
+    "doc list",
+    "doc read",
+    "doc search",
+    "doc write",
+    "docs",
+    "docs links",
+    "editions",
+    "editions list",
+    "editions show",
+    "email",
+    "email archive",
+    "email cancel",
+    "email inbox",
+    "email label",
+    "email mailboxes",
+    "email mark-read",
+    "email mark-unread",
+    "email message",
+    "email policy",
+    "email search",
+    "email sends",
+    "email thread",
+    "email unarchive",
+    "email unlabel",
+    "event-types",
+    "external",
+    "external sync",
+    "feedback",
+    "feedback give",
+    "feedback list",
+    "feedback markers",
+    "feedback reasons",
+    "feedback remove",
+    "feedback rule",
+    "feedback rule-draft",
+    "file",
+    "file approved",
+    "file archive",
+    "file delete",
+    "file import",
+    "file link",
+    "file list",
+    "file publish",
+    "file read",
+    "file review",
+    "file search",
+    "file touch",
+    "files",
+    "files add-link",
+    "finance",
+    "finance act",
+    "finance action",
+    "finance inbox",
+    "finance metric",
+    "finance report",
+    "finance search",
+    "fleet",
+    "fleet-check",
+    "gateway",
+    "gateway catalog",
+    "gateway digest",
+    "gateway fetch",
+    "gateway image",
+    "gateway search",
+    "gateway video",
+    "gateway video-status",
+    "github",
+    "github create-bot-repo",
+    "goal",
+    "goal auto",
+    "goal checkin",
+    "goal checkin list",
+    "goal checkin-list",
+    "goal checkins",
+    "goal company",
+    "goal create",
+    "goal list",
+    "goal needs-you",
+    "goal read-back",
+    "goal refresh",
+    "goal save",
+    "goal show",
+    "goal status",
+    "goal strategy-bot",
+    "goal strategy-bot-decide",
+    "goal strategy-bot-level3-offer",
+    "goal strategy-bot-log",
+    "goal strategy-bot-merge",
+    "goal update",
+    "goals",
+    "grokbot",
+    "grokbot sync",
+    "group",
+    "group access",
+    "group delete",
+    "group list",
+    "group update",
+    "growth",
+    "growth channel",
+    "growth channel add",
+    "growth channel list",
+    "growth channel retire",
+    "growth channel show",
+    "growth channel update",
+    "growth cohort",
+    "growth cohort list",
+    "growth cohort set",
+    "growth economics",
+    "growth kpis",
+    "growth numbers",
+    "growth settings",
+    "growth source",
+    "growth source add",
+    "growth source list",
+    "growth source retire",
+    "growth source update",
+    "gtm",
+    "gtm show",
+    "gtm sources",
+    "gtm summary",
+    "health",
+    "health check",
+    "health findings",
+    "health metrics",
+    "health report",
+    "history",
+    "human",
+    "human access",
+    "human add",
+    "human list",
+    "inbound",
+    "inbound audience",
+    "inbound code",
+    "inbound create-email",
+    "inbound cursor",
+    "inbound inboxes",
+    "inbound list",
+    "inbound read",
+    "inbound search",
+    "inbound wait",
+    "inbox",
+    "intake",
+    "integration",
+    "integrations",
+    "judge",
+    "kpi",
+    "kpi add",
+    "kpi archive",
+    "kpi create",
+    "kpi link",
+    "kpi list",
+    "kpi log",
+    "kpi readings",
+    "kpi restore",
+    "kpi show",
+    "kpi target",
+    "kpi unlink",
+    "kpi update",
+    "learn",
+    "lens",
+    "lens list",
+    "lens run",
+    "lens runs",
+    "lens show",
+    "listen",
+    "listen judge",
+    "listening",
+    "listening decide",
+    "listening item",
+    "listening item list",
+    "listening item resolve",
+    "listening runs",
+    "letter",
+    "letter cancel",
+    "letter list",
+    "letter quote",
+    "letter send",
+    "letter show",
+    "listening save",
+    "listening show",
+    "listening stats",
+    "live",
+    "live brief",
+    "live stats",
+    "mail",
+    "mail list",
+    "mail read",
+    "maintenance",
+    "maintenance run",
+    "maintenance runs",
+    "maintenance set",
+    "maintenance status",
+    "market",
+    "market apply",
+    "market ask",
+    "market briefing",
+    "market briefing latest",
+    "market briefing post",
+    "market define",
+    "market delta",
+    "market edges",
+    "market figure",
+    "market figure add",
+    "market find",
+    "market import",
+    "market page",
+    "market refresh",
+    "market report",
+    "market research",
+    "market resolve",
+    "market segment",
+    "market segment add",
+    "market segment tree",
+    "market show",
+    "market size",
+    "market size accept",
+    "market size add",
+    "market size list",
+    "market size params",
+    "market size reject",
+    "market sources",
+    "market spend",
+    "market sweep",
+    "market watch",
+    "market watch add",
+    "market watch check",
+    "market watch list",
+    "market watch stop",
+    "mcp",
+    "mcp stats",
+    "meeting",
+    "meeting approve",
+    "meeting delete",
+    "meeting dismiss",
+    "meeting granola",
+    "meeting granola status",
+    "meeting granola sync",
+    "meeting import",
+    "meeting link",
+    "meeting pending",
+    "meeting read",
+    "meeting restore",
+    "meeting search",
+    "meeting unlink",
+    "meetings",
+    "meetings transcript",
+    "message",
+    "message list",
+    "message mark-read",
+    "message redact",
+    "message send",
+    "needs-you",
+    "needs-you abandon",
+    "needs-you commit",
+    "needs-you next",
+    "needs-you respond",
+    "needs-you show",
+    "needs-you start",
+    "note",
+    "note create",
+    "note delete",
+    "note list",
+    "notes",
+    "notice",
+    "notice list",
+    "org",
+    "org models",
+    "org order",
+    "org reports-to",
+    "origin",
+    "origin show",
+    "page",
+    "page access",
+    "page archive",
+    "page list",
+    "page publish",
+    "page show",
+    "people",
+    "person",
+    "pin",
+    "pin add",
+    "pin remove",
+    "pin update",
+    "pipeline",
+    "proposal",
+    "proposal create",
+    "proposal decide",
+    "proposal list",
+    "queries",
+    "readers",
+    "readers list",
+    "recent",
+    "relay",
+    "relay set",
+    "relay status",
+    "relay wake-url",
+    "relay wake-url off",
+    "relay wake-url set",
+    "relay wake-url show",
+    "release",
+    "release now",
+    "release schedule",
+    "replay",
+    "replay show",
+    "repo",
+    "repo list",
+    "repo product-create",
+    "repo review",
+    "repo tick",
+    "repo untick",
+    "roadmap",
+    "roadmap settings",
+    "roadmap tasks",
+    "rule",
+    "rule accept",
+    "rule add",
+    "rule appeal",
+    "rule ask",
+    "rule check",
+    "rule due",
+    "rule due add",
+    "rule due edit",
+    "rule due list",
+    "rule due satisfied",
+    "rule edit",
+    "rule list",
+    "rule read",
+    "rule retire",
+    "rule skip",
+    "rule suggested",
+    "rule withdraw",
+    "rules",
+    "rules accept",
+    "rules add",
+    "rules appeal",
+    "rules ask",
+    "rules check",
+    "rules due",
+    "rules due add",
+    "rules due edit",
+    "rules due list",
+    "rules due satisfied",
+    "rules edit",
+    "rules list",
+    "rules read",
+    "rules retire",
+    "rules skip",
+    "rules suggested",
+    "rules withdraw",
+    "run",
+    "run export",
+    "run list",
+    "say",
+    "seat",
+    "seat close",
+    "seat create",
+    "seat list",
+    "seat update",
+    "service-key",
+    "service-key create",
+    "service-key list",
+    "service-key revoke",
+    "settings",
+    "settings ask",
+    "settings find",
+    "settings set",
+    "settings show",
+    "skill",
+    "skill copy",
+    "skill submit",
+    "slack",
+    "slack channel",
+    "slack channel add",
+    "slack channel import",
+    "slack channel list",
+    "slack channel remove",
+    "sleep",
+    "sleep set",
+    "sleep status",
+    "sql",
+    "status",
+    "strategy",
+    "strategy bet",
+    "strategy bet add",
+    "strategy bet retire",
+    "strategy bet update",
+    "strategy diff",
+    "strategy draft",
+    "strategy guides",
+    "strategy publish",
+    "strategy show",
+    "strategy summary",
+    "strategy versions",
+    "support",
+    "support file",
+    "support report",
+    "support send",
+    "tag",
+    "tag create",
+    "tag list",
+    "tag show",
+    "tag update",
+    "task",
+    "task answers",
+    "task attach",
+    "task bulk",
+    "task cap",
+    "task cap set",
+    "task caps",
+    "task check-back",
+    "task child",
+    "task close",
+    "task comment",
+    "task comment-delete",
+    "task comment-edit",
+    "task comment-moderate",
+    "task create",
+    "task defer",
+    "task delete",
+    "task deleted",
+    "task done",
+    "task follow",
+    "task followers",
+    "task label",
+    "task later",
+    "task link",
+    "task list",
+    "task context",
+    "task meetings",
+    "task model",
+    "task publication-preview",
+    "task question",
+    "task readers",
+    "task readers add",
+    "task readers list",
+    "task readers remove",
+    "task relate",
+    "task requester-remove",
+    "task requester-save",
+    "task requesters",
+    "task restore",
+    "task run",
+    "task show",
+    "task snooze",
+    "task stuck",
+    "task tree",
+    "task type",
+    "task type create",
+    "task type delete",
+    "task type update",
+    "task types",
+    "task unfollow",
+    "task unsnooze",
+    "task update",
+    "task wait",
+    "task waive-qa",
+    "task worktree",
+    "task worktree add",
+    "task worktree attach",
+    "task worktree setup",
+    "task-manager",
+    "task-manager bot",
+    "task-manager off",
+    "task-manager on",
+    "task-manager run",
+    "task-manager schedule",
+    "task-manager status",
+    "tasks",
+    "tasks answers",
+    "tasks attach",
+    "tasks bulk",
+    "tasks cap",
+    "tasks cap set",
+    "tasks caps",
+    "tasks check-back",
+    "tasks child",
+    "tasks close",
+    "tasks comment",
+    "tasks comment-delete",
+    "tasks comment-edit",
+    "tasks comment-moderate",
+    "tasks create",
+    "tasks defer",
+    "tasks delete",
+    "tasks deleted",
+    "tasks done",
+    "tasks follow",
+    "tasks followers",
+    "tasks label",
+    "tasks later",
+    "tasks link",
+    "tasks list",
+    "tasks context",
+    "tasks meetings",
+    "tasks model",
+    "tasks publication-preview",
+    "tasks question",
+    "tasks readers",
+    "tasks readers add",
+    "tasks readers list",
+    "tasks readers remove",
+    "tasks relate",
+    "tasks requester-remove",
+    "tasks requester-save",
+    "tasks requesters",
+    "tasks restore",
+    "tasks run",
+    "tasks show",
+    "tasks snooze",
+    "tasks tree",
+    "tasks type",
+    "tasks type create",
+    "tasks type delete",
+    "tasks type update",
+    "tasks types",
+    "tasks unfollow",
+    "tasks unsnooze",
+    "tasks update",
+    "tasks wait",
+    "tasks waive-qa",
+    "tasks worktree",
+    "tasks worktree add",
+    "tasks worktree attach",
+    "tasks worktree setup",
+    "team",
+    "team budget",
+    "team icon",
+    "team show",
+    "template",
+    "template list",
+    "thread",
+    "thread bot-status",
+    "thread catch-up",
+    "thread catchup",
+    "thread create",
+    "thread delete",
+    "thread dm",
+    "thread dm-group",
+    "thread edit",
+    "thread follow",
+    "thread home",
+    "thread link-slack",
+    "thread list",
+    "thread members",
+    "thread members add",
+    "thread members list",
+    "thread members remove",
+    "thread open-earlier",
+    "thread pin",
+    "thread post",
+    "thread react",
+    "thread read",
+    "thread reply",
+    "thread search",
+    "thread show",
+    "thread slack-resume",
+    "thread sub",
+    "thread task",
+    "thread unfollow",
+    "thread unpin",
+    "thread unreact",
+    "thread update",
+    "thread upload",
+    "tool",
+    "tool add",
+    "tool call",
+    "tool check",
+    "tool index",
+    "tool learn",
+    "tool list",
+    "tool query-search",
+    "tool remove",
+    "tool report",
+    "tool show",
+    "tool update",
+    "tools",
+    "trigger",
+    "trigger create",
+    "trigger delete",
+    "trigger deliveries",
+    "trigger delivery",
+    "trigger list",
+    "trigger recover",
+    "trigger relay",
+    "trigger relay create",
+    "trigger relay delete",
+    "trigger relay rotate",
+    "trigger replay",
+    "trigger rotate",
+    "trigger show",
+    "trigger sign",
+    "trigger update",
+    "turns",
+    "unnote",
+    "update",
+    "update create",
+    "update list",
+    "update mark-read",
+    "update post",
+    "update read",
+    "update redo",
+    "update reply",
+    "update settings",
+    "update show",
+    "updates",
+    "webhook",
+    "webhook create",
+    "webhook delete",
+    "webhook enable",
+    "webhook example",
+    "webhook list",
+    "webhook pause",
+    "webhook recover",
+    "webhook replay",
+    "webhook resume",
+    "webhook retry",
+    "webhook rotate",
+    "webhook send",
+    "webhook sends",
+    "webhook show",
+    "webhook update",
+    "whoami",
 ];
 
 /// What a shell command does, for a tool event: `hub` and its command path when a run of the line plainly starts with
@@ -439,20 +1529,86 @@ pub fn command_program(command: &str) -> String {
     if let Some(script) = shell_script(command) {
         return command_program(&script);
     }
-    let command = if command.contains("<<") { command.split('\n').next().unwrap_or("") } else { command };
-    if let Some(words) = command_runs(command).into_iter().find_map(hub_words) {
+    let command = if command.contains("<<") {
+        command.split('\n').next().unwrap_or("")
+    } else {
+        command
+    };
+    // A blank run (a comment's end, a trailing separator) holds no work.
+    let runs: Vec<&str> = command_runs(command)
+        .into_iter()
+        .filter(|run| !run.trim().is_empty())
+        .collect();
+    if let Some(words) = runs.iter().find_map(|run| hub_words(run)) {
         return hub_summary(&words);
     }
-    plain_program(command).map(clip).unwrap_or_default()
+    // The work is the first run past the setup runs before it: `cd web && npm test` names npm. A line that is only
+    // setup names its last run, so `cd /tmp` still reads `cd`.
+    let mut work = runs.as_slice();
+    while let [setup, rest @ ..] = work {
+        if rest.is_empty() || !is_setup_run(setup) {
+            break;
+        }
+        work = rest;
+    }
+    work.first()
+        .and_then(|run| plain_program(strip_env(run)))
+        .map(clip)
+        .unwrap_or_default()
+}
+
+/// A run that only sets the next one up and does no work of its own: `cd <dir>`, `source <file>`, `. <file>`,
+/// `export NAME=value`, `env NAME=value` or bare `NAME=value` assignments. Its words are read only to tell its shape,
+/// never shown, and a redirection makes it work, not setup.
+fn is_setup_run(run: &str) -> bool {
+    let Some(words) = shell_words(run) else {
+        return false;
+    };
+    let Some((first, args)) = words.split_first() else {
+        return true;
+    };
+    match first.as_str() {
+        "cd" | "source" | "." => {
+            args.len() <= 1 && args.iter().all(|w| !w.contains(['<', '>', '|', '&', ';']))
+        }
+        "export" => !args.is_empty() && args.iter().all(|w| is_assignment(w)),
+        "env" => args
+            .iter()
+            .all(|w| is_assignment(w) || w == "-i" || w == "-0"),
+        _ => is_assignment(first) && args.iter().all(|w| is_assignment(w)),
+    }
+}
+
+/// A run without its leading `env` and the `NAME=value` words (or `-i`, `-0`) after it, so `env TOKEN=x hub task list`
+/// reads as `hub task list`. Only those flags are taken: another flag may take a word of its own, which is never shown
+/// in its place. A run that is only `env` and its words is kept whole.
+fn strip_env(run: &str) -> &str {
+    static ENV: OnceLock<Regex> = OnceLock::new();
+    let env = ENV.get_or_init(|| {
+        Regex::new(
+            r#"^[ \t]*env(?:[ \t]+(?:-[i0]|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"\\$`]*"|[A-Za-z0-9._/:@%+,-])*))*[ \t]+"#,
+        )
+        .unwrap()
+    });
+    match env.find(run) {
+        Some(m) if !run[m.end()..].trim().is_empty() && !run[m.end()..].starts_with('-') => {
+            &run[m.end()..]
+        }
+        _ => run,
+    }
 }
 
 /// The script of a line that is only `sh`, `bash`, `zsh` or `dash`, one plain `-c` flag (`-c`, `-lc`, `-ec`) and one script word.
 fn shell_script(command: &str) -> Option<String> {
     let words = shell_words(command)?;
-    let [shell, flag, script] = words.as_slice() else { return None };
+    let [shell, flag, script] = words.as_slice() else {
+        return None;
+    };
     // The line itself reads `<shell> <flag> ` as written, unquoted, so no quoting, separator or redirection changes them.
     let blank = [' ', '\t'];
-    let plain = shell.chars().all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c))
+    let plain = shell
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "._+/-".contains(c))
         && command
             .trim_start_matches(blank)
             .strip_prefix(shell.as_str())
@@ -467,7 +1623,10 @@ fn shell_script(command: &str) -> Option<String> {
     (plain
         && !outer_expands(command)
         && matches!(name, "sh" | "bash" | "zsh" | "dash")
-        && matches!(flag.as_str(), "-c" | "-lc" | "-ic" | "-ec" | "-xc" | "-lic" | "-ilc"))
+        && matches!(
+            flag.as_str(),
+            "-c" | "-lc" | "-ic" | "-ec" | "-xc" | "-lic" | "-ilc"
+        ))
     .then(|| script.clone())
 }
 
@@ -514,6 +1673,7 @@ fn plain_program(text: &str) -> Option<&str> {
 /// runs only for this, and only the command path is read from the words (`hub_summary`), so a mis-split can at worst
 /// name a real command path and an argument never reaches the summary.
 fn hub_words(run: &str) -> Option<Vec<String>> {
+    let run = strip_env(run);
     if plain_program(run)? != "hub" {
         return None;
     }
@@ -526,7 +1686,8 @@ fn hub_words(run: &str) -> Option<Vec<String>> {
 /// secret in it.
 fn program_name_ok(program: &str) -> bool {
     static NAME: OnceLock<Regex> = OnceLock::new();
-    NAME.get_or_init(|| Regex::new(r"^[A-Za-z0-9._+-]{1,40}$").unwrap()).is_match(program)
+    NAME.get_or_init(|| Regex::new(r"^[A-Za-z0-9._+-]{1,40}$").unwrap())
+        .is_match(program)
 }
 
 /// The runs a shell line holds: its text cut at `&&`, `||`, `|`, `;` and newlines. A separator inside quotes, inside
@@ -534,7 +1695,8 @@ fn program_name_ok(program: &str) -> bool {
 /// a word comments out the rest of its line: the comment is in no run, and a separator inside it splits nothing.
 fn command_runs(command: &str) -> Vec<&str> {
     let mut runs: Vec<&str> = vec![];
-    let (mut start, mut quote, mut escaped, mut depth, mut ticked) = (0, None::<char>, false, 0usize, false);
+    let (mut start, mut quote, mut escaped, mut depth, mut ticked) =
+        (0, None::<char>, false, 0usize, false);
     let mut chars = command.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if std::mem::take(&mut escaped) {
@@ -579,23 +1741,33 @@ fn command_runs(command: &str) -> Vec<&str> {
 
 /// Whether the character at byte `i` starts a shell word: nothing, whitespace or an operator comes before it.
 fn starts_word(command: &str, i: usize) -> bool {
-    command[..i].chars().next_back().is_none_or(|p| p.is_whitespace() || ";|&()".contains(p))
+    command[..i]
+        .chars()
+        .next_back()
+        .is_none_or(|p| p.is_whitespace() || ";|&()".contains(p))
 }
 
 /// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
 /// word only if it is a top-level command, the next only if it is a subcommand of that command, and so on to three words.
 /// Reading stops at the first word that does not continue a path, so an argument, a recipient or a note never reaches the
-/// summary (`hub ask finance "x"` reads `hub ask`; `hub task close 7f3a` reads `hub task close`).
+/// summary (`hub message send finance "x"` reads `hub message send`; `hub task close 7f3a` reads `hub task close`).
 fn hub_summary(words: &[String]) -> String {
     let mut path: Vec<&str> = vec![];
-    for word in words[1..].iter().take(3).take_while(|w| !w.starts_with('-')) {
+    for word in words[1..]
+        .iter()
+        .take(3)
+        .take_while(|w| !w.starts_with('-'))
+    {
         path.push(word.as_str());
         if !HUB_PATHS.contains(&path.join(" ").as_str()) {
             path.pop();
             break;
         }
     }
-    std::iter::once("hub").chain(path).collect::<Vec<_>>().join(" ")
+    std::iter::once("hub")
+        .chain(path)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A command's words after shell quoting (single, double, backslash), or None when a quote is left open.
@@ -656,7 +1828,9 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
 }
 
 fn is_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 fn clip(text: &str) -> String {
@@ -664,7 +1838,12 @@ fn clip(text: &str) -> String {
     if line.chars().count() <= TOOL_SUMMARY_CHARS {
         line
     } else {
-        format!("{}…", line.chars().take(TOOL_SUMMARY_CHARS - 1).collect::<String>())
+        format!(
+            "{}…",
+            line.chars()
+                .take(TOOL_SUMMARY_CHARS - 1)
+                .collect::<String>()
+        )
     }
 }
 
@@ -716,7 +1895,14 @@ pub fn new_group(command: &mut tokio::process::Command) -> &mut tokio::process::
 fn exited_unreaped(pid: i32) -> bool {
     // SAFETY: with WNOWAIT, waitid only writes the child's state into `info`.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    let r = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) };
+    let r = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
     r != 0 || unsafe { info.si_pid() } != 0
 }
 
@@ -729,7 +1915,12 @@ fn exited_unreaped(pid: i32) -> bool {
 /// before its status is sent (so it has gone when a stop returns). What it started had the SIGTERM with it, and Claude
 /// ends its own tools on one. `kill` and `signal` reach the child alone, and after either the group is left to its
 /// caller: a turn that ends on its background wait keeps shells in that group.
-pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>) {
+pub fn own(
+    mut child: tokio::process::Child,
+) -> (
+    Stopper,
+    tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Stop>();
     let (done, exited) = tokio::sync::oneshot::channel();
     let pid = child.id().map(|p| p as i32);
@@ -738,7 +1929,9 @@ pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::
     tokio::spawn(async move {
         // A group leader's exit is watched on each SIGCHLD without reaping it (`exited_unreaped`); any other child is
         // reaped by its wait directly. Without the signal stream, a group leader is too, and nothing follows its exit.
-        let mut exits = group.and_then(|_| tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()).ok());
+        let mut exits = group.and_then(|_| {
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()).ok()
+        });
         let watching = exits.is_some();
         let mut kill_at: Option<tokio::time::Instant> = None;
         let mut asking = true;
@@ -978,7 +2171,11 @@ impl Host {
         }
     }
 
-    pub async fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
+    pub async fn resume_thread(
+        &self,
+        thread_id: &str,
+        settings: &Settings,
+    ) -> Result<String, HostError> {
         match self {
             Host::Claude(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Codex(h) => h.resume_thread(thread_id, settings).await,
@@ -992,7 +2189,12 @@ impl Host {
         }
     }
 
-    pub async fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub async fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         match self {
             Host::Claude(h) => h.start_turn(thread_id, text, effort),
             Host::Codex(h) => h.start_turn(thread_id, text, effort).await,
@@ -1012,7 +2214,9 @@ impl Host {
             Host::Codex(h) => h.steer(thread_id, turn_id, text).await,
             Host::Gemini(_) => Err(failed("Gemini runtime cannot steer a running turn")),
             Host::Antigravity(h) => h.steer(),
-            Host::MuseCode(_) => Err(HostError::SteerRefused("Muse Code cannot steer a running turn".into())),
+            Host::MuseCode(_) => Err(HostError::SteerRefused(
+                "Muse Code cannot steer a running turn".into(),
+            )),
             Host::Pi(h) => h.steer(thread_id, turn_id, text).await,
             Host::Cursor(_) => Err(failed("Cursor runtime cannot steer a running turn")),
             Host::Grok(_) => Err(failed("grok agent cannot steer a running turn")),
@@ -1065,7 +2269,10 @@ impl Host {
     /// Whether this host says when a thread it started is up (a `thread_confirmed` event: Claude's system init,
     /// Gemini's init, pi's reply to its first prompt, Codex's first turn/started). A new thread on one is kept only then.
     pub fn confirms_threads(&self) -> bool {
-        matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
+        matches!(
+            self,
+            Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_)
+        )
     }
 
     /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
@@ -1082,7 +2289,8 @@ impl Host {
     /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
     pub fn reports_compaction(&self) -> bool {
         let (runtime, harness) = self.harness();
-        crate::harness_tools::caps(runtime, harness).compaction_events && matches!(self, Host::Claude(_) | Host::Pi(_))
+        crate::harness_tools::caps(runtime, harness).compaction_events
+            && matches!(self, Host::Claude(_) | Host::Pi(_))
     }
 
     /// Whether the harness compacted `thread_id` since this was last asked.
@@ -1141,16 +2349,27 @@ pub mod fixtures {
     use serde_json::Value;
 
     pub fn dir(harness: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(harness)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(harness)
     }
 
     /// (fixture path, the events the Python host makes of it), for every fixture of `harness`.
     pub fn cases(harness: &str) -> Vec<(PathBuf, Vec<Value>)> {
         let mut out = vec![];
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(dir(harness)).unwrap().map(|e| e.unwrap().path()).collect();
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(dir(harness))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
         paths.sort();
-        for p in paths.into_iter().filter(|p| p.extension().is_some_and(|e| e == "jsonl")) {
-            let expected: Value = serde_json::from_str(&std::fs::read_to_string(p.with_extension("expected.json")).unwrap()).unwrap();
+        for p in paths
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        {
+            let expected: Value = serde_json::from_str(
+                &std::fs::read_to_string(p.with_extension("expected.json")).unwrap(),
+            )
+            .unwrap();
             out.push((p, expected.as_array().unwrap().clone()));
         }
         assert!(!out.is_empty(), "no {harness} fixtures");
@@ -1166,18 +2385,33 @@ mod tests {
     async fn grouped_harness() -> (tokio::process::Child, i32, i32) {
         use tokio::io::AsyncBufReadExt;
         let mut command = tokio::process::Command::new("/bin/sh");
-        command.args(["-c", "sleep 900 </dev/null >/dev/null 2>&1 & echo $!; while :; do sleep 1; done"]);
-        command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped());
+        command.args([
+            "-c",
+            "sleep 900 </dev/null >/dev/null 2>&1 & echo $!; while :; do sleep 1; done",
+        ]);
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped());
         let mut child = new_group(&mut command).spawn().unwrap();
         let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
-        let tool: i32 = lines.next_line().await.unwrap().unwrap().trim().parse().unwrap();
+        let tool: i32 = lines
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         let group = child.id().unwrap() as i32;
         (child, group, tool)
     }
 
     fn group_gone(group: i32) -> bool {
         // SAFETY: signal 0 only checks whether any process of the group is left.
-        unsafe { libc::kill(-group, 0) == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
+        unsafe {
+            libc::kill(-group, 0) == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        }
     }
 
     #[tokio::test]
@@ -1187,7 +2421,11 @@ mod tests {
         assert_eq!(unsafe { libc::getpgid(tool) }, group);
         let (stopper, exited) = own(child);
         stopper.terminate(std::time::Duration::from_secs(5));
-        tokio::time::timeout(std::time::Duration::from_secs(5), exited).await.unwrap().unwrap().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), exited)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while !group_gone(group) && std::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1198,7 +2436,11 @@ mod tests {
         let (child, group, tool) = grouped_harness().await;
         let (stopper, exited) = own(child);
         stopper.kill();
-        tokio::time::timeout(std::time::Duration::from_secs(5), exited).await.unwrap().unwrap().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), exited)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         // SAFETY: signal 0 only checks the pid.
         let kept = unsafe { libc::kill(tool, 0) } == 0;
         // SAFETY: the child this test started, and its group.
@@ -1207,39 +2449,201 @@ mod tests {
     }
 
     #[test]
+    fn a_shell_line_reads_only_when_every_run_of_it_reads() {
+        for command in [
+            "cd /w && hub needs-you show",
+            "cd /w && hub task list --status open | head",
+            "grep -n x f | wc -l",
+            "cat note.txt",
+            "cd /tmp",
+            "export A=1; env B=2 hub task show 7",
+            "cat x 2>&1 | sort | uniq -c",
+            "ls >/dev/null 2>/dev/null",
+            "wc -l < notes.txt",
+            "grep '> $(not run)' f",
+            "jq '.items[] | {id}' out.json",
+            "bash -lc 'cd /w && hub task show 1'",
+            "/bin/bash -lc \"cat note.txt\"",
+            "hub board",
+            "cat f # > out",
+        ] {
+            assert!(shell_reads_only(command), "{command}");
+        }
+        for command in [
+            "curl -X POST https://hooks.example/x && hub task list",
+            "cat body.json | curl -X POST https://hooks.example/x -d @-",
+            "git push",
+            "cd /w && git push",
+            "cat x > out.txt",
+            "echo hi >> f",
+            "cat x >/dev/null.txt",
+            "cat x >| f",
+            "cat <<EOF\nhi\nEOF",
+            "cat <<< hi",
+            "bash -lc \"cd /tmp;gh pr merge 42\"",
+            "bash -c \"cat $(curl x)\"",
+            "sh -c 'cat x' extra",
+            "cat $(ls)",
+            "cat `ls`",
+            "cat $HOME/x",
+            "ls | xargs rm",
+            "eval cat x",
+            "source env.sh",
+            "cat f & curl x",
+            "(cat f)",
+            "{ cat f; }",
+            "cat <(curl x)",
+            "cat f |& tee g",
+            "hub task close 7",
+            "hub status set busy",
+            "hub goal status",
+            "hub inbox",
+            "hub -q task list",
+            "sort -o out f",
+            "sort --output=out f",
+            "sort *",
+            "uniq in out",
+            "tree -o out",
+            "date -s 10:00",
+            "rg --pre sh x",
+            "env -S 'curl x' cat",
+            "cat 'open",
+            "",
+            ";",
+            "npm test",
+        ] {
+            assert!(!shell_reads_only(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn every_hub_read_path_is_a_leaf_command_path() {
+        for path in HUB_READ_PATHS {
+            assert!(HUB_PATHS.contains(path), "{path} is not a hub command path");
+            let below = format!("{path} ");
+            assert!(
+                !HUB_PATHS.iter().any(|p| p.starts_with(&below)),
+                "{path} is a group"
+            );
+            assert_eq!(
+                hub_summary(
+                    &std::iter::once("hub")
+                        .chain(path.split(' '))
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                ),
+                format!("hub {path}")
+            );
+        }
+    }
+
+    #[test]
     fn a_tool_summary_names_the_file_or_program_but_never_the_arguments() {
-        assert_eq!(tool_summary(&json!({"command": "curl -H 'Authorization: Bearer sk-live-1' https://api.example.com"})), "curl");
-        assert_eq!(tool_summary(&json!({"command": "TOKEN=sk-live-1 /usr/bin/python3 run.py --key sk-live-1"})), "python3");
-        assert_eq!(command_program("/bin/bash -lc 'gh api -H \"Authorization: token x1\" /user'"), "gh");
-        assert_eq!(tool_summary(&json!({"command": "TOKEN=\"Bearer sk-live-abc\" curl https://api.example.com"})), "curl");
-        assert_eq!(tool_summary(&json!({"command": "AUTH='x sk-live-abc' ./run.sh"})), "run.sh");
-        assert_eq!(tool_summary(&json!({"command": "bash -c \"TOKEN='a sk-live-abc' curl x\""})), "curl");
-        assert_eq!(tool_summary(&json!({"command": "TOKEN='sk-live-abc curl"})), "");
-        assert_eq!(tool_summary(&json!({"command": "TOKEN=$(echo sk-live-abc) curl x"})), "");
-        assert_eq!(tool_summary(&json!({"command": "TOKEN=`echo sk-live-abc` curl x"})), "");
-        assert_eq!(tool_summary(&json!({"command": "TOKEN=${T:-a sk-live-abc} curl x"})), "");
-        assert_eq!(tool_summary(&json!({"command": "curl -H \"X: $(cat key)\" x"})), "curl");
-        assert_eq!(tool_summary(&json!({"file_path": "/work/note.txt", "content": "secret body"})), "/work/note.txt");
-        assert_eq!(tool_summary(&json!({"description": "count words", "prompt": "Count the words", "subagent_type": "general-purpose"})), "");
-        assert_eq!(tool_summary(&json!({"query": "private question", "url": "https://x.example/?token=1"})), "");
+        assert_eq!(
+            tool_summary(
+                &json!({"command": "curl -H 'Authorization: Bearer sk-live-1' https://api.example.com"})
+            ),
+            "curl"
+        );
+        assert_eq!(
+            tool_summary(
+                &json!({"command": "TOKEN=sk-live-1 /usr/bin/python3 run.py --key sk-live-1"})
+            ),
+            "python3"
+        );
+        assert_eq!(
+            command_program("/bin/bash -lc 'gh api -H \"Authorization: token x1\" /user'"),
+            "gh"
+        );
+        assert_eq!(
+            tool_summary(
+                &json!({"command": "TOKEN=\"Bearer sk-live-abc\" curl https://api.example.com"})
+            ),
+            "curl"
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "AUTH='x sk-live-abc' ./run.sh"})),
+            "run.sh"
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "bash -c \"TOKEN='a sk-live-abc' curl x\""})),
+            "curl"
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "TOKEN='sk-live-abc curl"})),
+            ""
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "TOKEN=$(echo sk-live-abc) curl x"})),
+            ""
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "TOKEN=`echo sk-live-abc` curl x"})),
+            ""
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "TOKEN=${T:-a sk-live-abc} curl x"})),
+            ""
+        );
+        assert_eq!(
+            tool_summary(&json!({"command": "curl -H \"X: $(cat key)\" x"})),
+            "curl"
+        );
+        assert_eq!(
+            tool_summary(&json!({"file_path": "/work/note.txt", "content": "secret body"})),
+            "/work/note.txt"
+        );
+        assert_eq!(
+            tool_summary(
+                &json!({"description": "count words", "prompt": "Count the words", "subagent_type": "general-purpose"})
+            ),
+            ""
+        );
+        assert_eq!(
+            tool_summary(
+                &json!({"query": "private question", "url": "https://x.example/?token=1"})
+            ),
+            ""
+        );
     }
 
     #[test]
     fn a_compound_command_names_the_work_and_never_the_arguments() {
-        assert_eq!(command_program("cd /repo && hub task close --id 42 --reason 'sk-live-1'"), "hub task close");
-        assert_eq!(command_program("export HUB_TOKEN=sk-live-1; /usr/local/bin/hub task create --title sk-live-1"), "hub task create");
+        assert_eq!(
+            command_program("cd /repo && hub task close --id 42 --reason 'sk-live-1'"),
+            "hub task close"
+        );
+        assert_eq!(
+            command_program(
+                "export HUB_TOKEN=sk-live-1; /usr/local/bin/hub task create --title sk-live-1"
+            ),
+            "hub task create"
+        );
         assert_eq!(command_program("hub task note sk-live-1 close"), "hub task");
-        assert_eq!(command_program("cd web && npm run build && hub task list"), "hub task list");
+        assert_eq!(
+            command_program("cd web && npm run build && hub task list"),
+            "hub task list"
+        );
         assert_eq!(command_program("set -e\nnpm test | tee out.log"), "set");
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
         assert_eq!(command_program("cd /tmp"), "cd");
         assert_eq!(command_program("(cd web && npm test)"), "");
-        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cd");
-        assert_eq!(command_program("hub task create --title \"a && hub task close\""), "hub task create");
-        assert_eq!(command_program("hub ask botops please check the release"), "hub ask");
-        assert_eq!(command_program("FOO=1 && curl x"), "");
+        assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
+        assert_eq!(
+            command_program("hub task create --title \"a && hub task close\""),
+            "hub task create"
+        );
+        assert_eq!(
+            command_program("hub message send botops please check the release"),
+            "hub message send"
+        );
+        assert_eq!(command_program("FOO=1 && curl x"), "curl");
+        assert_eq!(command_program("FOO=1 curl x"), "curl");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
-        assert_eq!(tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})), "hub task list");
+        assert_eq!(
+            tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})),
+            "hub task list"
+        );
     }
 
     #[test]
@@ -1255,71 +2659,166 @@ mod tests {
             "cd /repo # note; private-token\nnpm test",
         ] {
             let shown = command_program(line);
-            assert!(!shown.contains("private") && !shown.contains("customer"), "{line:?} showed {shown:?}");
+            assert!(
+                !shown.contains("private") && !shown.contains("customer"),
+                "{line:?} showed {shown:?}"
+            );
         }
-        assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
+        assert_eq!(
+            command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"),
+            "cd"
+        );
+        assert_eq!(
+            command_program("cd /repo && >/tmp/customer-123.json printf ok"),
+            ""
+        );
         assert_eq!(command_program(">|private-token printf ok"), "");
-        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "cd");
+        assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "");
         assert_eq!(command_program("(( 1 || private_token ))"), "");
-        assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "cd");
+        assert_eq!(
+            command_program("cd /w && hub task close 7f3a"),
+            "hub task close"
+        );
+        assert_eq!(command_program("cd /w && npm test"), "npm");
     }
 
     #[test]
     fn a_shell_comment_is_in_no_run() {
-        assert_eq!(command_program("cd /repo # note; private-token\nnpm test"), "cd");
+        assert_eq!(
+            command_program("cd /repo # note; private-token\nnpm test"),
+            "npm"
+        );
         assert_eq!(command_program("cd /repo # note; private-token"), "cd");
         assert_eq!(command_program("echo ok # x && hub task close"), "echo");
-        assert_eq!(command_program("cd x; a#b && hub task list"), "hub task list");
-        assert_eq!(command_program("echo '# x'; hub task list"), "hub task list");
+        assert_eq!(
+            command_program("cd x; a#b && hub task list"),
+            "hub task list"
+        );
+        assert_eq!(
+            command_program("echo '# x'; hub task list"),
+            "hub task list"
+        );
         assert_eq!(command_program("sk-live-1$x y"), "");
     }
 
     #[test]
     fn a_hub_summary_stops_at_the_first_word_that_does_not_continue_a_command_path() {
-        assert_eq!(command_program("hub ask finance \"private question\""), "hub ask");
+        assert_eq!(
+            command_program("hub message send finance \"private question\""),
+            "hub message send"
+        );
         assert_eq!(command_program("hub history review"), "hub history");
         assert_eq!(command_program("hub task close 7f3a"), "hub task close");
         assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
-        assert_eq!(command_program("hub bot status history"), "hub bot status history");
+        assert_eq!(
+            command_program("hub bot status history"),
+            "hub bot status history"
+        );
+        for action in [
+            "archive",
+            "unarchive",
+            "mark-read",
+            "mark-unread",
+            "label",
+            "unlabel",
+        ] {
+            assert_eq!(
+                command_program(&format!(
+                    "hub email {action} ana@acme.example private-label private-id"
+                )),
+                format!("hub email {action}")
+            );
+        }
         assert_eq!(command_program("hub nosuch command"), "hub");
     }
 
     #[test]
     fn a_hub_line_inside_a_heredoc_body_is_text() {
-        assert_eq!(command_program("cat <<'EOF'\nhub approval approve\nEOF"), "cat");
-        assert_eq!(command_program("cat > /tmp/x <<EOF && echo ok\nhub task close 7f3a\nEOF"), "cat");
-        assert_eq!(command_program("hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"), "hub automation create");
-        assert_eq!(command_program("cd /w && hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"), "hub automation create");
+        assert_eq!(
+            command_program("cat <<'EOF'\nhub approval approve\nEOF"),
+            "cat"
+        );
+        assert_eq!(
+            command_program("cat > /tmp/x <<EOF && echo ok\nhub task close 7f3a\nEOF"),
+            "cat"
+        );
+        assert_eq!(
+            command_program("hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"),
+            "hub automation create"
+        );
+        assert_eq!(
+            command_program(
+                "cd /w && hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"
+            ),
+            "hub automation create"
+        );
         assert_eq!(command_program("<<'EOF'\nhub approval approve\nEOF"), "");
         assert_eq!(command_program("<<EOF\ncustomer-private\nEOF"), "");
         assert_eq!(command_program(">'>' printf customer-private"), "");
-        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "cd");
-        assert_eq!(command_program("cd /w && >'>' hub task close customer-private"), "cd");
-        assert_eq!(command_program("TOKEN=customer-private >'>' printf customer-private"), "");
+        assert_eq!(command_program("cd /w && >\\> printf customer-private"), "");
+        assert_eq!(
+            command_program("cd /w && >'>' hub task close customer-private"),
+            ""
+        );
+        assert_eq!(
+            command_program("TOKEN=customer-private >'>' printf customer-private"),
+            ""
+        );
         assert_eq!(command_program("2> >(printf customer-private) true"), "");
-        assert_eq!(command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"), "hub needs-you show");
-        assert_eq!(command_program("bash --norc /tmp/customer-private.sh"), "bash");
+        assert_eq!(
+            command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"),
+            "hub needs-you show"
+        );
+        assert_eq!(
+            command_program("bash --norc /tmp/customer-private.sh"),
+            "bash"
+        );
         assert_eq!(command_program("bash -c-x 'customer-private'"), "bash");
         assert_eq!(command_program("bash -oc /tmp/customer-private.sh"), "bash");
-        assert_eq!(command_program("bash;<<\\'\n-c\n'customer-private\n'"), "bash");
-        assert_eq!(command_program("bash; -c /tmp/customer-private.json"), "bash");
-        assert_eq!(command_program("bash \"-\\c\" /tmp/customer-private.json"), "bash");
-        assert_eq!(command_program("bash \n-c /tmp/customer-private.json"), "bash");
+        assert_eq!(
+            command_program("bash;<<\\'\n-c\n'customer-private\n'"),
+            "bash"
+        );
+        assert_eq!(
+            command_program("bash; -c /tmp/customer-private.json"),
+            "bash"
+        );
+        assert_eq!(
+            command_program("bash \"-\\c\" /tmp/customer-private.json"),
+            "bash"
+        );
+        assert_eq!(
+            command_program("bash \n-c /tmp/customer-private.json"),
+            "bash"
+        );
         assert_eq!(command_program("NOTE=\rcustomer-private"), "");
         assert_eq!(command_program("NOTE=\u{a0}customer-private"), "");
-        assert_eq!(command_program("bash -c \"NOTE=\\ customer-private /usr/bin/true\""), "");
-        assert_eq!(command_program("bash -c \"NOTE=\\$x customer-private\""), "");
+        assert_eq!(
+            command_program("bash -c \"NOTE=\\ customer-private /usr/bin/true\""),
+            ""
+        );
+        assert_eq!(
+            command_program("bash -c \"NOTE=\\$x customer-private\""),
+            ""
+        );
         assert_eq!(command_program("bash -c \r customer-private"), "bash");
         assert_eq!(command_program("bash -c \u{a0} customer-private"), "bash");
         assert_eq!(
             command_program("bash -c \"NOTE='$(printf %b \\\\047\\\\040/usr/bin/true\\\\040\\\\047)' customer-private\""),
             "bash"
         );
-        assert_eq!(command_program("bash -c \"NOTE='`printf x`' customer-private\""), "bash");
-        assert_eq!(command_program("bash -lc 'cd /w && hub needs-you show $X'"), "hub needs-you show");
-        assert_eq!(command_program("bash -c \"cd /w && hub \\\nneeds-you show\""), "hub needs-you show");
+        assert_eq!(
+            command_program("bash -c \"NOTE='`printf x`' customer-private\""),
+            "bash"
+        );
+        assert_eq!(
+            command_program("bash -lc 'cd /w && hub needs-you show $X'"),
+            "hub needs-you show"
+        );
+        assert_eq!(
+            command_program("bash -c \"cd /w && hub \\\nneeds-you show\""),
+            "hub needs-you show"
+        );
     }
 
     #[test]
@@ -1329,24 +2828,105 @@ mod tests {
         assert!(nested.is_empty() || nested == "export", "{nested}");
         assert!(!nested.contains("private-token"));
         // A heredoc body is no run.
-        assert_eq!(command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"), "cd");
+        assert_eq!(
+            command_program("cd /repo <<'EOF'\nprivate-token\nEOF\nnpm test"),
+            "cd"
+        );
         // A redirection is skipped to the program behind it, whether its target is attached or the next word.
-        assert_eq!(command_program("cd /repo && >/tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program("cd /repo && > /tmp/customer-123.json printf ok"), "cd");
-        assert_eq!(command_program("cd /w && 2>&1 npm test"), "cd");
+        assert_eq!(
+            command_program("cd /repo && >/tmp/customer-123.json printf ok"),
+            ""
+        );
+        assert_eq!(
+            command_program("cd /repo && > /tmp/customer-123.json printf ok"),
+            ""
+        );
+        assert_eq!(command_program("cd /w && 2>&1 npm test"), "");
         // A program word is a plain path, and a program name is at most 40 characters.
         assert_eq!(command_program("$HOME/bin/tool --x"), "");
         assert_eq!(command_program(&format!("{} x", "a".repeat(41))), "");
-        // A hub command in a later run still reads; any other line reads as its first program.
-        assert_eq!(command_program("cd /w && hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("cd /w && npm test"), "cd");
+        // A hub command in a later run still reads; a setup run before other work is skipped.
+        assert_eq!(
+            command_program("cd /w && hub task close 7f3a"),
+            "hub task close"
+        );
+        assert_eq!(command_program("cd /w && npm test"), "npm");
+    }
+
+    #[test]
+    fn a_setup_run_before_the_work_is_skipped_and_its_arguments_never_show() {
+        assert_eq!(
+            command_program("cd /home/user/workspace/bot-coo && hub task list --status open"),
+            "hub task list"
+        );
+        assert_eq!(
+            command_program("cd \"/home/user/My Repo\" && git status"),
+            "git"
+        );
+        assert_eq!(command_program("cd /repo && npm test"), "npm");
+        assert_eq!(command_program("cd /repo;npm test"), "npm");
+        assert_eq!(command_program("cd /repo\nnpm test"), "npm");
+        assert_eq!(command_program("cd /repo # note\nnpm test"), "npm");
+        assert_eq!(
+            command_program("cd /repo && export TOKEN=sk-live-1 && cargo test"),
+            "cargo"
+        );
+        assert_eq!(
+            command_program("export HUB_TOKEN=sk-live-1 && npm test"),
+            "npm"
+        );
+        assert_eq!(
+            command_program("export HUB_TOKEN=sk-live-1 && hub task create --title x"),
+            "hub task create"
+        );
+        assert_eq!(
+            command_program("env HUB_TOKEN=sk-live-1 cargo test"),
+            "cargo"
+        );
+        assert_eq!(
+            command_program("env HUB_TOKEN=sk-live-1 hub task list --token x"),
+            "hub task list"
+        );
+        assert_eq!(
+            command_program("cd /w && env HUB_TOKEN=sk-live-1 hub task close 7f3a"),
+            "hub task close"
+        );
+        assert_eq!(command_program("cd /w && env -i A=1 npm test"), "npm");
+        assert_eq!(command_program("source ~/.env.sh && npm test"), "npm");
+        assert_eq!(
+            command_program(". ./secret-env && hub task close 7f3a"),
+            "hub task close"
+        );
+        assert_eq!(
+            command_program("cd /w && source a.sh b.sh && npm test"),
+            "source"
+        );
+        assert_eq!(command_program("env -u sk-live-1 npm test"), "env");
+        assert_eq!(command_program("cd /w && env -u sk-live-1 npm test"), "env");
+        assert_eq!(
+            command_program("cd /w && export A=1 B=2 && npm test"),
+            "npm"
+        );
+        assert_eq!(command_program("cd /w && npm test > out.log"), "npm");
+        assert_eq!(command_program("cd /w"), "cd");
+        assert_eq!(command_program("cd /w && export A=1"), "export");
+        assert!(
+            !command_program("cd /private-customer && export K=sk-live-1 && npm test")
+                .contains("private")
+        );
     }
 
     #[test]
     fn a_new_message_starts_a_paragraph_and_pieces_of_one_message_join_with_nothing() {
         let mut reply = String::new();
-        assert_eq!(add_piece(&mut reply, true, "Holding until "), "Holding until ");
-        assert_eq!(add_piece(&mut reply, false, "it recovers. "), "it recovers. ");
+        assert_eq!(
+            add_piece(&mut reply, true, "Holding until "),
+            "Holding until "
+        );
+        assert_eq!(
+            add_piece(&mut reply, false, "it recovers. "),
+            "it recovers. "
+        );
         assert_eq!(add_piece(&mut reply, true, "No change."), "\n\nNo change.");
         assert_eq!(reply, "Holding until it recovers.\n\nNo change.");
     }
@@ -1354,50 +2934,89 @@ mod tests {
     #[test]
     fn the_python_classifiers_agree() {
         assert!(is_limit("You've hit your usage limit"));
-        assert!(is_limit("You've hit your session limit · resets 12:40am (UTC)"));
+        assert!(is_limit(
+            "You've hit your session limit · resets 12:40am (UTC)"
+        ));
         assert!(is_limit("HTTP 503 overloaded"));
         assert!(!is_limit("all good"));
-        assert!(is_limit("Claude AI monthly spend limit reached. Raise it in your account settings."));
+        assert!(is_limit(
+            "Claude AI monthly spend limit reached. Raise it in your account settings."
+        ));
         assert!(is_limit("API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-19T00:00:00Z. (rate_limit_error)"));
         assert!(!is_limit("Draft the monthly spend report"));
         // An API key's quota or billing refusal, as Codex and the OpenAI API word it.
-        assert!(is_limit("Quota exceeded. Check your plan and billing details."));
+        assert!(is_limit(
+            "Quota exceeded. Check your plan and billing details."
+        ));
         assert!(is_limit("You exceeded your current quota, please check your plan and billing details. (insufficient_quota)"));
-        assert!(is_limit(r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#));
+        assert!(is_limit(
+            r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#
+        ));
         assert!(!is_limit("Raise the storage quota for the team drive"));
         assert!(!is_limit("Quota: 40 of 100 seats used"));
-        assert!(!is_limit("write /tmp/out: Disk quota exceeded (os error 122)"));
+        assert!(!is_limit(
+            "write /tmp/out: Disk quota exceeded (os error 122)"
+        ));
         // Capacity is a limit (a fallback may take the turn) but not quota; the plan's quota stays quota.
-        assert!(is_limit("Selected model is at capacity. Please try a different model.") && is_capacity("Selected model is at capacity. Please try a different model."));
+        assert!(
+            is_limit("Selected model is at capacity. Please try a different model.")
+                && is_capacity("Selected model is at capacity. Please try a different model.")
+        );
         assert!(is_capacity("HTTP 503 overloaded"));
         // An API's structured refusal ("overloaded_error"): the underscore is a word character, so it needs its own match.
         let structured = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Server busy"}}"#;
         assert!(is_limit(structured) && is_capacity(structured));
-        assert!(!is_capacity("Quota exceeded. Check your plan and billing details."));
+        assert!(!is_capacity(
+            "Quota exceeded. Check your plan and billing details."
+        ));
         assert!(!is_capacity("API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-19T00:00:00Z. (rate_limit_error)"));
         assert!(!is_capacity("You've hit your usage limit"));
         assert!(is_auth_retryable("OAuth: failed to refresh OAuth token"));
-        assert!(!is_auth_retryable("unexpected status 401 Unauthorized: Invalid API key"));
+        assert!(!is_auth_retryable(
+            "unexpected status 401 Unauthorized: Invalid API key"
+        ));
         assert!(is_auth_rejected("Invalid API key · Please run /login"));
-        assert_eq!(rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"), "Invalid API key [redacted]");
+        assert_eq!(
+            rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"),
+            "Invalid API key [redacted]"
+        );
         assert_eq!(compact_at(&json!("120000")), 120000);
         assert_eq!(compact_at(&json!(0)), DEFAULT_COMPACT_AT);
     }
 
     #[test]
     fn a_bot_key_problem_is_its_own_grant_and_only_for_a_bot_that_needs_one() {
-        let grants: Map<String, Value> = json!({"has": ["OPENROUTER_API_KEY"]}).as_object().cloned().unwrap();
+        let grants: Map<String, Value> = json!({"has": ["OPENROUTER_API_KEY"]})
+            .as_object()
+            .cloned()
+            .unwrap();
         let pi = |model: &str| json!({"runtime": "pi", "harness": "pi", "model": model});
         assert_eq!(bot_key_problem("pi", &pi("kimi-k3"), "has", &grants), None);
-        assert_eq!(bot_key_problem("pi", &pi("kimi-k3"), "none", &grants), Some("OpenRouter API key required".into()));
+        assert_eq!(
+            bot_key_problem("pi", &pi("kimi-k3"), "none", &grants),
+            Some("OpenRouter API key required".into())
+        );
         // A Tico model signs in with the company's gateway key, so it needs no grant of its own.
-        assert_eq!(bot_key_problem("pi", &pi("tico-mid-1.0"), "none", &grants), None);
+        assert_eq!(
+            bot_key_problem("pi", &pi("tico-medium-1.0"), "none", &grants),
+            None
+        );
         let gemini = json!({"runtime": "gemini", "harness": "gemini", "model": "gemini-3.7-flash"});
-        assert_eq!(bot_key_problem("gemini", &gemini, "has", &grants), Some("Gemini API key required".into()));
+        assert_eq!(
+            bot_key_problem("gemini", &gemini, "has", &grants),
+            Some("Gemini API key required".into())
+        );
         // Antigravity runs on the Gemini runtime with its own sign-in, not a key here.
-        let antigravity = json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-3.7-flash"});
-        assert_eq!(bot_key_problem("gemini", &antigravity, "none", &grants), None);
-        assert_eq!(bot_key_problem("claude", &json!({"runtime": "claude"}), "none", &grants), None);
+        let antigravity =
+            json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-3.7-flash"});
+        assert_eq!(
+            bot_key_problem("gemini", &antigravity, "none", &grants),
+            None
+        );
+        assert_eq!(
+            bot_key_problem("claude", &json!({"runtime": "claude"}), "none", &grants),
+            None
+        );
     }
 }
 
@@ -1406,11 +3025,16 @@ mod tests {
 
 /// Native goals and built-in commands of one installed harness (goals.capabilities): Claude Code by version, Codex by
 /// the protocol its app-server describes; every other host has none.
-pub async fn probe_goals(runtime: &str, exe: &std::path::Path, version: &str) -> (bool, Vec<Value>) {
+pub async fn probe_goals(
+    runtime: &str,
+    exe: &std::path::Path,
+    version: &str,
+) -> (bool, Vec<Value>) {
     let (mut supported, mut commands) = (false, vec![]);
     match runtime {
         "claude" => {
-            supported = crate::hosts::claude::version_tuple(version).is_some_and(|v| v >= (2, 1, 212));
+            supported =
+                crate::hosts::claude::version_tuple(version).is_some_and(|v| v >= (2, 1, 212));
             if supported {
                 commands = vec![
                     crate::goals::command("compact", "Compact this conversation", "[instructions]"),
@@ -1421,20 +3045,42 @@ pub async fn probe_goals(runtime: &str, exe: &std::path::Path, version: &str) ->
         }
         "codex" => {
             // The installed protocol, rather than a version guess, determines native goal support.
-            let dir = std::env::temp_dir().join(format!("tico-goal-schema-{}", uuid::Uuid::new_v4().simple()));
+            let dir = std::env::temp_dir().join(format!(
+                "tico-goal-schema-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
             if std::fs::create_dir_all(&dir).is_ok() {
                 let mut cmd = tokio::process::Command::new(exe);
-                cmd.args(["app-server", "generate-json-schema", "--experimental", "--out"]).arg(&dir);
-                cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
-                if let Ok(Ok(status)) = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.status()).await {
+                cmd.args([
+                    "app-server",
+                    "generate-json-schema",
+                    "--experimental",
+                    "--out",
+                ])
+                .arg(&dir);
+                cmd.stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true);
+                if let Ok(Ok(status)) =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), cmd.status()).await
+                {
                     if status.success() {
                         let schema = dir.join("v2");
                         supported = schema.join("ThreadGoalSetParams.json").exists();
                         if schema.join("ThreadCompactStartParams.json").exists() {
-                            commands.push(crate::goals::command("compact", "Compact this conversation", ""));
+                            commands.push(crate::goals::command(
+                                "compact",
+                                "Compact this conversation",
+                                "",
+                            ));
                         }
                         if schema.join("ReviewStartParams.json").exists() {
-                            commands.push(crate::goals::command("review", "Review changes", "[instructions]"));
+                            commands.push(crate::goals::command(
+                                "review",
+                                "Review changes",
+                                "[instructions]",
+                            ));
                         }
                     }
                 }
@@ -1457,10 +3103,21 @@ pub fn bot_key_sign_in(runtime: &str, assignments: &[Value]) -> (&'static str, S
 
 /// `sign_in_status.check = "bot-key"`: the problem one bot has with its own key on `runtime`, or None when it holds the
 /// key its runtime reads or needs none here. Only that bot's readiness depends on it, never another bot's grant.
-pub fn bot_key_problem(runtime: &str, config: &Value, bot: &str, grants: &Map<String, Value>) -> Option<String> {
+pub fn bot_key_problem(
+    runtime: &str,
+    config: &Value,
+    bot: &str,
+    grants: &Map<String, Value>,
+) -> Option<String> {
     let (key, label) = match runtime {
-        "gemini" => (gemini::uses_gemini_cli(config).then_some("GEMINI_API_KEY")?, "Gemini"),
-        "pi" => (pi::needs_grant(config).then_some("OPENROUTER_API_KEY")?, "OpenRouter"),
+        "gemini" => (
+            gemini::uses_gemini_cli(config).then_some("GEMINI_API_KEY")?,
+            "Gemini",
+        ),
+        "pi" => (
+            pi::needs_grant(config).then_some("OPENROUTER_API_KEY")?,
+            "OpenRouter",
+        ),
         _ => return None,
     };
     (!gemini::has_grant_in(grants, bot, key)).then(|| format!("{label} API key required"))
@@ -1476,12 +3133,22 @@ pub fn prepare_login_home(runtime: &str, env: &Env) {
 
 /// Points `env` at the host's own config folder (`own_config_home`), so a login or status check sees the login its
 /// turns use rather than the operator's. False for a host without one.
-pub fn use_own_config_home(runtime: &str, profile: Option<&crate::profiles::Profile>, env: &mut Env) -> bool {
+pub fn use_own_config_home(
+    runtime: &str,
+    profile: Option<&crate::profiles::Profile>,
+    env: &mut Env,
+) -> bool {
     match runtime {
         "musecode" => {
             env.remove("MUSE_AUTH_PATH");
-            env.insert("XDG_CONFIG_HOME".into(), musecode::config_home(profile).display().to_string());
-            env.insert("XDG_DATA_HOME".into(), musecode::data_home(profile).display().to_string());
+            env.insert(
+                "XDG_CONFIG_HOME".into(),
+                musecode::config_home(profile).display().to_string(),
+            );
+            env.insert(
+                "XDG_DATA_HOME".into(),
+                musecode::data_home(profile).display().to_string(),
+            );
             true
         }
         _ => false,
@@ -1533,7 +3200,10 @@ pub fn file_problem(runtime: &str, env: &Env) -> Option<String> {
 pub fn models(runtime: &str, profile: Option<&crate::profiles::Profile>) -> Vec<String> {
     match runtime {
         "codex" => crate::readiness::codex_models(profile.and_then(|p| p.home("codex"))),
-        "claude" => crate::readiness::CLAUDE_MODELS.iter().map(|s| s.to_string()).collect(),
+        "claude" => crate::readiness::CLAUDE_MODELS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         "gemini" => gemini::MODELS.iter().map(|s| s.to_string()).collect(),
         "musecode" => musecode::MODELS.iter().map(|s| s.to_string()).collect(),
         "pi" => pi::model_names(),

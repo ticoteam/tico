@@ -38,7 +38,7 @@ function taskPipelineState(state) {
 function taskPipelineRemember(state) {
   try { localStorage.setItem('tico.tasks.type', state.type || 'general'); } catch {}
 }
-// Every task view belongs to one type; a selected type turns the board into its steps.
+// Open, Board and finished tasks belong to one type; a selected type turns the board into its steps.
 function taskPipelineMatches(task, state) {
   return pipelineTypeId(task) === (state.type || 'general');
 }
@@ -49,16 +49,18 @@ function taskPipelineDevType() {
   const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
   return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
-function taskPipelineTools(state) {
-  const host = $('#task-type');
-  if (!host) return;
+// The types the scope menu lists (task-list.js tasksScopeMenu): General, Roadmap and Engineering (or Dev tickets) by
+// their role, then the team's other types.
+function taskPipelineScopeTypes() {
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  const selected = other.find(type => type.id === state.type);
-  const segment = (id, label, disabled = false) => `<button type="button" id="task-type-${esc(id)}" data-task-type="${esc(id)}" aria-pressed="${state.type === id}"${disabled ? ' disabled title="This team has no Dev ticket type"' : ''}>${esc(label)}</button>`;
-  tasksPaint(host, segment('general', 'General') + (product ? segment(product.id, 'Roadmap') : '') + segment(dev?.id || 'dev', dev?.id === 'engineering' ? 'Engineering' : 'Dev tickets', !dev)
-    + `<button type="button" id="task-type-more" aria-haspopup="menu" aria-controls="task-filter-pop" aria-expanded="false" aria-pressed="${!!selected}" aria-label="${esc(selected ? 'Task type: ' + selected.name + '. More task types' : 'More task types')}"${other.length ? '' : ' disabled'}>${selected ? `<span>${esc(selected.name)}</span>` : ''}${TL_ICON.caret}</button>`);
+  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: 'Roadmap'}] : []),
+    ...(dev ? [{id: dev.id, label: dev.id === 'engineering' ? 'Engineering' : 'Dev tickets'}] : []),
+    ...other.map(type => ({id: type.id, label: type.name, other: true}))];
+}
+const taskPipelineLabel = id => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
+function taskPipelineTools(state) {
   $('#task-q')?.setAttribute('aria-label', `Search ${pipelineSelectedType(state)?.name || 'General'} tasks`);
 }
 function taskPipelineSelect(state, id) {
@@ -72,22 +74,6 @@ function taskPipelineSelect(state, id) {
   taskPipelineRemember(state); tasksRemember(state);
   tasksFiltersChanged(state); tasksPeekSync(state);
   tasksDoneEnsure(state);          // this type's board may have its finished steps unfolded
-}
-function taskPipelineMenu(state, anchor) {
-  const dev = taskPipelineDevType();
-  const product = pipelineProductType();
-  const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="More task types">
-    <div class="tl-menu-h" aria-hidden="true">Task type</div>
-    ${other.map(type => `<button type="button" role="menuitemradio" aria-checked="${state.type === type.id}" class="tl-mi" data-pick-type="${esc(type.id)}"><span>${esc(type.name)}</span>${state.type === type.id ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
-    pop.onclick = ev => {
-      const button = ev.target.closest('[data-pick-type]');
-      if (!button) return;
-      taskPipelineSelect(state, button.dataset.pickType);
-      $('#task-type-more')?.focus();
-    };
-  });
-  anchor.setAttribute('aria-expanded', String($('#task-filter-pop').matches(':popover-open')));
 }
 // A type's board: a column per step, in the type's order, that cards are dragged between (ui/app/task-board.js). Its
 // leading backlog steps (open, before the first step with work under way) and its trailing finished steps each fold

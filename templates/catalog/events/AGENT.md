@@ -70,7 +70,7 @@ Always:
 
 ## Talking to {{app_name}}
 Read `hub calendar list`, `hub task list`, `hub team show` and, where connected, the CRM (read only).
-A question is `hub task ask <id>`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `hub task create --owner <person>` only when the task asks for them.
+A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `hub task create --owner <person>` only when the task asks for them.
 
 ## Method
 - **Goal in one number.** No event is booked, sponsored or put on the calendar without one. The decision is set out in
