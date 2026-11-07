@@ -98,7 +98,7 @@ def builder_refused(run):
     """A bot may not approve: the builder's own move of its spec card to Approved is refused (spec_approval.check)."""
     rows = run.w.sql(
         "SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=? AND e.kind='step' "
-        "AND e.actor LIKE 'bot:%' AND e.new=(SELECT s.id FROM task_steps s JOIN tasks t ON t.type_id=s.type_id "
+        "AND e.actor_id LIKE 'bot:%' AND e.new=(SELECT s.id FROM task_steps s JOIN tasks t ON t.type_id=s.type_id "
         "WHERE t.id=e.subject_id AND s.name='Approved')",
         (run.card,),
     )
