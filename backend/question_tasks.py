@@ -200,6 +200,16 @@ def is_open(row: dict[str, Any] | None) -> bool:
     return is_question(row) and not row.get("answer") and row.get("status") in H.ACTIVE_STATUSES
 
 
+def chat_refusal(who: Any, person: str | None) -> str | None:
+    """Why a question for `person` may not be filed as a task from `who`'s turn, or None. In the Assistant chat the
+    person is in, the question is asked in the reply (the Assistant's NEVER list): a chat turn acts as that person
+    (backend/auth.py chat_person, via "assistant"), so a question for that same person is refused. A question for anyone
+    else still files, as a background run's does."""
+    if getattr(who, "via", "") == "assistant" and person and person == who.actor:
+        return "Ask it in your reply: a question for the person you are chatting with is not filed as a task."
+    return None
+
+
 def asked_at(row: dict[str, Any]) -> str | None:
     """The question's clock: when it was asked, or last asked again (a new wording folded in)."""
     return row.get("asked_at") or row.get("created_at")
