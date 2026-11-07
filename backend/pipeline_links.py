@@ -184,7 +184,8 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     first = pipeline_engine.first_stage(conn, pipeline_id)
     if first is not None:
         step = _one(conn, "SELECT id, type_id, position, flow FROM task_steps WHERE id = ?", (first["id"],))
-        rule = step_flow.of(step).get("assign") if step else None
+        flow: dict[str, Any] = step_flow.of(step)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        rule: Any = flow.get("assign") if step else None
         picked = _pool_bot(conn, step, rule) if step and rule else None
         if picked:
             return f"bot:{picked}"
@@ -218,7 +219,7 @@ def _one(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> Ro
     return found[0] if found else None
 
 
-def _evidence(conn: sqlite3.Connection, source_id: str, stage_id: str) -> list[Row]:
+def _evidence(conn: sqlite3.Connection, source_id: str, stage_id: str | None) -> list[Row]:
     """The source's attachments that can travel as links, the spec first: a requirement attachment on a requirement whose
     name contains "spec", else the newest attachment of the stage the card leaves; then its other link attachments, newest
     first; then its ordinary links (url and doc), oldest first. Each is a row with `url` and `title`. Files and blobs have

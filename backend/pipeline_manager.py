@@ -226,7 +226,7 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
             waiting_since[ticket] = when
         elif event["old"] == "waiting":
             # A stretch that began before this visit counts from the visit's start.
-            start = waiting_since.pop(ticket, began.get(ticket, when))
+            start = waiting_since.pop(ticket, None) or began.get(ticket) or when
             paused.setdefault(ticket, []).append((start, when))
     for ticket, start in waiting_since.items():
         paused.setdefault(ticket, []).append((start, now))
