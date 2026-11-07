@@ -2740,6 +2740,25 @@ def job_message_readable(c, bot, message):
     return privacy.message_readable(c, privacy.make_page_actor(c, "bot:" + bot, message), message)
 
 
+def refused_after_writes(c, row, who, answer):
+    """Whether the handout a claim has just written is one its bot is refused once the claim's own writes are in. Two
+    checks, both on the claim's writes: the job's message is unreadable to its bot (job_refusal's own predicate, which
+    the claim asks before it writes), or the response check every write's answer gets after its commit (app.py's
+    mutate wrapper, require_payload) refuses a message in the handout. The claim runs both inside its savepoint, so a
+    refused handout is undone and its job canceled, never committed for a 403."""
+    if not answer.get("attempt"):
+        return False
+    if not job_message_readable(c, row["bot_id"], H.message(c, row["message_id"])):
+        return True
+    try:
+        privacy.require_payload(c, who, answer)
+    except Problem as exc:
+        if exc.code == "privacy" and exc.detail == "This message is no longer available":
+            return True
+        raise
+    return False
+
+
 def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
@@ -4767,12 +4786,34 @@ class Execution:
                 if not row:
                     return {"attempt": None}
                 continue
+            if refused_after_writes(c, row, who, answer):
+                # The claim's own writes hid the job's message from its bot. Undo them and let the job go as an
+                # unreadable one, once: it is not handed out and not retried, and no 403 follows a commit.
+                c.execute("ROLLBACK TO claim_start")
+                c.execute("RELEASE claim_start")
+                self.cancel_unreadable(c, row)
+                passed.append(row["id"])
+                row = self.pick(c, who, body, runner, now, people_only=people_only, failed=failed, passed=passed)
+                if not row:
+                    return {"attempt": None}
+                continue
             c.execute("RELEASE claim_start")
             if answer.get("attempt"):
                 # The run is handed out: a retry that starts clears its hold and its bot's Health finding.
                 claim_holds.started(c, row["id"])
                 self.check_backoff.pop(row["bot_id"], None)
             return answer
+
+    def cancel_unreadable(self, c, row):
+        """Cancel a queued job whose message its bot may no longer read: the claim lets it go this way, and the
+        scheduler's sweep (drop_unreadable) does the same for the queue. The message itself stays where it is."""
+        from . import threads
+
+        msg = H.message(c, row["message_id"])
+        c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
+        threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
+        threads.replace_note_wake(c, msg, "bot:" + row["bot_id"])
+        H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
 
     def start_claimed(self, c, who, body, runner, row):
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
@@ -4783,10 +4824,7 @@ class Execution:
         if not job_message_readable(c, row["bot_id"], msg) or not threads.still_addressed(
             c, msg, "bot:" + row["bot_id"]
         ):
-            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
-            threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
-            threads.replace_note_wake(c, msg, "bot:" + row["bot_id"])
-            H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
+            self.cancel_unreadable(c, row)
             return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
         with shared_check():

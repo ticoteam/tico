@@ -79,7 +79,8 @@ def _open_checks(c: sqlite3.Connection, actor: str) -> list[tuple[str, str]]:
 
 def _blind_steps(c: sqlite3.Connection, actor: str, ticket_id: str) -> frozenset[str]:
     """The review steps of the ticket's board that `actor`'s open checks on it leave blind: those before the check's
-    own step, when that step comes after a review. The builder of a ticket is never blinded by it."""
+    own step, when that step is a review. Only a review check is blind to earlier reviews: a QA check after them reads
+    their findings as it always did. The builder of a ticket is never blinded by it."""
     values = _cache(c)
     key = ("review_blind_steps", actor, ticket_id)
     if values is not None and key in values:
@@ -92,7 +93,7 @@ def _blind_steps(c: sqlite3.Connection, actor: str, ticket_id: str) -> frozenset
                 continue
             check = _task(c, check_id)
             step = _child_check(c, check, ticket) if check else None
-            if step:
+            if step and _check_kind(step) == "review":
                 out.update(s["id"] for s in _reviews_before(c, step))
     frozen = frozenset(out)
     if values is not None:
@@ -194,5 +195,6 @@ def hides_event(c: sqlite3.Connection, who: str | tuple[str, ...] | list[str], e
 
 
 def blinds(c: sqlite3.Connection, step: Row) -> bool:
-    """Whether a check at `step` is one earlier review findings are hidden from: a check after a review step."""
-    return bool(_check_kind(step)) and bool(_reviews_before(c, step))
+    """Whether a check at `step` is one earlier review findings are hidden from: a review check after a review step.
+    A QA check reads the findings of the reviews before it."""
+    return _check_kind(step) == "review" and bool(_reviews_before(c, step))

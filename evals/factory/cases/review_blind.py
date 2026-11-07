@@ -10,11 +10,12 @@ SHORT = 8  # a finding's text shorter than this is too common to tell from other
 
 
 def _steps_before(w, step):
-    """The review steps on the board before `step`: the earlier reviews a check at `step` is blind to."""
+    """The review steps on the board before `step`: the earlier reviews a check at `step` is blind to. Only a review
+    check is blind to them: a QA check after the reviews reads their findings as it always did."""
     names = []
     for s in w.board.steps:
         if s.name == step:
-            return names
+            return names if s.check and s.check.kind == "review" else []
         if s.check and s.check.kind == "review":
             names.append(s.name)
     return []
@@ -61,7 +62,7 @@ def _scan(run):
     that ticket. Reads of a check at the first review have no earlier review, so they are not kept."""
     w = run.w
     if not hasattr(run, "later"):
-        run.later, run.scanned, run.person = [], 0, {}
+        run.later, run.scanned, run.person, run.paths = [], 0, {}, {}
     for _, _, check, ticket, reads in w.context_reads[run.scanned :]:
         row = next((c for c in w.checks(ticket) if c["id"] == check), None)
         step = w.check_step(row) if row else None
@@ -74,17 +75,24 @@ def _scan(run):
 
 def during(run, w, team, i):
     """Each tick, a person reads each ticket a later check has read findings on, once: the findings are there for her,
-    so a read that leaves them out is leaving out something real."""
+    so a read that leaves them out is leaving out something real. A finding can sit on the ticket, on its comments or
+    on the earlier review's own subtask, so she reads each of those; `run.paths` keeps what each one answered."""
     _scan(run)
     for read in run.later:
         ticket = read["ticket"]
         if ticket in run.person or not (read["mids"] or read["texts"]):
             continue
-        status, reply = w.request("get", f"tasks/{ticket}", token=PERSON)
-        shown = set(_strings(reply))
-        run.person[ticket] = status == 200 and (
-            any(m in shown for m in read["mids"]) or any(t in s for t in read["texts"] for s in shown)
-        )
+        paths = [f"tasks/{ticket}", f"tasks/{ticket}/comments", *(f"tasks/{sub}/comments" for sub in read["subs"])]
+        seen = []
+        for path in paths:
+            status, reply = w.request("get", path, token=PERSON)
+            shown = set(_strings(reply))
+            found = status == 200 and (
+                any(m in shown for m in read["mids"]) or any(t in s for t in read["texts"] for s in shown)
+            )
+            seen.append((path, status, found))
+        run.paths[ticket] = seen
+        run.person[ticket] = any(found for _, _, found in seen)
 
 
 def reads_answer(run):
@@ -121,12 +129,22 @@ def no_earlier_findings(run):
 
 
 def person_reads_findings(run):
-    """A person reads the findings on each ticket a later check was kept from: the positive control for the reads."""
+    """A person reads the findings on each ticket a later check was kept from: the positive control for the reads. A
+    miss names each read path the person made on that ticket and what it answered (status, and * when it had them)."""
     _scan(run)
     if not run.person:
         return False, "no person read a ticket with an earlier review's findings on it"
-    missing = [run.w.title(t) for t, shown in run.person.items() if not shown]
-    return not missing, ", ".join(missing[:4])
+    label = ["ticket", "ticket comments"]
+    missing = [t for t, shown in run.person.items() if not shown]
+    detail = "; ".join(
+        f"{run.w.title(t)}: "
+        + ", ".join(
+            f"{label[k] if k < len(label) else 'earlier review comments'} {status}{'*' if found else ''}"
+            for k, (_, status, found) in enumerate(run.paths.get(t, []))
+        )
+        for t in missing
+    )
+    return not missing, detail[:600]
 
 
 SCENARIOS = [

@@ -194,3 +194,33 @@ def test_a_stale_prepared_pick_leaves_the_backfill_to_the_next_poll(api, monkeyp
     assert backfills == [], "a stale prepared pick leaves automatic backfill to the next poll"
     with store.read() as c:
         assert job_of(c, task["id"])["state"] == "queued"
+
+
+def test_a_job_its_own_claim_hides_is_canceled_at_claim_not_retried(api, monkeypatch):
+    """The claim's own writes can take the job's message from its bot (a handoff marked for a later review, say). The
+    hand-out would then be refused once committed. The claim undoes its writes and cancels the job as unreadable, once:
+    it is not handed out, not retried, and no 403 follows a commit."""
+    machine = task_bot(api, lanes=True, others=("finance",))
+    secret = post(api, "tasks", {"owner": "ops", "title": "Salary bands", "body": "Please review.", "private": True})
+    store = api.app.state.store
+    with store.read() as c:
+        job = job_of(c, secret["id"])
+    assert refusal(api, machine, job) is None  # readable before the claim
+    real_start = execution.Execution.start_claimed
+    started = []
+
+    def start_then_hide(self, c, who, body, runner, row):
+        started.append(row["id"])
+        answer = real_start(self, c, who, body, runner, row)
+        # The claim's own write takes the task off the bot, as the handoff's review step would.
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (secret["id"],))
+        return answer
+
+    monkeypatch.setattr(execution.Execution, "start_claimed", start_then_hide)
+    assert claim(api, machine, "ops") is None
+    assert started == [job["id"]], "handed out once, not retried"
+    with store.read() as c:
+        assert job_of(c, secret["id"])["state"] == "canceled"
+        attempts = c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (job["id"],)).fetchone()[0]
+        assert attempts == 0, "the claim's writes are undone with the refused hand-out"
+        assert suppressed(c, job["id"]) == [{"reason": "unreadable"}]
