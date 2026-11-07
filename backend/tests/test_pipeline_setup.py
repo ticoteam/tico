@@ -278,3 +278,13 @@ def test_replace_keeps_cards_on_kept_stages_and_moves_only_cards_on_removed_stag
 
 def _type(c, name):
     return rows(c, "SELECT id FROM task_types WHERE name=? COLLATE NOCASE", name)[0]["id"]
+
+
+def test_visitor_suggestions_land_on_the_product_first_stage_before_and_after_setup(tmp_path):
+    """Public suggestions are filed at the Product roadmap's first stage: Suggested until the setup renames it to Ideas."""
+    from backend import public_roadmaps
+
+    c = fresh(tmp_path)
+    assert public_roadmaps._ideas_step(c) == "Suggested"
+    S.apply_factory_setup(c, ANA)
+    assert public_roadmaps._ideas_step(c) == "Ideas"
