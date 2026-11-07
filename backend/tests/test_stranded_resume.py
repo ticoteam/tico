@@ -1,15 +1,18 @@
 """Restarting stranded bot work (backend/stranded_resume.py): a bot's task left in `doing` with no run and nothing to
 wait on gets one resume wake through the ordinary wake path, a reviewer's included; a task with a hold, a wait, a live
 job or a follow-up to come does not; a sweep takes a few tasks, oldest first, one per bot; three resumes with no
-progress stop and list the task once on the bot's manager's roundup, never a person's; progress resets the count.
+progress stop and list the task once on the bot's manager's roundup, never a person's; progress resets the count. A resume
+still queued when its task has moved on is dropped at claim; one whose task is still stranded is handed out.
 Synthetic fixtures only."""
+
+import pytest
 
 from backend import hubdb as H
 from backend import profiles as P
 from backend import stranded_resume as SR
 from backend import task_roundup
 from backend.tests.hold_rows import set_holds
-from backend.tests.test_api import api, assign, post, ready, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_profiles import add_bot, put
 
 
@@ -188,6 +191,62 @@ def test_a_task_with_a_hold_a_wait_a_live_job_or_a_follow_up_to_come_is_not_resu
         assert wakes(c, "ops", plain) == 1
         for tid in (blocked, snoozed, waits, live, later, quarantined, open_task, person["id"]):
             assert resumes(c, tid) == [], H.task(c, tid)["title"]
+
+
+def queued_resume(api, tid):
+    """The task stranded and its resume queued for its bot, with nothing else of the bot's queued. Returns the resume's
+    message id. The notice is written before anything that moves the task on below."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")  # the new-task notices
+        strand(c, tid)
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        message = c.execute(
+            "SELECT m.id FROM messages m JOIN jobs j ON j.message_id=m.id WHERE j.bot_id='ops' AND j.state='queued' "
+            "AND json_extract(m.refs,'$.stranded')=1 AND json_extract(m.refs,'$.task')=?",
+            (tid,),
+        ).fetchone()[0]
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-30), message))
+    return message
+
+
+def move_on(c, tid, how):
+    """The task moves on from the state its resume was written in: a step change, finished, a note its owner wrote, or
+    a new owner."""
+    if how == "step":
+        H._task_event(c, tid, H.KEEPER, "step", "in-progress", "review-1")
+    elif how == "finished":
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (tid,))
+    elif how == "note":
+        H._task_event(c, tid, H.bot_actor("ops"), "note", None, "Found the draft; two sections left", "")
+    else:
+        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))
+        H._task_event(c, tid, H.KEEPER, "owner", "bot:ops", "bot:cpo")
+
+
+@pytest.mark.parametrize("how", ["step", "finished", "note", "owner"])
+def test_a_queued_resume_whose_task_has_moved_on_is_dropped_at_claim_not_handed_out(api, how):
+    machine = online(api, "ops")
+    tid = new_task(api, "Draft the notes")
+    message = queued_resume(api, tid)
+    with api.app.state.store.transaction() as c:
+        move_on(c, tid, how)
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (message,)).fetchone()[0]
+    attempt = claim(api, machine)
+    assert attempt is None or attempt["job_id"] != job, "the claim does not hand the stale resume out"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled", (
+            "and it does not stay queued"
+        )
+
+
+def test_a_queued_resume_for_a_task_still_stranded_is_handed_out_at_claim(api):
+    machine = online(api, "ops")
+    tid = new_task(api, "Draft the notes")
+    message = queued_resume(api, tid)
+    attempt = claim(api, machine)
+    with api.app.state.store.read() as c:
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (message,)).fetchone()[0]
+    assert attempt is not None and attempt["job_id"] == job
 
 
 def test_a_paused_or_draining_bot_or_one_whose_computer_is_not_seen_gets_no_resume(api):

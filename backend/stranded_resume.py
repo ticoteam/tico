@@ -21,6 +21,10 @@ result it wakes a bot whatever its profile says about other news, a reviewer inc
 the task's history. One sweep wakes at most SWEEP_CAP tasks, oldest first, at most one per bot and PER_COMPUTER per
 computer, so a backlog drains over hours without crowding one computer.
 
+A resume still queued when its task moves on (a step, status or owner change, or progress by its owner) is dropped at
+claim like any other out-of-date keeper notice (obsolete_sql). A task that is still stranded gets a new one at a later
+sweep.
+
 Progress on a task is a status, step or owner change by anyone; a note, comment or other change its owner bot made; a
 message the bot wrote in its room (other than its reply to a resume); or a subtask filed under it. After
 NO_PROGRESS_LIMIT resumes in a row with no progress the task is not resumed again until something moves it: a
@@ -345,6 +349,29 @@ def told(c: sqlite3.Connection, at: str) -> set[str]:
         )
         if r[0]
     }
+
+
+def obsolete_sql() -> str:
+    """The condition, for execution.obsolete_notices_sql (m: the notice's message, j: its queued job, t: its task), that
+    a queued stranded resume is out of date: its task is no longer in progress, its owner changed, or it moved on since
+    the notice was written by _progress's signal (a step, status or owner change, a note or message its owner wrote, a
+    subtask filed under it). The claim cancels it, as it cancels any other out-of-date keeper notice. A resume whose turn
+    already started is the rest of that turn, so it is never obsolete. Binds no parameters: the claim's queries bind
+    theirs by position."""
+    kinds = ",".join(f"'{kind}'" for kind in BOOKKEEPING)
+    return (
+        "json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 "
+        "AND NOT EXISTS (SELECT 1 FROM attempts ya WHERE ya.id=j.attempt_id AND ya.started_at IS NOT NULL) "
+        "AND (t.status<>'doing' OR t.owner_id<>'bot:'||j.bot_id "
+        "OR EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND e.created_at>m.created_at AND (e.kind IN ('status','step','owner') "
+        f"OR (e.actor_id=t.owner_id AND e.kind NOT IN ({kinds})))) "
+        "OR EXISTS (SELECT 1 FROM messages s WHERE s.conversation_id=t.conversation_id AND s.sender_id=t.owner_id "
+        "AND s.deleted_at IS NULL AND s.created_at>m.created_at "
+        f"AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.id=s.in_reply_to AND n.sender_id='{H.KEEPER}' "
+        "AND json_extract(n.refs,'$.stranded')=1)) "
+        "OR EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='parent' AND r.created_at>m.created_at))"
+    )
 
 
 def _progress(c: sqlite3.Connection, row: dict[str, Any]) -> str:
