@@ -3,7 +3,7 @@
 'use strict';
 
 // ---- chat over messages, with the reply streamed from the keeper's turn ----
-let V2C = null;                                   // the live v2 chat; one per visit
+let V2C: any = null;                                   // the live v2 chat; one per visit
 // "every switch is slow... bring down switching to less than 1s". Each bot's
 // last chat (its conversation and messages) and tasks stay in memory for this page load, so going
 // back to a bot paints what it showed at once while the fresh copy loads behind it.

@@ -606,6 +606,4 @@ SCENARIOS = [
 ]
 
 
-from .cases import SCENARIOS as _CASES  # evals/factory/cases/: one file per scenario
-
-SCENARIOS += _CASES
+from . import cases  # noqa: F401  evals/factory/cases/: one file per scenario, added to SCENARIOS

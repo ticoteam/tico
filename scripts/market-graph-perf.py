@@ -126,7 +126,9 @@ def main():
     source = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:ui/market-page.ts'], cwd=ROOT)
     before = subprocess.check_output(
         [str(ROOT / 'node_modules' / '.bin' / 'esbuild'), '--loader=ts', '--target=esnext', '--charset=utf8'],
-        cwd=ROOT, input=source)
+        cwd=ROOT,
+        input=source,
+    )
     (out / 'before.js').write_bytes(before)
     result = {
         'entities': args.entities,

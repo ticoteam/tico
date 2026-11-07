@@ -80,7 +80,11 @@ def test_typescript_files_are_served_compiled_at_their_urls(api):
     # send the compiled output the bundle is cut from.
     ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
     ui_build.prepare(ui)
-    for url, name in (("/sw.js", "sw.ts"), ("/tico/ui/theme.ts", "theme.ts"), ("/tico/ui/overview/bridge.ts", "overview/bridge.ts")):
+    for url, name in (
+        ("/sw.js", "sw.ts"),
+        ("/tico/ui/theme.ts", "theme.ts"),
+        ("/tico/ui/overview/bridge.ts", "overview/bridge.ts"),
+    ):
         r = api.get(url, headers=AUTH)
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript"), url
         assert r.content == ui_build.compiled(ui, name).read_bytes(), url

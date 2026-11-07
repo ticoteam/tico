@@ -19,7 +19,7 @@ function sessionIdentity() {
   return JSON.stringify([String(S.config.environment_id || location.origin), String(S.me.id)]);
 }
 
-const signedOutError = write => Object.assign(new Error(write ? "Not saved: you've been signed out. Sign in again, then try again."
+const signedOutError = (write?) => Object.assign(new Error(write ? "Not saved: you've been signed out. Sign in again, then try again."
   : "You've been signed out. Sign in again to continue."), {signedOut: true});
 const sessionHere = () => location.pathname + location.search + location.hash;
 const loginPage = to => typeof to === 'string' && to.startsWith('/auth/') ? to : '';

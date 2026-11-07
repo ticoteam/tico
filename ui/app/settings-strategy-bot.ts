@@ -80,7 +80,7 @@ const strategyLevelName = (v, level) => v.levels.find(lv => lv.level === level)?
 let STRATEGY_LOG_UNDO = null;
 const STRATEGY_LOG_STATE = {done: '', proposed: 'Proposed to you', undone: 'Undone'};
 const strategyBotLogShown = () => S.me?.role === 'owner';
-async function renderStrategyBotLog(host, more) {
+async function renderStrategyBotLog(host, more?) {
   if (!host) return;
   const page = await v2Get('/v2/strategy-bot/log' + (more ? '?before=' + encodeURIComponent(more) : ''));
   if (!page) { host.innerHTML = `<div class="empty">Couldn't load the ${esc(strategyBotName())} log. Try again in a moment.</div>`; return; }

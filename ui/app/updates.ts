@@ -816,7 +816,7 @@ function botLatestSeen() {
   void post('/v2/updates/read', {ids: [u.id]}).catch(() => {});
 }
 // Every update the bot posted, newest first; what is shown here is read.
-async function botHistoryLoad(slug, before) {
+async function botHistoryLoad(slug, before?) {
   const host = $('#bot-history'); if (!host) return;
   const q = new URLSearchParams({bot: slug, limit: '30', include_archive: 'true'}); if (before) q.set('before', before);
   const r = await v2Get('/v2/updates?' + q);

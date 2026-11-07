@@ -43,7 +43,7 @@ function railsAria(edge, side) {
   edge.setAttribute('aria-valuemax', String(Math.round(railsMax(side))));
 }
 // The edge's markup, for a page that draws its own (ui/app/bot-page.js); the sidebar's is added below.
-function railEdgeHTML(side, label, controls) {
+function railEdgeHTML(side, label?, controls?) {
   const r = RAILS[side];
   return `<div class="rail-edge" data-rail="${side}" role="separator" aria-orientation="vertical" aria-label="${label || r.label}" aria-controls="${controls || r.controls}" tabindex="0" aria-valuenow="${railsShown[side] || r.def}" aria-valuemin="${r.min}" aria-valuemax="${Math.round(railsMax(side))}"></div>`;
 }

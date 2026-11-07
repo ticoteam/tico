@@ -61,7 +61,7 @@ function auMaintAdopt(state, m, {keepEdits = false} = {}) {
   const f = document.activeElement;
   if (!(keepEdits && f?.matches?.('input:not([role="switch"]),select') && state.root?.querySelector('.au-pane')?.contains(f))) auDrawPane();
 }
-async function auMaintLoad(state, opts) {
+async function auMaintLoad(state, opts?) {
   const gen = state.mtGen;
   try {
     const m = await get('/v2/maintenance');

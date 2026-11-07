@@ -37,7 +37,8 @@ def settings_tabs():
 
 
 def ui_links():
-    for path in sorted((ROOT / "ui").rglob("*.ts")):
+    # The .js and the .ts sources (a converted script keeps its links), each listed by its own glob.
+    for path in sorted([*(ROOT / "ui").rglob("*.js"), *(ROOT / "ui").rglob("*.ts")]):
         rel = path.relative_to(ROOT).as_posix()
         if "/tests/" in rel or "/vendor/" in rel or "node_modules" in rel or "/assets/" in rel:
             continue
