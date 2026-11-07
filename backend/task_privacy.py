@@ -317,6 +317,8 @@ def prime_attempts(c, aids):
         meetings.prime_attempts(inputs, moved)
         tasks = set()
         for aid in chunk:
+            # The run's messages, for attempt_pages_readable (a file refusal is per reader, so only the rows are kept).
+            values[("attempt_messages", aid)] = inputs[aid]
             try:
                 ids = set(carried[aid])
                 for message in inputs[aid]:
@@ -513,7 +515,7 @@ def message_readable(c, actor, message, current=False):
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
-    if not page_message_readable(c, actor, carried):
+    if not page_message_readable(c, actor, carried) or not reply_pages_readable(c, actor, message):
         return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
@@ -603,6 +605,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             if not readable(c, reader, tasks):
                 return False
             if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
+            if not reply_pages_readable(c, reader, stored):
                 return False
         except Problem:
             return False
@@ -866,9 +870,41 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
-        return meeting_sources(c).attempt_readable(actor, aid) and readable(c, actor, attempt_tasks(c, aid, memo))
+        return (
+            meeting_sources(c).attempt_readable(actor, aid)
+            and readable(c, actor, attempt_tasks(c, aid, memo))
+            and attempt_pages_readable(c, actor, aid)
+        )
     except Problem:
         return False
+
+
+def attempt_pages_readable(c, actor, aid):
+    """A run's job message and inputs keep their own file refusal and that of the messages they reply to (the same
+    rule as ReadIndex.attempt_pages). The reply chains are read one query per level for all of them together, so a
+    run with many inputs costs no more statements than one with a few."""
+    values = read_cache.cache(c)
+    messages = values.get(("attempt_messages", aid)) if values is not None else None
+    if messages is None:
+        messages = [
+            dict(row)
+            for row in c.execute(
+                "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=? "
+                "UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+                (aid, aid),
+            ).fetchall()
+        ]
+    parents = reply_chain_rows(c, messages)
+    return all(
+        page_message_readable(c, actor, H._json(message.get("refs"), {}) or {})
+        and reply_pages_readable(
+            c,
+            actor,
+            message,
+            lookup=lambda mid: parents[mid] if mid in parents else H.message(c, mid, include_deleted=True),
+        )
+        for message in messages
+    )
 
 
 def require_attempt(c, who, aid):
@@ -1322,6 +1358,48 @@ PAGE_MESSAGE_KEYS = ("target", "answer", "review", "body_sources")
 def page_message_readable(c, actor, refs):
     """Generated file-review messages carry names in prose as well as structured refs."""
     return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get(key) for key in PAGE_MESSAGE_KEYS])
+
+
+REPLY_CHAIN_LIMIT = 100
+
+
+def reply_chain_rows(c, messages):
+    """The stored messages on the in_reply_to chains of `messages`, keyed by id, one query per level of the chains.
+    The bound is the level: each chain is read as far as its own walk reads (REPLY_CHAIN_LIMIT), however many chains
+    the batch holds, so no chain is cut short by another's rows."""
+    found, frontier = {}, {m["in_reply_to"] for m in messages if m.get("in_reply_to")}
+    for _ in range(REPLY_CHAIN_LIMIT):
+        if not frontier:
+            break
+        marks = ",".join("?" * len(frontier))
+        rows = {
+            row["id"]: dict(row)
+            for row in c.execute(f"SELECT id,refs,in_reply_to FROM messages WHERE id IN ({marks})", sorted(frontier))
+        }
+        found.update(rows)
+        frontier = {
+            row["in_reply_to"] for row in rows.values() if row["in_reply_to"] and row["in_reply_to"] not in found
+        }
+    return found
+
+
+def reply_pages_readable(c, actor, message, lookup=None):
+    """A reply inherits the file refusal of each message it replies to, at any depth: every message on its in_reply_to
+    chain is read with page_message_readable, as its own refs are. A reply with REPLY_CHAIN_LIMIT ancestors or more is
+    refused, as ReadIndex.sources refuses it; a cycle ends at the message seen. `lookup` reads a message by id."""
+    lookup = lookup or (lambda mid: H.message(c, mid, include_deleted=True))
+    seen, mid = set(), dict(message).get("in_reply_to")
+    while mid and mid not in seen:
+        if len(seen) + 1 >= REPLY_CHAIN_LIMIT:
+            return False
+        seen.add(mid)
+        parent = lookup(mid)
+        if not parent:
+            break
+        if not page_message_readable(c, actor, H._json(parent.get("refs"), {}) or {}):
+            return False
+        mid = parent.get("in_reply_to")
+    return True
 
 
 def page_content_readable(c, actor, payload):
