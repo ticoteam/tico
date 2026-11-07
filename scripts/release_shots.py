@@ -6,8 +6,8 @@
 The base and the head are each checked out as a git worktree, and each runs the demo (python -m backend.demo) on its
 own port, one after the other. This checkout's harness, scripts/screenshots/index.js, shoots the pages the diff's ui/ files
 draw (its PAGES table says which), at desktop 1440 px and phone 390 px, light, and dark too when a dark-theme file
-changed. Pairs are compared in Chromium (scripts/screenshots/compare.js). A pair under 0.1% changed pixels is unchanged
-and is listed on one line; a page the head adds has no before.
+changed. Pairs are compared in plain Node, which decodes the PNGs itself (scripts/screenshots/compare.js; no browser).
+A pair under 0.1% changed pixels is unchanged and is listed on one line; a page the head adds has no before.
 
 DIR gets <page>-<width>-before.png and <page>-<width>-after.png (dark: <page>-<width>-dark-before.png), manifest.json,
 and release-shots.md, the "What it looks like" section, whose images are release-evidence URLs. --upload pushes the
@@ -298,7 +298,7 @@ def capture(
 
 
 def changed_pixels(pairs: Sequence[tuple[str, Path, Path]], work: Path) -> dict[str, float]:
-    """Changed pixels, in percent, for each (key, before, after): one browser for all the pairs."""
+    """Changed pixels, in percent, for each (key, before, after): one node process for all the pairs."""
     if not pairs:
         return {}
     pairs_file = work / 'pairs.json'

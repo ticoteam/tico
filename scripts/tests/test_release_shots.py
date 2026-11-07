@@ -279,17 +279,18 @@ def test_only_changed_pictures_and_new_pages_are_uploaded() -> None:
     }
 
 
-def png(width: int, height: int, pixels: list[tuple[int, int, int, int]]) -> bytes:
-    """A PNG of RGBA pixels, row by row, with no filtering."""
+def png(width: int, height: int, pixels: list[tuple[int, int, int, int]], color_type: int = 6) -> bytes:
+    """A PNG of RGBA pixels, row by row, with no filtering: RGBA (color type 6), or RGB (2) without the alpha."""
+    channels = 4 if color_type == 6 else 3
     raw = b''.join(
-        b'\x00' + bytes(channel for pixel in pixels[row * width : (row + 1) * width] for channel in pixel)
+        b'\x00' + bytes(channel for pixel in pixels[row * width : (row + 1) * width] for channel in pixel[:channels])
         for row in range(height)
     )
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xFFFFFFFF)
 
-    header = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+    header = struct.pack('>IIBBBBB', width, height, 8, color_type, 0, 0, 0)
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
 
 
@@ -307,6 +308,15 @@ def test_changed_pixels_counts_past_the_tolerance_and_flags_a_size_change(tmp_pa
     pairs = [(key, tmp_path / 'before.png', tmp_path / f'{key}.png') for key in ('same', 'nudged', 'changed', 'wide')]
     percent = shots.changed_pixels(pairs, tmp_path)
     assert percent == {'same': 0.0, 'nudged': 0.0, 'changed': 25.0, 'wide': 100.0}
+
+
+def test_an_rgb_picture_matches_the_same_pixels_in_rgba(tmp_path: Path) -> None:
+    """RGB (color type 2) decodes as opaque, so it matches the same pixels saved as RGBA (color type 6)."""
+    pixels = [(10, 20, 30, 255), (255, 255, 255, 255), (0, 128, 255, 255), (200, 100, 50, 255)]
+    (tmp_path / 'rgb.png').write_bytes(png(2, 2, pixels, color_type=2))
+    (tmp_path / 'rgba.png').write_bytes(png(2, 2, pixels))
+    percent = shots.changed_pixels([('same', tmp_path / 'rgb.png', tmp_path / 'rgba.png')], tmp_path)
+    assert percent == {'same': 0.0}
 
 
 def test_upload_evidence_adds_versions_to_an_orphan_branch_and_leaves_other_branches(tmp_path: Path) -> None:
