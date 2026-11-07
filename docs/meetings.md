@@ -57,14 +57,16 @@ action items work identically whatever the source.
 ### Tico Recorder
 
 **Get Tico Recorder** on Meetings downloads the Mac app
-(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`); the app moves itself to Applications
-on first launch. The link hides once Tico has seen one of your copies in the last 30 days. The
-Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its calls; Tico keeps
-the last version and time per person and copy, writing at most every ten minutes unless the version changes. The newest
-version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
+(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`). A copy that cannot update itself, outside
+an Applications folder (for example, opened from Downloads or the disk image), asks once per launch, before your first
+recording: **Move** copies it to Applications (or `~/Applications`) and relaunches it from there; **Not now** keeps it
+where it is, and a smaller banner offers the move later. The link hides once Tico has seen one of your copies in the
+last 30 days. The Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its
+calls; Tico keeps the last version and time per person and copy, writing at most every ten minutes unless the version
+changes. The newest version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
 when the copy you used last is older, Meetings shows **Recorder update available**, and nothing else.
 `GET /api/v2/meetings/recorder` answers the same for your own copies; owners and admins see everyone's version in
-Settings > People. Neither link shows on a phone.
+Settings > People. Neither link shows in the phone layout, in a browser window 760 px wide or less.
 
 ## Review before sharing
 
