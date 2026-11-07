@@ -322,7 +322,8 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
     }
     // The segment P&L is for the owner (who sees the whole P&L) and segment leads; a manager is denied (reads.py pnl_by).
-    if (p === '/api/v2/finance/reports/pnl_by') return viewer === 'ana' ? json({columns: [], sections: [], lines: []}) : denied();
+    // Read as the person viewed as (?view_as=), like the P&L itself: the owner viewing as a manager is denied.
+    if (p === '/api/v2/finance/reports/pnl_by') return (url.searchParams.get('view_as') || (viewer === 'ana' ? 'human:ana' : '')) === 'human:ana' ? json({columns: [], sections: [], lines: []}) : denied();
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
     // budgetsExcl: a viewer whose budget figures leave payroll out (the read and each row say excluded).
     if (p === '/api/v2/finance/budgets') return json(budgetsExcl ? {budgets: BUDGETS.map(b => ({...b, state: {...b.state, excluded: true}})), more: false, excluded: true} : {budgets: BUDGETS, more: false});
