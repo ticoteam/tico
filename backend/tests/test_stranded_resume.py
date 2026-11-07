@@ -269,6 +269,7 @@ def test_a_stop_that_reaches_the_manager_gives_it_one_ticket_at_once(api):
     tid = new_task(api, "Draft the notes")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
+        put(c, "cpo", P.LEAD)  # a lead's catch-all digest row must not hold the manager's wake
         strand(c, tid)
         at = H.now()
         for _ in range(SR.NO_PROGRESS_LIMIT):
@@ -281,6 +282,11 @@ def test_a_stop_that_reaches_the_manager_gives_it_one_ticket_at_once(api):
         ).fetchall()
         assert len(made) == 1, "one ticket for the manager"
         assert made[0][0] == "bot:cpo" and "builder ops" in made[0][1]
+        held = c.execute(
+            "SELECT j.held FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='cpo' AND json_extract(m.refs,'$.wake')='nudge'"
+        ).fetchall()
+        assert [row[0] for row in held] == [0], "the manager's wake is immediate, not held for its digest"
         assert SR.run(c, H.shift(at, hours=2)) == {"resumed": 0, "stopped": 0}
         assert (
             c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", ("%made no progress in 3 runs%",)).fetchone()[0]
