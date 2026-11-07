@@ -20,11 +20,14 @@
  "garbled_reviews": 33.8,
  "github_read_outage": 50.1,
  "happy_path": 36.0,
+ "held_expiry": 62.0,
  "merged_outside": 28.9,
  "merged_stale_blocker": 28.8,
  "mid_fallback_quota": 9.4,
  "off_script": 36.0,
+ "owner_plate": 62.0,
  "qa_mixed": 52.4,
+ "qa_reviewer_profile": 48.0,
  "qa_waiver_head": 42.2,
  "quota_outage": 53.6,
  "receipt_wording": 60.2,
@@ -38,6 +41,7 @@
  "snoozed_ticket": 35.4,
  "stale_head": 36.5,
  "stale_quota_reset": 4.2,
+ "stranded_doing": 60.0,
  "stuck_ticket": 40.8,
  "verdict_past_open_sibling": 38.1
 }
