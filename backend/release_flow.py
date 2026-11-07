@@ -175,7 +175,7 @@ def _qa_room(c, ticket, qa):
 # ----------------------------------------------------------------------------- what is waiting for a release
 def pending(c):
     """The Dev tickets at the Pending Release step, oldest first: dicts of the task row plus `prs` (its pull request
-    links). Every one is listed; a task body names each ticket as `_named` allows."""
+    links). Every one is listed; a task body names each ticket as `_ticket_line` allows."""
     from .roadmap_flow import ENGINEERING
 
     rows = [
@@ -195,7 +195,7 @@ def _name(t, title=None):
     return (f"#{t['number']} " if t.get("number") is not None else "") + title
 
 
-def _named(c, t):
+def _ticket_line(c, t):
     """How a ticket is named in a team-visible task body, whoever reads it. A ticket that is not private is named as
     usual. A private ticket is never named by its private title, owner or pull request: it shows its public title and
     summary when it has a public title, and otherwise is only counted (None)."""
@@ -216,11 +216,11 @@ def _line(t, name, private):
 
 
 def _listing(c, tickets, more_where):
-    """The ticket lines a team-visible task or routine may carry (`_named`). A private ticket with no public title is
+    """The ticket lines a team-visible task or routine may carry (`_ticket_line`). A private ticket with no public title is
     counted only, and the task says to leave it out and never to ask anyone for its name."""
     named, hidden = [], 0
     for t in tickets:
-        found = _named(c, t)
+        found = _ticket_line(c, t)
         if found is None:
             hidden += 1
         else:
