@@ -268,10 +268,9 @@ async function taFinanceLoad() {
   const state = TA; if (!TAF_SERVICES.includes(state?.data?.tool?.service)) return;
   let found = null;
   try { found = await get('/v2/finance/ad-accounts?tool_id=' + encodeURIComponent(state.id), {fresh: true}); } catch { found = null; }
+  if (found) found.campaigns = await taCampaignList();
   if (TA !== state) return;
   state.fin = found;
-  state.campaigns = found ? await taCampaignList() : [];
-  if (TA !== state) return;
   const slot = $('#tool-api [data-ta-finance]');
   if (slot && !formBusy(slot)) { slot.innerHTML = found ? taFinanceCard(found) : ''; taFinanceBind(slot); }
 }
@@ -282,16 +281,17 @@ async function taCampaignList() {
   try { if (!FIN_ACCESS) await finProbe(); } catch { /* the picker shows the current owner only */ }
   try { return (await get('/v2/finance/campaigns?month=' + taMonthKey(), {fresh: true})).campaigns || []; } catch { return []; }
 }
+// The ad accounts read the Finance card last drew, with its campaigns.
+let taFinDrawn: {campaigns?: unknown} | null = null;
 // After an owner change: the campaigns read again and the card is drawn in place.
 async function taCampaignsReload() {
-  const state = TA; if (!state?.fin) return;
-  const campaigns = await taCampaignList();
-  if (TA !== state) return;
-  state.campaigns = campaigns;
-  const slot = $('#tool-api [data-ta-finance]');
-  if (slot?.isConnected) slot.innerHTML = taFinanceCard(state.fin);
+  const fin = taFinDrawn, slot = $('#tool-api [data-ta-finance]');
+  if (!fin || !slot) return;
+  fin.campaigns = await taCampaignList();
+  if (slot.isConnected && taFinDrawn === fin) slot.innerHTML = taFinanceCard(fin);
 }
-function taFinanceCard(f, campaigns = TA?.campaigns || []) {
+function taFinanceCard(f, campaigns = f.campaigns || []) {
+  taFinDrawn = f;
   const imp = f.import, on = imp.enabled, other = f.elsewhere;
   const seg = `<div class="theme-seg" role="radiogroup" aria-label="Ad spend">${[[true, 'On'], [false, 'Off']].map(([v, label]) =>
     `<button type="button" role="radio" aria-checked="${on === v}" data-taf-on="${v}"${other && v && !on ? ' disabled' : ''}>${label}</button>`).join('')}</div>`;
