@@ -746,3 +746,54 @@ def test_a_met_on_truncated_text_through_the_default_haiku_path_is_unsure(tmp_pa
     system, state = sent[0]
     assert "truncated" in system and "null" in system  # the rule the model is told
     assert state["attachment"]["truncated"] is True
+
+
+def test_a_marked_met_attachment_on_a_finished_ticket_is_never_asked_the_model(tmp_path, monkeypatch):
+    """Codex O-5: Mark met settles the requirement, and the ticket then finishes. The judge does not read or ask about that
+    attachment again: two passes make zero model calls, instead of asking and then discarding the answer every tick."""
+    from backend import pipeline_review
+
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    stage = step_id(c, dev["id"], "Review")
+    req = R.add(
+        c,
+        ANA,
+        stage,
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "The link opens the page",
+        },
+    )
+    task = H.task_create(c, ANA, "Ship", "", ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task["id"],
+        req["id"],
+        {"source": "link", "url": "https://x.example"},
+    )
+    pipeline_review.mark_met(c, ANA, task["id"], req["id"], "Checked by hand")
+    c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+    c.commit()
+    c.close()
+
+    store = Store(_settings(path))
+    asked = []
+
+    def ask(model, state, questions, label):
+        asked.append(state["requirement"])
+        return {"p": 0.95, "reason": "The page opens", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", ask)
+    assert P.tick(store) == 0
+    assert P.tick(store) == 0
+    assert asked == []

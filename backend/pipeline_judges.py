@@ -373,6 +373,13 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
            WHERE a.removed_at IS NULL
              AND r.kind = 'attachment' AND r.reviewed_by IN ('bot', 'bot_then_person')
              AND r.rubric IS NOT NULL
+             AND t.status IN ({active})
+             AND NOT EXISTS (SELECT 1 FROM stage_decisions d
+                             WHERE d.task_id = a.task_id AND d.stage_requirement_id = a.stage_requirement_id
+                               AND d.verdict = 'override'
+                               AND d.rowid = (SELECT x.rowid FROM stage_decisions x
+                                              WHERE x.task_id = a.task_id AND x.stage_requirement_id = a.stage_requirement_id
+                                              ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1))
              AND (t.step_id = r.pipeline_stage_id OR EXISTS (SELECT 1 FROM stage_visits v
                   WHERE v.task_id = a.task_id AND v.pipeline_stage_id = r.pipeline_stage_id AND v.left_at IS NOT NULL
                     AND r.created_at <= v.left_at))
@@ -382,8 +389,8 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                              WHERE d.task_id = a.task_id AND d.stage_requirement_id = a.stage_requirement_id
                                AND d.route_next_to IS NOT NULL)
            ORDER BY a.created_at, a.id
-           LIMIT ?""",
-        (limit,),
+           LIMIT ?""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES))),
+        (*H.ACTIVE_STATUSES, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 

@@ -926,6 +926,12 @@ class _Guard:
     def task(self, conn, who, task_id):
         return None
 
+    def identity_for_actor(self, conn, actor):
+        """The identity a reader of `actor`'s name reads as: a bot reviewer, who may read the ticket's files."""
+        from types import SimpleNamespace
+
+        return SimpleNamespace(actor=actor, role="bot", task_actor=None)
+
 
 def test_the_spawned_ticket_carries_the_spec_page_first_and_then_the_ordinary_links(co):
     """Fix V-5: the spec is attached through the real attachment API on a requirement named "Spec page", and an ordinary
@@ -1025,3 +1031,53 @@ def test_undo_refuses_a_not_validated_decision(co):
     co.c.rollback()
     assert caught.value.code == "not_undoable"
     assert co.where(card) == ("Product", "In development")
+
+
+def test_the_spawned_ticket_carries_a_tico_page_attached_to_the_spec_first(co, monkeypatch):
+    """Fix V-5 (page): a spec is usually a Tico page, a company file with a pages row. Attached through the real attach API
+    to Product Review's "Spec" requirement, it is carried to the Engineering ticket as a link to its version, first, ahead
+    of the approval's own evidence and the ordinary links. The address is absolute on the hub's public origin."""
+    from types import SimpleNamespace
+
+    from backend import requirement_attachments
+
+    monkeypatch.setattr(pipeline_links, "hub_origin", "https://hub.example.test")
+    card = co.ticket("Product", "Review", "Dark mode")
+    co.c.execute(
+        "INSERT INTO bots(id,slug,display_name,created_at) VALUES('bot-spec','spec','Spec writer',?)", (H.now(),)
+    )
+    co.c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,"
+        "last_activity_at) VALUES('file-dark-spec','bot-spec',?,'spec','Dark mode spec','file','text/html',"
+        "'tico_blob',1,?,?)",
+        ("task:" + card, H.now(), H.now()),
+    )
+    co.c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
+        "VALUES('blob-dark-spec',?,'sha-spec',10,'dark-spec.html','text/html',?)",
+        (ANA, H.now()),
+    )
+    co.c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES('file-dark-spec',1,'blob-dark-spec','sha-spec',10,'dark-spec.html','text/html',?,?)",
+        (ANA, H.now()),
+    )
+    co.c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES('file-dark-spec',?,?)", (H.now(), H.now()))
+    spec_req = co.require("Product", "Review", "Spec", needs={"formats": ["page"]}, reviewed_by="person")
+    requirement_attachments.attach(
+        co.c,
+        _Guard(),
+        SimpleNamespace(actor=ANA, role="human", task_actor=None),
+        card,
+        spec_req,
+        {"source": "file", "file_id": "file-dark-spec"},
+    )
+    H.task_link(co.c, BUILDER, card, NOTES)
+    co.attach(card, co.requirement("Product", "Review", "Spec approved"), url=SPEC)
+    co.c.commit()
+    co.approve(card, spec_req)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    links = [link["url"] for link in H.task_links(co.c, d41)]
+    assert links[0] == "https://hub.example.test/api/v2/files/file-dark-spec/versions/1"
+    assert NOTES in links
