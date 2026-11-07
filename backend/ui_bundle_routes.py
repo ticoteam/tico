@@ -6,6 +6,7 @@ from fastapi import Request
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 import re
+from . import brand_icons
 from . import ui_build
 from . import ui_bundle
 from .route_renames import install as install_route_renames
@@ -13,6 +14,17 @@ from .route_renames import install as install_route_renames
 
 def register(app, auth, settings):
     install_route_renames(app)  # after every route: the new spellings canonical, the old ones deprecated
+
+    # The two icons browsers ask for at the root (backend/brand_icons.py). Before the static mounts below, which would
+    # otherwise answer first.
+    @app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/apple-touch-icon.png", methods=["GET", "HEAD"], include_in_schema=False)
+    async def brand_root_icon(request: Request):
+        rel, media_type = brand_icons.ROOT[request.url.path]
+        data = brand_icons.read(settings, rel)
+        if data is None:
+            raise Problem("not_found", "Not found", 404)
+        return brand_icons.reply(data, media_type)
 
     # Only the frontend directory is served. No project root, runtime DB, or secrets.
     # The page loads its scripts and styles from /tico/ui/ (ui/index.html), so the same directory is

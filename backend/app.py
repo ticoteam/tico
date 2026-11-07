@@ -97,6 +97,7 @@ from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
 from . import bot_status_routes, computers_routes
+from . import brand_icons
 from .approvals_routes import SEND_WAY_DEFERS  # noqa: F401
 from .bot_status_routes import INBOX_LIMIT  # noqa: F401
 from .bot_status_routes import INBOX_PAGE  # noqa: F401
@@ -799,6 +800,10 @@ def create_app(settings=None):
                 return await call_next(request)
             if request.url.path == "/api/v2/team/icon" and request.method == "GET":
                 return await call_next(request)
+            # The server's icons (backend/brand_icons.py): the two root icons and the brand files a page links, and nothing
+            # else under /assets/.
+            if request.method in ("GET", "HEAD") and brand_icons.public(request.url.path):
+                return brand_icons.harden(await call_next(request))
             # Tico HQ's check that a self-run server is the one at its address (backend/company_server.py): only a
             # digest, and only while an owner's connect is pending.
             if request.url.path == company_server.PROOF_PATH and request.method == "GET":
