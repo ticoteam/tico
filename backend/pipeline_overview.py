@@ -5,12 +5,15 @@ work comes in. Track F owns this module.
 `read` is one set-based read: a handful of grouped queries, never one per card. It counts only the cards the reader may
 open (the caller's `Auth.task_sql`, as the Tasks board does) and leaves out a members-only pipeline the reader is not in.
 
-Where outside work comes from: a card made in a factory's first pipeline that no handoff brought. Tasks record no source
-of their own, so the label is read from what they do record: the card's first tag ("Ads"), else "Customers" for a
-guest's card, else "Team ideas" for a card a person made, else "Bots" for one a bot made.
+Where outside work comes from: a card whose first visit was in a factory's first pipeline, created in the period, and that
+no spawn made. Tasks record no source of their own, so the label is read from what they do record: the card's first tag
+by name ("Ads", from task_tags), else "Customers" for a guest's card, else "Team ideas" for a card a person made, else
+"Bots" for one a bot made. A factory's done count is the cards that entered its output stage in the period.
+
+Each count is one grouped SQL read over the shown pipelines; nothing is capped silently. The label list is capped at
+MAX_LABELS per factory, with the rest added up to "Other".
 """
 
-import json
 from collections import defaultdict
 from datetime import timedelta
 from statistics import median
@@ -37,7 +40,7 @@ PERIODS = {"1d": 1, "7d": 7, "30d": 30}
 MAX_PIPELINES = 50
 MAX_EDGES = 200
 MAX_LABELS = 5  # input circles per factory; the rest add up to "Other"
-INPUT_ROWS = 5000
+LOOP_MEDIAN_LAPS = 3  # a loop shows its median lap time from this many completed laps
 LIVE_HOURS = 2  # a turn still open after this long is not "live"
 FINISHED = ("done", "closed", "declined")
 
@@ -106,9 +109,10 @@ def _factories(c: "sqlite3.Connection") -> list[Row]:
         return []
     goal = "goal" if "goal" in have else "NULL AS goal"
     manager = "manager_id" if "manager_id" in have else "NULL AS manager_id"
+    output = "output_stage_id" if "output_stage_id" in have else "NULL AS output_stage_id"
     return _rows(
         c,
-        f"SELECT id, name, {goal}, {manager} FROM factories WHERE retired_at IS NULL "
+        f"SELECT id, name, {goal}, {manager}, {output} FROM factories WHERE retired_at IS NULL "
         "ORDER BY coalesce(position, 1000000), created_at, id",
     )
 
@@ -173,20 +177,24 @@ def _live(c: "sqlite3.Connection", ids: list[str], seen: str, now: str) -> dict[
     return out
 
 
-def _for_you(c: "sqlite3.Connection", actor: str, ids: list[str]) -> dict[str, int]:
-    """Cards waiting on the reader's review, per pipeline: only a pipeline with requirements can have any."""
+def _for_you(c: "sqlite3.Connection", actor: str, ids: list[str], seen: str) -> dict[str, int]:
+    """Cards waiting on the reader's review, per shown pipeline. One review queue read for the reader, then only the items
+    on cards the reader may open (`seen`), so a hidden card never counts."""
     if not actor.startswith("human:") or not ids or not _columns(c, "stage_requirements"):
         return {}
-    with_rules = sorted(
-        str(r[0])
-        for r in c.execute(
-            "SELECT DISTINCT pipeline_id FROM stage_requirements WHERE retired_at IS NULL "
-            f"AND pipeline_id IN ({_marks(ids)})",
-            ids,
-        )
-    )
-    counted = {pid: len(pipeline_review.queue_for(c, actor, pid)) for pid in with_rules}
-    return {pid: n for pid, n in counted.items() if n}
+    shown = set(ids)
+    items = [i for i in pipeline_review.queue_for(c, actor) if str(i["pipeline_id"]) in shown]
+    if not items:
+        return {}
+    task_ids = sorted({str(i["task_id"]) for i in items})
+    readable = {
+        str(r[0]) for r in c.execute(f"SELECT id FROM tasks WHERE ({seen}) AND id IN ({_marks(task_ids)})", task_ids)
+    }
+    counted: dict[str, int] = defaultdict(int)
+    for item in items:
+        if str(item["task_id"]) in readable:
+            counted[str(item["pipeline_id"])] += 1
+    return dict(counted)
 
 
 def _links(c: "sqlite3.Connection", ids: set[str]) -> list[Row]:
@@ -195,78 +203,206 @@ def _links(c: "sqlite3.Connection", ids: set[str]) -> list[Row]:
         return []
     return [
         r
-        for r in _rows(c, "SELECT id, from_pipeline_id, to_pipeline_id FROM pipeline_links WHERE retired_at IS NULL")
+        for r in _rows(
+            c, "SELECT id, from_pipeline_id, to_pipeline_id, mode FROM pipeline_links WHERE retired_at IS NULL"
+        )
         if r["from_pipeline_id"] in ids and r["to_pipeline_id"] in ids
     ]
 
 
-def _handoffs(c: "sqlite3.Connection", seen: str, since: str) -> dict[str, list[float]]:
-    """By link, minutes each card the reader may open spent in the source pipeline before a handoff in the period: from
-    its first visit there (else its creation) up to the handoff."""
-    if not _columns(c, "pipeline_handoffs"):
-        return {}
-    visits = _columns(c, "stage_visits")
+def _edges(c: "sqlite3.Connection", ids: list[str], seen: str, since: str) -> list[Row]:
+    """Per pair of shown pipelines and link mode: the handoffs in the period and the median minutes each card spent in the
+    source pipeline before it (from its first visit there, else its creation). The median is taken in SQL: the middle
+    row (or the two middle rows, averaged) of each edge's ranked ages, so one row per edge leaves the database."""
+    if not _columns(c, "pipeline_handoffs") or not ids:
+        return []
     start = (
         "(SELECT MIN(v.entered_at) FROM stage_visits v WHERE v.task_id=h.source_task_id "
         "AND v.pipeline_id=l.from_pipeline_id AND v.entered_at<=h.created_at)"
-        if visits
+        if _columns(c, "stage_visits")
         else "NULL"
     )
-    out: dict[str, list[float]] = defaultdict(list)
-    for r in _rows(
-        c,
-        f"SELECT h.pipeline_link_id AS lid, h.created_at AS at, coalesce({start}, t.created_at) AS entered "
+    m = _marks(ids)
+    sql = (
+        "WITH hops AS (SELECT l.from_pipeline_id AS a, l.to_pipeline_id AS b, l.mode AS mode, "
+        f"MAX(0, (julianday(h.created_at) - julianday(coalesce({start}, t.created_at))) * 1440.0) AS age "
         "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
         "LEFT JOIN tasks t ON t.id=h.source_task_id "
-        f"WHERE h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))",
-        [since],
-    ):
-        a, b = H.parse_ts(r["entered"]), H.parse_ts(r["at"])
-        out[str(r["lid"])].append(max(0.0, (b - a).total_seconds() / 60) if a and b else 0.0)
+        f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))), "
+        "ranked AS (SELECT a, b, mode, age, ROW_NUMBER() OVER (PARTITION BY a, b, mode ORDER BY age) AS rn, "
+        "COUNT(*) OVER (PARTITION BY a, b, mode) AS n FROM hops) "
+        "SELECT a, b, mode, n AS count, AVG(age) AS median_age FROM ranked "
+        "WHERE rn IN ((n+1)/2, (n+2)/2) GROUP BY a, b, mode ORDER BY a, b, mode"
+    )
+    return _rows(c, sql, [*ids, *ids, since])
+
+
+def _sccs(nodes: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:
+    """Groups of two or more pipelines that feed each other around a cycle (Tarjan's strongly connected components)."""
+    graph: dict[str, list[str]] = {n: [] for n in nodes}
+    for a, b in edges:
+        if a in graph and b in graph and a != b and b not in graph[a]:
+            graph[a].append(b)
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    out: list[list[str]] = []
+
+    def visit(v: str) -> None:
+        index[v] = low[v] = len(index)
+        stack.append(v)
+        on_stack.add(v)
+        for w in graph[v]:
+            if w not in index:
+                visit(w)
+                low[v] = min(low[v], low[w])
+            elif w in on_stack:
+                low[v] = min(low[v], index[w])
+        if low[v] == index[v]:
+            group: list[str] = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                group.append(w)
+                if w == v:
+                    break
+            if len(group) > 1:
+                out.append(group)
+
+    for n in nodes:
+        if n not in index:
+            visit(n)
     return out
 
 
-def _origin(labels: object, requester: object, guest: object) -> str:
-    """Where a card came from, from what the task records (module note)."""
+def _laps(seq: list[Row]) -> list[float]:
+    """Completed laps in one card's move handoffs, in time order: a lap starts where the card leaves a pipeline and ends
+    when it comes back to that pipeline. A hop that does not follow on from the card's last one starts a new lap."""
+    out: list[float] = []
+    pos: str | None = None
     first = ""
-    try:
-        parsed: object = json.loads(str(labels or "[]"))
-        if isinstance(parsed, list) and parsed:
-            first = str(parsed[0])  # pyright: ignore[reportUnknownArgumentType]
-    except ValueError:
-        first = ""
-    if first.strip():
-        return first.strip().replace("-", " ").replace("_", " ").capitalize()[:24]
-    if guest:
-        return "Customers"
-    if str(requester or "").startswith("human:"):
-        return "Team ideas"
-    return "Bots"
+    began: Any = None
+    for h in seq:
+        if pos is not None and str(h["a"]) != pos:
+            pos = None
+        if pos is None:
+            first, began = str(h["a"]), H.parse_ts(h["at"])
+        pos = str(h["b"])
+        ended = H.parse_ts(h["at"])
+        if pos == first and began and ended:
+            out.append(max(0.0, (ended - began).total_seconds() / 60))
+            pos = None
+    return out
+
+
+def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: str, since: str) -> list[Row]:
+    """Cycles in the links the reader sees, with their completed laps (move handoffs of one card round a cycle). The
+    median lap time shows only from LOOP_MEDIAN_LAPS laps."""
+    groups = _sccs(ordered, [(str(r["from_pipeline_id"]), str(r["to_pipeline_id"])) for r in links])
+    if not groups or not _columns(c, "pipeline_handoffs"):
+        return []
+    members = sorted({p for g in groups for p in g})
+    m = _marks(members)
+    hops = _rows(
+        c,
+        "SELECT h.target_task_id AS task, l.from_pipeline_id AS a, l.to_pipeline_id AS b, h.created_at AS at "
+        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
+        f"WHERE l.mode='move' AND l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        "ORDER BY h.target_task_id, h.created_at",
+        [*members, *members, since],
+    )
+    by_card: dict[str, list[Row]] = defaultdict(list)
+    for h in hops:
+        by_card[str(h["task"])].append(h)
+    rank = {pid: i for i, pid in enumerate(ordered)}
+    out: list[Row] = []
+    for group in sorted(groups, key=lambda g: min(rank.get(p, 0) for p in g)):
+        inside = set(group)
+        laps: list[float] = []
+        for seq in by_card.values():
+            laps.extend(_laps([h for h in seq if str(h["a"]) in inside and str(h["b"]) in inside]))
+        out.append(
+            {
+                "pipelines": sorted(group, key=lambda p: rank.get(p, 0)),
+                "laps": len(laps),
+                "median_lap_minutes": round(median(laps)) if len(laps) >= LOOP_MEDIAN_LAPS else None,
+            }
+        )
+    return out
+
+
+def _last_done(c: "sqlite3.Connection", pipeline_id: str) -> str:
+    """A pipeline's last stage of done kind: where its finished work ends, the default output stage of its factory."""
+    row = c.execute(
+        "SELECT id FROM task_steps WHERE type_id=? AND status='done' ORDER BY position DESC, id DESC LIMIT 1",
+        (pipeline_id,),
+    ).fetchone()
+    return str(row[0]) if row else ""
+
+
+def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
+    """Per output stage: the cards that entered it in the period (a factory's done count)."""
+    if not stages or not _columns(c, "stage_visits"):
+        return {}
+    rows = _rows(
+        c,
+        "SELECT v.pipeline_stage_id AS sid, COUNT(DISTINCT v.task_id) AS n FROM stage_visits v "
+        f"WHERE v.pipeline_stage_id IN ({_marks(list(stages.values()))}) AND v.entered_at>=? "
+        f"AND v.task_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY v.pipeline_stage_id",
+        [*stages.values(), since],
+    )
+    return {str(r["sid"]): int(r["n"] or 0) for r in rows}
+
+
+def _label(raw: str) -> str:
+    """A tag's name as the map shows it: "ads" and "Ads" are one label, tidied to a short line."""
+    text = raw.strip().replace("-", " ").replace("_", " ")[:24]
+    return text[:1].upper() + text[1:] or "Other"
 
 
 def _inputs(c: "sqlite3.Connection", firsts: dict[str, str], seen: str, since: str) -> list[Row]:
-    """Outside work: cards made in each factory's first pipeline in the period that no handoff brought, by origin."""
+    """Outside work: cards whose first visit was in each factory's first pipeline, created in the period, that no spawn
+    made, by origin. Counted in SQL over every such card; only the label groups are capped (MAX_LABELS, then "Other")."""
     if not firsts:
         return []
     pids = list(firsts.values())
-    handed = ""
-    if _columns(c, "pipeline_handoffs"):
-        handed = (
-            "AND id NOT IN (SELECT target_task_id FROM pipeline_handoffs WHERE returned_at IS NULL "
-            "UNION SELECT source_task_id FROM pipeline_handoffs WHERE returned_at IS NULL)"
+    spawned = ""
+    if _columns(c, "pipeline_handoffs") and _columns(c, "pipeline_links"):
+        spawned = (
+            "AND tasks.id NOT IN (SELECT h.target_task_id FROM pipeline_handoffs h "
+            "JOIN pipeline_links l ON l.id=h.pipeline_link_id WHERE l.mode='spawn')"
         )
-    guest = "guest" if "guest" in _columns(c, "tasks") else "NULL"
-    tasks = _rows(
+    intake = (
+        "COALESCE((SELECT v.pipeline_id FROM stage_visits v WHERE v.task_id=tasks.id AND v.direction='initial' "
+        "ORDER BY v.entered_at LIMIT 1), tasks.type_id)"
+        if _columns(c, "stage_visits")
+        else "tasks.type_id"
+    )
+    tag = (
+        "(SELECT tg.label FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.task_id=tasks.id "
+        "ORDER BY tg.label LIMIT 1)"
+        if _columns(c, "task_tags") and _columns(c, "tags")
+        else "NULL"
+    )
+    guest = "tasks.guest" if "guest" in _columns(c, "tasks") else "0"
+    origin = (
+        f"COALESCE({tag}, CASE WHEN {guest} THEN 'Customers' "
+        "WHEN tasks.requester_id LIKE 'human:%' THEN 'Team ideas' ELSE 'Bots' END)"
+    )
+    rows = _rows(
         c,
-        f"SELECT type_id AS pid, labels, requester_id AS requester, {guest} AS guest FROM tasks "
-        f"WHERE ({seen}) AND created_at>=? AND type_id IN ({_marks(pids)}) {handed} LIMIT {INPUT_ROWS}",
+        f"SELECT pid, origin, COUNT(*) AS n FROM (SELECT {intake} AS pid, {origin} AS origin FROM tasks "
+        f"WHERE ({seen}) AND tasks.created_at>=? {spawned}) WHERE pid IN ({_marks(pids)}) GROUP BY pid, origin",
         [since, *pids],
     )
     tally: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for t in tasks:
-        tally[str(t["pid"])][_origin(t["labels"], t["requester"], t["guest"])] += 1
+    for r in rows:
+        tally[str(r["pid"])][_label(str(r["origin"]))] += int(r["n"])
     out: list[Row] = []
-    for pid in firsts.values():
+    for pid in pids:
         ranked = sorted(tally[pid].items(), key=lambda kv: (-kv[1], kv[0]))
         out.extend({"label": label, "count": n, "to": pid} for label, n in ranked[:MAX_LABELS])
         rest = sum(n for _, n in ranked[MAX_LABELS:])
@@ -315,6 +451,7 @@ def read(
     )
     ordered: list[str] = []
     firsts: dict[str, str] = {}
+    chains: dict[str, list[str]] = {}
     for fid in factory_order:
         inside = set(in_factory[fid])
         chain = _order(
@@ -324,11 +461,12 @@ def read(
         )
         ordered.extend(chain)
         firsts[fid] = chain[0]
+        chains[fid] = chain
     ordered.extend(sorted((pid for pid in ids if not by_id[pid]["factory_id"]), key=lambda i: (names[i].lower(), i)))
 
     counts = _counts(c, ids, seen, now, since)
     live = _live(c, ids, seen, now)
-    waiting = _for_you(c, actor, ids)
+    waiting = _for_you(c, actor, ids, seen)
 
     pipelines = [
         {
@@ -344,28 +482,45 @@ def read(
         }
         for pid in ordered
     ]
+    # A factory's output stage: its own, else the last done stage of its last pipeline in flow order.
+    outputs: dict[str, str] = {}
+    for fid in factory_order:
+        stage = str(factories[fid].get("output_stage_id") or "")
+        if not stage and chains[fid]:
+            stage = _last_done(c, chains[fid][-1])
+        if stage:
+            outputs[fid] = stage
+    finished = _done(c, outputs, seen, since)
     drawn = [
         {
             "id": fid,
             "name": factories[fid]["name"],
             "goal": factories[fid]["goal"],
             "manager_id": factories[fid]["manager_id"],
-            "done": sum(counts[pid]["done"] for pid in in_factory[fid]),
+            "done": finished.get(outputs.get(fid, ""), 0),
             "overdue": sum(counts[pid]["overdue"] for pid in in_factory[fid]),
             "live": len({bot for pid in in_factory[fid] for bot in live.get(pid, ())}),
         }
         for fid in factory_order
     ]
 
-    handed = _handoffs(c, seen, since)
-    moved: dict[tuple[str, str], list[float]] = defaultdict(list)
-    for link in links:
-        moved[str(link["from_pipeline_id"]), str(link["to_pipeline_id"])].extend(handed.get(str(link["id"]), []))
     edges = [
-        {"from": a, "to": b, "count": len(ages), "median_age_minutes": round(median(ages)) if ages else None}
-        for (a, b), ages in sorted(moved.items())
+        {
+            "from": str(r["a"]),
+            "to": str(r["b"]),
+            "mode": str(r["mode"]),
+            "count": int(r["count"]),
+            "median_age_minutes": round(float(r["median_age"])) if r["median_age"] is not None else None,
+        }
+        for r in _edges(c, ids, seen, since)
     ][:MAX_EDGES]
-    return {"factories": drawn, "pipelines": pipelines, "edges": edges, "inputs": _inputs(c, firsts, seen, since)}
+    return {
+        "factories": drawn,
+        "pipelines": pipelines,
+        "edges": edges,
+        "inputs": _inputs(c, firsts, seen, since),
+        "loops": _loops(c, ordered, links, seen, since),
+    }
 
 
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:

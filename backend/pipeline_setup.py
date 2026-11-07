@@ -332,6 +332,20 @@ def apply_factory_setup(
             missing = _link(c, actor, link, pipelines, made)
             if missing:
                 unresolved.append(missing)
+        # A factory's output stage (D56): the last done stage of its last pipeline, unless one is already set.
+        for f in spec["factories"]:
+            in_factory = [p["name"] for p in spec["pipelines"] if p.get("factory") == f["name"]]
+            if not in_factory:
+                continue
+            done = c.execute(
+                "SELECT id FROM task_steps WHERE type_id = ? AND status = 'done' ORDER BY position DESC, id DESC LIMIT 1",
+                (pipelines[in_factory[-1]],),
+            ).fetchone()
+            if done:
+                c.execute(
+                    "UPDATE factories SET output_stage_id = COALESCE(output_stage_id, ?) WHERE id = ?",
+                    (done[0], factories[f["name"]]),
+                )
         if unresolved and replace:
             raise Problem(
                 "unresolved",

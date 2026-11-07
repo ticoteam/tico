@@ -44,12 +44,9 @@ let pipelineStageOrder: string[] = [];
 
 const pipelinePhone = (): boolean => window.matchMedia(PIPELINE_PHONE_QUERY).matches;
 
-/** A card's time in its stage shows only when it is past the stage's limit: the stage's own limit when the server sends
-    one, else the manager's Late list. */
-function pipelineStepLate(task: { id: string | number; step_since?: string; step?: { limit_minutes?: number | null } | null }): boolean {
-  const limit = Number(task.step?.limit_minutes || 0);
-  const since = Date.parse(task.step_since || '');
-  if (limit > 0 && since) return Date.now() - since >= limit * 60000;
+/** A card's time in its stage shows only when the server's Late list (late_tickets) says it is past the stage's Warn
+    after. The server pauses the clock on holds and waiting tickets; the client does not repeat that rule. */
+function pipelineStepLate(task: { id: string | number }): boolean {
   return pipelineLateIds.has(String(task.id));
 }
 
