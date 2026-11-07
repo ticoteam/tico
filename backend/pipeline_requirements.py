@@ -359,22 +359,6 @@ def _factory_live(conn: "sqlite3.Connection", factory_id: str) -> bool:
     )
 
 
-def _may_read(
-    conn: "sqlite3.Connection", actor: str, pipeline_id: str, visibility: str, owner: object, manager: object
-) -> bool:
-    """A members-only pipeline shows to its owner, its manager, its members and whoever may edit its rules."""
-    if visibility != "members":
-        return True
-    if actor in (owner, manager) or pipeline_rights.may_edit_rules(conn, actor, pipeline_id):
-        return True
-    return (
-        conn.execute(
-            "SELECT 1 FROM pipeline_members WHERE pipeline_id=? AND actor_id=?", (pipeline_id, actor)
-        ).fetchone()
-        is not None
-    )
-
-
 def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any]:
     """A pipeline's settings: what its owner and admins see and set. A null judge_model is the default judge."""
     row = conn.execute(
@@ -391,10 +375,7 @@ def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any
 def settings_read(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> dict[str, Any]:
     """A pipeline's settings for a reader who may see it, with the judge models a pipeline may be given. A members-only
     pipeline is not found by anyone outside it."""
-    row = conn.execute(
-        "SELECT pipeline_visibility, pipeline_owner_id, manager FROM task_types WHERE id=?", (pipeline_id,)
-    ).fetchone()
-    if row is None or not _may_read(conn, actor, pipeline_id, str(row[0]), row[1], row[2]):
+    if not pipeline_rights.may_see(conn, actor, pipeline_id):
         raise Problem("not_found", "No such pipeline", 404)
     return {
         **settings_view(conn, pipeline_id),
@@ -479,17 +460,23 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
     @app.get("/api/v2/pipeline-stages/{stage_id}/requirements")
     def stage_requirements(request: Request, stage_id: str) -> dict[str, Any]:
-        """The live requirements of a stage, in order."""
+        """The live requirements of a stage, in order. A stage of a members-only pipeline is not found to anyone outside it."""
+        who = request.state.identity
+        guard.domain(who)
         with db.read() as c:
-            _stage(c, stage_id)
+            pipeline_id, _ = _stage(c, stage_id)
+            if not pipeline_rights.may_see(c, who.actor, pipeline_id):
+                raise Problem("not_found", "No such stage", 404)
             return {"requirements": requirements_for_stage(c, stage_id)}
 
     @app.get("/api/v2/requirements/{requirement_id}")
     def requirement_read(request: Request, requirement_id: str) -> dict[str, Any]:
-        """One requirement with its version history."""
+        """One requirement with its version history. Not found to anyone who may not see its pipeline."""
+        who = request.state.identity
+        guard.domain(who)
         with db.read() as c:
             row = requirement(c, requirement_id)
-            if row is None:
+            if row is None or not pipeline_rights.may_see(c, who.actor, row["pipeline_id"]):
                 raise Problem("not_found", "No such requirement", 404)
             return {**row, "versions": versions(c, requirement_id)}
 

@@ -4,6 +4,7 @@ itself over, into the first stage of the target pipeline; `spawn` is stored for 
 ticket there and records the handoff. A stage has at most one live link out (the table's unique index), so a pipeline
 never branches. Changing links is changing the pipeline's rules: its owner and the company's Admins, not bots."""
 
+import json
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 MODES = ("move", "spawn")
 COLUMNS = "id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, return_stage_id, created_by, created_at"
+LINK_LIMIT = 200  # links per page; a page also stays under LINK_BYTES, as the audit list does
+LINK_BYTES = 262_144
 
 
 def _rows(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> list[Row]:
@@ -42,13 +45,51 @@ def link_for_stage(conn: sqlite3.Connection, pipeline_stage_id: str) -> Row | No
 
 
 def links(conn: sqlite3.Connection, pipeline_id: str | None = None) -> list[Row]:
-    """The live links, optionally those leaving or entering one pipeline."""
+    """The live links, optionally those leaving or entering one pipeline. Unpaged: for code inside the server, not a route."""
     sql = f"SELECT {COLUMNS} FROM pipeline_links WHERE retired_at IS NULL"
     args: tuple[Any, ...] = ()
     if pipeline_id:
         sql += " AND (from_pipeline_id = ? OR to_pipeline_id = ?)"
         args = (pipeline_id, pipeline_id)
     return _rows(conn, sql + " ORDER BY created_at, id", args)
+
+
+def visible_links(
+    conn: sqlite3.Connection,
+    actor: str,
+    pipeline_id: str | None = None,
+    limit: int = LINK_LIMIT,
+    after: str | None = None,
+) -> dict[str, Any]:
+    """One page of the live links the reader may see, oldest first. A link is left out unless the reader may see both
+    pipelines it joins: it names the stage on the far side. `after` is the last link's `<created_at>|<id>` from the page
+    before; `next` is the cursor for the page after this one, or None."""
+    sql = f"SELECT {COLUMNS} FROM pipeline_links WHERE retired_at IS NULL"
+    args: list[Any] = []
+    if pipeline_id:
+        sql += " AND (from_pipeline_id = ? OR to_pipeline_id = ?)"
+        args += [pipeline_id, pipeline_id]
+    hidden = sorted(pipeline_rights.hidden_pipeline_ids(conn, actor))
+    if hidden:
+        marks = ",".join("?" * len(hidden))
+        sql += f" AND from_pipeline_id NOT IN ({marks}) AND to_pipeline_id NOT IN ({marks})"
+        args += [*hidden, *hidden]
+    if after:
+        at, _, ident = after.partition("|")
+        sql += " AND (created_at > ? OR (created_at = ? AND id > ?))"
+        args += [at, at, ident]
+    limit = max(1, min(int(limit or LINK_LIMIT), LINK_LIMIT))
+    found = _rows(conn, sql + " ORDER BY created_at, id LIMIT ?", (*args, limit + 1))
+    shown: list[Row] = []
+    used = 256
+    for row in found[:limit]:
+        size = len(json.dumps(row, default=str).encode()) + 1
+        if shown and used + size > LINK_BYTES:
+            break  # the first link of a page always fits
+        used += size
+        shown.append(row)
+    last = shown[-1] if len(shown) < len(found) else None
+    return {"links": shown, "next": f"{last['created_at']}|{last['id']}" if last else None}
 
 
 def create_link(
@@ -144,12 +185,16 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
     from fastapi import Request
 
     @app.get("/api/v2/pipeline-links")  # pyright: ignore[reportUntypedFunctionDecorator]
-    def list_links(request: Request, pipeline: str | None = None) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
+    def list_links(  # pyright: ignore[reportUnusedFunction]
+        request: Request, pipeline: str | None = None, limit: int = LINK_LIMIT, after: str | None = None
+    ) -> dict[str, Any]:
+        """The live links the caller may see, a page at a time: `next` is the cursor for the page after."""
+        who = request.state.identity
         guard: Any = auth
         reader: Any = store
         with reader.read() as read:
-            guard.domain(request.state.identity)
-            return {"links": links(cast("sqlite3.Connection", read), pipeline)}
+            guard.domain(who)
+            return visible_links(cast("sqlite3.Connection", read), who.actor, pipeline, limit, after)
 
     @app.post("/api/v2/pipeline-links")  # pyright: ignore[reportUntypedFunctionDecorator]
     def add_link(request: Request, body: PipelineLinkBody) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
