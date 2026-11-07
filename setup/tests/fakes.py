@@ -148,8 +148,9 @@ class FakeEC2:
 
     def run_instances(self, **kw):
         self.raw_user_data = kw.get("UserData")
-        if isinstance(self.raw_user_data, bytes):     # gzipped (aws.fit_user_data): record what cloud-init runs
+        if isinstance(self.raw_user_data, bytes):  # gzipped (aws.fit_user_data): record what cloud-init runs
             import gzip
+
             kw = {**kw, "UserData": gzip.decompress(self.raw_user_data).decode()}
         self._rec("run_instances", **kw)
         self.instances.append({"InstanceId": "i-1", "Tags": kw["TagSpecifications"][0]["Tags"]})

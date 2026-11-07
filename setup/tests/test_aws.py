@@ -128,14 +128,20 @@ def test_a_full_boot_script_over_ec2s_16_kb_cap_launches_gzipped():
     from setup import remote
 
     compose = (Path(aws.__file__).resolve().parent.parent / "compose.yaml").read_bytes()
-    script = remote.bootstrap_script(os_family="ubuntu", domain="tico.example.com", front_door="caddy", compose=compose,
-                                     compose_url="", env_param=("/tico/tico-example-com/env", "us-east-1"),
-                                     wait_for_ip="203.0.113.9")
-    assert len(script.encode()) > aws.USER_DATA_LIMIT          # what made every hosted AWS launch fail
+    script = remote.bootstrap_script(
+        os_family="ubuntu",
+        domain="tico.example.com",
+        front_door="caddy",
+        compose=compose,
+        compose_url="",
+        env_param=("/tico/tico-example-com/env", "us-east-1"),
+        wait_for_ip="203.0.113.9",
+    )
+    assert len(script.encode()) > aws.USER_DATA_LIMIT  # what made every hosted AWS launch fail
     ec2, iam, ssm, _ = aws_clients()
     d = deployer(plan("caddy"), ec2, iam, ssm)
     d.launch_or_reuse(d.prepare(), script)
     sent = ec2.raw_user_data
     assert isinstance(sent, bytes) and len(sent) <= aws.USER_DATA_LIMIT
     assert gzip.decompress(sent).decode() == script == ec2.called("run_instances")[0]["UserData"]
-    assert aws.fit_user_data("#!/bin/bash\n") == "#!/bin/bash\n"   # small scripts stay plain text
+    assert aws.fit_user_data("#!/bin/bash\n") == "#!/bin/bash\n"  # small scripts stay plain text

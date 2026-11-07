@@ -180,7 +180,7 @@ def _filters(name: str) -> list[dict]:
     ]
 
 
-USER_DATA_LIMIT = 16384     # EC2's cap on user data, before base64
+USER_DATA_LIMIT = 16384  # EC2's cap on user data, before base64
 
 
 def fit_user_data(script: str) -> str | bytes:
