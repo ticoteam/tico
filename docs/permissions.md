@@ -170,7 +170,9 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - **home**: a bot's or a person's Home, readable by its Read audience. A person's personal chat with a bot moves into
   that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
   chats, and chats with a bot synced from another app, stay where they are. Everyone who can read the Home can read
-  those messages, except one that names a task, meeting or file its reader may not read.
+  those messages, except one whose references, or those of the message it replies to, name a task, meeting or file its
+  reader may not read. That check does not read the words typed into a message, nor the files attached to it; an
+  attached file is checked on its own when opened, and is refused if it is linked to a task its reader may not read.
 - **personal**: a DM, read by the people in it, with no owner bypass. **task**: whoever may read the task.
   **meeting**: the people who may see the meeting.
 - The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
