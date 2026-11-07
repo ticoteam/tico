@@ -942,15 +942,13 @@ def changed_lines(root, anc, head, name):
 
 def py_tests_for(name, py_map, root, anc, head, graph, added, known):
     """Rule 6 for one changed Python file: the tests that executed the functions its diff touches, as the measured map
-    says. None when the static map decides for this file instead: it is not in the map, its diff touches module code,
-    a decorator, a class body or a signature, it removes or renames a function (its importers break, and the map does
-    not see them), or it does not parse at either commit. A function the map lacks, or whose body changed since the
-    measurement, runs the tests of the file's other functions."""
-    if not name.endswith(".py") or is_test(name) or Path(name).name == "conftest.py":
-        return None
+    says. {"static": reason} when the static map decides for this file instead: it is not in the map, its diff touches
+    module code, a decorator, a class body or a signature, it removes or renames a function (its importers break, and
+    the map does not see them), or it does not parse at either commit. A function the map lacks, or whose body changed
+    since the measurement, runs the tests of the file's other functions ("stale")."""
     per_function = py_map["files"].get(name)
     if per_function is None:
-        return None
+        return {"static": "not in the measured map"}
     try:
         before = git_output(root, "show", f"{anc}:{name}")
         after = git_output(root, "show", f"{head}:{name}")
@@ -959,9 +957,9 @@ def py_tests_for(name, py_map, root, anc, head, graph, added, known):
         base_hashes, head_hashes = py_test_map.function_hashes(before), py_test_map.function_hashes(after)
         inert = {"old": py_test_map.inert_lines(before), "new": py_test_map.inert_lines(after)}
     except (subprocess.CalledProcessError, OSError, SyntaxError, ValueError, tokenize.TokenError):
-        return None
+        return {"static": "does not parse at one commit"}
     if not old and not new:
-        return None
+        return {"static": "no changed lines"}
     base_defs = {qual for kind, qual in base_own if kind == "header"}
     touched = set()
     for lines, own, blank in ((old, base_own, inert["old"]), (new, head_own, inert["new"])):
@@ -972,13 +970,14 @@ def py_tests_for(name, py_map, root, anc, head, graph, added, known):
             if kind == "function":
                 touched.add(qual)
             elif kind == "header" and qual in base_defs:
-                return None  # a decorator, a signature or a class line that the base already had
+                return {"static": "a decorator, class line or signature changed"}
             elif kind == "header" and qual in head_hashes:
                 touched.add(qual)  # a new function: its body was never measured
             elif kind != "header":
-                return None  # module code
+                return {"static": "module code changed"}
     if not touched <= set(head_hashes):
-        return None  # a function the diff removes or renames: its importers break, and the map does not see them
+        # A function the diff removes or renames: its importers break, and the map does not see them.
+        return {"static": "a function was removed or renamed"}
     hashes = py_map["hashes"].get(name, {})
     stale = sorted(
         qual
@@ -1009,12 +1008,12 @@ def py_tests_for(name, py_map, root, anc, head, graph, added, known):
         tests |= {t for t in graph.affected(sorted(readers), added) if is_test(t)}
     tests |= {t for t in graph.everything if is_test(t)}
     tests = {t for t in tests if (root / t).is_file()}
-    return {"tests": tests, "uncertain": uncertain}
+    return {"tests": tests, "uncertain": uncertain, "stale": bool(stale)}
 
 
 def measured_tests(py_map, root, base, head, graph, added, names, notes):
-    """Rule 6: for each changed Python file in `names`, the tests the measured map ties to its change. Files the map does
-    not cover are left to the static map. A map whose commit this checkout lacks is not used (static for every file)."""
+    """Rule 6: for each changed Python source file in `names`, the tests the measured map ties to its change, and the
+    reason each other one keeps the static map. A map whose commit this checkout lacks is not used (static for all)."""
     try:
         anc = git_output(root, "merge-base", base, head).strip()
         drift = {
@@ -1024,19 +1023,26 @@ def measured_tests(py_map, root, base, head, graph, added, names, notes):
         }
     except (subprocess.CalledProcessError, OSError):
         notes.append("rule 6: the measured map's commit is not in this checkout: static map")
-        return {}
+        return {}, {}
     partial = {py_map["tests"][i] for i in py_map["partial"]}
     known = set(py_map["tests"]) - partial - drift
-    out = {}
+    out, static = {}, {}
     for name in names:
+        if not name.endswith(".py") or is_test(name) or Path(name).name == "conftest.py":
+            continue  # test files run themselves, conftests are rule 2, and other files are not Python
         found = py_tests_for(name, py_map, root, anc, head, graph, added, known)
-        if found is not None:
+        if "static" in found:
+            static[name] = found["static"]
+        else:
             out[name] = found
     if out:
         notes.append(
             f"rule 6: {len(out)} changed Python file(s) run the tests the measured map ties to their functions"
         )
-    return out
+    if static:
+        reasons = sorted({f"{reason} ({sum(r == reason for r in static.values())})" for reason in static.values()})
+        notes.append(f"rule 6: {len(static)} changed Python file(s) keep the static map: {'; '.join(reasons)}")
+    return out, static
 
 
 def selection(
@@ -1189,12 +1195,19 @@ def selection(
         notes.append("rule 4: ui outside UI_MAP")
     if py_map is None and map_note:
         notes.append(f"rule 6: {map_note}: static map")
+    rule6 = {"narrowed": [], "stale": [], "static": {}}
     if py_map is not None and base is not None:
         everyone = set(changed) if added is None else set(added)  # None: any changed file may be new
-        for name, found in measured_tests(py_map, root, base, head, graph, everyone, sorted(seeds), notes).items():
+        narrowed, static = measured_tests(py_map, root, base, head, graph, everyone, sorted(seeds), notes)
+        for name, found in narrowed.items():
             seeds.discard(name)
             python |= found["tests"]
             uncertain.extend(found["uncertain"])
+        rule6 = {
+            "narrowed": sorted(narrowed),
+            "stale": sorted(n for n, f in narrowed.items() if f["stale"]),
+            "static": static,
+        }
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1229,7 +1242,9 @@ def selection(
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
     contracts = any(n.startswith(CONTRACT_INPUTS) for n in names) or bool((touched | python) & set(CONTRACT_TESTS))
-    return plan(python, browser, caddy=caddy, contracts=contracts)
+    result = plan(python, browser, caddy=caddy, contracts=contracts)
+    result["rule6"] = rule6
+    return result
 
 
 def changed_files(base, head="HEAD", root=ROOT, only=None):
