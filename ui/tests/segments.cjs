@@ -228,7 +228,8 @@ const pastEdge = page => page.evaluate(() => [...document.querySelectorAll('#mai
       const tag = 'compare';
       const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market'});
       await page.locator('.seg-cmp tbody tr').first().waitFor();
-      assert.deepEqual(await texts(page, '.seg-cmp th'), ['Segment', 'Money', 'Yearly spend', 'Growth', 'Our share', 'Faces'], tag + ': the columns');
+      // The labels as written: the table's headers are uppercased on screen, so read the text, not the rendered words.
+      assert.deepEqual((await page.locator('.seg-cmp th').allTextContents()).map(t => t.trim()), ['Segment', 'Money', 'Yearly spend', 'Growth', 'Our share', 'Faces'], tag + ': the columns');
       assert.deepEqual(await texts(page, '.seg-cmp tbody .seg-name'), ['Release checks', 'Deploy pipelines'], tag + ': the rows');
       const row = page.locator('.seg-cmp tbody tr').first();
       assert.equal(await row.locator('.seg-dot').getAttribute('data-seg-color'), 'blue', tag + ': the dot');
