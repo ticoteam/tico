@@ -84,7 +84,7 @@ async function renderSettingsRepos(fresh) {
   host.dataset.drawn = '';   // a link to the card (SETTINGS_REPOS_CARD) scrolls once it is filled in
   const admin = settingsIsAdmin(), dis = admin ? '' : ` disabled title="${REPO_LOCKED}"`, owner = S.me?.role === 'owner';
   if (!REPOS.github_connected) {
-    host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">The GitHub App is not connected; bots use their computers' own GitHub sign-in.${owner ? ` <a href="#/tools/github" data-repos-connect>Connect GitHub</a>`
+    host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">GitHub is not connected; bots' repositories are not backed up.${owner ? ` <a href="#/tools/github" data-repos-connect>Connect GitHub</a>`
       : ` <span data-repos-ask>Ask ${esc(settingsOwnerName() || 'the owner')} to connect GitHub.</span>`}</p>`;
     return;
   }

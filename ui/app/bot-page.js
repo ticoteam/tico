@@ -387,7 +387,8 @@ async function pageBot(slug, tab) {
     <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="More" title="More"><svg class="bot-more-i" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
-  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div></div>
+  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div>
+  ${limited || isBuiltInBot(slug) ? '' : `<div id="bot-github-host" data-bot="${esc(slug)}"></div>`}</div>
   <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${BOT_TAB_LABELS[work[0]] || 'Tasks'}</a>
 
   <div class="bot-work" id="bot-work">
@@ -503,6 +504,7 @@ async function pageBot(slug, tab) {
     void botBranchesLoad(slug);
     void botLearningsLoad(slug);
     void botDreamLoad(slug);
+    if (!isBuiltInBot(slug)) void githubNudgeBot(slug);
   }
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {

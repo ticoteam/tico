@@ -217,11 +217,11 @@ def checklist(c, who, settings, github):
         ),
         _item(
             "github",
-            "GitHub is connected",
+            "GitHub is connected" if installed else "Connect GitHub",
             installed,
-            "Lets bots keep their work in your GitHub.",
-            "#/settings",
-            "cloud",
+            "Without GitHub, each bot's files and memory exist only on its computer, with no backup.",
+            "#/tools/github",
+            "",
             optional=True,
         ),
         _item(

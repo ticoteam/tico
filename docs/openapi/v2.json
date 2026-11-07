@@ -71304,10 +71304,14 @@
           },
           "github_connected": {
             "type": "boolean"
+          },
+          "github_installed": {
+            "type": "boolean"
           }
         },
         "required": [
           "github_connected",
+          "github_installed",
           "new_bot_default",
           "repositories"
         ],
