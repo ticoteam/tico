@@ -5103,6 +5103,15 @@ STABLE.extend(
             "FinanceMetric",
         ),
         (
+            "/api/v2/finance/unattributed",
+            "get",
+            "Finance",
+            "listFinanceUnattributed",
+            "The Unattributed queue: the P&L lines in the period (this month by default) with no team, teammate or attribution "
+            "in force, newest first, paged by cursor, cut to what the caller sees",
+            "FinanceUnattributed",
+        ),
+        (
             "/api/v2/finance/close/{month}",
             "get",
             "Finance",
@@ -6227,6 +6236,7 @@ SCHEMAS.update(
                                     "item",
                                     "location",
                                     "project",
+                                    "vendor",
                                 ],
                             },
                             "id": "s",
@@ -6238,6 +6248,32 @@ SCHEMAS.update(
                 "currency": "s",
                 "view_version": "i",
             }
+        ),
+        "FinanceUnattributed": obj(
+            {
+                "lines": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "date": "s",
+                            "entry_id": "s",
+                            "account": obj({"id": "s", "code": "s", "name": "s"}),
+                            "amount": "i",
+                            "description": "s",
+                            "memo": "s",
+                            "vendor": obj({"id": "s", "name": "s"}),
+                            "source": "s",
+                        }
+                    )
+                ),
+                "next_cursor": "n",
+                "start": "s",
+                "end": "s",
+                "as_of": "s",
+                "currency": "s",
+                "view_version": "i",
+            },
+            required=["lines", "start", "end", "as_of", "view_version"],
         ),
         "FinanceMetric": obj(
             {

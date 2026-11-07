@@ -14,6 +14,7 @@ from typing import Any, cast
 from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import visible as VB
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
@@ -115,6 +116,7 @@ def _cells(
                     location=location,
                     class_id=klass,
                     project=project,
+                    lines=int(r["line_count"]),
                 )
             )
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
@@ -775,12 +777,13 @@ def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
     return cell.account_id
 
 
-def _labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
-    """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id)."""
+def _labels(s: _Seen, keys: Iterable[str], by: str, shown: Mapping[str, bool] | None = None) -> dict[str, str]:
+    """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id). `shown` is a
+    vendor's visibility by key (visible.py), given for a vendor group."""
     if by in LOCATED:
         named = _located_names(s.ctx.c, by)
         return {k: _located_label(named, by, k) for k in keys}
-    names = tab_ap.vendor_labels(s.ctx, s.view, keys) if by == "vendor" else {}
+    names = tab_ap.vendor_labels(s.ctx, s.view, keys, shown) if by == "vendor" else {}
     return {k: names.get(k, k) if by == "vendor" and k else _label(s, k, by) for k in keys}
 
 
@@ -826,8 +829,25 @@ def _grouped(
         if key is None or (key == "" and by in ("department", "team", "teammate") and not s.view.company_expenses()):
             continue
         sums[key] = sums.get(key, 0) + cell.amount
-    labels = _labels(s, sums, by)
-    rows: list[Row] = [{"key": k or NONE, "label": labels[k], "amount": v} for k, v in sums.items()]
+    shown: dict[str, bool] = {}
+    lost: set[str] = set()
+    if by == "vendor":
+        # A vendor's name shows when the viewer sees one of its lines; a total that lost a hidden line says excl (visible.py)
+        seen = VB.records_visible(
+            s.ctx,
+            s.view,
+            "vendor",
+            cells,
+            all_contacts=tab_ap.sees_contact_kind(s.ctx, s.view, "vendor"),
+            window=(a.isoformat(), z.isoformat()),
+        )
+        shown = {k: v.named for k, v in seen.items()}
+        lost = {k for k, v in seen.items() if v.excl}
+    labels = _labels(s, sums, by, shown if by == "vendor" else None)
+    rows: list[Row] = [
+        {"key": k or NONE, "label": labels[k], "amount": v, **({"excl": True} if k in lost else {})}
+        for k, v in sums.items()
+    ]
     return {
         "by": by,
         "start": a.isoformat(),
@@ -1514,6 +1534,7 @@ METRICS = (
     "unreconciled_days",
     "duplicate_charges",
     "price_increases",
+    "unattributed",
 )
 STALE_HOURS = 24  # bank data older than this marks a cash metric stale
 WATCH_LABELS = 10  # the Watch findings a metric names (its count is the whole)
@@ -1630,6 +1651,20 @@ def metric(
     currency = s.ctx.book.base_currency
     base: Row = {"name": name, "as_of": s.ctx.at, "view_version": s.view.version}
     today = dates.day(s.ctx.today)
+    if name == "unattributed":
+        a, z = _window(start, end, s.ctx)
+        amount, count, lost = _unattributed_total(s, a, z)
+        return {
+            **base,
+            "value": amount,
+            "amount": amount,
+            "lines": count,
+            "excl": lost,
+            "start": a.isoformat(),
+            "end": z.isoformat(),
+            "unit": "minor",
+            "currency": currency,
+        }
     if name in ("budget_remaining", "budget_pct_used"):
         b = s.ctx.budgets().get(budget_id or "")
         if b is None or not reads_budget(s.ctx, viewer, b):
@@ -1927,7 +1962,7 @@ SEARCH_KINDS = (
     "po",
     "estimate",
 )
-NAMED_ONLY_KINDS = ("account",)  # searched when named (the chart a bot codes lines to), not in the first few of each
+NAMED_ONLY_KINDS = ("account", "vendor")  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10  # results per kind when no kind is named
 
@@ -2003,6 +2038,141 @@ def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | Non
         }
         for a in page
     ], nxt
+
+
+def _search_vendors(s: _Seen, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
+    """Vendors by name (a vendor or both contacts), each with what the viewer sees of it this month. A vendor is listed
+    only when its name may show (visible.py), so a page can hold fewer than `most`; paged over the contacts."""
+    if not s.view.sees_anything():
+        raise denied("vendors are not in your view")
+    marks = tab.decode_cursor(cursor) or []
+    after = (marks[0], marks[1]) if len(marks) == 2 else None
+    contacts = SAP.contacts_page(
+        s.ctx.c, book_id=s.ctx.book.id, kinds=("vendor", "both"), q=q, active=True, after=after, most=most + 1
+    )
+    page = contacts[:most]
+    a, z = dates.month_bounds(dates.day(s.ctx.today))
+    expense = sorted(x.id for x in s.ctx.accounts.values() if x.type == "expense")
+    seen = VB.records_visible(
+        s.ctx,
+        s.view,
+        "vendor",
+        _cells(s, a, z, expense),
+        record_ids=[str(r["id"]) for r in page],
+        all_contacts=tab_ap.sees_contact_kind(s.ctx, s.view, "vendor"),
+        window=(a.isoformat(), z.isoformat()),
+    )
+    out: list[Row] = []
+    for r in page:
+        vis = seen.get(str(r["id"]))
+        if vis is None or not vis.named:
+            continue
+        name = str(r["name"])
+        out.append(
+            {
+                "kind": "vendor",
+                "id": str(r["id"]),
+                "label": name,
+                "name": name,
+                "aliases": SAP.aliases_of(s.ctx.c, str(r["id"])),
+                "month": {"spend": vis.amount, "excl": vis.excl, "as_of": s.ctx.at},
+            }
+        )
+    nxt = tab.encode_cursor([str(page[-1]["name"]), str(page[-1]["id"])]) if len(contacts) > most and page else None
+    return out, nxt
+
+
+UNATTRIBUTED_CHUNK = 500  # lines read per page while a total is summed
+
+
+def _unattributed_visible(s: _Seen, rows: Sequence[Any]) -> tuple[list[Any], bool]:
+    """The unattributed lines the viewer sees: on an account in their view, and not on a private one they lack the detail
+    of (that one is left out and marks the total excl). A line with no team or teammate is company-wide only."""
+    cut = VB.private_accounts(s.ctx, s.view)
+    kept: list[Any] = []
+    lost = False
+    for r in rows:
+        account = s.ctx.accounts.get(str(r["account_id"]))
+        if account is None or not s.view.sees(account, {}):
+            continue
+        if str(r["account_id"]) in cut:
+            lost = True
+            continue
+        kept.append(r)
+    return kept, lost
+
+
+def _unattributed_total(s: _Seen, a: date, z: date) -> tuple[int, int, bool]:
+    """The reader's slice of the window's unattributed P&L lines: its amount, its line count, and whether a hidden one
+    was left out."""
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES]
+    amount = count = 0
+    lost = False
+    after: tuple[str, str] | None = None
+    while True:
+        batch = SL.unattributed_lines(s.ctx.c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids, after, UNATTRIBUTED_CHUNK)
+        kept, cut = _unattributed_visible(s, batch)
+        lost = lost or cut
+        amount += sum(int(r["amount"]) for r in kept)
+        count += len(kept)
+        if len(batch) < UNATTRIBUTED_CHUNK:
+            return amount, count, lost
+        last = batch[-1]
+        after = (str(last["entry_date"]), str(last["id"]))
+
+
+def unattributed(
+    c: sqlite3.Connection,
+    viewer: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+    at: str | None = None,
+) -> Row:
+    """The Unattributed queue: the P&L lines in the window (this month by default) with no team or teammate and no
+    attribution in force, newest first, paged by (entry date, line id). Only what the viewer sees: a line with no tags
+    shows to company-wide views alone. A page can hold fewer lines than `limit` (lines the viewer cannot see are left
+    out after the page is read)."""
+    s = _open(c, viewer, at)
+    a, z = _window(start, end, s.ctx)
+    parts = tab.decode_cursor(cursor)
+    after = (parts[0], parts[1]) if len(parts) == 2 else None
+    most = tab.page_size(limit)
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES]
+    fetched = SL.unattributed_lines(c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids, after, most + 1)
+    page = fetched[:most]
+    kept, _ = _unattributed_visible(s, page)
+    contacts = [str(r["contact_id"]) for r in kept if r["contact_id"]]
+    names = tab_ap.vendor_labels(s.ctx, s.view, contacts, {k: True for k in contacts})
+    lines: list[Row] = []
+    for r in kept:
+        account = s.ctx.accounts[str(r["account_id"])]
+        cid = str(r["contact_id"] or "")
+        lines.append(
+            {
+                "id": str(r["id"]),
+                "date": str(r["entry_date"]),
+                "entry_id": str(r["entry_id"]),
+                "account": {"id": account.id, "code": account.code, "name": account.name},
+                "amount": int(r["amount"]),
+                "description": str(r["description"] or ""),
+                "memo": str(r["memo"] or ""),
+                "vendor": {"id": cid, "name": names.get(cid, "")},
+                "source": str(r["source"]),
+            }
+        )
+    nxt = tab.encode_cursor([str(page[-1]["entry_date"]), str(page[-1]["id"])]) if len(fetched) > most and page else None
+    return {
+        "lines": lines,
+        "next_cursor": nxt,
+        "start": a.isoformat(),
+        "end": z.isoformat(),
+        "as_of": s.ctx.at,
+        "currency": s.ctx.book.base_currency,
+        "view_version": s.view.version,
+    }
 
 
 def _record_row(kind: str, r: Any) -> Row:
@@ -2112,7 +2282,8 @@ def search(
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
     item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
-    the active accounts the forms list, in code order."""
+    the active accounts the forms list, in code order; vendor (named only): a search over name, each with this month's
+    spend as the viewer sees it (visible.py), listing only the vendors whose name may show."""
     if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
         raise invalid(f"kind is {'|'.join((*SEARCH_KINDS, *NAMED_ONLY_KINDS))}")
     if cursor and kind is None:
@@ -2236,6 +2407,9 @@ def search(
             elif k == "account":
                 listed_accounts, nxt = _search_accounts(ctx, viewer, text, most, cursor)
                 results += listed_accounts
+            elif k == "vendor":
+                listed_vendors, nxt = _search_vendors(_open(c, viewer, at), text, most, cursor)
+                results += listed_vendors
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
