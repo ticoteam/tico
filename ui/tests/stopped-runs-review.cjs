@@ -115,7 +115,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.match(stuck, /3 behind an interrupted run · 1 held on purpose$/);
     assert.doesNotMatch(stuck, /queued/, 'nothing that can start is called queued');
     // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad,
-    // yet BotOps reviews them, so ui/app/heartbeat.js never lists them.
+    // yet BotOps reviews them, so ui/app/heartbeat.ts never lists them.
     assert.equal(await page.locator('#hl-summary').innerText(), '2 issues to look at');
     const stoppedRow = page.locator('#hl-page [data-hl-check="stopped_runs"]'), quarantineRow = page.locator('#hl-page [data-hl-check="quarantine"]');
     assert.equal(await stoppedRow.getAttribute('data-status'), 'warn');

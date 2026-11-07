@@ -37,7 +37,7 @@ def settings_tabs():
 
 
 def ui_links():
-    for path in sorted((ROOT / "ui").rglob("*.js")):
+    for path in sorted(p for p in (ROOT / "ui").rglob("*") if p.suffix in (".js", ".ts")):
         rel = path.relative_to(ROOT).as_posix()
         if "/tests/" in rel or "/vendor/" in rel or "node_modules" in rel or "/assets/" in rel:
             continue
@@ -82,7 +82,7 @@ def test_ui_links_name_a_settings_tab_that_exists():
     assert {
         ("ui/app/chat.js", "models"),
         ("ui/app/chat.js", "devices"),
-        ("ui/app/heartbeat.js", "health"),
+        ("ui/app/heartbeat.ts", "health"),
         ("ui/first-run.js", "models"),
     } <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
