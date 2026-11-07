@@ -16,6 +16,7 @@ GitHub's runs and jobs (world.py connect_github) stand in for them, each finishe
 """
 
 from backend import ci_runs
+from backend.finance import actions as FA
 from backend.finance.store import ledger as SL
 from evals.factory.scenarios import Scenario, at, standard, tickets
 from evals.factory.world import REPO, START
@@ -26,6 +27,7 @@ SMALL = ["runs-on=1/runner=4cpu-linux-x64"]
 BIG = ["runs-on=1/runner=16cpu-linux-x64"]
 HOSTED = ["ubuntu-24.04"]
 CALLS = ("ask", "retry", "extend")  # the steps whose answer is allowed (or granted) or not
+OWNER = "ana@acme.example"  # the world's owner (world.py hub-access.yaml)
 
 
 # ---------------------------------------------------------------------------------------------------- the driver
@@ -153,6 +155,13 @@ def setup_for(script, share=False):
     def setup(run, w, team):
         w.connect_github()
         w.store.settings.release_repo = REPO  # the repository the sweep lists (settings.release_repo)
+        # The world builds its scheduler without the App (world.py); a hub passes it (backend/app.py), and the sweep reads
+        # the repository's runs through it. Without it the sweep records nothing.
+        w.scheduler.github_app = w.app.state.github_app
+        # A hub sets Finance up on its scheduler's first pass (backend/scheduler.py), after this setup. The budget lookup
+        # and the posts need it now, so set it up as app startup does (backend/app.py), once the owner exists.
+        with w.store.transaction() as c:
+            FA.ensure_setup(c, OWNER)
         run.ci = {"script": script, "next": 0, "answers": [], "runs": [], "tickets": [], "seq": 0, "gh": 7_000_000}
         run.ci["tickets"] = [t["id"] for t in tickets(run, w, 5)]
         if share:
