@@ -178,9 +178,12 @@ def home_for_chat(c, person, bot_ref, *, create=True):
         if home is None:
             return None
         home_id = home["id"]
-    # An owner with no viewer (no record in the registry) gets the Home too: the move took their old chat there, so a new
-    # chat goes there as well and is never split. Only a viewer that is refused the Home keeps the chat where it was.
+    # An owner with no viewer (a human with no record in the registry) gets the Home too: the move took their old chat there,
+    # so a new chat goes there as well and is never split. Only a viewer that is refused the Home keeps the chat where it
+    # was. Any other actor with no viewer keeps the old answer, None.
     v = threads.actor_viewer(c, person)
+    if v is None and not str(person).startswith("human:"):
+        return None
     if _federated(c, home_id) or (v is not None and not threads.readable(c, v, home_id)):
         return None
     return home_id

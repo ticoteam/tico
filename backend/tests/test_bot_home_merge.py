@@ -791,3 +791,23 @@ def test_the_federated_check_still_applies_to_an_owner_with_no_viewer(api, ops_r
         c.execute("CREATE TABLE federation_threads(thread_id TEXT NOT NULL)")
         c.execute("INSERT INTO federation_threads(thread_id) VALUES(?)", (home,))
         assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) is None
+
+
+def test_an_actor_that_is_not_a_person_with_no_viewer_keeps_none(api, ops_rooms):
+    """Only a human with no record is an owner with no viewer; another actor with no viewer keeps the answer None."""
+    merge(api)
+    with store(api).transaction() as c:
+        assert threads.actor_viewer(c, "service:ci") is None
+        assert bot_home_merge.home_for_chat(c, "service:ci", "ops", create=False) is None
+
+
+def test_an_owner_with_no_viewer_and_an_archived_home_gets_a_new_home_on_the_first_chat(api, ops_rooms, fay_room):
+    """A chat whose bot Home was archived makes the bot's Home with create, as the first message of a new chat does."""
+    merge(api)
+    old = ops_rooms["home"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), old))
+        assert bot_home_merge.chat_home_missing(c, "human:fay", "ops")
+        made = bot_home_merge.home_for_chat(c, "human:fay", "ops")
+        assert made and made != old
+        assert H.chat_home(c, "human:fay", "bot:ops") == made
