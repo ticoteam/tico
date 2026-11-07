@@ -64,14 +64,22 @@ async function vaultReveal(id: string) {
   try {
     const result = await post(`/v2/credentials/${encodeURIComponent(id)}/reveal`);
     if (!dialog.open || !dialog.isConnected || generation !== VAULT_DIALOG_GENERATION) return;
-    dialog.querySelector('p')!.remove();   // the Loading line vaultDialog drew
+    const loading = dialog.querySelector<HTMLElement>('p');
+    if (!loading) throw new Error('The vault dialog did not draw its Loading line');
+    loading.remove();   // the Loading line vaultDialog drew
     const label = document.createElement('label'); label.textContent = 'Value';
     const value = document.createElement('textarea'); value.readOnly = true; value.value = result.value; value.setAttribute('aria-label','Value'); label.appendChild(value);dialog.appendChild(label);
     const copy = document.createElement('button');copy.type='button';copy.className='primary';copy.textContent='Copy';
     copy.onclick = async () => {try {await navigator.clipboard.writeText(value.value);toast('Copied');} catch {value.focus();value.select();toast('Select and copy the value shown.');}};
     dialog.appendChild(copy); VAULT_REVEAL_TIMER = setTimeout(vaultClose,60000);
     // The error replaces the Loading line, which is still drawn while this dialog is open.
-  } catch(error) { if(dialog.open && generation === VAULT_DIALOG_GENERATION) dialog.querySelector('p')!.textContent=errorMessage(error, ''); }
+  } catch(error) {
+    if(dialog.open && generation === VAULT_DIALOG_GENERATION) {
+      const loading = dialog.querySelector<HTMLElement>('p');
+      if (!loading) throw new Error('The vault dialog did not draw its Loading line');
+      loading.textContent=errorMessage(error, '');
+    }
+  }
 }
 // `row` is a stored credential to edit, or for Add a template ({name, env, source}: a tool's variable) to start from.
 function vaultEdit(row?: VaultEditRow) {
