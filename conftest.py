@@ -147,6 +147,14 @@ def pytest_sessionfinish(session, exitstatus):
         )
 
 
+def pytest_collection_modifyitems(items):
+    """Marks each slow test in the junit report (`<property name="slow">`). The timings job sums each file's slow seconds
+    over its testcase seconds (scripts/pr_checks.py durations writes that share to slow-shares.json)."""
+    for item in items:
+        if item.get_closest_marker("slow"):
+            item.user_properties.append(("slow", "1"))
+
+
 @pytest.fixture(autouse=True)
 def maintenance_runs_end(tmp_path):
     """A scheduler tick starts its maintenance run on a thread that outlives the test. Join those runs here, before the
