@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-"""Which browser scripts run each UI source file's code: scripts/ui-test-map.json.
+"""Which browser scripts run each UI file's code: the UI test map, published to the ci/ui-test-map branch.
 
-A UI change selects its browser scripts from this map. ui/index.html lists the classic scripts every page loads. A run of
-the browser scripts under scripts/ui-coverage.cjs (the measuring workflow, .github/workflows/ui-test-map.yml) records, per
-script and file, how many of the file's functions ran, other than its top-level code: every page loads every file, so
-loading says nothing. A file that at least SHARED_SHARE of the scripts run is "shared": it selects the core scripts (the
-CORE list of scripts/ui-tests.cjs), never all of them. A file that no script runs has no entry, so the selector falls back
-to its narrow default. The map is data: nothing edits it by hand.
+The measuring workflow (.github/workflows/ui-test-map.yml) runs every browser script (ui/tests/<name>.cjs) under
+scripts/ui-coverage.cjs, and the boot baseline (scripts/ui-boot-baseline.cjs), which loads the app once and does nothing
+else. A script exercises a UI file when it calls one of the file's functions more often, per page load, than the boot load
+does, or calls one the boot load never calls. Loading the app runs every file's top-level code, so loading alone says
+nothing. A file that at least SHARED_SHARE of the scripts exercise is "shared": a change to it runs the core scripts (the
+CORE list of scripts/ui-tests.cjs), never all of them. A UI file with no entry, CSS included, runs the core scripts too.
+The full suite runs only on release candidates. The map is data: the workflow publishes it as the only file on
+ci/ui-test-map, and nothing edits it by hand.
 
-    python3 scripts/ui_test_map.py build --measured DIR [--shared-share S] [--summary FILE]
-                                     a measured run (coverage/, timings-*.json) -> the map
-    python3 scripts/ui_test_map.py empty     the unmeasured map: every file falls back
-    python3 scripts/ui_test_map.py check     fail on a file or script the map names that no longer exists (static job)
-    python3 scripts/ui_test_map.py prune     drop the names that no longer exist, after a UI file or script is deleted
-    python3 scripts/ui_test_map.py shard I N print the browser scripts of measuring shard I of N
+    python3 scripts/ui_test_map.py check --map PATH    the schema of a published map
+    python3 scripts/ui_test_map.py build --measured DIR --out PATH --main-sha SHA --run URL [--summary PATH]
+                                                       a measured run -> the map
+    python3 scripts/ui_test_map.py shard I N           the browser scripts of measuring shard I of N
 
-ui_scripts_for(path, core=None) is what the selector calls: the scripts for a UI file, the core scripts for a shared
-one, or None when the map has no entry for the file.
+ui_scripts_for(path, core=None) is what the selector calls; it always returns a list. The map it reads is the file named by
+TICO_UI_TEST_MAP (the plan job fetches it from ci/ui-test-map). With no map, every UI file runs the core scripts.
 """
 
 import argparse
+import functools
 import json
+import os
 from pathlib import Path
 import re
 import statistics
@@ -28,15 +30,21 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-MAP_PATH = "scripts/ui-test-map.json"
-# A file is shared when at least this share of the measured scripts runs its code: it is on nearly every page's path, so a
-# change to it runs the core scripts rather than the scripts that happen to load it.
+MAP_ENV = "TICO_UI_TEST_MAP"
+VERSION = 2
+# A file is shared when at least this share of the browser scripts exercises it: it is on nearly every script's path, so a
+# change to it runs the core scripts rather than the scripts that happen to use it.
 SHARED_SHARE = 0.9
-FIELDS = ("files", "partial", "scripts", "shared", "shared_share", "smoke", "unexercised")
+# The boot baseline's record name. No browser script may take it.
+BOOT = "boot"
+FIELDS = ("files", "partial", "scripts", "shared", "shared_share", "source", "unexercised", "version")
+SOURCE_FIELDS = ("main", "run")
+SCRIPT_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+SHA = re.compile(r"[0-9a-f]{40}")
 
 
 class MapError(Exception):
-    """A measured run or the map does not hold together. The message says what to do."""
+    """A measured run or a map does not hold together. The message says what to do."""
 
 
 def tests(root=ROOT):
@@ -45,7 +53,7 @@ def tests(root=ROOT):
 
 
 def served_files(root=ROOT):
-    """The UI scripts the page loads (ui/index.html's script tags), by their path from ui/, in load order."""
+    """The UI scripts ui/index.html loads, by their path from ui/, in load order, that exist."""
     html = (root / "ui" / "index.html").read_text(encoding="utf-8")
     listed = []
     for src in re.findall(r'<script\s+src="/tico/ui/([^"?#]+)"', html):
@@ -54,105 +62,8 @@ def served_files(root=ROOT):
     return [f"ui/{src}" for src in listed if (root / "ui" / src).is_file()]
 
 
-def load(root=ROOT):
-    return json.loads((root / MAP_PATH).read_text(encoding="utf-8"))
-
-
-def write(data, root=ROOT):
-    (root / MAP_PATH).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def ui_scripts_for(path, core=None, root=ROOT):
-    """The browser scripts that run UI file `path`: its list in the map. A shared file gets the core scripts (`core`, or the
-    map's smoke list). None when the map has no entry for the file, so the caller falls back to its own default."""
-    key = Path(path).as_posix()
-    try:
-        data = load(root)
-    except FileNotFoundError:
-        return None
-    if key in data["shared"]:
-        return sorted(data["smoke"] if core is None else core)
-    if key in data["files"]:
-        return list(data["files"][key])
-    return None
-
-
-def problems(root=ROOT):
-    """What is wrong with the map on this tree: a field that does not hold together, or a name that no longer exists."""
-    if not (root / MAP_PATH).is_file():
-        return [f"{MAP_PATH} is missing: run python3 scripts/ui_test_map.py empty"]
-    try:
-        data = load(root)
-    except json.JSONDecodeError as error:
-        return [f"{MAP_PATH} is not JSON: {error}"]
-    if not isinstance(data, dict) or set(data) != set(FIELDS):
-        return [f"{MAP_PATH} must hold exactly these fields: {', '.join(FIELDS)}"]
-    found = []
-    scripts = set(tests(root))
-    ui_names = set(data["shared"]) | set(data["unexercised"]) | set(data["files"])
-    for name in sorted(ui_names):
-        if not name.startswith("ui/") or not name.endswith((".js", ".ts")):
-            found.append(f"{name} is not a UI script (ui/…js or ui/…ts)")
-        elif not (root / name).is_file():
-            found.append(f"{name} is in the map but no longer exists: run python3 scripts/ui_test_map.py prune")
-    named_scripts = set(data["smoke"]) | set(data["partial"]) | {s for ran in data["files"].values() for s in ran}
-    for name in sorted(named_scripts - scripts):
-        found.append(
-            f"{name} is in the map but ui/tests/{name}.cjs no longer exists: run python3 scripts/ui_test_map.py prune"
-        )
-    for field in ("shared", "unexercised", "smoke", "partial"):
-        if data[field] != sorted(set(data[field])):
-            found.append(f"{MAP_PATH}: {field} must be sorted and unique")
-    for name, ran in data["files"].items():
-        if not ran or ran != sorted(set(ran)):
-            found.append(f"{MAP_PATH}: files[{name}] must be a sorted, nonempty list of scripts")
-    overlap = (set(data["shared"]) & set(data["files"])) | (set(data["unexercised"]) & set(data["files"]))
-    overlap |= set(data["shared"]) & set(data["unexercised"])
-    for name in sorted(overlap):
-        found.append(f"{name} appears in more than one of shared, unexercised and files")
-    if data["shared"] and not data["smoke"]:
-        found.append(f"{MAP_PATH} has shared files but no smoke scripts")
-    return found
-
-
-def prune(root=ROOT):
-    """Drops every name that no longer exists, from the lists and from the files that ran them."""
-    data = load(root)
-    scripts = set(tests(root))
-
-    def exists(name):
-        return (root / name).is_file()
-
-    data["shared"] = [name for name in data["shared"] if exists(name)]
-    data["unexercised"] = [name for name in data["unexercised"] if exists(name)]
-    files = {}
-    for name, ran in data["files"].items():
-        kept = [script for script in ran if script in scripts]
-        if exists(name) and kept:
-            files[name] = kept
-    data["files"] = files
-    data["smoke"] = [script for script in data["smoke"] if script in scripts]
-    data["partial"] = [script for script in data["partial"] if script in scripts]
-    write(data, root)
-    return data
-
-
-def empty(root=ROOT):
-    """The unmeasured map: no file has an entry, so every UI file falls back to the selector's default."""
-    data = {
-        "files": {},
-        "partial": [],
-        "scripts": 0,
-        "shared": [],
-        "shared_share": SHARED_SHARE,
-        "smoke": [],
-        "unexercised": [],
-    }
-    write(data, root)
-    return data
-
-
-def smoke_list(root=ROOT):
+@functools.lru_cache(maxsize=None)
+def core_list(root=ROOT):
     """The core scripts: what scripts/ui-tests.cjs runs with no names. `--list` prints them and runs nothing."""
     try:
         out = subprocess.run(
@@ -160,52 +71,221 @@ def smoke_list(root=ROOT):
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         raise MapError(f"could not read the core scripts from scripts/ui-tests.cjs: {error}") from error
-    return sorted(line.strip() for line in out.splitlines() if line.strip())
+    return tuple(sorted(line.strip() for line in out.splitlines() if line.strip()))
 
 
-def build(root, measured, share=SHARED_SHARE, smoke=None):
-    """The map from a measured run. `measured` holds coverage/<script>.json for every browser script (scripts/ui-coverage.cjs
-    writes it) and timings-<shard>.json for the scripts that passed. A script with no coverage record stops the build: its
-    browser never started under the hook, so its files would be missing from the map without a sign."""
+def _is_file_name(name):
+    return isinstance(name, str) and re.fullmatch(r"ui/[^\s]+\.(?:js|ts)", name) is not None and ".." not in name
+
+
+def _is_script_name(name):
+    return isinstance(name, str) and SCRIPT_NAME.fullmatch(name) is not None
+
+
+def _is_count(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _names(value):
+    """The strings of a list, as a set; nothing when the value is not a list of strings (validate() reports that)."""
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return set(value)
+    return set()
+
+
+def _sorted_unique(value, check, nonempty=False):
+    """Why a list is not a sorted, unique list of valid names (None when it is one)."""
+    if not isinstance(value, list) or not all(check(item) for item in value):
+        return "must be a list of valid names"
+    if value != sorted(set(value)):
+        return "must be sorted and without repeats"
+    if nonempty and not value:
+        return "must not be empty"
+    return None
+
+
+def validate(data):
+    """What is wrong with a map's shape, as messages (empty when it holds together). It does not look at the tree: a name a
+    later change deleted is pruned when the map loads, not refused here."""
+    if not isinstance(data, dict) or set(data) != set(FIELDS):
+        return [f"a map holds exactly these fields: {', '.join(FIELDS)}"]
+    found = []
+    if data["version"] != VERSION:
+        found.append(f"version must be {VERSION}")
+    source = data["source"]
+    well_formed = (
+        isinstance(source, dict)
+        and set(source) == set(SOURCE_FIELDS)
+        and isinstance(source["main"], str)
+        and SHA.fullmatch(source["main"]) is not None
+        and isinstance(source["run"], str)
+        and source["run"] != ""
+    )
+    if not well_formed:
+        found.append("source holds main (the main commit's 40-character SHA) and run (the measuring run's URL)")
+    if not _is_count(data["scripts"]) or data["scripts"] < 1:
+        found.append("scripts is the number of measured browser scripts (at least 1)")
+    share = data["shared_share"]
+    if isinstance(share, bool) or not isinstance(share, (int, float)) or not 0 < share <= 1:
+        found.append("shared_share is a number above 0 and at most 1")
+    for field, check in (("shared", _is_file_name), ("unexercised", _is_file_name), ("partial", _is_script_name)):
+        problem = _sorted_unique(data[field], check)
+        if problem:
+            found.append(f"{field} {problem}")
+    files = data["files"]
+    if not isinstance(files, dict):
+        found.append("files maps each UI file to the browser scripts that run it")
+    else:
+        for name, ran in files.items():
+            if not _is_file_name(name):
+                found.append(f"files has {name!r}, which is not a UI file")
+            problem = _sorted_unique(ran, _is_script_name, nonempty=True)
+            if problem:
+                found.append(f"files[{name}] {problem}")
+        shared = _names(data["shared"])
+        unexercised = _names(data["unexercised"])
+        both = (set(files) & shared) | (set(files) & unexercised) | (shared & unexercised)
+        for name in sorted(both):
+            found.append(f"{name} is in more than one of shared, unexercised and files")
+    return found
+
+
+def read_map(path):
+    """The map in `path`, as JSON. Its shape is not checked here: validate() does that."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise MapError(f"{path} is not a readable map: {error}") from error
+
+
+def prune(data, root=ROOT):
+    """The map without the names this tree no longer has: a UI file or browser script deleted or renamed since the map was
+    measured. A file whose list empties is dropped, so it runs the core scripts."""
+    scripts = set(tests(root))
+
+    def has_file(name):
+        return (root / name).is_file()
+
+    files = {}
+    for name, ran in data["files"].items():
+        kept = [script for script in ran if script in scripts]
+        if kept and has_file(name):
+            files[name] = kept
+    return {
+        **data,
+        "files": files,
+        "partial": [script for script in data["partial"] if script in scripts],
+        "shared": [name for name in data["shared"] if has_file(name)],
+        "unexercised": [name for name in data["unexercised"] if has_file(name)],
+    }
+
+
+def load_map(root=ROOT, map_path=None):
+    """The published map, pruned to this tree, or None when there is none: no path given and TICO_UI_TEST_MAP unset, or the
+    file is missing (the branch or its file is not there yet). A map that is there but does not validate is an error."""
+    if map_path is None:
+        map_path = os.environ.get(MAP_ENV, "")
+        if not map_path:
+            return None
+    if not Path(map_path).is_file():
+        return None
+    data = read_map(map_path)
+    found = validate(data)
+    if found:
+        raise MapError(f"{map_path} does not validate: " + "; ".join(found))
+    return prune(data, root)
+
+
+def ui_scripts_for(path, core=None, root=ROOT, map_path=None):
+    """The browser scripts that run UI file `path`, always as a list. A browser script (ui/tests/<name>.cjs) runs itself, while
+    it is in the tree. A file the map lists runs its list. Any other UI file (shared, unexercised, no entry, or no map at all)
+    runs the core scripts: `core`, or the list scripts/ui-tests.cjs prints. Raises MapError for a path outside ui/."""
+    key = Path(path).as_posix()
+    if not key.startswith("ui/"):
+        raise MapError(f"{key} is not a UI file")
+    test = re.fullmatch(r"ui/tests/([^/]+)\.cjs", key)
+    if test and (root / key).is_file():
+        return [test.group(1)]
+    data = load_map(root, map_path)
+    if data is not None and key in data["files"]:
+        return list(data["files"][key])
+    return sorted(core_list(root) if core is None else core)
+
+
+def exercised_files(record, boot):
+    """The UI files a script exercises: one of their functions ran more often than the boot load runs it, scaled to the
+    script's page loads, or it ran a function the boot load never runs."""
+    out = set()
+    for file, counts in record["files"].items():
+        boot_counts = boot["files"].get(file, {})
+        for key, count in counts.items():
+            if count * boot["loads"] > boot_counts.get(key, 0) * record["loads"]:
+                out.add(file)
+                break
+    return out
+
+
+def _record(measured, name):
+    path = measured / "coverage" / f"{name}.json"
+    if not path.is_file():
+        raise MapError(f"no coverage record for {name}: it did not start under scripts/ui-coverage.cjs")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise MapError(f"the coverage record for {name} is not JSON: {error}") from error
+    if not isinstance(record, dict) or not {"pages", "loads", "files"} <= set(record):
+        raise MapError(f"the coverage record for {name} is not from scripts/ui-coverage.cjs")
+    return record
+
+
+def build(root, measured, main_sha, run_url, share=SHARED_SHARE):
+    """The map from a measured run: coverage/<name>.json for every browser script and for the boot baseline, and
+    timings-<shard>.json for the scripts that passed. A script with no record stops the build: its browser never started under
+    the hook, so its files would be missing from the map without a sign. Returns (map, scripts that opened no page)."""
     measured = Path(measured)
     names = tests(root)
-    records = {}
-    for name in names:
-        record = measured / "coverage" / f"{name}.json"
-        if not record.is_file():
-            raise MapError(f"no coverage record for {name}: the script did not start under scripts/ui-coverage.cjs")
-        records[name] = json.loads(record.read_text(encoding="utf-8"))
+    if BOOT in names:
+        raise MapError(f"no browser script may be named {BOOT}: that name is the boot baseline's record")
+    boot = _record(measured, BOOT)
+    if boot["loads"] < 1:
+        raise MapError("the boot baseline loaded no page, so there is nothing to compare the scripts with")
+    records = {name: _record(measured, name) for name in names}
+    exercised = {name: exercised_files(records[name], boot) for name in names}
+    universe = set(served_files(root))
+    for record in records.values():
+        universe |= set(record["files"])
+    ran_by = {file: [name for name in names if file in exercised[name]] for file in sorted(universe)}
+    shared = sorted(file for file, ran in ran_by.items() if ran and len(ran) >= share * len(names))
     passed = set()
     for timing in sorted(measured.glob("timings-*.json")):
         passed |= set(json.loads(timing.read_text(encoding="utf-8")))
-    ran_by = {}
-    for file in served_files(root):
-        ran_by[file] = [name for name in names if records[name]["files"].get(file, {}).get("ran", 0) > 0]
-    shared = sorted(file for file, ran in ran_by.items() if ran and len(ran) >= share * len(names))
     data = {
-        "files": {file: ran for file, ran in sorted(ran_by.items()) if ran and file not in shared},
-        "partial": [name for name in names if name not in passed],
+        "version": VERSION,
+        "source": {"main": main_sha, "run": run_url},
         "scripts": len(names),
-        "shared": shared,
         "shared_share": share,
-        "smoke": smoke_list(root) if smoke is None else sorted(smoke),
-        "unexercised": sorted(file for file, ran in ran_by.items() if not ran),
+        "shared": shared,
+        "files": {file: ran for file, ran in ran_by.items() if ran and file not in shared},
+        "unexercised": [file for file, ran in ran_by.items() if not ran],
+        "partial": [name for name in names if name not in passed],
     }
-    write(data, root)
-    return data, sorted(name for name in names if records[name].get("pages", 0) == 0)
+    found = validate(data)
+    if found:
+        raise MapError("the built map does not validate: " + "; ".join(found))
+    return data, [name for name in names if records[name]["pages"] == 0]
 
 
 def summary(data, no_page):
-    """A short Markdown summary of a build, for the pull request body and the workflow summary."""
+    """A short Markdown summary of a build, for the workflow summary."""
     per_file = [len(ran) for ran in data["files"].values()]
     lines = [
         f"- Browser scripts measured: {data['scripts']}; did not pass in the measured run: {len(data['partial'])}"
         f"{' (' + ', '.join(data['partial']) + ')' if data['partial'] else ''}",
-        f"- Shared (run the {len(data['smoke'])} smoke scripts, share at least {data['shared_share']}): {len(data['shared'])}"
-        f" ({', '.join(data['shared'])})",
+        f"- Shared (run the core scripts; at least {data['shared_share']} of the scripts exercise them): "
+        f"{len(data['shared'])} ({', '.join(data['shared'])})",
         f"- Files with a list of scripts: {len(data['files'])}; median scripts per file: "
         f"{statistics.median(per_file) if per_file else 0}",
-        f"- Files no script runs (narrow fallback): {len(data['unexercised'])}",
+        f"- Files no script exercises (run the core scripts): {len(data['unexercised'])}",
     ]
     if no_page:
         lines.append(f"- Scripts that opened no page: {', '.join(no_page)}")
@@ -222,11 +302,13 @@ def shard(index, count, root=ROOT):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="The map from each UI file to the browser scripts that run its code.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("check", help="fail on a name the map holds that no longer exists")
-    commands.add_parser("prune", help="drop the names that no longer exist")
-    commands.add_parser("empty", help="write the unmeasured map")
+    checked = commands.add_parser("check", help="validate a published map's schema")
+    checked.add_argument("--map", required=True, type=Path, help="the map to validate")
     built = commands.add_parser("build", help="write the map from a measured run")
     built.add_argument("--measured", required=True, type=Path, help="the measured run's folder")
+    built.add_argument("--out", required=True, type=Path, help="where to write the map")
+    built.add_argument("--main-sha", required=True, help="the main commit the run measured")
+    built.add_argument("--run", required=True, help="the measuring run's URL")
     built.add_argument("--shared-share", type=float, default=SHARED_SHARE)
     built.add_argument("--summary", type=Path, help="also write the Markdown summary here")
     sharded = commands.add_parser("shard", help="print one measuring shard's browser scripts")
@@ -235,21 +317,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "check":
-            found = problems()
+            data = read_map(args.map)
+            found = validate(data)
             for line in found:
-                print(line, file=sys.stderr)
+                print(f"ui-test-map: {line}", file=sys.stderr)
             if found:
                 return 1
-            data = load()
-            print(f"ui-test-map: {len(data['files'])} files, {len(data['shared'])} shared, all names exist")
-        elif args.command == "prune":
-            prune()
-            print("ui-test-map: pruned")
-        elif args.command == "empty":
-            empty()
-            print("ui-test-map: written unmeasured")
+            print(
+                f"ui-test-map: {args.map} matches the schema ({len(data['files'])} files, {len(data['shared'])} shared)"
+            )
         elif args.command == "build":
-            data, no_page = build(ROOT, args.measured, args.shared_share)
+            data, no_page = build(ROOT, args.measured, args.main_sha, args.run, args.shared_share)
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             text = summary(data, no_page)
             if args.summary:
                 args.summary.write_text(text, encoding="utf-8")

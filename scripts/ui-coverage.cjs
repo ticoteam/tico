@@ -1,14 +1,15 @@
-// Records which UI source files each browser script runs, for scripts/ui_test_map.py. Off unless TICO_UI_COVERAGE
-// names a folder, and it acts only in a browser script (ui/tests/<name>.cjs), so the runner, the Playwright driver and
-// the other node processes are left alone. The measuring workflow preloads it with NODE_OPTIONS
-// (.github/workflows/ui-test-map.yml); a normal run never loads it.
+// Records what each browser script runs in the UI, for scripts/ui_test_map.py. Off unless TICO_UI_COVERAGE names a folder,
+// and it acts only in a browser script (ui/tests/<name>.cjs) or the boot baseline (scripts/ui-boot-baseline.cjs), so the
+// runner, the Playwright driver and the other node processes are left alone. The measuring workflow preloads it with
+// NODE_OPTIONS (.github/workflows/ui-test-map.yml); a normal run never loads it.
 //
 // Each script writes <folder>/<name>.json:
-//   {"script": "chat", "pages": 3, "files": {"ui/app/chat.js": {"functions": 120, "ran": 31}}}
-// "functions" counts the functions a file defines, other than its top-level code; "ran" counts those that ran at least
-// once in any page the script used. The top-level code runs at every page load, so it does not count.
-// Chromium's precise coverage is read from each page every FLUSH_MS, after each navigation, and before a page, context
-// or browser closes, so a script that fails or is stopped still leaves what it ran.
+//   {"script": "chat", "pages": 3, "loads": 4, "files": {"ui/app/chat.js": {"120-398": 31, "402-611": 2}}}
+// "files" maps each UI file to the functions that ran, by their source range ("start-end"), with how many times each ran
+// across all of the script's pages. The top-level code of a file runs at every load and is left out. "loads" counts the
+// page loads (the load event) of those pages: the boot baseline loads the app once, so counts are compared per load.
+// Chromium's precise coverage is read from each page every FLUSH_MS, after each navigation, and before a page, context or
+// browser closes, so a script that fails or is stopped still leaves what it ran.
 'use strict';
 
 const fs = require('node:fs');
@@ -17,9 +18,11 @@ const path = require('node:path');
 const FLUSH_MS = 2000;
 // The UI scripts a page loads, by their path under /tico/ui/. The bundles have no source file of their own.
 const SERVED = /^\/tico\/ui\/((?!app\.bundle)[^?#]+\.(?:js|ts))$/;
+// The files this hook measures when it is preloaded: a browser script, or the boot baseline.
+const MEASURED = /[\\/](?:ui[\\/]tests[\\/][^\\/]+\.cjs|scripts[\\/]ui-boot-baseline\.cjs)$/;
 
-// Adds one reading (the scripts of Profiler.takePreciseCoverage) to files, which maps "ui/app/chat.js" to the keys of
-// its functions and of those that ran. A key is the function's source range.
+// Adds one reading (the scripts of Profiler.takePreciseCoverage) to files: a Map from "ui/app/chat.js" to a Map from each
+// function's key to the calls it has had. A key is the function's source range, the same in every page of the file.
 function fold(files, scripts) {
   for (const entry of scripts) {
     let pathname;
@@ -31,23 +34,23 @@ function fold(files, scripts) {
     let end = 0;
     for (const fn of functions) for (const range of fn.ranges || []) end = Math.max(end, range.endOffset);
     const file = `ui/${match[1]}`;
-    if (!files.has(file)) files.set(file, {functions: new Set(), ran: new Set()});
-    const seen = files.get(file);
     for (const fn of functions) {
       const first = (fn.ranges || [])[0];
-      if (!first || (first.startOffset === 0 && first.endOffset === end)) continue;
+      if (!first || !(first.count > 0) || (first.startOffset === 0 && first.endOffset === end)) continue;
+      if (!files.has(file)) files.set(file, new Map());
+      const counts = files.get(file);
       const key = `${first.startOffset}-${first.endOffset}`;
-      seen.functions.add(key);
-      if (first.count > 0) seen.ran.add(key);
+      counts.set(key, (counts.get(key) || 0) + first.count);
     }
   }
   return files;
 }
 
-function summary(files) {
+// The record a script writes: every UI file it ran code in, with the calls of each function that ran.
+function record(name, files, pages, loads) {
   const out = {};
-  for (const [file, seen] of files) out[file] = {functions: seen.functions.size, ran: seen.ran.size};
-  return out;
+  for (const [file, counts] of files) out[file] = Object.fromEntries(counts);
+  return {script: name, pages, loads, files: out};
 }
 
 function install() {
@@ -57,6 +60,7 @@ function install() {
   const files = new Map();
   const pages = new Map(); // page -> {session, ready, queue}
   let attached = 0;
+  let loads = 0;
   let timer = null;
 
   // A failed write keeps the previous record. Nothing here may throw into the script under test.
@@ -64,8 +68,7 @@ function install() {
     try {
       fs.mkdirSync(folder, {recursive: true});
       const target = path.join(folder, `${name}.json`);
-      const record = {script: name, pages: attached, files: summary(files)};
-      fs.writeFileSync(`${target}.tmp`, `${JSON.stringify(record, null, 1)}\n`);
+      fs.writeFileSync(`${target}.tmp`, `${JSON.stringify(record(name, files, attached, loads), null, 1)}\n`);
       fs.renameSync(`${target}.tmp`, target);
     } catch { /* the build reports a script with no record */ }
   }
@@ -103,6 +106,7 @@ function install() {
     const state = {session: null, ready: null, queue: Promise.resolve()};
     pages.set(page, state);
     attached += 1;
+    page.on('load', () => { loads += 1; });
     const close = page.close;
     page.close = async function (...args) {
       await finish(page);
@@ -130,6 +134,13 @@ function install() {
   function attachContext(context) {
     for (const page of context.pages()) attach(page);
     context.on('page', page => { attach(page); });
+    // A page made here is attached before the caller gets it, so its first navigation is measured.
+    const newPage = context.newPage;
+    context.newPage = async function (...options) {
+      const page = await newPage.apply(this, options);
+      await attach(page);
+      return page;
+    };
     const close = context.close;
     context.close = async function (...args) {
       await Promise.all([...pages.keys()].filter(page => page.context() === context).map(finish));
@@ -163,6 +174,6 @@ function install() {
 }
 
 const folder = process.env.TICO_UI_COVERAGE;
-if (folder && /[\\/]ui[\\/]tests[\\/][^\\/]+\.cjs$/.test(path.resolve(process.argv[1] || ''))) install();
+if (folder && MEASURED.test(path.resolve(process.argv[1] || ''))) install();
 
-module.exports = {fold, summary, SERVED, FLUSH_MS};
+module.exports = {fold, record, SERVED, FLUSH_MS, MEASURED};

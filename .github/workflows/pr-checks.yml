@@ -91,6 +91,14 @@ jobs:
             case $log in *'failed permanently'*) ;; *) break ;; esac
           done
           [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
+      - name: UI test map from ci/ui-test-map, or the core scripts when there is none
+        run: |
+          set -euo pipefail
+          if git fetch --depth=1 origin ci/ui-test-map && git show FETCH_HEAD:ui-test-map.json > "$RUNNER_TEMP/ui-test-map.json"; then
+            echo "TICO_UI_TEST_MAP=$RUNNER_TEMP/ui-test-map.json" >> "$GITHUB_ENV"
+          else
+            echo "::notice title=UI test map::no map on ci/ui-test-map: UI files run the core scripts"
+          fi
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
@@ -316,8 +324,14 @@ jobs:
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
-      - name: UI test map (every named file and script exists)
-        run: python3 scripts/ui_test_map.py check
+      - name: UI test map (the published map's schema)
+        run: |
+          set -euo pipefail
+          if git fetch --depth=1 origin ci/ui-test-map && git show FETCH_HEAD:ui-test-map.json > "$RUNNER_TEMP/ui-test-map.json"; then
+            python3 scripts/ui_test_map.py check --map "$RUNNER_TEMP/ui-test-map.json"
+          else
+            echo "::notice title=UI test map::no map on ci/ui-test-map yet: nothing to check"
+          fi
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
       - name: Shell scripts (shellcheck, pinned)
