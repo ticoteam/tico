@@ -38,17 +38,23 @@
 .task-req-mark input { height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
 .task-req-err { font-size: 12px; color: var(--fail); }
 
-/* The "▶ N for you" buttons: on the board header and on each column (ui/app/pipeline-review.ts). */
-.pipe-play-row { display: flex; gap: 8px; padding: 0 0 8px; }
+/* The "▶ N for you" buttons: the header's, beside the pipeline picker (#task-play), and a column's or a phone stage's compact
+   chip, as tall as its count (ui/app/pipeline-review.ts). */
+.tl-play { display: inline-flex; align-items: center; flex: none; margin-left: 8px; }
+.tl-play[hidden] { display: none; }
 .pipe-play { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; border: 0;
-  background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; flex: none; }
+  background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; flex: none; }
+.pipe-play-chip { gap: 4px; height: 18px; padding: 0 7px; border-radius: 9px; font-size: 11px; line-height: 18px; }
 .pipe-play-tri { width: 0; height: 0; border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent currentColor; }
+.pipe-play-chip .pipe-play-tri { border-width: 3px 0 3px 5px; }
 
 /* Review mode: one full-window dialog. Desktop puts the attachment beside the decision; a phone stacks them. */
 .pipe-review { position: fixed; inset: 0; z-index: 1000; background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
   font-size: 13px; overflow: hidden; }
 .pipe-review-head { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.pipe-review-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; min-width: 0; }
 .pipe-review-count { font-weight: 600; }
+.pipe-review-x { display: none; font-size: 22px; line-height: 1; }
 .pipe-review-body { flex: 1 1 auto; display: flex; min-height: 0; }
 .pipe-review-main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; padding: 16px 24px; min-width: 0; }
 .pipe-review-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -66,26 +72,39 @@
   background: var(--bg); color: var(--ink); font: inherit; resize: vertical; }
 .pipe-review-note-label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
 .pipe-review-sendback { display: flex; gap: 8px; }
-.pipe-review-sendback .btn { flex: 1 1 0; height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2);
-  color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.pipe-review-sendback .btn { flex: 1 1 0; min-width: 0; height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2);
+  color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .pipe-review-approve { height: 56px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 17px;
   font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
 .pipe-review-approve:disabled { opacity: .6; cursor: default; }
 .pipe-review-kbd { font-size: 12px; padding: 0 6px; border-radius: 3px; border: 1px solid currentColor; opacity: .8; font-family: inherit; }
+.pipe-review-met { align-self: center; min-height: 36px; padding: 0 10px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px;
+  text-decoration: underline; cursor: pointer; }
 .pipe-review-moves { text-align: center; margin: 0; font-size: 12px; color: var(--muted); }
 .pipe-review-err { margin: 0; color: var(--fail); font-size: 12px; }
 .pipe-review-empty { padding: 40px 20px; color: var(--muted); }
 .pipe-review-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
   padding: 10px 14px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--line); box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
 .pipe-review .linkish { font: inherit; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
+/* A touch screen has no keyboard to hint at: Esc and ⌘⏎ show only where a hover can. */
+@media (hover: none) {
+  .pipe-review kbd { display: none; }
+}
 
 @media (max-width: 600px) {
   .pipe-review-head { padding: 10px 16px; gap: 8px; }
+  .pipe-review-title { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .pipe-review-where { display: none; }
+  .pipe-review-exit { width: 44px; height: 44px; padding: 0; border-radius: 22px; display: inline-flex; align-items: center; justify-content: center; }
+  .pipe-review-exit-word { display: none; }
+  .pipe-review-x { display: inline; }
+  .pipe-review-head button[data-review-prev], .pipe-review-head button[data-review-next] { width: 44px; height: 44px; padding: 0; font-size: 20px; }
   .pipe-review-body { flex-direction: column; overflow-y: auto; }
   .pipe-review-main { padding: 12px 16px; flex: none; }
   .pipe-review-view { min-height: 260px; }
   .pipe-review-side { width: auto; border-left: 0; border-top: 1px solid var(--line); padding: 14px 16px 20px; flex: none; }
   .pipe-review-sendback .btn { height: 44px; }
+  .pipe-review-met { min-height: 44px; }
   .pipe-review-approve { height: 56px; }
   .pipe-review-toast { left: 16px; right: 16px; transform: none; justify-content: space-between; }
 }
@@ -129,7 +148,7 @@
 .pr-error .pr-dot { background: var(--fail); }
 .pr-text { overflow-wrap: anywhere; }
 .pr-empty { margin: 0; padding: 10px 16px; color: var(--muted); }
-.pr-chat { flex: 1 1 0; min-height: 160px; display: flex; flex-direction: column; overflow: hidden; }
+.pr-chat { flex: 1 1 0; min-height: 160px; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; padding: 0 16px 14px; }
 .pr-chat > .thv { flex: 1 1 auto; min-height: 0; }
 .pr-bar, .pr-scrim { display: none; }
 
@@ -145,6 +164,15 @@
 .pchip-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
 .pipe-next { display: block; width: 100%; min-height: 44px; margin-top: 8px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
 .pipe-phone { min-height: 40vh; }
+/* A phone's stage: its name and limit on a quiet line, then the cards full width (ui/app/task-pipelines.js). */
+.pipe-stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pipe-stage-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 16px 0; color: var(--muted); font-size: 13px; }
+.pipe-stage-cards { display: flex; flex-direction: column; gap: 8px; padding: 0 16px 6px; }
+.pipe-stage-cards .bcard { width: 100%; box-sizing: border-box; }
+.pipe-stage-cards .empty { padding: 6px 4px; color: var(--muted); font-size: 13px; }
+@media (max-width: 600px) {
+  .tl-play .pipe-play-word { display: none; }
+}
 
 @media (min-width: 601px) and (max-width: 760px) {
   .tasks-page.has-rail { display: grid; }

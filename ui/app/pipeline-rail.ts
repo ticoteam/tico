@@ -285,12 +285,14 @@ function pipelineRailLeave(): void {
     board) and takes it away otherwise. */
 function pipelineRailSync(state: PipelineTasksState): void {
   const type = state.view === 'board' ? (pipelineSelectedType(state) as { id: string; manager?: string | null } | null) : null;
+  // The type names its manager by slug; the tasks it holds carry the bot's id, so the actor is the bot row's id when there is one.
   const ref = type?.manager ? String(type.manager).replace(/^bot:/, '') : '';
+  const manager = ref ? 'bot:' + (botByRef(ref)?.id ?? ref) : '';
   const page = document.querySelector('.tasks-page');
   if (type) void pipelineMineSync(type.id);
-  if (!type || !ref || !page) { pipelineRailLeave(); return; }
-  if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== 'bot:' + ref || !pipelineRail.host.isConnected) {
-    pipelineRailEnter(type, 'bot:' + ref, page);
+  if (!type || !manager || !page) { pipelineRailLeave(); return; }
+  if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== manager || !pipelineRail.host.isConnected) {
+    pipelineRailEnter(type, manager, page);
   }
   pipelineRailPaint(state);
 }

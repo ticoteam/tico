@@ -388,7 +388,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         // A phone shows one stage at a time, with a chip for each; the stage with tickets is the one on show.
         assert.deepEqual(await page.locator('#task-body .pchips [data-pipe-chip]').evaluateAll(els => els.map(el => el.dataset.pipeChip)),
           ['dev-deck', 'dev-blocked', 'dev-building', 'dev-review']);
-        assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['Blocked']);
+        // The phone's stage has no column box: its name is the stage line, and its tickets sit under it.
+        assert.deepEqual(await page.locator('#task-body .pipe-stage-name').allTextContents(), ['Blocked']);
       } else {
         assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['On Deck', 'Blocked', 'In Progress', 'Review 1']);
         assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
