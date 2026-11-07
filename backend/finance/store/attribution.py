@@ -28,6 +28,8 @@ _H: Any = _hubdb
 
 SOURCES = ("rule", "person", "bot")
 MATCH_KINDS = ("vendor", "account", "money_account")
+# The order a line's matching rules are judged in: the first kind with an enabled rule that fits the line wins.
+PRECEDENCE = ("vendor", "money_account", "account")
 HISTORY_MAX = 20
 
 
@@ -237,7 +239,7 @@ def match_rule(rule_rows: Iterable[Any], facts: Facts) -> Any:
     """The enabled rule a line takes, by precedence: a vendor rule, then a money-account rule, then an account rule;
     within one kind, the first created."""
     live = [r for r in rule_rows if int(r["enabled"])]
-    for kind in MATCH_KINDS:
+    for kind in PRECEDENCE:
         for r in live:
             if str(r["match_kind"]) != kind:
                 continue
