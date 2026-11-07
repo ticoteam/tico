@@ -1,31 +1,34 @@
-/* ui/styles/segment-tags.css — Segments on the people's pages (ui/app/segment-tags.ts): the colour dots, the tag chips and
-   a teammate's Segments menu, and the filter list. The eight colours are the app's own: blue, green, amber, red are its
-   status tokens; purple, teal, pink and gray are the automations palette's (ui/styles/automations.css), in both themes. */
-:root{--seg-blue:var(--run);--seg-green:var(--ok);--seg-amber:var(--wait);--seg-red:var(--fail);--seg-purple:#b9a8f0;--seg-teal:#5fc4c4;--seg-pink:#d99ad0;--seg-gray:#979a99}
-:root[data-theme="light"]{--seg-purple:#6650bd;--seg-teal:#1d7778;--seg-pink:#a3458b;--seg-gray:#6a736e}
-@media (prefers-color-scheme:light){:root[data-theme="system"]{--seg-purple:#6650bd;--seg-teal:#1d7778;--seg-pink:#a3458b;--seg-gray:#6a736e}}
+/* ui/styles/segment-tags.css — Segments, shared by every page that shows one (ui/app/segment-tags.ts is the one place
+   that draws them): the colour dot, the chip in a line or on a card, a teammate's Segments row and its menu, and the
+   page's Segment filter. Shared: the org chart, the profiles, Goals, Tasks, Growth and Finance all load this sheet, and
+   the one copy of each class lives here. The eight colours are the automations palette's (--au-* in tokens.css, one set
+   for both themes), so a segment reads the same on every page. */
 
+/* A segment's colour dot: 8px, the same on a card, in a menu and in a chip (a chip's is 7px). */
 .seg-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;vertical-align:middle}
-.seg-dot.c-blue{background:var(--seg-blue)}
-.seg-dot.c-green{background:var(--seg-green)}
-.seg-dot.c-amber{background:var(--seg-amber)}
-.seg-dot.c-red{background:var(--seg-red)}
-.seg-dot.c-purple{background:var(--seg-purple)}
-.seg-dot.c-teal{background:var(--seg-teal)}
-.seg-dot.c-pink{background:var(--seg-pink)}
-.seg-dot.c-gray{background:var(--seg-gray)}
+.seg-dot.c-blue{background:var(--au-blue)}
+.seg-dot.c-green{background:var(--au-green)}
+.seg-dot.c-amber{background:var(--au-amber)}
+.seg-dot.c-red{background:var(--au-red)}
+.seg-dot.c-purple{background:var(--au-violet)}
+.seg-dot.c-teal{background:var(--au-teal)}
+.seg-dot.c-pink{background:var(--au-pink)}
+.seg-dot.c-gray{background:var(--au-gray)}
 
-/* A tag in a line: its dots and names. All segments reads as one label. */
-.seg-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:1px 8px 1px 6px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);line-height:1.5;white-space:nowrap}
+/* A tag in a line: its dot and name. Narrow (a board card), the name ends in an ellipsis and the chip gives way first. */
+.seg-chip{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;padding:1px 8px 1px 6px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);line-height:1.5;white-space:nowrap}
 .seg-chip .seg-dot{width:7px;height:7px}
+.seg-chip-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .seg-chip.seg-all{padding:1px 8px;color:var(--muted)}
 
 /* On a card: the dots side by side, a small All instead. */
 .seg-card{display:inline-flex;align-items:center;gap:3px;min-width:0;flex:none}
 .seg-card-all{color:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:.02em}
 
-/* The Segments button on a teammate and the menu it opens. */
-.seg-tags-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+/* A teammate's Segments row: its chips, then Edit for the owner (a link, like the rows beside it). */
+.seg-tags-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+
+/* The menu (All, each segment with a tick, Clear) and the filter list, both one popover. */
 .seg-menu{z-index:70;min-width:200px;max-width:min(92vw,280px);max-height:min(60vh,420px);overflow-y:auto;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);color:var(--ink);box-shadow:0 14px 40px rgba(0,0,0,.3)}
 .seg-pop-h{padding:6px 10px 4px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
 .seg-mi{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:5px 10px 5px 6px;border:0;border-radius:7px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
@@ -36,14 +39,20 @@
 .seg-tick{display:inline-flex;flex:none;width:14px;height:14px;align-items:center;justify-content:center;color:var(--ink)}
 .seg-clear{color:var(--muted)}
 .seg-sep{margin:4px 6px;border:0;border-top:1px solid var(--line)}
+.seg-filter .seg-mi[aria-checked="true"]{font-weight:600}
 
-/* The page's filter button: the shared icon, the picked segment's name beside it. */
-.seg-filter-btn{display:inline-flex;align-items:center;gap:6px;max-width:100%}
+/* The page's Segment filter button: the shared filter icon, the picked segment's name beside it. On a phone the name
+   goes (the page's bar has no room for it) and the icon is marked active instead. */
+.seg-filter-btn{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0}
 .seg-filter-btn.active{color:var(--ink)}
 .seg-filter-btn.active .seg-filter-on{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
-.seg-filter .seg-mi[aria-checked="true"]{font-weight:600}
 
 @media (max-width:760px){
   .seg-menu{max-width:none;width:min(92vw,320px)}
   .seg-mi{min-height:40px}
+  .seg-filter-on{display:none}
+  .seg-filter-btn.active{background:var(--hover);border-color:var(--ink)}
 }
+
+/* A segment row under a profile's About card: "Segments" then its chips and Edit, on one line. */
+.seg-tags-field{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px;font-size:var(--t-sm)}
