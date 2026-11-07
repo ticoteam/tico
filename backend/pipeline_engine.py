@@ -652,6 +652,9 @@ def on_step_change(
     current = open_visit(conn, task_id)
     _leave_spawn_stage(conn, row, type_id, step_id)
     _move_visit(conn, actor, row, type_id, step_id, ts, current)
+    target = stage(conn, step_id)
+    if target is not None and target["status"] == "declined" and row.get("status") != "declined":
+        _decline_children(conn, actor, row, type_id)
     _settle_parent(conn, task_id)
 
 
@@ -735,6 +738,47 @@ def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
     found = _evaluate(conn, {str(parent_id): {stage_id: None}}, by_stage).get(str(parent_id), [])
     if found and all(s.state == "met" for s in found):
         advance(conn, H.KEEPER, str(parent_id))
+
+
+# ---------------------------------------------------------------------------------------------- decline
+DECLINE_NOTE = "Parent declined"
+
+
+def _spawned_open(conn: sqlite3.Connection, card: Row) -> list[Row]:
+    """The open subtasks of a card that its pipeline spawned into (the Engineering tickets of a Product card)."""
+    targets = [
+        str(r["to_pipeline_id"])
+        for r in _rows(
+            conn,
+            "SELECT to_pipeline_id FROM pipeline_links WHERE from_pipeline_id = ? AND mode = 'spawn' AND retired_at IS NULL",
+            (str(card.get("type_id") or ""),),
+        )
+    ]
+    if not targets:
+        return []
+    kids = [H.task(conn, kid_id) for kid_id in H.TR.child_ids(conn, str(card["id"]))]
+    return [k for k in kids if k and str(k.get("type_id") or "") in targets and k["status"] in H.ACTIVE_STATUSES]
+
+
+def _decline_preflight(
+    conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None, step_id: str | None
+) -> None:
+    """A card moving into a declined stage must be closable with its open subtasks by this actor, as a close cascade would
+    need. Refuses before anything is written (D66)."""
+    target = stage(conn, step_id)
+    if target is None or target["status"] != "declined" or row.get("status") == "declined":
+        return
+    for kid in _spawned_open(conn, {**row, "type_id": type_id or row.get("type_id")}):
+        H._check_task_close(conn, actor, kid, DECLINE_NOTE, None)  # pyright: ignore[reportPrivateUsage]
+
+
+def _decline_children(conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None) -> None:
+    """A card was declined: its open spawned subtasks close with it, noted "Parent declined", each with its own open
+    descendants. Subtasks already done stay done. Same transaction as the decline (called after its write)."""
+    card = {**row, "type_id": type_id or row.get("type_id")}
+    for kid in _spawned_open(conn, card):
+        H.task_close(conn, actor, str(kid["id"]), note=DECLINE_NOTE, with_parent=str(row["id"]), strict=True)
+        H._finish_children(conn, actor, H.task(conn, str(kid["id"])), None, False, strict=True)  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------------------------- the move gate
@@ -864,6 +908,7 @@ def check_forward(conn: sqlite3.Connection, actor: str, row: Row, type_id: str |
     if before is not None and after is not None and after["type_id"] == before["type_id"]:
         if after["position"] < before["position"]:
             return
+    _decline_preflight(conn, actor, row, type_id, step_id)
     check_move(conn, actor, {**row, "type_id": type_id}, step_id)
 
 

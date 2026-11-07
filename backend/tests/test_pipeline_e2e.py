@@ -1020,3 +1020,33 @@ def test_a_subtask_that_only_closed_with_its_card_never_passes_the_card(co):
     co.close(card, actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
     assert standing_names(co, card)["Engineering shipped"] == "failed"
+
+
+# ----------------------------------------------------------------------------- finding 7: decline cascades like close
+def test_declining_a_product_card_closes_its_open_subtask_and_keeps_the_shipped_one(co):
+    """Finding 7 (D66): an authorized move of a Product card into the Declined stage closes its open Engineering subtask
+    with "Parent declined"; a subtask already done stays done. The editor passes the card's open requirements with an
+    override, as the move gate asks."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    d42 = H.task_create(
+        co.c,
+        ANA,
+        "Dark mode, part two",
+        "",
+        BUILDER,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)  # shipped: the card moves to Validate
+    co.move(card, "Declined", actor=ANA, override_requirements=True, note="Dropped")
+    assert co.where(card) == ("Product", "Declined")
+    assert H.task(co.c, d42)["status"] == "closed"
+    assert H.task(co.c, d42)["note"] == "Parent declined"
+    assert H.task(co.c, d41)["status"] == "closed"  # shipped stays shipped: it is in Done
+    assert co.where(d41) == ("Engineering", "Done")
