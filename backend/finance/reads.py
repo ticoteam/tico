@@ -196,6 +196,16 @@ def _segment_filter(segment: str | None) -> str | None:
     return segment
 
 
+def _segment_gate(s: _Seen, segment: str | None) -> str | None:
+    """The segment a line read keeps (`_segment_filter`), checked for this viewer before any line is read: a viewer
+    without the whole P&L may name only a segment they lead, the column pnl_by shows them. Unallocated and every other
+    segment are refused. The P&L and a line's drill-down both come through here, so they refuse the same things."""
+    want = _segment_filter(segment)
+    if want is not None and not s.view.company_pnl() and want not in s.view.segments_led():
+        raise denied("a segment P&L is for people who see the whole P&L, and a segment's lead sees its own column")
+    return want
+
+
 _Key = tuple[str, str, str, str, str, str, str, str, str]
 
 
@@ -494,11 +504,9 @@ def pnl(
     )
     if f.any and view != "expenses":
         raise invalid("a team or teammate filter is for the expenses view")
-    want = _segment_filter(segment)
-    if want is not None and not s.view.company_pnl() and want not in s.view.segments_led():
-        # Refused before any line is read: a viewer without the whole P&L filters only to a segment they lead, the
-        # column pnl_by shows them. Unallocated and every other segment are refused.
-        raise denied("a segment P&L is for people who see the whole P&L, and a segment's lead sees its own column")
+    # Refused before any line is read (_segment_gate): a viewer without the whole P&L filters only to a segment they
+    # lead, the column pnl_by shows them.
+    want = _segment_gate(s, segment)
     made_by = ""
     if budget_as_of:
         made_by = budget_as_of if "T" in budget_as_of else dates.day(budget_as_of).isoformat() + "T23:59:59.999999Z"
@@ -743,7 +751,9 @@ def pnl_by_segment(
     (lines that count toward no segment) and Total. Revenue, costs and the contribution row (revenue minus the column's
     own costs) are actuals only: budgets and projections are not split here. Who sees what (View): a viewer who sees
     the whole P&L sees every column; a segment's lead sees only their segments' columns, with no Unallocated or Total;
-    anyone else is denied. Total equals the P&L's income, expense and net over the same window."""
+    anyone else is denied. Total equals the P&L's income, expense and net over the same window, except for a pay run a
+    viewer sees only in whole: every column and the Total leave it out, and `excluded` says so, as a segment's drill-down
+    does."""
     if basis not in (None, "cash", "accrual"):
         raise invalid("basis is cash|accrual")
     s = _open(c, viewer, at)
@@ -760,7 +770,8 @@ def pnl_by_segment(
     if full:
         keys.append(SG.UNALLOCATED)
     ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
-    sup = _suppress(s, _cells(s, a, z, ids, basis), False, a, z)
+    # Narrow, as a segment's drill-down is, so a column and the lines it lists are cut by the same rule.
+    sup = _suppress(s, _cells(s, a, z, ids, basis), True, a, z)
     income = dict.fromkeys(keys, 0)
     expense = dict.fromkeys(keys, 0)
     for cell in sup.cells:
@@ -1339,6 +1350,7 @@ def line_detail(
     teammates: Iterable[str] = (),
     who: str = "both",
     unattributed: bool = False,
+    segment: str | None = None,
 ) -> Row:
     """One line's spend by vendor, team and teammate, and its entries. With `vendor` ("" for lines with none) every
     breakdown, the entries and how they were paid are that vendor's; `teams`, `teammates`, `who` and `unattributed`
@@ -1346,16 +1358,19 @@ def line_detail(
     `next_by` each vendor's, team's and teammate's default for that month.
 
     Private totals come only from whole cohorts: a vendor filter is always narrow (so a payroll cell is never rebuilt
-    from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is."""
+    from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is. `segment`
+    keeps the entries that count toward one company segment (`unallocated` for none): the lines a segment column sums,
+    gated and narrowed as the P&L's segment filter is."""
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     account = s.ctx.accounts.get(account_id)
     if account is None or not s.view.sees_account(account):
         raise FinanceError(NOT_FOUND, "no such account")
     f = _org_filter(s, teams, teammates, who, unattributed)
+    want = _segment_gate(s, segment)
     if vendor is not None:
         vendor = SAP.vendor_resolved(c, s.ctx.book.id, vendor)
-    narrow = vendor is not None or f.narrow(s.ctx.org)
+    narrow = vendor is not None or f.narrow(s.ctx.org) or want is not None
     # Each month counts the line and the lines under it on the tree it closed with (the live tree while it is open), and
     # is suppressed on that tree alone, as a read of that month is. A private month's cells come from its whole fiscal
     # quarters, so suppressing the window at once would count them once for each month that reads them.
@@ -1374,6 +1389,8 @@ def line_detail(
             cells = [x for x in cells if x.vendor == vendor]
         if f.any:
             cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+        if want is not None:
+            cells = [x for x in cells if x.segment == want]
         whole = _suppress(tree, cells, narrow, sa, sz)
         split = _suppress(tree, cells, True, sa, sz)
         whole_cells += whole.cells
@@ -1399,6 +1416,7 @@ def line_detail(
         "excluded": excluded,
         "hidden": _hidden_labels(s, hidden),
         "vendor": vendor,
+        "segment": None if want is None else (want or SG.UNALLOCATED),
         "filter": {
             "teams": list(f.teams),
             "teammates": list(f.teammates),

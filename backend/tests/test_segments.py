@@ -13,7 +13,8 @@ from backend import migrations
 from backend import segments as SG
 from backend import strategy as S
 from backend import strategy_market as SM
-from backend.finance.store import access as FA
+from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn
@@ -453,7 +454,7 @@ def test_a_change_to_who_is_tagged_moves_the_finance_view_version(api):
 
     def version():
         with api.app.state.store.read() as c:
-            return FA.view_version(c)
+            return FR.view_version(c)
 
     before = version()
     post(api, "segments/members", {"member": "bot:ops", "segments": [first]})
@@ -474,7 +475,7 @@ def test_a_change_to_who_is_tagged_moves_the_finance_view_version(api):
 
 def test_the_finance_view_bump_does_nothing_where_the_finance_tables_are_absent():
     conn = sqlite3.connect(":memory:")
-    SM.bump_finance_view(conn, "segment tags")
+    FA.segment_tags_changed(conn, "segment tags")
     assert conn.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 
@@ -628,18 +629,24 @@ def test_a_segment_strategy_write_names_the_draft_revision_it_read(api):
     write_segment(api, first, {"serve": "Stale."}, revision=read, expected=409)
 
 
-def test_a_merge_moves_the_latest_published_text_of_a_segment_too(api):
+def test_a_merge_moves_the_draft_text_and_leaves_the_published_version_as_it_was(api):
     first, second, _ = defined(api)
     segment(api, "Screening")
     segment(api, "Payments")
     ready(api)
     write_segment(api, first, {"summary": "Small landlords, one building at a time."})
     publish(api)
+    with api.app.state.store.read() as c:
+        published = S.current(c)
     post(api, f"market/entities/{first}/merge", {"into": second})
     with api.app.state.store.read() as c:
-        published = S.current(c)["sections"].get("segments", {})
-    assert first not in published
-    assert published[second]["summary"] == "Small landlords, one building at a time."
+        assert S.current(c) == published  # history is not edited
+        row = c.execute(
+            "SELECT sections FROM strategy_versions WHERE status='draft' ORDER BY n DESC LIMIT 1"
+        ).fetchone()
+    draft_segments = json.loads(row[0])["segments"]
+    assert first not in draft_segments
+    assert draft_segments[second]["summary"] == "Small landlords, one building at a time."
 
 
 def test_the_segment_finance_and_bot_context_routes_are_cards_and_only_those_routes_are():
