@@ -159,6 +159,17 @@ def test_a_comparison_before_a_parenthesis_is_not_read_as_type_arguments():
     assert all("repeated non-null assertion `( d )!`" in message for _, message in hits)
 
 
+def test_a_statement_header_before_a_call_is_not_part_of_its_operand():
+    hits = strict.shift_left_hits("if (a) d.q('p')!;\nif (b) d.q('p')!;\n")
+    assert [line for line, _ in hits] == [1, 2]
+    assert all("repeated non-null assertion `d . q ( 'p' )!`" in message for _, message in hits)
+
+
+def test_calls_with_different_receivers_or_arguments_are_not_one_repeat():
+    assert strict.shift_left_hits("x.y(1)!;\nz.y(1)!;\n") == []
+    assert strict.shift_left_hits("x.y(1)!;\nx.y(2)!;\n") == []
+
+
 def test_shift_left_reads_only_the_strict_files_without_a_piece(monkeypatch):
     texts = {
         "ui/app/clean.ts": "const a = (x as Foo);\n",

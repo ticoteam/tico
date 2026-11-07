@@ -351,9 +351,19 @@ def _type_args_open(toks, j):
     return -1
 
 
+def _is_name(t):
+    return t.kind == "word" and t.v not in KEYWORDS
+
+
+def _chain_start(t):
+    """Whether a token can be the left end of a member chain: a name, a literal, or the end of a call or an index."""
+    return _is_name(t) or t.kind in ("num", "str", "tpl") or (t.kind == "op" and t.v in (")", "]"))
+
+
 def _operand(toks, i):
     """The text of the expression that ends just before toks[i]: a name, a member chain, a call or an index. A call's
-    type arguments are part of it, so `a.f<T>(x)` and `b.f<T>(x)` are two different expressions."""
+    type arguments are part of it, so `a.f<T>(x)` and `b.f<T>(x)` are two different expressions. The chain goes back
+    only through a dot, so the `if (ok)` before `dialog.q(x)!` is not part of it."""
     start, j = i, i - 1
     while j >= 0:
         t = toks[j]
@@ -366,9 +376,15 @@ def _operand(toks, i):
                 m = _type_args_open(toks, j)
                 if m >= 0:
                     start, j = m, m - 1
-        elif (t.kind in ("word", "num", "str", "tpl") and t.v not in KEYWORDS) or (
-            t.kind == "op" and t.v in (".", "?.")
-        ):
+            if j >= 0 and _is_name(toks[j]) and toks[k].v in ("(", "["):
+                start, j = j, j - 1  # the name a call or an index is on
+            elif j >= 0 and toks[j].kind == "op" and toks[j].v in (")", "]"):
+                continue  # a call on the result of a call, or an index on one: f(a)(b)
+        elif _is_name(t) or t.kind in ("num", "str", "tpl"):
+            start, j = j, j - 1
+        else:
+            break
+        if j >= 1 and toks[j].kind == "op" and toks[j].v in (".", "?.") and _chain_start(toks[j - 1]):
             start, j = j, j - 1
         else:
             break
