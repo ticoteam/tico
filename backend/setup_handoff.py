@@ -1,5 +1,4 @@
 # pyright: strict
-# pyright: strict
 """Setup handoff: how the owner's coding agent gets into a new server without a person pressing anything.
 
 Our team provisions a hosted server for a customer whose coding agent then finishes setting it up over HTTPS (the MCP
