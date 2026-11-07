@@ -28,15 +28,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import hubdb, task_caps
-from .finance import budgeting
-from .finance.context import is_set_up, load
-from .finance.core import budgets as B
-from .finance.core import dates
-from .finance.core.ledger import Book
-from .finance.core.org import SYSTEM
-from .finance.posting import post_entry
-from .finance.store import budgets as SB
-from .finance.store import ledger as SL
+from .finance import ci as FC
 from .models import Contract
 from .store import Problem
 
@@ -68,9 +60,6 @@ WORKFLOW_KINDS = {
 }
 # The rate and cap the Rules page quotes: install() sets them from the running settings (backend/config.py).
 ACTIVE: dict[str, Any] = {"minutes": 120, "rate": 0.0016}
-# The CHART rows' subtypes (backend/finance/setup.py): found by subtype, since an older book may have another account on
-# the seeded code (a card liability on 2100).
-CI_SUBTYPE, ACCRUED_SUBTYPE = "ci", "accrued"
 
 
 class Permit(Contract):
@@ -183,49 +172,19 @@ def ticket_used(c: sqlite3.Connection, task_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------------- the daily share
-def _budget(c: sqlite3.Connection, book: Book) -> B.Budget | None:
-    account = next((a.id for a in SL.accounts(c, book.id).values() if a.subtype == CI_SUBTYPE), None)
-    if account is None:
-        return None
-    return next(
-        (b for b in SB.budgets(c, book.id).values() if b.account_id == account and not b.parent_id and not b.catch_all),
-        None,
-    )
-
-
-def day_share(c: sqlite3.Connection, at: str) -> tuple[B.Budget | None, int | None]:
-    """(budget, today's share in cents or None). None when Finance is not set up, the CI budget is missing or off, or no
-    amount is set: then no daily gate applies."""
-    if not is_set_up(c):
-        return None, None
-    book = SL.book(c)
-    budget = _budget(c, book) if book is not None else None
-    if budget is None or not budget.active or book is None:
-        return budget, None
-    versions = SB.versions(c, [budget.id]).get(budget.id, [])
-    day = dates.day(at[:10])
-    return budget, B.in_window(budget, versions, (day, day), book.fiscal_year_start)
-
-
-def day_spent(c: sqlite3.Connection, book: Book, budget: B.Budget, at: str) -> int:
-    """Today's CI spend in cents: posted to the account today, and holds on it that have not posted yet."""
-    day = at[:10]
-    return SL.rollup_sum(c, book.id, day, day, [budget.account_id]) + SB.held(c, [budget.id], day, day)
-
-
 def digest_line(c: sqlite3.Connection, at: str | None = None) -> str | None:
     """The one line of CI build time in a manager's update request (updates.request_text), for today: what CI has cost
     or reserved against today's share, and the builder runs refused today. None when there is nothing to say."""
     at = at or _now()
-    book = SL.book(c) if is_set_up(c) else None
-    budget = _budget(c, book) if book is not None else None
+    book = FC.current_book(c)
+    found = FC.ci_budget(c, book) if book is not None else None
     refused = c.execute(
         "SELECT COUNT(*) AS n FROM ci_runs WHERE status = 'refused' AND created_at LIKE ?", (at[:10] + "%",)
     ).fetchone()["n"]
-    spent = day_spent(c, book, budget, at) if book is not None and budget is not None else 0
+    spent = FC.day_spent(c, book, found, at) if book is not None and found is not None else 0
     if not spent and not refused:
         return None
-    _, share = day_share(c, at)
+    _, share = FC.day_share(c, at)
     line = f"CI today: ${spent / 100:,.2f}"
     if share is not None:
         line += f" of a ${share / 100:,.2f} share"
@@ -323,29 +282,18 @@ def permit(
     if used >= cap:
         why = f"ticket {task['number'] or task['id']} has used its {cap} VM-minutes"
         return _refusal(c, who, task, body.remote_id, body.cpus, body.minutes, reserve, why, at, cap)
-    budget, share = day_share(c, at)
-    book = SL.book(c)
-    if share is not None and budget is not None and book is not None:
-        if day_spent(c, book, budget, at) + reserve > share:
+    found, share = FC.day_share(c, at)
+    book = FC.current_book(c)
+    if share is not None and found is not None and book is not None:
+        if FC.day_spent(c, book, found, at) + reserve > share:
             why = f"today's CI share (${share / 100:,.2f}) has no room for this run"
             return _refusal(c, who, task, body.remote_id, body.cpus, body.minutes, reserve, why, at, cap)
     hold_id = ""
-    if share is not None and budget is not None and book is not None and reserve > 0:
-        decision = budgeting.hold_place(
-            c,
-            budget_scope={"account_id": budget.account_id},
-            amount=reserve,
-            currency=book.base_currency,
-            source="ci",
-            source_id="run:" + body.remote_id,
-            expires_at=_shift(at, hours=RESERVE_HOURS),
-            at=at,
-            past_reserves=True,
-        )
-        if not decision.allowed:
+    if share is not None and found is not None and book is not None and reserve > 0:
+        allowed, hold_id = FC.reserve(c, found, book, body.remote_id, reserve, at, _shift(at, hours=RESERVE_HOURS))
+        if not allowed:
             why = "the CI budget will not hold this run"
             return _refusal(c, who, task, body.remote_id, body.cpus, body.minutes, reserve, why, at, cap)
-        hold_id = decision.hold_id or ""
     c.execute(
         "INSERT INTO ci_runs(kind, status, remote_id, task_id, bot, cpus, requested_minutes, reserve_cents, hold_id, "
         "created_at) VALUES('builder','permitted',?,?,?,?,?,?,?,?)",
@@ -430,46 +378,14 @@ def _record(c: sqlite3.Connection, run: dict[str, Any], jobs: list[dict[str, Any
         "UPDATE ci_runs SET github_run_id=?, minutes=?, cost_cents=?, seen_at=? WHERE id=?",
         (gh_id, minutes, cents, at, row["id"]),
     )
-    hold = SB.hold(c, row["hold_id"]) if row["hold_id"] else None
-    if hold is not None and hold["status"] == "held" and not cents and SL.book(c) is not None:
-        budgeting.release(load(c, at), hold["id"])  # a run that cost nothing frees its estimate now
-
-
-def _post(c: sqlite3.Connection, row: sqlite3.Row, book: Book, at: str) -> str:
-    """Post one run's cost to CI (6150) against Accrued expenses (2100), absorbing its permit's hold. Returns the entry id
-    or ""."""
-    accounts = {a.subtype: a.id for a in SL.accounts(c, book.id).values() if a.subtype in (CI_SUBTYPE, ACCRUED_SUBTYPE)}
-    if CI_SUBTYPE not in accounts or ACCRUED_SUBTYPE not in accounts or not row["cost_cents"]:
-        return ""
-    ctx = load(c, at)
-    hold_ids: list[str] = []
-    if row["hold_id"]:
-        hold = SB.hold(c, row["hold_id"])
-        if hold is not None and hold["status"] == "held":
-            budgeting.settle(ctx, hold["id"], int(row["cost_cents"]), None, SYSTEM)
-        hold = SB.hold(c, row["hold_id"])
-        if hold is not None and hold["status"] == "settled" and hold["entry_id"] is None:
-            hold_ids.append(hold["id"])
-    label = f"CI run {row['github_run_id']}"
-    entry = {
-        "date": at[:10],
-        "memo": f"CI build time, {row['kind']}",
-        "source": "usage",
-        "source_id": "ci:" + row["github_run_id"],
-        "lines": [
-            {"account_id": accounts[CI_SUBTYPE], "amount": int(row["cost_cents"]), "description": label},
-            {"account_id": accounts[ACCRUED_SUBTYPE], "amount": -int(row["cost_cents"]), "description": label},
-        ],
-    }
-    made = post_entry(c, entry, by=SYSTEM, hold_ids=hold_ids, at=at, touch=True)
-    entry_id = str(made["entry_id"])
-    c.execute("UPDATE ci_runs SET entry_id=? WHERE id=?", (entry_id, row["id"]))
-    return entry_id
+    if not cents and row["hold_id"]:
+        FC.release_unused(c, str(row["hold_id"]), at)  # a run that cost nothing frees its estimate now
 
 
 def post_unposted(c: sqlite3.Connection, at: str) -> int:
-    """Post every priced run that has no entry yet (a run priced before Finance was set up posts once it is)."""
-    book = SL.book(c) if is_set_up(c) else None
+    """Post every priced run that has no entry yet (a run priced before Finance was set up posts once it is). Each run's
+    cost goes to CI (6150) against Accrued expenses (2100) in Finance, absorbing its permit's hold."""
+    book = FC.current_book(c)
     if book is None:
         return 0
     rows = c.execute(
@@ -478,7 +394,17 @@ def post_unposted(c: sqlite3.Connection, at: str) -> int:
     ).fetchall()
     posted = 0
     for row in rows:
-        if _post(c, row, book, at):
+        entry_id = FC.post_run(
+            c,
+            book,
+            at,
+            github_run_id=str(row["github_run_id"]),
+            kind=str(row["kind"]),
+            cost_cents=int(row["cost_cents"]),
+            hold_id=str(row["hold_id"] or ""),
+        )
+        if entry_id:
+            c.execute("UPDATE ci_runs SET entry_id=? WHERE id=?", (entry_id, row["id"]))
             posted += 1
     return posted
 
@@ -551,7 +477,7 @@ def sentences(c: sqlite3.Connection) -> list[dict[str, Any]]:
             "edit": None,
         }
     ]
-    _, share = day_share(c, _now())
+    _, share = FC.day_share(c, _now())
     if share is None:
         text = "No daily CI limit set"
     else:

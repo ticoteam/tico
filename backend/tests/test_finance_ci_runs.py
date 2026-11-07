@@ -4,11 +4,12 @@ sweep that prices every workflow run into Finance account 6150, and the Rules se
 import pytest
 
 from backend import ci_runs
+from backend.finance import ci as FC
 from backend.finance import setup as FS
 from backend.finance.store import budgets as SB
 from backend.finance.store import ledger as SL
 from backend.store import H, Problem
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, budget, books, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, budget, books, finance_template, store  # noqa: F401
 
 RUN = "a1b2c3d4e5f6"
 CI_BOT = "bot:coder"
@@ -130,10 +131,10 @@ def test_a_permit_with_a_bad_run_id_size_or_time_limit_is_refused_as_invalid(boo
 # ---------------------------------------------------------------------------------------------------- the daily share
 def test_the_daily_share_refuses_a_run_that_no_longer_fits_and_no_amount_means_no_gate(books):
     with books.transaction() as c:
-        assert ci_runs.day_share(c, AT)[1] is None  # the CI budget starts with no amount
+        assert FC.day_share(c, AT)[1] is None  # the CI budget starts with no amount
         assert permit(c, ticket(c), remote_id="555555555551")["allowed"] is True  # no gate, no hold
         set_ci_amount(c, 3_100)  # $31 in October: $1.00 a day
-        share = ci_runs.day_share(c, AT)[1]
+        share = FC.day_share(c, AT)[1]
         assert share == 100
         # 50 minutes on 16 vCPUs is 32 cents: three fit in $1.00, the fourth does not.
         for n in range(3):
@@ -192,7 +193,7 @@ def test_a_builder_run_absorbs_its_permit_hold_when_it_posts(books):
         assert (row["kind"], row["status"], row["cost_cents"]) == ("builder", "permitted", 32)
         hold = c.execute("SELECT status, entry_id FROM fin_holds WHERE source='ci'").fetchone()
         assert hold["status"] == "settled" and hold["entry_id"] is not None  # the hold no longer reserves anything
-        assert ci_runs.day_spent(c, SL.book(c), _budget_of(c), AT) == 32  # posted, and nothing held
+        assert FC.day_spent(c, SL.book(c), _budget_of(c), AT) == 32  # posted, and nothing held
 
 
 def _budget_of(c):
