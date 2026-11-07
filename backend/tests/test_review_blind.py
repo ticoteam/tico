@@ -121,7 +121,7 @@ def test_a_verdict_move_that_names_review_1_is_withheld_from_review_2_in_the_his
             None,
             "Review 2",
             verdict,
-            data=json.dumps(review_blind.step_marks(step)),
+            data=review_blind.step_marks(step),
         )
         H._task_event(c, task["id"], H.KEEPER, "step", None, "Review 2", "Review 2 is filed")
     rev_b = read(api, bot_token(api, "rev-b"), f"tasks/{task['id']}")

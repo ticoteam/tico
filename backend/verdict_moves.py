@@ -196,7 +196,7 @@ def move(c, row, target, why, *, sources=(), review_step=None):
             json.dumps({"source_tasks": list(sources)}) if sources else None,
             target["name"],
             why,
-            data=json.dumps(marks) if marks else None,
+            data=marks or None,
         )
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
@@ -266,7 +266,7 @@ def after_verdict(c, check):
             None,
             json.dumps(pending, sort_keys=True),
             "",
-            data=json.dumps(marks) if marks else None,
+            data=marks or None,
         )
     return {
         "moved": None,
@@ -971,7 +971,7 @@ def timeouts(c, at=None):
                 json.dumps({"source_tasks": sources}) if sources else None,
                 f"{step['id']}:{head}",
                 note,
-                data=json.dumps(marks) if marks else None,
+                data=marks or None,
             )
             if verdict and verdict not in GOOD:
                 out = _failed(c, H.task(c, ticket_id), step, verdict, head)
