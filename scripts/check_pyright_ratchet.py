@@ -30,6 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import baseline_merge  # scripts/ is on sys.path when this runs as a script; the layout check uses its renderer
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "pyrightconfig.json"
 LEGACY = "scripts/pyright-legacy-modules.txt"
@@ -175,8 +177,21 @@ def init(config, found):
     return 0
 
 
+def layout_problems():
+    """The baseline must be in the one layout scripts/baseline_merge.py writes; its merge driver depends on it."""
+    path = ROOT / BASELINE
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    if text != baseline_merge.render_pyright(baseline_merge.parse_pyright(text)):
+        return [
+            f"{BASELINE} is not in the layout scripts/baseline_merge.py writes; run scripts/check_types.sh --writebaseline"
+        ]
+    return []
+
+
 def check(config, found, base):
-    problems = []
+    problems = layout_problems()
     legacy_text = (ROOT / LEGACY).read_text(encoding="utf-8") if (ROOT / LEGACY).exists() else None
     if legacy_text is None:
         return [f"missing {LEGACY}; create it once with `python3 scripts/check_pyright_ratchet.py --init`"]
