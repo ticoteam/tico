@@ -1174,6 +1174,7 @@ def manifest(settings, name, administration):
             "pull_request_review_comment",
             "check_run",
             "check_suite",
+            "workflow_run",
             "status",
             "push",
             "release",
