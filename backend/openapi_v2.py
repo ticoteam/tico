@@ -6753,6 +6753,7 @@ SCHEMAS.update(
                 "repositories": items(ref("Repository")),
                 "new_bot_default": {"enum": ["own", "all"]},
                 "github_connected": "b",
+                "github_installed": "b",
             }
         ),
         # The workflow options are present only when on; a request's access defaults to write.

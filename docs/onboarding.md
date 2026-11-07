@@ -319,7 +319,7 @@ from the account menu with **Take the tour**. That it was seen is kept per human
 
 ### Bots
 
-There is no checklist, no card above any page and no card in the sidebar. While there are no bots of your own (the Create your
+There is no checklist, no onboarding card above any page and no card in the sidebar. While there are no bots of your own (the Create your
 first bot step is not done), one line of muted text sits under the team list: "Ask to add or edit your bots",
 with **Ask** opening the Assistant panel over the page. It shows only to humans who may add bots (the owner and bot administrators,
 `can_build`), and has nothing to close. Asking the Assistant (it hands the request to BotOps) is how a bot is added (`playbooks/build-me-a-bot.md`); connecting

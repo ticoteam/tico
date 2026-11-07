@@ -33,7 +33,7 @@ from . import (
     watchers,
 )
 from .batch_work import report, storage_error
-from .getting_started import _online_runners, _wanted_runtimes, _person
+from .getting_started import _online_runners, _person, _wanted_runtimes, own_bots
 
 
 def _harness_name(runtime):
@@ -1663,13 +1663,20 @@ def token_failure(c):
     )
 
 
-def _github(c, github):
+def _github(c, github, settings):
+    """Not connected is "info" while the team has no bot of its own (getting_started.own_bots), and "warn" once it has
+    one: the built-in bots come with every install, so the warning waits for a bot someone made."""
     row = github.row(c) if github else None
     failure = token_failure(c) if row else None
-    fix = _fix("Open GitHub settings", "#/settings", "cloud")
+    fix = _fix("Open GitHub", "#/tools/github")
     if not row:
+        bots = own_bots(c, settings)
         return _check(
-            "github", "GitHub", "info", "Not connected. Optional: connect it to keep bot work in your GitHub.", [fix]
+            "github",
+            "GitHub",
+            "warn" if bots else "info",
+            "Not connected. Bots' files and memory are only on their computers, with no backup.",
+            [_fix("Connect GitHub", "#/tools/github")],
         )
     if not row["installation_id"]:
         return _check("github", "GitHub", "warn", "The app is created but not installed on your organization.", [fix])
@@ -3968,7 +3975,7 @@ def view(c, who, settings, auth, github, config):
     if full and (suggestions := _roadmap_suggestions(c)):
         checks.append(suggestions)
     if full:
-        checks.append(_github(c, github))
+        checks.append(_github(c, github, settings))
         if repo_create := _github_repo_create(c, github):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):
