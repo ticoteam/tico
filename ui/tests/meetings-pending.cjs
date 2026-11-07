@@ -5,8 +5,10 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const sharedCode = fs.readFileSync(path.join(__dirname, '../app/shared-edit.js'), 'utf8');
-const code = fs.readFileSync(path.join(__dirname, '../app/meetings.js'), 'utf8');
+const sharedCode = fs.readFileSync(path.join(__dirname, '../../build/ui/app/shared-edit.js'), 'utf8');
+const code = fs.readFileSync(path.join(__dirname, '../../build/ui/app/meetings.js'), 'utf8');
+// meetings reads the shared helpers the app bundle defines first (eventElement, errorMessage and friends).
+const helperCode = ['dom', 'errors'].map(n => fs.readFileSync(path.join(__dirname, `../../build/ui/app/${n}.js`), 'utf8')).join('\n');
 const item = {version:1, id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
 const streams = new Set(), sessions = new Map(), errors = [];
 let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0, linked = 0, lastSend;
@@ -15,6 +17,7 @@ const actors = () => [...new Set(sessions.values())].map(id => ({actor:'human:' 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const answer = (body, status=200) => { res.writeHead(status, {'Content-Type':'application/json'}); res.end(JSON.stringify(body)); };
+  if (url.pathname === '/helpers.js') { res.writeHead(200, {'Content-Type':'text/javascript'}); return res.end(helperCode); }
   if (url.pathname === '/shared-edit.js') { res.writeHead(200, {'Content-Type':'text/javascript'}); return res.end(sharedCode); }
   if (url.pathname === '/meetings.js') { res.writeHead(200, {'Content-Type':'text/javascript'}); return res.end(code); }
   if (url.pathname === '/') {
@@ -29,7 +32,7 @@ const server = http.createServer(async (req, res) => {
       const taskOwnerOptions=()=>'<option value="human:ben">Sam</option>', botByRef=()=>null;
       const get=p=>fetch(API+p).then(r=>r.json());
       const post=async(p,body)=>{const r=await fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json','X-Viewer':me},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const e=new Error(data.error?.detail || data.error);e.body=data;throw e;}return data;};
-    </script><script src="/shared-edit.js"></script><script src="/meetings.js"></script><script>
+    </script><script src="/helpers.js"></script><script src="/shared-edit.js"></script><script src="/meetings.js"></script><script>
       MEET={open:true,selected:'m1',list:[{id:'m1'}],items:{},itemDup:{}}; meetItemsWire(MEET,{id:'m1'});
     </script>`);
   }

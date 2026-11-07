@@ -1,4 +1,4 @@
-/* ui/styles/bot-learnings.css — The Learnings button beside a bot's name and its panel (ui/app/bot-learnings.js).
+/* ui/styles/bot-learnings.css — The Learnings button beside a bot's name and its panel (ui/app/bot-learnings.ts).
    A panel on the right on a desktop, a sheet from the bottom on a phone. Dream mode (.dreaming) and the bot page's
    dream card share a slow drifting sky: soft violet, teal and rose over the surface, the text on a scrim. */
 .bot-learn{position:relative;flex:none;display:inline-grid;place-items:center;width:28px;height:28px;margin-left:4px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}

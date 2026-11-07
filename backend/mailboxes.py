@@ -1,4 +1,4 @@
-"""Tools, Google mailboxes: which mailboxes Tico uses and who may use each (ui/app/inboxes-email.js).
+"""Tools, Google mailboxes: which mailboxes Tico uses and who may use each (ui/app/inboxes-email.ts).
 
 GET /api/v2/mailboxes is the page: for an admin every mailbox with its person, status and routines; for everyone their
 own mailbox and the ones shared with them. Each row also says who uses it (`used_by`: people, bots, the first names)

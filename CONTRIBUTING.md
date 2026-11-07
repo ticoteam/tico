@@ -62,13 +62,16 @@ generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writ
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
-The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
-`bash scripts/check_ui_lint.sh`. Each counts findings per file against its own baseline file:
-`ui/baselines/tsc/<path>.json` or `ui/baselines/biome/<path>.json` (a file with no findings has none). Converting a file
-deletes its baseline files and changes its script tag in `ui/index.html`, which keeps a blank line between script
-tags so that conversions of different files do not conflict in a merge. The counts only shrink: after you fix findings,
-lower the baseline with `python3 scripts/ui_baseline.py tsc --write` (or `biome`). `ui/index.html` must keep the blank
-lines: `python3 scripts/ui_baseline.py migrate` adds them.
+The UI's scripts have a strict type check (`python3 scripts/check_ui_strict.py`, run by `scripts/check.sh`), a loose
+type check of the `.js` files left (`bash scripts/check_ui_types.sh`) and a Biome lint (`bash scripts/check_ui_lint.sh`),
+all seconds long. Each counts findings per file against its own baseline file: `ui/baselines/strict/<path>.json` for a
+`.ts` file with strict findings (a new `.ts` file must be at zero), `ui/baselines/tsc/<path>.json` for a `.js` file, or
+`ui/baselines/biome/<path>.json` (a file with no findings has none). Flipping a `.js` file to `.ts` is
+`python3 scripts/ui_flip.py`: it moves the file and its baselines, and changes its references and its script tag in
+`ui/index.html`, which keeps a blank line between script tags so that flips of different files do not conflict in a
+merge. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
+`ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with

@@ -124,7 +124,8 @@ function providersFillModels(root: ParentNode, view: SettingsProvidersView, mode
   const gateway = providersGatewayIds(view).filter(id => (view.enabled || []).includes(id));
   const boxes = root.querySelectorAll<HTMLInputElement>('[data-provider]');
   const enabled = boxes.length ? [...[...boxes].filter(input => input.checked).map(input => input.value), ...gateway] : view.enabled || [];
-  const select = root.querySelector<HTMLSelectElement>('[data-provider-model]')!;
+  const select = root.querySelector<HTMLSelectElement>('[data-provider-model]');
+  if (!select) return;
   const options = providersModels(view, models, enabled);
   const meetingOptions = providersModels(view, models, enabled, true);
   const fallback = options.find(row => row.recommended) ?? options[0];
@@ -145,7 +146,11 @@ function providersWire(root: HTMLElement | null, view: SettingsProvidersView, mo
   if (!root) return;
   providersFillModels(root, view, models, view.default?.model || '');
   root.querySelectorAll<HTMLInputElement>('[data-provider]').forEach(input => {
-    input.onchange = () => providersFillModels(root, view, models, root.querySelector<HTMLSelectElement>('[data-provider-model]')!.value);
+    input.onchange = () => {
+      const model = root.querySelector<HTMLSelectElement>('[data-provider-model]');
+      if (!model) return;
+      providersFillModels(root, view, models, model.value);
+    };
   });
   root.querySelectorAll<HTMLInputElement>('[data-provider-preset]').forEach(input => {
     input.onchange = () => {
@@ -153,7 +158,9 @@ function providersWire(root: HTMLElement | null, view: SettingsProvidersView, mo
       const boxes = [...root.querySelectorAll<HTMLInputElement>('[data-provider]')];
       if (boxes.some(box => box.checked)) return;
       boxes.filter(box => (PRESET_PROVIDERS[input.value] || []).includes(box.value)).forEach(box => { box.checked = true; });
-      providersFillModels(root, view, models, root.querySelector<HTMLSelectElement>('[data-provider-model]')!.value);
+      const model = root.querySelector<HTMLSelectElement>('[data-provider-model]');
+      if (!model) return;
+      providersFillModels(root, view, models, model.value);
     };
   });
 }
@@ -162,9 +169,12 @@ const providersCollect = (root: HTMLElement): SettingsProvidersChoice => {
   const fallback = root.querySelector<HTMLInputElement>('[data-provider-fallback]'), check = root.querySelector<HTMLInputElement>('[data-provider-check]');
   const preset = root.querySelector<HTMLInputElement>('[data-provider-preset]:checked'), decide = root.querySelector<HTMLSelectElement>('[data-provider-decide]');
   const meeting = root.querySelector<HTMLSelectElement>('[data-provider-meeting]');
+  // The default model select is required: the form always draws it, and a save without it has nothing to send.
+  const model = root.querySelector<HTMLSelectElement>('[data-provider-model]');
+  if (!model) throw new Error('The models form did not draw its default model');
   return {enabled: [...root.querySelectorAll<HTMLInputElement>('[data-provider]:checked')].map(input => input.value),
     ...(preset ? {preset: preset.value} : {}),
-    model: root.querySelector<HTMLSelectElement>('[data-provider-model]')!.value, ...(decide ? {decide_level: decide.value} : {}), ...(fallback ? {auto_fallback: fallback.checked} : {}),
+    model: model.value, ...(decide ? {decide_level: decide.value} : {}), ...(fallback ? {auto_fallback: fallback.checked} : {}),
     // Sent only when changed, so a save about something else keeps an unset meeting model unset.
     ...(meeting && meeting.value !== meeting.dataset.saved ? {meeting_model: meeting.value} : {}),
     // Sent only when edited, so a save about something else never re-checks a saved entry.
@@ -212,7 +222,7 @@ function providersDefaultsHTML(view: SettingsProvidersView, owner: boolean): str
   </form>`;
 }
 // One line: whether the Gateway is connected, this month's spend against its cap, and the switch. Below it what
-// GET /v2/gateway adds for owners and admins (settings-gateway.js), the key and address behind Advanced (read-only for
+// GET /v2/gateway adds for owners and admins (settings-gateway.ts), the key and address behind Advanced (read-only for
 // anyone but the owner), and Webhooks: incoming webhooks' Gateway addresses, drawn when opened (settings-webhooks.js).
 function providersGatewayCardHTML(view: SettingsProvidersView, gateway: SettingsGatewayView | null, owner: boolean, overview: unknown): string {
   const [tone, line] = gateway ? gatewayStatusLine(gateway) : ['', ''];

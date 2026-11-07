@@ -112,7 +112,7 @@ function finShareWire(root: ParentNode): void {
     total.classList.toggle('fin-bad', sum > FIN_SHARE_ALL);
   };
   rows.onclick = ev => {
-    const x = (ev.target as HTMLElement).closest('[data-share-x]');
+    const x = eventElement(ev)?.closest('[data-share-x]');
     if (x) { x.closest('[data-share-row]')?.remove(); sync(); }
   };
   rows.oninput = sync;
@@ -158,7 +158,8 @@ async function finShareRailLoad(key: string, lines: {line_id: string; account?: 
   for (const f of found) FIN_SHARE.at.set(f.line.line_id, f.a);
   box.innerHTML = found.map(f => finShareSection(f.line, f.a, found.length > 1)).join('');
   box.onclick = ev => {
-    const t = ev.target as HTMLElement;
+    const t = eventElement(ev);
+    if (!t) return;
     const edit = t.closest<HTMLElement>('[data-share-edit]');
     if (edit) { finShareLineDialog(edit.dataset.shareEdit || ''); return; }
     const undo = t.closest<HTMLElement>('[data-share-undo]');
@@ -199,12 +200,12 @@ function finShareLineDialog(lineId: string): void {
   finShareWire(dlg);
   finShareEl<HTMLButtonElement>(dlg, '[data-share-clear]').onclick = async () => {
     try { await finAct('attribute', {line_id: lineId, splits: []}); dlg.close(); refresh(); }
-    catch (e) { const err = finShareEl<HTMLElement>(dlg, '[data-error]'); err.textContent = (e as Error).message; err.hidden = false; }
+    catch (e) { const err = finShareEl<HTMLElement>(dlg, '[data-error]'); err.textContent = errorMessage(e, ''); err.hidden = false; }
   };
 }
 async function finShareUndo(lineId: string): Promise<void> {
   try { await finAct('attribute_undo', {line_id: lineId}); toast('Undone'); }
-  catch (e) { toast((e as Error).message, true); return; }
+  catch (e) { toast(errorMessage(e, ''), true); return; }
   if (FIN?.tx) void finTxLoad(false);
 }
 
@@ -213,11 +214,13 @@ async function finShareUndo(lineId: string): Promise<void> {
 function finAttrPage(): void {
   const state: FinAttrState = {rules: [], can: false, load: 0, dims: []};
   FIN.attr = state;
-  $('#fin-body')!.innerHTML = `<div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-rule-add hidden>+ Rule</button></div>
+  const body = $('#fin-body');
+  if (!body) return;
+  body.innerHTML = `<div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-rule-add hidden>+ Rule</button></div>
     <div class="fin-scroll" id="fin-rules">${skelRows(4, {dot: false})}</div>`;
-  const body = $('#fin-body')!;
   body.onclick = (ev: MouseEvent) => {
-    const t = ev.target as HTMLElement;
+    const t = eventElement(ev);
+    if (!t) return;
     if (t.closest('[data-fin-rule-add]')) { finRuleDialog(null); return; }
     if (t.closest('[data-fin-class-save]')) { void finClassesSave(); return; }
     const menu = t.closest<HTMLElement>('[data-fin-rule-menu]');
@@ -237,14 +240,14 @@ function finAttrPage(): void {
     if (yes) void finRuleDelete(state.rules[Number(yes.dataset.finRuleYes)]);
   };
   body.onchange = (ev: Event) => {
-    const on = (ev.target as HTMLElement).closest<HTMLInputElement>('input[data-fin-rule-on]');
+    const on = eventElement(ev)?.closest<HTMLInputElement>('input[data-fin-rule-on]');
     if (on) void finRuleToggle(on, state.rules[Number(on.dataset.finRuleOn)]);
     if ((ev.target as HTMLElement).closest('select[data-fin-class-team]')) finClassesDirty();
   };
   void finAttrLoad();
 }
 async function finAttrLoad(): Promise<void> {
-  const state = FIN.attr as FinAttrState | undefined;
+  const state: FinAttrState | undefined = FIN.attr;
   if (!state) return;
   const load = ++state.load;
   let d: FinRulesRead | null;
@@ -305,7 +308,7 @@ async function finClassesSave(): Promise<void> {
   void finAttrLoad();
 }
 function finAttrDraw(): void {
-  const state = FIN.attr as FinAttrState | undefined, box = $('#fin-rules');
+  const state: FinAttrState | undefined = FIN.attr, box = $('#fin-rules');
   if (!box || !state) return;
   const classes = finClassesHtml(state.dims);
   if (!state.rules.length) { box.innerHTML = classes + finNote('No rules.'); return; }
@@ -323,12 +326,12 @@ async function finRuleToggle(input: HTMLInputElement, rule: FinRule | undefined)
   if (!rule) return;
   const on = input.checked;
   try { await finAct('attribution_rule_set', {...finRuleBody(rule), enabled: on}); rule.enabled = on; }
-  catch (e) { input.checked = !on; toast((e as Error).message, true); }
+  catch (e) { input.checked = !on; toast(errorMessage(e, ''), true); }
 }
 async function finRuleDelete(rule: FinRule | undefined): Promise<void> {
   if (!rule) return;
   try { await finAct('attribution_rule_delete', {id: rule.id}); toast('Deleted'); }
-  catch (e) { toast((e as Error).message, true); }
+  catch (e) { toast(errorMessage(e, ''), true); }
   void finAttrLoad();
 }
 // The lines a rule can apply to, by kind: vendors (contacts), P&L accounts (the chart) or the bank and card accounts.
@@ -351,7 +354,7 @@ function finRuleDialog(rule: FinRule | null): void {
     const f = (n: string) => form.elements.namedItem(n) as HTMLInputElement;
     const name = f('name').value.trim();
     if (!name) throw new Error('Name the rule');
-    const match = (form.elements.namedItem('match') as HTMLSelectElement).value;
+    const match = matchSelect.value;
     if (!match) throw new Error('Pick what it applies to');
     const splits = finShareRead(form);
     const from = f('apply_from').value;
@@ -361,13 +364,13 @@ function finRuleDialog(rule: FinRule | null): void {
   });
   finShareWire(dlg);
   const form = dlg.querySelector('form') as HTMLFormElement;
-  const kind = form.elements.namedItem('kind') as HTMLSelectElement, match = form.elements.namedItem('match') as HTMLSelectElement;
+  const kind = form.elements.namedItem('kind') as HTMLSelectElement, matchSelect = form.elements.namedItem('match') as HTMLSelectElement;
   const lists = new Map<string, FinPick[]>();
   const fill = async () => {
     const k = kind.value;
     if (!lists.has(k)) lists.set(k, await finRulePicks(k));
     const keep = k === kind0 ? match0 : '';
-    match.innerHTML = `<option value="">Pick…</option>${(lists.get(k) || []).map(p => `<option value="${esc(p.id)}"${p.id === keep ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}`;
+    matchSelect.innerHTML = `<option value="">Pick…</option>${(lists.get(k) || []).map(p => `<option value="${esc(p.id)}"${p.id === keep ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}`;
   };
   kind.onchange = () => void fill();
   void fill();

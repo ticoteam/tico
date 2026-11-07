@@ -19,8 +19,11 @@ One baseline file per source file keeps two PRs that convert different UI files 
 deletes its own baseline files and changes its own script tag, and ui/index.html keeps a blank line between script tags,
 so git's three-way merge (GitHub's merge queue runs no custom merge drivers) keeps the two edits apart.
 
-Findings under ui/vendor/ are third-party code that a type-checked module imports (ui/overview/building.js imports
+Findings under ui/vendor/ are third-party code that a type-checked module imports (ui/overview/building.ts imports
 three.js); tsc reads them, so they are dropped here, not counted.
+
+Findings in a .ts file are dropped too: a TypeScript file is governed by the strict ratchet alone
+(scripts/check_ui_strict.py, one count per file under ui/baselines/strict/), so no file is gated twice.
 """
 
 import argparse
@@ -61,21 +64,29 @@ def fail(message):
     sys.exit(message)
 
 
+def is_typescript(file):
+    """A .ts source (not a declaration file): its findings belong to the strict ratchet, not this one."""
+    return file.endswith(".ts") and not file.endswith(".d.ts")
+
+
 def run_tsc():
     done = subprocess.run(TSC, cwd=ROOT, capture_output=True, text=True, check=False)
-    findings = []
+    findings, diagnostics = [], 0
     for raw in done.stdout.splitlines():
         m = TSC_LINE.match(raw)
         if m:
+            diagnostics += 1
             file = m["file"].replace("\\", "/")
-            if file.startswith(VENDOR):
+            if file.startswith(VENDOR) or is_typescript(file):
                 continue
             findings.append(Finding(file, int(m["line"]), int(m["col"]), m["code"], m["msg"]))
             continue
         m = TSC_GLOBAL.match(raw)
         if m:
+            diagnostics += 1
             findings.append(Finding("<config>", 0, 0, m["code"], m["msg"]))
-    if done.returncode not in (0, 1, 2) or (done.returncode != 0 and not findings):
+    # A failing run with no diagnostic at all crashed. Findings in .ts files count too: the strict ratchet owns them.
+    if done.returncode not in (0, 1, 2) or (done.returncode != 0 and not diagnostics):
         fail(f"tsc exited {done.returncode} without diagnostics:\n{done.stdout}{done.stderr}")
     return findings, "tsc " + TSC[3].split("@")[1]
 
@@ -233,6 +244,13 @@ def print_top(counts, total_files):
         print(f"  {n:6d}  {file}")
 
 
+def base_name(file, old):
+    """The name a file had at the base ref: a .ts file that renamed a .js file (scripts/ui_flip.py) keeps the .js count."""
+    if file.endswith(".ts") and file not in old and file[:-3] + ".js" in old:
+        return file[:-3] + ".js"
+    return file
+
+
 def check(findings, tool, base_ref):
     label, rel = tool, f"{LAYOUT}/{tool}"
     counts = counts_of(findings)
@@ -265,10 +283,11 @@ def check(findings, tool, base_ref):
             print(f"note: {rel} is absent at {base_ref}; the growth check starts with the next change to it")
         else:
             for file in sorted(baseline):
-                if baseline[file] > old.get(file, 0):
+                was = old.get(base_name(file, old), 0)
+                if baseline[file] > was:
                     problems += 1
                     print(
-                        f"GREW {file}: {old.get(file, 0)} at {base_ref}, now {baseline[file]} in {rel}; "
+                        f"GREW {file}: {was} at {base_ref}, now {baseline[file]} in {rel}; "
                         "baselines only shrink, so fix the findings instead"
                     )
 

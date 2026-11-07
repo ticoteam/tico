@@ -74,6 +74,12 @@ interface MessagingDetail {
 // ----------------------------------------------------------------- Message bot review
 // Bots are the primary unit. Provider messages remain evidence behind a run or action.
 let MESSAGING_LOAD = 0, MESSAGING_LIST: MessagingList | null = null;
+// A page element the drawn markup must hold: a missing one throws a plain Error that names it.
+function messagingNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {
+  const el = root.querySelector<T>(selector);
+  if (!el) throw new Error(`${selector} is not on the page`);
+  return el;
+}
 function messagingParams(): {bot: string; source: string} {
   const raw = S.route.startsWith(MESSAGING) ? S.route.slice(MESSAGING.length) : '';
   const q = new URLSearchParams(raw.startsWith('?') ? raw.slice(1) : '');
@@ -137,7 +143,7 @@ function messagingDetail(data: MessagingDetail): void {
     : `<div class="msg-sources" aria-label="Sources covered by ${esc(b.name)}">${sources}</div>`;
   const shownSources = state.source ? b.sources.filter(s => s.id === state.source) : b.sources.length > 8 ? [] : b.sources;
   const checks = messagingRuns(data);
-  $('#msg-detail')!.innerHTML = `<div class="msg-workspace">
+  messagingNeed('#msg-detail').innerHTML = `<div class="msg-workspace">
     <div class="msg-config">
       <div class="msg-detail-head"><div><h1>${esc(b.name)}</h1><div class="muted">${esc(b.description || b.bot)}</div></div>
         <div class="msg-actions"><a class="ghost" href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a class="ghost" href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>${b.can_manage && ['active', 'paused'].includes(b.state) ? `<button class="ghost" type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : ''}</div></div>
@@ -225,13 +231,14 @@ async function pageMessaging(): Promise<void> {
     };
   }
   try { if (!MESSAGING_LIST) MESSAGING_LIST = await get<MessagingList>('/v2/messaging/bots'); }
-  catch (e) { if (load === MESSAGING_LOAD) $('#msg-detail')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+  catch (e) { if (load === MESSAGING_LOAD) messagingNeed('#msg-detail').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MESSAGING_LOAD) return;
-  const list = MESSAGING_LIST!;
-  const detailBox = $('#msg-detail')!;
+  const list = MESSAGING_LIST;
+  if (!list) throw new Error('the message bot list did not load');
+  const detailBox = messagingNeed('#msg-detail');
   let state = messagingParams();
   if (!state.bot && list.bots.length) { messagingGo({bot: list.bots[0]!.bot}); return; }
-  if (state.bot && !list.bots.some(b => b.bot === state.bot)) { messagingGo({bot: MESSAGING_LIST!.bots[0]?.bot || '', source: ''}); return; }
+  if (state.bot && !list.bots.some(b => b.bot === state.bot)) { messagingGo({bot: list.bots[0]?.bot || '', source: ''}); return; }
   if (!state.bot) { detailBox.innerHTML = '<div class="empty">No bots are assigned to a visible messaging source.</div>'; return; }
   detailBox.innerHTML = '<div class="empty">Loading bot activity…</div>';
   try {
@@ -240,6 +247,6 @@ async function pageMessaging(): Promise<void> {
     if (load !== MESSAGING_LOAD) return;
     messagingDetail(detail);
   } catch (e) {
-    if (load === MESSAGING_LOAD) $('#msg-detail')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
+    if (load === MESSAGING_LOAD) messagingNeed('#msg-detail').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
   }
 }

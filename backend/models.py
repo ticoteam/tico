@@ -439,7 +439,7 @@ class TaskTypeUpdate(Contract):
     steps_only: bool | None = None
 
 
-# What a pick says on a person's card (ui/app/question-card.js): `then` is its "what happens" line, under its button;
+# What a pick says on a person's card (ui/app/question-card.ts): `then` is its "what happens" line, under its button;
 # `recommended` pre-ticks it among several picks. A bot's pick to a person needs `then` (hubdb.lint_question).
 OptionThen = Annotated[StrictStr, Field(max_length=120)]
 
@@ -3060,7 +3060,7 @@ class AssistantMessage(Contract):
     text: Annotated[str, Field(min_length=1, max_length=8000)]
     # place "updates" hands the turn the updates the person may read (backend/updates_chat.py).
     place: Literal["updates"] | None = None
-    # Sent from the Ask panel (ui/app/ask-panel.js): the page the person is looking at, handed to the turn as a hint.
+    # Sent from the Ask panel (ui/app/ask-panel.ts): the page the person is looking at, handed to the turn as a hint.
     page: AssistantPage | None = None
 
 
