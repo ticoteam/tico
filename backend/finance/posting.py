@@ -103,7 +103,8 @@ def post(
 
 def _claims(ctx: Ctx, e: L.Entry) -> dict[int, ATT.Claim]:
     """The attribution the book's rules give each P&L line of an entry as it posts: the enabled rule its vendor, its
-    money account (the entry's first line on a balance sheet account) or its account matches, by precedence."""
+    money account (the entry's first line on a balance sheet account), its account, or its class, location or project
+    matches, by precedence (ATT.PRECEDENCE)."""
     rules = ATT.rules(ctx.c, ctx.book.id)
     if not rules:
         return {}
@@ -119,7 +120,7 @@ def _claims(ctx: Ctx, e: L.Entry) -> dict[int, ATT.Claim]:
         if account is None or account.type not in L.PNL_TYPES:
             continue
         keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, x.contact_id)
-        claim = ATT.claim_for(rules, ATT.Facts(x.account_id, keys, money))
+        claim = ATT.claim_for(rules, ATT.facts_of_tags(x.account_id, keys, money, x.tags))
         if claim is not None:
             out[n] = claim
     return out
