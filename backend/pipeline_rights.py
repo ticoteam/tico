@@ -2,9 +2,10 @@
 """Who may see a pipeline, and who may change its rules: its stage requirements, prefix, settings and links.
 
 A pipeline is company-wide unless it is members-only (task_types.pipeline_visibility). A members-only pipeline shows to its
-owner, its manager and its members (pipeline_members). Rules are a separate right: only people change them, the pipeline's
-owner and the company's owner and Admins (access.owner_and_admin_emails); an Admin who is not one of those still does not
-see a members-only pipeline. Bots never edit rules, whatever the owner column says.
+owner, its manager, its members (pipeline_members) and the company's owner (the address in access.owner_email). Rules are a
+separate right: only people change them, the pipeline's owner and the company's owner and Admins
+(access.owner_and_admin_emails); an Admin who is not one of those still does not see a members-only pipeline. Bots never
+edit rules, whatever the owner column says.
 
 The owner, the manager and the members are stored as references, and a reference may name a bot by its slug or its id, or
 a person as `person:<id>`. `canonical` reads each one as the actor string a reader's identity carries, so the comparison
@@ -12,7 +13,7 @@ is the same whichever form was stored.
 """
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -81,10 +82,11 @@ def visible_pipeline_ids(c: "sqlite3.Connection", actor: str, ids: Sequence[obje
         f"SELECT pipeline_id, actor_id FROM pipeline_members WHERE pipeline_id IN ({marks})", private_ids
     ).fetchall():
         members[str(pipeline_id)].add(canonical(c, member))
+    company = company_owner(c)
     for row in private:
         pipeline_id = str(row[0])
         owner, manager = canonical(c, row[2]), canonical(c, row[3])
-        if me in (owner, manager) or me in members[pipeline_id]:
+        if me in (owner, manager, company) or me in members[pipeline_id]:
             visible.add(pipeline_id)
     return visible
 
@@ -98,3 +100,35 @@ def hidden_pipeline_ids(c: "sqlite3.Connection", actor: str) -> set[str]:
     """The members-only pipelines `actor` may not see. A list leaves out whatever joins one of them."""
     private = [str(r[0]) for r in c.execute("SELECT id FROM task_types WHERE pipeline_visibility='members'").fetchall()]
     return set(private) - visible_pipeline_ids(c, actor, private)
+
+
+def company_owner(c: "sqlite3.Connection") -> str:
+    """The company owner's actor (`human:<id>`): the person whose address is the owner's (access.owner_email), or "" when no
+    person on the roster has it. The owner sees every members-only pipeline; an Admin does not, unless a member."""
+    email = Access.owner_email(c)
+    found = c.execute("SELECT id FROM humans WHERE lower(email)=? LIMIT 1", (email,)).fetchone() if email else None
+    return "human:" + str(found[0]) if found else ""
+
+
+def left_out(hidden: set[str], actor: str, row: Mapping[str, object]) -> bool:
+    """True when a ticket list leaves this ticket out: it is on a pipeline in `hidden`, and the reader neither owns nor
+    requested it."""
+    type_id = str(row.get("type_id") or "")
+    return bool(type_id) and type_id in hidden and actor not in (row.get("owner_id"), row.get("requester_id"))
+
+
+def _quoted(value: object) -> str:
+    """A SQL string literal (the quoting bot_access uses), for the WHERE fragment a list composes."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def list_sql(c: "sqlite3.Connection", actor: str, visible_sql: str) -> str:
+    """`visible_sql` (Auth.task_sql) for a ticket list, a search, a count or a pipeline view: a members-only pipeline's
+    tickets are left out for a reader who may not see it, except the ones the reader owns or requested. The execution
+    queues keep task_sql alone, so a runner still reaches every ticket it works."""
+    hidden = hidden_pipeline_ids(c, actor)
+    if not hidden:
+        return visible_sql
+    own = f" OR owner_id={_quoted(actor)} OR requester_id={_quoted(actor)}" if actor else ""
+    listed = ",".join(_quoted(t) for t in sorted(hidden))
+    return f"({visible_sql}) AND (type_id IS NULL OR type_id NOT IN ({listed}){own})"

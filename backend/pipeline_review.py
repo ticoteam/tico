@@ -1063,7 +1063,13 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         who = request.state.identity
         human_only(who)
         with cast(Any, store).read() as c:
-            return {"items": queue_for(c, who.actor, pipeline_id, stage_id)}
+            # A members-only pipeline the reader may not see has no queue for them: its items are left out, and its own
+            # queue is the same answer as a pipeline that is not there.
+            hidden = pipeline_rights.hidden_pipeline_ids(c, who.task_actor or who.actor)
+            if pipeline_id and pipeline_id in hidden:
+                raise Problem("not_found", "No such pipeline", 404)
+            items = queue_for(c, who.actor, pipeline_id, stage_id)
+            return {"items": [item for item in items if item["pipeline_id"] not in hidden]}
 
     @app.get("/api/v2/pipelines/review/queue")
     def review_queue_all(request: Request) -> Row:  # pyright: ignore[reportUnusedFunction]

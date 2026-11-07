@@ -11,6 +11,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 import re
 from . import reach
+from . import pipeline_rights
 from . import views
 
 
@@ -68,7 +69,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
-            visible_sql = auth.task_sql(c, who)
+            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
             typed = None
             if ids is not None:
@@ -283,7 +284,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            visible_sql = auth.task_sql(c, who)
+            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             tag = reads.etag("labels", reads.version(c), reads.access(visible_sql), reads.names(c), who.actor)
             if reads.fresh(request, tag):
                 return reads.not_modified(tag)
@@ -297,12 +298,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         who = request.state.identity
         if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
             raise Problem("forbidden", "The stuck-task sweep is BotOps's and people's", 403)
+        principal = who.task_actor or who.actor
         with store.read() as c:
+            hidden = pipeline_rights.hidden_pipeline_ids(c, principal)
             return {
                 "tasks": [
                     t
                     for t in H.stuck_tasks(c, hours=max(1, hours), hidden=auth.unreadable_bots(c, who))
                     if privacy.task_readable(c, who, H.task(c, t["id"]))
+                    and not pipeline_rights.left_out(hidden, principal, H.task(c, t["id"]) or {})
                 ]
             }
 
@@ -341,7 +345,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     c,
                     since,
                     tz_minutes=tz,
-                    visible=auth.task_sql(c, who),
+                    visible=pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who)),
                     owner=owner,
                     requester=requester,
                     owner_kind=owner_kind or None,

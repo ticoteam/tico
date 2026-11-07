@@ -1300,7 +1300,11 @@ class Auth:
 
         # A members-only pipeline's tickets are its owner's, manager's and members' whatever the ticket's own privacy says
         # (pipeline_rights.may_see). A person's Assistant reads them as the person it acts for.
-        if row.get("type_id") and not pipeline_rights.may_see(c, who.task_actor or who.actor, row["type_id"]):
+        principal = who.task_actor or who.actor
+        # The ticket's own owner and requester read it whatever its pipeline: a bot that owns a ticket on a private pipeline
+        # it is not on still reads its own work.
+        own = principal in (row.get("owner_id"), row.get("requester_id"))
+        if row.get("type_id") and not own and not pipeline_rights.may_see(c, principal, row["type_id"]):
             raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not (
             H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
