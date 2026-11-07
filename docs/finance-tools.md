@@ -37,6 +37,21 @@ Spend by vendor, budgets and attribution rules then count the names as `into`. A
 refused, and the error says which. `vendor_unmerge {into, keys}` takes back a merge: pass the `keys` it returned. A mirrored
 book (QuickBooks, Xero) gets only the aliases; its contacts are left alone.
 
+## Classes, departments and projects
+
+A QuickBooks or Xero book tags its lines with the class, department (location) and project (job) the provider holds.
+Attribution rules match those tags too: `attribution_rule_set` takes `match` kind `class`, `location` or `project` with
+the record's id. `attribution_map {items: [{kind, id, team?, teammate?}]}` sets one rule per class, department or
+project at 100% to the team or teammate, from the earliest line that carries it, so the lines already posted re-roll. An
+item with neither `team` nor `teammate` clears its rule. `GET /api/v2/finance/attribution/dimensions` lists them, largest
+amount first, over the last 12 months. Precedence for a line: a person's or bot's override, then a vendor rule, a
+money-account rule, an account rule, a class rule, a department rule, a project rule, then the line's own tags. Tico
+never writes these to the provider: they are Tico-side, and no outbox row is made.
+
+A book with no bank connection works the same: Watch reads its posted expense entries as the charges for any money
+account that has no feed rows in the window, one charge per entry, grouped by its vendor. A book with feed rows reads
+those rows, as before.
+
 ## Acting
 
 `hub finance act help` lists every action kind with the right it needs; `hub finance act help --payload

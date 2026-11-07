@@ -2730,7 +2730,9 @@ def _month_windows(today: date, n: int = 4) -> list[tuple[str, str, str]]:
 
 
 def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
-    """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them (feed rows, not pending)."""
+    """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them: the feed rows (not pending), and for
+    each money account with no feed rows in the window, its posted expense entries. Only a mirrored book (QuickBooks or
+    Xero) reads entries: in a Tico-kept book a bill's entry and its feed payment would count the same charge twice."""
     today = date.fromisoformat(at[:10])
     start = (today - timedelta(days=WATCH_HISTORY_DAYS)).isoformat()
     out: list[W.Charge] = []
@@ -2743,16 +2745,12 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         for row in cast(list[Row], page.get("rows") or []):
             # A charge groups by its vendor (alias -> contact, else the merchant key), never by its raw text, and reads
             # under the vendor's name (backend/finance/vendors.py).
+            if row.get("kind") != "feed":
+                continue
             vendor = cast(Row, row.get("vendor") or {})
             payee = str(vendor.get("id") or "")
             amount = int(cast(int, row.get("amount") or 0))
-            if (
-                row.get("kind") != "feed"
-                or row.get("pending")
-                or row.get("status") == "ignored"
-                or amount >= 0
-                or not payee
-            ):
+            if row.get("pending") or row.get("status") == "ignored" or amount >= 0 or not payee:
                 continue
             out.append(
                 W.Charge(
@@ -2767,6 +2765,73 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
+    book = SL.book(c)
+    if book is None or book.mode != "mirror":
+        return out  # a Tico-kept book pays its bills from the feed, and that feed row is the charge
+    fed = _fed_money_accounts(c, start, today.isoformat())
+    return out + _entry_charges(c, viewer, start, today.isoformat(), fed)
+
+
+def _fed_money_accounts(c: sqlite3.Connection, start: str, end: str) -> set[str]:
+    """The books' accounts (GL lines) of the money accounts that have feed rows dated in the window: their money is read
+    from the feed, so their entries are never read again as charges."""
+    rows = c.execute(
+        "SELECT DISTINCT m.account_id FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "WHERE f.txn_date BETWEEN ? AND ? AND m.account_id IS NOT NULL",
+        (start, end),
+    ).fetchall()
+    return {str(r[0]) for r in rows}
+
+
+def _entry_charges(c: sqlite3.Connection, viewer: str, start: str, end: str, fed: set[str]) -> list[W.Charge]:
+    """One charge per posted expense entry in the window whose money account has no feed rows: the expense lines it
+    carries, summed, under the vendor they name (the vendor the books resolve, as a feed row's vendor is). Reversed
+    entries and entries with no vendor are left out."""
+    types = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, type FROM fin_accounts").fetchall()}
+    book = SL.book(c)
+    if book is None:
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
+    cursor: str | None = None
+    for _ in range(WATCH_PAGES):
+        try:
+            page = transactions(c, viewer, source="entry", start=start, end=end, limit=200, cursor=cursor)
+        except FinanceError:
+            break
+        for row in cast(list[Row], page.get("rows") or []):
+            if row.get("kind") != "entry" or row.get("reversed") or types.get(str(row.get("account_id"))) != "expense":
+                continue
+            entry = str(row["entry_id"])
+            if entry not in grouped:
+                if SATT.money_account_of(c, entry) in fed:
+                    grouped[entry] = {"skip": True}
+                    continue
+                payee = SAP.vendor_resolved(c, book.id, str(row.get("vendor") or ""))
+                grouped[entry] = {
+                    "skip": not payee,
+                    "payee": payee,
+                    "shown": str(row.get("vendor_name") or payee),
+                    "day": str(row["date"]),
+                    "amount": 0,
+                }
+            if not grouped[entry]["skip"]:
+                grouped[entry]["amount"] += int(cast(int, row.get("amount") or 0))
+        cursor = cast(str | None, page.get("next"))
+        if not cursor:
+            break
+    out: list[W.Charge] = []
+    for entry, g in grouped.items():
+        if g["skip"] or int(g["amount"]) <= 0:
+            continue
+        out.append(
+            W.Charge(
+                id=entry,
+                payee=str(g["payee"]),
+                amount=int(g["amount"]),
+                day=date.fromisoformat(str(g["day"])[:10]),
+                shown=str(g["shown"]).strip(),
+            )
+        )
     return out
 
 
@@ -3072,6 +3137,61 @@ def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str |
             for r in rows[: SATT.HISTORY_MAX]
         ],
     }
+
+
+DIMENSION_MONTHS = 12  # the classes, locations and projects a map read lists: those seen on lines in this many months
+
+
+def attribution_dimensions(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
+    """The classes, locations and projects seen on the P&L lines of the last DIMENSION_MONTHS the viewer sees, largest
+    amount first, each with its line count, amount and the attribution rule it has (its shares, or null). Needs the
+    attribution right (or admin), as the rules do."""
+    s = _open(c, viewer, at)
+    ctx = s.ctx
+    if not R.has(ctx.org, viewer, R.ATTRIBUTION, ctx.rights(viewer)):
+        raise denied("you need the attribution right to see the classes")
+    since = dates.add_months(dates.day(ctx.today), -DIMENSION_MONTHS).isoformat()
+    marks = ",".join("?" * len(SATT.DIMENSION_KINDS))
+    tagged = c.execute(
+        f"SELECT t.line_id, t.kind, t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id "
+        f"WHERE t.kind IN ({marks}) AND l.book_id=? AND l.entry_date>=? ORDER BY t.line_id",
+        [*SATT.DIMENSION_KINDS, ctx.book.id, since],
+    ).fetchall()
+    found = SL.lines(c, sorted({str(r[0]) for r in tagged}))
+    totals: dict[tuple[str, str], list[int]] = {}
+    for r in tagged:
+        hit = found.get(str(r[0]))
+        if hit is None or ctx.accounts.get(hit[1].account_id) is None:
+            continue
+        if ctx.accounts[hit[1].account_id].type not in PNL_TYPES or not attribution_visible(ctx, viewer, hit[1]):
+            continue
+        slot = totals.setdefault((str(r[1]), str(r[2])), [0, 0])
+        slot[0] += 1
+        slot[1] += hit[1].amount
+    rules = {(str(r["match_kind"]), str(r["match_id"])): r for r in SATT.rules(c, ctx.book.id)}
+    out: list[Row] = []
+    for (kind, dim_id), (lines, amount) in totals.items():
+        name = SATT.dimension_name(c, kind, dim_id)
+        if name is None:
+            continue
+        rule = rules.get((kind, dim_id))
+        out.append(
+            {
+                "kind": kind,
+                "id": dim_id,
+                "name": name,
+                "lines": lines,
+                "amount": amount,
+                "rule_id": str(rule["id"]) if rule is not None else None,
+                "splits": [
+                    {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps} for x in SATT.rule_splits(rule)
+                ]
+                if rule is not None
+                else None,
+            }
+        )
+    out.sort(key=lambda x: (-cast(int, x["amount"]), str(x["kind"]), str(x["id"])))
+    return {"dimensions": out, "can_change": True, "view_version": s.view.version}
 
 
 def attribution_rules(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:

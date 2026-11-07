@@ -439,6 +439,13 @@ def install(app, store, auth, mutate):
         who = viewer(request)
         return read(lambda c: finance_reads.attribution_rules(c, who.actor))
 
+    @app.get("/api/v2/finance/attribution/dimensions")
+    def finance_attribution_dimensions(request: Request):
+        """The classes, locations and projects on the P&L lines of the last 12 months, with their rules; needs the
+        attribution right or admin."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.attribution_dimensions(c, who.actor))
+
     @app.get("/api/v2/finance/lines/{line_id}/attribution")
     def finance_line_attribution(request: Request, line_id: str, view_as: str | None = None):
         """One posted P&L line's attribution: the shares in force, their amounts and the line's history, as far as the
