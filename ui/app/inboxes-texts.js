@@ -130,7 +130,7 @@ const inFail = (host, error) => { const s = host.querySelector('#inbound-status'
 // The filters and the table an inbox's page and Messages share; Messages adds which inboxes and the channel.
 const IN_FILTERS = `<label>From <input name="sender" maxlength="200"></label><label>Search messages <input name="q" type="search" maxlength="200"></label>
   <label><input name="has_code" type="checkbox"> Has a code</label><label><input name="spam" type="checkbox"> Include spam</label>
-  <button class="ghost" type="submit">Filter</button>`;
+  <button class="ghost inbound-apply" type="submit" aria-label="Filter" title="Filter">${filterIcon(16)}</button>`;
 const inTable = all => `<div class="inbound-scroll"><table class="inbound-table"><thead><tr><th>Received</th>${all ? '<th>Channel</th><th>To</th>' : ''}<th>From</th><th>Message</th><th>Code</th></tr></thead>
   <tbody id="inbound-messages"></tbody></table></div>
   <div class="row"><button type="button" class="ghost" id="inbound-newest">Newest</button><button type="button" class="ghost" id="inbound-older" hidden>Older messages</button></div>

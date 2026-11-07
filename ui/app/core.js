@@ -34,6 +34,8 @@ const MESSAGING = '#/messaging';       // selected Message bot: setup, schedules
 // Bot notices still flow through /api/v2/messages?unread=1. People read mail on #/mail, not live Gmail.
 const $ = (s, r=document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// The one filter icon: every button that opens or applies filters shows it, with no word (aria-label carries it).
+const filterIcon = (size = 14) => `<svg viewBox="0 0 14 14" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path d="M2 3.5h10M4 7h6M5.8 10.5h2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 // A shaped placeholder for a list that is still loading (styles/skeleton.css): `n` rows of uneven width, so the page
 // keeps its layout and does not jump when the rows arrive. `card` drops the dividers for a list inside a card.
 const SKEL_W = [62, 44, 71, 53, 38, 66, 49, 57];
