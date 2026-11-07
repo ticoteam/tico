@@ -129,7 +129,7 @@ def test_a_busy_owner_takes_its_resume_behind_its_other_work(api):
     with api.app.state.store.transaction() as c:
         strand(c, tid)
         row = H.task(c, other)
-        assert H._wake(c, row, row["owner_id"], "Please do the other work.", {"wake": "other"}), "a run is queued"
+        assert H._wake(c, row, row["owner_id"], "Please do the other work.", {"needs_action": True}), "a run is queued"
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] >= 1
         assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
         assert resumes(c, tid) == ["1"]
