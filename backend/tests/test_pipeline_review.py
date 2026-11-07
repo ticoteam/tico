@@ -1381,3 +1381,21 @@ def test_a_hidden_pipeline_and_an_unknown_one_answer_the_queue_the_same(tmp_path
                 answers.append((response.status_code, response.json()))
         assert answers[0] == answers[2] and answers[1] == answers[3]
         assert answers[0][0] == answers[1][0] == 404
+
+
+def test_not_validated_is_not_offered_while_another_reviewer_holds_the_claim(world):
+    w = world
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    H.task_close(w.c, ANA, L.spawn(w.c, link_row, w.task), note="Done")
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is True
+    w.c.execute(
+        "INSERT INTO review_claims (id, task_id, stage_requirement_id, claimed_by, work_version, claimed_at, expires_at) "
+        "VALUES ('rc-ben', ?, ?, ?, 0, ?, ?)",
+        (w.task, w.mockup, BEN, H.now(), H.shift(H.now(), minutes=10)),
+    )
+    assert item()["claimed_by"] == BEN
+    assert item()["can_not_validate"] is False

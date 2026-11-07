@@ -620,7 +620,8 @@ def _queue_fields(
         item["can_mark_met"] = bool(rights[item["pipeline_id"]]) and item["kind"] != "approval"
         at_stage = tasks[item["task_id"]].get("step_id") == item["stage_id"]
         # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
-        item["can_not_validate"] = at_stage and _route_ok(item)
+        # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
+        item["can_not_validate"] = at_stage and item["claimed_by"] is None and _route_ok(item)
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names, blocked) if at_stage else None
 
 
