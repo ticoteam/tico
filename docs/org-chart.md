@@ -172,7 +172,8 @@ its segments as a dot in that segment's colour. A tag of **All** (`all`) means t
 the chart labels it All, it is not one of any segment's faces, and its runs are handed every segment's summary. A teammate
 can carry several tags. A tag does not change its group or its manager.
 
-Owners and bot admins set the tags with `POST /api/v2/segments/members`. Anyone signed in reads them with
+Owners set the tags with `POST /api/v2/segments/members`, from a teammate's Segments menu in the app (on a person's page, and
+in a bot's Info pane); nobody else sees that menu. Anyone signed in reads them with
 `GET /api/v2/segments/members`, which leaves out the people the viewer may not see. A tag names one of the company's
 segments (or `all`): taking a segment out of the company takes its tags off, and a teammate who is archived (a bot) or
 removed (a person) loses all of theirs.
