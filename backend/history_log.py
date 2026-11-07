@@ -311,7 +311,7 @@ def install(app, store, auth):
             c,
             who,
             {r["target"] for r in about_keys},
-            {r["target"] for r in about_keys if r["actor"] == who.actor},
+            frozenset(r["target"] for r in about_keys if r["actor"] == who.actor),
         )
         autos = {r["target"] for r in rows if r["kind"] == "outbound.blocked"}
         autos = (
