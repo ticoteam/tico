@@ -103,3 +103,18 @@ def test_the_affected_count_is_the_open_tickets_at_the_stage_with_the_label_and_
     assert everything == {"stage": "Review", "label": None, "count": 3}
     assert urgent == {"stage": "Review", "label": "urgent", "count": 1}
     assert hidden["count"] == 0
+
+
+def test_a_field_or_run_is_a_rule_so_a_bot_or_judge_cannot_review_it(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    _, stage = _review_stage(c)
+    for kind, needs in (("field", {"field": "due"}), ("run", {"source": "github_checks"})):
+        for reviewed_by in ("bot", "bot_then_person"):
+            body = _body(kind=kind, needs=needs, reviewed_by=reviewed_by, rubric="Judge it")
+            with pytest.raises(Problem) as refused:
+                R.add(c, ANA, stage, body)
+            assert refused.value.status == 422
+    nobody = R.add(c, ANA, stage, _body(kind="field", needs={"field": "due"}, reviewed_by="nobody", rubric=None))
+    assert nobody["reviewed_by"] == "nobody"

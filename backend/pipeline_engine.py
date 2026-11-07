@@ -488,8 +488,11 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
     source = (
         _field_state(task, requirement, facts) if kind == "field" else _run_state(task_id, requirement, facts, conn)
     )
-    if source == "met" and requirement["reviewed_by"] != "nobody":
-        return Standing(requirement, "waiting")  # the source is ready; the reviewer (a person or a judge) still decides
+    # A field or run is a rule (D60): no judge reads it, so only a person's review waits on the source. A bot or
+    # bot-then-person review of one (rows from before the API refused it) reads as the rule itself, so no card waits
+    # for a reviewer nobody can reach.
+    if source == "met" and requirement["reviewed_by"] == "person":
+        return Standing(requirement, "waiting")  # the source is ready; the named person still decides
     return Standing(requirement, source)
 
 

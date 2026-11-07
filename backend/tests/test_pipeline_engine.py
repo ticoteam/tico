@@ -453,3 +453,37 @@ def test_an_override_needs_the_rule_editor_of_every_pipeline_whose_requirement_i
     H.task_update(c, ANA, task, step=ship, override_requirements=True)
     overrides = rows(c, "SELECT judge_actor FROM stage_decisions WHERE task_id=? AND verdict='override'", task)
     assert {r["judge_actor"] for r in overrides} == {ANA}
+
+
+def test_a_person_decides_a_field_requirement_through_approve(tmp_path):
+    from backend import pipeline_requirements as R
+    from backend import pipeline_review as RV
+
+    c, board = pipeline(tmp_path)
+    stage = step_id(c, board["id"], "Drafting")
+    R.add(
+        c,
+        ANA,
+        stage,
+        {"name": "Due date", "kind": "field", "needs": {"field": "due"}, "reviewed_by": "person", "reviewer_id": BEN},
+    )
+    task = card(c, board)["id"]
+    c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
+    assert states(c, task) == {"Due date": "waiting"}
+    [item] = [i for i in RV.queue_for(c, BEN) if i["task_id"] == task]
+    RV.approve(c, BEN, task, item["requirement_id"], requirement_version=1, work_version=item["work_version"])
+    assert [d["verdict"] for d in rows(c, "SELECT verdict FROM stage_decisions WHERE task_id=?", task)] == ["met"]
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (task,)).fetchone()[0] == step_id(c, board["id"], "Review")
+
+
+def test_a_bot_reviewed_field_or_run_is_read_as_the_rule_so_no_card_waits_for_nobody(tmp_path):
+    c, board = pipeline(tmp_path)
+    requirement(c, board, "Drafting", "Due date", kind="field", needs={"field": "due"}, reviewed_by="bot")
+    requirement(
+        c, board, "Drafting", "Checks", kind="run", needs={"source": "github_checks"}, reviewed_by="bot_then_person"
+    )
+    task = card(c, board)["id"]
+    assert states(c, task) == {"Due date": "none", "Checks": "none"}
+    c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
+    assert states(c, task) == {"Due date": "met", "Checks": "none"}
+    assert refused(lambda: H.task_update(c, ANA, task, step="Review")).rule == "requirement"
