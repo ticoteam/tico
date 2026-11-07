@@ -260,8 +260,9 @@ const finBudSegParam = () => FIN_BUD.seg ? '&segment=' + encodeURIComponent(FIN_
 // A budget's Segment, from the rail (budget_update; None clears it). A segment is not versioned by month.
 function finBudSegmentEdit(b) {
   finDecideDialog('Segment', segSelectHtml(b.segment_id || '', {name: 'segment_id'}), 'Save', form => {
-    const seg = form.elements.segment_id.value;
-    return ['budget_update', {budget_id: b.id, segment_id: seg}];
+    const picker = form.elements.segment_id;
+    if (!picker) throw new Error('There are no segments to pick from');   // no select: the company has none
+    return ['budget_update', {budget_id: b.id, segment_id: picker.value}];
   }, 'Saved');
 }
 
@@ -294,7 +295,7 @@ function finBudAdd() {
     if (parent) payload.parent_id = parent.id;
     if (teammate) payload.teammate = teammate;
     if (vendor) payload.vendor = vendor;
-    const seg = f.segment_id.value;
+    const seg = f.segment_id?.value || '';   // no select when the company has no segments
     if (seg) payload.segment_id = seg;
     return ['budget_create', payload];
   }, 'Saved');
