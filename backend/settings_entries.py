@@ -30,7 +30,7 @@ SETTINGS_FILES = sorted(
         "settings-release.ts",
         "settings-repositories.ts",
         "settings-storage.ts",
-        "settings-webhooks.ts",
+        "settings-webhooks.js",
         "subscriptions.ts",
         "bot-budget.ts",
         "bot-profile.ts",
