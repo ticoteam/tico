@@ -319,3 +319,26 @@ def test_a_ticket_moved_out_of_a_members_only_pipeline_is_not_gone_to_a_non_memb
     feed = get(api, f"tasks?changed_after={cursor}", "cara-test")
     assert not feed.get("reset")
     assert moved not in feed["gone"] and moved not in str(feed)
+
+
+def test_a_hidden_only_edit_leaves_a_non_members_list_etag_as_it_was(api):
+    # A ticket on a members-only pipeline changes; a company reader who may not see it gets the same list, so the same
+    # ETag, and her If-None-Match still answers 304. A change she may read moves the ETag.
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Lgl" + tag, private=True)
+    post(api, "tasks", {"owner": "ben", "title": "Shown " + tag, "body": "Please."})
+    hidden = ticket(api, legal, "Hidden " + tag, owner="human:ben", requester="human:ana")
+
+    first = api.get("/api/v2/tasks?limit=50", headers=headers("cara-test"))
+    assert first.status_code == 200
+    etag = first.headers["ETag"]
+    version = get(api, "tasks/" + hidden, "ana-test")["task"]["version"]
+    post(api, "tasks/" + hidden, {"version": version, "title": "Hidden renamed " + tag})
+    again = api.get("/api/v2/tasks?limit=50", headers={**headers("cara-test"), "If-None-Match": etag})
+    assert (again.status_code, again.headers["ETag"]) == (304, etag)
+
+    shown = get(api, "tasks?limit=50", "cara-test")["tasks"]
+    edit = next(t for t in shown if t["title"].startswith("Shown"))
+    post(api, "tasks/" + edit["id"], {"version": edit["version"], "title": "Shown again " + tag})
+    moved = api.get("/api/v2/tasks?limit=50", headers={**headers("cara-test"), "If-None-Match": etag})
+    assert moved.status_code == 200 and moved.headers["ETag"] != etag

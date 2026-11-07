@@ -48,16 +48,6 @@ def names(c):
     return digest.hexdigest()[:12]
 
 
-def version(c):
-    """The newest change to any task (its row, tags, files, relations, ask, step), or where the
-    log begins when none is kept."""
-    row = c.execute("SELECT seq FROM changes WHERE topic='tasks' ORDER BY seq DESC LIMIT 1").fetchone()
-    if row:
-        return row[0]
-    first = E.oldest(c)
-    return first - 1 if first is not None else E.latest(c)
-
-
 def cursor(c, visible_sql):
     return f"{E.latest(c)}.{access(visible_sql)}"
 
@@ -73,25 +63,6 @@ def fresh(request, tag):
         return False
     bare = tag.removeprefix("W/")
     return any(item.strip() == "*" or item.strip().removeprefix("W/") == bare for item in wanted.split(","))
-
-
-def digest(*parts):
-    return hashlib.sha256(json.dumps(parts, default=str, sort_keys=True).encode()).hexdigest()[:24]
-
-
-def list_tag(whole, rows):
-    """A task list's ETag: `whole` moves with any task change anywhere, `rows` only with the rows it answered."""
-    return f'W/"{whole}.{rows}"'
-
-
-def held(request):
-    """The (whole, rows) pairs the request's If-None-Match holds."""
-    out = []
-    for item in (request.headers.get("if-none-match") or "").split(","):
-        whole, _, rows = item.strip().removeprefix("W/").strip('"').partition(".")
-        if whole and rows:
-            out.append((whole, rows))
-    return out
 
 
 def not_modified(tag):
