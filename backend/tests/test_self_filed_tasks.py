@@ -239,10 +239,16 @@ def test_the_hold_ends_after_a_few_minutes_even_while_the_filing_turn_runs(api):
         api, "tasks", {"owner": "ops", "title": "Build the docs", "body": "In parallel."}, token=active["token"]
     )
     assert claim(api, machine) is None
+    aged = H.shift(H.now(), seconds=-execution.FILER_HOLD_S - 1)
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE messages SET created_at=? WHERE recipient_id='bot:ops' AND body LIKE 'New task from %Build the docs'",
-            (H.shift(H.now(), seconds=-execution.FILER_HOLD_S - 1),),
+            (aged,),
+        )
+        # The task's creation is written before its notice (hubdb.task_create), so it ages with the notice; left
+        # newer, the filing step would read as a later step change by the recipient (execution.obsolete_notices_sql).
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (aged, mine["id"])
         )
     assert H.message_task_id(claim(api, machine)["message"]) == mine["id"]
 
