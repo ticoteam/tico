@@ -37,6 +37,7 @@ interface FinPick { id: string; name: string }
 interface FinAccessLite { teammates?: {teammate?: string}[]; teams?: {id: string; name: string}[] }
 interface FinRulesRead { rules?: FinRule[]; can_change?: boolean }
 interface FinNamed { id: string; name: string }
+interface FinAttrState { rules: FinRule[]; can: boolean; load: number }
 
 const FIN_SHARE_MAX = 10;      // parts in one split (the contract: 1 to 10)
 const FIN_SHARE_ALL = 10000;   // basis points in a whole line
@@ -182,7 +183,7 @@ function finShareLineDialog(lineId: string): void {
   if (!a) return;
   const refresh = () => { if (FIN?.tx) void finTxLoad(false); };
   const dlg = finDialog('Attributed to', `${finShareRowsHtml(a.splits)}
-    <div class="fin-share-clear"><button type="button" class="ghost" data-share-clear>Clear</button></div>`, 'Save', async form => {
+    <div class="fin-share-clear"><button type="button" class="ghost" data-share-clear>Clear</button></div>`, 'Save', async (form: HTMLFormElement) => {
     const splits = finShareRead(form);
     await finAct('attribute', {line_id: lineId, splits});
     refresh();
@@ -202,12 +203,12 @@ async function finShareUndo(lineId: string): Promise<void> {
 // ----------------------------------------------------------------- the Attribution tab
 // Shown to the owner and anyone holding finance.attribution (or finance.admin): the rules, and + Rule for those who may change them.
 function finAttrPage(): void {
-  const state = {rules: [] as FinRule[], can: false, load: 0};
+  const state: FinAttrState = {rules: [], can: false, load: 0};
   FIN.attr = state;
   $('#fin-body')!.innerHTML = `<div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-rule-add hidden>+ Rule</button></div>
     <div class="fin-scroll" id="fin-rules">${skelRows(4, {dot: false})}</div>`;
   const body = $('#fin-body')!;
-  body.onclick = ev => {
+  body.onclick = (ev: MouseEvent) => {
     const t = ev.target as HTMLElement;
     if (t.closest('[data-fin-rule-add]')) { finRuleDialog(null); return; }
     const menu = t.closest<HTMLElement>('[data-fin-rule-menu]');
@@ -226,14 +227,14 @@ function finAttrPage(): void {
     const yes = t.closest<HTMLElement>('[data-fin-rule-yes]');
     if (yes) void finRuleDelete(state.rules[Number(yes.dataset.finRuleYes)]);
   };
-  body.onchange = ev => {
+  body.onchange = (ev: Event) => {
     const on = (ev.target as HTMLElement).closest<HTMLInputElement>('input[data-fin-rule-on]');
     if (on) void finRuleToggle(on, state.rules[Number(on.dataset.finRuleOn)]);
   };
   void finAttrLoad();
 }
 async function finAttrLoad(): Promise<void> {
-  const state = FIN.attr;
+  const state = FIN.attr as FinAttrState | undefined;
   if (!state) return;
   const load = ++state.load;
   let d: FinRulesRead | null;
@@ -248,7 +249,7 @@ async function finAttrLoad(): Promise<void> {
   finAttrDraw();
 }
 function finAttrDraw(): void {
-  const state = FIN.attr, box = $('#fin-rules');
+  const state = FIN.attr as FinAttrState | undefined, box = $('#fin-rules');
   if (!box || !state) return;
   if (!state.rules.length) { box.innerHTML = finNote('No rules.'); return; }
   box.innerHTML = `<table class="fin-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th aria-label="Actions"></th></tr></thead><tbody>${state.rules.map((r, i) => {
@@ -289,7 +290,7 @@ function finRuleDialog(rule: FinRule | null): void {
     <label>Match<select name="match" required></select></label>
     <div class="fin-share-label muted fin-small">Split</div>${finShareRowsHtml(rule?.splits || [])}
     <label>Apply to lines from<input type="date" name="apply_from" value="${esc(rule?.apply_from || '')}"></label>`,
-  rule ? 'Save' : 'Add', async form => {
+  rule ? 'Save' : 'Add', async (form: HTMLFormElement) => {
     const f = (n: string) => form.elements.namedItem(n) as HTMLInputElement;
     const name = f('name').value.trim();
     if (!name) throw new Error('Name the rule');

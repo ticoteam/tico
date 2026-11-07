@@ -13,8 +13,8 @@
 const FIN_ROUTE = '#/finance';
 const FIN_TABS = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['attribution', 'Attribution'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
   ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
-let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
-let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
+/** @type {any} */ let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
+/** @type {any} */ let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE = null;     // the sidebar's one read per visit
 let FIN_VIEW_AS = '';     // the owner viewing Finance as a teammate (read only): ?view_as=… in the address
 
