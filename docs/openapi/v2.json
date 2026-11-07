@@ -35397,7 +35397,7 @@
     },
     "/api/v2/segments/strategy": {
       "put": {
-        "summary": "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision answers 409",
+        "summary": "Owner only: the segment's own text for the sections sent (id in the body), in the draft; a stale revision answers 409, and only a card the owner confirmed may leave revision out (otherwise 422)",
         "operationId": "updateSegmentStrategy",
         "requestBody": {
           "content": {
@@ -73808,7 +73808,14 @@
             "title": "Id"
           },
           "revision": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Revision"
           },
           "sections": {
@@ -73823,11 +73830,10 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "id",
-          "revision"
+          "id"
         ],
         "title": "SegmentStrategy",
-        "description": "A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); \"\" uses the\ncompany's text again. `id` is the segment; `revision` is the draft's as read."
+        "description": "A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); \"\" uses the\ncompany's text again. `id` is the segment; `revision` is the draft's as read. Only a card the owner confirmed in the\nAssistant or BotOps may leave `revision` out: it then writes its keys onto the draft as it is now (the route\nanswers 422 for anyone else who leaves it out)."
       },
       "SegmentUpdate": {
         "properties": {

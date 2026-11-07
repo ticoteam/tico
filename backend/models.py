@@ -970,10 +970,12 @@ class SegmentRemove(Contract):
 
 class SegmentStrategy(Contract):
     """A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); "" uses the
-    company's text again. `id` is the segment; `revision` is the draft's as read."""
+    company's text again. `id` is the segment; `revision` is the draft's as read. Only a card the owner confirmed in the
+    Assistant or BotOps may leave `revision` out: it then writes its keys onto the draft as it is now (the route
+    answers 422 for anyone else who leaves it out)."""
 
     id: str = Field(min_length=3, max_length=200)
-    revision: int
+    revision: int | None = None
     sections: dict[str, str] = Field(default_factory=dict, max_length=8)
 
 

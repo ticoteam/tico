@@ -165,7 +165,8 @@ not see is left out of them, and out of the count.
 
 **Its strategy.** A segment has the same fields as the company's strategy: its summary and the seven sections
 ([The page](#the-page)). The owner writes its own text for any of them in the draft
-(`PUT /api/v2/segments/strategy` with `{id, revision, sections}`, against the draft's revision). A field the segment did not change reads as the
+(`PUT /api/v2/segments/strategy` with `{id, revision, sections}`, against the draft's revision; a card the owner confirmed in the Assistant or
+BotOps may leave `revision` out and writes just its keys onto the draft as it is). A field the segment did not change reads as the
 company's text, and `""` gives the company's text back. Its text publishes with the rest, is in every version, and the
 diff names it `sections.segments.<id>.<field>`. `GET /api/v2/segments/{id}` gives the strategy field by field: each with
 its `text` (the segment's where it changed one; `from` says which), the company's text beside it (`company`) and whether
@@ -391,7 +392,7 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `GET /segments/{id}` | any reader | the segment as the list shows it, plus `leads` (its live faces whose manager is not one of them), `strategy` (`{draft, revision, version, fields: [{key, title, text, company, changed, from}]}`; the draft for the owner and the published text otherwise; `from` is `segment` or `company`) and `bets` (`{id, statement, status}`, live ones) |
 | `POST /segments/{id}` | the owner | `{name?, who?, color?}`, only what is sent changes; answers `{segment}` |
 | `POST /segments/remove` | the owner | `{id}`: takes the segment out of the company's; its teammate tags go; answers `{id, removed}` |
-| `PUT /segments/strategy` | the owner | `{id, revision, sections: {summary?, serve?, ...}}`, `""` gives the company's text back; `409` on a stale revision; answers `{strategy}` |
+| `PUT /segments/strategy` | the owner | `{id, revision, sections: {summary?, serve?, ...}}`, `""` gives the company's text back; `409` on a stale revision; `revision` may be left out only by a card the owner confirmed (Assistant or BotOps), which writes just its keys; otherwise `422`; answers `{strategy}` |
 | `GET /market/competitors` | any reader | `{competitors: [{id, name, url}]}`, by name |
 | `POST /market/competitors` | the owner or the Librarian | `{name}`: a name or a site; answers `{competitor}` |
 | `POST /market/competitors/remove` | the owner or the Librarian | `{id}`: ends its `competes_with` edges; 404 if it is not one |
