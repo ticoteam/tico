@@ -398,6 +398,8 @@ scheme, host and port exactly, and has no trailing slash).
 Tico applies **no request-rate limit** to the API: it will answer as fast as it can. The limits that exist:
 
 - Bodies: 2 MB for writes; 20 MB for uploads (`/api/v2/uploads/...`) and meeting imports (`413 too_large`).
+- File imports (`POST /api/v2/docs/import`): two conversions run at once per server. A third gets `503 imports_busy`, and
+  each conversion stops after 30 seconds (`422 import_failed`).
 - A few actions have a daily allowance (tool notes, the server's decisions) and answer `429` when it is used; the
   `detail` says which.
 - Live events: an open `/api/v2/events` costs nothing while nothing changes, and one read per burst of changes; keep
