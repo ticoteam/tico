@@ -64,8 +64,9 @@ def test_a_model_call_that_fails_is_raised_to_the_caller_and_never_passes():
 
 def test_the_gateways_cost_is_kept_and_tokens_are_priced_when_it_gives_none():
     assert adapter.cost_usd("haiku-5.5", {"cost_usd": 0.5, "prompt_tokens": 1_000_000}) == 0.5
-    assert adapter.cost_usd("haiku-5.5", {"prompt_tokens": 1_000_000, "completion_tokens": 0}) == (
-        adapter.PRICES["haiku-5.5"][0]
+    assert (
+        adapter.cost_usd("haiku-5.5", {"prompt_tokens": 1_000_000, "completion_tokens": 0})
+        == (adapter.PRICES["haiku-5.5"][0])
     )
 
 

@@ -411,7 +411,9 @@ def test_the_judge_is_told_the_tickets_current_work_version_and_the_attachments_
         {"source": "link", "url": "https://x.example"},
     )
     E.work_changed(c, task["id"])  # the work goes on after the attachment was made
-    attached_at = c.execute("SELECT work_version FROM requirement_attachments WHERE task_id=?", (task["id"],)).fetchone()[0]
+    attached_at = c.execute(
+        "SELECT work_version FROM requirement_attachments WHERE task_id=?", (task["id"],)
+    ).fetchone()[0]
     current = c.execute("SELECT work_revision FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
     c.close()
     assert attached_at < current

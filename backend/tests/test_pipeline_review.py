@@ -113,7 +113,9 @@ class World:
         """The ticket's open visit at `step`: the one the engine opened at creation is moved there, else one is opened
         (a ticket has one open visit at a time)."""
         ticket, when, stage = task or self.task, at or H.now(), step or self.review
-        open_visit = self.c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (ticket,)).fetchone()
+        open_visit = self.c.execute(
+            "SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (ticket,)
+        ).fetchone()
         if open_visit:
             self.c.execute(
                 "UPDATE stage_visits SET pipeline_stage_id=?, entered_at=? WHERE id=?", (stage, when, open_visit[0])

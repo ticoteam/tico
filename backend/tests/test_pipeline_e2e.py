@@ -400,7 +400,10 @@ def test_late_card_is_asked_once_and_the_factory_manager_sees_the_bottleneck(co)
     pipeline_manager.tick(co.store, NOW)
     pipeline_manager.tick(co.store, NOW + timedelta(minutes=10))
     for task in tasks:
-        assert co.count("pipeline_manager_actions", "task_id=? AND stage_requirement_id=? AND action='ask'", task, shots) == 1
+        assert (
+            co.count("pipeline_manager_actions", "task_id=? AND stage_requirement_id=? AND action='ask'", task, shots)
+            == 1
+        )
     late = [item["task_id"] for item in pipeline_manager.rail(co.c, co.type["Engineering"], NOW)["late"]]
     assert sorted(late) == sorted(tasks)
     bottleneck = factory_manager.factory_rail(co.c, co.factory["Product development"], NOW)["bottleneck"]
@@ -530,9 +533,7 @@ def test_flow_map_numbers_equal_the_database(co):
     assert edge["count"] == truth == 3
 
     eng = next(p for p in seen["pipelines"] if p["id"] == co.type["Engineering"])
-    in_stage = co.count(
-        "tasks", "type_id=? AND status NOT IN ('done','closed','declined')", co.type["Engineering"]
-    )
+    in_stage = co.count("tasks", "type_id=? AND status NOT IN ('done','closed','declined')", co.type["Engineering"])
     assert eng["cards"] == in_stage == 1
     assert eng["overdue"] == 1
 

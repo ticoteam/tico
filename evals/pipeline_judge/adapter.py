@@ -156,7 +156,9 @@ def judge_once(engine, case, model=""):
             failed.append(J.error_code(exc))
             raise
 
-    with closing(sqlite3.connect(":memory:")) as c:  # judge_once reads the connection only to pick a model, and it is given
+    with closing(
+        sqlite3.connect(":memory:")
+    ) as c:  # judge_once reads the connection only to pick a model, and it is given
         result = P.judge_once(c, _requirement(case), _attachment(case), model, engine=ask)
     if failed:
         raise J.JudgeError(failed[0], "the model call failed")
