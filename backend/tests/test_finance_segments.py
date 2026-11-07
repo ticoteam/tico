@@ -535,14 +535,14 @@ def test_a_segment_filter_shows_no_pay_run_that_a_subtraction_could_reveal(books
         assert FR.pnl(c, "human:ben", *window, "month", "accrual", segment=S1)["expense"] == [0]
 
 
-def test_a_lead_sees_only_their_own_lines_for_any_filter_and_a_dedicated_non_lead_is_refused(books):  # noqa: F811
+def test_a_lead_sees_its_segment_and_its_teams_lines_and_a_dedicated_non_lead_is_refused(books):  # noqa: F811
     with books.transaction() as c:
-        _month(c)  # cara leads S1; eve is dedicated to S1 and leads nothing
+        _month(c)  # cara leads S1 and the web team: her view is both, so the web line (under S2) shows in her plain P&L
         own = FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual")
-        assert (own["income"], own["expense"]) == ([10_000], [1_700])
+        assert (own["income"], own["expense"]) == ([10_000], [3_700])
         assert FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=S1)["expense"] == [1_700]
         other = FR.pnl(c, "human:cara", *OCTOBER, "month", "accrual", segment=S2)
-        assert (other["income"], other["expense"]) == ([0], [0])
+        assert (other["income"], other["expense"]) == ([0], [2_000])  # only the web line she already sees
         with pytest.raises(FinanceError, match="segment P&L"):
             FR.pnl(c, "human:eve", *OCTOBER, "month", "accrual", segment=S1)
 
@@ -574,16 +574,16 @@ def test_a_bot_acting_for_a_person_sets_a_guess_and_never_overwrites_a_choice(bo
 def test_a_catch_all_budget_takes_no_segment_and_shared_costs_stay_unallocated(books):  # noqa: F811
     with books.transaction() as c:
         ids = _month(c)
+        catch_all = next(r for r in FR.budgets(c, OWNER)["budgets"] if r["catch_all"])  # the book's own catch-all
         assert "no segment" in _refused(
-            c, OWNER, "budget_create", {"name": "Everything else", "catch_all": True, "segment_id": S1}
+            c, OWNER, "budget_create", {"name": "Second", "catch_all": True, "segment_id": S1}
         )
-        catch_all = str(
-            _ok(act(c, OWNER, "budget_create", {"name": "Everything else", "catch_all": True}))["budget_id"]
-        )
-        assert "no segment" in _refused(c, OWNER, "budget_update", {"budget_id": catch_all, "segment_id": S1})
+        assert "no segment" in _refused(c, OWNER, "budget_update", {"budget_id": catch_all["id"], "segment_id": S1})
         out = FR.pnl_by(c, OWNER, "segment", *OCTOBER, basis="accrual")
-        assert _values(out, "expense")[SG.UNALLOCATED] == 500  # the 6530 cost, on the catch-all, is Unallocated
-        assert _budgets(c)["Everything else"]["effective_segment_id"] is None
+        assert (
+            _values(out, "expense")[SG.UNALLOCATED] == 500
+        )  # the 6530 cost, which the catch-all takes, is Unallocated
+        assert _budgets(c)[catch_all["name"]]["effective_segment_id"] is None
         assert _budgets(c)["Software web"]["id"] == ids["web"]
 
 
