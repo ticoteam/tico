@@ -47,19 +47,25 @@ def is_id(key: str) -> bool:
         return False
 
 
+def _row_key(r: Any) -> str:
+    """A feed row's vendor key: the one stored at sync, else the merchant key of its counterparty text (rows written
+    before the key existed, or without it)."""
+    return str(r["vendor_key"] or "") or merchant_key(str(r["counterparty"] or ""))
+
+
 def feed_vendors(c: Any, book_id: str, rows: Sequence[Any], sees_kind: Callable[[str], bool]) -> dict[str, Row]:
     """Each feed row's vendor, by row id: `id` is the contact its vendor key resolves to, else the key; `name` is that
     contact's name when `sees_kind` says the viewer sees a contact of that kind (else ""), or the row's own counterparty
     text when no contact has the key. Rows are read as the store returns them (vendor_key, counterparty, id)."""
+    keys = {str(r["id"]): _row_key(r) for r in rows}
     resolved: dict[str, str] = {}
-    for r in rows:
-        key = str(r["vendor_key"] or "")
+    for key in keys.values():
         if key and key not in resolved:
             resolved[key] = SAP.vendor_resolved(c, book_id, key)
     contacts = SAP.contacts(c, sorted(set(resolved.values())))
     out: dict[str, Row] = {}
     for r in rows:
-        key = str(r["vendor_key"] or "")
+        key = keys[str(r["id"])]
         if not key:
             out[str(r["id"])] = {"id": "", "name": ""}
             continue
@@ -84,25 +90,26 @@ def _vendor_contact(ctx: Ctx, contact_id: str) -> Any:
     return row
 
 
-def _moves(ctx: Ctx, into: str, merge: Sequence[str]) -> list[tuple[str, str]]:
-    """The keys a merge puts on `into`, as (key, the contact it comes from or ""), in order. A contact's keys are its own
-    id, the names it went by and its name; a plain name is its name key. A key already on `into` is left out. A key on
-    another contact is refused, and the refusal names that contact."""
-    out: list[tuple[str, str]] = []
+def _moves(ctx: Ctx, into: str, merge: Sequence[str]) -> list[tuple[str, str, str]]:
+    """The keys a merge puts on `into`, in order, as (key, prior, contact): `prior` is the contact the key already went to
+    ("" when no alias had it, which unmerge removes), `contact` the vendor contact it came from ("" for a plain name). A
+    contact's keys are its own id, the names it went by and its name; a plain name is its name key. A key already on
+    `into` is left out. A key on another contact is refused, and the refusal names that contact."""
+    out: list[tuple[str, str, str]] = []
     seen: set[str] = set()
 
-    def take(key: str, source: str, label: str) -> None:
+    def take(key: str, contact: str, label: str) -> None:
         if key in seen:
             return
         seen.add(key)
         owner = SAP.alias_of(ctx.c, ctx.book.id, key)
         if owner == into:
             return
-        if owner and owner != source:
+        if owner and owner != contact:
             held = SAP.get(ctx.c, "fin_contacts", owner)
             who = str(held["name"]) if held is not None else owner
             raise FinanceError(CONFLICT, f"{label} already goes by {who}")
-        out.append((key, source))
+        out.append((key, owner, contact))
 
     for item in merge:
         if is_id(item) or SAP.is_contact(ctx.c, item):
@@ -149,23 +156,23 @@ def vendor_merge(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("merge is a list of vendor names or contact ids")
     merge = list(dict.fromkeys(V.texts(p, "merge", MAX_MERGE)))
     moves = _moves(ctx, into, merge)  # refuses a conflict now, before anything is asked
-    _budget_clash(ctx, into, [k for k, _ in moves])
+    _budget_clash(ctx, into, [k for k, _, _ in moves])
 
     def apply(aid: str) -> Result:
         now = _moves(ctx, into, merge)
-        for key, source in now:
-            SAP.alias_put(ctx.c, ctx.book.id, key, into, ctx.at, source)
+        for key, prior, _ in now:
+            SAP.alias_put(ctx.c, ctx.book.id, key, into, ctx.at, prior)
         archived: list[str] = []
         if ctx.book.mode != "mirror":  # a mirrored book's contacts are the provider's: only the aliases change
-            for contact in sorted({src for _, src in now if src}):
+            for contact in sorted({src for _, _, src in now if src}):
                 SAP.update(ctx.c, "fin_contacts", contact, {"active": 0, "updated_at": ctx.at})
                 archived.append(contact)
         ctx.changed()
         return {
             "into": into,
-            "keys": [k for k, _ in now],
-            "moved": [{"key": k, "from": s} for k, s in now if s],
-            "added": [k for k, s in now if not s],
+            "keys": [k for k, _, _ in now],
+            "moved": [{"key": k, "from": p} for k, p, _ in now if p],
+            "added": [k for k, p, _ in now if not p],
             "archived": archived,
         }
 
@@ -181,13 +188,14 @@ def vendor_unmerge(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     into = V.text(p, "into", 80)
     _vendor_contact(ctx, into)
     keys = list(dict.fromkeys(k if is_id(k) else L.name_key(k) for k in V.texts(p, "keys", 2 * MAX_MERGE)))
-    came: dict[str, str] = {}  # key -> merged_from: "" for a name the merge added, else the contact it came from
+    came: dict[str, str] = {}  # key -> merged_from: "" for a key the merge added, else the contact it moved from
     for key in keys:
         row = SAP.alias_row(ctx.c, ctx.book.id, key)
         if row is None or str(row[0]) != into or row[1] is None:
             raise invalid(f"{key} was not merged into this vendor")
         came[key] = str(row[1])
-    sources = sorted({src for src in came.values() if src})
+    # the merged-in contacts: a contact's own id is one of its keys, and a key moved from a contact names it
+    merged_in = sorted({k for k in came if is_id(k)} | {v for v in came.values() if is_id(v)})
     mirrored = ctx.book.mode == "mirror"
 
     def apply(aid: str) -> Result:
@@ -200,7 +208,7 @@ def vendor_unmerge(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 restored.append(key)
         unarchived: list[str] = []
         if not mirrored:
-            for contact in sources:
+            for contact in merged_in:
                 row = SAP.get(ctx.c, "fin_contacts", contact)
                 if row is not None and not int(row["active"]):
                     SAP.update(ctx.c, "fin_contacts", contact, {"active": 1, "updated_at": ctx.at})
