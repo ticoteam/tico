@@ -5,8 +5,9 @@ or at any step whose flow sets `late_hours` (backend/step_flow.py), carries `ste
 that status, from its task events. Waiting, or any other held status, is not `doing`, so time spent there is not counted:
 the clock starts again when the ticket comes back to work. The board shows that age on the card.
 
-A working ticket is late at LATE_HOURS at its step (the step's `late_hours`; an engineering type's step without one uses
-LATE_HOURS). `late_items` finds the late ones and sends nothing: the task roundup lists each one on its manager's list as
+A ticket is late by the one Late rule (pipeline_manager.late_tickets): it has spent its step's Warn after
+(task_steps.limit_minutes) in its open stage visit, and a hold pauses it. A step with no Warn after is never late ("Don't
+warn" is authoritative; no default hours apply). `late_items` finds the late working ones and sends nothing: the task roundup lists each one on its manager's list as
 "Late in <step>" (backend/task_roundup.py). The manager is the bot that manages the type, else the owner's manager, and a
 person is never listed. A type whose manager reads a stuck ticket on the exceptions list gets none of these; that list is
 the manager's (backend/pipeline_exceptions.py). A manager who wrote in the ticket's room or changed it in the last
@@ -45,15 +46,6 @@ def _timed_steps(c):
         if "late_hours" in flow or "status_hours" in flow:
             out[s["id"]] = flow
     return out
-
-
-def late_limit(c, row, timed=None):
-    """The hours at its step after which a ticket is late, or None when that check is off there."""
-    flow = (_timed_steps(c) if timed is None else timed).get(row.get("step_id")) or {}
-    engineering = row.get("status") == WORKING and bool(
-        c.execute("SELECT 1 FROM task_types WHERE id=? AND role=?", (row.get("type_id") or "", ENGINEERING)).fetchone()
-    )
-    return flow.get("late_hours", LATE_HOURS if engineering else None)
 
 
 def since_map(c, rows):
@@ -101,13 +93,6 @@ def _seen_by(c, row, who, at):
     )
 
 
-def _hours(at, since):
-    now, then = H.parse_ts(at), H.parse_ts(since)
-    if now is None or then is None:
-        raise ValueError(f"unreadable step time: {at!r}, {since!r}")
-    return (now - then).total_seconds() / 3600
-
-
 def _step(c, row):
     step = c.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id") or "",)).fetchone()
     return step[0] if step else "its step"
@@ -127,23 +112,18 @@ def _manager(c, row):
 
 def late_items(c, at=None):
     """The working tickets late at their step at `at`, oldest first: dicts with row, to (the bot actor whose list gets the
-    line), since (when it entered the step), hours (how long it has been there) and step (its name). A ticket is left out
-    when its manager reads it on the exceptions list, when no bot manages it, or when that manager has just been at it."""
+    line), since (when it entered its stage visit), hours (how long it has been there) and step (its name). Lateness is
+    pipeline_manager.late_tickets, the one Late rule the pipeline rail and overview read. A ticket is left out when its
+    manager reads it on the exceptions list, when no bot manages it, or when that manager has just been at it."""
+    from . import pipeline_manager as PM  # read here: pipeline_manager imports this module
+
     at = at or H.now()
     rows = _working(c)
-    since = since_map(c, rows)
-    timed = _timed_steps(c)
+    late = PM.late_tickets(c, rows, at)
     out = []
     for row in rows:
-        start = since.get(row["id"])
-        if not start:
-            continue
-        try:
-            hours = _hours(at, start)
-        except ValueError:
-            continue  # an unreadable step time: no line for this ticket
-        late_hours = late_limit(c, row, timed)
-        if not late_hours or hours < late_hours:
+        found = late.get(row["id"])
+        if not found:
             continue
         typed = H.type_manager(c, row)
         if typed and reads_list(c, typed):
@@ -151,6 +131,6 @@ def late_items(c, at=None):
         to = _manager(c, row)
         if not to or not H.is_bot(to) or _seen_by(c, row, to, at):
             continue
-        out.append({"row": row, "to": to, "since": start, "hours": hours, "step": _step(c, row)})
+        out.append({"row": row, "to": to, "since": found["since"], "hours": found["hours"], "step": _step(c, row)})
     out.sort(key=lambda item: (item["since"], item["row"]["id"]))
     return out

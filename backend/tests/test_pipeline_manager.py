@@ -11,6 +11,7 @@ from backend import pipeline_manager as PM
 from backend import pipeline_overview as OV
 from backend import task_holds
 from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.test_dev_ticket_rules import dev_type
 
 ANA = "human:ana"
 STAGES = [
@@ -111,6 +112,8 @@ def woken(monkeypatch):
     def fake(conn, task_row, target, body, refs=None, **kwargs):
         if str(kwargs.get("source") or "").startswith("pipeline_manager"):
             sent.append((target, kwargs.get("source"), (refs or {}).get("wake")))
+            return {"id": "msg-fake"}  # delivered; _wake returns None when the target cannot read the ticket
+        return None
 
     monkeypatch.setattr(H, "_wake", fake)
     return sent
@@ -140,7 +143,7 @@ def test_an_ask_is_made_once_per_visit_and_again_after_a_move_back_then_forward(
     PM.tick(store, t0 + timedelta(minutes=10))
     with store.read() as c:
         assert actions(c, "ask") == 1
-    assert [target for target, _, _ in woken] == ["human:ben"]
+    assert [target for target, _, _ in woken] == ["human:ana"]  # no work yet: the assignee owes it, not the reviewer
 
     with store.transaction() as c:
         c.execute(
@@ -271,3 +274,125 @@ def test_only_the_allowed_actions_are_taken(api):
                 text="",
                 at="",
             )
+
+
+def test_the_watchdog_judges_the_missed_passes_before_a_scheduled_round_records_its_own(api, monkeypatch):
+    """D2: the dispatcher runs the watchdog first. Recording the round first hid an outage from the watchdog."""
+    from backend import factory_manager
+
+    store = api.app.state.store
+    t0 = now()
+    with store.transaction() as c:
+        botops_roster(c)
+        pipeline(c)
+    PM.tick(store, t0)
+    monkeypatch.setattr(factory_manager, "tick", lambda s, at: None)
+    monkeypatch.setattr(PM, "_LAST_RUN", PM.WeakKeyDictionary())
+    PM.run_due(store, t0 + timedelta(minutes=40))
+    with store.read() as c:
+        assert botops_tasks(c) == 1
+
+
+def test_the_dispatcher_runs_the_watchdog_then_the_pass_then_the_factory_managers(api, monkeypatch):
+    from backend import factory_manager
+
+    order = []
+    monkeypatch.setattr(PM, "watchdog", lambda s, at: order.append("watchdog"))
+    monkeypatch.setattr(PM, "tick", lambda s, at: order.append("tick"))
+    monkeypatch.setattr(factory_manager, "tick", lambda s, at: order.append("factory"))
+    monkeypatch.setattr(PM, "_LAST_RUN", PM.WeakKeyDictionary())
+    PM.run_due(api.app.state.store, now())
+    assert order == ["watchdog", "tick", "factory"]
+
+
+def test_an_undelivered_ask_is_not_recorded_so_the_next_pass_tries_it_again(api, monkeypatch):
+    """D5: a wake that reaches nobody (the target cannot read the ticket) consumes no once-per-visit key."""
+    store = api.app.state.store
+    tries = []
+
+    def undelivered(conn, task_row, target, body, refs=None, **kwargs):
+        if str(kwargs.get("source") or "").startswith("pipeline_manager"):
+            tries.append(target)
+        return None
+
+    monkeypatch.setattr(H, "_wake", undelivered)
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        requirement(c, type_id, "Building", reviewer="human:ben")
+        task = ticket(c, type_id, created=base - timedelta(hours=2))
+        visit(c, task["id"], type_id, "Building", base - timedelta(hours=2))
+    for minutes in (0, 10, 20):
+        PM.tick(store, base + timedelta(minutes=minutes))
+    with store.read() as c:
+        assert actions(c, "ask") == 0
+    assert len(tries) >= 3
+
+
+def test_a_requirement_that_failed_twice_in_a_visit_wakes_the_manager_for_one_judgment(api):
+    """D6: repeated failed judgments in the open visit are a judgment wake, once per visit and requirement."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        req = requirement(c, type_id, "Building", reviewer="human:ben")
+        task = ticket(c, type_id, created=base - timedelta(hours=2))
+        visit(c, task["id"], type_id, "Building", base - timedelta(hours=2))
+        visit_id = c.execute(
+            "SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (task["id"],)
+        ).fetchone()[0]
+        for n in range(PM.REPEATED_FAILURES):
+            c.execute(
+                "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, stage_visit_id, "
+                "work_version, judge, verdict, created_at) VALUES (?,?,?,?,?,?,'llm','failed',?)",
+                (f"fail-{n}", task["id"], step(c, type_id, "Building"), req, visit_id, 0, stamp(base)),
+            )
+    PM.tick(store, base)
+    PM.tick(store, base + timedelta(minutes=10))
+    with store.read() as c:
+        judged = c.execute("SELECT COUNT(*) FROM events WHERE action=?", (PM.JUDGMENT_EVENT,)).fetchone()[0]
+    assert judged == 1
+
+
+def test_over_limit_costs_the_same_number_of_statements_for_two_tickets_as_for_six(api):
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        pid = type_id
+        for n in range(2):
+            row = H.task_create(c, ANA, f"Ship page {n} early", "", ANA, type=type_id, step="Building", lint=False)
+            visit(c, row["id"], type_id, "Building", base - timedelta(hours=2))
+
+    def count(conn):
+        statements = []
+        conn.set_trace_callback(statements.append)
+        PM.over_limit(conn, pid, base)
+        conn.set_trace_callback(None)
+        return len(statements)
+
+    def add_late(c, n):
+        row = H.task_create(c, ANA, f"Ship page {n}", "", ANA, type=type_id, step="Building", lint=False)
+        visit(c, row["id"], type_id, "Building", base - timedelta(hours=2))
+
+    with store.read() as c:
+        few = count(c)
+    with store.transaction() as c:
+        for n in range(4):
+            add_late(c, n)
+    with store.read() as c:
+        assert count(c) == few
+
+
+def test_a_type_created_after_boot_gets_the_default_warn_after_on_its_working_steps(api):
+    """Track L: a type made after boot is seeded when it is made, not at the next restart."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        typ = dev_type(c)
+        limits = {
+            r[0]: r[1]
+            for r in c.execute("SELECT name, limit_minutes FROM task_steps WHERE type_id=?", (typ["id"],)).fetchall()
+        }
+    assert limits["In Progress"] == 240 and limits["QA Fixes"] == 240
+    assert limits["Done"] is None and limits["In QA"] is None

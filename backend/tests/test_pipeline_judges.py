@@ -2,6 +2,7 @@
 attachment is judged once, the model is called outside any write transaction, and a person is asked when the rule says
 so."""
 
+import json
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -54,7 +55,10 @@ def test_the_bands_decide_met_not_met_or_unsure(tmp_path):
     assert verdict(float("nan")) == "unsure"  # an answer with no probability is unsure, not a pass
 
 
-def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path):
+def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        P, "_installed_store", None
+    )  # no installed app: no production engine, so no engine means unsure
     path = tmp_path / "hub.sqlite"
     boot(path)
     c = hub(path)
@@ -509,3 +513,58 @@ def test_a_page_or_text_file_reaches_the_judge_cut_at_its_cap_and_an_image_has_n
     assert len(page["text"]) == P.TEXT_CHARS and page["truncated"] is True
     shot = by_digest[picture_digest]
     assert shot["text"] is None and shot["truncated"] is False
+
+
+def test_a_bot_only_unsure_answer_goes_to_a_person_and_a_bot_task_owner_is_no_route(tmp_path):
+    """B8: an unsure answer always has a person to go to, the reviewer, the pipeline's owner, or a person ticket owner."""
+    bot_only = {"reviewed_by": "bot", "reviewer_id": None, "pipeline_owner_id": "human:chris", "task_owner_id": "bot:x"}
+    assert P._route_of(bot_only, "unsure") == "human:chris"
+    assert P._route_of({**bot_only, "pipeline_owner_id": None, "task_owner_id": "human:ana"}, "unsure") == "human:ana"
+    assert P._route_of({**bot_only, "pipeline_owner_id": None}, "unsure") is None
+    assert P._route_of(bot_only, "met") is None
+
+
+def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp_path, monkeypatch):
+    """B11: judge_once's default engine is the installed store's live engine, not a permanent unsure."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    asked = []
+
+    def recording_engine(store):
+        def engine(model, state, questions, label):
+            asked.append(model)
+            return {"p": 0.95, "reason": "ok", "provider": "t", "model": model, "cost_usd": 0.0, "latency_ms": 1}
+
+        return engine
+
+    monkeypatch.setattr(P, "_installed_store", object())
+    monkeypatch.setattr(P, "live_engine", recording_engine)
+    P.judge_once(c, REQ, ATTACHMENT, "haiku-5.5", settings=_settings(path))
+    assert asked == ["haiku-5.5"]
+
+
+def test_an_answer_is_refused_once_its_attachment_is_gone(tmp_path):
+    """B7: the answer is checked against the attachment (and the rest of the state it was read in) before it is recorded."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    job = {
+        "id": "no-such-attachment",
+        "stage_requirement_id": "r",
+        "requirement_version": 1,
+        "task_id": "t",
+        "task_work_version": 0,
+        "pipeline_stage_id": "s",
+        "visit_id": "v",
+        "read_at": "2000-01-01T00:00:00.000Z",
+    }
+    assert P._superseded(c, job) == "the attachment was taken away"
+
+
+def test_the_judge_state_carries_the_pipeline_goal(tmp_path):
+    """Track J/D58: the pipeline goal reaches the judge with the requirement."""
+    state = P._state(
+        {"name": "Shows the page live", "rubric": "The link opens", "goal": "Launch the lights"}, ATTACHMENT
+    )
+    assert "Launch the lights" in json.dumps(state)

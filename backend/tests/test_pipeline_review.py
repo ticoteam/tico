@@ -216,6 +216,30 @@ def test_the_queue_lists_late_first_then_oldest_and_narrows_to_a_stage(world):
     assert R.queue_for(w.c, ANA, "other-pipeline") == []
 
 
+def test_late_counts_only_the_time_off_hold_and_a_held_card_is_not_late(world):
+    from backend import task_holds
+
+    w = world
+    w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
+    now = H.now()
+    held = w.ticket("Worked, then held")
+    late = w.ticket("Late")
+    for task in (held, late):
+        w.attach(task, w.mockup, "x")
+    w.visit(held, H.shift(now, minutes=-130))
+    w.visit(late, H.shift(now, minutes=-90))
+    # Ten minutes of work, two hours on hold (not counted), ten minutes of work again: 20 minutes of the 60.
+    task_holds.put(w.c, held, "blocked", H.shift(now, minutes=-120))
+    task_holds.release(w.c, held, "blocked", H.shift(now, minutes=-10))
+    items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
+    assert [i["task_id"] for i in items] == [late, held]
+    assert [i["late"] for i in items] == [True, False]
+    # Still on hold: never late, however long the hold has run.
+    task_holds.put(w.c, late, "blocked", H.shift(now, minutes=-80))
+    items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
+    assert [i["late"] for i in items] == [False, False]
+
+
 def test_a_second_reviewer_cannot_claim_or_approve_while_the_claim_is_held(world, monkeypatch):
     w = world
     w.c.execute("UPDATE stage_requirements SET backup_reviewer_id=? WHERE id=?", (BEN, w.mockup))

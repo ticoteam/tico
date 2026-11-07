@@ -14,7 +14,9 @@ work). Per model the report gives accuracy, false "met" count (a met verdict whe
 
 This makes real model calls, so it is NOT a pytest and never runs in CI. --dry-run sends nothing: it checks the cases and runs
 two fake models through the same scoring (an oracle that must pass, and a sloppy one that must fail the bar).
-Exit 0 after a run, 1 when the cases are unusable, 2 when no requested model has its key (adapter.py says which)."""
+The bar (approval criterion 3): accuracy at least 90%, no false met, an unsure rate at most the labeled unsure share plus 10
+points, p95 under 30 seconds, no failed calls, and a nonempty case set. Exit 0 after a run, 1 when the cases are unusable,
+2 when any requested model has no key: that run is incomplete, so nothing is sent (adapter.py says which)."""
 
 import argparse
 import json
@@ -32,9 +34,13 @@ CASES = HERE / "cases.json"
 DOMAINS = ("dev", "marketing")
 LABELS = ("met", "not_met", "unsure")
 MET_AT, NOT_MET_AT = 0.8, 0.2
+ACCURACY_BAR = 0.9
+UNSURE_SLACK = 0.10
+P95_BAR_MS = 30_000
 NO_ENGINE = (
     "No model has a key. See evals/pipeline_judge/adapter.py. Nothing was sent. Try --dry-run to check the harness."
 )
+INCOMPLETE = "INCOMPLETE RUN: no key for {names}. Nothing was sent. An approval run needs every requested model."
 
 
 def load(path=CASES):
@@ -117,20 +123,38 @@ def score(name, judge, cases):
         for d in DOMAINS
     }
     times = [r["ms"] for r in rows if r["ms"]]
+    labeled_unsure = sum(c["expected"] == "unsure" for c in cases) / max(1, n)
+    unsure_rate = round(sum(r["got"] == "unsure" for r in rows) / max(1, n), 3)
+    accuracy = round(sum(r["got"] == r["expected"] for r in rows) / max(1, n), 3)
+    p95 = percentile(times, 0.95)
+    failed_bar = []
+    if not n:
+        failed_bar.append("no cases")
+    if accuracy < ACCURACY_BAR:
+        failed_bar.append(f"accuracy {accuracy:.0%} is under {ACCURACY_BAR:.0%}")
+    if false_met:
+        failed_bar.append(f"{len(false_met)} false met")
+    if unsure_rate > labeled_unsure + UNSURE_SLACK:
+        failed_bar.append(f"unsure {unsure_rate:.0%} is over the labeled {labeled_unsure:.0%} plus 10 points")
+    if p95 >= P95_BAR_MS:
+        failed_bar.append(f"p95 {p95} ms is 30 s or more")
+    if errors:
+        failed_bar.append(f"{len(errors)} failed calls")
     return {
         "model": name,
         "cases": n,
-        "accuracy": round(sum(r["got"] == r["expected"] for r in rows) / max(1, n), 3),
+        "accuracy": accuracy,
         "accuracy_by_domain": by_domain,
         "false_met": len(false_met),
         "false_met_cases": false_met,
         "missed_met": sum(r["got"] != "met" and r["expected"] == "met" for r in rows),
-        "unsure_rate": round(sum(r["got"] == "unsure" for r in rows) / max(1, n), 3),
+        "unsure_rate": unsure_rate,
         "errors": errors,
         "cost_usd": round(sum(r["cost"] for r in rows), 5),
         "p50_ms": round(statistics.median(times)) if times else 0,
-        "p95_ms": percentile(times, 0.95),
-        "passes_bar": not false_met and not errors,
+        "p95_ms": p95,
+        "bar_failures": failed_bar,
+        "passes_bar": not failed_bar,
         "mistakes": mistakes,
         "rows": rows,
     }
@@ -186,13 +210,16 @@ def main(argv=None, env=None):
     if args.dry_run:
         judges = fake_judges(cases)
     else:
-        judges = {}
+        judges, skipped = {}, []
         for name in [m.strip() for m in args.models.split(",") if m.strip()]:
             engine = adapter.build_engine(name, env)
             if engine is None:
-                print(f"{name}: no key, skipped", file=sys.stderr)
+                skipped.append(name)
                 continue
             judges[name] = lambda case, engine=engine, name=name: adapter.judge_once(engine, case, name)
+        if skipped:
+            print(INCOMPLETE.format(names=", ".join(skipped)), file=sys.stderr)
+            return 2
         if not judges:
             print(NO_ENGINE, file=sys.stderr)
             return 2

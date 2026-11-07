@@ -16,13 +16,14 @@ asked: it reads the work, asks, then writes the decision in its own transaction.
 """
 
 import hashlib
+import io
 import json
 import logging
 import math
 import sqlite3
 import threading
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, TYPE_CHECKING, cast
 
 from clients import judge as clients_judge
 
@@ -67,8 +68,10 @@ JUDGE_SYSTEM = (
     '{"p": a number from 0 to 1, the probability the evidence meets the rubric, "reason": "one short sentence"}.'
 )
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
-# latency_ms}. None asks no one, so every answer is unsure until a caller sets one.
+# latency_ms}. None, with no installed store, asks no one, so every answer is unsure until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
+# The store the server installed (install): judge_once asks the production engine on it when no engine is given.
+_installed_store: Any = None
 
 
 def judge_model_of(conn: sqlite3.Connection, pipeline_id: str | None) -> str:
@@ -125,7 +128,11 @@ def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str,
     image, a video, a PDF or a link); the question set answers that as unreadable."""
     text, cut = excerpt(attachment.get("text"))
     return {
-        "requirement": {"name": requirement.get("name") or "", "rubric": requirement.get("rubric") or ""},
+        "requirement": {
+            "name": requirement.get("name") or "",
+            "rubric": requirement.get("rubric") or "",
+            "goal": requirement.get("goal") or "",  # the pipeline's goal (D58)
+        },
         "work": {"work_version": int(attachment.get("task_work_version") or 0)},
         "attachment": {
             "work_version": int(attachment.get("work_version") or 0),
@@ -142,6 +149,14 @@ def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str,
 def _questions() -> dict[str, Any]:
     """The question set's questions (questions/pipeline-requirement.json)."""
     return J.load_set(QUESTION_SET)["questions"]
+
+
+def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None":
+    """The engine a judge call uses when none is given: ENGINE when a test or harness set it, else the production engine on
+    the installed store, else None (every answer is unsure)."""
+    if ENGINE is not None:
+        return ENGINE
+    return live_engine(_installed_store) if _installed_store is not None else None
 
 
 def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
@@ -197,10 +212,24 @@ def _gateway_haiku(store: "Store", state: dict[str, Any], questions: dict[str, A
             secret, now_base, _ = gateway_connection.target(c, vault, settings)
         return secret if G.chat_base(now_base) == base else ""
 
-    write = J.gateway_writer(key_of, base, gateway_tiers.default_model("low"), timeout=GATEWAY_TIMEOUT)
+    usage: dict[str, Any] = {}
+
+    def opener(request: Any, timeout: float) -> Any:
+        """The Gateway's answer, read here so its usage is kept: the writer returns only the parsed JSON, and a call with no
+        usage is charged at its reservation ceiling (judge.metered). The body is handed back unchanged."""
+        with J.gateway_open(request, timeout) as response:
+            body = response.read()
+        payload: object = json.loads(body or b"{}")
+        data = cast("dict[str, Any]", payload) if isinstance(payload, dict) else {}
+        usage.clear()
+        usage.update(J.clean_usage(data.get("usage")))
+        return io.BytesIO(body)
+
+    write = J.gateway_writer(key_of, base, gateway_tiers.default_model("low"), timeout=GATEWAY_TIMEOUT, opener=opener)
     user = json.dumps(state, sort_keys=True, default=str)
 
     def call() -> dict[str, Any]:
+        usage.clear()
         started = time.monotonic()
         parsed = write(JUDGE_SYSTEM, user)
         return {
@@ -208,6 +237,7 @@ def _gateway_haiku(store: "Store", state: dict[str, Any], questions: dict[str, A
             "answers": [parsed],
             "provider": J.GATEWAY_PROVIDER,
             "ms": round((time.monotonic() - started) * 1000),
+            "usage": dict(usage),
         }
 
     result = judge.metered(store, [write.model], state, questions, label, call)
@@ -266,7 +296,7 @@ def judge_once(
         return unsure("This pipeline's judge model is not available")
     if settings is not None and judge.over_spend_cap(c, settings) is not None:
         return unsure("Decide has reached the team's monthly spend cap")
-    return _ask(base, requirement, attachment, engine)
+    return _ask(base, requirement, attachment, engine or _default_engine())
 
 
 def _ask(
@@ -282,7 +312,7 @@ def _ask(
     def unsure(why: str) -> dict[str, Any]:
         return {**base, "verdict": "unsure", "p": 0.5, "reason": why}
 
-    ask = engine or ENGINE
+    ask = engine
     if ask is None:
         return unsure("No judge is configured on this server")
     try:
@@ -309,8 +339,11 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     person was routed to (route_next_to: a bot does not judge what a person now answers)."""
     rows = c.execute(
         """SELECT a.id AS id, a.task_id, a.stage_requirement_id, a.digest, a.work_version, a.source, a.url, a.file_version,
-                  t.work_revision AS task_work_version, r.name, r.rubric, r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by,
-                  r.reviewer_id, COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest
+                  t.work_revision AS task_work_version, t.owner_id AS task_owner_id, r.name, r.rubric,
+                  r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by, r.reviewer_id,
+                  (SELECT goal FROM task_types WHERE id = r.pipeline_id) AS goal,
+                  (SELECT pipeline_owner_id FROM task_types WHERE id = r.pipeline_id) AS pipeline_owner_id,
+                  COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest
            FROM requirement_attachments a
            JOIN stage_requirements r ON r.id = a.stage_requirement_id AND r.retired_at IS NULL
            JOIN tasks t ON t.id = a.task_id
@@ -348,9 +381,79 @@ def _text_of(c: sqlite3.Connection, job: dict[str, Any]) -> tuple[str | None, bo
     return files.extract(mime, data, full=True), len(data) > files.READ_MAX
 
 
+def _open_visit(c: sqlite3.Connection, task_id: str) -> str | None:
+    """The id of the ticket's open stage visit, or None."""
+    found = c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (task_id,)).fetchone()
+    return str(found[0]) if found else None
+
+
+def _superseded(c: sqlite3.Connection, job: dict[str, Any]) -> str | None:
+    """Why the answer for a waiting attachment no longer applies, or None when it still does. Checked in the write
+    transaction that records the answer, against the state the job was read in (`read_at`, `visit_id`): the evidence, the
+    requirement's version, the stage, the work version, and any ruling by a person since. A superseded answer is kept
+    as an audit event only."""
+    if (
+        c.execute("SELECT 1 FROM requirement_attachments WHERE id=? AND removed_at IS NULL", (job["id"],)).fetchone()
+        is None
+    ):
+        return "the attachment was taken away"
+    req = c.execute(
+        "SELECT version, retired_at FROM stage_requirements WHERE id=?", (job["stage_requirement_id"],)
+    ).fetchone()
+    if req is None or req[1] is not None or int(req[0] or 0) != int(job["requirement_version"] or 0):
+        return "the requirement changed"
+    task = c.execute("SELECT step_id, work_revision, status FROM tasks WHERE id=?", (job["task_id"],)).fetchone()
+    if task is None or task[0] != job["pipeline_stage_id"] or task[2] not in H.ACTIVE_STATUSES:
+        return "the ticket left the stage"
+    if int(task[1] or 0) != int(job["task_work_version"] or 0):
+        return "the work changed"
+    if _open_visit(c, job["task_id"]) != job.get("visit_id"):
+        return "the ticket moved on"
+    ruled = c.execute(
+        "SELECT 1 FROM stage_decisions WHERE task_id=? AND stage_requirement_id=? AND COALESCE(judge,'')<>'llm' "
+        "AND created_at>? LIMIT 1",
+        (job["task_id"], job["stage_requirement_id"], job.get("read_at") or ""),
+    ).fetchone()
+    if ruled is not None:
+        return "a person ruled on it since"
+    return None
+
+
+def _route_of(job: dict[str, Any], verdict: str) -> str | None:
+    """Who the next look goes to when the judge does not pass the requirement (route_next_to). Every unsure answer goes to a
+    person: the requirement's reviewer, else the pipeline's owner, else the ticket's owner when that is a person. A
+    bot_then_person requirement's not-met answer goes to its reviewer. A met answer and a bot-only not-met route nowhere."""
+    if verdict == "met":
+        return None
+    reviewer = job.get("reviewer_id") or None
+    if verdict == "unsure":
+        owner = job.get("pipeline_owner_id") or None
+        task_owner = job.get("task_owner_id") or ""
+        return reviewer or owner or (task_owner if H.is_human(task_owner) else None)
+    return reviewer if job.get("reviewed_by") == "bot_then_person" else None
+
+
+def _audit_superseded(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any], why: str) -> None:
+    """Keep a superseded answer as an audit event: no decision row, so nothing counts as a verdict."""
+    H.event(
+        c,
+        H.KEEPER,
+        "requirement.judge_superseded",
+        job["task_id"],
+        {
+            "requirement": job["stage_requirement_id"],
+            "attachment": job["id"],
+            "verdict": result["verdict"],
+            "p": result["p"],
+            "model": result.get("model") or "",
+            "why": why,
+        },
+    )
+
+
 def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) -> str:
     """Write the decision row and the audit event it points at. Returns the decision id."""
-    state = _state({"name": job["name"], "rubric": job["rubric"]}, job)
+    state = _state({"name": job["name"], "rubric": job["rubric"], "goal": job.get("goal")}, job)
     inputs = hashlib.sha256(json.dumps(state, sort_keys=True, default=str).encode()).hexdigest()
     visit = c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (job["task_id"],)).fetchone()
     cost = float(result.get("cost_usd") or 0.0)
@@ -372,8 +475,7 @@ def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) 
         },
     )
     decision_id = H.new_id()
-    # bot_then_person sends anything that is not met on to the requirement's person; a bot-only requirement routes nowhere.
-    route = job.get("reviewer_id") if decision != "met" and job["reviewed_by"] == "bot_then_person" else None
+    route = _route_of(job, result["verdict"])
     c.execute(
         "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_visit_id, stage_requirement_id, "
         "requirement_version, requirement_attachment_id, attachment_digest, work_version, judge, judge_actor, verdict, "
@@ -406,7 +508,8 @@ def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) 
 def tick(store: "Store", at: Any = None) -> int:
     """One judge pass: up to TICK_LIMIT waiting attachments, each asked and recorded. Returns how many were judged. Most
     installs have no bot-reviewed requirement, so the first query finds none and the pass ends there. A read gathers each
-    job's inputs and is left before the model is asked; the decision is written in its own transaction."""
+    job's inputs and is left before the model is asked; the answer is written in its own transaction, and only if it still
+    applies to the work as it is then (_superseded)."""
     db: Any = store
     with db.read() as c:
         if (
@@ -417,11 +520,13 @@ def tick(store: "Store", at: Any = None) -> int:
         ):
             return 0
         jobs = _waiting(c, TICK_LIMIT)
+        read_at = H.now()  # the state these answers are asked about; _superseded compares later work with it
         asks: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         for job in jobs:
             requirement = {
                 "name": job["name"],
                 "rubric": job["rubric"],
+                "goal": job.get("goal"),
                 "pipeline_id": job["pipeline_id"],
                 "stage_requirement_id": job["stage_requirement_id"],
             }
@@ -429,7 +534,13 @@ def tick(store: "Store", at: Any = None) -> int:
             capped = judge.over_spend_cap(c, db.settings) is not None
             chosen = judge_model_of(c, job["pipeline_id"])
             text, cut = _text_of(c, job)
-            job = {**job, "text": text, "truncated": cut}
+            job = {
+                **job,
+                "text": text,
+                "truncated": cut,
+                "visit_id": _open_visit(c, job["task_id"]),
+                "read_at": read_at,
+            }
             asks.append((job, requirement, _base(requirement, job, chosen) | {"capped": capped}))
     if not asks:
         return 0
@@ -449,8 +560,13 @@ def tick(store: "Store", at: Any = None) -> int:
         else:
             result = _ask(base, requirement, job, engine)
         with db.transaction() as c:
-            _record(c, job, result)
-        judged += 1
+            why = _superseded(c, job)
+            if why is None:
+                _record(c, job, result)
+            else:
+                _audit_superseded(c, job, result, why)
+        if why is None:
+            judged += 1
     return judged
 
 
@@ -483,5 +599,8 @@ def dispatch(store: "Store", at: Any, failures: list[dict[str, str]]) -> threadi
 
 
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:
-    """Judges have no routes: a decision is read through the requirement and ticket routes."""
+    """Judges have no routes: a decision is read through the requirement and ticket routes. The installed store is what
+    judge_once asks the production engine on when no engine is given."""
+    global _installed_store
+    _installed_store = store
     return None

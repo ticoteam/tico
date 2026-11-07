@@ -460,6 +460,13 @@ class _Queue:
                 [requirement["pipeline_id"] for requirement in requirements],
             )
         }
+        from . import (
+            pipeline_manager,
+        )  # the one Late rule; read here, as the manager imports the engine, not this module
+
+        self.late_since: dict[str, str] = {
+            ticket: info["since"] for ticket, info in pipeline_manager.late_tickets(c, tasks, now).items()
+        }
         self.stepped: dict[str, Any] = {
             row["subject_id"]: row["at"]
             for row in _read(
@@ -471,16 +478,20 @@ class _Queue:
         }
 
     def since(self, task: Row) -> str:
-        """When the ticket entered its stage: the open visit's entry, else its last step, else when it was created."""
+        """When the ticket's clock started: for a late ticket, the start the Late rule counts from (holds pause it, so it
+        is the latest release); otherwise when it entered its stage: the open visit's entry, else its last step, else when
+        it was created."""
+        if task["id"] in self.late_since:
+            return str(self.late_since[task["id"]])
         visit = self.facts.visits.get(task["id"])
         if visit:
             return str(visit["entered_at"])
         return str(self.stepped.get(task["id"]) or task.get("created_at") or _now())
 
     def late(self, task: Row, since: str) -> bool:
-        """Whether the ticket has been at its stage longer than the stage's Warn after."""
-        minutes = (self.stages.get(task.get("step_id") or "") or {}).get("limit_minutes")
-        return bool(minutes) and since < _shift(self.now, minutes=-float(minutes))
+        """Whether the ticket is late by the one Late rule (pipeline_manager.late_tickets): past its Warn after in its open
+        visit, with time on hold not counted (D40)."""
+        return task["id"] in self.late_since
 
     def item(self, actor: str, task: Row, requirement: Row, why: str) -> Row:
         key = (task["id"], requirement["id"])
