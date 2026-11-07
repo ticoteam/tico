@@ -86,13 +86,15 @@ def _over_pace(row: Row) -> bool:
     return st["pace_end"] is not None and int(st["pace_end"]) > int(st["amount"] or 0)
 
 
-def _budget_lines(c: sqlite3.Connection, reader: str) -> list[str]:
-    """The reader's own budgets, then their team's, then over-pace teammates (a manager sees them), then the ad total."""
+def _budget_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
+    """The reader's own budgets, then their team's, then over-pace teammates (a manager sees them), then the ad total. A
+    budget with no amount and no spend (a placeholder nobody set) says nothing."""
     try:
-        rows = cast(list[Row], R.budgets(c, reader, limit=500)["budgets"])
+        rows = cast(list[Row], R.budgets(c, reader, limit=500, at=at)["budgets"])
     except FinanceError:
         return []
     # Theirs: a budget on their own name, or a company budget with no team or teammate (what the owner reads as theirs).
+    rows = [r for r in rows if int(r["state"]["amount"] or 0) or int(r["state"]["actual"] or 0)]
     own = [r for r in rows if r["teammate"] == reader or (not r["teammate"] and not r["team"])]
     team = [r for r in rows if r["team"] and not r["teammate"]]
     others = [r for r in rows if r["teammate"] and r["teammate"] != reader and _over_pace(r)]
@@ -184,7 +186,7 @@ def compute(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
     view = ctx.view(reader)
     if not view.sees_anything():
         return []
-    lines = _budget_lines(c, reader)
+    lines = _budget_lines(c, reader, at)
     lines += _loose_lines(c, ctx, view, SA.private_lines(c), at)
     lines += _company_lines(c, reader, at)
     lines += _later_lines(c, reader, at)
