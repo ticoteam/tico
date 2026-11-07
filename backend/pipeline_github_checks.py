@@ -92,7 +92,8 @@ def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
     how many checks were recorded."""
     from . import pipeline_review  # the requirement's standing is the review module's reading of the same facts
 
-    task = H.task(conn, task_id) or {}
+    found = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    task: dict[str, Any] = dict(found) if found else {}
     if not task.get("step_id"):
         return 0
     heads = sorted(
@@ -107,7 +108,7 @@ def publish_task(conn: "sqlite3.Connection", task_id: str) -> int:
     )
     if not heads:
         return 0
-    requirements = [
+    requirements: list[dict[str, Any]] = [
         dict(r)
         for r in conn.execute(
             "SELECT * FROM stage_requirements WHERE pipeline_stage_id=? AND retired_at IS NULL ORDER BY id",
