@@ -3,6 +3,8 @@
 // is the account's owner. A change posts campaign_owner_set and the card reads its campaigns again. Phone width: the
 // table scrolls in its container.
 
+'use strict';
+
 interface FcCampaign {
   id: string;
   name: string;
