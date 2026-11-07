@@ -454,14 +454,21 @@ def test_the_full_loop_validates_and_is_done_when_both_subtasks_ship(co, monkeyp
     assert owner_and_session(co, card) == at_review
 
 
-def test_leaving_review_twice_in_one_visit_files_one_subtask(co):
-    """The handoff key is the stage visit: a second leave inside the visit that filed the first ticket files nothing."""
+def test_leaving_review_twice_files_one_subtask_until_the_handoff_is_returned(co):
+    """The handoff key is the card and the link: while its handoff is live a second leave files nothing. An undone
+    (returned) handoff allows a new spawn."""
     card = review_card(co)
     approve_spec(co, card)
     link = pipeline_links.link_for_stage(co.c, co.stage("Product", "Review"))
-    visit_start = co.c.execute("SELECT MIN(entered_at) FROM stage_visits WHERE task_id = ?", (card,)).fetchone()[0]
-    assert pipeline_links.spawn(co.c, link, card, visit_start) is None
+    assert pipeline_links.spawn(co.c, link, card) is None
     assert len(subtasks(co, card)) == 1
+    (d41,) = subtasks(co, card)
+    co.close(d41)  # an open ticket with the same title is a duplicate the rules refuse; a closed one is not
+    co.c.execute("UPDATE pipeline_handoffs SET returned_at = ? WHERE source_task_id = ?", (stamp(), card))
+    co.c.commit()
+    assert pipeline_links.spawn(co.c, link, card) is not None
+    assert len(subtasks(co, card)) == 2
+    assert pipeline_links.spawn(co.c, link, card) is None  # the new handoff is live again
 
 
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):

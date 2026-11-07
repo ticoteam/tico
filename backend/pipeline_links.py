@@ -164,21 +164,25 @@ def _carry_attachments(conn: sqlite3.Connection, filer: str, source_id: str, chi
         conn.execute("RELEASE pipeline_spawn_link")
 
 
-def spawn(conn: sqlite3.Connection, link: Row, source_id: str, since: str) -> str | None:
+def spawn(conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False) -> str | None:
     """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the
     target pipeline's first stage, titled as the source, with a line pointing back at it and the source's links carried
-    over. It is filed as the source's owner (so the owner is the requester). Once per (link, source ticket, stage visit):
-    `since` is when the visit began, so a card that leaves twice in one visit files one ticket. A refusal by the rules is
-    logged on the source, and the source moves on alone. Returns the new ticket's id, or None when nothing was filed."""
+    over. It is filed as the source's owner (so the owner is the requester). Once per (link, source ticket): while a
+    handoff for that pair is live (not returned), nothing is filed again. A returned (undone) handoff allows a new one.
+    `again=True` is a deliberate second spawn (Validate's "Not validated"), which skips that check and is recorded as its
+    own handoff. A refusal by the rules is logged on the source, and the source moves on alone. Returns the new ticket's
+    id, or None when nothing was filed."""
     if link["mode"] != "spawn":
         return None
-    filed = _rows(
-        conn,
-        "SELECT id FROM pipeline_handoffs WHERE pipeline_link_id = ? AND source_task_id = ? AND created_at >= ? LIMIT 1",
-        (link["id"], source_id, since),
-    )
-    if filed:
-        return None
+    if not again:
+        filed = _rows(
+            conn,
+            "SELECT id FROM pipeline_handoffs WHERE pipeline_link_id = ? AND source_task_id = ? "
+            "AND returned_at IS NULL LIMIT 1",
+            (link["id"], source_id),
+        )
+        if filed:
+            return None
     target = str(link["to_pipeline_id"])
     first = pipeline_engine.first_stage(conn, target)
     source = H.task(conn, source_id)

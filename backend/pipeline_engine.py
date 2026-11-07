@@ -554,7 +554,7 @@ def on_step_change(
     old_type: str | None = row.get("type_id")
     old_step: str | None = row.get("step_id")
     current = open_visit(conn, task_id)
-    _leave_spawn_stage(conn, row, type_id, step_id, current, ts)
+    _leave_spawn_stage(conn, row, type_id, step_id)
     _settle_parent(conn, task_id)
     if current is None and not (has_requirements(conn, old_type) or has_requirements(conn, type_id)):
         return
@@ -584,11 +584,10 @@ def on_step_change(
         H._task_event(conn, task_id, actor, "stage_move_back", old_step, step_id, "")  # pyright: ignore[reportPrivateUsage]
 
 
-def _leave_spawn_stage(
-    conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None, current: Row | None, ts: str
-) -> None:
+def _leave_spawn_stage(conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None) -> None:
     """A card that moves forward out of a stage with a spawn link files its spawned ticket (pipeline_links.spawn), once
-    per stage visit. A move back, a move into a closing stage or a move to another pipeline files nothing."""
+    per card while that handoff is live. A move back, a move into a closing stage or a move to another pipeline files
+    nothing."""
     old_step = row.get("step_id")
     if not old_step or not step_id or not type_id or step_id == old_step:
         return
@@ -602,8 +601,7 @@ def _leave_spawn_stage(
         return
     if after["position"] <= before["position"] or after["status"] in CLOSED:
         return
-    since = str(current["entered_at"]) if current is not None else ts
-    pipeline_links.spawn(conn, link, str(row.get("id")), since)
+    pipeline_links.spawn(conn, link, str(row.get("id")))
 
 
 def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
