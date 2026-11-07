@@ -1354,17 +1354,18 @@ class Files:
     def write(self, request, who, body, work):
         # File mutations use their own wrapper, so repeat the current fence under Store's lock too.
         if request is None:
-            # A server-side publish (backend/review_pages.py) has no request: its operation is this path and its retry
-            # key is the body's hash, so the same publish again replays its receipt.
-            source, path = who, "/server/files"
-            key = hashlib.sha256(encode(body).encode()).hexdigest()
-        else:
-            source, path = getattr(request.state, "privacy_source", who), request.url.path
-            key = request.headers.get("idempotency-key")
+            # A server-side publish (backend/review_pages.py) has no request, so no retry key and no credential to check.
+            # The server writes for the bot that owns the file; the write fence runs in the same transaction.
+            def fenced(c):
+                privacy.guard_write(c, who, "/server/files", self.auth)
+                return work(c)
+
+            return self.store.write(who, fenced, validate=False)
+        source, path = getattr(request.state, "privacy_source", who), request.url.path
         result = self.store.mutate(
             who,
             path,
-            key,
+            request.headers.get("idempotency-key"),
             body,
             work,
             check=lambda c: privacy.guard_write(c, source, path, self.auth),
