@@ -2,10 +2,13 @@
 what changed and what left, never naming a task the reader could not have seen; a stale cursor
 resets; an unchanged full read is a 304."""
 
+import uuid
+
 from backend import events as E
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
+from backend.tests.test_pipeline_members_only import make_pipeline, ticket
 
 ACTIVE = "status=open,doing,waiting,review,ready,declined"
 
@@ -299,3 +302,20 @@ def test_a_deleted_untyped_ticket_with_no_trash_row_is_reported_gone_to_its_read
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
     assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
+
+
+def test_a_ticket_moved_out_of_a_members_only_pipeline_is_not_gone_to_a_non_member(api):
+    # Legal is members-only and the ticket is company-readable there, so a non-member cannot read it. It then moves to a
+    # public pipeline and goes private. Its earlier snapshot was on Legal, so the change feed must not report it gone to
+    # that non-member, though the current pipeline and privacy would let her read it.
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Legal" + tag, private=True)
+    public, _ = make_pipeline(api, "Sales" + tag)
+    moved = ticket(api, legal, "Move " + tag, owner="human:ben", requester="human:ana")
+    assert moved not in str(get(api, "tasks?limit=50", "cara-test"))
+    cursor = get(api, "tasks?limit=5", "cara-test")["cursor"]
+    version = get(api, "tasks/" + moved, "ana-test")["task"]["version"]
+    post(api, "tasks/" + moved, {"version": version, "type": public, "private": True})
+    feed = get(api, f"tasks?changed_after={cursor}", "cara-test")
+    assert not feed.get("reset")
+    assert moved not in feed["gone"] and moved not in str(feed)

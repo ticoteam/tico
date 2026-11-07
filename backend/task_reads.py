@@ -109,15 +109,15 @@ def changed(c, after, visible_sql):
     if seq > newest or seq < floor:
         return None
     was = {}
-    for subject, ref, kind in c.execute(
-        "SELECT subject_id, ref, kind FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
+    for subject, ref, kind, at in c.execute(
+        "SELECT subject_id, ref, kind, created_at FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
     ):
         if kind == "bulk":  # one change to many tasks (events.FAN_CAP): read in full
             return None
         if subject:
             was.setdefault(subject, [])
             if ref:
-                was[subject].append(ref)
+                was[subject].append((ref, at))  # the snapshot and when it was replaced: its pipeline is then
     if len(was) > CAP:
         return None
     return was, f"{newest}.{tag}"
@@ -154,7 +154,7 @@ def gone(c, visible_sql, was, matched):
         )
     }
     for tid in missing:
-        if tid in readable or any(_could_read(c, visible_sql, tid, ref) for ref in was[tid]):
+        if tid in readable or any(_could_read(c, visible_sql, tid, ref, at) for ref, at in was[tid]):
             out.append(tid)
     return out
 
@@ -180,7 +180,34 @@ def _pipeline_of(c, tid):
     return private is None, None
 
 
-def _could_read(c, visible_sql, tid, ref):
+def _type_at(c, tid, at):
+    """(known, type_id): the pipeline a ticket was on just before `at`, from its type history (the type events name each
+    change of pipeline, and creation's old is None). Without that history the pipeline is unknown, so the caller fails
+    closed once a members-only pipeline exists."""
+    # The change log stamps milliseconds, truncated, and the history event that made this change lands within a
+    # millisecond or two of that stamp: a type event that near is the change's own, so the pipeline before it is
+    # the one this snapshot names.
+    before = c.execute(
+        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='type' "
+        "AND julianday(created_at)<julianday(?)-0.002/86400.0 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (tid, at),
+    ).fetchone()
+    if before is not None:
+        return True, before[0]
+    first = c.execute(
+        "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='type' "
+        "ORDER BY created_at, rowid LIMIT 1",
+        (tid,),
+    ).fetchone()
+    if first is not None and first[0] is not None:
+        return True, first[0]
+    private = c.execute("SELECT 1 FROM task_types WHERE pipeline_visibility='members' LIMIT 1").fetchone()
+    return private is None, None
+
+
+def _could_read(c, visible_sql, tid, ref, at=None):
+    """Whether the snapshot `ref` (owner, requester, privacy, readers) let its reader open the ticket. `at` is when that
+    snapshot was replaced: the pipeline then is the one the ticket was on, not the one it is on now."""
     try:
         # (owner, requester, private, readers): an older change has three parts, or a one-person `guest` fourth.
         owner, requester, private, readers = (json.loads(ref) + [None])[:4]
@@ -192,7 +219,7 @@ def _could_read(c, visible_sql, tid, ref):
         readers = json.dumps([readers])
     elif not isinstance(readers, str):
         readers = None
-    known, type_id = _pipeline_of(c, tid)
+    known, type_id = _type_at(c, tid, at) if at is not None else _pipeline_of(c, tid)
     if not known:  # the pipeline rule (pipeline_rights.list_sql) cannot be applied: the ticket is not read
         return False
     return (
