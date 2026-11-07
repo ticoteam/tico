@@ -6,7 +6,8 @@ name: Python test map
 # Each default-suite test file runs alone under coverage (scripts/py_test_map.py), on RunsOn like the queue's Python jobs.
 #
 # The push trigger is temporary: it measures the branch that adds this workflow, before the workflow is on main, where a
-# dispatch can find it. It runs only when this file changes. Remove it in the change that merges.
+# dispatch can find it. It runs only when this file changes (each such push measures the branch again). Remove it in
+# the change that merges.
 
 on:
   schedule:

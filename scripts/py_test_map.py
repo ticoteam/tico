@@ -364,13 +364,21 @@ def measure(shard, of, out, data):
         tests[test] = {"exit": code, "partial": partial, "seconds": seconds}
         if partial:
             tests[test]["tail"] = log.read_text(encoding="utf-8", errors="replace")[-1500:]
-        for rel, executed in found.items():
-            text = (ROOT / rel).read_text(encoding="utf-8")
-            if rel not in hashes:
-                hashes[rel] = function_hashes(text)
-            own = owners(text)
-            for qual in owner_names(own, executed):
-                files[rel][qual].add(test)
+        try:
+            for rel, executed in found.items():
+                if not (ROOT / rel).is_file():
+                    continue  # a file the test made and removed, or one the tree does not keep: nothing to map
+                text = (ROOT / rel).read_text(encoding="utf-8")
+                if rel not in hashes:
+                    hashes[rel] = function_hashes(text)
+                own = owners(text)
+                for qual in owner_names(own, executed):
+                    files[rel][qual].add(test)
+        except (MapError, OSError, SyntaxError, ValueError) as error:
+            # Coverage that cannot be attributed makes this test partial, not the whole shard: the selector treats a
+            # partial test as unmeasured.
+            tests[test]["partial"] = True
+            tests[test]["tail"] = (tests[test].get("tail", "") + f"\ncoverage not attributed: {error}")[-1500:]
         shutil.rmtree(run_dir)
     payload = {
         "version": VERSION,
