@@ -75,7 +75,7 @@ function reposDrawList() {
     + (more > 0 ? `<li class="empty">${more} more · search to narrow</li>` : '')
     : `<li class="empty">${q ? 'No match.' : 'None.'}</li>`;
 }
-async function renderSettingsRepos(fresh) {
+async function renderSettingsRepos(fresh?: boolean) {
   const host = $('#set-repos');
   if (!host) return;
   try { REPOS = fresh || await get('/v2/repositories'); }
