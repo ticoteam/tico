@@ -134,19 +134,23 @@ def test_a_note_only_update_leaves_the_reason_matching_the_state(api):
 
 
 def test_the_one_time_repair_changes_only_stale_reasons(api):
-    """Migration 20261107140000 over three waiting tasks: a stale hold gets the reason its holds give (none); a live hold
-    keeps its reason; a hold the keeper chose by hand keeps its reason and cause. Nothing else is written."""
+    """Migration 20261107140000 over four waiting tasks: a stale dependency hold gets the reason its holds give (none); a
+    live hold keeps its reason; a hold a keeper set by hand that names a person gets the reason its holds give (none) and
+    stays held, with its cause, clock and owner; a hand-set hold over a step keeps its reason. Nothing else is written."""
     migration = importlib.import_module("backend.migrations.20261107140000_blocked_reason_recompute")
     stale, attempt = _work(api, title="Stale wait")
     _stale(api, stale["id"])
     live = _task(api, "Live wait")
     _wait(api, live["id"], attempt["token"], on="ana", note="Which venue?")
     kept = _task(api, "Keeper kept it")
+    stepped = _task(api, "Step hold")
     with api.app.state.store.transaction() as c:
         H._set_status(c, H.KEEPER, H.task(c, kept["id"]), "waiting", note="Keep it held.")
         task_holds.change(c, kept["id"], "blocked", cause="manual", reason="Waiting on Chris Hawkins: keep it held?")
+        H._set_status(c, H.KEEPER, H.task(c, stepped["id"]), "waiting", note="Parked.")
+        task_holds.change(c, stepped["id"], "blocked", cause="manual", reason="In Review 1")
 
-    ids = (stale["id"], live["id"], kept["id"])
+    ids = (stale["id"], live["id"], kept["id"], stepped["id"])
 
     def snapshot():
         with api.app.state.store.read() as c:
@@ -161,6 +165,12 @@ def test_the_one_time_repair_changes_only_stale_reasons(api):
                     row.get("holds_cleared_at"),
                     row["version"],
                     row["updated_at"],
+                    [
+                        (h["kind"], h["cause"])
+                        for h in c.execute(
+                            "SELECT kind, cause FROM task_holds WHERE task_id=? AND released_at IS NULL", (tid,)
+                        ).fetchall()
+                    ],
                 )
             counts = (
                 c.execute("SELECT count(*) FROM messages").fetchone()[0],
@@ -173,8 +183,13 @@ def test_the_one_time_repair_changes_only_stale_reasons(api):
         migration.up(c)
     after, counts_after = snapshot()
 
+    keep = (0, 2, 3, 4, 5, 6, 7)
     assert after[stale["id"]][1] == task_holds.NOTHING
-    assert [after[stale["id"]][i] for i in (0, 2, 3, 4, 5, 6)] == [before[stale["id"]][i] for i in (0, 2, 3, 4, 5, 6)]
+    assert [after[stale["id"]][i] for i in keep] == [before[stale["id"]][i] for i in keep]
     assert after[live["id"]] == before[live["id"]]
-    assert after[kept["id"]] == before[kept["id"]]
+    # The keeper's hold stays held with its owner, status, clock and cause; only its reason is corrected.
+    assert after[kept["id"]][1] == task_holds.NOTHING
+    assert [after[kept["id"]][i] for i in keep] == [before[kept["id"]][i] for i in keep]
+    assert after[kept["id"]][0] == "waiting"
+    assert after[stepped["id"]] == before[stepped["id"]]
     assert counts_after == counts_before

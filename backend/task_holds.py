@@ -224,10 +224,11 @@ def refresh_many(conn, task_ids, cleared=None):
 
 
 def recompute_reasons(conn):
-    """The one-time repair (migration 20261107140000): each waiting task's open dependency hold gets the reason its holds
-    give now (`words`, or NOTHING when none is left). Only the reason text changes: the hold, its cause, its clock, its
-    resume step and the task's status stay as they are, so nothing clears, wakes, is messaged or touches an approval,
-    and a hold the keeper chose to keep stays with the keeper. Returns how many reasons changed."""
+    """The one-time repair (migration 20261107140000): each waiting task's open hold that names a person gets the reason
+    its holds give now (`words`, or NOTHING when none is left). That is a dependency hold, and a hold a keeper or person
+    set by hand whose reason names someone ("Waiting on ..."); a hold set by hand over a step ("In Review") keeps its
+    reason. Only the reason text changes: the hold, its cause, its clock, its resume step and the task's status stay as
+    they are, so nothing clears, wakes, is messaged or touches an approval. Returns how many reasons changed."""
     from . import hubdb as H
 
     changed = 0
@@ -235,11 +236,12 @@ def recompute_reasons(conn):
         r[0]
         for r in conn.execute(
             "SELECT t.id FROM tasks t JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
-            "WHERE t.status='waiting' AND h.cause='dependency' ORDER BY t.created_at,t.id"
+            "WHERE t.status='waiting' AND (h.cause='dependency' OR (h.cause='manual' AND h.reason LIKE 'Waiting on %')) "
+            "ORDER BY t.created_at,t.id"
         ).fetchall()
     ]:
         row = H.task(conn, task_id)
-        if row is None or not _applies(conn, row):
+        if not _repairable(conn, row):
             continue
         found = holds(conn, row)
         text = (words(conn, found) if found else NOTHING)[:1000]
@@ -247,6 +249,18 @@ def recompute_reasons(conn):
             change(conn, task_id, "blocked", reason=text)
             changed += 1
     return changed
+
+
+def _repairable(conn, row):
+    """A waiting task whose hold the repair may re-word: the same as _applies, but a hold set by hand (blocked_kind
+    manual) is in scope, since the repair only rewords it and never clears it."""
+    from . import hubdb as H
+
+    if not row or row.get("status") != "waiting" or not row.get("blocked_since"):
+        return False
+    if row.get("blocked_kind") in OWN_RECONCILE:
+        return False
+    return (H.type_get(conn, row.get("type_id")) or {}).get("role") != "product-roadmap"
 
 
 def title(conn, row):
