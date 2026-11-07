@@ -190,7 +190,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await step.waitFor();
     assert.match(await step.innerText(), /Copy review/);
     assert.match(await peek.locator('[data-prop="type"]').innerText(), /Marketing/);
-    assert.equal(await peek.locator('.pill').first().textContent(), 'Copy review');
+    assert.equal(await peek.locator('[data-prop-row="step"] .prop-txt').innerText(), 'Copy review');
+    assert.equal(await peek.locator('.tmodal-head .pill').count(), 0, 'the header carries no state pill');
     assert.equal(await peek.locator('[data-tag-key]').innerText(), 'release · Oct 2');
     assert.equal(await peek.locator('[data-prop="tags"]').count(), 1);
     await peek.locator('[data-prop="status"]').click();
