@@ -58,6 +58,7 @@ class FakeGitHub:
         self.latest_ = "v0.5.200"  # GitHub's latest release before this run
         self.on_dispatch = None
         self.numbers = iter(range(100, 100000))
+        self.failed = {}  # per run id: the tests its failed jobs name (None: a failure nobody can name)
 
     def _sha(self, ref):
         return self.tags_.get(ref) or (self.head_ if ref == "main" else ref)
@@ -81,6 +82,9 @@ class FakeGitHub:
 
     def validation_runs(self):
         return list(self.runs)
+
+    def failed_tokens(self, run_id):
+        return self.failed.get(run_id)
 
     def recent_runs(self, workflow):
         return (list(self.runs) if workflow == "ci.yml" else []) + self.others[workflow]
@@ -625,6 +629,112 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
     assert plan(FakeGitHub(), finished=stale)["red"] is None
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="cancelled"))["red"]["conclusion"] == "cancelled"
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="success"))["red"] is None
+
+
+class FakeCheckout:
+    """The checkout's answers: the tokens a range selects (None when its diff cannot be read) and the plan it makes."""
+
+    def __init__(self, since=None, plan=None):
+        self.since_, self.plan_text = since, plan
+        self.calls = []
+
+    def tokens_since(self, base, head):
+        self.calls.append(("tokens_since", base, head))
+        return self.since_
+
+    def plan(self, base, head, carried):
+        self.calls.append(("plan", base, head, set(carried)))
+        return self.plan_text
+
+
+PLAN_TEXT = '{"jobs":[{"name":"python-1","part":"python","files":["backend/tests/test_b.py"]}]}'
+
+
+def red_then_anchor(anchor_at=OPENED - timedelta(hours=1), red_at=NOW - timedelta(hours=1)):
+    """main is A <- B <- C <- D and D is the head. B was green before the window opened (the anchor); C went red after
+    it. Newest first, as GitHub lists them."""
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=red_at), run(B, id=2, at=anchor_at)], head=D)
+    gh.order = [A, B, C, D]
+    return gh
+
+
+def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert picked["increment"] == PLAN_TEXT
+    assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % B[:12] in picked["why"]
+    assert ("tokens_since", C, D) in checkout.calls and ("plan", B, D, {"backend/tests/test_b.py"}) in checkout.calls
+
+
+def test_a_red_validation_waits_and_says_so_while_no_commit_selects_what_failed():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"ui/tests/threads.cjs"}, plan=PLAN_TEXT))
+    assert picked["action"] == "wait" and "the window waits" in picked["why"]
+    assert "backend/tests/test_b.py" in picked["why"] and gh.dispatched == []
+
+
+def test_a_red_naming_no_failure_runs_the_full_validation():
+    gh = red_then_anchor()  # its log names nothing a commit could fix
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "named no failure a commit could fix" in picked["why"]
+
+
+def test_a_stale_anchor_runs_the_full_validation_once_a_day():
+    gh = red_then_anchor(anchor_at=NOW - timedelta(hours=25))
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "no green full validation" in picked["why"]
+
+
+def test_an_incremental_plan_too_big_to_dispatch_runs_the_full_validation():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"backend/tests/test_b.py"}, plan=None))
+    assert (picked["action"], picked["mode"]) == ("dispatch", "full")
+    assert "too big" in picked["why"]
+
+
+def test_without_a_checkout_every_validation_is_full():
+    gh = red_then_anchor()
+    gh.failed = {3: {"backend/tests/test_b.py"}}
+    assert rt.plan_step(gh, NOW)["mode"] == "full"
+
+
+def test_an_incremental_validation_names_its_anchor_and_plan_and_a_full_one_names_neither():
+    gh = FakeGitHub()
+    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0)
+    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0, anchor=B, increment=PLAN_TEXT)
+    assert gh.dispatched[0][2] == {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"}
+    assert gh.dispatched[1][2] == {
+        "candidate_sha": C,
+        "previous_release": "v0.5.200",
+        "version": "v0.5.201",
+        "anchor": B,
+        "plan": PLAN_TEXT,
+    }
+    assert any("(incremental on %s)" % B in line for line in rt.LOG)
+
+
+def test_an_incremental_title_keeps_the_prefix_release_yml_finds_and_names_its_anchor():
+    text = rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+    assert text == "Validate %s as v0.5.201 from v0.5.200 (incremental on %s)" % (C, B)
+    assert text.startswith("Validate %s as v0.5.201 from " % C)
+    assert rt.parse_title(text) == (C, "v0.5.201", "v0.5.200")
+    assert rt.parse_anchor(text) == B
+    assert rt.parse_anchor(rt.title(C, "v0.5.201", "v0.5.200")) is None
+
+
+def test_validation_records_say_which_runs_are_incremental_and_only_full_green_ones_anchor():
+    full = rt.validation_record(run(B, id=2))
+    incremental = rt.validation_record(dict(run(C, id=3), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)))
+    assert (full["incremental"], full["sha"], full["id"]) == (False, B, 2)
+    assert (incremental["incremental"], incremental["sha"], incremental["id"]) == (True, C, 3)
 
 
 # ---- the guard ----

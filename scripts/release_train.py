@@ -84,7 +84,7 @@ CRONS = [
 # does, never opens one, and promotes an approved canary release. Minutes 5, 25 and 45: never a window's minute (00 or 30).
 BACKSTOP_CRON = "5-59/20 * * * *"
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-TITLE = re.compile(r"^Validate ([0-9a-f]{40}) as (v\S+) from (v\S+)$")
+TITLE = re.compile(r"^Validate ([0-9a-f]{40}) as (v\S+) from (v\S+)(?: \(incremental on ([0-9a-f]{40})\))?$")
 UNFINISHED = {"queued", "pending", "waiting", "requested", "in_progress"}
 # A candidate that did not pass: refused, or cancelled. Main's head is not validated again until the next push (or a
 # manual run), and the run is reported once.
@@ -130,8 +130,12 @@ def _load(name, path):
     return module
 
 
+INCREMENT_PATH = ROOT / "scripts/release_increment.py"
+RED_JOB = re.compile(r"(python|browser)-\d+")  # the jobs whose logs name the tests that failed (release_increment)
+
 rollout = _load("tico_rollout", ROLLOUT_PATH)
 release_notes = _load("tico_release_notes", NOTES_PATH)
+increment = _load("tico_release_increment", INCREMENT_PATH)
 
 
 def sleep(seconds):
@@ -162,14 +166,22 @@ def next_patch(tag):
     return "v%d.%d.%d" % (major, minor, patch + 1)
 
 
-def title(sha, version, previous):
-    """Release validation's run-name; release.yml finds a run by it."""
+def title(sha, version, previous, anchor=None):
+    """Release validation's run-name; release.yml finds a run by its prefix. An incremental validation names its anchor."""
+    if anchor:
+        return "Validate %s as %s from %s (incremental on %s)" % (sha, version, previous, anchor)
     return "Validate %s as %s from %s" % (sha, version, previous)
 
 
 def parse_title(text):
     match = TITLE.match(str(text or ""))
-    return match.groups() if match else None
+    return match.group(1, 2, 3) if match else None
+
+
+def parse_anchor(text):
+    """The anchor commit an incremental validation builds on, or None for a full one (or a title that is not one)."""
+    match = TITLE.match(str(text or ""))
+    return match.group(4) if match else None
 
 
 def as_tag(release):
@@ -253,6 +265,21 @@ def reason_ok(reason):
 
 
 # ---- GitHub ----
+
+
+def validation_record(run):
+    """A Release validation run as the incremental decisions read it (release_increment.anchor_of and red_since)."""
+    parsed = parse_title(run.get("display_title"))
+    run_id = run.get("id") if run.get("id") is not None else run.get("html_url")
+    return {
+        "id": run_id,
+        "sha": parsed[0] if parsed else "",
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "finished": parse_time(run.get("updated_at")),
+        "url": run.get("html_url") or "",
+        "incremental": parse_anchor(run.get("display_title")) is not None,
+    }
 
 
 class GitHub:
@@ -350,6 +377,29 @@ class GitHub:
         code, data, _ = self.call("POST", "actions/workflows/%s/dispatches" % workflow, {"ref": ref, "inputs": inputs})
         if code not in (200, 204):
             raise Fail("dispatching %s on %s: %s %s" % (workflow, ref, code, data.get("message", "")))
+
+    def job_log(self, job_id):
+        """A job's log text, its last 2 MB (gh follows GitHub's redirect to the log file); "" when it cannot be read."""
+        result = subprocess.run(
+            ["gh", "api", "repos/%s/actions/jobs/%d/logs" % (self.repo, job_id)],
+            capture_output=True,
+            check=False,
+            text=True,
+            env={**os.environ, "GH_TOKEN": self.token or ""},
+            timeout=180,
+        )
+        return result.stdout[-2 * 1024**2 :] if result.returncode == 0 else ""
+
+    def failed_tokens(self, run_id):
+        """The tests a red validation's failed jobs name (release_increment.failed_tokens); None when a failure cannot be
+        named, so any later commit could be the fix."""
+        jobs = self.pages("actions/runs/%d/jobs?per_page=100" % run_id, key="jobs")
+        pairs = []
+        for entry in jobs:
+            name = entry.get("name") or ""
+            if entry.get("conclusion") in FAILED and name not in increment.IGNORED_JOBS:
+                pairs.append((name, self.job_log(entry["id"]) if RED_JOB.fullmatch(name) else ""))
+        return increment.failed_tokens(pairs)
 
     def tag_commit(self, name):
         """The commit refs/tags/<name> points at (through an annotated tag), or None when there is no such tag."""
@@ -684,10 +734,12 @@ def unpublished(gh, now, tag, plan):
     return plan
 
 
-def plan_step(gh, now, finished=None, manual=False):
-    """What the open window does next, worked out from GitHub alone. Returns {"action": "none" | "wait" | "ship" |
-    "dispatch", "why", ...}: "red" is a candidate of this window that did not pass, and "stuck" a tag whose release did
-    not publish, both to report. A manual run validates main's head again even after a red or cancelled run."""
+def plan_step(gh, now, finished=None, manual=False, checkout=None):
+    """What the open window does next, worked out from GitHub alone (and, for an incremental validation, the checkout's
+    diff). Returns {"action": "none" | "wait" | "ship" | "dispatch", "why", ...}: "red" is a candidate of this window that
+    did not pass, and "stuck" a tag whose release did not publish, both to report. A manual run validates main's head
+    again even after a red or cancelled run. A dispatch is a full validation (mode "full") or an incremental one on the
+    anchor (mode "incremental", with its plan): docs/releasing.md#incremental-validation."""
     tags = gh.tags()
     newest = newest_stable(tags)
     if not newest:
@@ -721,9 +773,13 @@ def plan_step(gh, now, finished=None, manual=False):
         plan["why"] = "window open since %s; main is at %s, nothing new" % (hhmm(start), newest)
         return plan
     head_failed = None
+    records = []  # this release's validations, newest first: the anchor and the red validation are read from them
     for run in gh.validation_runs():
         parsed = parse_title(run.get("display_title"))
-        if not parsed or parsed[1:] != (version, newest) or run.get("status") != "completed":
+        if not parsed or parsed[1:] != (version, newest):
+            continue
+        records.append(validation_record(run))
+        if run.get("status") != "completed":
             continue
         sha = parsed[0]
         if run.get("conclusion") == "success":
@@ -749,15 +805,66 @@ def plan_step(gh, now, finished=None, manual=False):
     if busy:
         plan.update(action="wait", why="window open since %s; waiting for %s" % (hhmm(start), busy.get("html_url")))
         return plan
-    if head_failed and not manual:
+    anchor = increment.anchor_of(records, now, lambda sha: gh.contains("main", sha))
+    red = increment.red_since(records, anchor)
+    if red is not None:
+        red = {**red, "failed": gh.failed_tokens(red["id"])}
+    if red is not None and not manual:
+        # A red validation runs again only once a commit since it selects one of its failures (or names none: any commit).
+        since = checkout.tokens_since(red["sha"], head) if checkout is not None and red["sha"] != head else None
+        go, why = increment.red_rule(red, head, since)
+        if not go:
+            plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
+            return plan
+    if anchor is None:
+        reason = "no green full validation of %s in the last 24 hours" % newest
+    elif checkout is None:
+        reason = "no checkout to select the changes from"
+    elif red is not None and not red["failed"]:
+        reason = "%s named no failure a commit could fix" % red["url"]
+    else:
+        reason = ""
+    if reason:
         plan.update(
-            action="wait",
-            why="window open since %s; main's head %s ended %s (%s): the next push to main, or "
-            "a manual run, validates it again"
-            % (hhmm(start), head[:12], head_failed.get("conclusion"), head_failed.get("html_url")),
+            action="dispatch",
+            mode="full",
+            anchor=None,
+            increment=None,
+            why="validate %s as %s from %s: a full validation (%s)" % (head[:12], version, newest, reason),
         )
         return plan
-    plan.update(action="dispatch", why="validate %s as %s from %s" % (head[:12], version, newest))
+    carried = set(red["failed"]) if red is not None else set()
+    try:
+        text = checkout.plan(anchor["sha"], head, carried)
+    except Exception as exc:  # noqa: BLE001 - an incremental plan that cannot be made runs the full validation
+        text = None
+        note("Incremental plan failed, validating in full: %s: %s" % (type(exc).__name__, exc))
+    if text is None:
+        plan.update(
+            action="dispatch",
+            mode="full",
+            anchor=None,
+            increment=None,
+            why="validate %s as %s from %s: a full validation (the incremental plan is too big or could not be made)"
+            % (head[:12], version, newest),
+        )
+        return plan
+    jobs = len(json.loads(text)["jobs"])
+    plan.update(
+        action="dispatch",
+        mode="incremental",
+        anchor=anchor["sha"],
+        increment=text,
+        why="validate %s as %s from %s incrementally on %s: %d VMs%s"
+        % (
+            head[:12],
+            version,
+            newest,
+            anchor["sha"][:12],
+            jobs,
+            "; carries %s" % increment.names(carried) if carried else "",
+        ),
+    )
     return plan
 
 
@@ -856,11 +963,18 @@ def wait_release(gh, version, since, timeout=RELEASE_WAIT):
         sleep(POLL)
 
 
-def dispatch_candidate(gh, sha, version, previous, timeout=DISPATCH_WAIT):
+def dispatch_candidate(gh, sha, version, previous, timeout=DISPATCH_WAIT, anchor=None, increment=None):
     """Dispatch Release validation and wait until GitHub lists the run, so the next release job (which runs after
-    this one, in the same concurrency group) sees it running and does not dispatch it again."""
-    want, since = title(sha, version, previous), datetime.now(timezone.utc) - SKEW
-    gh.dispatch("ci.yml", "main", {"candidate_sha": sha, "previous_release": previous, "version": version})
+    this one, in the same concurrency group) sees it running and does not dispatch it again. An incremental one
+    (`increment`, its plan's JSON) names the anchor it builds on; a full one carries no extra inputs."""
+    inputs = {"candidate_sha": sha, "previous_release": previous, "version": version}
+    if increment is not None:
+        inputs.update(anchor=anchor, plan=increment)
+    want, since = (
+        title(sha, version, previous, anchor if increment is not None else None),
+        datetime.now(timezone.utc) - SKEW,
+    )
+    gh.dispatch("ci.yml", "main", inputs)
     note("Dispatched Release validation: " + want)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1201,7 +1315,10 @@ def cmd_window(gh, env, opening, now=None):
         promoted = True
     plan = {}
     manual = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    step("plan", lambda: plan.update(plan_step(gh, now, event_run(env), manual=manual)))
+    step(
+        "plan",
+        lambda: plan.update(plan_step(gh, now, event_run(env), manual=manual, checkout=increment.Checkout(ROOT))),
+    )
     if plan:
         note("Window: " + plan["why"])
         for line in problems(plan):
@@ -1244,7 +1361,17 @@ def cmd_window(gh, env, opening, now=None):
 
             step("ship", ship)
         elif plan["action"] == "dispatch":
-            step("validate", lambda: dispatch_candidate(gh, plan["sha"], plan["version"], plan["newest"]))
+            step(
+                "validate",
+                lambda: dispatch_candidate(
+                    gh,
+                    plan["sha"],
+                    plan["version"],
+                    plan["newest"],
+                    anchor=plan.get("anchor"),
+                    increment=plan.get("increment"),
+                ),
+            )
     if failures:
         report(gh, False, list(LOG), key=failures)
     elif shipment:

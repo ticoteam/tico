@@ -301,9 +301,35 @@ def test_validation_is_dispatch_only_and_keeps_the_title_release_yml_finds():
     assert (
         ci["run-name"]
         == "Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}"
+        "${{ inputs.plan != '' && format(' (incremental on {0})', inputs.anchor) || '' }}"
     )
     assert release_train.title("s", "v", "p") == "Validate s as v from p"
     assert ci["concurrency"] == {"group": "manual-release-validation", "cancel-in-progress": False}
+
+
+def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only_what_it_lists():
+    ci, on = _workflow("ci.yml")
+    inputs = on["workflow_dispatch"]["inputs"]
+    # Both inputs are optional: an empty plan is the full validation, unchanged.
+    assert inputs["anchor"]["default"] == "" and inputs["anchor"].get("required") is not True
+    assert inputs["plan"]["default"] == "" and inputs["plan"].get("required") is not True
+    jobs = ci["jobs"]
+    assert "matrix" in jobs["candidate"]["outputs"]
+    # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
+    assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
+    assert jobs["gate"]["strategy"]["fail-fast"] is False
+    # The full default factory sim and the measured timings run only in a full validation.
+    assert jobs["factory-sim"]["if"] == "inputs.plan == '' || fromJSON(inputs.plan).factory"
+    assert jobs["test-timings"]["if"] == "inputs.plan == ''"
+    steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
+    assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
+
+
+def test_the_window_checks_out_the_whole_tree_it_diffs_and_never_keeps_its_token():
+    train, _ = _workflow("train.yml")
+    checkout = next(step for step in train["jobs"]["window"]["steps"] if step.get("id") == "checkout")
+    assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}
+    assert "sparse-checkout" not in checkout["with"]
 
 
 def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane():

@@ -1395,9 +1395,12 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
-def run(plan_path, suite):
+def run(plan_path, suite, root=ROOT):
+    """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones."""
     plan = json.loads(Path(plan_path).read_text())
-    job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
+    # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
+    entries = plan["matrix"]["include"] if "matrix" in plan else plan["jobs"]
+    job = next(j for j in entries if j.get("suite", j.get("name")) == suite)
     files = job["files"]
     if suite == "selection":
         if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
@@ -1409,9 +1412,9 @@ def run(plan_path, suite):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
-        env = {**os.environ, "TICO_UI_TIMINGS": str(ROOT / "ci-results" / f"{suite}.json")}
+        env = {**os.environ, "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json")}
     else:
-        if not files or any(not (ROOT / f).is_file() for f in files):
+        if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
         command = [
             sys.executable,
@@ -1428,11 +1431,11 @@ def run(plan_path, suite):
         if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
         command += files
-    (ROOT / "ci-results").mkdir(exist_ok=True)
+    (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
-    result = subprocess.run(command, cwd=ROOT, env=env)
+    result = subprocess.run(command, cwd=root, env=env)
     if result.returncode == 0 and not suite.startswith("browser-"):
-        cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
+        cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
     return result.returncode or rust
@@ -1536,6 +1539,7 @@ def main():
     execute = sub.add_parser("run")
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
+    execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -1554,7 +1558,7 @@ def main():
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
-        return run(args.plan, args.suite)
+        return run(args.plan, args.suite, Path(args.root))
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:

@@ -104,6 +104,25 @@ and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repositor
 (`on` to go live) and `RELEASE_HOLD`. The window tags with the Actions token, which starts no
 workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
 
+### Incremental validation
+
+A window validates a head in one of two ways. A **full** validation is the whole gate (`ci.yml`, as before). An
+**incremental** one runs the same gate on less, and says so in its run title (`... from vX.Y.Z (incremental on <anchor>)`).
+
+- **Anchor.** A full validation runs when no green full validation of the same release (same version and previous
+  release) finished in the last 24 hours. That green run is the anchor. A release's first candidate is always full.
+- **Incremental candidate.** Later heads of that release run only: what `scripts/pr_checks.py` selection picks for
+  anchor..head (the merge queue's rules, never the full suite), the browser smoke set, the product and factory parts
+  when their inputs changed, and the tests that failed in the newest red run since the anchor. A failed file that marks
+  slow tests also runs in the contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
+- **Red runs.** After a red run, the window runs a later head only when a commit since that run selects one of its
+  failed tests. Otherwise it waits, and the window's log says `the window waits` and why. A red run that names no
+  failure, or whose diff cannot be read, is run again on the next commit.
+- **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
+  contracts lane, and `alone` tests never do. Images and native builds still run for every candidate.
+- **Not changed.** Hotfixes, approval, promotion, the `release-train` issue, the concurrency group and the schedule.
+  `release.yml` accepts an incremental run's title for the tag, because the title starts the same way.
+
 ### Approval
 
 Stable (TIDY) takes a canary release only once someone approves it. Approval is a judgment about what the release
@@ -414,6 +433,8 @@ has landed (see Hotfixes above). The queue itself is a repository ruleset (`merg
 check), set by a maintainer.
 
 ## Hosted release validation
+
+A validation run is full or [incremental](#incremental-validation); its jobs and their checks are the same gate either way.
 
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
 interactive work. Its gate jobs run in parallel on ephemeral RunsOn Linux VMs in Tico's own AWS account (4-vCPU for every
