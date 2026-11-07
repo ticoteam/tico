@@ -295,8 +295,9 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Documents | A document or a link that Counsel reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
 
-Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn, and Slack cannot be set
-to Hold. Only the decision model's score can hold an item: the pattern check only warns. Every door defaults to Warn, which only observes:
+Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. Slack's row in Settings
+offers all three, but Tico does not save a Slack mode yet: Slack stays at Warn, and a change to it is refused. Only the
+decision model's score can hold an item: the pattern check only warns. Every door defaults to Warn, which only observes:
 nothing is held until you set a door to Hold. The six defaults are one constant,
 `DEFAULTS` in `backend/screening.py`; Hold becomes the default for webhooks, ideas and watchers once the live eval
 (`python -m evals.screening.run --live`) and a week of `screening.warned` rows show the hold line is safe.
@@ -317,7 +318,7 @@ The check has four layers. Two of them can be switched off in the same card:
   door set to Hold, becomes a task for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the
   task to the bot to release it; close it if it is an attack. With no person to hold it, it goes to its bot with the
   warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for Counsel,
-  labelled held, with its text left out. Slack cannot be set to Hold, so no Slack message is held; at Warn it gets no
+  labelled held, with its text left out. Slack stays at Warn for now, so no Slack message is held; at Warn it gets no
   line. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a prompt injection and is
   data. That covers mail, Documents, webhooks, watchers, ideas and automation turns, not Slack. Mail is never held: its
   read carries the verdict in a `screening` field as well. A held automation turn is recorded as step `held`.
@@ -332,7 +333,7 @@ The check has four layers. Two of them can be switched off in the same card:
   to a person.
 - **Audit.** Each model call is one `judge.call` row labelled `injection-screen@1`, and each hold or warning one
   `screening.held` or `screening.warned` event, with the score and kind, never the text. Settings lists the newest.
-  Slack writes no `screening` event, since a Slack message is never held and at Warn it gets no line.
+  Slack writes no `screening` event: while it stays at Warn, a Slack message is never held and gets no line.
 - **Test** runs eight built-in samples, four attacks and four lookalikes (code, a security article, an ordinary
   request), through the model and shows which it got right. Each sample counts against the person's decision budget.
 
