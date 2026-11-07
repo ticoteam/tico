@@ -88,8 +88,7 @@ suggestion of the same kind on the same goal, for the same KPI or measure, at on
 KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no second yes. Your message
 is kept as the reason, unless it is only a no. Another measure's card on the same goal stays waiting. If two waiting
 cards of the same kind are about the same measure on the same goal, nothing is turned down, and Tico asks which one you
-mean. A yes that opens with "no", such as "No problem", is not a no: it turns nothing down, and a read-back saves only
-on a plain yes, so "No problem, save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's
+mean. A yes that opens with "no", such as "No problem", is not a no: it turns nothing down, and a read-back saves only on a yes it can read, such as a plain yes or "yes to 1 and 3", so "No problem, save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's
 Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
