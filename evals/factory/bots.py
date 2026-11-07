@@ -812,7 +812,11 @@ class Lead(Bot):
     def act(self, task, message):
         refs = message.get("refs") or {}
         if refs.get("wake") == "nudge" and refs.get("task"):
-            return self.reassign_once(refs["task"])
+            # The lead settles its own ticket about the stop, as it closes its sweep ticket: done, with what it did.
+            told = self.reassign_once(refs["task"])
+            if task["status"] not in FINISHED:
+                self.world.update(task["id"], token=self.token, status="done", note=told)
+            return told
         if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
             self.world.post(
                 f"tasks/{task['id']}/comments",
