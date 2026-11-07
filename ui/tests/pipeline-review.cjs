@@ -33,7 +33,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
         const {context, page, state, errors} = await openReview(browser, {...size, theme});
         const count = () => page.locator('.pipe-review-count').first().innerText();
         assert.equal((await count()).trim(), 'For you · 1 of 2');
-        assert.equal(await page.locator('.pipe-review-tab').count(), 3, 'every attachment is a tab');
+        assert.equal(await page.locator('.pipe-review-tab').count(), 1, 'every attachment is a tab');
         assert.equal(await page.locator('.pipe-review-approve kbd, .pipe-review-kbd').count() > 0, true);
 
         // Layout: no sideways scroll; on a phone the decision sits under the attachment, not beside it.
@@ -57,7 +57,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
         await page.locator('.pipe-review textarea[name=note]').fill('Shot 2 still shows the old card');
         await page.locator('[data-review-send="assignee"]').click();
         await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent.includes('For you · 1 of 1'), null, {timeout: t(5000)});
-        assert.deepEqual(state.posts.map(p => p.path), ['review/D52/r-shots/send-back'], 'send-back posts to the item');
+        assert.deepEqual(state.posts.map(p => p.path), ['tasks/D52/requirements/r-shots/send-back'], 'send-back posts to the item');
         assert.equal(state.posts[0].body.note, 'Shot 2 still shows the old card');
 
         // Approve the last item with ⌘⏎ from the note, then Undo within the toast.
@@ -66,7 +66,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
         await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
         await page.waitForSelector('.pipe-review-toast', {timeout: t(5000)});
         assert.match(await page.locator('.pipe-review-toast').innerText(), /Approved\s*·\s*Undo/);
-        assert.equal(state.posts.at(-1).path, 'review/D61/r-spec61/approve', 'approval posts to the item');
+        assert.equal(state.posts.at(-1).path, 'tasks/D61/requirements/r-spec61/approve', 'approval posts to the item');
         await page.locator('[data-review-undo]').click();
         await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent.includes('For you · 1 of 1'), null, {timeout: t(5000)});
         assert.equal(state.posts.at(-1).path, 'decisions/dec-1/undo', 'undo posts the decision');

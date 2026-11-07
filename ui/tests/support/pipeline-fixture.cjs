@@ -37,17 +37,15 @@ function tasks() {
   ];
 }
 
-// The review queue for the pipeline: two items for Ana (D52 screenshots, D61 spec), the first with three attachments.
+// The review queue for the pipeline, as the server sends it (GET /v2/pipelines/{id}/review/queue): two items for Ana.
 function queue() {
+  const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => ({task_id, title, pipeline_id: 'dev-tickets',
+    pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: 'attachment',
+    work_version: 3, attachment, attachment_digest: attachment ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false});
   return {items: [
-    {task_id: 'D52', requirement_id: 'r-shots', task_title: 'Assistant can approve a spec', stage_name: 'Build', pipeline_id: 'dev-tickets',
-      assignee: {id: 'bot:b2', name: 'Builder 2'}, why: 'The bot is unsure about shot 2', bot_note: '2 of 3 match the spec',
-      attachments: [{id: 'a1', label: 'Screenshots · 3', kind: 'image', url: 'https://example.test/shot.png'},
-        {id: 'a2', label: 'Spec v1.3', kind: 'page', detail: 'Spec page'}, {id: 'a3', label: 'Test run', kind: 'link', detail: 'CI run 8812'}],
-      claim: null, moves_to: 'Review 1'},
-    {task_id: 'D61', requirement_id: 'r-spec61', task_title: 'Pipeline stages + manager', stage_name: 'Spec', pipeline_id: 'dev-tickets',
-      assignee: {id: 'bot:b3', name: 'Builder 3'}, why: 'Spec needs your sign-off', bot_note: '', attachments: [{id: 'b1', label: 'Spec v2', kind: 'page', detail: 'Spec page'}],
-      claim: null, moves_to: null},
+    row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
+      {id: 'a1', source: 'link', url: 'https://example.test/shot.png'}),
+    row('D61', 'Pipeline stages + manager', 'Spec', 'r-spec61', 'Spec page', 'Spec needs your sign-off', {id: 'b1', source: 'file', url: null, file_id: 'f1'}),
   ]};
 }
 
@@ -73,7 +71,7 @@ async function install(page, {refuseApprove = false} = {}) {
       const found = tasks().find(t => t.id === one[1]);
       return json({task: found, children: [], parent: null, comments: [], events: [], messages: [], mover: true});
     }
-    const pipe = p.match(/^\/api\/v2\/pipelines\/([^/]+)\/review-queue$/);
+    const pipe = p.match(/^\/api\/v2\/pipelines\/([^/]+)\/review\/queue$/);
     if (pipe) { state.queueReads++; return json(queue()); }
     const action = p.match(/^\/api\/v2\/pipelines\/(.+)$/);
     if (action && req.method() === 'POST') {
@@ -81,9 +79,9 @@ async function install(page, {refuseApprove = false} = {}) {
       state.posts.push({path, body});
       if (path.endsWith('/approve')) {
         if (state.refuseApprove) { state.refuseApprove = false; return json({error: {code: 'stale', detail: 'changed'}}, 409); }
-        return json({decision_id: 'dec-1', moved_to: null});
+        return json({decision_id: 'dec-1', advanced: false});
       }
-      if (path.startsWith('decisions/') || path.endsWith('/undo')) return json({ok: true});
+      if (path.startsWith('decisions/') || path.endsWith('/undo')) return json({undone: true});
       if (path.endsWith('/send-back') || path.endsWith('/message-manager')) return json({ok: true, decision_id: 'dec-2'});
       if (path.endsWith('/mark-met')) return json({decision_id: 'dec-3'});
     }
