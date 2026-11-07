@@ -158,6 +158,10 @@ class Company:
         pipeline_engine.work_changed(self.c, task_id)
         self.c.commit()
 
+    def revision(self, task_id):
+        """The work version (tasks.work_revision): it goes up on every change of the work."""
+        return self.c.execute("SELECT work_revision FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+
     def attach(self, task_id, req_id, by=BUILDER, digest="sha-1", url="https://example.test/shot.png"):
         self.insert(
             "requirement_attachments",
@@ -759,7 +763,10 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
     G.pull_request(co.c, {"action": "dequeued", "reason": "checks failed", "pull_request": pr})
     co.c.commit()
     assert co.where(task) == ("Engineering", "In review")  # the webhook sends nothing for a removal that is not a merge
-    assert H.task_links(co.c, task)[0]["detail"] and "verify" in json.loads(H.task_links(co.c, task)[0]["detail"])["merge_queue"]
+    assert (
+        H.task_links(co.c, task)[0]["detail"]
+        and "verify" in json.loads(H.task_links(co.c, task)[0]["detail"])["merge_queue"]
+    )
 
     reads = []
 
@@ -776,7 +783,9 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
 
         def _call(self, method, path, headers=None, **kw):
             reads.append((method, path))
-            return SimpleNamespace(status_code=200, json=lambda: {"state": "open", "merged": False, "head": {"sha": "abc123"}})
+            return SimpleNamespace(
+                status_code=200, json=lambda: {"state": "open", "merged": False, "head": {"sha": "abc123"}}
+            )
 
     G.refresh_queue_removals(GitHub())
     assert reads == [("GET", "/repos/acme/app/pulls/7")]
@@ -791,6 +800,49 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
     assert notes == ["checks failed"]
     G.refresh_queue_removals(GitHub())
     assert len(reads) == 1  # the removal was settled: nothing is read again
+
+
+def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_refuses_the_move(co):
+    """The real path: a linked pull request's head moves by webhook (synchronize). The new head is new work (the work
+    version goes up once, a redelivery of the same head does nothing), the met evidence goes out of date, and the card
+    will not move on until the requirement is checked again."""
+    from backend import github as G
+
+    task = co.ticket("Engineering", "Doing", "Push me")
+    url = "https://github.com/acme/app/pull/8"
+    co.insert(
+        "task_links",
+        id="lnk-pr-8",
+        task_id=task,
+        kind="pr",
+        url=url,
+        repo="acme/app",
+        number=8,
+        state="open",
+        added_by=BUILDER,
+        created_at=stamp(),
+        detail=json.dumps({"head_sha": "abc123"}),
+    )
+    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
+    co.attach(task, shots)
+    co.decide(task, shots, judge="llm", actor=PM)
+    assert co.dots(task)["Screenshots"]["state"] == "met"
+    before = co.revision(task)
+
+    moved = {"html_url": url, "number": 8, "state": "open", "merged": False, "head": {"sha": "def456"}}
+    G.pull_request(co.c, {"action": "synchronize", "pull_request": moved, "sender": {"login": "builder-bot"}})
+    co.c.commit()
+    after = co.revision(task)
+    assert after == before + 1
+    assert json.loads(H.task_links(co.c, task)[0]["detail"])["head_sha"] == "def456"
+    assert co.dots(task)["Screenshots"]["state"] == "out_of_date"
+    assert co.refused(task, "In review")
+
+    G.pull_request(
+        co.c, {"action": "synchronize", "pull_request": moved, "sender": {"login": "builder-bot"}}
+    )  # redelivery
+    co.c.commit()
+    assert co.revision(task) == after
 
 
 # ----------------------------------------------------------------------------- Mark met
@@ -819,6 +871,9 @@ def test_a_private_legal_pipeline_is_hidden_from_a_non_member(co):
     for hidden_from in (CAL, BEN):
         seen = pipeline_overview.read(co.c, hidden_from, "7d")
         assert co.type["Legal"] not in [p["id"] for p in seen["pipelines"]]
+        assert all(co.type["Legal"] not in (e["from"], e["to"]) for e in seen["edges"]), (
+            "the flow map draws no hidden stage"
+        )
         assert legal not in [i.get("requirement_id") for i in pipeline_review.queue_for(co.c, hidden_from)]
     mine = pipeline_overview.read(co.c, ANA, "7d")
     assert co.type["Legal"] in [p["id"] for p in mine["pipelines"]]
