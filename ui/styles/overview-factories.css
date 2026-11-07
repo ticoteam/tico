@@ -11,8 +11,13 @@
 .of-in-l{font-size:var(--t-sm);color:var(--muted)}
 .of-stage{position:relative}
 .of-lines{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
-.of-edge{fill:none;stroke:var(--g5);stroke-linecap:round;stroke-dasharray:6 6}
+.of-edge{fill:none;stroke:var(--g5);stroke-linecap:round}
+/* A move is a solid line; a spawn makes new cards, so its line is dashed. Outside work (inputs) is dashed too. */
+.of-edge-spawn,.of-edge-in{stroke-dasharray:6 6}
 .of-edge-in{stroke:var(--g4)}
+.of-new{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:0 0 12px}
+.of-new label{display:flex;flex-direction:column;gap:4px;font-size:12px}
+.of-new-acts{display:flex;gap:8px}
 .of-edge-l{fill:var(--muted);font-size:11px;stroke:var(--surface);stroke-width:3px;paint-order:stroke}
 @media (prefers-reduced-motion:no-preference){
   .of-edge{animation:of-flow 1.6s linear infinite}

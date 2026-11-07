@@ -9,9 +9,11 @@
 
 interface OfPipeline { id: string; name: string; goal: string | null; manager_id: string | null; factory_id: string | null; cards: number; overdue: number; for_you: number; live: number; }
 interface OfFactory { id: string; name: string; goal: string | null; manager_id: string | null; done: number; overdue: number; live: number; }
-interface OfEdge { from: string; to: string; count: number; median_age_minutes: number | null; }
+interface OfEdge { from: string; to: string; mode: string; count: number; median_age_minutes: number | null; }
+/** A cycle of pipelines: laps completed round it, and the median lap in minutes (null under three laps). */
+interface OfLoop { pipelines: string[]; laps: number; median_lap_minutes: number | null; }
 interface OfInput { label: string; count: number; to: string; }
-interface OfMap { factories: OfFactory[]; pipelines: OfPipeline[]; edges: OfEdge[]; inputs: OfInput[]; }
+interface OfMap { factories: OfFactory[]; pipelines: OfPipeline[]; edges: OfEdge[]; inputs: OfInput[]; loops?: OfLoop[]; }
 /** One box the map draws: a factory with its pipelines, or the pipelines in no factory (id ''). */
 interface OfGroup { id: string; name: string; manager: string | null; sub: string; pipelines: OfPipeline[]; }
 /** A factory or pipeline with a manager: a chip in the rail and a chat icon on the map. The key is f:<id> or p:<id>. */
@@ -34,7 +36,7 @@ function ofPeriodKeep(period: string): void {
   try { localStorage.setItem(OF_PERIOD_KEY, period); } catch { /* storage blocked: not kept */ }
 }
 
-const ofPipelineHref = (id: string): string => `${TASKS}?type=${encodeURIComponent(id)}&view=list`;
+const ofPipelineHref = (id: string): string => `${TASKS}?type=${encodeURIComponent(id)}&view=board`;
 const ofAge = (minutes: number): string => minutes >= 1440 ? `${Math.round(minutes / 1440)}d` : minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`;
 const OF_CHAT_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>';
 // The chat icon for a factory or pipeline: nothing when it has no manager (no dead button).
@@ -117,9 +119,19 @@ function ofLines(map: OfMap): void {
     const x1 = (back ? a.left + a.width / 2 : a.right) - origin.left, y1 = (back ? a.bottom : a.top + a.height / 2) - origin.top;
     const x2 = (back ? b.left + b.width / 2 : b.left) - origin.left, y2 = (back ? b.bottom : b.top + b.height / 2) - origin.top;
     const d = back ? `M${x1},${y1} C${x1},${y1 + 48} ${x2},${y2 + 48} ${x2},${y2}` : `M${x1},${y1} C${x1 + 40},${y1} ${x2 - 40},${y2} ${x2},${y2}`;
-    paths += `<path class="of-edge" d="${d}" style="stroke-width:${width(e.count)}"></path>`;
+    paths += `<path class="of-edge${e.mode === 'spawn' ? ' of-edge-spawn' : ''}" d="${d}" style="stroke-width:${width(e.count)}"></path>`;
     const mx = (x1 + x2) / 2, my = back ? Math.max(y1, y2) + 36 : (y1 + y2) / 2 - 8;
     paths += `<text class="of-edge-l tnum" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${esc(ofEdgeText(e))}</text>`;
+  }
+  // A loop is a line back from its last pipeline to its first, labelled like the others: laps · median lap.
+  for (const loop of map.loops ?? []) {
+    const first = rect(loop.pipelines[0] ?? ''), last = rect(loop.pipelines[loop.pipelines.length - 1] ?? '');
+    if (!first || !last || loop.pipelines.length < 2) continue;
+    const x1 = last.left + last.width / 2 - origin.left, y1 = last.bottom - origin.top;
+    const x2 = first.left + first.width / 2 - origin.left, y2 = first.bottom - origin.top;
+    paths += `<path class="of-edge of-loop" d="M${x1},${y1} C${x1},${y1 + 60} ${x2},${y2 + 60} ${x2},${y2}" style="stroke-width:${width(loop.laps)}"></path>`;
+    const label = loop.median_lap_minutes == null ? `${loop.laps} laps` : `${loop.laps} · ${ofAge(loop.median_lap_minutes)}`;
+    paths += `<text class="of-edge-l of-loop-l tnum" x="${((x1 + x2) / 2).toFixed(1)}" y="${(Math.max(y1, y2) + 44).toFixed(1)}" text-anchor="middle">${esc(label)}</text>`;
   }
   for (const i of map.inputs) {
     const dot = document.querySelector(`[data-of-in="${CSS.escape(i.to)}"] .of-dot`)?.getBoundingClientRect(), b = rect(i.to);
@@ -167,7 +179,13 @@ function pageOverviewFactories(): void {
   main.innerHTML = `<section class="overview-page of-page" aria-label="Factories">
     <div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('factories')}</div>
     <div class="of-bar"><div class="og-seg" role="group" aria-label="Period" id="of-period">${OF_PERIODS.map(([p, l]) =>
-      `<button type="button" data-of-period="${p}" aria-pressed="${p === period}">${l}</button>`).join('')}</div></div>
+      `<button type="button" data-of-period="${p}" aria-pressed="${p === period}">${l}</button>`).join('')}</div>
+      ${ofMayMakeFactory() ? '<button type="button" class="ghost of-new-b" id="of-new-b" aria-expanded="false" aria-controls="of-new">+ Factory</button>' : ''}</div>
+    ${ofMayMakeFactory() ? `<form class="of-new" id="of-new" hidden>
+      <label>Name <input name="name" required maxlength="80" autocomplete="off"></label>
+      <label>Goal <input name="goal" maxlength="500" autocomplete="off" placeholder="Optional"></label>
+      <div class="of-new-acts"><button type="button" class="ghost" data-of-new-cancel>Cancel</button><button type="submit">Save</button></div>
+      <p class="of-new-err muted" role="alert" hidden></p></form>` : ''}
     <div class="of-main"><div class="of-body" id="of-body">${skelRows(3, {dot: false})}</div>
       <aside class="of-rail" id="of-rail" aria-label="Chat" hidden>
         <header class="of-rail-head"><div class="of-chips" id="of-chips" role="group" aria-label="Managers"></div>
@@ -192,7 +210,42 @@ function pageOverviewFactories(): void {
     for (const b of document.querySelectorAll<HTMLElement>('[data-of-period]')) b.setAttribute('aria-pressed', String(b.dataset['ofPeriod'] === period));
     void ofLoad(period);
   });
+  document.getElementById('of-new-b')?.addEventListener('click', () => ofNewToggle(true));
+  document.querySelector('[data-of-new-cancel]')?.addEventListener('click', () => ofNewToggle(false));
+  document.getElementById('of-new')?.addEventListener('submit', ev => {
+    ev.preventDefault();
+    void ofNewSave(ev.currentTarget as HTMLFormElement, () => period);
+  });
   void ofLoad(period);
+}
+
+// ---- + Factory: the company's owner and Admins make a factory (POST /v2/factories). The map refreshes after a save.
+function ofMayMakeFactory(): boolean {
+  return S.me?.role === 'owner' || S.me?.role === 'admin';
+}
+
+function ofNewToggle(open: boolean): void {
+  const form = document.getElementById('of-new') as HTMLFormElement | null;
+  const button = document.getElementById('of-new-b');
+  if (!form) return;
+  form.hidden = !open;
+  button?.setAttribute('aria-expanded', String(open));
+  if (open) (form.elements.namedItem('name') as HTMLInputElement | null)?.focus();
+  else form.reset();
+}
+
+async function ofNewSave(form: HTMLFormElement, period: () => string): Promise<void> {
+  const name = String((form.elements.namedItem('name') as HTMLInputElement).value).trim();
+  const goal = String((form.elements.namedItem('goal') as HTMLInputElement).value).trim();
+  const err = form.querySelector<HTMLElement>('.of-new-err');
+  if (!name) return;
+  try {
+    await writeRequest('POST', '/v2/factories', {name, goal: goal || null});
+    ofNewToggle(false);
+    void ofLoad(period());
+  } catch {
+    if (err) { err.textContent = 'Could not save the factory.'; err.hidden = false; }
+  }
 }
 
 // ---- the chat rail: one chip for each factory and pipeline with a manager. A chip, or a chat icon on the map, shows that

@@ -24,12 +24,12 @@ const map = {
   inputs: [{label: 'Ads', count: 14, to: 'camp'}],
 };
 
-async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/overview/factories', reduce = false} = {}) {
+async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/overview/factories', reduce = false, data = map, role = 'owner'} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 600, isMobile: viewport.width < 600, reducedMotion: reduce ? 'reduce' : 'no-preference'});
-  const errors = [], periods = [], dms = [];
+  const errors = [], periods = [], dms = [], factories = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
-  const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', config: {company_name: 'Acme Bikes'}};
+  const me = {id: 'ana', role, name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', config: {company_name: 'Acme Bikes'}};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -45,7 +45,12 @@ async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/o
     if (p === '/api/employees') return json([{name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Ruiz', role: 'owner'}], teams: {}, org_groups: []});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
-    if (p === '/api/v2/pipelines/overview') { periods.push(url.searchParams.get('period')); return json(map); }
+    if (p === '/api/v2/pipelines/overview') { periods.push(url.searchParams.get('period')); return json(data); }
+    if (p === '/api/v2/factories') {
+      if (req.method() !== 'POST') return json({factories: []});
+      factories.push(JSON.parse(req.postData() || '{}'));
+      return json({id: 'fac-new'});
+    }
     if (p === '/api/v2/threads/dm') { dms.push(url.searchParams.get('with')); return json({thread: {id: 'th' + dms.length}}); }
     if (p.startsWith('/api/v2/threads/th') && p.endsWith('/timeline')) return json({thread: {id: p.split('/')[4]}, messages: [], next_cursor: null, read_marks: {}});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -53,7 +58,7 @@ async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/o
   });
   await page.goto('https://tico-ui.test/' + hash);
   await page.locator('.dash-tabs').first().waitFor();
-  return {page, errors, periods, dms};
+  return {page, errors, periods, dms, factories};
 }
 
 async function desktop(browser) {
@@ -111,8 +116,56 @@ async function desktop(browser) {
   // Tap a pipeline: its page.
   await page.locator('[data-of-pl=sales] .of-link').click();
   await page.waitForFunction(() => location.hash.startsWith('#/tasks') && location.hash.includes('type=sales'));
+  assert.equal(await page.evaluate(() => new URL('https://x/' + location.hash.slice(1)).searchParams.get('view')), 'board');
   assert.deepEqual(errors, []);
   await page.close();
+}
+
+async function mapExtras(browser) {
+  // A spawn is drawn dashed and a move solid; a loop is one labelled line back, "laps · median lap".
+  const data = {...map,
+    edges: [...map.edges, {from: 'camp', to: 'help', mode: 'spawn', count: 4, median_age_minutes: null}],
+    loops: [{pipelines: ['camp', 'sales'], laps: 3, median_lap_minutes: 1440}]};
+  const {page, errors} = await open(browser, {data});
+  await page.locator('.of-node').first().waitFor();
+  await page.waitForSelector('.of-loop-l');
+  assert.equal(await page.locator('.of-edge-spawn').count(), 1);
+  assert.notEqual(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge-spawn')).strokeDasharray), 'none');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge:not(.of-edge-spawn):not(.of-edge-in)')).strokeDasharray), 'none');
+  assert.equal(await page.locator('.of-loop-l').textContent(), '3 · 1d');
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
+async function noLinks(browser) {
+  // A factory whose pipelines have no links between them (no Marketing to Sales): it renders with no lines or loops.
+  const data = {...map, edges: [], loops: [], inputs: []};
+  const {page, errors} = await open(browser, {data});
+  await page.locator('.of-node').first().waitFor();
+  assert.equal(await page.locator('.of-edge').count(), 0);
+  assert.equal(await page.locator('.of-loop').count(), 0);
+  assert.equal(await page.locator('.of-factory h2').first().innerText(), 'Lead factory');
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
+async function makeFactory(browser) {
+  // + Factory: the owner and Admins see it; it posts name and an optional goal, then the map reloads.
+  const {page, errors, periods, factories} = await open(browser);
+  await page.locator('.of-node').first().waitFor();
+  await page.locator('#of-new-b').click();
+  await page.locator('#of-new').waitFor();
+  await page.locator('#of-new input[name=name]').fill('Support');
+  await page.locator('#of-new button[type=submit]').click();
+  await page.waitForFunction(() => document.querySelector('#of-new')?.hidden === true);
+  assert.deepEqual(factories, [{name: 'Support', goal: null}]);
+  assert.ok(periods.length >= 2, 'the map reloads after the save');
+  assert.deepEqual(errors, []);
+  await page.close();
+  const member = await open(browser, {role: 'member'});
+  await member.page.locator('.of-node').first().waitFor();
+  assert.equal(await member.page.locator('#of-new-b').count(), 0);
+  await member.page.close();
 }
 
 async function reducedMotion(browser) {
@@ -143,5 +196,5 @@ async function phone(browser) {
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  try { await desktop(browser); await reducedMotion(browser); await phone(browser); console.log('overview-factories: ok'); } finally { await browser.close(); }
+  try { await desktop(browser); await mapExtras(browser); await noLinks(browser); await makeFactory(browser); await reducedMotion(browser); await phone(browser); console.log('overview-factories: ok'); } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
