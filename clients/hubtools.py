@@ -10196,7 +10196,7 @@ def bot_repos_set(api, args):
 @tool(
     "hub_bot_repo_create",
     "Owner or the BotOps bot: create the private repository bot-<slug> in the "
-    "connected GitHub organization from a template (default ticoteam/botops), or empty when the bot's "
+    "connected GitHub account or organization from a template (default ticoteam/botops), or empty when the bot's "
     "repository already exists on a computer. Answers with how to create it by hand when the team's "
     "GitHub App was not given permission to.",
     {
@@ -10245,7 +10245,7 @@ def repo_review(api, args):
     "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
     "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
     "is told. First call with `name` and a stable `operation_id` to preview the "
-    "connected organization, exact repository name, private visibility, empty initialization, and live App "
+    "connected account or organization, exact repository name, private visibility, empty initialization, and live App "
     "capability. If capability is available, review the preview and call again with `confirm_repository` set "
     "to the exact `org/name`. The create request uses the same stable operation id, so retries replay the saved "
     "receipt and never issue a second GitHub create.",
