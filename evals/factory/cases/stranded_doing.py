@@ -44,6 +44,7 @@ def stranded_resumed(run):
             if first is None or (first - when).total_seconds() / 3600 > STUCK_HOURS:
                 late.append(
                     f"{run.w.title(task_id)} ({bot.slug}, {(first - when).total_seconds() / 3600 if first else 'never'} h)"
+                    f" [now: {run.resume_why(run.w, task_id)}]"
                 )
     return (
         not late,

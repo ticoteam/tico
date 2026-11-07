@@ -559,11 +559,65 @@ class Run:
                     "status": row["status"],
                     "idle": self.idle[tid],
                     "since": now,
+                    "why": self.resume_why(w, tid),
                 }
         for tid in list(self.idle):
             if tid not in live:
                 del self.idle[tid]
         self.tick_at = now
+
+    def resume_why(self, w, tid):
+        """Diagnostic only: the first condition of the stranded resume (backend/stranded_resume.py) that holds this task
+        back now, read in a read of the store with the product's own helpers, so the answer is the sweep's."""
+        from backend import auto_tasks, check_pools, task_holds
+        from backend import hubdb as H
+        from backend import stranded_resume as SR
+
+        with w.store.read() as c:
+            row = H.task(c, tid)
+            if row is None:
+                return "task gone"
+            slug = H.actor_id(row["owner_id"])
+            if not SR._bot_ready(c, slug):
+                jobs = c.execute(
+                    f"SELECT count(*) FROM jobs j WHERE j.bot_id=? AND j.state IN ('queued','leased','running') "
+                    f"AND {H.unheld_sql()}",
+                    (slug,),
+                ).fetchone()[0]
+                drain = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (slug,)).fetchone()
+                return (
+                    f"owner not ready: online={check_pools.online(c, slug)}, draining={drain is not None}, "
+                    f"unheld jobs={jobs}"
+                )
+            at = H.now()
+            if not SR.stranded(c, row, at):
+                reasons = []
+                if task_holds.with_holds(c, row) is None:
+                    reasons.append("hold")
+                if row.get("blocked_since") or (row.get("snoozed_until") and row["snoozed_until"] > at):
+                    reasons.append("blocked or snoozed")
+                if row.get("next_run") or row.get("resume") or row.get("carried_by"):
+                    reasons.append("carried or next run or resume recorded")
+                if row.get("check_back_at") and row["check_back_at"] > at:
+                    reasons.append("check-back ahead")
+                if not H.bot_reads_task(c, row["owner_id"], row):
+                    reasons.append("owner does not read it")
+                if SR._live(c, row):
+                    reasons.append("a job or run is live")
+                if c.execute(
+                    "SELECT 1 FROM quarantine_holds WHERE bot_id=? AND task_id=? AND released_at IS NULL LIMIT 1",
+                    (slug, tid),
+                ).fetchone():
+                    reasons.append("quarantined")
+                if auto_tasks.waiting(c, row):
+                    reasons.append("auto-task waiting")
+                if H.recorded_wait(c, {**row, "due_at": None}, at) is not None:
+                    reasons.append("recorded wait")
+                return "not stranded: " + (", ".join(reasons) or "no single condition (see stranded_resume.stranded)")
+            found = SR.state(c, row, at)
+            if found is None:
+                return "stranded, but quiet time not reached, or the daily limit, or already stopped and listed"
+            return f"stranded and ready: resumes in a row with no progress={found['since']}, stop={found['stop']}"
 
     def waiting(self, w, row, bot, now, held, parents, queued):
         """Whether the task waits for its owner to act: the owner is free to take it, and nothing holds the task back."""
@@ -624,11 +678,19 @@ class Run:
             for e in self.w.sql(
                 "SELECT e.created_at, e.actor_id AS actor, e.kind AS field, coalesce(s.name, e.new) new, e.note FROM history_events e "
                 "LEFT JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? AND e.kind IN ('step','verdict_move',"
-                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
+                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait','resumed','resume_stopped') "
+                "ORDER BY e.created_at, e.rowid",
                 (t["id"],),
             ):
                 out.append(
                     f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}"
+                )
+            for a in self.w.sql(
+                "SELECT created_at, bot_id, state, settled_at FROM attempts WHERE task_id=? ORDER BY created_at",
+                (t["id"],),
+            ):
+                out.append(
+                    f"  turn {a['created_at'][11:16]} {a['bot_id']} {a['state']} settled {str(a['settled_at'])[11:16]}"
                 )
             pr = self.w.pr_of(t["id"])
             if pr:

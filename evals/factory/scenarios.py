@@ -32,6 +32,7 @@ def no_stuck_work(run):
     found = sorted(run.stuck.values(), key=lambda s: s["since"])
     text = "; ".join(
         f"{s['title']} at {s['step']} ({s['owner']}, {s['status']}) waited {s['idle']:.0f} h with its owner free"
+        + (f" [resume: {s['why']}]" if s.get("why") else "")
         for s in found[:4]
     )
     return not found, text + (f" (+{len(found) - 4})" if len(found) > 4 else "")
