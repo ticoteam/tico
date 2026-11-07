@@ -343,6 +343,8 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
+    if args.cmd in ("requirements", "requirement"):
+        return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):

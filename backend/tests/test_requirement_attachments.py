@@ -357,3 +357,55 @@ def test_a_ticket_lists_each_requirements_attachments_with_their_addresses_in_on
     assert len(entry["attachments"]) == A.ATTACH_LIMIT
     assert entry["attachments"][0]["href"] == f"https://example.com/{A.ATTACH_LIMIT + 1}"
     assert entry["attachments"][0]["format"] == "link"
+
+
+def test_evidence_a_requirement_counts_keeps_its_blob_when_its_message_is_removed(tmp_path):
+    from backend import file_library
+
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    _, stage, task = _ticket(c)
+    req = R.add(
+        c, ANA, stage, {"name": "Shot", "kind": "attachment", "needs": {"formats": ["image"]}, "reviewed_by": "nobody"}
+    )
+    blob_id = "blob-evidence-shot"
+    insert(
+        c,
+        "requirement_attachments",
+        id="ra-shot",
+        task_id=task["id"],
+        stage_requirement_id=req["id"],
+        source="blob",
+        blob_id=blob_id,
+        digest="d" * 64,
+        work_version=0,
+        attached_by=ANA,
+        created_at="2026-11-07T00:00:00Z",
+    )
+
+    assert file_library._kept_elsewhere(c, blob_id) is True
+
+    c.execute("UPDATE requirement_attachments SET removed_at='2026-11-07T01:00:00Z' WHERE id='ra-shot'")
+    assert file_library._kept_elsewhere(c, blob_id) is True  # a removed attachment's bytes are still its history
+
+
+def test_a_native_tico_page_satisfies_a_page_requirement(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    assert A._format_of("text/html", "spec.html") == "file"
+    assert A._format_of("text/html", "spec.html", native_page=True) == "page"
+    assert A._native_pages(c, []) == set()
+    c.execute("PRAGMA foreign_keys=OFF")  # the page's bot is not part of this fixture
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,first_activity_at,last_activity_at) "
+        "VALUES('file-spec','bot:writer','bot','file-spec','spec.html','document','text/html','tico_blob',"
+        "'2026-11-07','2026-11-07')"
+    )
+    c.execute(
+        "INSERT INTO pages (file_id, cadence, created_at, updated_at) VALUES ('file-spec', 'none', '2026-11-07', '2026-11-07')"
+    )
+    assert A._native_pages(c, ["file-spec", "file-other"]) == {"file-spec"}
+    c.execute("UPDATE pages SET deleted_at='2026-11-07T01:00:00Z' WHERE file_id='file-spec'")
+    assert A._native_pages(c, ["file-spec"]) == set()

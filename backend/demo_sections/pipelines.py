@@ -80,6 +80,10 @@ def seed(b: Any) -> None:
 
     def write(c: Any) -> None:
         ts = H.now()
+        # Every ticket is at its stage's current work revision (1). Waiting evidence is attached at that revision; the
+        # stale one at the revision before it, so the attach-time revision is what makes it out of date (D33).
+        for task in ids.values():
+            c.execute("UPDATE tasks SET work_revision=1 WHERE id=?", (task,))
         c.execute("UPDATE task_types SET manager=? WHERE id=?", (MANAGER, type_id))
         c.execute("UPDATE task_types SET pipeline_owner_id=?, manager_every_minutes=60 WHERE id=?", (OWNER, type_id))
         for name, _, limit in STAGES:
@@ -124,14 +128,14 @@ def seed(b: Any) -> None:
                 if state == "met":
                     c.execute(
                         "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, "
-                        "requirement_version, judge, judge_actor, verdict, reason, created_at) "
-                        "VALUES (?,?,?,?,1,'rule','system','met','Passed on 3f2a9c1',?)",
+                        "requirement_version, work_version, judge, judge_actor, verdict, reason, created_at) "
+                        "VALUES (?,?,?,?,1,1,'rule','system','met','Passed on 3f2a9c1',?)",
                         (_id(), task, stage[stage_name], req[name], entered),
                     )
                 elif state in ("waiting", "out_of_date"):
                     attach_id = _id()
                     link = "https://acme.example/shots/" + key.lower()
-                    version = 1 if state == "waiting" else 0
+                    version = 1 if state == "waiting" else 0  # the work revision the evidence was attached at
                     c.execute(
                         "INSERT INTO requirement_attachments (id, task_id, stage_requirement_id, source, url, digest, "
                         "work_version, attached_by, created_at) VALUES (?,?,?,'link',?,?,?,?,?)",

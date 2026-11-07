@@ -2,6 +2,7 @@
 advance, the 10-second undo, send-back, Message manager and Mark met. The concurrency cases use real connections to one
 file: the database decides, not a Python lock."""
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -726,6 +727,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -752,6 +754,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -789,6 +792,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -815,6 +819,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -841,6 +846,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": {"stage_id": "Shipped", "name": "Shipped"},
             },
             {
@@ -878,6 +884,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "The badge is too small",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": {"stage_id": "Review", "name": "Review"},
             },
             {
@@ -915,6 +922,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ben",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -941,6 +949,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -978,6 +987,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1004,6 +1014,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1030,6 +1041,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
         ],
@@ -1069,6 +1081,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": False,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1106,6 +1119,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": False,
+                "can_not_validate": False,
                 "moves_to": None,
             },
         ],
@@ -1158,3 +1172,30 @@ def test_reviewer_id_is_the_claimant_and_a_plain_member_cannot_mark_met(world, m
     assert R.queue_for(w.c, BEN)[0]["reviewer_id"] == BEN
     (seen_by_ana,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff]
     assert seen_by_ana["reviewer_id"] == BEN
+
+
+def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_on_subtasks(world):
+    """Not validated works only on a stage that directly follows an In development stage holding a `subtasks` run, with
+    a spawn link from an earlier stage. The queue flag and the action share that rule. A bot never gets it."""
+    w = world
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    rev = w.revision()
+    # Review's requirement sits after Making, which waits on nothing: refused, and the queue does not offer it.
+    assert item()["can_not_validate"] is False
+    refused(
+        "not_validatable", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    # Making now waits on its Engineering subtasks: Review is the Validate stage and Not validated is offered.
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    assert item()["can_not_validate"] is True
+    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review) is None, "a bot never gets the route"
+    # A stale work version or requirement version refuses, inside the transaction.
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev + 1, requirement_version=1)
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=2)
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screenshots never validated", work_version=rev, requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making" and done["follow_up"]

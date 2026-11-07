@@ -119,6 +119,7 @@ function liveTasksApply(events) {
     if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
   }
   if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
+  pipelineLateLive(events);   // the pipeline on the board: its cards' late times (pipeline-rail.ts)
 }
 function liveWire() {
   if (!S.me?.cloud || !liveAvailable()) return;

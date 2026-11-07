@@ -70,6 +70,8 @@ interface PipelineReviewItem {
   reviewer_id?: string | null;
   /** Whether the viewer may mark it met by hand. */
   can_mark_met?: boolean;
+  /** Whether the viewer may send it Not validated (the server's follow-up rule, D66). */
+  can_not_validate?: boolean;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
   claim: { by: string; label: string } | null;
@@ -181,6 +183,7 @@ interface ServerQueueItem {
   /** The claimant, else the configured reviewer. */
   reviewer_id: string | null;
   can_mark_met: boolean;
+  can_not_validate: boolean;
 }
 
 interface ServerRun {
@@ -242,6 +245,7 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     bot_note: row.bot_note ?? '',
     reviewer_id: row.reviewer_id ?? null,
     can_mark_met: !!row.can_mark_met,
+    can_not_validate: !!row.can_not_validate,
     attachments: a
       ? [{ id: a.id, label: a.name || 'Attachment', kind: a.format, ...(a.href ? { url: a.href } : {}) }]
       : [],
@@ -356,6 +360,16 @@ async function pipelineSendBack(taskId: string, requirementId: string, note: str
   return post(pipelineRoute(reviewPath(taskId, requirementId) + '/send-back'), { note }) as Promise<{ decision_id: string }>;
 }
 
+/** Validate's "Not validated": the item goes back to the stage before Validate and one follow-up ticket is filed. */
+async function pipelineNotValidated(item: PipelineReviewItem, reason: string):
+  Promise<{ decision_id: string; moved_back_to: string | null; follow_up: string | null }> {
+  return post(pipelineRoute(reviewPath(item.task_id, item.requirement_id) + '/not-validated'), {
+    note: reason,
+    work_version: item.work_version,
+    requirement_version: item.requirement_version,
+  }) as Promise<{ decision_id: string; moved_back_to: string | null; follow_up: string | null }>;
+}
+
 /** Message the pipeline manager about one item. The manager decides or forwards it. */
 async function pipelineMessageManager(taskId: string, requirementId: string, text: string): Promise<{ ok: boolean }> {
   await post(pipelineRoute(reviewPath(taskId, requirementId) + '/message-manager'), { text });
@@ -374,6 +388,13 @@ async function pipelineAffectedCount(stageId: string, label: string): Promise<{ 
 }
 
 /** The manager's status for one pipeline: last run, late cards, the log. */
+/** The ids of the pipeline's Late tickets (GET .../late): every live ticket past its stage's Warn after, uncapped, from the
+    server's one Late rule. It needs no manager, so a pipeline without one still shows its late time. */
+async function pipelineLateTicketIds(pipelineId: string): Promise<string[]> {
+  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/late`)) as { late: Record<string, unknown> };
+  return Object.keys(res.late ?? {});
+}
+
 async function pipelineManagerView(pipelineId: string): Promise<PipelineManagerView> {
   const rail = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/manager`)) as ServerRail;
   return managerViewFromRail(rail);
