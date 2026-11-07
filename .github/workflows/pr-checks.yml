@@ -1,17 +1,22 @@
-# Two tiers. Each push to a pull request runs only the cheap checks (plan, static) on free GitHub-hosted
-# Ubuntu runners, so a push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
+# Two tiers. Each push to a pull request runs the cheap checks (plan, static) on free GitHub-hosted Ubuntu runners, so a
+# push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
+# A ready pull request from this repository also runs the plan's selected tests and factory simulation on RunsOn Spot
+# VMs, on the same labels the merge queue uses, so its `checks` passes only when they pass. A fork's pull request keeps
+# the cheap checks only, and a draft runs nothing.
 # A merge queue group (the merge_group event, once per queue group) runs everything else on RunsOn Spot VMs in Tico's
 # own AWS account: the tests the group's merged change selects, the factory simulation when the change reaches what it
 # runs (scripts/pr_checks.py factory_reason), the Rust and desktop checks, the macOS recorder tests and the Linux Caddy
 # image. The group selects from its own base and head. Static checks run in the group too: its merge
 # commit is the one that lands on main, and a migration timestamp can collide with a change queued ahead of it.
+# A failed `tests` or `factory-sim` leg cancels its whole run (its last step), in a queue group or a pull request. The
+# `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
 # pull request runs nothing.
 # A skipped run proves nothing on its own: Tico reads a head whose every check was skipped as pending (backend/github.py
 # _overall). Converting a pull request back to a draft starts no run: such a run would cancel the one in progress on the
 # same head, and a cancelled check keeps the review gate blocking that head (backend/review_gate.py).
-# A pull request's own push runs on hosted runners whether or not it comes from a fork. A fork's change runs on RunsOn
-# only once a maintainer queues it.
+# A pull request's own push runs the cheap checks on hosted runners whether or not it comes from a fork. A fork's tests
+# run on RunsOn only once a maintainer queues it.
 # Repository variable TICO_CI_HOSTED=true runs every RunsOn job here on GitHub-hosted runners instead
 # (docs/releasing.md#tests-on-a-pr); unset, RunsOn is the default.
 # Without main pushes, pr-cache.yml keeps the main-branch caches the queue groups restore from fresh.
@@ -110,9 +115,13 @@ jobs:
           { echo '### Test selection'; echo '```json'; cat ci-plan.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   tests:
-    # Merge queue groups only.
+    # Merge queue groups, and a pull request from this repository once it is ready (a draft has no plan; a fork's pull
+    # request runs none of these).
     needs: plan
-    if: ${{ github.event_name == 'merge_group' }}
+    if: ${{ github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository) }}
+    permissions:
+      contents: read
+      actions: write # the last step cancels the run when a suite fails
     name: ${{ matrix.suite }}
     runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
@@ -185,13 +194,23 @@ jobs:
           path: ci-results/*
           retention-days: 7
           if-no-files-found: warn
+      # Fail fast: a failed suite stops the other legs and any other job in the run at once. `checks` still reports it.
+      - name: Cancel the run when a suite failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID"
 
   factory-sim:
-    # Merge queue groups only, when the plan selects the factory simulation (scripts/pr_checks.py factory_reason). Seed 1
-    # of every scenario, in one VM per group of the sim's own packing (timings.json; run.py --shard), four scenarios at a
-    # time on each. Release validation runs seeds 1-3 (ci.yml). A pull request's push never runs it.
+    # Merge queue groups, and a pull request from this repository once it is ready, when the plan selects the factory
+    # simulation (scripts/pr_checks.py factory_reason). Seed 1 of every scenario, in one VM per group of the sim's own
+    # packing (timings.json; run.py --shard), four scenarios at a time on each. Release validation runs seeds 1-3 (ci.yml).
+    # A draft and a fork's pull request never run it.
     needs: plan
-    if: ${{ github.event_name == 'merge_group' && needs.plan.outputs.factory == 'true' }}
+    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.factory == 'true' }}
+    permissions:
+      contents: read
+      actions: write # the last step cancels the run when the sim fails
     name: factory sim ${{ matrix.shard }}
     runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
@@ -231,6 +250,11 @@ jobs:
           { echo '### Factory sim, group ${{ matrix.shard }}'; echo '```'
             awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Cancel the run when the sim failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID"
 
   static:
     # Every change, on both tiers: pinned ruff against its baseline (no new findings or suppressions), basedpyright on
@@ -515,8 +539,9 @@ jobs:
           echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
   checks:
-    # The one required check, on main and on the merge queue. It fails when a job it needs failed or was cancelled. A
-    # skipped job passes: a pull request skips the merge queue jobs, and a draft pull request skips every job.
+    # The one required check, on every pull request to main and on the merge queue. It fails when a job it needs failed or
+    # was cancelled. A skipped job passes: a pull request skips the queue-only jobs, a fork's skips the tests and the sim,
+    # and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
     needs: [plan, static, tests, factory-sim, rust-lint, desktop-app, recorder, caddy-linux]

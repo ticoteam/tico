@@ -1310,10 +1310,10 @@ def factory_shards():
 
 
 def factory_plan(event, changed):
-    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. Only a merge queue group runs it,
-    so a pull request's plan never packs the sim."""
+    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. A merge queue group and a pull
+    request both run it on RunsOn, one VM per group, so both pack it; the workflow decides which pull requests get it."""
     reason = factory_reason(changed)
-    shards = factory_shards() if reason and event == "merge_group" else ["1/1"]
+    shards = factory_shards() if reason and event in ("merge_group", "pull_request") else ["1/1"]
     return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
 
 
