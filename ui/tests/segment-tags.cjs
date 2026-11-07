@@ -87,6 +87,8 @@ function pnlBy(url, lead) {
 }
 const budget = (id, name, amount, actual, extra = {}) => ({id, name, period: 'month', account_id: 'a-6400', catch_all: false, team: null, teammate: null,
   vendor: null, parent_id: null, owner: 'human:ana', warn_pct: 80, at_limit: 'warn', rollover: 'none', active: true, card_limits: false, segment_id: null, ...extra,
+  // What the server sends (backend/finance/reads.py): the segment the spend reports under, the parent's when a budget has none.
+  effective_segment_id: 'effective_segment_id' in extra ? extra.effective_segment_id : (extra.segment_id ?? null),
   state: {amount, actual, held: 0, remaining: amount - actual, pct: String(actual / amount * 100), crossed_warn: false, at_limit: false,
     period_start: thisMonth + '-01', period_end: thisMonth + '-28', excluded: false}});
 const BUDGETS = [budget('b-mkt', 'Marketing', 900000, 159000),
@@ -259,6 +261,8 @@ async function sizes(browser, name, hash, ready, opts = {}) {
 
 // The org chart's Segments menu for a card: the card's button (it shows on hover), or on a touch screen the sheet's row.
 async function openOrgMenu(page, ref) {
+  // A menu left open by the last pick can cover the card, so Escape closes it first.
+  if (await page.locator('.seg-menu').count()) await page.keyboard.press('Escape');
   if (await page.evaluate(() => matchMedia('(hover: none)').matches)) {
     await page.locator(`.rdo-card[data-rdo-ref="${ref}"]`).click();
     await page.locator('dialog.rdo-dialog[open] [data-seg-tags]').click();
@@ -288,7 +292,7 @@ async function openOrgMenu(page, ref) {
       assert.equal(await page.locator('.rdo-card[data-rdo-ref="bot:builder"] .seg-card').getAttribute('title'), 'Rental', tag + ': a bot card too');
       assert.equal(await page.locator('.rdo-card[data-rdo-ref="person:ben"] .seg-card').count(), 0, tag + ': an untagged card has no mark');
       await openOrgMenu(page, 'person:ben');
-      assert.equal(await page.locator('.seg-menu').getAttribute('aria-label'), 'Segments for Ben', tag + ': the menu names the teammate');
+      assert.equal(await page.locator('.seg-menu').getAttribute('aria-label'), 'Segments for Ben Ortiz', tag + ': the menu names the teammate');
       await page.locator('.seg-menu [data-pick="all"]').click();
       await page.locator('.rdo-card[data-rdo-ref="person:ben"] .seg-card-all').waitFor();
       assert.equal(await page.locator('.rdo-card[data-rdo-ref="person:ben"] .seg-card').getAttribute('title'), 'All segments', tag + ': the All label shows on the card');
@@ -349,7 +353,8 @@ async function openOrgMenu(page, ref) {
       await page.locator('#person-about [data-seg-tags]').click();
       await page.locator('.seg-menu [data-pick="seg-rental"]').click();
       await page.waitForFunction(() => document.querySelector('#person-about [data-seg-chips]')?.textContent.includes('Rental'));
-      assert.deepEqual(hub.writes.at(-1).body, {member: 'person:cara', segments: ['seg-rental']}, tag + ': the owner\'s pick saves');
+      // A pick adds to the teammate's segments (Consumer stays), in the list's rank order.
+      assert.deepEqual(hub.writes.at(-1).body, {member: 'person:cara', segments: ['seg-rental', 'seg-consumer']}, tag + ': the owner\'s pick adds a segment');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     });
