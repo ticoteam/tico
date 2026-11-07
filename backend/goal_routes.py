@@ -967,9 +967,10 @@ def install(app, store, auth, mutate, settings):
                     )
             if raw.get("segment_id") is not None:
                 segment = raw["segment_id"] or None
-                if segment and segment not in SG.ours_ids(c):
-                    raise Problem("not_found", f"Change {n}: no segment {segment} of the company's", 404)
                 if segment != (row.get("segment_id") or None):
+                    # Checked only when it changes: a goal already in a segment the company no longer plays in keeps it.
+                    if segment and segment not in SG.ours_ids(c):
+                        raise Problem("not_found", f"Change {n}: no segment {segment} of the company's", 404)
                     sets["segment_id"] = segment or ""
                     said.append(
                         f"segment was {q(ST.name(c, row['segment_id'])) if row.get('segment_id') else 'none'}, "

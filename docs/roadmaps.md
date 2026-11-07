@@ -169,8 +169,8 @@ it back, and without it an item goes from Building straight to Shipped.
 
 Measured sits right after Shipped with status done and Shipped's public name, so a measured item still reads as shipped
 publicly. It is added to an existing Product roadmap once, on upgrade, and a team that removes it does not get it back.
-A person can move an item there by hand; a ticket that reopens takes it back to Building, and a plain close leaves it
-where it is.
+A person can move an item there by hand; a ticket that reopens takes it back to Building. A plain close takes the item
+off the board (no step), never onto Measured.
 
 Each Dev ticket also leaves a quiet line when it first starts, gets a blocker that is still open, or reaches done:
 `Started: #143 Title. Step: In Progress. PR: <url>.`, `Blocked: #143 Title. Step: In Progress. Waits on #139 Title

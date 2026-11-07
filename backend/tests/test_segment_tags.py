@@ -5,6 +5,7 @@ Payments."""
 
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_market_spend import defined
+from backend.tests.test_strategy_bot_chat import strategy_bot, turn
 
 
 def segments(api):
@@ -241,3 +242,24 @@ def test_the_growth_markers_narrow_to_the_segment_when_filtered(api):
     assert marked(f"?segment={screening}") == ["Screening referral ads"]
     assert marked("?segment=none") == []
     assert marked("?segment=segment/nope") == []
+
+
+def read_back(api, attempt, *changes, expected=200):
+    return post(api, "goals/read-back", {"changes": list(changes)}, token=attempt["token"], expected=expected)
+
+
+def test_a_read_back_repeating_a_goals_segment_is_no_change_and_only_a_new_segment_is_checked(api):
+    screening, payments, sub = segments(api)
+    gold = post(api, "goals", {"title": "Screening pays back", "owner": "ops", "segment_id": screening})["goal"]
+    # Screening stops being one of the company's: the goal keeps it, and a read-back that repeats it is not a change.
+    post(api, "market/segments/target", {"id": screening, "target": "none"})
+    strategy_bot(api)
+    _, attempt = turn(api, "coo", "ana-test", "Fix the screening goal")
+    change = {"kind": "goal_update", "goal_id": gold["id"], "title": "Screening pays back in a quarter"}
+    text = read_back(api, attempt, {**change, "segment_id": screening})["text"]
+    assert "title was" in text and "segment was" not in text
+    same = read_back(
+        api, attempt, {"kind": "goal_update", "goal_id": gold["id"], "segment_id": screening}, expected=409
+    )
+    assert same["error"]["code"] == "no_change"
+    read_back(api, attempt, {"kind": "goal_update", "goal_id": gold["id"], "segment_id": sub}, expected=404)
