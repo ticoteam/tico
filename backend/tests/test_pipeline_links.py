@@ -137,3 +137,43 @@ def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_ch
     assert states(c, task) == {"Signed off": "out_of_date"}
     error = refused(lambda: H.task_update(c, ANA, task, step=step_id(c, success["id"], "Active")))
     assert error.rule == "requirement" and "Signed off" in error.detail
+
+
+def test_a_refused_parent_move_after_a_subtask_finishes_keeps_the_subtasks_change(tmp_path, monkeypatch):
+    """Track Y: a subtask's finish moves its parent on from inside the subtask's own write. When the parent's move is
+    refused (here a spawn that could not be filed), only the parent's move rolls back: the subtask's change stands, and the
+    refusal is logged on the parent with its reason."""
+    from backend.store import Problem
+
+    c, _, _, _ = two(tmp_path)
+    product = H.type_create(
+        c,
+        ANA,
+        "Spec pipeline",
+        [{"name": "Review", "status": "review"}, {"name": "Build", "status": "doing"}],
+        mover=True,
+    )
+    eng = H.type_create(
+        c, ANA, "Build pipeline", [{"name": "Dev", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    for t in (product, eng):
+        c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, t["id"]))
+    L.create_link(c, ANA, step_id(c, product["id"], "Review"), eng["id"], "spawn")
+    requirement(
+        c, product, "Review", "Engineering shipped", kind="run", needs={"source": "subtasks"}, reviewed_by="nobody"
+    )
+    parent = H.task_create(c, ANA, "Spec", "", ANA, type=product["id"], step="Review", lint=False)["id"]
+    child = H.task_create(c, ANA, "Build it", "", ANA, type=eng["id"], step="Dev", parent_id=parent, lint=False)["id"]
+
+    def refuse_spawn(*args, **kwargs):
+        raise Problem("spawn_refused", "The linked ticket could not be filed: test", 409)
+
+    monkeypatch.setattr(L, "spawn", refuse_spawn)
+    H.task_update(c, ANA, child, step=step_id(c, eng["id"], "Done"))
+
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (child,)).fetchone()[0] == step_id(c, eng["id"], "Done")
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (parent,)).fetchone()[0] == step_id(
+        c, product["id"], "Review"
+    )
+    [logged] = rows(c, "SELECT note FROM history_events WHERE subject_id=? AND kind='auto_move_refused'", parent)
+    assert "could not be filed" in logged["note"]

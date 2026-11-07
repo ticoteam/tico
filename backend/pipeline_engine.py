@@ -750,7 +750,28 @@ def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
         return
     found = _evaluate(conn, {str(parent_id): {stage_id: None}}, by_stage).get(str(parent_id), [])
     if found and all(s.state == "met" for s in found):
-        advance(conn, H.KEEPER, str(parent_id))
+        _advance_parent(conn, str(parent_id))
+
+
+def _advance_parent(conn: sqlite3.Connection, parent_id: str) -> None:
+    """Moves a parent on because its subtasks finished, in a savepoint of its own. A refusal (a requirement, or a spawn the
+    rules could not file) rolls back only the parent's move: the subtask's change that settled it stands, and the refusal is
+    logged on the parent (`auto_move_refused`) with its reason."""
+    from .store import Problem
+
+    conn.execute("SAVEPOINT settle_parent")
+    try:
+        result = advance(conn, H.KEEPER, parent_id)
+    except (H.Refused, Problem) as exc:
+        conn.execute("ROLLBACK TO settle_parent")
+        conn.execute("RELEASE settle_parent")
+        reason = str(cast("object", getattr(exc, "detail", None)) or exc)
+    else:
+        conn.execute("RELEASE settle_parent")
+        if result["moved"] or not result["reason"]:
+            return
+        reason = str(result["reason"])  # advance already undid its own move and says why it stayed
+    H._task_event(conn, parent_id, H.KEEPER, "auto_move_refused", None, None, reason)  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------------------------- decline
