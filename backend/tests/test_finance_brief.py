@@ -87,8 +87,14 @@ def test_a_budget_pacing_past_its_amount_reads_over_budget(books):
             c,
             OWNER,
             "budget_create",
-            {"name": "Small", "account_id": soft, "teammate": "bot:seller", "parent_id": parent, "amount": 1_000_000,
-             "at_limit": "warn"},
+            {
+                "name": "Small",
+                "account_id": soft,
+                "teammate": "bot:seller",
+                "parent_id": parent,
+                "amount": 1_000_000,
+                "at_limit": "warn",
+            },
         )
         assert made.status == "committed", made
         spend(c, "6100", 1_000, day="2026-10-10", teammate="bot:seller")  # $10 spent: far under $10,000
@@ -104,8 +110,14 @@ def test_a_manager_bot_sees_the_team_budget_its_over_pace_teammates_and_its_unat
             c,
             OWNER,
             "budget_create",
-            {"name": "Web", "account_id": soft, "team": "web", "parent_id": parent, "amount": 900_000,
-             "at_limit": "warn"},
+            {
+                "name": "Web",
+                "account_id": soft,
+                "team": "web",
+                "parent_id": parent,
+                "amount": 900_000,
+                "at_limit": "warn",
+            },
         )
         assert web.status == "committed", web
         _coder_budget(c, str(web.result["budget_id"]), soft)

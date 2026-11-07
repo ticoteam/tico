@@ -30,8 +30,11 @@ from typing import Any, cast
 
 from .. import hubdb as H
 from . import reads as R
+from .context import Ctx, load
 from .core import dates
 from .core.errors import FinanceError
+from .core.view import View
+from .store import access as SA
 from .store import ledger as SL
 
 MAX_LINES = 6  # a briefing is a few lines, not a report
@@ -112,19 +115,21 @@ def _budget_lines(c: sqlite3.Connection, reader: str) -> list[str]:
     return lines[:3]
 
 
-def _loose(c: sqlite3.Connection, s: R._Seen, at: str) -> tuple[tuple[int, int], tuple[int, int]]:
+def _loose(
+    c: sqlite3.Connection, ctx: Ctx, view: View, private: dict[str, Any], at: str
+) -> tuple[tuple[int, int], tuple[int, int]]:
     """Expense lines this month with no teammate, as (amount, lines) for those with no team either (company-wide) and
     for those on a team (a manager's). Read from the rollup rows the reader's view covers; private accounts never show
     (view.suppress: "Unattributed private lines never show")."""
     a, z = dates.month_bounds(date.fromisoformat(at[:10]))
-    ids = [x.id for x in s.ctx.accounts.values() if x.type == "expense" and x.id not in s.private]
+    ids = [x.id for x in ctx.accounts.values() if x.type == "expense" and x.id not in private]
     company, team = [0, 0], [0, 0]  # [amount, lines]
-    for r in SL.rollup_rows(c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids):
+    for r in SL.rollup_rows(c, ctx.book.id, a.isoformat(), z.isoformat(), ids):
         if str(r["teammate"] or ""):
             continue
-        account = s.ctx.accounts.get(r["account_id"])
+        account = ctx.accounts.get(r["account_id"])
         tags = {"team": str(r["team"] or ""), "teammate": ""}
-        if account is None or not s.view.sees(account, tags):
+        if account is None or not view.sees(account, tags):
             continue
         bucket = team if tags["team"] else company
         bucket[0] += int(r["amount"] or 0)
@@ -132,11 +137,11 @@ def _loose(c: sqlite3.Connection, s: R._Seen, at: str) -> tuple[tuple[int, int],
     return (company[0], company[1]), (team[0], team[1])
 
 
-def _loose_lines(c: sqlite3.Connection, s: R._Seen, at: str) -> list[str]:
+def _loose_lines(c: sqlite3.Connection, ctx: Ctx, view: View, private: dict[str, Any], at: str) -> list[str]:
     """Unattributed spend: the company's as "Unattributed" (a reader who sees all the expenses), a team's as "in your
     team" (a manager). Each says its amount and its line count."""
-    company, team = _loose(c, s, at)
-    if s.view.company_expenses():
+    company, team = _loose(c, ctx, view, private, at)
+    if view.company_expenses():
         amount, n = company
         return [f"Unattributed: {_money(amount)} ({_lines_word(n)})."] if n else []
     amount, n = team
@@ -175,11 +180,12 @@ def _later_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
 
 def compute(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
     """The lines this reader may see, read now: [] when they have no Finance view at all. Reads only."""
-    s = R._open(c, reader, at)
-    if not s.view.sees_anything():
+    ctx = load(c, at)
+    view = ctx.view(reader)
+    if not view.sees_anything():
         return []
     lines = _budget_lines(c, reader)
-    lines += _loose_lines(c, s, at)
+    lines += _loose_lines(c, ctx, view, SA.private_lines(c), at)
     lines += _company_lines(c, reader, at)
     lines += _later_lines(c, reader, at)
     return [_short(line) for line in lines][:MAX_LINES]
