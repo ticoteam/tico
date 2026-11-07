@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from datetime import date
 from typing import Any, cast
@@ -40,6 +41,7 @@ from .store import ledger as SL
 MAX_LINES = 6  # a briefing is a few lines, not a report
 LINE_CHARS = 100  # one short line each; the page and the prompt never carry a paragraph
 Row = dict[str, Any]
+PACE = re.compile(r"pace \$[\d,.]+k?")  # the pace figure, which moves with the clock (see fingerprint)
 
 
 def _int(value: object) -> int:
@@ -194,7 +196,11 @@ def compute(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
 
 
 def fingerprint(lines: list[str]) -> str:
-    return hashlib.sha256(json.dumps(lines, ensure_ascii=False).encode("utf-8")).hexdigest()
+    """The brief's numbers, as its lines state them. The pace figure is left out: a budget's pace moves with the clock
+    every hour the month runs, so a brief is re-issued when a spend, an amount, a team's total or whether a budget is
+    over pace changes, and the stored lines keep the pace of that time (their as_of)."""
+    normal = [PACE.sub("pace", line) for line in lines]
+    return hashlib.sha256(json.dumps(normal, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _row(c: sqlite3.Connection, reader: str) -> Row | None:
@@ -209,6 +215,8 @@ def _save(
     fingerprint handed at turn start is recorded as well. Writes nothing when nothing moved."""
     version = R.view_version(c)
     if row is not None and row["fingerprint"] == digest:
+        # The numbers did not move: the stored lines (with the pace of the time they were issued) stand.
+        lines = json.loads(row["lines"])
         as_of, changed_since = row["as_of"], row["changed_since"]
         if deliver and row["delivered_fingerprint"] != digest:
             c.execute("UPDATE fin_briefs SET delivered_fingerprint=? WHERE reader=?", (digest, reader))
@@ -246,6 +254,6 @@ def for_turn(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row |
     if row is not None and row["fingerprint"] == digest and row["delivered_fingerprint"] == digest:
         return None
     got = _save(c, reader, lines, digest, now, row, deliver=True)
-    if not lines:
+    if not got["lines"]:
         return None
     return {"lines": got["lines"], "as_of": got["as_of"], "changed_since": got["changed_since"]}

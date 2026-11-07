@@ -31,8 +31,8 @@ def _software(c, amount=1_000_000):
     return str(made.result["budget_id"]), soft
 
 
-def _coder_budget(c, parent: str, soft: str, amount: int = 50_000) -> None:
-    """The coding bot's ad budget ($500 by default) under `parent`."""
+def _coder_budget(c, parent: str, soft: str, amount: int = 50_000, team: str = "") -> None:
+    """The coding bot's ad budget ($500 by default) under `parent`, on `team` when it nests under a team's budget."""
     mine = act(
         c,
         OWNER,
@@ -44,6 +44,7 @@ def _coder_budget(c, parent: str, soft: str, amount: int = 50_000) -> None:
             "parent_id": parent,
             "amount": amount,
             "at_limit": "warn",
+            **({"team": team} if team else {}),
         },
     )
     assert mine.status == "committed", mine
@@ -120,6 +121,7 @@ def test_a_manager_bot_sees_the_team_budget_its_over_pace_teammates_and_its_unat
             },
         )
         assert web.status == "committed", web
+        _coder_budget(c, str(web.result["budget_id"]), soft, team="web")  # nests under Web: no sibling overlap
         _coder_budget(
             c, parent, soft
         )  # a teammate's budget sits under the company's, not under a team's (it is refused there)
