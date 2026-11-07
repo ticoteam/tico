@@ -125,53 +125,82 @@ def _visits(c: "sqlite3.Connection", pipeline_id: str) -> list[dict[str, Any]]:
     )
 
 
-def _holds(c: "sqlite3.Connection", task_id: str) -> tuple[bool, list[str]]:
-    """(whether a hold is open now, the times the task's holds were released)."""
-    rows = H._rows(c.execute("SELECT released_at FROM task_holds WHERE task_id=?", (task_id,)))
-    open_now = any(not row["released_at"] for row in rows)
-    return open_now, [row["released_at"] for row in rows if row["released_at"]]
+def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -> dict[str, dict[str, Any]]:
+    """The one Late rule: the manager's rail and the overview both read it. A live ticket is late once it has spent its
+    stage's Warn after (task_steps.limit_minutes, D55) in its open stage visit, and at the limit exactly. Time on hold does
+    not count (D40): an open hold, or a waiting ticket, pauses it, and its clock starts again at the latest release.
+    `rows` are task rows (id, type_id, step_id, status, created_at). Returns {task id: {since, hours, limit_hours,
+    limit_minutes}} for the late ones only."""
+    now = when_of(at)
+    limits: dict[str, int] = {
+        str(r["id"]): r["limit_minutes"]
+        for r in H._rows(c.execute("SELECT id, limit_minutes FROM task_steps WHERE limit_minutes IS NOT NULL"))
+    }
+    live = [
+        r
+        for r in rows
+        if r.get("status") in H.ACTIVE_STATUSES and r.get("status") != "waiting" and str(r.get("step_id")) in limits
+    ]
+    if not live:
+        return {}
+    ids = [r["id"] for r in live]
+    marks = ",".join("?" * len(ids))
+    entered = {
+        r["task_id"]: r["entered_at"]
+        for r in H._rows(
+            c.execute(
+                f"SELECT task_id, entered_at FROM stage_visits WHERE left_at IS NULL AND task_id IN ({marks})", ids
+            )
+        )
+    }
+    open_now: set[str] = set()
+    released: dict[str, list[str]] = {}
+    for hold in H._rows(c.execute(f"SELECT task_id, released_at FROM task_holds WHERE task_id IN ({marks})", ids)):
+        if hold["released_at"]:
+            released.setdefault(hold["task_id"], []).append(hold["released_at"])
+        else:
+            open_now.add(hold["task_id"])
+    out: dict[str, dict[str, Any]] = {}
+    for r in live:
+        ticket = r["id"]
+        if ticket in open_now:
+            continue
+        starts = [H.parse_ts(entered.get(ticket) or r.get("created_at") or "")]
+        starts += [H.parse_ts(at_release) for at_release in released.get(ticket, [])]
+        began = max((t for t in starts if t is not None), default=None)
+        if began is None:
+            continue
+        minutes = (now - began).total_seconds() / 60
+        limit = limits[str(r["step_id"])]
+        if minutes >= limit:
+            out[ticket] = {
+                "since": stamp_of(began),
+                "hours": round(minutes / 60, 2),
+                "limit_hours": limit / 60,
+                "limit_minutes": limit,
+            }
+    return out
 
 
 def over_limit(c: "sqlite3.Connection", pipeline_id: str, at: Any) -> list[dict[str, Any]]:
-    """The live tickets of a pipeline past their stage's Limit, oldest first. The clock is step_age's: a ticket on hold
-    does not run its clock, and it starts again at the release."""
+    """The live tickets of a pipeline past their stage's Warn after, oldest first (late_tickets)."""
     rows = H._rows(
         c.execute(
             f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
             (pipeline_id, *H.ACTIVE_STATUSES),
         )
     )
-    since = SA.since_map(c, rows)
-    timed = SA._timed_steps(c)
-    stamp = stamp_of(at)
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        start = since.get(row["id"])
-        limit = SA.late_limit(c, row, timed)
-        if not start or not limit:
-            continue
-        open_now, released = _holds(c, row["id"])
-        if open_now:
-            continue
-        if released:
-            start = max(start, max(released))
-        try:
-            hours = SA._hours(stamp, start)
-        except ValueError:
-            continue
-        if hours >= limit:
-            out.append(
-                {
-                    "task_id": row["id"],
-                    "title": row.get("title") or "",
-                    "pipeline_stage_id": row.get("step_id") or "",
-                    "stage": SA._step(c, row),
-                    "hours": round(hours, 2),
-                    "limit_hours": limit,
-                    "limit_minutes": round(limit * 60),
-                    "since": start,
-                }
-            )
+    by_id = {row["id"]: row for row in rows}
+    out = [
+        {
+            "task_id": ticket,
+            "title": by_id[ticket].get("title") or "",
+            "pipeline_stage_id": by_id[ticket].get("step_id") or "",
+            "stage": SA._step(c, by_id[ticket]),
+            **info,
+        }
+        for ticket, info in late_tickets(c, rows, at).items()
+    ]
     out.sort(key=lambda item: (item["since"], item["task_id"]))
     return out
 
