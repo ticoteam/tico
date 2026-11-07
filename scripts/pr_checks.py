@@ -13,7 +13,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tokenize
 import xml.etree.ElementTree as ET
+
+if __package__:
+    from . import py_test_map
+else:
+    import py_test_map
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
@@ -914,7 +920,137 @@ def script_changes(base, head, changed, root=ROOT):
     return sorted(found)
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
+def git_output(root, *args):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
+
+
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
+
+
+def changed_lines(root, anc, head, name):
+    """(base line numbers a change removes or replaces, head line numbers it adds or replaces), from -U0 hunks. A pure
+    insertion adds head lines only: its neighbours keep their meaning, so they are not touched."""
+    text = git_output(root, "diff", "-U0", "--no-color", "--no-ext-diff", anc, head, "--", name)
+    old, new = set(), set()
+    for start, count, new_start, new_count in HUNK.findall(text):
+        if count != "0":
+            old.update(range(int(start), int(start) + int(count or 1)))
+        if new_count != "0":
+            new.update(range(int(new_start), int(new_start) + int(new_count or 1)))
+    return old, new
+
+
+def py_tests_for(name, py_map, root, anc, head, graph, added, known):
+    """Rule 6 for one changed Python file: the tests that executed the functions its diff touches, as the measured map
+    says. None when the static map decides for this file instead: it is not in the map, its diff touches module code,
+    a decorator, a class body or a signature, it removes or renames a function (its importers break, and the map does
+    not see them), or it does not parse at either commit. A function the map lacks, or whose body changed since the
+    measurement, runs the tests of the file's other functions."""
+    if not name.endswith(".py") or is_test(name) or Path(name).name == "conftest.py":
+        return None
+    per_function = py_map["files"].get(name)
+    if per_function is None:
+        return None
+    try:
+        before = git_output(root, "show", f"{anc}:{name}")
+        after = git_output(root, "show", f"{head}:{name}")
+        old, new = changed_lines(root, anc, head, name)
+        base_own, head_own = py_test_map.owners(before), py_test_map.owners(after)
+        base_hashes, head_hashes = py_test_map.function_hashes(before), py_test_map.function_hashes(after)
+        inert = {"old": py_test_map.inert_lines(before), "new": py_test_map.inert_lines(after)}
+    except (subprocess.CalledProcessError, OSError, SyntaxError, ValueError, tokenize.TokenError):
+        return None
+    if not old and not new:
+        return None
+    base_defs = {qual for kind, qual in base_own if kind == "header"}
+    touched = set()
+    for lines, own, blank in ((old, base_own, inert["old"]), (new, head_own, inert["new"])):
+        for line in lines:
+            if line in blank:
+                continue  # a blank or comment-only line runs nothing
+            kind, qual = own[line] if line < len(own) else ("module", "")
+            if kind == "function":
+                touched.add(qual)
+            elif kind == "header" and qual in base_defs:
+                return None  # a decorator, a signature or a class line that the base already had
+            elif kind == "header" and qual in head_hashes:
+                touched.add(qual)  # a new function: its body was never measured
+            elif kind != "header":
+                return None  # module code
+    if not touched <= set(head_hashes):
+        return None  # a function the diff removes or renames: its importers break, and the map does not see them
+    hashes = py_map["hashes"].get(name, {})
+    stale = sorted(
+        qual
+        for qual in touched
+        if per_function.get(qual) is None or qual not in base_hashes or hashes.get(qual) != base_hashes[qual]
+    )
+    tests, uncertain = set(), []
+    names = py_map["tests"]
+    if stale:
+        # The map cannot say what the stale functions run: every function's tests in this file, module code excepted.
+        uncertain.append(
+            f"rule 6: {name} {', '.join(stale)} is new or changed since the measured map: the tests of its file's "
+            "other functions"
+        )
+        for qual, ran in per_function.items():
+            if qual != py_test_map.MODULE:
+                tests |= {names[i] for i in ran}
+    else:
+        for qual in touched:
+            tests |= {names[i] for i in per_function[qual]}
+    # What the map does not vouch for keeps the static answer: the tests that import the file, transitively, minus the
+    # tests the map knows (new, partial, changed since the measurement, or not in it). Importers the map knows are left
+    # out: they ran the file's module code, which this change does not touch. The tests that read the file's text, and
+    # the tests that list the repository, always run.
+    tests |= {t for t in graph.affected([name], added) if is_test(t)} - known
+    readers = graph.readers(name, added)
+    if readers:
+        tests |= {t for t in graph.affected(sorted(readers), added) if is_test(t)}
+    tests |= {t for t in graph.everything if is_test(t)}
+    tests = {t for t in tests if (root / t).is_file()}
+    return {"tests": tests, "uncertain": uncertain}
+
+
+def measured_tests(py_map, root, base, head, graph, added, names, notes):
+    """Rule 6: for each changed Python file in `names`, the tests the measured map ties to its change. Files the map does
+    not cover are left to the static map. A map whose commit this checkout lacks is not used (static for every file)."""
+    try:
+        anc = git_output(root, "merge-base", base, head).strip()
+        drift = {
+            p
+            for p in git_output(root, "diff", "--name-only", "--no-renames", py_map["sha"], anc).splitlines()
+            if is_test(p)
+        }
+    except (subprocess.CalledProcessError, OSError):
+        notes.append("rule 6: the measured map's commit is not in this checkout: static map")
+        return {}
+    partial = {py_map["tests"][i] for i in py_map["partial"]}
+    known = set(py_map["tests"]) - partial - drift
+    out = {}
+    for name in names:
+        found = py_tests_for(name, py_map, root, anc, head, graph, added, known)
+        if found is not None:
+            out[name] = found
+    if out:
+        notes.append(
+            f"rule 6: {len(out)} changed Python file(s) run the tests the measured map ties to their functions"
+        )
+    return out
+
+
+def selection(
+    changed,
+    event="pull_request",
+    root=ROOT,
+    graph=None,
+    base=None,
+    added=None,
+    core=None,
+    py_map=None,
+    head="HEAD",
+    map_note="",
+):
     """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
     from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
@@ -931,6 +1067,11 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        it directly, and the smoke set's browser scripts. A UI_MAP file runs its scripts; a missing one runs the smoke set's
        browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
+    6. A changed Python file the measured map (py_test_map.py) covers runs the tests that executed the functions its
+       diff touches, instead of every test that imports it. A diff that touches module code, a decorator or a signature
+       keeps the static answer for that file; a function the map lacks, or whose body changed since the measurement,
+       runs its file's other tests. Tests the map does not know (new, partial, or changed since it) keep the static
+       answer. `py_map` is the loaded map (None: static), `head` the commit under test.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cjs).
@@ -1046,6 +1187,14 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         smoke_browser = True
         uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
         notes.append("rule 4: ui outside UI_MAP")
+    if py_map is None and map_note:
+        notes.append(f"rule 6: {map_note}: static map")
+    if py_map is not None and base is not None:
+        everyone = set(changed) if added is None else set(added)  # None: any changed file may be new
+        for name, found in measured_tests(py_map, root, base, head, graph, everyone, sorted(seeds), notes).items():
+            seeds.discard(name)
+            python |= found["tests"]
+            uncertain.extend(found["uncertain"])
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1252,7 +1401,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     added = changed_files(base, head, only="A") if base else None
     if base:
         changed = sorted(set(changed) | set(script_changes(base, head, changed)))
-    picked = selection(changed, event, base=base, added=added)
+    py_map, map_note = py_test_map.load_map()
+    picked = selection(changed, event, base=base, added=added, py_map=py_map, head=head, map_note=map_note)
     if picked["python"] is not None and not picked["caddy"]:
         image_checks(changed)
     counts = collect() if picked["python"] != [] else Counter()

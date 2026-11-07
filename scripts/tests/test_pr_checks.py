@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import pr_checks as checks
+from scripts import py_test_map as pm
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -1174,3 +1175,133 @@ def test_a_file_that_reaches_tests_only_through_a_conftest_selects_its_direct_re
     assert "backend/tests/test_unrelated.py" not in plan["python"]
     assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"])
     assert any("conftest.py is reached" in note for note in plan["uncertain"])
+
+
+HUB = "LIMIT = 3\n\n\ndef top(x):\n    return x + LIMIT\n\n\ndef other(x):\n    return x * 2\n"
+MEASURED = [
+    "backend/tests/test_top.py",
+    "backend/tests/test_other.py",
+    "backend/tests/test_both.py",
+    "backend/tests/test_import.py",
+]
+
+
+def git_commit(git, message="change"):
+    git("add", "-A")
+    git("commit", "-qm", message)
+    return git("rev-parse", "HEAD")
+
+
+def measured_hub(tmp_path):
+    """A committed hub with four tests, and the map that measured it: top ran in test_top and test_both, other in
+    test_other and test_both, and test_import only imports the hub (module code)."""
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args],
+            cwd=tmp_path,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    source(tmp_path, "backend/__init__.py", "")
+    source(tmp_path, "backend/hub.py", HUB)
+    source(tmp_path, "backend/tests/test_top.py", "from backend.hub import top\n\ndef test_top():\n    top(1)\n")
+    source(
+        tmp_path, "backend/tests/test_other.py", "from backend.hub import other\n\ndef test_other():\n    other(1)\n"
+    )
+    source(
+        tmp_path,
+        "backend/tests/test_both.py",
+        "from backend.hub import other, top\n\ndef test_both():\n    top(1)\n    other(1)\n",
+    )
+    source(tmp_path, "backend/tests/test_import.py", "import backend.hub\n\ndef test_import():\n    pass\n")
+    smoke_tree(tmp_path)
+    base = git_commit(git, "base")
+    py_map = {
+        "sha": base,
+        "tests": MEASURED,
+        "partial": [],
+        "files": {"backend/hub.py": {"top": [0, 2], "other": [1, 2], pm.MODULE: [0, 1, 2, 3]}},
+        "hashes": {"backend/hub.py": pm.function_hashes(HUB)},
+    }
+    return git, base, py_map
+
+
+def select_measured(tmp_path, base, head, py_map, changed):
+    return checks.selection(changed, root=tmp_path, base=base, added=[], core=[], py_map=py_map, head=head)
+
+
+def test_a_function_body_change_runs_only_the_tests_that_ran_that_function(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.replace("return x + LIMIT", "return x + LIMIT + 1"))
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_top.py"]
+    assert "rule 6" in plan["reason"]
+
+
+def test_a_module_level_change_keeps_the_static_answer_for_its_file(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.replace("LIMIT = 3", "LIMIT = 4"))
+    head = git_commit(git)
+    assert select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])["python"] == sorted(MEASURED)
+
+
+def test_a_removed_function_or_a_changed_signature_keeps_the_static_answer(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.split("\n\ndef other")[0] + "\n")
+    removed = git_commit(git, "remove other")
+    assert select_measured(tmp_path, base, removed, py_map, ["backend/hub.py"])["python"] == sorted(MEASURED)
+
+    source(tmp_path, "backend/hub.py", HUB.replace("def top(x):", "def top(x, y=0):"))
+    signature = git_commit(git, "signature")
+    assert select_measured(tmp_path, base, signature, py_map, ["backend/hub.py"])["python"] == sorted(MEASURED)
+
+
+def test_a_new_function_runs_the_tests_of_its_file_and_blank_lines_run_nothing(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB + "\n\ndef fresh(x):\n    return x\n")
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_other.py", "backend/tests/test_top.py"]
+    assert any("fresh" in note for note in plan["uncertain"])
+
+    source(tmp_path, "backend/hub.py", HUB.replace("\n\n\ndef other", "\n\n# the second helper\n\ndef other"))
+    comment = git_commit(git, "comment")
+    assert select_measured(tmp_path, base, comment, py_map, ["backend/hub.py"])["python"] == []
+
+
+def test_a_map_that_disagrees_with_the_base_runs_the_file_level_and_a_missing_commit_is_static(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/hub.py", HUB.replace("return x + LIMIT", "return x + LIMIT + 1"))
+    head = git_commit(git)
+    drifted = {**py_map, "hashes": {"backend/hub.py": {"top": "0" * 16}}}
+    plan = select_measured(tmp_path, base, head, drifted, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_other.py", "backend/tests/test_top.py"]
+    gone = {**py_map, "sha": "f" * 40}
+    assert select_measured(tmp_path, base, head, gone, ["backend/hub.py"])["python"] == sorted(MEASURED)
+
+
+def test_tests_the_map_does_not_vouch_for_keep_the_static_answer(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/tests/test_new.py", "from backend.hub import top\n\ndef test_new():\n    top(1)\n")
+    source(tmp_path, "backend/hub.py", HUB.replace("return x + LIMIT", "return x + LIMIT + 1"))
+    head = git_commit(git)
+    plan = select_measured(tmp_path, base, head, py_map, ["backend/hub.py"])
+    assert plan["python"] == ["backend/tests/test_both.py", "backend/tests/test_new.py", "backend/tests/test_top.py"]
+
+    partial = {**py_map, "partial": [1]}
+    plan = select_measured(tmp_path, base, head, partial, ["backend/hub.py"])
+    assert "backend/tests/test_other.py" in plan["python"]
+
+
+def test_a_changed_test_file_runs_itself(tmp_path):
+    git, base, py_map = measured_hub(tmp_path)
+    source(tmp_path, "backend/tests/test_import.py", "import backend.hub\n\ndef test_import():\n    assert True\n")
+    head = git_commit(git)
+    assert select_measured(tmp_path, base, head, py_map, ["backend/tests/test_import.py"])["python"] == [
+        "backend/tests/test_import.py"
+    ]

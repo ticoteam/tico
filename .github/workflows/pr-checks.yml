@@ -81,6 +81,16 @@ jobs:
             case $log in *'failed permanently'*) ;; *) break ;; esac
           done
           [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
+      # The measured Python test map (scripts/py_test_map.py), published on ci/py-test-map by the py-test-map workflow.
+      # Without one, Python files run the static import map, and the plan's notes say so.
+      - name: Python test map from ci/py-test-map, or the static import map when there is none
+        run: |
+          set -euo pipefail
+          if git fetch --depth=1 origin ci/py-test-map && git show FETCH_HEAD:py-test-map.json > "$RUNNER_TEMP/py-test-map.json"; then
+            echo "TICO_PY_TEST_MAP=$RUNNER_TEMP/py-test-map.json" >> "$GITHUB_ENV"
+          else
+            echo "::notice title=Python test map::no map on ci/py-test-map: Python files run the static import map"
+          fi
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:
@@ -240,6 +250,14 @@ jobs:
         run: bash scripts/shell_lint.sh
       - name: Workflows (actionlint, pinned)
         run: bash scripts/pinned_tool.sh actionlint
+      - name: Python test map (the published map's schema)
+        run: |
+          set -euo pipefail
+          if git fetch --depth=1 origin ci/py-test-map && git show FETCH_HEAD:py-test-map.json > "$RUNNER_TEMP/py-test-map.json"; then
+            python3 scripts/py_test_map.py check --map "$RUNNER_TEMP/py-test-map.json"
+          else
+            echo "::notice title=Python test map::no map on ci/py-test-map yet: nothing to check"
+          fi
 
   rust-lint:
     # Merge queue groups only: a cold clippy build on a hosted runner (no RunsOn cache) is slower than a pull request's

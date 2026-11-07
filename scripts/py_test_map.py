@@ -27,6 +27,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import hashlib
 import heapq
+import io
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,7 @@ import sys
 import sysconfig
 import tempfile
 import time
+import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 MAP_ENV = "TICO_PY_TEST_MAP"
@@ -118,19 +120,41 @@ def _scopes(tree):
 def owners(source):
     """Who owns each line of a source file. Index = line number (index 0 is unused).
 
-    ("function", qualname) for a line in a function's body; ("header", "") for a decorator, a signature or a class's
-    header; ("module", "") for everything else (imports, constants, class bodies). An inner scope overwrites the outer
-    scope it sits in, so a method's lines belong to the method and a nested def's header to "header".
+    ("function", qualname) for a line in a function's body; ("header", qualname) for a decorator, a signature or a
+    class's header, with the qualname of the def or class it belongs to; ("module", "") for everything else (imports,
+    constants, class bodies). An inner scope overwrites the outer scope it sits in, so a method's lines belong to the
+    method and a nested def's header to the nested def.
     """
     scopes = _scopes(ast.parse(source))
     size = source.count("\n") + 2
     out = [("module", "")] * (size + 1)
     for kind, qual, first, body, last, _node in sorted(scopes, key=lambda s: s[4] - s[2], reverse=True):
         for line in range(first, min(body, size + 1)):
-            out[line] = ("header", "")
+            out[line] = ("header", qual)
         tag = ("function", qual) if kind == "function" else ("module", "")
         for line in range(body, min(last, size) + 1):
             out[line] = tag
+    return out
+
+
+def inert_lines(source):
+    """Line numbers (1-based, as git counts them) that hold no code: blank lines and comment-only lines outside every
+    string literal. Editing one cannot change what runs, so a diff that only touches them keeps the map's answer."""
+    inside, opened = set(), []
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == fstring_start:
+            opened.append(token.start[0])
+        elif token.type == fstring_end:
+            inside.update(range(opened.pop(), token.end[0] + 1))
+        elif token.type == tokenize.STRING and token.end[0] > token.start[0]:
+            inside.update(range(token.start[0], token.end[0] + 1))
+    out = set()
+    for number, text in enumerate(source.split("\n"), 1):
+        stripped = text.strip()
+        if number not in inside and (not stripped or stripped.startswith("#")):
+            out.add(number)
     return out
 
 

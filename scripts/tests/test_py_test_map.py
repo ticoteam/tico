@@ -51,15 +51,16 @@ def test_owners_split_bodies_from_headers_and_module_code():
     assert owner_of(SOURCE, "LIMIT = 3") == ("module", "")
     assert owner_of(SOURCE, "import os") == ("module", "")
     # A decorator (including its continuation lines) and a signature are headers, never narrowed.
-    assert owner_of(SOURCE, "@decorator(") == ("header", "")
-    assert owner_of(SOURCE, "1,") == ("header", "")
-    assert owner_of(SOURCE, "def top(x):") == ("header", "")
+    assert owner_of(SOURCE, "@decorator(") == ("header", "top")
+    assert owner_of(SOURCE, "1,") == ("header", "top")
+    assert owner_of(SOURCE, "def top(x):") == ("header", "top")
     # A class body outside its methods is module code; a method is its own qualname, nested defs are dotted.
     assert owner_of(SOURCE, "size = 2") == ("module", "")
-    assert owner_of(SOURCE, "def grow(self, n):") == ("header", "")
+    assert owner_of(SOURCE, "def grow(self, n):") == ("header", "Box.grow")
+    assert owner_of(SOURCE, "def inner(k):") == ("header", "Box.grow.inner")
     assert owner_of(SOURCE, "return inner(n)") == ("function", "Box.grow")
     assert owner_of(SOURCE, "return k * 2") == ("function", "Box.grow.inner")
-    assert owner_of(SOURCE, "async def fetch") == ("header", "")
+    assert owner_of(SOURCE, "async def fetch") == ("header", "fetch")
     assert owner_of(SOURCE, "return 1") == ("function", "fetch")
 
 
@@ -217,3 +218,8 @@ def test_coverage_lines_refuses_a_line_under_another_test_context(tmp_path, monk
     data.write()
     with pytest.raises(pm.MapError, match="ran under context"):
         pm.coverage_lines(tmp_path, "backend/tests/test_a.py")
+
+
+def test_inert_lines_are_blank_or_comment_lines_outside_strings():
+    source = 'x = """\n\n# not a comment\n"""\n\n# a comment\ny = 1\n'
+    assert pm.inert_lines(source) == {5, 6}
