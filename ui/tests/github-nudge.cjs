@@ -74,10 +74,12 @@ async function visit(page, url, {read = true} = {}) {
   await page.waitForTimeout(200);   // the card fills in the same tick as the read; this lets the render finish
 }
 
-const scope = inTask => (inTask ? '[data-gh-nudge-task] ' : '');
-const card = (page, inTask = false) => page.locator(`${scope(inTask)}.gh-nudge`);
+// The bot's card sits in its host; a task's card sits in the task's host. The task modal can stay open over the bot
+// page, so each card is found in its own host, never by class alone.
+const host = (inTask = false) => (inTask ? '[data-gh-nudge-task]' : '#bot-github-host');
+const card = (page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge`);
 const sentence = (page, inTask = false) => card(page, inTask).locator('span').first().textContent();
-const link = (page, inTask = false) => page.locator(`${scope(inTask)}.gh-nudge a[data-gh-connect]`);
+const link = (page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge a[data-gh-connect]`);
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
