@@ -33,7 +33,7 @@ Row = dict[str, Any]
 
 DIMENSION = "offering"  # the market page's defaults, so these numbers match its first view
 BASIS = "product"
-COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")
+COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")  # core's color_of falls back on these
 CHANGED_MAX = 30
 WHAT_CHANGED_MAX = 30
 NOTE_MAX = 1000
@@ -43,7 +43,7 @@ RESEARCH_EVENT = "market.segment_research_requested"
 # The helpers of the modules that are not strict yet, each cast to the signature this module uses it with (the way
 # ask_refusals.py and heartbeat.py do it). The private ones are read on purpose: the roll-up and the market page read
 # them the same way, so this page cannot drift from the numbers the market page shows.
-_ours_ids = cast(Callable[[Conn], set[str]], SG.ours_ids)
+_ordered_segments = cast(Callable[[Conn], list[Row]], SG.ordered)  # each segment's color and rank come from here
 _require_ours = cast(Callable[[Conn, str], str], SG.require_ours)
 _market_entity = cast(Callable[[Conn, str], Row | None], MK.entity)
 _for_task = cast(Callable[[str], str], MK._for_task)  # pyright: ignore[reportPrivateUsage]
@@ -79,14 +79,12 @@ def _entity(c: Conn, sid: str) -> Row:
     return ent
 
 
-def _rank(ent: Row) -> int | None:
-    rank = ent["properties"].get("rank")
-    return rank if isinstance(rank, int) and not isinstance(rank, bool) else None
-
-
-def _color(ent: Row) -> str | None:
-    color = ent["properties"].get("color")
-    return color if color in COLORS else None
+def _listed(c: Conn, sid: str) -> Row:
+    """One of the company's segments as the list shows it (core's `ordered`): its color and its rank in the list."""
+    row = next((seg for seg in _ordered_segments(c) if seg["id"] == sid), None)
+    if row is None:
+        raise Problem("not_found", f"{sid} is not one of the company's segments", 404)
+    return row
 
 
 # ----------------------------------------------------------------------------- compare
@@ -108,7 +106,8 @@ def _round_robin(lists: list[list[Row]], limit: int) -> list[Row]:
 
 
 def compare(c: Conn) -> dict[str, Any]:
-    """Every segment the company plays in, and the newest briefing items across the whole market and them.
+    """Every segment the company plays in, in the company's list order, and the newest briefing items across the whole
+    market and them.
 
     Each segment: `money` is its accepted size in USD (`market_sizes.spend_usd`). `yearly_spend` is that money, or where
     the segment has no accepted size, the sum of its sub-segments' yearly spend at any depth (the roll-up `member_of`
@@ -127,11 +126,8 @@ def compare(c: Conn) -> dict[str, Any]:
     year = int(opts.get("year") or datetime.now(timezone.utc).year)
     root = opts.get("root")
     tree: Row = _tree(c, root) if root else {"order": [], "parent": {}, "rows": {}}
-    ents = sorted(
-        (_entity(c, sid) for sid in _ours_ids(c)),
-        key=lambda e: (_rank(e) is None, _rank(e) or 0, (e["name"] or "").lower(), e["id"]),
-    )
-    scope = sorted(set(tree["order"]) | {e["id"] for e in ents})
+    listed = _ordered_segments(c)
+    scope = sorted(set(tree["order"]) | {seg["id"] for seg in listed})
     first: dict[str, Row] = {}
     for row in c.execute(
         "SELECT * FROM market_sizes WHERE dimension=? AND year=? AND basis=? AND status='accepted' "
@@ -145,8 +141,8 @@ def compare(c: Conn) -> dict[str, Any]:
 
     segments: list[Row] = []
     lists: list[list[Row]] = [_tagged(_latest(c, "", body=False, active=active), "")]
-    for ent in ents:
-        sid: str = ent["id"]
+    for seg in listed:
+        sid: str = seg["id"]
         own: Row = accepted.get(sid) or {}
         spend: Any
         if sid in rolled:
@@ -165,8 +161,8 @@ def compare(c: Conn) -> dict[str, Any]:
         segments.append(
             {
                 "id": sid,
-                "name": ent["name"],
-                "color": _color(ent),
+                "name": seg["name"],
+                "color": seg["color"],
                 "money": own.get("spend_usd"),
                 "yearly_spend": spend,
                 "growth": own.get("growth_pct"),
@@ -183,7 +179,7 @@ def compare(c: Conn) -> dict[str, Any]:
 def page(c: Conn, sid: str) -> dict[str, Any]:
     """One segment's market: its name and one-line who, the five answers and briefing of its newest briefing, its sizes
     as the market page shows them, its players, and the history of it, its sub-segments and its players."""
-    ent = _entity(c, sid)
+    listed = _listed(c, sid)
     view = _spend(c, DIMENSION, BASIS)
     entry: Row = (
         next((s for s in view["segments"] if s["id"] == sid), None)
@@ -201,7 +197,13 @@ def page(c: Conn, sid: str) -> dict[str, Any]:
     ).fetchall()
     what_changed: list[Row] = [dict(row) for row in history]
     return {
-        "segment": {"id": sid, "name": ent["name"], "who": ent["summary"], "color": _color(ent), "rank": _rank(ent)},
+        "segment": {
+            "id": sid,
+            "name": listed["name"],
+            "who": listed["who"],
+            "color": listed["color"],
+            "rank": listed["rank"],
+        },
         "answers": shown.get("answers", {}),
         "briefing": briefing,
         "sizes": {
