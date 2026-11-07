@@ -21,12 +21,18 @@ import logging
 import math
 import sqlite3
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from clients import judge as J
+from clients import judge as clients_judge
 
-from . import hubdb as H
-from . import judge
+from . import hubdb
+from . import judge as server_judge
+
+# These modules are untyped: through Any, their calls are Any here, not partially unknown (as in stranded_resume.py).
+H: Any = hubdb
+J: Any = clients_judge
+judge: Any = server_judge
+JudgeError = clients_judge.JudgeError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -119,16 +125,18 @@ def _questions() -> dict[str, Any]:
 def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
     """The engine the server asks: Decide's chain for jev and sonnet, the Gateway's Low chat tier for haiku-5.5."""
 
+    db: Any = store
+
     def engine(model: str, state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
         if model in DECIDE_LEVELS:
-            with store.read() as c:
+            with db.read() as c:
                 asks = judge.server_engine(store, c, judge.primary_engine(store.settings, store))
             if asks is None:
-                raise J.JudgeError("unconfigured", "no decision model is configured on this server")
+                raise JudgeError("unconfigured", "no decision model is configured on this server")
             result = asks(state, questions, label, level=DECIDE_LEVELS[model])
             p = _probability(result["answers"]["met"]["noul"])
             if p is None:
-                raise J.JudgeError("shape", "the decision model's answer has no probability")
+                raise JudgeError("shape", "the decision model's answer has no probability")
             return {
                 "p": p,
                 "reason": "",
@@ -144,20 +152,26 @@ def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any
 
 def _gateway_haiku(store: "Store", state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
     """Haiku 5.5 on the Gateway's Low tier, asked for one JSON answer. Metered under the same cap as every Decide call."""
-    from clients import gateway as G
+    from clients import gateway as gateway_client
 
-    from . import gateway_connection, gateway_tiers
+    from . import gateway_connection as connection_module
+    from . import gateway_tiers as tiers_module
     from .credentials import Vault
 
+    G: Any = gateway_client
+    gateway_connection: Any = connection_module
+    gateway_tiers: Any = tiers_module
+    db: Any = store
+
     settings = store.settings
-    with store.read() as c:
+    with db.read() as c:
         if not gateway_connection.connected(c, settings):
-            raise J.JudgeError("unconfigured", "the Tico AI Gateway is not connected")
+            raise JudgeError("unconfigured", "the Tico AI Gateway is not connected")
         base = G.chat_base(gateway_connection.url(c, settings))
     vault = Vault(store)
 
     def key_of() -> str:
-        with store.read() as c:
+        with db.read() as c:
             secret, now_base, _ = gateway_connection.target(c, vault, settings)
         return secret if G.chat_base(now_base) == base else ""
 
@@ -175,11 +189,12 @@ def _gateway_haiku(store: "Store", state: dict[str, Any], questions: dict[str, A
         }
 
     result = judge.metered(store, [write.model], state, questions, label, call)
-    parsed = result["answers"][0]
-    p = _probability(parsed.get("p")) if isinstance(parsed, dict) else None
+    parsed: Any = result["answers"][0]
+    answer: dict[str, Any] = cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else {}
+    p = _probability(answer.get("p"))
     if p is None:
-        raise J.JudgeError("shape", "the model's answer has no probability")
-    reason = " ".join(str(parsed.get("reason") or "").split())
+        raise JudgeError("shape", "the model's answer has no probability")
+    reason = " ".join(str(answer.get("reason") or "").split())
     return {
         "p": p,
         "reason": reason,
@@ -229,7 +244,7 @@ def judge_once(
         return unsure("No judge is configured on this server")
     try:
         result = ask(chosen, _state(requirement, attachment), _questions(), QUESTION_SET)
-    except J.JudgeError as exc:
+    except JudgeError as exc:
         return unsure(judge.FAILED.get(J.error_code(exc), exc.detail))
     p = _probability(result.get("p"))
     if p is None:
@@ -329,7 +344,8 @@ def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) 
 def tick(store: "Store", at: Any = None) -> int:
     """One judge pass: up to TICK_LIMIT waiting attachments, each asked and recorded. Returns how many were judged. Most
     installs have no bot-reviewed requirement, so the first query finds none and the pass ends there."""
-    with store.read() as c:
+    db: Any = store
+    with db.read() as c:
         if (
             c.execute(
                 "SELECT 1 FROM stage_requirements WHERE reviewed_by IN ('bot','bot_then_person') AND retired_at IS NULL LIMIT 1"
@@ -343,15 +359,15 @@ def tick(store: "Store", at: Any = None) -> int:
     ask = ENGINE or live_engine(store)
     judged = 0
     for job in jobs:
-        with store.read() as c:
+        with db.read() as c:
             requirement = {
                 "name": job["name"],
                 "rubric": job["rubric"],
                 "pipeline_id": job["pipeline_id"],
                 "stage_requirement_id": job["stage_requirement_id"],
             }
-            result = judge_once(c, requirement, job, settings=store.settings, engine=ask)
-        with store.transaction() as c:
+            result = judge_once(c, requirement, job, settings=db.settings, engine=ask)
+        with db.transaction() as c:
             _record(c, job, result)
         judged += 1
     return judged
@@ -362,7 +378,7 @@ def dispatch(store: "Store", at: Any, failures: list[dict[str, str]]) -> None:
     the same attachments still waiting."""
     try:
         tick(store, at)
-    except (J.JudgeError, sqlite3.Error, OSError, ValueError) as exc:
+    except (JudgeError, sqlite3.Error, OSError, ValueError) as exc:
         LOG.warning("The requirement judge pass failed: %s", type(exc).__name__)
         failures.append({"pipeline_judges": type(exc).__name__})
 

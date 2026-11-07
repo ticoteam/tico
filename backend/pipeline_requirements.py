@@ -9,15 +9,18 @@ Retiring a requirement keeps its rows and its log; it only stops counting for ne
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import Request
 from pydantic import Field
 
-from . import hubdb as H
+from . import hubdb
 from . import pipeline_rights
 from .models import Contract
 from .store import Problem
+
+# hubdb is untyped: its functions are Any here (as in stranded_resume.py), not partially unknown.
+H: Any = hubdb
 
 if TYPE_CHECKING:
     import sqlite3
@@ -141,11 +144,11 @@ def check_definition(body: dict[str, Any]) -> dict[str, Any]:
     kind, reviewed_by = body["kind"], body["reviewed_by"]
     needs = dict(body.get("needs") or {})
     if kind == "attachment":
-        formats = needs.get("formats")
-        if not isinstance(formats, list) or not formats or any(f not in FORMATS for f in formats):
+        formats: Any = needs.get("formats")
+        if not isinstance(formats, list) or not formats or any(f not in FORMATS for f in cast("list[Any]", formats)):
             raise Problem("validation", f"An attachment needs formats from: {', '.join(FORMATS)}", 422)
         needs = {
-            "formats": sorted(set(formats)),
+            "formats": sorted(set(cast("list[str]", formats))),
             "newer_than_change": bool(needs.get("newer_than_change", True)),
             "is_work": bool(needs.get("is_work", False)),
         }
@@ -365,18 +368,19 @@ def set_stage_limit(conn: "sqlite3.Connection", actor: str, stage_id: str, minut
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:
     """The requirement, pipeline settings and stage limit routes. Reads need a signed-in company member; every write
     goes through pipeline_rights, so a bot is refused unless it is the pipeline's owner."""
+    db: Any = store  # Store is untyped, so its connections are Any here, not partially unknown
 
     @app.get("/api/v2/pipeline-stages/{stage_id}/requirements")
     def stage_requirements(request: Request, stage_id: str) -> dict[str, Any]:
         """The live requirements of a stage, in order."""
-        with store.read() as c:
+        with db.read() as c:
             _stage(c, stage_id)
             return {"requirements": requirements_for_stage(c, stage_id)}
 
     @app.get("/api/v2/requirements/{requirement_id}")
     def requirement_read(request: Request, requirement_id: str) -> dict[str, Any]:
         """One requirement with its version history."""
-        with store.read() as c:
+        with db.read() as c:
             row = requirement(c, requirement_id)
             if row is None:
                 raise Problem("not_found", "No such requirement", 404)
@@ -386,28 +390,48 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
     def requirement_add(request: Request, stage_id: str, body: RequirementBody) -> dict[str, Any]:
         """Add a requirement to a stage. The pipeline's owner and admins only."""
         who = request.state.identity
-        return mutate(request, body, lambda c: add(c, who.actor, stage_id, body.model_dump()))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return add(c, who.actor, stage_id, body.model_dump())
+
+        return mutate(request, body, write)
 
     @app.put("/api/v2/requirements/{requirement_id}")
     def requirement_edit(request: Request, requirement_id: str, body: RequirementBody) -> dict[str, Any]:
         """Replace a requirement's definition; the version it replaces is kept. The pipeline's owner and admins only."""
         who = request.state.identity
-        return mutate(request, body, lambda c: edit(c, who.actor, requirement_id, body.model_dump()))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return edit(c, who.actor, requirement_id, body.model_dump())
+
+        return mutate(request, body, write)
 
     @app.delete("/api/v2/requirements/{requirement_id}")
     def requirement_retire(request: Request, requirement_id: str) -> dict[str, Any]:
         """Retire a requirement: it stops counting for new tickets and its history stays."""
         who = request.state.identity
-        return mutate(request, Nothing(), lambda c: retire(c, who.actor, requirement_id))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return retire(c, who.actor, requirement_id)
+
+        return mutate(request, Nothing(), write)
 
     @app.patch("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings(request: Request, pipeline_id: str, body: PipelineSettingsBody) -> dict[str, Any]:
         """The pipeline's prefix, owner, manager and manager cadence. The pipeline's owner and admins only."""
         who = request.state.identity
-        return mutate(request, body, lambda c: update_settings(c, who.actor, pipeline_id, body.model_dump()))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return update_settings(c, who.actor, pipeline_id, body.model_dump())
+
+        return mutate(request, body, write)
 
     @app.patch("/api/v2/pipeline-stages/{stage_id}")
     def stage_limit(request: Request, stage_id: str, body: StageLimitBody) -> dict[str, Any]:
         """The stage's Warn-after time in minutes (null for none). The pipeline's owner and admins only."""
         who = request.state.identity
-        return mutate(request, body, lambda c: set_stage_limit(c, who.actor, stage_id, body.limit_minutes))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return set_stage_limit(c, who.actor, stage_id, body.limit_minutes)
+
+        return mutate(request, body, write)

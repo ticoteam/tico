@@ -18,11 +18,14 @@ from urllib.parse import urlparse
 from fastapi import Request
 from pydantic import Field
 
-from . import hubdb as H
+from . import hubdb
 from . import pipeline_requirements as R
 from . import pipeline_rights
 from .models import Contract
 from .store import Problem
+
+# hubdb is untyped: its functions are Any here (as in stranded_resume.py), not partially unknown.
+H: Any = hubdb
 
 if TYPE_CHECKING:
     import sqlite3
@@ -155,9 +158,10 @@ def attach(
     """Attach evidence to a requirement of the ticket's current stage. `who` is the caller's identity; the writer check
     (a bot must be able to edit the ticket) and the reviewer's privacy check both apply."""
     actor = str(who.actor)
-    auth.task(conn, who, task_id)  # 404 unless the caller can read the ticket
+    guard: Any = auth  # the Auth class is untyped
+    guard.task(conn, who, task_id)  # 404 unless the caller can read the ticket
     H._writer(conn, actor, task_id=task_id)
-    task = H.task(conn, task_id) or {}
+    task: dict[str, Any] = H.task(conn, task_id) or {}
     req = R.requirement(conn, requirement_id)
     if req is None or req["retired_at"]:
         raise Problem("not_found", "No such requirement", 404)
@@ -170,7 +174,7 @@ def attach(
         raise Problem("forbidden", "The reviewer cannot read this ticket, so cannot see the attachment", 403)
     needs = req["needs"]
     what = _source(conn, body)
-    formats = needs.get("formats") or []
+    formats: list[str] = needs.get("formats") or []
     if formats and what["format"] not in formats:
         raise Problem("validation", f"This requirement takes {', '.join(formats)}, not {what['format']}", 422)
     if needs.get("is_work"):
@@ -213,7 +217,8 @@ def remove(conn: "sqlite3.Connection", auth: "Auth", who: Any, attachment_id: st
     found = conn.execute("SELECT * FROM requirement_attachments WHERE id=?", (attachment_id,)).fetchone()
     if found is None or found["removed_at"]:
         raise Problem("not_found", "No such attachment", 404)
-    auth.task(conn, who, found["task_id"])
+    guard: Any = auth  # the Auth class is untyped
+    guard.task(conn, who, found["task_id"])
     req = R.requirement(conn, found["stage_requirement_id"]) or {}
     if actor != found["attached_by"] and not pipeline_rights.may_edit_rules(conn, actor, req.get("pipeline_id")):
         raise Problem("forbidden", "Only who attached it, or the pipeline's owner and admins, may remove it", 403)
@@ -227,24 +232,34 @@ def remove(conn: "sqlite3.Connection", auth: "Auth", who: Any, attachment_id: st
 
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:
     """The attachment routes: attach to a requirement on a ticket, list them, and remove one."""
+    guard: Any = auth
+    db: Any = store  # Store is untyped, so its connections are Any here, not partially unknown
 
     @app.post("/api/v2/tasks/{tid}/requirements/{requirement_id}/attachments")
     def requirement_attach(request: Request, tid: str, requirement_id: str, body: AttachBody) -> dict[str, Any]:
         """Attach a company file, an uploaded blob or a link as evidence for a requirement of the ticket's current stage.
         A person or a bot may attach; the reviewer must be able to read the ticket."""
         who = request.state.identity
-        return mutate(request, body, lambda c: attach(c, auth, who, tid, requirement_id, body.model_dump()))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return attach(c, auth, who, tid, requirement_id, body.model_dump())
+
+        return mutate(request, body, write)
 
     @app.get("/api/v2/tasks/{tid}/requirements/{requirement_id}/attachments")
     def requirement_attachments(request: Request, tid: str, requirement_id: str) -> dict[str, Any]:
         """The evidence attached to one requirement on a ticket, newest first, with its digest and work version."""
         who = request.state.identity
-        with store.read() as c:
-            auth.task(c, who, tid)
+        with db.read() as c:
+            guard.task(c, who, tid)
             return {"attachments": attachments_for(c, tid, requirement_id)}
 
     @app.delete("/api/v2/requirement-attachments/{attachment_id}")
     def requirement_detach(request: Request, attachment_id: str) -> dict[str, Any]:
         """Remove an attachment; it stops counting for the requirement."""
         who = request.state.identity
-        return mutate(request, R.Nothing(), lambda c: remove(c, auth, who, attachment_id))
+
+        def write(c: "sqlite3.Connection") -> dict[str, Any]:
+            return remove(c, auth, who, attachment_id)
+
+        return mutate(request, R.Nothing(), write)
