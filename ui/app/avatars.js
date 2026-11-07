@@ -220,7 +220,7 @@ const RUNTIME_LABELS = {codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini',
 const RUNTIME_MARKS = {codex: 'openai', claude: 'anthropic', gemini: 'google', antigravity: 'google', grok: 'xai',
   grokbot: 'xai', 'grok-bot': 'xai', cursor: 'cursor', pi: 'openrouter', openrouter: 'openrouter'};
 // Hover and screen readers say harness, model and effort in words: "Claude Code Opus 5.5 Med", "Codex GPT 6.1 Sol High".
-// The model is modelWords (ui/app/format.js) without a first word the harness already says; no effort, nothing after.
+// The model is modelWords (ui/app/format.ts) without a first word the harness already says; no effort, nothing after.
 const EFFORT_SHORT = {low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra'};
 function runtimeTag(e) {
   const raw = String(e?.harness || e?.resolved_runtime || e?.runtime || '').trim().toLowerCase();

@@ -139,8 +139,8 @@ Writes are recorded in the activity log with the actor (`docs.created_at`, `docs
 `docs.locked`, `docs.imported`, `docs.linked`, ...). `GET /api/v2/context/search?source=docs`
 covers internal, indexed external and linked docs too.
 
-The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.js`,
-`ui/docs-editor.js`, `ui/docs-search.js`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cjs`.
+The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.ts`,
+`ui/docs-editor.ts`, `ui/docs-search.js`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cjs`.
 
 Archive removes a doc from the active list and search. **Undo** brings it back immediately.
 Choose **Archived** on Docs to browse archived docs, open one and choose **Restore**. Restore keeps its history;

@@ -9,7 +9,7 @@ globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript o
     styles/*.css      the stylesheet, one file per area, linked in cascade order
     app/*.js, *.ts    the app: routing, state, sidebar and one file per page or feature
     *.js              features that mount into a page through a small `window.*` API
-                      (docs-page.js, goals-kpis.js, first-run.js, support.js, ...)
+                      (docs-page.ts, goals-kpis.js, first-run.js, support.js, ...)
     assets/, vendor/  images, the text font (Inter) and the icon font, marked
     tests/*.cjs       browser tests (`npm run test:ui`)
     sw.js             the service worker; it caches nothing (it lets the hashed bundle through to the browser cache)

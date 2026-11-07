@@ -719,8 +719,14 @@ class DependencyMap:
         users |= {
             p for p, patterns in self.globs.items() if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)
         }
+        users |= self.listed_by(name, added)
+        return users
+
+    def listed_by(self, name, added):
+        """The files whose listing of a folder holds a changed file: `ui/*.js` lists ui/app/x.js too only when recursive
+        (`rglob`, `**`), and a listing that uses only names sees it only when it is new."""
         folder = str(Path(name).parent)
-        users |= {
+        return {
             p
             for p, listings in self.listings.items()
             if any(
@@ -730,7 +736,6 @@ class DependencyMap:
                 for d, g, recursive, names_only in listings
             )
         }
-        return users
 
     def fixture_users(self, name, read):
         """Tests that use a non-autouse conftest fixture whose body runs `name` (or reads it, when `read`)."""
@@ -946,8 +951,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        reads, adds the smoke set; the tests below it are not reached through it.
     3. A Python file the map cannot parse, or does not know, runs the checks that name its path, else the smoke set.
     4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
-       it directly, and the smoke set's browser scripts. A UI_MAP file runs its scripts; a missing one runs the smoke set's
-       browser scripts instead.
+       it directly or run a module that lists its folder (a test that globs ui/*.js is reached through the module it
+       runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
+       a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
@@ -1061,6 +1067,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
         browser |= {Path(p).stem for p in linked if is_browser(p)}
         python |= {p for p in linked if is_test(p)}
+        # A module that lists the folder (scripts/build-icon-font.py globs ui/*.js) reaches the tests that run it.
+        python |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
+        if is_browser(name):  # a changed browser script runs itself: it is the check that changed
+            browser.add(Path(name).stem)
         smoke_browser = True
         uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
         notes.append("rule 4: ui outside UI_MAP")
@@ -1310,10 +1320,10 @@ def factory_shards():
 
 
 def factory_plan(event, changed):
-    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. Only a merge queue group runs it,
-    so a pull request's plan never packs the sim."""
+    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. A merge queue group and a pull
+    request both run it on RunsOn, one VM per group, so both pack it; the workflow decides which pull requests get it."""
     reason = factory_reason(changed)
-    shards = factory_shards() if reason and event == "merge_group" else ["1/1"]
+    shards = factory_shards() if reason and event in ("merge_group", "pull_request") else ["1/1"]
     return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
 
 
@@ -1395,9 +1405,14 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
-def run(plan_path, suite):
+def run(plan_path, suite, root=None):
+    """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
+    `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value)."""
+    root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
-    job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
+    # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
+    entries = plan["matrix"]["include"] if "matrix" in plan else plan["jobs"]
+    job = next(j for j in entries if j.get("suite", j.get("name")) == suite)
     files = job["files"]
     if suite == "selection":
         if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
@@ -1409,9 +1424,9 @@ def run(plan_path, suite):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
-        env = {**os.environ, "TICO_UI_TIMINGS": str(ROOT / "ci-results" / f"{suite}.json")}
+        env = {**os.environ, "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json")}
     else:
-        if not files or any(not (ROOT / f).is_file() for f in files):
+        if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
         command = [
             sys.executable,
@@ -1428,11 +1443,11 @@ def run(plan_path, suite):
         if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
         command += files
-    (ROOT / "ci-results").mkdir(exist_ok=True)
+    (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
-    result = subprocess.run(command, cwd=ROOT, env=env)
+    result = subprocess.run(command, cwd=root, env=env)
     if result.returncode == 0 and not suite.startswith("browser-"):
-        cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
+        cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
     return result.returncode or rust
@@ -1536,6 +1551,7 @@ def main():
     execute = sub.add_parser("run")
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
+    execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -1554,7 +1570,7 @@ def main():
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
-        return run(args.plan, args.suite)
+        return run(args.plan, args.suite, Path(args.root))
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:

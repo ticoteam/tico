@@ -489,8 +489,11 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
     # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first;
     # test_system_jobs_list scans all of backend/ for recorded job keys, so it is one more.
+    # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
+    # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
+    # seconds each) run for any test file change too.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 26
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 31
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
@@ -939,22 +942,55 @@ def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_g
     ]
 
 
-def test_each_push_runs_only_the_cheap_checks_on_hosted_runners_and_the_queue_runs_the_rest():
+def test_each_push_runs_the_cheap_checks_hosted_and_a_ready_pull_request_runs_its_tests_on_runners():
     doc = workflow_jobs()
     assert doc[True]["merge_group"] == {"types": ["checks_requested"]}
     assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
     assert doc["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
     assert "github.ref" in doc["concurrency"]["group"]
-    pull_request_jobs = {name for name, job in doc["jobs"].items() if "merge_group" not in str(job.get("if", ""))}
-    assert pull_request_jobs == {"plan", "static", "checks"}
-    for name in pull_request_jobs - {"checks"}:
-        runs_on = doc["jobs"][name]["runs-on"]
-        # Only the merge queue takes the RunsOn label; every other event gets the free hosted runner.
+    jobs = doc["jobs"]
+    # Every event runs these on the free hosted runner; only a merge queue group or a ready pull request takes the label.
+    for name in ("plan", "static"):
+        runs_on = jobs[name]["runs-on"]
         assert runs_on.startswith(HOSTED_SWITCH + "(github.event_name == 'merge_group' && format('runs-on={0}/"), name
         assert runs_on.endswith("|| 'ubuntu-24.04') }}"), name
-    assert doc["jobs"]["checks"]["runs-on"] == "ubuntu-24.04"
-    for name in set(doc["jobs"]) - pull_request_jobs:
-        assert "github.event_name == 'merge_group'" in str(doc["jobs"][name]["if"]), name
+    assert jobs["checks"]["runs-on"] == "ubuntu-24.04"
+    # A ready pull request and a merge queue group run the tests and the factory sim on the same RunsOn labels.
+    for name in ("tests", "factory-sim"):
+        assert jobs[name]["runs-on"].startswith(HOSTED_SWITCH + "format('runs-on={0}/"), name
+        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
+        assert "github.event_name == 'pull_request'" in jobs[name]["if"], name
+    # Everything else runs in the merge queue alone.
+    queue_only = ("rust-lint", "desktop-app", "recorder", "caddy-linux", "timings")
+    for name in queue_only:
+        assert "github.event_name == 'merge_group'" in str(jobs[name]["if"]), name
+        assert "github.event_name == 'pull_request'" not in str(jobs[name]["if"]), name
+    assert set(jobs) == {"plan", "static", "tests", "factory-sim", "checks", *queue_only}
+
+
+def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
+    jobs = workflow_jobs()["jobs"]
+    assert jobs["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
+    for name in ("tests", "factory-sim"):
+        assert jobs[name]["needs"] == "plan", name  # a draft has no plan, so the leg is skipped with it
+        # A fork's pull request is not this repository's head, so it runs no leg here; a maintainer queues it instead.
+        assert "!github.event.pull_request.draft" in jobs[name]["if"], name
+        assert "github.event.pull_request.head.repo.full_name == github.repository" in jobs[name]["if"], name
+
+
+def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
+    jobs = workflow_jobs()["jobs"]
+    for name in ("tests", "factory-sim"):
+        job = jobs[name]
+        assert job["permissions"] == {"contents": "read", "actions": "write"}, name
+        cancel = job["steps"][-1]
+        assert cancel["if"] == "failure()" and cancel["run"] == 'gh run cancel "$GITHUB_RUN_ID"', name
+        assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
+    # Only the two heavy legs may cancel; every other job keeps the workflow's read-only token.
+    assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim"}
+    # The required gate still runs after a cancel, and a cancelled timing receipt never waits for a runner.
+    assert "always()" in jobs["checks"]["if"] and "tests" in jobs["checks"]["needs"]
+    assert "!cancelled()" in jobs["timings"]["if"]
 
 
 def test_runner_labels_stay_at_two_or_four_vcpus():
@@ -1052,14 +1088,16 @@ def test_an_empty_or_unmeasured_change_runs_the_sim(tmp_path):
     assert "missing" in checks.factory_reason(["docs/releasing.md"], root=tmp_path)
 
 
-def test_a_factory_plan_packs_the_sim_only_for_a_merge_group(monkeypatch):
+def test_a_factory_plan_packs_the_sim_for_a_queue_group_or_a_pull_request_only_when_it_runs(monkeypatch):
     monkeypatch.setattr(checks, "factory_call_path", lambda root=checks.ROOT: measured(code=["backend/wake_rules.py"]))
-    pull = checks.factory_plan("pull_request", ["backend/wake_rules.py"])
-    assert pull["run"] is True and pull["shards"] == ["1/1"]
-    queue = checks.factory_plan("merge_group", ["backend/wake_rules.py"])
-    assert queue["run"] is True and queue["shards"] == checks.factory_shards()
+    shards = checks.factory_shards()
+    # One VM per group: a ready pull request's sim is packed as the queue's is, never run as one 1/1 VM.
+    for event in ("merge_group", "pull_request"):
+        plan = checks.factory_plan(event, ["backend/wake_rules.py"])
+        assert plan["run"] is True and plan["shards"] == shards, event
     unrelated = checks.factory_plan("merge_group", ["ui/app/chat.ts"])
     assert unrelated["run"] is False and unrelated["shards"] == ["1/1"]
+    assert checks.factory_plan("pull_request", ["ui/app/chat.ts"])["shards"] == ["1/1"]
 
 
 def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm():
@@ -1078,12 +1116,13 @@ def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm
     assert slowest_vm <= 300, slowest_vm
 
 
-def test_the_factory_sim_job_runs_only_in_the_queue_on_the_plans_shards():
+def test_the_factory_sim_runs_in_the_queue_and_on_a_ready_pull_request_on_the_plans_shards():
     jobs = workflow_jobs()["jobs"]
     assert {"factory", "factory_shards"} <= set(jobs["plan"]["outputs"])
     job = jobs["factory-sim"]
     assert job["needs"] == "plan"
-    assert "github.event_name == 'merge_group'" in job["if"] and "needs.plan.outputs.factory == 'true'" in job["if"]
+    assert "needs.plan.outputs.factory == 'true'" in job["if"]
+    assert "github.event_name == 'merge_group'" in job["if"] and "github.event_name == 'pull_request'" in job["if"]
     assert job["strategy"]["matrix"]["shard"] == "${{ fromJSON(needs.plan.outputs.factory_shards) }}"
     assert "runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7" in job["runs-on"]
     [sim] = [step["run"] for step in job["steps"] if "evals.factory.run" in step.get("run", "")]
@@ -1317,3 +1356,74 @@ def test_a_file_that_reaches_tests_only_through_a_conftest_selects_its_direct_re
     assert "backend/tests/test_unrelated.py" not in plan["python"]
     assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"])
     assert any("conftest.py is reached" in note for note in plan["uncertain"])
+
+
+def test_a_changed_browser_script_runs_itself_when_the_map_does_not_list_it(tmp_path):
+    # The queue group of #2844 changed ui/tests/threads.cjs and threads-real-hub.cjs and ran neither: a ui/ file outside
+    # UI_MAP seeded nothing, and a browser script names no other script.
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/tests/notes.cjs", "// a browser script\n")
+    plan = checks.selection(["ui/tests/notes.cjs"], root=tmp_path, core=[])
+    assert "notes" in plan["browser"]
+    assert "--all" not in plan["browser"]
+
+
+def icon_font_tree(root):
+    """#2893's shape: scripts/build-icon-font.py globs ui/app/*.js and backend/tests/test_icon_font.py runs it."""
+    source(
+        root,
+        "scripts/build-icon-font.py",
+        "from pathlib import Path\n"
+        'ROOT = Path(__file__).resolve().parent.parent\nUI = ROOT / "ui"\n'
+        'def used_icons():\n    return [p.read_text() for p in UI.glob("app/*.js")]\n',
+    )
+    source(
+        root,
+        "backend/tests/test_icon_font.py",
+        "import importlib.util\nfrom pathlib import Path\n"
+        'ROOT = Path(__file__).resolve().parents[2]\n'
+        '_spec = importlib.util.spec_from_file_location("build_icon_font", ROOT / "scripts" / "build-icon-font.py")\n'
+        "build = importlib.util.module_from_spec(_spec)\n_spec.loader.exec_module(build)\n"
+        "def test_every_icon_in_use_is_in_the_font_manifest():\n    assert build.used_icons() is not None\n",
+    )
+
+
+def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui_folder(tmp_path):
+    # #2893 changed ui/app/ files. backend/tests/test_icon_font.py runs scripts/build-icon-font.py, which reads each
+    # ui/app/*.js: the test is reached through that module, not through a direct read of the file.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
+    source(tmp_path, "ui/app/new.js", "export const icon = 'filter_list';\n")
+    source(tmp_path, "ui/styles/new.css", ".x { color: red; }\n")
+    plan = checks.selection(["ui/app/new.js"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" in plan["python"]
+    unrelated = checks.selection(["ui/styles/new.css"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" not in unrelated["python"]
+
+
+def test_a_verdict_moves_change_runs_the_factory_sim_that_the_queue_did_not_run_for_2841():
+    # #2841 changed backend/verdict_moves.py and merged through the queue, which had no factory rule then: the sim went
+    # red on main at 21:26Z (verdict_past_open_sibling). The recorded call path reaches the file, so the sim runs.
+    assert checks.factory_reason(["backend/verdict_moves.py"]) is not None
+
+
+def test_a_template_edit_runs_the_hub_command_test_in_the_contract_job_that_2866_broke(mapped):
+    # #2866 added librarian commands with no recorded refusal. test_e2e_cli walks templates/ and skills/ and runs in the
+    # contract job, which any change under those folders selects.
+    assert "backend/tests/test_e2e_cli.py" in checks.CONTRACT_TESTS
+    plan = checks.selection(["templates/catalog/librarian/AGENT.md"])
+    assert plan["contracts"] is True
+
+
+def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder_listing(tmp_path, monkeypatch):
+    # A UI_MAP file runs its mapped scripts, and the module that globs ui/app/*.js reaches test_icon_font for it too,
+    # as it does for a file the map does not list. The map lists this file, so no rule-4 "not in UI_MAP" note applies.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
+    source(tmp_path, "ui/app/mapped.js", "export const icon = 'home';\n")
+    source(tmp_path, "ui/tests/mapped-one.cjs", "// the browser script the map links to\n")
+    monkeypatch.setattr(checks, "UI_MAP", {"ui/app/mapped.js": ["mapped-one"]})
+    plan = checks.selection(["ui/app/mapped.js"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" in plan["python"]
+    assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
+    assert not any("is not in UI_MAP" in note for note in plan["uncertain"])

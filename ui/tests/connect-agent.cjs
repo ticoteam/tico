@@ -1,4 +1,4 @@
-// Connect an agent (ui/connect-agent.js): one tile per agent with its logo; picking Grok shows only
+// Connect an agent (ui/connect-agent.ts): one tile per agent with its logo; picking Grok shows only
 // Grok's steps with the MCP URL; Create token shows the token once and fills the snippet; polling the
 // token list flips to Connected when the agent's first call lands; the token never reaches storage, a
 // URL or the console; an existing connection can be revoked. Desktop and phone, including the protected MCP hostname.

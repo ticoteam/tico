@@ -175,7 +175,7 @@ function redesignRoute(r) {
     else $('#main').innerHTML = '<div id="automations-root" class="rd-automations"></div>';
     return true;
   }
-  if (toolsRoute(r)) return true;   // Tools and every old address of what it holds (ui/app/tools.js)
+  if (toolsRoute(r)) return true;   // Tools and every old address of what it holds (ui/app/tools.ts)
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
