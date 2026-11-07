@@ -1,6 +1,6 @@
 // Tools > GitHub with a personal account (ui/github-connect.js). Until the owner authorizes Tico for the account, the card
-// says Tico can't create bot repositories on it yet and offers Authorize Tico, with the callback URL for an App set up before
-// that. Once authorized it says Tico can create them. Either way it names the waiting bot's repository and links to the App's
+// says Let Tico create repositories, with one Authorize button, and names the callback URL only when the App was set up
+// without it. Once authorized it says Tico can create them. Either way it names the waiting bot's repository and links to the App's
 // settings and the uninstall page on github.com/settings. Without a connection, the form asks for one account or organization
 // name. Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
 const {chromium} = require('playwright');
@@ -88,16 +88,19 @@ async function themed(page, locator, name) {
       const host = page.locator('#set-github'), card = page.locator('section:has(#set-github)');
       await host.locator('[data-gh-install]').waitFor();
 
-      // Connected as a personal account, not yet authorized: Tico asks for the authorization, and names the callback URL.
+      // Connected as a personal account, not yet authorized: one line asks for the authorization, with one button, and the
+      // callback URL is named only when the App was set up without it.
       const text = await words(host);
       assert.match(text, /Connected to ana-dev through the app acme-tico\./);
       assert.match(text, /Installed on the account\./);
-      assert.match(text, /Tico can't create bot repositories on ana-dev yet\./);
+      assert.match(text, /Let Tico create repositories\./);
+      assert.doesNotMatch(text, /signs in as you|Authorize it once/, 'no sign-in explanation on the card');
       assert.doesNotMatch(text, /New bots wait for you to create their repository on GitHub\./, 'the old wait-only line is gone');
       assert.match(text, /Waiting for a repository: newbie \(create ana-dev\/bot-newbie yourself\)\./);
       assert.doesNotMatch(text, /organi[sz]ation/i, 'a personal account is never called an organization');
-      assert.equal(await host.getByRole('button', {name: 'Authorize Tico'}).count(), 1, 'an Authorize button');
-      assert.equal(await host.locator('code').textContent(), CALLBACK, 'the callback URL for an App set up before authorization');
+      const authorize = host.locator('[data-gh-authorize]');
+      assert.equal(await authorize.getByRole('button', {name: 'Authorize', exact: true}).count(), 1, 'one Authorize button');
+      assert.equal(await authorize.locator('code').textContent(), CALLBACK, 'the callback hint, for an App set up before authorization');
       assert.equal(await host.locator('[data-gh-permissions], [data-gh-repo-fix]').count(), 0, 'no Administration fix when it is on');
       assert.equal(await host.locator('[data-gh-events]').getAttribute('href'), PERSONAL.permissions_url);
       assert.equal(await host.locator('[data-gh-create="0"]').getAttribute('href'), PERSONAL.waiting[0].create_url);
@@ -108,14 +111,21 @@ async function themed(page, locator, name) {
         assert.ok(box.x + box.width <= viewport.width, 'the card fits a phone without a sideways scroll');
       }
 
+      // An App set up with the callback in its manifest: the same line and button, and no callback hint.
+      state.app = {...PERSONAL, callback_url: ''};
+      await page.reload();
+      await host.locator('[data-gh-install]').waitFor();
+      assert.equal(await host.getByRole('button', {name: 'Authorize', exact: true}).count(), 1, 'the same one button');
+      assert.equal(await host.locator('[data-gh-authorize] code').count(), 0, 'no callback hint once the App has it');
+
       // Authorized: the card says Tico can create them, with no Authorize button.
       state.app = AUTHORIZED;
       await page.reload();
       await host.locator('[data-gh-install]').waitFor();
       const done = await words(host);
       assert.match(done, /Tico can create bot repositories on ana-dev\./);
-      assert.doesNotMatch(done, /Tico can't create bot repositories on ana-dev yet/);
-      assert.equal(await host.getByRole('button', {name: 'Authorize Tico'}).count(), 0, 'no Authorize button once authorized');
+      assert.doesNotMatch(done, /Let Tico create repositories/, 'no authorize line once authorized');
+      assert.equal(await host.getByRole('button', {name: 'Authorize', exact: true}).count(), 0, 'no Authorize button once authorized');
       assert.equal(await host.locator('[data-gh-authorize]').count(), 0);
       await themed(page, card, `github-personal-connected-${tag}`);
 

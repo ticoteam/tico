@@ -115,21 +115,30 @@ What works the same as for an organization: connecting, installing on **All repo
 (with the installation's Administration).
 
 Creating a bot's repository in a personal account needs one step by the owner: **authorize Tico** once. Tools, GitHub
-shows **Authorize Tico** for the account. GitHub asks the owner to sign in as that account and allow the app, then
-returns to Tico, which keeps the owner's user token for that account, sealed like the app's secrets (see
-"Where the key lives"). Tico uses that token for one thing: creating an empty private repository in the account
-(`POST /user/repos`). A bot's repository made from a template, and every other call, still uses installation tokens.
+shows the line **Let Tico create repositories** with one **Authorize** button. GitHub asks the owner to sign in as that
+account and allow the app, then returns to Tico with a code. Tico checks that the sign-in is the account the app was made
+for, by GitHub's numeric account id as well as its login (a login can be renamed), and keeps the owner's user token for
+that account, sealed like the app's secrets (see "Where the key lives"). Tico uses that token for one thing: creating an
+empty private repository in the account (`POST /user/repos`). A bot's repository made from a template, and every other
+call, still uses installation tokens.
 
-- The token is refreshed automatically. GitHub rotates the refresh token on each refresh, and Tico stores the new one
-  before it uses the new access token.
-- A refresh GitHub refuses, or a token GitHub rejects, forgets the authorization: Tools asks for it again, and a
-  waiting bot's Needs-you task says so. Authorizing again finishes the waiting bots on its own.
-- A sign-in as a different account than the app's is refused, and GitHub's token for it is revoked at once.
-- Disconnecting revokes the token on GitHub (best effort) and forgets it here. The owner can also remove the
-  authorization in GitHub's settings under Applications.
-- An app connected before this was added has no callback URL for the authorization. If GitHub says the redirect
-  address is not valid, add the **Callback URL** Tools shows (`<public address>/api/v2/github/app/authorized`) on the
-  app's General settings page, then authorize again.
+- Each return from GitHub carries a single-use state that Tico made for the owner's session: the Authorize link, or the
+  install link on a personal account, which may ask for the authorization too (`request_oauth_on_install`). A return
+  without a valid state, from another person, or more than an hour after its state was made is refused.
+- The token is refreshed automatically when fewer than ten minutes of it remain. GitHub rotates the refresh token on each
+  refresh, and Tico stores the new one before it uses the new access token. Refreshes run one at a time.
+- A refresh GitHub refuses, or a token GitHub rejects, forgets that authorization only (a newer one is kept). Tools asks
+  for it again, and a waiting bot's Needs-you task says so. Authorizing again finishes the waiting bots on its own.
+- GitHub failing on a refresh (a server error or a rate limit) is retryable, not an authorization problem: nothing is
+  forgotten and no Needs-you task is filed.
+- A sign-in as a different login or numeric account id than the app's is refused, and that sign-in's authorization is
+  revoked on GitHub at once.
+- Disconnecting revokes the owner's whole authorization of the app on GitHub (the grant, with its refresh token; best
+  effort, `DELETE /applications/{client_id}/grant`) and forgets it here. Connecting a new app forgets the earlier app's
+  authorization. The owner can also remove the authorization in GitHub's settings under Applications.
+- Tools shows a **Callback URL** only for an app connected before the authorization was part of its setup. Add that
+  address (`<public address>/api/v2/github/app/authorized`) as the app's Callback URL on its General settings page, then
+  authorize again.
 
 Until the owner authorizes Tico, a bot whose repository cannot be created waits: its Needs-you task asks for the
 authorization, or for the owner to create the repository on GitHub. Product repositories in a personal account follow

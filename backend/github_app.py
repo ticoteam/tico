@@ -131,7 +131,7 @@ BOT_SCOPED = ("github_repo_missing", "github_repo_not_accessible", "rehearsal")
 RECONNECT = "Reconnect GitHub in Settings."
 WEB = "https://github.com"  # the OAuth endpoints, which are not the REST API
 USER_AAD = b"tico-github-user-token:v1"
-ACCESS_MARGIN = 5 * 60  # a user token this close to its end is refreshed first
+ACCESS_MARGIN = 10 * 60  # a user token this close to its end is refreshed first
 NOT_AUTHORIZED = (
     "Tico is not authorized to create repositories in the personal account yet: authorize Tico in Tools > GitHub"
 )
@@ -420,11 +420,14 @@ class GitHubApp:
                 "pem": conversion["pem"],
                 "webhook_secret": conversion.get("webhook_secret") or "",
                 "client_secret": conversion.get("client_secret") or "",
+                "owner_id": int(owner.get("id") or 0),
+                "callback_in_manifest": kind == PERSONAL,
             }
         ).encode()
         nonce = os.urandom(12)
         sealed = AESGCM(self._key(c)).encrypt(nonce, secrets_blob, b"tico-github-app:v1")
         c.execute("DELETE FROM github_app")
+        c.execute("DELETE FROM github_user_token")  # an authorization is for one App: a new App starts with none
         c.execute(
             "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,nonce,"
             "created_at,created_by,account_type) VALUES('app',?,?,?,?,?,NULL,?,?,?,?,?,?)",
@@ -526,18 +529,38 @@ class GitHubApp:
                 return self.user_authorized(conn)
         row, stored = self.row(c), self._user_token_row(c)
         return bool(
-            row and stored and account_kind(row) == PERSONAL and str(stored["login"]).lower() == str(row["org"]).lower()
+            row
+            and stored
+            and account_kind(row) == PERSONAL
+            and stored["client_id"] == row["client_id"]  # a token from an earlier App is not this App's
+            and str(stored["login"]).lower() == str(row["org"]).lower()
         )
 
-    def save_user_token(self, c, actor, login, tokens):
-        """Store the authorization the owner just gave, replacing an earlier one: the sealed pair and the expiry times."""
+    def owner_id(self, c):
+        """The numeric id of the account the App was made for, sealed at save (0 for an App saved before it was recorded)."""
+        row = self.row(c)
+        return int(self._app_secrets(c, row).get("owner_id") or 0) if row else 0
+
+    def callback_in_manifest(self):
+        """Whether the App's manifest asked for the authorization callback. Apps saved before that did not, so GitHub needs the
+        callback URL added on its settings page."""
+        with self.store.read() as c:
+            row = self.row(c)
+            return bool(row and self._app_secrets(c, row).get("callback_in_manifest"))
+
+    def save_user_token(self, c, actor, login, github_id, tokens):
+        """Store the authorization the owner just gave, replacing an earlier one: the sealed pair, the expiry times, and the
+        App and account it is for (a token from another App or account is never used)."""
+        app = self.row(c)
         sealed, nonce = self._seal_user(c, tokens)
         c.execute("DELETE FROM github_user_token")
         c.execute(
-            "INSERT INTO github_user_token(id,login,ciphertext,nonce,access_expires_at,refresh_expires_at,authorized_by,"
-            "authorized_at,refreshed_at) VALUES('app',?,?,?,?,?,?,?,NULL)",
+            "INSERT INTO github_user_token(id,login,github_id,client_id,ciphertext,nonce,access_expires_at,"
+            "refresh_expires_at,authorized_by,authorized_at,refreshed_at) VALUES('app',?,?,?,?,?,?,?,?,?,NULL)",
             (
                 login,
+                int(github_id),
+                app["client_id"],
                 sealed,
                 nonce,
                 _ends(tokens["expires_in"]) if tokens.get("expires_in") else None,
@@ -564,7 +587,7 @@ class GitHubApp:
         )
         if r.status_code >= 500 or rate_limited(r):
             raise Problem(
-                "github_user_token",
+                "github_unreachable",
                 "GitHub could not check Tico's authorization; try again shortly",
                 502,
                 retryable=True,
@@ -584,27 +607,41 @@ class GitHubApp:
             raise Problem("github_exchange", "GitHub did not accept that authorization; start again from Tools", 400)
         return tokens
 
-    def user_login(self, token):
-        """The login GitHub says the token is for (GET /user)."""
+    def user_identity(self, token):
+        """GitHub's login and numeric id for the token (GET /user). The id is the account itself; a login can be renamed."""
         r = self._call("GET", "/user", headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
             raise Problem(
-                "github_user_token", "GitHub would not say who authorized Tico; try again shortly", 502, retryable=True
+                "github_unreachable", "GitHub would not say who authorized Tico; try again shortly", 502, retryable=True
             )
-        return str(r.json().get("login") or "")
+        data = r.json()
+        return str(data.get("login") or ""), int(data.get("id") or 0)
 
-    def _lose_user_token(self, reason):
-        """The stored authorization is no good (GitHub refused its refresh, or the token): forget it, so the owner
-        authorizes again. Recorded without any token value."""
+    def _lose_user_token(self, reason, stored):
+        """The authorization `stored` (the row that was read) is no good: GitHub refused its refresh, or it was rejected. Only
+        that row is deleted (compare-and-delete on its nonce), so an authorization made in the meantime is kept. Recorded
+        without any token value."""
         with self.store.transaction() as c:
-            c.execute("DELETE FROM github_user_token")
-            H.event(c, H.KEEPER, "github.user_authorization_lost", "", {"reason": reason})
+            gone = c.execute("DELETE FROM github_user_token WHERE id='app' AND nonce=?", (stored["nonce"],)).rowcount
+            if gone:
+                H.event(c, H.KEEPER, "github.user_authorization_lost", "", {"reason": reason})
+
+    def _forget_rejected(self, token):
+        """GitHub rejected this access token (401): forget the authorization if it is still the stored one, compared by value,
+        so a newer authorization is never dropped. Only the reason is recorded."""
+        with self.user_lock:
+            with self.store.read() as c:
+                stored = self._user_token_row(c)
+                current = self._open_user(c, stored) if stored else None
+            if stored and current and current.get("access_token") == token:
+                self._lose_user_token("rejected", stored)
 
     def user_token(self):
         """The owner's user access token, for the empty repositories Tico creates in the personal account, refreshed when it is
-        near its end. GitHub rotates the refresh token on each refresh, so refreshes run one at a time, and the new pair is
-        stored before its access token is used. A refusal forgets the authorization: the owner authorizes again. Raises
-        github_user_token (409) when there is no usable authorization."""
+        near its end. GitHub rotates the refresh token on each refresh, so refreshes run one at a time (user_lock, which
+        authorizing takes too), and the new pair is stored before its access token is used. GitHub refusing the refresh
+        forgets the authorization: the owner authorizes again (github_user_token, 409). GitHub unreachable is retryable
+        (github_unreachable, 502) and forgets nothing."""
         with self.user_lock:
             with self.store.read() as c:
                 stored = self._user_token_row(c)
@@ -614,11 +651,13 @@ class GitHubApp:
             if not stored["access_expires_at"] or _iso(stored["access_expires_at"]) - ACCESS_MARGIN > time.time():
                 return current["access_token"]
             if not current.get("refresh_token"):
-                self._lose_user_token("no_refresh_token")
+                self._lose_user_token("no_refresh_token", stored)
                 raise Problem("github_user_token", NOT_AUTHORIZED, 409)
+            # GitHub rotates the refresh token as it accepts this one, so the old pair dies here. Unavoidable: if the process
+            # stops between GitHub's answer and the commit below, the stored pair is dead too and the owner authorizes again.
             tokens = self._user_grant({"grant_type": "refresh_token", "refresh_token": current["refresh_token"]})
             if tokens is None:
-                self._lose_user_token("refresh_refused")
+                self._lose_user_token("refresh_refused", stored)
                 raise Problem("github_user_token", NOT_AUTHORIZED, 409)
             with self.store.transaction() as c:
                 sealed, nonce = self._seal_user(
@@ -645,12 +684,13 @@ class GitHubApp:
         """POST /user/repos as the owner: the empty repository in their own account. A token GitHub rejects is forgotten."""
         r = self._call("POST", "/user/repos", headers={"Authorization": "Bearer " + token}, json=body)
         if r.status_code == 401:
-            self._lose_user_token("rejected")
+            self._forget_rejected(token)
             raise Problem("github_user_token", NOT_AUTHORIZED, 409)
         return r
 
     def revoke_user_token(self, token=None):
-        """Best effort, on disconnect and when a new authorization is refused: GitHub drops the owner's user token for the App.
+        """Best effort, on disconnect and when a new authorization is refused: GitHub revokes the owner's whole authorization of
+        the App (the grant, with its refresh token).
         A failure is logged without any token value; the owner can also remove the authorization in GitHub's settings."""
         with self.store.read() as c:
             row, stored = self.row(c), self._user_token_row(c)
@@ -668,7 +708,7 @@ class GitHubApp:
         try:
             r = self._call(
                 "DELETE",
-                f"/applications/{quote(client_id, safe='')}/token",
+                f"/applications/{quote(client_id, safe='')}/grant",
                 auth=(client_id, credentials.get("client_secret") or ""),
                 json={"access_token": token},
             )
@@ -1715,7 +1755,7 @@ def install_github_app(app, settings, store):
             "administration": administration,
             "installed": bool(row["installation_id"]),
             "authorized": authorized,
-            "callback_url": user_callback(settings) if personal else "",
+            "callback_url": user_callback(settings) if personal and not service.callback_in_manifest() else "",
             "install_url": page["install_url"],
             "settings_url": page["settings_url"],
             "permissions_url": fix["permissions_url"],
@@ -1831,7 +1871,15 @@ def install_github_app(app, settings, store):
                 conversion["slug"],
                 {"org": saved["org"], "account_type": saved["account_type"], "app_id": conversion["id"]},
             )
-        return RedirectResponse(f"https://github.com/apps/{conversion['slug']}/installations/new", status_code=302)
+        # The install's return to the authorize callback carries this state back; the callback takes only a state Tico made.
+        nonce = secrets.token_urlsafe(24)
+        with store.transaction() as c:
+            c.execute(
+                "INSERT INTO github_user_states(nonce,actor,created_at) VALUES(?,?,?)", (nonce, who.actor, time.time())
+            )
+        return RedirectResponse(
+            f"https://github.com/apps/{conversion['slug']}/installations/new?state={nonce}", status_code=302
+        )
 
     @app.get("/api/v2/github/app/authorize-link")
     def authorize_link(request: Request):
@@ -1853,57 +1901,74 @@ def install_github_app(app, settings, store):
         return {"url": f"{WEB}/login/oauth/authorize?{query}"}
 
     @app.get("/api/v2/github/app/authorized")
-    def authorized(request: Request, code: str = "", state: str = ""):
-        """Where GitHub sends the owner after they authorize Tico for the personal account. With the state from the authorize
-        link it must be this session's, unused and fresh. Without one (GitHub may send the code from the App's install
-        instead) the code must still belong to the account the App is under, so another person's is never kept."""
+    def authorized(
+        request: Request,
+        code: str = "",
+        state: str = "",
+        installation_id: str = "",
+        setup_action: str = "",
+        error: str = "",
+    ):
+        """Where GitHub sends the owner after they authorize Tico for the personal account, or after an install that asks for
+        the authorization too. Every return must carry the single-use state Tico made for this session (the Authorize link or
+        the install link), unused and fresh. An install's return (installation_id or setup_action) runs the install step
+        first, and an installation_id must be the App's own installation. A return without a code (the owner declined) goes
+        back to Tools after that."""
         who = owner(request)
-        found = None
-        if state:
-            with store.transaction() as c:
-                found = c.execute("SELECT * FROM github_user_states WHERE nonce=?", (state,)).fetchone()
-                if found:
-                    c.execute("DELETE FROM github_user_states WHERE nonce=?", (state,))
-            if (
-                not found
-                or found["actor"] != who.actor
-                or time.time() - found["created_at"] > STATE_TTL
-                or not secrets.compare_digest(found["nonce"], state)
-            ):
-                raise Problem(
-                    "github_state",
-                    "This GitHub authorization link is not valid or has expired; start again from Tools",
-                    400,
-                )
+        with store.transaction() as c:
+            found = c.execute("SELECT * FROM github_user_states WHERE nonce=?", (state,)).fetchone() if state else None
+            if found:
+                c.execute("DELETE FROM github_user_states WHERE nonce=?", (state,))
+        if (
+            not found
+            or found["actor"] != who.actor
+            or time.time() - found["created_at"] > STATE_TTL
+            or not secrets.compare_digest(found["nonce"], state)
+        ):
+            raise Problem(
+                "github_state",
+                "This GitHub authorization link is not valid or has expired; start again from Tools",
+                400,
+            )
         row = service.row()
         if not row or account_kind(row) != PERSONAL:
             raise Problem("github_not_connected", "Connect the personal GitHub account first", 409)
-        if not code:
+        if installation_id or setup_action:
+            installation = installed_now(who.actor)
+            if installation_id and str(installation or "") != installation_id:
+                raise Problem(
+                    "github_installation", "That installation is not this GitHub App's; start again from Tools", 409
+                )
+        if error or not code:
+            if error:
+                return RedirectResponse("/#/tools/github?github=declined", status_code=302)
             raise Problem("github_exchange", "GitHub did not send an authorization code", 400)
         tokens = service.exchange_user(code)
-        login = service.user_login(tokens["access_token"])
-        if login.lower() != row["org"].lower():
+        login, github_id = service.user_identity(tokens["access_token"])
+        with store.read_transaction() as c:
+            expected = service.owner_id(c)
+        if login.lower() != row["org"].lower() or (expected and github_id != expected):
             service.revoke_user_token(tokens["access_token"])
             raise Problem(
                 "github_user_login",
                 f"Sign in to GitHub as {row['org']} to authorize Tico for that account (this sign-in was {login})",
                 403,
             )
-        with store.transaction() as c:
-            service.save_user_token(c, who.actor, login, tokens)
-            H.event(c, who.actor, "github.user_authorized", row["slug"], {"login": login})
+        with service.user_lock:  # the lock a refresh takes: no refresh runs against the pair this replaces
+            with store.transaction() as c:
+                service.save_user_token(c, who.actor, login, github_id, tokens)
+                H.event(c, who.actor, "github.user_authorized", row["slug"], {"login": login})
         from .repo_waits import resume
 
         try:
-            installed_now(who.actor)  # the install step's refresh and sync, whichever redirect brought the owner here
             resume(service)  # a bot waiting for its empty repository in this account goes on now
         except (Problem, ValueError):
-            log.warning("Finishing the authorization (installation refresh, waiting bots) failed")
+            log.warning("Checking waiting bots after the authorization failed")
         return RedirectResponse("/#/tools/github?github=authorized", status_code=302)
 
     def installed_now(actor):
-        """The install step: refresh the App's installation and sync its repositories. The authorize callback runs it too,
-        since GitHub may send an install's code there instead of to the setup URL."""
+        """The install step: refresh the App's installation and sync its repositories. Returns the installation's id, or None
+        when there is none yet. Runs on the setup redirect and on an install's return to the authorize callback."""
         found = service.installation(refresh=True)
         if found:
             try:
@@ -1912,7 +1977,7 @@ def install_github_app(app, settings, store):
                 log.warning("Repository sync failed: %s", exc.code)
         with store.transaction() as c:
             H.event(c, actor, "github.app_installed", "", {"installed": bool(found)})
-        return bool(found)
+        return found
 
     @app.get("/api/v2/github/app/installed")
     def installed(request: Request):
@@ -2339,7 +2404,7 @@ def install_github_app(app, settings, store):
         try:
             result = service.create_repo(slug, template, empty=body.empty)
         except Problem as problem:
-            if problem.code != "github_permission_missing":
+            if problem.code not in ("github_permission_missing", "github_user_token"):
                 raise
             # A person must act. One Needs-you task per bot, however often this is retried; the bot keeps its
             # local build and finishes on its own once the repository or the permission appears (repo_waits).

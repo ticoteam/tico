@@ -16,9 +16,9 @@ window.mountGithubConnect = async function (host) {
     // A personal account's empty repositories are made with the owner's authorization (once per account); until it is given,
     // bots wait. Administration is needed by either kind for the repositories Tico makes.
     const authorize = personal && !state.authorized ? `<div data-gh-authorize>
-        <p><strong>Tico can't create bot repositories on ${text(state.org)} yet.</strong> Authorize it once: Tico signs in as you and only creates empty repositories in your account.</p>
-        <p><button type="button" class="primary" data-gh-authorize-link>Authorize Tico</button></p>
-        <p class="muted">If GitHub says the callback URL is not set, add <code>${text(state.callback_url)}</code> as the app's Callback URL on GitHub, then try again.</p>
+        <p>Let Tico create repositories.</p>
+        <p><button type="button" class="primary" data-gh-authorize-link>Authorize</button></p>
+        ${state.callback_url ? `<p class="muted">First add <code>${text(state.callback_url)}</code> as the Callback URL of the app on GitHub.</p>` : ''}
       </div>` : '';
     const ready = state.administration && (!personal || state.authorized) ? `<p class="muted">Tico can create bot repositories${personal ? ` on ${text(state.org)}` : ''}.</p>` : '';
     const fix = state.administration ? '' : `<div data-gh-repo-fix>

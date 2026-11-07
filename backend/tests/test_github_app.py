@@ -59,10 +59,12 @@ class FakeGitHub:
         self.account_down = False  # every account lookup fails to connect
         self.conversion_owner = {"login": "Acme", "type": "Organization"}  # whose account GitHub made the App under
         self.token_login = "ana-dev"  # the login GitHub says an authorized user token is for
+        self.user_id = 9001  # the numeric id of that login (GET /user)
+        self.refresh_status = None  # answer every refresh with this status, as GitHub failing does, when set
         self.refuse_refresh = False  # refuse every refresh (the refresh token is no longer good)
         self.refreshes, self.issued = 0, 0  # refreshes made; tokens issued (gho_<n> access, ghr_<n> refresh)
         self.access_tokens, self.live_refresh = set(), set()
-        self.revoked = set()  # access tokens DELETE /applications/{client_id}/token revoked
+        self.revoked = set()  # access tokens DELETE /applications/{client_id}/grant revoked
         self.user_repo_status = 201  # POST /user/repos answers this
         self.expires_in = 28800
 
@@ -77,10 +79,10 @@ class FakeGitHub:
         if path == "/login/oauth/access_token":
             return self._oauth(body)
         if path == "/user":
-            return httpx.Response(200, json={"login": self.token_login})
+            return httpx.Response(200, json={"login": self.token_login, "id": self.user_id})
         if path == "/user/repos":
             return self._user_repos(request, body)
-        if path.startswith("/applications/") and path.endswith("/token"):
+        if path.startswith("/applications/") and path.endswith("/grant"):
             self.revoked.add(body["access_token"])
             return httpx.Response(204)
         if path.startswith("/users/"):
@@ -209,6 +211,8 @@ class FakeGitHub:
         """GitHub's OAuth token endpoint: a code is exchanged once, and a refresh rotates the refresh token (the one given stops
         working). A refusal is a 200 with an error in the body, as GitHub answers it."""
         if body.get("grant_type") == "refresh_token":
+            if self.refresh_status:
+                return httpx.Response(self.refresh_status, json={"message": "GitHub is unavailable"})
             if self.refuse_refresh or body.get("refresh_token") not in self.live_refresh:
                 return httpx.Response(200, json={"error": "bad_refresh_token"})
             self.live_refresh.discard(body["refresh_token"])
@@ -1488,7 +1492,7 @@ def test_the_fake_installation_lists_a_repository_created_through_it_only_when_i
 def personal(gh, login="ana-dev"):
     """The signed-in person's personal account: the one GitHub makes the App under, with the installation there."""
     gh.accounts[login] = "User"
-    gh.conversion_owner = {"login": login, "type": "User"}
+    gh.conversion_owner = {"login": login, "type": "User", "id": gh.user_id}
     gh.installations = [{"id": 77, "account": {"login": login}}]
 
 
@@ -1602,12 +1606,8 @@ def test_the_owner_authorizes_tico_for_the_personal_account_once_and_only_that_a
     with api.app_state.store.read() as c:
         installs = c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0]
     assert authorize(api).headers["location"] == "/#/tools/github?github=authorized"
-    with (
-        api.app_state.store.read() as c
-    ):  # the install step (installation refresh, repo sync) runs on this redirect too
-        assert (
-            c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0] == installs + 1
-        )
+    with api.app_state.store.read() as c:  # a Tools sign-in is not an install: the install step does not run on it
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0] == installs
     status = api.get("/api/v2/github/app", headers=auth()).json()
     assert status["authorized"] is True and status["callback_url"] == PUBLIC + "/api/v2/github/app/authorized"
     assert "gho_" not in json.dumps(status) and "ghr_" not in json.dumps(status)
@@ -1718,7 +1718,7 @@ def test_disconnect_revokes_the_owners_user_token_on_github_and_forgets_it(api, 
     connect(api, org="ana-dev")
     authorize(api)
     assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
-    revoked = [c for c in gh.calls if c[0] == "DELETE" and c[1] == "/applications/Iv1.abc/token"]
+    revoked = [c for c in gh.calls if c[0] == "DELETE" and c[1] == "/applications/Iv1.abc/grant"]
     assert revoked and revoked[0][2] == {"access_token": "gho_1"} and revoked[0][3].startswith("Basic ")
     assert gh.revoked == {"gho_1"}
     with api.app_state.store.read() as c:
@@ -1742,6 +1742,165 @@ def test_health_warns_a_personal_account_until_the_owner_authorizes_it(api, gh):
     assert "github_repo_create" not in alerts()
 
 
+def link_state(api, actor="owner-test"):
+    """A fresh single-use state from the Authorize link, as that person's session gets it."""
+    link = api.get("/api/v2/github/app/authorize-link", headers=auth(actor))
+    assert link.status_code == 200, link.text
+    return parse_qs(urlparse(link.json()["url"]).query)["state"][0]
+
+
+def test_concurrent_user_token_refreshes_run_one_refresh_and_share_its_token(api, gh):
+    import threading
+
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    service = api.app_state.github_app
+    expire(api)
+    served = []
+    threads = [threading.Thread(target=lambda: served.append(service.user_token())) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert len(served) == 6 and set(served) == {"gho_2"}
+    assert gh.refreshes == 1, "GitHub rotates the refresh token, so a second refresh would be refused"
+
+
+def test_the_authorization_return_needs_a_state_its_own_actor_made_recently(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    stateless = api.get("/api/v2/github/app/authorized", params={"code": "the-code"}, headers=auth())
+    assert stateless.status_code == 400 and stateless.json()["error"]["code"] == "github_state"
+    state = link_state(api)
+    someone = api.get(
+        "/api/v2/github/app/authorized", params={"code": "the-code", "state": state}, headers=auth("other-test")
+    )
+    assert someone.status_code == 400 and someone.json()["error"]["code"] == "github_state"
+    state = link_state(api)
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE github_user_states SET created_at=0 WHERE nonce=?", (state,))
+    late = api.get("/api/v2/github/app/authorized", params={"code": "the-code", "state": state}, headers=auth())
+    assert late.status_code == 400 and late.json()["error"]["code"] == "github_state"
+    assert gh.issued == 0, "no code is exchanged for a return without a valid state"
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
+
+
+def test_a_sign_in_as_the_same_login_with_another_account_id_is_refused_and_revoked(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    gh.user_id = 9002  # the same login, now another numeric account
+    back = api.get(
+        "/api/v2/github/app/authorized", params={"code": "the-code", "state": link_state(api)}, headers=auth()
+    )
+    assert back.status_code == 403 and back.json()["error"]["code"] == "github_user_login", back.text
+    assert gh.revoked == {"gho_1"}
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM github_user_token").fetchone()[0] == 0
+
+
+def test_tokens_never_reach_events_logs_or_the_status(api, gh, caplog):
+    caplog.set_level("DEBUG")
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    service = api.app_state.github_app
+    expire(api)
+    assert service.user_token() == "gho_2"
+    seen = api.get("/api/v2/github/app", headers=auth()).text
+    expire(api)
+    gh.refuse_refresh = True
+    with pytest.raises(Problem) as lost:
+        service.user_token()
+    assert lost.value.code == "github_user_token"
+    with api.app_state.store.read() as c:
+        recorded = " ".join(str(part) for row in c.execute("SELECT action, target, detail FROM events") for part in row)
+    assert "github.user_authorization_lost" in recorded and "refresh_refused" in recorded
+    for token in ("gho_", "ghr_"):
+        assert token not in seen + recorded + caplog.text
+
+
+def test_a_refresh_github_cannot_answer_is_retryable_and_forgets_nothing(api, gh):
+    from backend import repo_waits
+
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
+    expire(api)
+    gh.refresh_status = 503
+    botops_turn(api)
+    with api.app_state.store.read() as c:
+        tasks = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+
+    def create():
+        return api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+
+    down = create()
+    assert down.status_code == 502 and down.json()["error"]["code"] == "github_unreachable", down.text
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is True, "an outage forgets nothing"
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks, "no Needs-you task for an outage"
+        assert "newbie" not in repo_waits.waits(c)
+        assert not c.execute("SELECT 1 FROM events WHERE action='github.user_authorization_lost'").fetchone()
+    gh.refresh_status = None
+    made = create()
+    assert made.status_code == 200 and "ana-dev/bot-newbie" in gh.created_repositories, made.text
+
+
+def test_a_new_app_saved_over_an_old_one_starts_with_no_owner_authorization(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    authorize(api)
+    newer = {
+        "id": 4243,
+        "slug": "acme-tico-two",
+        "client_id": "Iv1.new",
+        "client_secret": "cs2",
+        "webhook_secret": "whs2",
+        "pem": PEM,
+        "html_url": "https://github.com/apps/acme-tico-two",
+        "owner": {"login": "ana-dev", "type": "User", "id": 9001},
+    }
+    with api.app_state.store.transaction() as c:
+        api.app_state.github_app.save(c, "human:ana", "ana-dev", True, newer, "User")
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM github_user_token").fetchone()[0] == 0
+
+
+def test_an_install_return_runs_the_install_step_and_a_decline_goes_back_to_tools(api, gh):
+    personal(gh, "ana-dev")
+    manifest_state = manifest(api, org="ana-dev")["state"]
+    setup = api.get("/api/v2/github/app/callback", params={"code": "the-code", "state": manifest_state}, headers=auth())
+    assert setup.status_code == 302, setup.text
+    install_state = parse_qs(urlparse(setup.headers["location"]).query)["state"][0]
+    with api.app_state.store.read() as c:
+        installs = c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0]
+    back = api.get(
+        "/api/v2/github/app/authorized",
+        params={"code": "the-code", "state": install_state, "installation_id": "77", "setup_action": "install"},
+        headers=auth(),
+    )
+    assert back.status_code == 302 and back.headers["location"] == "/#/tools/github?github=authorized", back.text
+    with api.app_state.store.read() as c:
+        assert (
+            c.execute("SELECT COUNT(*) FROM events WHERE action='github.app_installed'").fetchone()[0] == installs + 1
+        )
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is True
+    wrong = api.get(
+        "/api/v2/github/app/authorized",
+        params={"code": "the-code", "state": link_state(api), "installation_id": "99"},
+        headers=auth(),
+    )
+    assert wrong.status_code == 409 and wrong.json()["error"]["code"] == "github_installation", wrong.text
+    declined = api.get(
+        "/api/v2/github/app/authorized", params={"error": "access_denied", "state": link_state(api)}, headers=auth()
+    )
+    assert declined.status_code == 302 and declined.headers["location"] == "/#/tools/github?github=declined"
+
+
 def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
     sql = (Path(G.__file__).parent / "migrations" / "20261107181259_github_user_token.sql").read_text(encoding="utf-8")
     with sqlite3.connect(":memory:") as c:
@@ -1750,6 +1909,8 @@ def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
         assert {row[1] for row in c.execute("PRAGMA table_info(github_user_token)")} == {
             "id",
             "login",
+            "github_id",
+            "client_id",
             "ciphertext",
             "nonce",
             "access_expires_at",
