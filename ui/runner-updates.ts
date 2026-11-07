@@ -3,11 +3,27 @@
    Health and Settings > Computers both draw it. An outdated computer (behind the server's release, or on no
    release at all) carries an Outdated badge whatever its state says. */
 'use strict';
+
+// The update record a computer reports, and the machine it belongs to. Declared here, not checked: the server's JSON
+// reaches these functions through untyped JS callers.
+interface RunnerUpdate {
+  state?: string; outdated?: boolean; server_release?: string | null; target?: string | null; min_runner?: string | null;
+  error?: string | null; release?: string | null; commit?: string | null; kind?: string | null; update_state?: string | null;
+  label?: string | null;
+}
+interface RunnerMachine { id?: string; label?: string | null; owner_id?: string | null; online?: boolean; update?: RunnerUpdate | null; }
+interface Window {
+  runnerUpdateHtml: (update: RunnerUpdate | null | undefined, version?: string | null) => string;
+  runnerOutdatedBanner: (machines: RunnerMachine[] | null | undefined, me: string | null | undefined,
+    name: (id: string) => string, online: (machine: RunnerMachine) => boolean) => string;
+}
+
 // `version`: what the computer itself reported; with one, "Release not reported" would contradict it, so an unknown state
 // that is not outdated says nothing.
 window.runnerUpdateHtml = function runnerUpdateHtml(update, version) {
   if (!update || !update.state || (update.state === 'unknown' && version && !update.outdated)) return '';
-  const tone = {current: 'ok', updating: 'waiting', needs_update: 'waiting', incompatible: 'fail'}[update.state] || '';
+  const tones: Record<string, string> = {current: 'ok', updating: 'waiting', needs_update: 'waiting', incompatible: 'fail'};
+  const tone = tones[update.state] || '';
   const detail = [update.release ? `Tico ${update.release}` : '', update.commit ? update.commit.slice(0, 7) : '', update.kind || '',
     update.update_state === 'pinned' ? 'pinned' : '']
     .filter(Boolean).map(esc).join(' · ');
@@ -25,9 +41,9 @@ window.runnerUpdateHtml = function runnerUpdateHtml(update, version) {
 window.runnerOutdatedBanner = function runnerOutdatedBanner(machines, me, name, online) {
   const stale = (machines || []).filter(machine => machine.update?.outdated && online(machine));
   if (!stale.length) return '';
-  const server = stale[0].update.server_release;
+  const server = stale[0]?.update?.server_release;
   const mine = stale.filter(machine => machine.owner_id === me);
-  const list = stale.map(machine => `${esc(machine.label)} (${esc(machine.update.release || 'release unknown')}${machine.owner_id === me ? '' : machine.owner_id ? `, ${esc(name(machine.owner_id))}'s` : ', no owner'})`).join(', ');
+  const list = stale.map(machine => `${esc(machine.label)} (${esc(machine.update?.release || 'release unknown')}${machine.owner_id === me ? '' : machine.owner_id ? `, ${esc(name(machine.owner_id))}'s` : ', no owner'})`).join(', ');
   const ask = mine.length ? ` ${mine.length === 1 ? 'Yours updates' : 'Yours update'} by itself between turns; when it stays behind, its row says why.` : ' Their owners update them.';
   return `<div class="machine-outdated-banner" role="status" data-runner-outdated-banner>${stale.length === 1 ? 'A computer runs' : `${stale.length} computers run`} older code than this server (Tico ${esc(server)}): ${list}.${ask}</div>`;
 };

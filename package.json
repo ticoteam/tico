@@ -5,7 +5,7 @@
     "build:ui": "node scripts/build-ui.cjs",
     "watch:ui": "node scripts/build-ui.cjs --watch",
     "build:observability": "esbuild ui/observability-vendors.js --bundle --format=esm --minify --outfile=ui/assets/observability-vendors.js",
-    "check:observability": "node --check ui/observability.js && node --check ui/observability-vendors.js",
+    "check:observability": "npm run build:ui && node --check build/ui/observability.js && node --check ui/observability-vendors.js",
     "screenshots": "node scripts/screenshots",
     "test:ui": "node scripts/ui-tests.cjs"
   },

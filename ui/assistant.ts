@@ -3,6 +3,73 @@
    Anything with a side effect that matters arrives as a Confirm / Cancel card; only your click runs it.
    deps keeps this file free of the page's globals (get, post, esc, toast). */
 'use strict';
+
+// The deps cards() takes from its page. assistantName is the Assistant's name, shown on its own cards.
+interface AssistantCardsDeps {
+  get: <T>(path: string) => Promise<T>;
+  post: <T>(path: string, body?: unknown) => Promise<T>;
+  esc: (s: unknown) => string;
+  toast?: (msg: string, isErr?: boolean) => unknown;
+  reload?: () => unknown;
+  assistantName?: string;
+}
+
+// The deps off() takes. after runs once the Assistant is on again.
+interface AssistantOffDeps {
+  post: <T>(path: string, body?: unknown) => Promise<T>;
+  esc: (s: unknown) => string;
+  after?: () => unknown;
+}
+
+// The deps settingsStrip() takes. after runs once the Assistant is on again.
+interface AssistantSettingsDeps {
+  get: <T>(path: string) => Promise<T>;
+  post: <T>(path: string, body?: unknown) => Promise<T>;
+  esc: (s: unknown) => string;
+  toast?: (msg: string, isErr?: boolean) => unknown;
+  after?: () => unknown;
+}
+
+// One line of a card's changes: old → new for a task change, or a plain field.
+interface AssistantCardDiff {
+  field: string;
+  new: unknown;
+  old?: unknown;
+  routine?: boolean;
+  group?: unknown;
+}
+
+// One Confirm / Cancel card's action as GET and POST /v2/assistant/actions/{id} send it (api.d.ts has only a shell for it).
+interface AssistantCardAction {
+  id: string;
+  status: string;
+  method: string;
+  path: string;
+  description?: string | null;
+  summary?: string | null;
+  proposer?: string | null;
+  proposed_via?: string | null;
+  by_name?: string | null;
+  original_summary?: string | null;
+  body?: Record<string, unknown> | null;
+  diff?: AssistantCardDiff[] | null;
+  result?: {error?: string | null} | null;
+}
+
+// What a Confirm or a Cancel answers: the action as it is now, and a one-time code it made, if any.
+interface AssistantCardAnswer {
+  action: AssistantCardAction;
+  shown_once?: Record<string, unknown>;
+}
+
+interface Window {
+  assistantChat?: {
+    cards(root: ParentNode | null, deps: AssistantCardsDeps): Promise<void>;
+    off(host: HTMLElement | null, info: import('./types/api').Assistant, deps: AssistantOffDeps): void;
+    settingsStrip(host: HTMLElement | null, deps: AssistantSettingsDeps): Promise<void>;
+  };
+}
+
 (function () {
   const css = `
 .asst-card{align-self:flex-start;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:6px 0;background:var(--surface)}
@@ -47,26 +114,31 @@
   const RAW_TITLE = /^(GET|POST|PUT|PATCH|DELETE) \//;
   // A one-time value the Confirm answered with (a new computer's code): kept in this page only, never stored anywhere
   // the proposing bot reads, so it shows on its card until the page is reloaded.
-  const shownOnce = new Map();
-  function onceHTML(id, esc) {
+  const shownOnce = new Map<string, Record<string, unknown>>();
+  function onceHTML(id: string, esc: (s: unknown) => string): string {
     const once = shownOnce.get(id);
     if (!once?.code) return '';
-    const until = once.expires_at ? new Date(once.expires_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
+    // The server sends expires_at as an ISO time; api.d.ts types the whole shown_once record as unknown values.
+    const until = once.expires_at ? new Date(once.expires_at as string).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
     return `<div class="asst-once" data-shown-once><span class="asst-state">One-time code for a new computer${until ? `, until ${esc(until)}` : ''}. It is shown only here and works once: use it where the computer's setup asks for a code (Settings &gt; Computers &gt; Add computer shows the commands).</span><code>${esc(once.code)}</code></div>`;
   }
   const SENT = new Set(['message', 'body', 'text', 'comment']);
+  // Who says a card's words, by its proposer (a card with `by_name` says its own name instead).
+  const SAYS: Record<string, string> = {assistant: 'The assistant says: ', botops: 'BotOps says: '};
   // `busy`: the button pressed ('confirm' / 'cancel') while its answer is on its way: it spins (chat.css p-spin) and says
   // so, the other is off, and a thread rebuilt meanwhile draws the same.
-  function actionCard(action, esc, open = false, assistantName = '', busy = '') {
+  function actionCard(action: AssistantCardAction, esc: (s: unknown) => string, open = false, assistantName = '', busy = ''): string {
     // A bulk card that ran with some steps refused is done, and says which did not go through.
-    const done = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
-      canceled: 'Canceled.', withdrawn: 'Withdrawn: nothing ran.', expired: 'Expired: ask again.', running: 'Confirmed · working on it'}[action.status];
+    const doneWords: Record<string, string> = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
+      canceled: 'Canceled.', withdrawn: 'Withdrawn: nothing ran.', expired: 'Expired: ask again.', running: 'Confirmed · working on it'};
+    const done = doneWords[action.status];
     // Never cut a value: a long one is folded behind "Show more", whole.
-    const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
+    const shown = (v: unknown): string => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
-    const by = action.proposer || action.proposed_via;
+    const by = action.proposer || action.proposed_via || '';
     // A card the Strategy Bot put in the owner's earlier chat with it names it (`by_name`), never "the Assistant".
-    const name = action.by_name || {assistant: assistantName || 'The Assistant', botops: 'BotOps'}[by] || 'A bot';
+    const names: Record<string, string> = {assistant: assistantName || 'The Assistant', botops: 'BotOps'};
+    const name = action.by_name || names[by] || 'A bot';
     const what = String(action.description || '').trim(), plain = what && !RAW_TITLE.test(what);
     // What the card does is always in view before the click: with no sentence from the server, the bot's own summary
     // is the title, and with neither, the fields stay on the card.
@@ -79,15 +151,15 @@
     const fields = action.diff?.length
       ? `<ul class="asst-body" aria-label="Changes">${action.diff.map(d => `<li><strong>${esc(d.field)}</strong>: ${'old' in d ? shown(d.old ?? '') + ' → ' : ''}${shown(d.new)}</li>`).join('')}</ul>`
       : Object.keys(action.body || {}).length
-        ? `<ul class="asst-body" aria-label="Fields">${Object.entries(action.body).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${shown(v)}</li>`).join('')}</ul>` : '';
+        ? `<ul class="asst-body" aria-label="Fields">${Object.entries(action.body || {}).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${shown(v)}</li>`).join('')}</ul>` : '';
     // The words a send carries (a message, a comment, a support request) are what the person approves: shown whole,
     // never only under Details.
     const sends = Object.entries(action.body || {}).filter(([k, v]) => SENT.has(k) && typeof v === 'string' && v.trim())
       .map(([, v]) => `<blockquote class="asst-said" aria-label="What is sent">${shown(v)}</blockquote>`).join('');
-    const who = action.by_name ? action.by_name + ' says: ' : {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
+    const who = action.by_name ? action.by_name + ' says: ' : SAYS[by] || '';
     // The same sentence, or its first 300 characters (a summary is cut there), repeats the title.
     const said = summary, repeats = said === title || said.length >= 300 && title.startsWith(said);
-    const button = (verb, cls, label, doing, title = '') => busy === verb
+    const button = (verb: string, cls: string, label: string, doing: string, title = ''): string => busy === verb
       ? `<button class="${cls}" type="button" data-${verb} disabled aria-busy="true">${doing}</button>`
       : `<button class="${cls}" type="button" data-${verb}${busy ? ' disabled' : ''}${title}>${label}</button>`;
     return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
@@ -108,19 +180,19 @@
   // is kept here and put back at once, inside that rebuild: the same element when it would draw the same, so a "Show
   // more" opened on it stays open and it keeps its height and place, instead of every card falling back to "Loading the
   // card…" and growing back one fetch at a time. A Confirm repaints only its card.
-  const seenActions = new Map();
-  const openRaw = new Set();             // cards whose Details is open, kept open across a rebuild
-  const painted = new WeakMap();         // host -> the card HTML it shows
-  const drawn = new Map();               // action id -> {card, html}: the element last drawn for it
+  const seenActions = new Map<string, AssistantCardAction>();
+  const openRaw = new Set<string>();             // cards whose Details is open, kept open across a rebuild
+  const painted = new WeakMap<HTMLElement, string>();         // host -> the card HTML it shows
+  const drawn = new Map<string, {card: HTMLElement; html: string}>();               // action id -> {card, html}: the element last drawn for it
   const UNSETTLED = new Set(['pending', 'running']);
-  const deciding = new Map();            // action id -> 'confirm' / 'cancel' on its way: a fetch never repaints it
-  async function cards(root, deps) {
+  const deciding = new Map<string, string>();            // action id -> 'confirm' / 'cancel' on its way: a fetch never repaints it
+  async function cards(root: ParentNode | null, deps: AssistantCardsDeps): Promise<void> {
     if (!root) return;
     style();
     const {get, post, esc, toast, reload, assistantName} = deps;
-    const hostsOf = id => [...root.querySelectorAll('[data-action-host]')].filter(h => h.dataset.actionHost === id);
-    const draw = (action, open) => actionCard(action, esc, open, assistantName, deciding.get(action.id));
-    const paint = (host, action) => {
+    const hostsOf = (id: string): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('[data-action-host]')].filter(h => h.dataset.actionHost === id);
+    const draw = (action: AssistantCardAction, open: boolean) => actionCard(action, esc, open, assistantName, deciding.get(action.id));
+    const paint = (host: HTMLElement, action: AssistantCardAction): void => {
       seenActions.set(action.id, action);
       const html = draw(action, openRaw.has(action.id));
       if (painted.get(host) === html) return;            // nothing changed: leave it alone
@@ -134,15 +206,17 @@
       host.innerHTML = html;
       painted.set(host, html);
       const card = host.firstElementChild;
+      if (!(card instanceof HTMLElement)) return;        // the markup starts with the card's div, so this is always one
       drawn.set(action.id, {card, html});
       // The card moves between hosts, so what it does is found from the card, never from the host it was drawn in.
-      card.querySelector('details.asst-raw')?.addEventListener('toggle', ev => {
-        openRaw[ev.target.open ? 'add' : 'delete'](action.id);
-        const now = draw(action, ev.target.open);
+      const details = card.querySelector<HTMLDetailsElement>('details.asst-raw');
+      if (details) details.addEventListener('toggle', () => {
+        openRaw[details.open ? 'add' : 'delete'](action.id);
+        const now = draw(action, details.open);
         drawn.set(action.id, {card, html: now});
         if (card.parentElement) painted.set(card.parentElement, now);
       });
-      const decide = async verb => {
+      const decide = async (verb: string): Promise<void> => {
         const host = card.parentElement || host0;
         const focused = card.contains(document.activeElement);
         // At once, the pressed button spins ("Confirming…") and the other is off; a thread rebuilt while this runs (the
@@ -151,14 +225,14 @@
         deciding.set(action.id, verb);
         for (const h of new Set([...hostsOf(action.id), host])) { painted.delete(h); paint(h, waiting); }
         if (focused) drawn.get(action.id)?.card.focus({preventScroll: true});
-        let next = null;
+        let next: AssistantCardAction | null = null;
         try {
-          const answer = await post(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {});
+          const answer = await post<AssistantCardAnswer>(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {});
           if (answer?.shown_once) shownOnce.set(action.id, answer.shown_once);
           next = answer.action;
         }
-        catch (e) { toast?.(e.message, true); }
-        if (!next) try { next = (await get(`/v2/assistant/actions/${encodeURIComponent(action.id)}`)).action; } catch { /* kept as it was */ }
+        catch (e) { toast?.(errorMessage(e, ''), true); }
+        if (!next) try { next = (await get<AssistantCardAnswer>(`/v2/assistant/actions/${encodeURIComponent(action.id)}`)).action; } catch { /* kept as it was */ }
         deciding.delete(action.id);
         // Only this card is drawn again, wherever it is now; one still waiting gets its buttons back.
         for (const h of new Set([...hostsOf(action.id), host])) { painted.delete(h); paint(h, next || action); }
@@ -170,15 +244,18 @@
       card.querySelector('[data-confirm]')?.addEventListener('click', () => decide('confirm'));
       card.querySelector('[data-cancel]')?.addEventListener('click', () => decide('cancel'));
     };
-    const hosts = [...root.querySelectorAll('[data-action-host]')];
+    const hosts = [...root.querySelectorAll<HTMLElement>('[data-action-host]')];
     // At once, before anything is fetched: every card already seen.
-    for (const host of hosts) { const kept = seenActions.get(host.dataset.actionHost); if (kept) paint(host, kept); }
+    for (const host of hosts) { const kept = seenActions.get(host.dataset.actionHost ?? ''); if (kept) paint(host, kept); }
     // Then, side by side, what may have changed: new cards, and ones still waiting (decided in another tab, expired).
-    await Promise.all(hosts.filter(h => !seenActions.has(h.dataset.actionHost) || UNSETTLED.has(seenActions.get(h.dataset.actionHost).status))
+    await Promise.all(hosts.filter(h => {
+        const kept = seenActions.get(h.dataset.actionHost ?? '');
+        return !kept || UNSETTLED.has(kept.status);
+      })
       .map(async host => {
-        const id = host.dataset.actionHost;
+        const id = host.dataset.actionHost ?? '';
         try {
-          const action = (await get(`/v2/assistant/actions/${encodeURIComponent(id)}`)).action;
+          const action = (await get<AssistantCardAnswer>(`/v2/assistant/actions/${encodeURIComponent(id)}`)).action;
           // A fetch sent before a click comes back late: it never repaints a card being decided, nor makes a decided
           // one pending again.
           const kept = seenActions.get(id);
@@ -191,41 +268,44 @@
 
   // The Assistant page when the assistant is off: one line, with the switch for the owner and whom to ask for anyone
   // else. `after` runs once it is on.
-  function off(host, info, deps) {
+  function off(host: HTMLElement | null, info: import('./types/api').Assistant, deps: AssistantOffDeps): void {
     if (!host) return;
     style();
     const {post, esc, after} = deps;
     host.innerHTML = `<div class="asst-off asst-row"><span>The Assistant is off.${info.can_turn_on ? '' : ' Ask the owner to turn it on.'}</span>
       ${info.can_turn_on ? '<button class="primary" type="button" data-turn-on>Turn on</button><span class="asst-state" data-turn-status></span>' : ''}</div>`;
-    const on = host.querySelector('[data-turn-on]');
-    if (on) on.onclick = async () => {
+    // The status line is drawn with the button above; both are looked up once, and the button is wired only when both exist.
+    const on = host.querySelector<HTMLButtonElement>('[data-turn-on]');
+    const status = host.querySelector<HTMLElement>('[data-turn-status]');
+    if (on && status) on.onclick = async () => {
       on.disabled = true;
-      try { const r = await post('/v2/assistant/turn-on', {}); if (r.state !== 'active') host.querySelector('[data-turn-status]').textContent = 'Restored, but it needs a computer before it can answer (Settings).'; else await after?.(); }
-      catch (e) { on.disabled = false; host.querySelector('[data-turn-status]').innerHTML = `<span class="asst-err">${esc(e.message)}</span>`; }
+      try { const r = await post<{state: string}>('/v2/assistant/turn-on', {}); if (r.state !== 'active') status.textContent = 'Restored, but it needs a computer before it can answer (Settings).'; else await after?.(); }
+      catch (e) { on.disabled = false; status.innerHTML = `<span class="asst-err">${esc(errorMessage(e, ''))}</span>`; }
     };
   }
 
   // Settings > Bots, owner only: when the team has no Assistant (archived at setup, or never added),
   // one button restores it or adds it from the template, and everyone's Assistant page starts working.
-  async function settingsStrip(host, deps) {
+  async function settingsStrip(host: HTMLElement | null, deps: AssistantSettingsDeps): Promise<void> {
     if (!host) return;
     style();
     const {get, post, esc, toast, after} = deps;
-    let info;
-    try { info = await get('/v2/assistant'); } catch { host.innerHTML = ''; return; }
+    let info: import('./types/api').Assistant;
+    try { info = await get<import('./types/api').Assistant>('/v2/assistant'); } catch { host.innerHTML = ''; return; }
     if (info.available || !info.can_turn_on) { host.innerHTML = ''; return; }
     host.innerHTML = `<section class="card" data-assistant-off><div class="asst-row"><strong>The Assistant is off</strong>
       <button class="primary" type="button" data-turn-on>Turn on</button><span class="asst-state" data-turn-status role="status"></span></div></section>`;
-    const button = host.querySelector('[data-turn-on]'), status = host.querySelector('[data-turn-status]');
+    // Both are drawn by the markup just above.
+    const button = host.querySelector<HTMLButtonElement>('[data-turn-on]')!, status = host.querySelector<HTMLElement>('[data-turn-status]')!;
     button.onclick = async () => {
       button.disabled = true; status.textContent = 'Turning it on…';
       try {
-        const r = await post('/v2/assistant/turn-on', {});
+        const r = await post<{state: string}>('/v2/assistant/turn-on', {});
         status.textContent = r.state === 'active' ? 'On.' : 'Restored, but it needs a computer before it can answer: add one under Computers.';
         toast?.(r.state === 'active' ? 'The Assistant is on' : 'The Assistant is restored and waiting for a computer');
         await after?.();
         if (r.state === 'active') host.innerHTML = '';
-      } catch (e) { button.disabled = false; status.innerHTML = `<span class="asst-err">${esc(e.message)}</span>`; }
+      } catch (e) { button.disabled = false; status.innerHTML = `<span class="asst-err">${esc(errorMessage(e, ''))}</span>`; }
     };
   }
 

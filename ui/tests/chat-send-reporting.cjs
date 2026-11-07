@@ -1,9 +1,9 @@
 // Exercise the real pinned Sentry browser SDK and final wire scrubber with synthetic config only.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 const {chromium} = require('playwright');
-const {scrubSentry} = require('../observability.js');
+const {uiFile} = require('./support/page.cjs');
+const {scrubSentry} = require(uiFile('observability.ts'));
 
 const scrubbed = scrubSentry({message:'PRIVATE', request:{url:'PRIVATE'}, breadcrumbs:[{message:'PRIVATE'}],
   exception:{values:[{value:'PRIVATE',stacktrace:{frames:[
@@ -34,8 +34,8 @@ assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|brea
       if (url.pathname === '/assets/observability-vendors.js') vendorLoads++;
       if (url.pathname === '/api/v2/observability') return route.fulfill({json:{app:'tico', environment:'test', distinct_id:'tico:' + identity.repeat(64),
         sentry_dsn:'https://' + 'b'.repeat(32) + '@o123.ingest.us.sentry.io/123', release:'test-503'}});
-      const file = {'/observability.js':'observability.js', '/assets/observability-vendors.js':'assets/observability-vendors.js'}[url.pathname];
-      return route.fulfill({contentType:file ? 'text/javascript' : 'text/html',body:file ? fs.readFileSync(path.join(__dirname,'..',file),'utf8') : '<script src="/observability.js"></script>'});
+      const file = {'/observability.js': uiFile('observability.ts'), '/assets/observability-vendors.js': uiFile('assets/observability-vendors.js')}[url.pathname];
+      return route.fulfill({contentType:file ? 'text/javascript' : 'text/html',body:file ? fs.readFileSync(file,'utf8') : '<script src="/observability.js"></script>'});
     });
     await page.goto('http://fixture.test/');
     await page.evaluate(async () => { await TicoObservability.start(); TicoObservability.chatSend()({outcome:'refused',status:500}); });
