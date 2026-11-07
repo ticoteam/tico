@@ -1144,13 +1144,12 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             api_tools.refuse_finance_key(c, [cid])  # a Finance source still reads it (409 key_in_use)
             row = vault.row(c, cid)
-            grants = c.execute('SELECT count(*) FROM credential_grants WHERE credential_id=?', (cid,)).fetchone()[0]
             from .computer_keys import before_delete
 
             before_delete(c, who, cid)
-            c.execute('DELETE FROM credential_grants WHERE credential_id=?', (cid,))
+            grants = c.execute('DELETE FROM credential_grants WHERE credential_id=?', (cid,)).rowcount
             c.execute('DELETE FROM credentials WHERE id=?', (cid,))
-            H.event(c, who.actor, 'credential.deleted', cid, {'name': row['name'], 'env': row['env'], 'grants': grants})
+            api_tools.key_gone(c, who, row, grants)  # credential.deleted keeps its last name, and its tool's event
             return {'deleted': True, 'id': cid}
 
     @app.post('/api/v2/credentials/{cid}/reveal')

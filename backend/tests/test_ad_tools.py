@@ -98,3 +98,38 @@ def test_the_migration_skips_a_database_without_tools(tmp_path):
     conn = sqlite3.connect(tmp_path / "empty.sqlite")
     AD_SERVICES.up(conn)
     conn.close()
+
+
+BREX_HOST = importlib.import_module("backend.migrations.20261106222525_brex_tool_host")
+
+
+def test_brex_tool_uses_the_host_and_variable_finance_uses():
+    from backend.finance import brex
+
+    row = tool_services.defaults("brex")
+    assert row["base_url"] == brex.BASE
+    assert row["env"] == "BREX_TOKEN"
+    assert row["check_path"] == "/v2/users/me"
+    assert tool_services.match(env="BREX_API_KEY") == "brex"  # the old variable still lands on Brex
+
+
+def test_the_migration_moves_a_legacy_brex_tool_to_finances_host(tmp_path):
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(FIXTURE.read_text())
+    conn.commit()
+    conn.close()
+    Store(Settings(db_path=path)).initialize()
+    conn = sqlite3.connect(path)
+    now = "2026-11-05T00:00:00Z"
+    for tid, base in (("brex", "https://platform.brexapis.com"), ("brex-own", "http://127.0.0.1:9000")):
+        conn.execute(
+            "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
+            "updated_at) VALUES(?,'Brex','brex',?,'bearer','/v2/users/me','proxy','human:ana',?,?)",
+            (tid, base, now, now),
+        )
+    BREX_HOST.up(conn)
+    BREX_HOST.up(conn)
+    got = dict(conn.execute("SELECT id, base_url FROM tools WHERE service='brex'").fetchall())
+    conn.close()
+    assert got == {"brex": "https://api.brex.com", "brex-own": "http://127.0.0.1:9000"}

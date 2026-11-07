@@ -92,6 +92,12 @@ def by_code(ctx: Ctx, code: str) -> L.Account | None:
     return next((a for a in ctx.accounts.values() if a.code == code), None)
 
 
+def cards_gl(ctx: Ctx) -> L.Account | None:
+    """The credit card line at CARDS. A book whose sales tax line took 2100 (before tax had its own range) has none."""
+    found = by_code(ctx, CARDS)
+    return found if found is not None and found.subtype == "credit_card" else None
+
+
 def gl_account(ctx: Ctx, money: Any) -> L.Account:
     account = ctx.accounts.get(str(money["account_id"] or ""))
     if account is None:
@@ -218,7 +224,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
                 mapped.append(new_money(ctx, cid, a, "card_program", "debit", gl, who))
                 continue
-            cards = by_code(ctx, CARDS)
+            cards = cards_gl(ctx)
             gl = (
                 cards
                 if cards is not None

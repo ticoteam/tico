@@ -1109,6 +1109,11 @@ def connect(path, c, auth, who, trace=None, seconds=None):
 
         source = index.c
         audience_cache = {}
+        from .api_tools import hidden_ids
+
+        # A tool `who` may not see leaves no event: not its own, not its keys', live or deleted (api_tools `visible`).
+        # Its rules need no credential administrators: an Only listed tool ignores them.
+        unseen_targets = hidden_ids(c, who, (), auth)
 
         def visible_file(fid):
             row = restricted_pages(source).get(fid)
@@ -1134,7 +1139,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             "event": (
                 4,
                 lambda target, actor, ts, detail: (
-                    page_event_readable(source, auth, who, target, detail) and index.event(target, actor, ts, detail)
+                    target not in unseen_targets
+                    and page_event_readable(source, auth, who, target, detail)
+                    and index.event(target, actor, ts, detail)
                 ),
             ),
             "tag": (2, index.tag),
