@@ -94,8 +94,10 @@ the company's segments in rank, then name order (an unranked segment last), each
 expense and net for the same window. Budgets and projections are not split by segment in this read.
 `GET /api/v2/finance/pnl?segment=<id|unallocated>` keeps the lines that count toward one segment; its budgets are cut to
 it, and its projections are left out. A viewer without the whole P&L may name only a segment they lead; any other segment, Unallocated included, is refused. A segment filter also narrows the lines enough that private payroll shows none of
-its cells, so a filtered P&L never shows what the rest of a pay run was paid. The expenses view (`/finance/expenses`)
-does not group by segment.
+its cells, so a filtered P&L never shows what the rest of a pay run was paid. A line's drill-down into a segment is
+`GET /api/v2/finance/lines/{account_id}?segment=<id|unallocated>`: its `entries` and `total` are the lines that segment's
+column sums, gated as the P&L's filter is. Its `next_month` and `next_by` are the line's whole projection, not split by
+segment. The expenses view (`/finance/expenses`) does not group by segment.
 
 Who sees what:
 
