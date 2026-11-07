@@ -146,7 +146,7 @@ Each address is a Letters in row in Tools (`#/tools?show=mail`), with open order
 email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
 so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it (an
 owner or admin gives and removes Read on that address there), its automations and its letters (date, sender, kind,
-scan, the task it went to, status), with Retry on a failed one for an owner or admin. Inboxes > Settings > Letters in
+scan, the task it went to, status), with Retry on a failed one for an owner or admin. Tools > Settings > Letters in
 has the addresses with Get an address (owner or admin: state, kind, monthly and scan prices), Bring your own (the
 intake inbox), Who can use it (Read and Remove on all addresses) and Legal mail (who receives legal letters).
 
