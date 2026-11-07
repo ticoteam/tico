@@ -18,7 +18,7 @@
    and a phone's text fields a literal 16px (iOS zooms into anything smaller). */
 :root{
   --t-2xs:10px;   /* filled chips and badges */
-  --t-xs:11px;    /* meta, counts, hints */
+  --t-xs:12px;    /* meta, counts, hints */
   --t-sm:12px;    /* secondary text, tables' small print, code */
   --t-base:13px;  /* body text, rows, buttons, fields */
   --t-md:14px;    /* card titles, reading text */
@@ -36,7 +36,7 @@
   /* the one uppercase label: section heads, table heads, field keys */
   /* long-form reading (Docs): its own small scale, larger than the UI's */
   --prose:15px;--prose-h1:22px;--prose-h2:18px;--prose-h3:16px;--prose-title:24px;
-  --t-label:11px;--track-caps:.06em;
+  --t-label:12px;--track-caps:.06em;
   /* motion: short and decelerating; nothing animates layout */
   --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:cubic-bezier(0,0,.2,1);
   /* the house rules these serve are at the top of components.css */

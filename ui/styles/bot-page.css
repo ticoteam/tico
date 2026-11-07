@@ -60,7 +60,7 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
 .bot-goal-main{display:flex;align-items:center;gap:7px;min-width:0;max-width:100%;padding:3px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:inherit}
 a.bot-goal-main:hover{text-decoration:none;background:var(--hover)}a.bot-goal-main:hover .bot-goal-title{color:var(--ink)}
 .bot-goal-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:600}
-.bot-goal-set{flex:none;color:var(--link-quiet)}.bot-goal-set:hover{color:var(--ink)}
+.bot-goal-set{flex:none;padding:4px 0;color:var(--link-quiet)}.bot-goal-set:hover{color:var(--ink)}
 .bot-goal-row{padding:8px 0;border-top:1px solid var(--line)}.bot-goal-row:first-child{border-top:0;padding-top:0}
 .person-edit-btn{font-size:var(--t-base);font-weight:400;margin-left:8px;vertical-align:middle}
 .person-notify{display:flex;width:fit-content;align-items:center;gap:10px;cursor:pointer}.person-notify+.person-notify{margin-top:10px}
@@ -89,7 +89,7 @@ a.bot-goal-main:hover{text-decoration:none;background:var(--hover)}a.bot-goal-ma
 .rail-head .spacer{flex:1}
 .rail-head .upd-dot{margin-left:0;width:6px;height:6px}
 .rail-age{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-.rail-ico{display:inline-grid;place-items:center;flex:none;width:22px;height:22px;margin:-2px -4px -2px 0;border-radius:5px;color:var(--muted);opacity:.7}
+.rail-ico{display:inline-grid;place-items:center;flex:none;width:24px;height:24px;margin:-3px -5px -3px 0;border-radius:5px;color:var(--muted);opacity:.7}
 .rail-ico:hover,.rail-ico:focus-visible{opacity:1;color:var(--ink);background:var(--surface2);text-decoration:none}
 button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-ico .nav-icon{font-size:16px;width:16px;height:16px;color:inherit}
@@ -100,7 +100,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;margin:2px 0 6px;gap:2px}
 .bot-task-tabs::-webkit-scrollbar{height:4px}
 .bot-task-tabs::-webkit-scrollbar-thumb{border-radius:2px;background:var(--line)}
-.bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;padding:3px 7px;font-size:var(--t-sm)}
+.bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;min-height:26px;padding:3px 8px;font-size:var(--t-sm)}
 .trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
@@ -191,6 +191,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-top{flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:8px}
   .bot-ident{flex:1 1 0;max-width:none;gap:8px}
   .bot-ident .av{width:28px!important;height:28px!important;font-size:var(--t-sm)!important}
+  .bot-ident>[data-tip-bot]{display:inline-grid;place-items:center;min-width:44px;min-height:44px;margin:-8px}   /* status tip: a 44 px tap */
   .bot-ident h1{font-size:var(--t-lg)}
   .bot-top .bot-switch{display:flex;order:2;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
   .bot-top>.bot-goal{order:3;flex:0 1000000 auto}
@@ -198,7 +199,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   body.mobile-composer-focus #main.bot-chat-layout .bot-top{display:none}
 }
 @media (max-width:760px){
-  .bot-back-arrow{display:inline-flex;align-items:center;justify-content:center;order:0;flex:none;width:30px;height:32px;margin-left:-6px;border:0;background:none;color:var(--ink);font-size:28px;line-height:var(--lh-none);cursor:pointer}
+  .bot-back-arrow{display:inline-flex;align-items:center;justify-content:center;order:0;flex:none;width:44px;height:44px;margin-left:-12px;border:0;background:none;color:var(--ink);font-size:28px;line-height:var(--lh-none);cursor:pointer}
   .bot-switch button{padding:5px 8px}
 }
 @media (max-width:760px){
@@ -207,7 +208,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-top>.bot-goal{display:none}            /* the Goals card leads More on a phone */
   /* words, not icons: Home and DM look alike as icons, and these four are the way around a bot on a phone */
   .bot-top .bot-switch{margin-left:auto;border:0;background:none;padding:0;gap:0}
-  .bot-switch button{min-height:40px;padding:0 7px;border-radius:8px;font-size:var(--t-sm);white-space:nowrap}
+  .bot-switch button{min-height:44px;min-width:44px;padding:0 10px;border-radius:8px;font-size:var(--t-sm);white-space:nowrap}
   .bot-switch button.cur{background:var(--surface2);color:var(--ink)}
 }
 @media (max-width:760px){
@@ -310,3 +311,4 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-pause-row>button{flex:none}
 #bot-paused:empty{display:none}#bot-paused .bot-paused-badge{margin-left:8px}
 @media(max-width:600px){.bot-pause-row{align-items:stretch;flex-direction:column;gap:12px}.bot-pause-row>button{width:100%}}
+.bot-task-list .trow .ttl{padding-block:3px;margin-block:-3px}   /* a 24 px tap on the task title */

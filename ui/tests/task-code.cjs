@@ -142,12 +142,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         .map(t => ({...t, links: (t.links || []).map(({detail, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
     }
-    // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
-    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'},
-      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', conditions: []}], widgets: null, can_edit: false});
+    // The default sidebar (backend/bot_task_tabs.py): Assigned to others is a filter tab the server counts.
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'},
+      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', conditions: []}], widgets: null, can_edit: false});
     if (/^\/api\/v2\/bots\/[^/]+\/task-tabs\/tasks$/.test(p)) {
       const others = data.tasks.filter(t => t.requester_id === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner_id) && ['open', 'doing', 'waiting'].includes(t.status));
-      return json({tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
+      return json({tabs: [{key: 'c4', name: 'Assigned to others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});

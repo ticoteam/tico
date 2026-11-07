@@ -1056,7 +1056,7 @@ returns to the step it left, without advancing through the refused gate; back at
 gave during the hold moves it on then. An owner-declared hold
 is cleared by moving back to a working step. The active Building clock pauses while blocked;
 a separate blocked age alerts the type's manager after four hours, once per hold. The bot rail's
-Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs You tasks.
+Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs you tasks.
 
 A task also has a place within its step, `step_rank`, lower first, apart from `rank`, its place in
 its owner's queue. A task that enters a step, when it is created or its step, type or status
