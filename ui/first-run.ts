@@ -194,7 +194,7 @@ async function frGithubFill() {
   if (!line) return;
   const missing = ghNudgeAnswer ?? (await ghNudgeMissingRead());
   if (!missing || !line.isConnected) return;   // connected, or the screen moved on while the read was out
-  line.innerHTML = `Connect GitHub so your bots' work is backed up. <a class="ghost" href="#/tools/github">Connect GitHub</a>`;
+  line.innerHTML = `<strong>GitHub:</strong> not backed up. <a href="#/tools/github">Connect GitHub</a>`;
   line.hidden = false;
 }
 

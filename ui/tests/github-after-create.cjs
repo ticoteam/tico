@@ -1,6 +1,5 @@
-// The screen after Create (ui/first-run.js) for the owner: while GitHub is not connected and installed, one line says
-// "Connect GitHub so your bots' work is backed up." with a secondary Connect GitHub link to Tools › GitHub, above the
-// owners and the admin rows. It is gone once GitHub is connected, a failed read shows nothing, nobody else gets it, and
+// The screen after Create (ui/first-run.js) for the owner: while GitHub is not connected and installed, one row says
+// "GitHub: not backed up." with a Connect GitHub link to Tools › GitHub, above the owners and the admin rows. It is gone once GitHub is connected, a failed read shows nothing, nobody else gets it, and
 // the line is filled from the nudge's once-per-page read (ui/app/github-nudge.ts): no screen polls for it. Fixtures only,
 // no network. TICO_SCREENSHOT_DIR keeps the screen at desktop and phone width, light and dark.
 const {chromium} = require('playwright');
@@ -87,16 +86,16 @@ const line = page => page.locator('#fr-github');
       // The owner, GitHub not connected: one line with a secondary link, above the owners row, and still one primary button.
       const {page, context, errors, counts} = await open(browser, {});
       await visit(page);
-      await line(page).locator('a.ghost').waitFor({state: 'attached'});
+      await line(page).locator('a').waitFor({state: 'attached'});
       assert.equal(await line(page).isVisible(), true);
-      assert.equal(await line(page).textContent(), "Connect GitHub so your bots' work is backed up. Connect GitHub");
+      assert.equal(await line(page).textContent(), 'GitHub: not backed up. Connect GitHub');
       assert.equal(await line(page).locator('a').getAttribute('href'), '#/tools/github');
       assert.equal(await line(page).locator('.primary').count(), 0);
       assert.deepEqual(await page.locator('#onb .primary').evaluateAll(els => els.map(el => el.id)), ['onb-tasks']);
       assert.equal(await line(page).evaluate(el => el.nextElementSibling?.id), 'fr-owners');
       assert.equal(await page.locator('#onb-after > :first-child').first().getAttribute('id'), 'fr-providers');
-      // The progress poll redraws the rows every few seconds; the GitHub answer is asked once for the screen, not per poll.
-      await page.waitForTimeout(4500);
+      // The progress poll redraws the rows; two polls in a row must not ask GitHub again: the answer is read once per page.
+      await page.evaluate(async () => { await onbPoll(ONB); await onbPoll(ONB); });
       assert.equal(counts.repositories, 1);
       assert.deepEqual(errors, []);
       await line(page).locator('a').click();
@@ -116,7 +115,7 @@ const line = page => page.locator('#fr-github');
       // Connected but not installed is still missing: the line stays.
       const {page, context, errors} = await open(browser, {github: {github_connected: true, github_installed: false}});
       await visit(page);
-      await line(page).locator('a.ghost').waitFor({state: 'attached'});
+      await line(page).locator('a').waitFor({state: 'attached'});
       assert.equal(await line(page).isVisible(), true);
       assert.deepEqual(errors, []);
       await context.close();
@@ -146,7 +145,7 @@ const line = page => page.locator('#fr-github');
         for (const [label, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
           const {page, context, errors} = await open(browser, {colorScheme, viewport});
           await visit(page);
-          await line(page).locator('a.ghost').waitFor({state: 'attached'});
+          await line(page).locator('a').waitFor({state: 'attached'});
           if (label === 'phone') {
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
             assert.ok(overflow <= 0, `the screen after Create scrolls sideways by ${overflow}px at phone width`);
