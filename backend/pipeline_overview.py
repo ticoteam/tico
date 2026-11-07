@@ -197,8 +197,7 @@ def _for_you(c: "sqlite3.Connection", actor: str, ids: list[str], seen: str) -> 
         return {}
     task_ids = sorted({str(i["task_id"]) for i in items})
     readable = {
-        str(r[0])
-        for r in c.execute(f"SELECT id FROM tasks WHERE ({seen}) AND id IN ({_marks(task_ids)})", task_ids)
+        str(r[0]) for r in c.execute(f"SELECT id FROM tasks WHERE ({seen}) AND id IN ({_marks(task_ids)})", task_ids)
     }
     counted: dict[str, int] = defaultdict(int)
     for item in items:
@@ -213,7 +212,9 @@ def _links(c: "sqlite3.Connection", ids: set[str]) -> list[Row]:
         return []
     return [
         r
-        for r in _rows(c, "SELECT id, from_pipeline_id, to_pipeline_id, mode FROM pipeline_links WHERE retired_at IS NULL")
+        for r in _rows(
+            c, "SELECT id, from_pipeline_id, to_pipeline_id, mode FROM pipeline_links WHERE retired_at IS NULL"
+        )
         if r["from_pipeline_id"] in ids and r["to_pipeline_id"] in ids
     ]
 
@@ -345,7 +346,8 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
 def _last_done(c: "sqlite3.Connection", pipeline_id: str) -> str:
     """A pipeline's last stage of done kind: where its finished work ends, the default output stage of its factory."""
     row = c.execute(
-        "SELECT id FROM task_steps WHERE type_id=? AND status='done' ORDER BY position DESC, id DESC LIMIT 1", (pipeline_id,)
+        "SELECT id FROM task_steps WHERE type_id=? AND status='done' ORDER BY position DESC, id DESC LIMIT 1",
+        (pipeline_id,),
     ).fetchone()
     return str(row[0]) if row else ""
 

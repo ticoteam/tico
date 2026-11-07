@@ -192,7 +192,11 @@ def test_inputs_cap_labels_at_five_then_other_and_count_every_card(api):
 
 def test_a_reader_is_not_counted_a_review_on_a_card_they_may_not_open(api):
     growth = make_factory(api, "Gro")
-    steps = [{"name": "Doing", "status": "doing"}, {"name": "Review", "status": "review"}, {"name": "Done", "status": "done"}]
+    steps = [
+        {"name": "Doing", "status": "doing"},
+        {"name": "Review", "status": "review"},
+        {"name": "Done", "status": "done"},
+    ]
     typ, s = make_type(api, "Rvw", steps=steps, factory=growth)
     with api.app.state.store.transaction() as c:
         c.execute(

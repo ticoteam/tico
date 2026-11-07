@@ -221,7 +221,7 @@ function pageOverviewFactories(): void {
 
 // ---- + Factory: the company's owner and Admins make a factory (POST /v2/factories). The map refreshes after a save.
 function ofMayMakeFactory(): boolean {
-  return S.me?.role === 'owner' || S.me?.role === 'admin';
+  return S.me?.role === 'owner' || S.me?.bot_admin === true;
 }
 
 function ofNewToggle(open: boolean): void {
