@@ -742,11 +742,11 @@ def test_a_red_full_naming_no_failure_is_no_anchor_so_the_next_candidate_is_a_fu
 @pytest.mark.parametrize(
     "runs, anchor, failed",
     [
-        ([run(B, id=2, at=NOW - timedelta(hours=2))], B, {}),
+        ([run(B, id=2, at=OPENED - timedelta(hours=1))], B, {}),
         (
             [
                 run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                run(B, id=2, at=NOW - timedelta(hours=2)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
             ],
             B,
             {},
@@ -754,7 +754,7 @@ def test_a_red_full_naming_no_failure_is_no_anchor_so_the_next_candidate_is_a_fu
         (
             [
                 run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1)),
-                run(B, id=2, at=NOW - timedelta(hours=2)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
             ],
             B,
             {},
@@ -762,7 +762,7 @@ def test_a_red_full_naming_no_failure_is_no_anchor_so_the_next_candidate_is_a_fu
         (
             [
                 run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                run(B, id=2, at=NOW - timedelta(hours=2)),
+                run(B, id=2, at=OPENED - timedelta(hours=1)),
             ],
             C,
             {3: {"backend/tests/test_b.py"}},

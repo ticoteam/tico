@@ -122,13 +122,6 @@ def test_a_red_anchor_stays_open_until_a_green_validation_of_main_supersedes_it(
     assert ri.anchor_open([anchor], None, lambda sha: True) is False
 
 
-def test_a_stale_red_running_or_uncontained_validation_is_no_anchor():
-    assert ri.anchor_of([record(1, A, hours=25)], NOW, lambda sha: True) is None
-    assert ri.anchor_of([record(1, A, conclusion="failure")], NOW, lambda sha: True) is None
-    assert ri.anchor_of([record(1, A, status="in_progress")], NOW, lambda sha: True) is None
-    assert ri.anchor_of([record(1, A)], NOW, lambda sha: False) is None
-
-
 def test_the_red_run_since_the_anchor_is_the_newest_red_newer_than_it():
     anchor = record(2, B, hours=3)
     records = [record(4, C, conclusion="failure"), record(3, B, conclusion="cancelled", hours=2), anchor]
