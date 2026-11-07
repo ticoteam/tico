@@ -14,6 +14,7 @@ from . import (
     growth,
     meeting_links,
     pages,
+    pipelines,
     recruit,
     reach,
     schedules,
@@ -40,6 +41,7 @@ SECTIONS = (
     reach,
     meeting_links,
     pages,
+    pipelines,
     alerts,
     skills,
 )
