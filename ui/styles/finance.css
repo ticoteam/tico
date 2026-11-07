@@ -14,6 +14,7 @@
 .fin-bar>button,.fin-pop-at>button{padding:0 10px;white-space:nowrap}
 .fin-bar select,.fin-bar input[type=date],.fin-bar input[type=month]{width:auto;max-width:220px;min-width:0;padding-top:0;padding-bottom:0}
 .fin-inline{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);white-space:nowrap}
+.fin-seg{height:var(--ctl-sm)}
 .fin-seg button{padding:3px 10px}
 .fin-search{display:inline-flex;align-items:center;gap:6px;flex:1 1 200px;max-width:340px;min-width:0;height:var(--ctl-sm);padding:0 8px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
 .fin-search .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
@@ -187,6 +188,7 @@
   .fin-sel-v{display:inline}
   .fin-sel select{position:absolute;inset:0;width:100%;height:100%;opacity:0}
   .fin-form input,.fin-form select{height:40px}
+  .fin-seg{height:auto}
   .fin-seg button{min-height:40px;padding:6px 10px}
   /* Names and group rows in a table: the row's height stays the text's on a computer, 40px under a thumb. */
   .fin-t .fin-link,.fin-ln td:first-child a{display:inline-flex;align-items:center;min-height:40px}
