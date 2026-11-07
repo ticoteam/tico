@@ -5176,7 +5176,10 @@ STABLE.extend(
             "getFinanceLine",
             "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
             "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
-            "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n "
+            "unattributed filter it as the P&L's expenses view does; segment keeps the entries that count toward one company "
+            "segment (unallocated for none), the lines that segment's column sums, and without the whole P&L only a segment "
+            "you lead (else refused). next_month and next_by are the whole line's projection, not split by segment. "
+            "Private totals only from whole cohorts. Rows past top_n "
             "fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
             "FinanceReport",
         ),

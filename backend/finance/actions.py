@@ -1156,10 +1156,12 @@ def _has_column(c: sqlite3.Connection, table: str, column: str) -> bool:
 
 def segment_merged(c: sqlite3.Connection, from_id: str, to_id: str) -> None:
     """A segment merged into another (backend/strategy_market.py follow_merge): the budgets and finance contacts that
-    named the one it merged from name the one it merged into. A table the database does not have is skipped."""
+    named the one it merged from name the one it merged into. A table the database does not have is skipped. The finance
+    view moves, so cached P&L views drop the merged column."""
     for table in ("fin_budgets", "fin_contacts"):
         if _has_column(c, table, "segment_id"):
             c.execute(f"UPDATE {table} SET segment_id=? WHERE segment_id=?", (to_id, from_id))
+    segment_tags_changed(c, f"segment {from_id} merged")
 
 
 def segment_tags_changed(c: sqlite3.Connection, why: str) -> None:

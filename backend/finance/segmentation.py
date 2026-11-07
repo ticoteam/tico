@@ -8,9 +8,8 @@ segment of its customer; else Unallocated. Shared costs (payroll, engineering, A
 Unallocated.
 """
 
-import json
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any, cast
 
 from .. import hubdb as H
@@ -21,46 +20,10 @@ UNALLOCATED = "unallocated"  # the column for lines that count toward no segment
 TOTAL = "total"  # the column every line counts toward
 
 
-def _props(text: object) -> dict[str, Any]:
-    try:
-        value = json.loads(str(text or "{}"))
-    except ValueError:
-        return {}
-    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
-
-
-def _rank(props: Mapping[str, Any]) -> int | None:
-    """A segment's rank, or None when it has none (such a segment sorts last)."""
-    value = props.get("rank")
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def ours(c: sqlite3.Connection) -> list[dict[str, Any]]:
-    """The company's segments in the order a segment P&L shows them: by rank, then name, with the unranked last. Each
-    one's id, name, one line (`who`), color and rank (None when unranked)."""
-    ids = sorted(SEG.ours_ids(c))
-    if not ids:
-        return []
-    marks = ",".join("?" * len(ids))
-    rows = c.execute(f"SELECT id, name, summary, properties FROM market_entities WHERE id IN ({marks})", ids).fetchall()
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        props = _props(r[3])
-        out.append(
-            {
-                "id": str(r[0]),
-                "name": str(r[1]),
-                "who": str(r[2] or ""),
-                "color": str(props.get("color") or ""),
-                "rank": _rank(props),
-            }
-        )
-    return sorted(out, key=lambda x: (x["rank"] is None, x["rank"] or 0, x["name"], x["id"]))
+    """The company's segments in the Market page's order, with its colors and ranks (backend/segments.py ordered): each
+    one's id, name, one line (`who`), color and rank, its place in that list. A segment P&L's columns come in this order."""
+    return SEG.ordered(c)
 
 
 def checked(c: sqlite3.Connection, value: object) -> str:
