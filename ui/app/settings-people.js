@@ -209,7 +209,7 @@ async function renderSettingsPeople() {
     }
     // Who can join: "Anyone with a <domain> Google login" puts the company domain on the allow list (backend/access.py
     // view `join`). Turning it off can lock people out, so it asks first; a declined change puts the radio back.
-    el.querySelectorAll('input[name=join]').forEach(radio => radio.onchange = async () => {
+    el.querySelectorAll('input[name=join]').forEach(radio => { radio.onchange = async () => {
       const on = radio.value === 'domain';
       if (!on && !await settingsConfirm({title: `Stop sign-in for everyone at ${home}?`, ok: 'Turn off',
         text: `Only people added here keep signing in. Anyone else at ${home} can no longer sign in.`})) {
@@ -219,7 +219,7 @@ async function renderSettingsPeople() {
         await allow(view.allowed, on ? [...view.allowed_domains, home] : view.allowed_domains.filter(d => d !== home));
         PEOPLE_ADDED = on ? home : '';
       }, S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', radio);
-    });
+    }; });
     el.querySelectorAll('[data-allow-remove]').forEach(button => button.onclick = async () => {
       const x = button.dataset.allowRemove, domain = !x.includes('@');
       if (!await settingsConfirm({title: `Remove ${x}?`, ok: 'Remove',
