@@ -32,7 +32,7 @@ certifi==2026.10.23
     #   httpcore
     #   httpx
     #   sentry-sdk
-cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+cffi==2.1.1
     # via
     #   -c requirements.txt
     #   cryptography
@@ -126,11 +126,11 @@ psycopg[binary]==3.3.6
     # via
     #   -c requirements.txt
     #   -r requirements.in
-psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+psycopg-binary==3.3.6
     # via
     #   -c requirements.txt
     #   psycopg
-pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+pycparser==3.0
     # via
     #   -c requirements.txt
     #   cffi
@@ -150,6 +150,7 @@ pyjwt[crypto]==2.15.1
     # via
     #   -c requirements.txt
     #   -r requirements.in
+    #   pyjwt
 pymongo==4.19.0
     # via
     #   -c requirements.txt
@@ -158,7 +159,7 @@ pymysql==1.2.3
     # via
     #   -c requirements.txt
     #   -r requirements.in
-pypdf==6.21.2
+pypdf==6.21.4
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -235,7 +236,7 @@ uvicorn==0.54.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
-uvloop==0.23.0 ; sys_platform != 'win32'
+uvloop==0.23.0 ; sys_platform != "win32"
     # via
     #   -c requirements.txt
     #   -r requirements.in
