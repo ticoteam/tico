@@ -757,6 +757,17 @@ SMOKE_SCRIPT = "sign-in-redirect"
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
 UI_RUNNER = "scripts/ui-tests.cjs"
+# The factory simulation (evals/factory) runs the Dev board end to end, and the merge queue runs it when a change reaches
+# what it runs. That reach is measured, not mapped: evals/factory/call_path.json lists the Python files a run of the sim
+# executed, the non-Python files it read and the folders it listed (python -m evals.factory.run --seeds 1-3
+# --save-call-path). The static map cannot say it: the sim imports backend.app, which imports every router, and a read of
+# ui/ by backend/config.py would reach the sim from a stylesheet. The sim also loads every catalog template into the
+# company file, so a new template under templates/catalog/ runs it; the pinned backend dependencies and this workflow
+# (which defines the sim's job) are named too.
+FACTORY_DIR = "evals/factory/"
+FACTORY_CALL_PATH = FACTORY_DIR + "call_path.json"
+FACTORY_TEMPLATES = ("templates/catalog/",)
+FACTORY_PINS = re.compile(r"backend/requirements[\w.-]*\.(txt|in)")
 
 
 def unread(name):
@@ -964,6 +975,63 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
+def factory_call_path(root=ROOT):
+    """What the sim's recorded run ran, read and listed (evals/factory/call_path.json), or None when nothing is recorded."""
+    path = root / FACTORY_CALL_PATH
+    if not path.is_file():
+        return None
+    recorded = json.loads(path.read_text())
+    return {key: list(recorded.get(key, ())) for key in ("code", "data", "folders")}
+
+
+def factory_reason(changed, call_path=None, root=ROOT):
+    """Why a change runs the factory simulation, or None. An empty diff runs it too: the diff could not be read, and a
+    change that is not known to miss the sim does not go unchecked."""
+    if not changed:
+        return "the diff is empty or could not be read"
+    measured = factory_call_path(root) if call_path is None else call_path
+    if measured is None:
+        return f"{FACTORY_CALL_PATH} is missing"
+    reached = set(measured["code"]) | set(measured["data"])
+    folders = set(measured["folders"])
+    for name in changed:
+        if name.startswith(FACTORY_DIR):
+            return f"{name} is the sim's own code"
+        if name in reached:
+            return f"the sim runs or reads {name}"
+        # A listing sees the entries directly in a folder, so only a change to one of them moves it.
+        parent = name.rsplit("/", 1)[0] + "/" if "/" in name else ""
+        if parent in folders:
+            return f"the sim lists {parent}, which {name} is in"
+        if name.startswith(FACTORY_TEMPLATES):
+            return f"{name} is a catalog template the sim loads"
+        if name == PR_WORKFLOW:
+            return f"{name} defines the sim's job"
+        if FACTORY_PINS.fullmatch(name):
+            return f"{name} pins what the sim installs"
+    return None
+
+
+def factory_shards():
+    """The `i/n` groups of the sim's seed-1 runs that `run.py --shard` takes, one per RunsOn VM: the sim's own packing
+    of its scenarios by timings.json. Imports only run.py, which sets up no scenario, server or environment."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from evals.factory import run as factory
+
+    timings = factory.timings()
+    count = factory.groups_for([(name, 1) for name in timings], timings)
+    return [f"{index}/{count}" for index in range(1, count + 1)]
+
+
+def factory_plan(event, changed):
+    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. Only a merge queue group runs it,
+    so a pull request's plan never packs the sim."""
+    reason = factory_reason(changed)
+    shards = factory_shards() if reason and event == "merge_group" else ["1/1"]
+    return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
+
+
 def prepare(event, base, output, timings_path=None, head="HEAD"):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
     merge_group. A group's base is its own base sha, so it needs no merge_parent or changelog guard."""
@@ -1014,6 +1082,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     plan = {
         **picked,
         "changed": changed,
+        "factory": factory_plan(event, changed),
         "matrix": {"include": jobs},
         "estimated_seconds": loads,
         "timed_files": len(set(counts) & timings.keys()),
@@ -1024,6 +1093,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write("matrix=" + json.dumps(plan["matrix"]) + "\n")
             stream.write("caddy=" + str(plan["caddy"]).lower() + "\n")
+            stream.write("factory=" + str(plan["factory"]["run"]).lower() + "\n")
+            stream.write("factory_shards=" + json.dumps(plan["factory"]["shards"]) + "\n")
     return plan
 
 

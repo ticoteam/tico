@@ -939,7 +939,7 @@ def test_runner_labels_stay_at_two_or_four_vcpus():
     text = (ROOT / ".github" / "workflows" / "pr-checks.yml").read_text()
     assert set(re.findall(r"runner=(\d+)cpu", text)) <= {"2", "4"}
     families = re.findall(r"runner=\d+cpu-linux-x64(/family=[^/']+)?/", text)
-    assert len(families) == 6 and set(families) == {"/family=m8+m7+m6+r8+r7"}, families
+    assert len(families) == 7 and set(families) == {"/family=m8+m7+m6+r8+r7"}, families
     # The Caddy image takes the same families on amd64 only; arm64 keeps its label.
     assert "matrix.arch != 'arm64' && '/family=m8+m7+m6+r8+r7' || ''" in text
 
@@ -986,4 +986,99 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
+    assert exit_code({**passing, "factory-sim": "failure"}) == 1
+    assert exit_code({**passing, "factory-sim": "skipped"}) == 0
     assert exit_code({**passing, "plan": "skipped"}) == 0
+
+
+def measured(code=(), data=(), folders=()):
+    return {"code": list(code), "data": list(data), "folders": list(folders)}
+
+
+def test_a_change_the_recorded_sim_run_reads_selects_the_factory_sim():
+    recorded = measured(code=["backend/wake_rules.py"], data=["backend/data/rules.json"], folders=["backend/workers/"])
+    assert "runs or reads" in checks.factory_reason(["backend/wake_rules.py"], call_path=recorded)
+    assert "runs or reads" in checks.factory_reason(["backend/data/rules.json"], call_path=recorded)
+    assert "lists backend/workers/" in checks.factory_reason(["backend/workers/new_job.py"], call_path=recorded)
+    assert "catalog template" in checks.factory_reason(["templates/catalog/new-role/AGENT.md"], call_path=recorded)
+
+
+def test_changes_the_sim_never_reads_do_not_select_it():
+    # A listing sees only the entries directly in its folder: a change below one of them moves nothing it lists.
+    recorded = measured(code=["backend/wake_rules.py"], folders=["backend/workers/"])
+    for name in [
+        "ui/app/chat.ts",
+        "docs/releasing.md",
+        "backend/tests/test_auth.py",
+        "scripts/remote.py",
+        "backend/workers/sub/job.py",
+    ]:
+        assert checks.factory_reason([name], call_path=recorded) is None, name
+
+
+def test_the_sim_pins_its_own_code_its_workflow_job_and_the_pinned_backend_requirements():
+    recorded = measured()
+    assert "sim's own code" in checks.factory_reason(["evals/factory/sim.py"], call_path=recorded)
+    assert "defines the sim's job" in checks.factory_reason([checks.PR_WORKFLOW], call_path=recorded)
+    assert "pins" in checks.factory_reason(["backend/requirements-dev.txt"], call_path=recorded)
+    assert "pins" in checks.factory_reason(["backend/requirements.txt"], call_path=recorded)
+
+
+def test_an_empty_or_unmeasured_change_runs_the_sim(tmp_path):
+    assert "empty" in checks.factory_reason([], call_path=measured())
+    assert "missing" in checks.factory_reason(["docs/releasing.md"], root=tmp_path)
+
+
+def test_a_factory_plan_packs_the_sim_only_for_a_merge_group(monkeypatch):
+    monkeypatch.setattr(checks, "factory_call_path", lambda root=checks.ROOT: measured(code=["backend/wake_rules.py"]))
+    pull = checks.factory_plan("pull_request", ["backend/wake_rules.py"])
+    assert pull["run"] is True and pull["shards"] == ["1/1"]
+    queue = checks.factory_plan("merge_group", ["backend/wake_rules.py"])
+    assert queue["run"] is True and queue["shards"] == checks.factory_shards()
+    unrelated = checks.factory_plan("merge_group", ["ui/app/chat.ts"])
+    assert unrelated["run"] is False and unrelated["shards"] == ["1/1"]
+
+
+def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm():
+    from evals.factory import run as factory
+    from evals.factory.scenarios import SCENARIOS
+
+    timings = factory.timings()
+    assert set(timings) == {s.name for s in SCENARIOS}, "timings.json needs a time for every scenario"
+    shards = checks.factory_shards()
+    count = len(shards)
+    assert shards == [f"{index}/{count}" for index in range(1, count + 1)]
+    pairs = [(name, 1) for name in sorted(timings)]
+    groups = [factory.pack(pairs, count, timings)[index] for index in range(count)]
+    assert sorted(pair for group in groups for pair in group) == sorted(pairs)
+    slowest_vm = max(sum(timings[name] for name, _ in group) for group in groups) / factory.REMOTE_CPUS
+    assert slowest_vm <= 300, slowest_vm
+
+
+def test_the_factory_sim_job_runs_only_in_the_queue_on_the_plans_shards():
+    jobs = workflow_jobs()["jobs"]
+    assert {"factory", "factory_shards"} <= set(jobs["plan"]["outputs"])
+    job = jobs["factory-sim"]
+    assert job["needs"] == "plan"
+    assert "github.event_name == 'merge_group'" in job["if"] and "needs.plan.outputs.factory == 'true'" in job["if"]
+    assert job["strategy"]["matrix"]["shard"] == "${{ fromJSON(needs.plan.outputs.factory_shards) }}"
+    assert "runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7" in job["runs-on"]
+    [sim] = [step["run"] for step in job["steps"] if "evals.factory.run" in step.get("run", "")]
+    assert '--seeds 1 --shard "$SHARD" -j 4' in sim
+
+
+def test_the_recorded_call_path_matches_the_repository_and_decides_what_the_queue_runs():
+    recorded = checks.factory_call_path()
+    # The two data entries that are not files: the sim opens VERSION, which this repository does not have, and a
+    # directory of registry fixtures. Neither is a file a change can add without also changing what the sim reads.
+    not_files = {"VERSION", "backend/tests/fixtures/registry"}
+    assert all((checks.ROOT / name).is_file() for name in recorded["code"])
+    assert all((checks.ROOT / name).is_file() or name in not_files for name in recorded["data"])
+    assert all((checks.ROOT / name).is_dir() for name in recorded["folders"])
+    assert not [name for name in recorded["code"] if name.startswith("ui/")]
+    assert "ui/index.html" in recorded["data"] and "backend/wake_rules.py" in recorded["code"]
+    assert "templates/catalog/" in recorded["folders"]
+    assert checks.factory_reason(["backend/wake_rules.py"]) is not None
+    assert checks.factory_reason(["ui/app/chat.ts"]) is None
+    assert checks.factory_reason(["docs/releasing.md"]) is None
+    assert checks.factory_reason(["scripts/tests/test_pr_checks.py"]) is None
