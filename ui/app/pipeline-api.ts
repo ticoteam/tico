@@ -356,6 +356,13 @@ async function pipelineSendBack(taskId: string, requirementId: string, note: str
   return post(pipelineRoute(reviewPath(taskId, requirementId) + '/send-back'), { note }) as Promise<{ decision_id: string }>;
 }
 
+/** Validate's "Not validated": the item goes back to the stage before Validate and one follow-up ticket is filed. */
+async function pipelineNotValidated(taskId: string, requirementId: string, reason: string):
+  Promise<{ decision_id: string; moved_back_to: string | null; follow_up: string | null }> {
+  return post(pipelineRoute(reviewPath(taskId, requirementId) + '/not-validated'), { note: reason }) as
+    Promise<{ decision_id: string; moved_back_to: string | null; follow_up: string | null }>;
+}
+
 /** Message the pipeline manager about one item. The manager decides or forwards it. */
 async function pipelineMessageManager(taskId: string, requirementId: string, text: string): Promise<{ ok: boolean }> {
   await post(pipelineRoute(reviewPath(taskId, requirementId) + '/message-manager'), { text });

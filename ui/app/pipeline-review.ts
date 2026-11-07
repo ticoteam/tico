@@ -23,6 +23,8 @@ let pipelineReviewState: {
   /** The item (task and requirement) whose claim was taken or asked for, so each item is claimed once. */
   claimed: string;
   undo: { decisionId: string; item: PipelineReviewItem; index: number; timer: number } | null;
+  /** What the last Not validated did (the follow-up it filed), shown until the next send. */
+  notice: string;
 } | null = null;
 
 /** The queue rows that wait on this person, by ticket: the board dots do not say who reviews, the queue does. */
@@ -97,7 +99,7 @@ async function pipelineReviewOpen(pipelineId: string, stage = ''): Promise<void>
   let failed = '';
   try { items = pipelineReviewItems((await pipelineReviewQueue(pipelineId)).items, stage); }
   catch (error) { failed = error instanceof Error ? error.message : 'The queue did not load.'; }
-  pipelineReviewState = { pipelineId, stage, items, index: 0, tab: 0, busy: false, message: failed, note: '', claimed: '', undo: null };
+  pipelineReviewState = { pipelineId, stage, items, index: 0, tab: 0, busy: false, message: failed, note: '', claimed: '', undo: null, notice: '' };
   const host = document.createElement('div');
   host.className = 'pipe-review';
   host.setAttribute('role', 'dialog');
@@ -116,10 +118,11 @@ function pipelineReviewRender(): void {
   const total = state.items.length;
   const item = state.items[state.index];
   const undo = state.undo ? `<div class="pipe-review-toast" role="status">Approved · <button type="button" class="linkish" data-review-undo>Undo</button></div>` : '';
+  const notice = state.notice ? `<p class="pipe-review-notice" role="status">${esc(state.notice)}</p>` : '';
   if (!item) {
     host.innerHTML = `<header class="pipe-review-head"><span class="pipe-review-count">${state.message ? 'Queue not loaded' : 'For you · none'}</span>
       <span class="spacer"></span>${PIPELINE_REVIEW_EXIT}</header>
-      <p class="pipe-review-empty" role="status">${esc(state.message || 'Nothing is waiting on you.')}</p>${undo}`;
+      <p class="pipe-review-empty" role="status">${esc(state.message || 'Nothing is waiting on you.')}</p>${notice}${undo}`;
     return;
   }
   const attachments = item.attachments;
@@ -159,7 +162,9 @@ function pipelineReviewRender(): void {
         ${item.claim ? `<p class="pipe-review-claim" role="status">${esc(item.claim.label)}</p>` : ''}
         <button type="button" class="pipe-review-approve" data-review-approve ${state.busy || item.claim ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>
         ${item.can_mark_met ? '<button type="button" class="pipe-review-met" data-review-send="met">Mark met</button>' : ''}
+        ${item.stage_name === 'Validate' && myActor().startsWith('human:') ? '<button type="button" class="pipe-review-met" data-review-not-validated>Not validated</button>' : ''}
         <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_id)} to ${esc(item.moves_to)}` : ''}</p>
+        ${notice}
       </aside>
     </div>
     ${undo}`;
@@ -254,6 +259,30 @@ async function pipelineReviewUndo(): Promise<void> {
   pipelineReviewRender();
 }
 
+/** Validate's "Not validated": asks for one line of reason, then the item leaves the queue and a follow-up is filed. */
+async function pipelineReviewNotValidated(): Promise<void> {
+  const state = pipelineReviewState;
+  const item = state?.items[state.index];
+  if (!state || !item || state.busy) return;
+  const reason = (window.prompt('Why did it not validate? One line.') ?? '').trim();
+  if (!reason) return;
+  state.busy = true; state.message = ''; state.notice = '';
+  try {
+    const res = await pipelineNotValidated(item.task_id, item.requirement_id, reason);
+    void pipelineMineSync(state.pipelineId, true);
+    if (!pipelineReviewState) return;
+    state.items = state.items.filter(other => other !== item);
+    state.index = Math.min(state.index, Math.max(0, state.items.length - 1));
+    state.tab = 0; state.note = '';
+    state.notice = `Back to ${res.moved_back_to ?? 'In development'} · follow-up ${res.follow_up ?? ''} filed`;
+  } catch (error) {
+    if (pipelineReviewState) state.message = error instanceof Error ? error.message : 'Not sent.';
+  } finally {
+    if (pipelineReviewState) pipelineReviewState.busy = false;
+    pipelineReviewRender();
+  }
+}
+
 /** Sends the item back to its assignee or to the manager with the note. Nothing is approved. */
 async function pipelineReviewSend(to: 'assignee' | 'manager' | 'met'): Promise<void> {
   const state = pipelineReviewState;
@@ -261,7 +290,7 @@ async function pipelineReviewSend(to: 'assignee' | 'manager' | 'met'): Promise<v
   const note = pipelineReviewNoteValue();
   if (!state || !item || state.busy) return;
   if (!note) { state.message = 'Write a note first.'; pipelineReviewRender(); return; }
-  state.busy = true; state.message = '';
+  state.busy = true; state.message = ''; state.notice = '';
   try {
     if (to === 'assignee') await pipelineSendBack(item.task_id, item.requirement_id, note);
     else if (to === 'met') await pipelineMarkMet(item.task_id, item.requirement_id, note);
@@ -301,6 +330,7 @@ document.addEventListener('click', (event: MouseEvent) => {
   if (target.closest('[data-review-next]')) return pipelineReviewStep(1);
   if (target.closest('[data-review-approve]')) return void pipelineReviewApprove();
   if (target.closest('[data-review-undo]')) return void pipelineReviewUndo();
+  if (target.closest('[data-review-not-validated]')) return void pipelineReviewNotValidated();
   const tab = target.closest<HTMLElement>('[data-review-tab]');
   if (tab && pipelineReviewState) { pipelineReviewState.tab = Number(tab.dataset.reviewTab) || 0; pipelineReviewRender(); return; }
   const send = target.closest<HTMLElement>('[data-review-send]');

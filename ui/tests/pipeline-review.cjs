@@ -14,7 +14,7 @@ async function until(check, ms = 5000) {
   while (!check()) { if (Date.now() > end) throw new Error('timed out waiting for the server to record it'); await new Promise(r => setTimeout(r, 50)); }
 }
 
-async function openReview(browser, {width, height, theme, refuseApprove = false, touch = false, claimedBy = null}) {
+async function openReview(browser, {width, height, theme, refuseApprove = false, touch = false, claimedBy = null, validate = false}) {
   const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', ...(touch ? {isMobile: true, hasTouch: true} : {})});
   await context.addInitScript(([theme]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
@@ -22,7 +22,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  const state = await install(page, {refuseApprove, claimedBy});
+  const state = await install(page, {refuseApprove, claimedBy, validate});
   await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
   await page.waitForSelector('.tl-head .pipe-play', {timeout: t(8000)});
   await page.locator('.tl-head .pipe-play').click();
@@ -108,6 +108,32 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       const drawn = await page.locator('.pipe-review kbd').evaluateAll(els => els.filter(el => el.getClientRects().length > 0).length);
       assert.equal(drawn, 0, 'no key hints on a touch phone');
       assert.deepEqual(errors, [], 'touch phone: no page errors');
+      await context.close();
+    }
+
+    // S1: at Validate, Not validated asks for one line of reason. Cancelling posts nothing; with a reason it goes to the
+    // server, the item leaves the queue, and the notice names the follow-up. Other stages do not show the button.
+    {
+      const {context, page, state, errors} = await openReview(browser, {width: 1440, height: 940, theme: 'light', validate: true});
+      const dialogs = [];
+      page.on('dialog', async d => {
+        dialogs.push(d.message());
+        if (dialogs.length === 1) await d.dismiss();
+        else await d.accept('Screenshots never validated');
+      });
+      assert.equal(await page.locator('[data-review-not-validated]').count(), 1, 'Validate shows Not validated');
+      await page.locator('[data-review-not-validated]').click();
+      await until(() => dialogs.length === 1);
+      assert.equal(state.posts.length, 0, 'cancelling the reason posts nothing');
+      await page.locator('[data-review-not-validated]').click();
+      await until(() => state.posts.some(p => p.path.endsWith('/not-validated')));
+      assert.deepEqual(state.posts.map(p => p.path), ['tasks/D70/requirements/r-val70/not-validated'], 'Not validated posts to the item');
+      assert.equal(state.posts[0].body.note, 'Screenshots never validated', 'the reason is sent');
+      await page.waitForFunction(() => document.querySelector('.pipe-review-notice')?.textContent.includes('follow-up'), null, {timeout: t(5000)});
+      assert.equal((await page.locator('.pipe-review-notice').innerText()).trim(), 'Back to In development · follow-up D71 filed');
+      assert.equal(await page.locator('[data-review-not-validated]').count(), 0, 'the next item is not at Validate');
+      assert.equal(await page.locator('.pipe-review-count').first().innerText().then(s => s.trim()), 'For you · 1 of 2');
+      assert.deepEqual(errors, [], 'not validated: no page errors');
       await context.close();
     }
 
