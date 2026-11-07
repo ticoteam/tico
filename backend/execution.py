@@ -2889,6 +2889,61 @@ def suppress_notice(c, job, task_id, reason):
     H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
 
 
+def request_stop(c, actor, aid, bot, detail):
+    """Record a Stop on a live attempt as a person's Stop records it (Execution.stop): the stop names who asked, the
+    runner learns of it on its next renewal (Execution.renew), and an attempt.stop event says why."""
+    c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=?", (actor, aid))
+    H.event(c, actor, "attempt.stop", aid, {"bot": bot, **detail})
+
+
+def end_task_work(c, actor, task_id, status):
+    """Closing or declining a task stops the work on it (docs/tasks.md). Every queued run whose work is this task is
+    canceled as an obsolete notice is (suppress_notice), and every leased or running turn on it is asked to stop as a
+    person's Stop asks (request_stop). That turn's answer is then filed, not posted (complete). The turn that makes the
+    close is never stopped: its run's token made the request (H.RUN). "Its work" is the task the claim reads for a
+    message (work_task_id), so a notice that is only news about a task is not work on it. Returns (turns stopped,
+    runs canceled)."""
+    if not (H._has_table(c, "jobs") and H._has_table(c, "attempts")):
+        return 0, 0
+    turn = H.RUN.get() or ""
+    reason = f"Its task was {H.TASK_ENDED[status]}."
+    queued = [
+        dict(row)
+        for row in c.execute(
+            "SELECT j.id,j.bot_id,j.attempt_id,j.message_id,m.conversation_id FROM jobs j "
+            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at, j.id",
+            (task_id,),
+        ).fetchall()
+    ]
+    canceled = 0
+    for job in queued:
+        if _work_of(c, job["message_id"], job["conversation_id"]) == task_id:
+            suppress_notice(c, job, task_id, reason)
+            canceled += 1
+    running = [
+        dict(row)
+        for row in c.execute(
+            "SELECT a.id,a.bot_id,j.message_id,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE a.state IN ('leased','running') AND a.stop_requested_at IS NULL AND {H.MESSAGE_TASK_SQL}=?",
+            (task_id,),
+        ).fetchall()
+    ]
+    stopped = 0
+    for turn_row in running:
+        if turn_row["id"] == turn or _work_of(c, turn_row["message_id"], turn_row["conversation_id"]) != task_id:
+            continue
+        request_stop(c, actor, turn_row["id"], turn_row["bot_id"], {"task": task_id, "ended": status})
+        stopped += 1
+    return stopped, canceled
+
+
+def _work_of(c, message_id, conversation_id):
+    """The task a queued or running message's work is on (work_task_id), as the claim reads it."""
+    return work_task_id(H.message(c, message_id, include_deleted=True), H.conversation(c, conversation_id))
+
+
 HAND_BACK_WAIT = 15  # seconds before a handed-back job is handed out again, doubled for each hand-back
 HAND_BACK_MAX = 300
 
@@ -5860,10 +5915,7 @@ class Execution:
                 raise Problem("not_queued", "That message is already being answered", 409)
             c.execute("UPDATE jobs SET redirect=1 WHERE id=?", (job["id"],))
         if not row["stop_requested_at"]:
-            c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=?", (who.actor, row["id"]))
-            H.event(
-                c, who.actor, "attempt.stop", row["id"], {"bot": bot, **({"redirect": redirect} if redirect else {})}
-            )
+            request_stop(c, who.actor, row["id"], bot, {**({"redirect": redirect} if redirect else {})})
         return {"attempt_id": row["id"], "stopping": True, **({"redirect": redirect} if redirect else {})}
 
     def start_place(self, c, who, aid, body):
@@ -6707,6 +6759,10 @@ class Execution:
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "no_change"},
                         )
+                # A turn a Stop reached after its task was closed or declined (end_task_work) files its answer on the run
+                # instead: the closed room takes no more posts from work that was stopped.
+                if task and task["status"] in ("closed", "declined") and row["stop_requested_at"]:
+                    replyable = False
                 # A reply the turn already sent is not posted again, but the person waiting still hears of a hold.
                 reaches = replyable
                 replyable = replyable and posting
