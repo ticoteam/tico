@@ -305,17 +305,19 @@ class Run:
         """Each candidate bot's readiness now, from the records and never from a claim's answer. A bot is ready when its
         computer is awake (execution.Execution.awake), and a login it can run on is free: its own, when no hold keeps it
         (login_holds.holding: a hold before its end, or a probe out after it) and it is not cooling off
-        (execution.cooling_off), or a fallback login the computer reports signed in that no hold keeps. A bot that
-        started this round was ready. Returns (ready, blocked): blocked maps each other bot to what the records keep it
-        from. Each probe a login's hold names is recorded in probe_seen, read after the round's claims, so a probe the
-        round started is seen too."""
-        from backend import execution as X, login_holds
+        (execution.cooling_off), or a fallback login the computer reports signed in that no hold keeps. A bot a usage
+        limit holds is not ready either: the product's own check (usage_limits.blocked, which the claim refuses with
+        "limit") says it cannot start, so a round it passes over is no stall. A bot that started this round was ready.
+        Returns (ready, blocked): blocked maps each other bot to what the records keep it from. Each probe a login's hold
+        names is recorded in probe_seen, read after the round's claims, so a probe the round started is seen too."""
+        from backend import execution as X, login_holds, usage_limits
         from backend.store import H
 
         rid = w.runner["runner_id"]
         ready, blocked = [], {}
         with w.store.read() as c:
             now = H.now()
+            pools = usage_limits.company(c)  # one Default for every bot's check, so the pool reads are shared
             runner = c.execute(X.RUNNER_SQL, (rid,)).fetchone()
             awake = bool(runner) and X.Execution.awake(X.Execution.waking(runner, now), now)
             login = login_holds.canonical(c, rid, "", PRIMARY)
@@ -336,6 +338,9 @@ class Run:
                     ready.append(bot)
                 elif not awake:
                     blocked[bot] = "computer waking"
+                elif capped := usage_limits.blocked(c, bot, default=pools):
+                    # The same check the claim makes before it looks at a bot's work (execution._claim_refusal "limit").
+                    blocked[bot] = f"{capped} usage limit"
                 else:
                     # The probe's own bot is let through its login's probe (execution.login_wait).
                     held = None if own == "probing" and prober and prober["bot_id"] == bot else own

@@ -28,7 +28,8 @@ def hit(runtime, text):
 
 
 def cap(scope, hourly):
-    """A team's (`company`) or a group's (`groups/<id>`) hourly limit, set as its owner sets it."""
+    """A team's (`company`) or a group's (`groups/<id>`) limit, set in dollars an hour as its owner sets it. The product
+    holds it per UTC half hour at half that amount (usage.py amounts), which spend_under checks."""
 
     def act(run, w, team):
         w.set_pool(scope, hourly)
@@ -216,7 +217,7 @@ def spend_under(cap_usd, since, until, scope="company"):
         if reached < limit:
             return False, (
                 f"the half hour spent ${reached:.2f} by {START + until:%H:%M}, short of the ${limit:g} "
-                f"window cap an ${cap_usd:g} hourly cap holds"
+                f"half-hour cap that an ${cap_usd:g} hourly limit becomes"
             )
         late = []
         for r in turns:
@@ -235,7 +236,7 @@ def spend_under(cap_usd, since, until, scope="company"):
                 late.append(f"{r['started_at'][11:16]} (${spent:.2f})")
         if late:
             return False, f"{len(late)} turns started past the ${limit:g} window cap: " + ", ".join(late[:4])
-        return True, f"no turn started past the ${limit:g} window cap (an ${cap_usd:g} hourly cap)"
+        return True, f"no turn started past the ${limit:g} half-hour cap (from an ${cap_usd:g} hourly limit)"
 
     return check
 
@@ -388,8 +389,8 @@ def freeze_checks(since, *extra, waits=(), fallback=False):
 SCENARIOS = [
     Scenario(
         "freeze_company_cap",
-        "The team's hourly limit is lowered to $3 at 10:30, below the hour's spend, and raised to $40 at 10:42, "
-        "with a backlog on every fleet bot.",
+        "The team's limit is set to $3 an hour at 10:30, below a half hour's spend, and to $40 an hour at 10:42 (the "
+        "product holds each per UTC half hour, at half), with a backlog on every fleet bot.",
         setup=setup_with(10, each=12),
         claim="runner",
         signed_in=("fake",),
@@ -405,8 +406,8 @@ SCENARIOS = [
     ),
     Scenario(
         "freeze_group_cap",
-        "The engineering group's hourly limit is lowered to $3 at 10:30 and raised to $40 at 10:42, with a backlog "
-        "on every fleet bot: its bots resume.",
+        "The engineering group's limit is set to $3 an hour at 10:30 and to $40 an hour at 10:42 (held per UTC half "
+        "hour, at half), with a backlog on every fleet bot: its bots resume.",
         setup=setup_with(10, each=12, groups=("engineering",)),
         claim="runner",
         signed_in=("fake",),
@@ -442,8 +443,8 @@ SCENARIOS = [
     ),
     Scenario(
         "freeze_combined",
-        "The weekly hold, a company hourly limit lowered and raised, codex held for two days so the second fallback "
-        "takes the work, and two reviewers paused.",
+        "The weekly hold, a company limit set to $3 then $40 an hour (held per UTC half hour), codex held for two days "
+        "so the second fallback takes the work, and two reviewers paused.",
         setup=setup_with(10, each=12, providers=("openai", "anthropic")),
         claim="runner",
         signed_in=("fake", "codex", "claude"),
