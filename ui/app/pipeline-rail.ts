@@ -197,13 +197,23 @@ function htmlNodes(html: string): Node[] {
   return [...box.childNodes];
 }
 
+/** A manager's actor id from its reference: task_types.manager and factories.manager_id are stored with or without bot:. */
+function pipelineManagerActor(ref: string): string {
+  return 'bot:' + ref.replace(/^bot:/, '');
+}
+
+/** The manager's direct thread drawn into a host. The Tasks page's rail and the Factories rail both mount it here. */
+function pipelineManagerChatMount(host: HTMLElement, manager: string): unknown {
+  return threadMount(host, { dm: pipelineManagerActor(manager), card: true, header: false });
+}
+
 /** Mounts the DM thread with the manager once the panel can be seen (the desktop rail open, or the phone's sheet). */
 function pipelineRailChatEnsure(): void {
   const rail = pipelineRail;
   if (!rail || rail.chat) return;
   if (pipelinePhone() ? !rail.sheet : pipelineRailHidden) return;
   const host = rail.host.querySelector<HTMLElement>('.pr-chat');
-  if (host) rail.chat = threadMount(host, { dm: rail.manager, card: true, header: false });
+  if (host) rail.chat = pipelineManagerChatMount(host, rail.manager);
 }
 
 // ---------------------------------------------------------------- loading and keeping it
@@ -285,12 +295,12 @@ function pipelineRailLeave(): void {
     board) and takes it away otherwise. */
 function pipelineRailSync(state: PipelineTasksState): void {
   const type = state.view === 'board' ? (pipelineSelectedType(state) as { id: string; manager?: string | null } | null) : null;
-  const ref = type?.manager ? String(type.manager).replace(/^bot:/, '') : '';
+  const manager = type?.manager ? pipelineManagerActor(String(type.manager)) : '';
   const page = document.querySelector('.tasks-page');
   if (type) void pipelineMineSync(type.id);
-  if (!type || !ref || !page) { pipelineRailLeave(); return; }
-  if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== 'bot:' + ref || !pipelineRail.host.isConnected) {
-    pipelineRailEnter(type, 'bot:' + ref, page);
+  if (!type || !manager || !page) { pipelineRailLeave(); return; }
+  if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== manager || !pipelineRail.host.isConnected) {
+    pipelineRailEnter(type, manager, page);
   }
   pipelineRailPaint(state);
 }
