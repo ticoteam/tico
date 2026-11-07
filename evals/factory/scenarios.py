@@ -51,7 +51,14 @@ def never_blocked_after_merge(run):
 def no_stale_turns(run):
     stale = [r for r in run.turns() if r["stale"]]
     kinds = Counter(r["news"] for r in stale)
-    return not stale, f"{len(stale)} turns on stale notices: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common())
+    named = []  # the first few turns by name: the bot, its task and that task's status now, and when it woke
+    for r in stale[:3]:
+        rows = run.w.sql("SELECT status FROM tasks WHERE id=?", (r["task"],)) if r["task"] else []
+        status = rows[0]["status"] if rows else "no task"
+        named.append(f"{r['bot']} on {r['task']} ({status}) at {r['at']}")
+    counts = ", ".join(f"{k} {n}" for k, n in kinds.most_common())
+    detail = f" [{'; '.join(named)}]" if named else ""
+    return not stale, f"{len(stale)} turns on stale notices: {counts}{detail}"
 
 
 def noise_under(share):
