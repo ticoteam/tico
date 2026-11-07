@@ -359,6 +359,9 @@ checks on that merge commit, and moves main only when they pass.
 - **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
   browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
   recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
+- **The factory simulation** (RunsOn Spot, one 4-vCPU VM per group): seed 1 of every scenario, only when the change
+  reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
+  check fails the group. Release validation runs seeds 1-3 as before.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set

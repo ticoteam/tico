@@ -1037,3 +1037,20 @@ def test_the_factory_sim_job_runs_only_in_the_queue_on_the_plans_shards():
     assert "runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7" in job["runs-on"]
     [sim] = [step["run"] for step in job["steps"] if "evals.factory.run" in step.get("run", "")]
     assert '--seeds 1 --shard "$SHARD" -j 4' in sim
+
+
+def test_the_recorded_call_path_matches_the_repository_and_decides_what_the_queue_runs():
+    recorded = checks.factory_call_path()
+    # The two data entries that are not files: the sim opens VERSION, which this repository does not have, and a
+    # directory of registry fixtures. Neither is a file a change can add without also changing what the sim reads.
+    not_files = {"VERSION", "backend/tests/fixtures/registry"}
+    assert all((checks.ROOT / name).is_file() for name in recorded["code"])
+    assert all((checks.ROOT / name).is_file() or name in not_files for name in recorded["data"])
+    assert all((checks.ROOT / name).is_dir() for name in recorded["folders"])
+    assert not [name for name in recorded["code"] if name.startswith("ui/")]
+    assert "ui/index.html" in recorded["data"] and "backend/wake_rules.py" in recorded["code"]
+    assert "templates/catalog/" in recorded["folders"]
+    assert checks.factory_reason(["backend/wake_rules.py"]) is not None
+    assert checks.factory_reason(["ui/app/chat.ts"]) is None
+    assert checks.factory_reason(["docs/releasing.md"]) is None
+    assert checks.factory_reason(["scripts/tests/test_pr_checks.py"]) is None
