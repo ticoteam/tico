@@ -5726,6 +5726,9 @@ def create_app(settings=None):
     from .strategy_market import install as install_strategy_market
 
     install_strategy_market(app, store, auth, mutate)
+    from .segments import install as install_segments
+
+    install_segments(app, store, auth, mutate)
     from .strategy import install as install_strategy
 
     install_strategy(app, store, auth, mutate)

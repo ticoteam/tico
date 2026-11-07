@@ -10,7 +10,10 @@ watched against the numbers and the market.
   editors never overwrite each other silently.
 - Bets (`strategy_bets`) are the spine: a statement that could turn out wrong, why, what it rules out, what would show
   it is wrong (`wrong_if`: a KPI crossing a threshold, a market thesis changing, or a sentence with a check date), the
-  market ids it rests on (`cites`), and a status (proposed, active, retired). `rules_out` and `wrong_if` are optional
+  market ids it rests on (`cites`), a status (proposed, active, retired) and, optionally, the one segment it is about
+  (`segment_id`, one of the company's segments: backend/segments.py).
+- A segment has its own strategy in the same versions: `sections.segments` is {segment id: {summary, serve, ...}}, the
+  text the segment changed. A key it did not change reads as the company's text (backend/segments.py). `rules_out` and `wrong_if` are optional
   (the fit check watches a bet only when it has a `wrong_if`), and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
   bet keeps its goals.
 - The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
@@ -76,13 +79,20 @@ FIXED = (
 )
 FIXED_KEYS = tuple(k for k, _ in FIXED)
 TITLES = dict(FIXED)
-SECTIONS_SHAPE = "sections is an object: {" + ", ".join(FIXED_KEYS) + ", extra: {key: {title, body}}}"
+SEGMENT_KEYS = ("summary",) + FIXED_KEYS  # what a segment can change: its summary and the seven fixed sections
+SECTIONS_SHAPE = (
+    "sections is an object: {"
+    + ", ".join(FIXED_KEYS)
+    + ", extra: {key: {title, body}}, segments: {segment id: {"
+    + ", ".join(SEGMENT_KEYS)
+    + "}}}"
+)
 PROOF_STALE_DAYS = (
     30  # the Monday note says so when "How we know they want it" is older (playbooks/keep-proof-current.md)
 )
 EXTRA_KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 FIELDS = ("guide", "summary", "vision", "sections")
-SNAPSHOT = ("id", "statement", "why", "rules_out", "wrong_if", "cites", "status", "rank")
+SNAPSHOT = ("id", "statement", "why", "rules_out", "wrong_if", "cites", "status", "rank", "segment_id")
 EVENT = "strategy.published"
 REALIGN = "strategy_realign"
 TRIPPED = "bet_tripped"
@@ -103,7 +113,8 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS strategy_bets (id TEXT PRIMARY KEY, statement TEXT NOT NULL, "
     "why TEXT NOT NULL DEFAULT '', rules_out TEXT NOT NULL DEFAULT '', wrong_if TEXT, cites TEXT NOT NULL DEFAULT '[]', "
     "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
-    "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
+    "segment_id TEXT, rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+    "updated_by TEXT NOT NULL)",
 )
 
 
@@ -178,6 +189,22 @@ def _sections(raw):
         while key in FIXED_KEYS or key in out["extra"] or (key != k and key in extra):
             key, n = f"{k}-{n}", n + 1
         out["extra"][key] = {"title": str(v.get("title") or k), "body": str(v.get("body") or "")}
+    out["segments"] = _segment_sections(raw.get("segments"))
+    return out
+
+
+def _segment_sections(raw):
+    """{segment id: {key: text}} as stored: only the keys a segment changed, and only text in them. Which segments are
+    the company's is not checked on a read: a read shows what was saved."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for sid, item in raw.items():
+        if not isinstance(item, dict):
+            continue
+        keep = {k: str(item[k]) for k in SEGMENT_KEYS if str(item.get(k) or "").strip()}
+        if keep:
+            out[str(sid)] = keep
     return out
 
 
@@ -446,6 +473,12 @@ def diff(c, a, b):
     for key in sorted(set(extra_a) | set(extra_b)):
         if extra_a.get(key) != extra_b.get(key):
             fields.append({"key": "sections.extra." + key, "from": extra_a.get(key), "to": extra_b.get(key)})
+    seg_a, seg_b = one["sections"]["segments"], two["sections"]["segments"]
+    for sid in sorted(set(seg_a) | set(seg_b)):
+        for key in SEGMENT_KEYS:
+            a_text, b_text = seg_a.get(sid, {}).get(key, ""), seg_b.get(sid, {}).get(key, "")
+            if a_text != b_text:
+                fields.append({"key": f"sections.segments.{sid}.{key}", "from": a_text, "to": b_text})
     before = {x["id"]: x for x in one["bets"]}
     after = {x["id"]: x for x in two["bets"]}
     retired = [
@@ -524,10 +557,44 @@ def _merge_sections(c, actor, stored, sent):
                 }
             if len(out["extra"]) > EXTRA_MAX:
                 H.refuse(c, actor, "lint", f"a strategy has at most {EXTRA_MAX} extra sections")
+        elif key == "segments":
+            out["segments"] = _merge_segments(c, actor, out["segments"], value)
         elif key in FIXED_KEYS:
             out[key] = _clean(c, actor, value, SECTION_MAX, f'"{TITLES[key]}" section')
         else:
             H.refuse(c, actor, "kind", f"{key} is not a section; one of {', '.join(FIXED_KEYS)}, or extra")
+    return out
+
+
+def _merge_segments(c, actor, stored, sent):
+    """`sent` ({segment id: {key: text}}) merged onto the stored segments: a key sent is set, "" clears it (the segment
+    reads the company's text again). A segment that is not one of the company's takes no text; the others stay as
+    they are."""
+    from . import segments as SG
+
+    if not isinstance(sent, dict):
+        H.refuse(c, actor, "kind", "segments is {segment id: {summary, serve, sell, proof, now, know, how, not}}")
+    out = {sid: dict(item) for sid, item in stored.items()}
+    for sid, changes in sent.items():
+        if not str(sid).strip() or not isinstance(changes, dict):
+            H.refuse(c, actor, "kind", "a segment's strategy is {summary, serve, sell, proof, now, know, how, not}")
+        SG.require_ours(c, sid)  # not one of the company's: a 404
+        for key, text in changes.items():
+            if key not in SEGMENT_KEYS:
+                H.refuse(c, actor, "kind", f"{key} is not a segment section; one of {', '.join(SEGMENT_KEYS)}")
+            body = _clean(
+                c,
+                actor,
+                text,
+                SUMMARY_MAX if key == "summary" else SECTION_MAX,
+                f"{TITLES.get(key, 'summary')} section",
+            )
+            if body:
+                out.setdefault(sid, {})[key] = body
+            else:
+                out.get(sid, {}).pop(key, None)
+        if not out.get(sid):
+            out.pop(sid, None)
     return out
 
 
@@ -672,8 +739,25 @@ def _bet_revision(c, actor, revision):
     return _bump(c, actor, row)
 
 
+def _segment_of(c, value):
+    """A bet's segment: one of the company's, or None for none."""
+    from . import segments as SG
+
+    return SG.require_ours(c, value) or None
+
+
 def add_bet(
-    c, actor, statement, why="", rules_out="", wrong_if=None, cites=None, status="proposed", rank=None, revision=None
+    c,
+    actor,
+    statement,
+    why="",
+    rules_out="",
+    wrong_if=None,
+    cites=None,
+    status="proposed",
+    rank=None,
+    revision=None,
+    segment_id=None,
 ):
     H._writer(c, actor)
     statement = _clean(c, actor, statement, STATEMENT_MAX, "statement", one_line=True)
@@ -692,6 +776,7 @@ def add_bet(
         "wrong_if": _wrong_if(c, actor, wrong_if),
         "cites": _cites(c, actor, cites) or [],
         "status": status,
+        "segment_id": _segment_of(c, segment_id),
         "rank": int(rank),
         "created_at": now,
         "updated_at": now,
@@ -700,8 +785,8 @@ def add_bet(
     _may_be(c, actor, row)
     c.execute(
         "INSERT INTO strategy_bets (id, statement, why, rules_out, wrong_if, cites, status, since_n, until_n, "
-        "rank, created_at, updated_at, updated_by) VALUES (:id, :statement, :why, :rules_out, :wrong_if, :cites, "
-        ":status, NULL, NULL, :rank, :created_at, :updated_at, :updated_by)",
+        "segment_id, rank, created_at, updated_at, updated_by) VALUES (:id, :statement, :why, :rules_out, :wrong_if, "
+        ":cites, :status, NULL, NULL, :segment_id, :rank, :created_at, :updated_at, :updated_by)",
         {**row, "wrong_if": dumps(row["wrong_if"]) if row["wrong_if"] else None, "cites": dumps(row["cites"])},
     )
     _event(c, actor, "bet.add", {"id": row["id"], "new": {k: row[k] for k in SNAPSHOT if k != "id"}})
@@ -721,8 +806,10 @@ def update_bet(
     status=None,
     rank=None,
     revision=None,
+    segment_id=None,
 ):
-    """Only the fields sent. `wrong_if` sent empty ({}) clears it; so does `cites` sent as []."""
+    """Only the fields sent. `wrong_if` sent empty ({}) clears it; so does `cites` sent as []; `segment_id` sent as ""
+    takes the segment off the bet."""
     H._writer(c, actor)
     row = bet(c, bet_id)
     if not row:
@@ -746,6 +833,8 @@ def update_bet(
         changes["status"] = status
     if rank is not None:
         changes["rank"] = int(rank)
+    if segment_id is not None:
+        changes["segment_id"] = _segment_of(c, segment_id)
     changes = {k: v for k, v in changes.items() if v != row[k]}
     if not changes:
         return row, draft(c)["revision"]
@@ -798,6 +887,10 @@ def proposal_error(c, payload):
             if key == "extra":
                 if not isinstance(value, dict):
                     return "extra is an object of {key: {title, body}}"
+            elif key == "segments":
+                problem = _segments_error(c, value)
+                if problem:
+                    return problem
             elif key not in FIXED_KEYS:
                 return f"{key} is not a section; one of {', '.join(FIXED_KEYS)}, or extra"
             elif len(str(value or "")) > SECTION_MAX:
@@ -818,6 +911,31 @@ def proposal_error(c, payload):
             not isinstance(item["wrong_if"], dict) or item["wrong_if"].get("kind") not in WRONG_KINDS
         ):
             return f"a wrong-if is kind {'|'.join(WRONG_KINDS)}"
+        if item.get("segment_id"):
+            from . import segments as SG
+
+            if item["segment_id"] not in SG.ours_ids(c):
+                return f"{item['segment_id']} is not one of the company's segments"
+    return None
+
+
+def _segments_error(c, value):
+    """What is wrong with a proposal's segments ({segment id: {key: text}}), in a sentence, or None."""
+    from . import segments as SG
+
+    if not isinstance(value, dict):
+        return "segments is {segment id: {summary, serve, sell, proof, now, know, how, not}}"
+    ours = SG.ours_ids(c)
+    for sid, changes in value.items():
+        if sid not in ours:
+            return f"{sid} is not one of the company's segments"
+        if not isinstance(changes, dict):
+            return "a segment's strategy is {summary, serve, sell, proof, now, know, how, not}"
+        for key, text in changes.items():
+            if key not in SEGMENT_KEYS:
+                return f"{key} is not a segment section; one of {', '.join(SEGMENT_KEYS)}"
+            if len(" ".join(str(text or "").split())) > (SUMMARY_MAX if key == "summary" else SECTION_MAX):
+                return f"keep the {key} of a segment's strategy under {SUMMARY_MAX if key == 'summary' else SECTION_MAX} characters"
     return None
 
 
@@ -827,7 +945,9 @@ def apply_proposal(c, actor, payload):
     update_draft(c, actor, None, None, payload.get("summary"), payload.get("vision"), payload.get("sections"))
     ids = []
     for item in payload.get("bets") or []:
-        fields = {k: item.get(k) for k in ("statement", "why", "rules_out", "wrong_if", "cites", "status")}
+        fields = {
+            k: item.get(k) for k in ("statement", "why", "rules_out", "wrong_if", "cites", "status", "segment_id")
+        }
         if item.get("id"):
             row, _ = update_bet(c, actor, item["id"], **fields)
         else:
@@ -840,6 +960,7 @@ def apply_proposal(c, actor, payload):
                 fields["wrong_if"],
                 fields["cites"],
                 fields["status"] or "proposed",
+                segment_id=fields["segment_id"],
             )
         ids.append(row["id"])
     return {"draft": True, "bets": ids, "revision": draft(c)["revision"]}
@@ -1298,6 +1419,7 @@ def install(app, store, auth, mutate):
                 body.status,
                 body.rank,
                 body.revision,
+                segment_id=body.segment_id,
             )
             return {"bet": row, "revision": revision}
 
@@ -1322,6 +1444,7 @@ def install(app, store, auth, mutate):
                 body.status,
                 body.rank,
                 body.revision,
+                segment_id=body.segment_id,
             )
             return {"bet": row, "revision": revision}
 

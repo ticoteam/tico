@@ -913,6 +913,7 @@ class StrategyBetCreate(Contract):
     status: Literal["proposed", "active", "retired"] = "proposed"
     rank: int | None = None
     revision: int | None = None  # the draft's, when the writer wants a stale page refused
+    segment_id: str | None = Field(default=None, max_length=200)  # one of the company's segments, or none
 
 
 class StrategyBetUpdate(Contract):
@@ -924,6 +925,42 @@ class StrategyBetUpdate(Contract):
     status: Literal["proposed", "active", "retired"] | None = None
     rank: int | None = None
     revision: int | None = None
+    segment_id: str | None = Field(default=None, max_length=200)  # "" takes the segment off the bet
+
+
+class SegmentCreate(Contract):
+    """A business segment (backend/segments.py): its name, one line of who it is for, and its color."""
+
+    name: str = Field(min_length=1, max_length=120)
+    who: str = Field(default="", max_length=200)
+    color: Literal["blue", "green", "amber", "red", "purple", "teal", "pink", "gray"] | None = None
+
+
+class SegmentUpdate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    who: str | None = Field(default=None, max_length=200)
+    color: Literal["blue", "green", "amber", "red", "purple", "teal", "pink", "gray"] | None = None
+
+
+class SegmentOrder(Contract):
+    """Every segment the company plays in, once each, in the order they should list."""
+
+    ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class SegmentMembers(Contract):
+    """A teammate's segments: `bot:<id>` or `person:<id>`, and the segment ids or `all`; [] clears them."""
+
+    member: str = Field(min_length=3, max_length=200)
+    segments: list[str] = Field(default_factory=list, max_length=60)
+
+
+class SegmentStrategy(Contract):
+    """A segment's own strategy text, by section key (summary, serve, sell, proof, now, know, how, not); "" uses the
+    company's text again. `revision` is the draft's as read."""
+
+    revision: int | None = None
+    sections: dict[str, str] = Field(default_factory=dict, max_length=8)
 
 
 class MarketEvidenceCreate(Contract):

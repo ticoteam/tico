@@ -133,11 +133,12 @@ def for_turn(c, settings, conversation, bot):
     """What a turn in a person's own chat is handed, read now: their personal layer, and in the owner's own Assistant
     chat the company layer too. Neither for any other turn (a task, a shared room, the Strategy Bot's goals session).
     Every turn, whoever it is for, also carries the team's published strategy as `strategy` (the text of GET
-    /api/v2/strategy/summary, backend/strategy.py) once one is published; None when there is nothing to hand over."""
-    from . import strategy
+    /api/v2/strategy/summary, backend/strategy.py) once one is published, and a bot dedicated to segments the segments'
+    text after it (backend/segments.py run_text); None when there is nothing to hand over."""
+    from . import segments, strategy
 
     layers = _layers(c, settings, conversation, bot)
-    text = strategy.summary_text(c)
+    text = "\n\n".join(x for x in (strategy.summary_text(c), segments.run_text(c, bot)) if x)
     if text:
         layers = {**(layers or {}), "strategy": text}
     if growth_facing(c, bot):

@@ -272,8 +272,8 @@ CONTENT = {
             ],
         },
     },
-    # The market map, as the owner sets it on Where we play: the root, the core segments under it, one new segment,
-    # the Us and Next marks, one accepted estimate per segment, and the companies in each. Marks: ours (Us), next.
+    # The market map, as the owner sets it on the Strategy page: the root, the core segments under it, one new segment,
+    # which of them are the company's, one accepted estimate per segment, and the companies in each. Marks: ours.
     "market": {
         "root": {
             "root_name": "Holiday light shows",
@@ -344,7 +344,7 @@ CONTENT = {
             },
             {
                 "id": "segment/towns-malls",
-                "mark": "next",
+                "mark": "ours",
                 "players": ["company/crewline"],
                 "size": {
                     "method": "owner",
@@ -368,7 +368,7 @@ CONTENT = {
         "added": [
             {
                 "name": "Event venues",
-                "mark": "next",
+                "mark": "ours",
                 "players": ["company/crewline"],
                 "summary": "Venues that light the front of the building for the season: theaters, arenas and event halls.",
                 "size": {

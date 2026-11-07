@@ -1,11 +1,14 @@
-"""The Strategy page's market cards (docs/strategy.md#the-page): Where we play and Competitors, written by the owner
-in one click each. They are the market graph's own rows (backend/market.py, backend/market_spend.py), nothing new:
+"""The Strategy page's market cards (docs/strategy.md#segments): the segments the company plays in and the competitors,
+written by the owner in one click each. They are the market graph's own rows (backend/market.py, backend/market_spend.py),
+nothing new:
 
-- a segment the team plays in (**Us**) is `company/self` `operates_in` it, and one it means to enter next (**Next**)
-  is `next: true` on the segment's properties, as the company file's import writes them (backend/company_import.py).
-  Several of each. Only people set these: a bot is refused here;
-- merging a segment into another moves its Next mark there, unless the other is Us already (`follow_merge`);
-- removing a segment retires it and clears its Next; its sub-segments move up to its parent;
+- a segment is one of the company's (**ours**) while `company/self` has a current `operates_in` edge to it. There is no
+  second mark: a segment the company meant to enter next is one of ours now (backend/company_import.py, and the
+  migration that folded the old `next` property). Only people set it: a bot is refused here;
+- merging a segment into another moves its teammate tags and the strategy bets that name it to the one it merged into
+  (`follow_merge`);
+- removing a segment retires it; its sub-segments move up to its parent. Its teammate tags stay: they show again if the
+  segment is added back, and nothing reads them while it is not one of the company's (backend/segments.py);
 - a competitor is a company or product with a current `competes_with` edge to `company/self`, either way round.
   Removing one ends those edges (the company stays in the graph); adding one by name or site finds the company the
   graph already has, or makes it, and adds the edge.
@@ -34,7 +37,8 @@ COMPETITORS_MAX = 40
 SITE = re.compile(r"^(https?://)?([a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(/\S*)?$", re.I)
 
 
-def _evidence(c, actor):
+def owner_evidence(c, actor):
+    """The evidence an owner's click on the Strategy page cites: one row, its say-so."""
     row, _events = MK.create_evidence(
         c,
         actor,
@@ -75,7 +79,8 @@ def _end(c, actor, edge, ev):
     )
 
 
-def _own(c, actor, name, ev):
+def own_company(c, actor, name, ev):
+    """company/self, made from the company's name when the graph has none yet."""
     if not MK.entity(c, MK.OWN_COMPANY_ID):
         MK.create_entity(
             c,
@@ -97,70 +102,58 @@ def _segment(c, segment_id):
     return row
 
 
-def mirror(c, actor, segment_id, status, company=""):
-    """Where we play as `status` says: `serving` is Us, `next` is Next, anything else (or None) neither. Only what
-    differs is written."""
-    seg = _segment(c, segment_id)
-    ev = None
-
-    def proof():
-        nonlocal ev
-        ev = ev or _evidence(c, actor)
-        return ev
-
+def set_ours(c, actor, segment_id, on, company=""):
+    """Make the segment one of the company's (`on`) or stop it being one: the company's current `operates_in` edge
+    says which, and only a change is written."""
+    _segment(c, segment_id)
     edges = _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, segment_id))
-    if status == "serving" and not edges:
+    if on and not edges:
+        ev = owner_evidence(c, actor)
         today, _ = _days()
         MK.create_edge(
             c,
             actor,
-            src=_own(c, actor, company, proof()),
+            src=own_company(c, actor, company, ev),
             rel="operates_in",
             dst=segment_id,
             since=today,
-            evidence_ids=proof(),
+            evidence_ids=ev,
         )
-    elif status != "serving":
+    elif not on and edges:
+        ev = owner_evidence(c, actor)
         for edge in edges:
-            _end(c, actor, edge, proof())
-    flagged = bool(seg["properties"].get("next"))
-    if (status == "next") != flagged:
-        props = {k: v for k, v in seg["properties"].items() if k != "next"}
-        MK.update_entity(
-            c,
-            actor,
-            segment_id,
-            properties={**props, "next": True} if status == "next" else props,
-            evidence_ids=proof(),
-        )
+            _end(c, actor, edge, ev)
 
 
 def target(c, actor, segment_id, to, company=""):
-    """Mark a segment Us (`ours`), Next (`next`) or neither (`none`), leaving the others as they are. Answers
-    {id, ours, next}."""
+    """Make a segment one of the company's (`ours`, and `next`, which is the same now) or stop it (`none`). Answers
+    {id, ours}."""
     _segment(c, segment_id)
-    mirror(c, actor, segment_id, {"ours": "serving", "next": "next"}.get(to), company)
-    return {"id": segment_id, "ours": to == "ours", "next": to == "next"}
+    on = to in ("ours", "next")
+    set_ours(c, actor, segment_id, on, company)
+    return {"id": segment_id, "ours": on}
 
 
 def follow_merge(c, actor, segment_id, into_id):
     """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities). Its Us edge moved there with
-    the graph's other edges; its Next mark moves too, unless the one it merged into is Us already (Us ranks higher)."""
-    seg = MK.entity(c, segment_id)
-    if not seg or not seg["properties"].get("next"):
-        return
-    if _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, into_id)):
-        return
-    mirror(c, actor, into_id, "next")
+    the graph's other edges; its teammate tags and the strategy bets that name it move there too."""
+    c.execute(
+        "INSERT OR IGNORE INTO segment_members (segment_id, member, created_at, created_by) "
+        "SELECT ?, member, created_at, created_by FROM segment_members WHERE segment_id=?",
+        (into_id, segment_id),
+    )
+    c.execute("DELETE FROM segment_members WHERE segment_id=?", (segment_id,))
+    c.execute("UPDATE strategy_bets SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
 
 
 def remove_segment(c, actor, segment_id):
-    """Retire a segment; its sub-segments move up to its parent (the root for a top one)."""
+    """Retire a segment; its sub-segments move up to its parent (the root for a top one). Its edges end, the
+    company's operates_in one included, so it is no longer one of the company's."""
     _segment(c, segment_id)
     root = (MS.definition(c) or {}).get("root")
     if segment_id == root:
         raise Problem("tree", "The market's root is not removed here", 422)
-    ev = _evidence(c, actor)
+    ev = owner_evidence(c, actor)
     up = _current(c, "rel='member_of' AND src=?", (segment_id,))
     parent = up[0]["dst"] if up else root
     today, _ = _days()
@@ -170,11 +163,6 @@ def remove_segment(c, actor, segment_id):
             MK.create_edge(c, actor, src=edge["src"], rel="member_of", dst=parent, since=today, evidence_ids=ev)
     for edge in _current(c, "src=? OR dst=?", (segment_id, segment_id)):
         _end(c, actor, edge, ev)
-    props = MK.entity(c, segment_id)["properties"]
-    if "next" in props:  # added again later, it is not Next until someone says so
-        MK.update_entity(
-            c, actor, segment_id, properties={k: v for k, v in props.items() if k != "next"}, evidence_ids=ev
-        )
     MK.retire_entity(c, actor, segment_id)
     return {"id": segment_id, "removed": True}
 
@@ -205,7 +193,7 @@ def add_competitor(c, actor, text, company=""):
     name = host or text[:120]
     if not name:
         raise Problem("validation", "Give a name or a site", 422)
-    ev = _evidence(c, actor)
+    ev = owner_evidence(c, actor)
     found = [
         r
         for r in MK._resolve_existing(c, name, [], {"domain": host} if host else {})
@@ -237,7 +225,7 @@ def add_competitor(c, actor, text, company=""):
             actor,
             src=entity["id"],
             rel="competes_with",
-            dst=_own(c, actor, company, ev),
+            dst=own_company(c, actor, company, ev),
             since=today,
             evidence_ids=ev,
         )
@@ -252,7 +240,7 @@ def remove_competitor(c, actor, entity_id):
     )
     if not edges:
         raise Problem("not_found", f"{entity_id} is not a competitor", 404)
-    ev = _evidence(c, actor)
+    ev = owner_evidence(c, actor)
     for edge in edges:
         _end(c, actor, edge, ev)
     return {"id": entity_id, "removed": True}
@@ -260,7 +248,7 @@ def remove_competitor(c, actor, entity_id):
 
 class SegmentTarget(M.Contract):
     id: str = Field(min_length=1, max_length=200)
-    target: Literal["ours", "next", "none"]
+    target: Literal["ours", "next", "none"]  # next is ours too: a segment is one of the company's or it is not
 
 
 class SegmentRemove(M.Contract):
@@ -290,7 +278,9 @@ def install(app, store, auth, mutate):
             writer(who)
             if who.role == "bot":
                 raise Problem(
-                    "forbidden", "Only a person marks a segment Us or Next; propose it to the owner instead", 403
+                    "forbidden",
+                    "Only a person makes a segment one of the company's; propose it to the owner instead",
+                    403,
                 )
             return target(c, who.actor, body.id, body.target, company())
 

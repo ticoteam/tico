@@ -409,7 +409,6 @@ def _market(c, actor, market, company, skipped):
                 evidence_ids=[evidence],
                 parent=parent,
                 entity_id=_segment_id(c, segment["key"]),
-                properties={"next": True} if segment["next"] else None,
                 force=True,
             )
             urls = [u for u in map(_safe_url, segment["evidence"]) if u]
@@ -429,7 +428,7 @@ def _market(c, actor, market, company, skipped):
                         "confidence": "low",
                     },
                 )
-            if segment["ours"]:
+            if segment["ours"] or segment["next"]:  # a segment the company means to enter is one of its segments now
                 MK.create_edge(
                     c,
                     actor,

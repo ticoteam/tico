@@ -154,7 +154,7 @@ def test_the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_clo
     assert parse(created) > NOW - timedelta(days=2) and parse(decided) > parse(created)
 
 
-def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
+def test_the_strategy_page_market_has_our_segments_and_sized_segments(built):
     with signed_in(built) as api:
         spend = api.get("/api/v2/market/spend").json()
     assert spend["definition"]["root"] == "segment/holiday-light-shows"
@@ -164,7 +164,7 @@ def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
     segments = {seg["name"]: seg for seg in spend["segments"]}
     assert {"Home light shows", "Shops and hotels", "Towns, malls and HOAs", "Event venues"} <= set(segments)
     assert segments["Home light shows"]["self"] and segments["Shops and hotels"]["self"]
-    assert segments["Towns, malls and HOAs"]["next"] and segments["Event venues"]["next"]
+    assert segments["Towns, malls and HOAs"]["self"] and segments["Event venues"]["self"]
     sized = [seg for seg in spend["segments"] if seg["size"]]
     assert len(sized) >= 2 and all(seg["size"]["accepted"] for seg in sized)
     assert spend["total"]["spend_usd"] > 0

@@ -49,7 +49,7 @@ def ready(api, **bet):
 
 def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
     first = draft(api)
-    assert first["guide"] == "default" and set(first["sections"]) == {*S.FIXED_KEYS, "extra"}
+    assert first["guide"] == "default" and set(first["sections"]) == {*S.FIXED_KEYS, "extra", "segments"}
     saved = write(
         api,
         sections={
