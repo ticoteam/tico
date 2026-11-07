@@ -151,7 +151,7 @@ function rdqSayingHtml(stats, heard) {
 
 // The one-page Market: its header, its tiles and its questions. The whole market and a segment's market both draw it,
 // each with its own data (rdqQuestionsHtml); the blank state is the caller's.
-function rdqPageHtml({cls = '', top, tiles = [], questions}) {
+function rdqPageHtml({cls = '', top, tiles = /** @type {string[]} */ ([]), questions}) {
   const nothing = !tiles.length && !questions;
   return `<div class="mkt-pg${cls ? ' ' + cls : ''}">${top}${tiles.length ? `<div class="mkt-tiles">${tiles.join('')}</div>` : ''}${questions || (nothing ? '<p class="market-none">Nothing here yet.</p>' : '')}</div>`;
 }

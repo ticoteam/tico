@@ -12,13 +12,18 @@ const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, '../fixt
 
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
-// Acme's strategy as a segment reads it (backend/segments.py strategy_view): the company's text per field. A segment's
-// own text is in its `own` (a key present = the segment changed it).
-const SEG_TITLES = {summary: 'Summary', serve: 'Who we serve', sell: 'What we sell, and for how much', not: "What we won't do"};
+// Acme's strategy as a segment reads it (backend/segments.py strategy_view): the company's text per field, all eight of
+// them in order. A segment's own text is in its `own` (a key present = the segment changed it).
+const SEG_TITLES = {summary: 'Summary', serve: 'Who we serve', sell: 'What we sell, and for how much', proof: 'Proof',
+  now: 'Where we are now', know: 'What we know', how: 'How we win', not: "What we won't do"};
 const COMPANY_TEXT = {
   summary: 'Acme makes release checks that run inside the CI plans teams already pay for.',
   serve: 'Engineering teams of 20 to 200 who ship every week.',
   sell: 'A seat at $19 a month, bundled into the CI plan.',
+  proof: 'Teams keep 90 percent of their checks after the first month.',
+  now: 'Live in GitHub Actions and GitLab CI; Jenkins next quarter.',
+  know: 'Release checks cut failed deploys by a third in our pilots.',
+  how: 'Sold through the CI plan admin, then by the team lead.',
   not: 'No on-premise installs, no custom checks for one customer.',
 };
 // The company's segments in list order (GET /api/v2/segments), with the teammates dedicated to each. Release checks is
@@ -53,9 +58,10 @@ function listeningStats(now = new Date()) {
 // briefing: false answers {briefing: null}. listening: 403 answers the stats with that status. market: false is a
 // market with nothing in it yet.
 // segments: the company's segments (SEGMENTS by default; [] for none). refusals: {'METHOD /api/path': {status, detail}}
-// answers that write with that refusal, for a test of the server's text on failure.
+// answers that write with that refusal, for a test of the server's text on failure (a GET too, for a failed read).
+// finance: true makes the viewer one who sees Finance beyond their own budgets (GET /api/v2/finance/access).
 async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true,
-  segments = SEGMENTS, refusals = {}} = {}) {
+  segments = SEGMENTS, refusals = {}, finance = false} = {}) {
   const mk = fixture('redesign-market.json');
   const fx = fixture('redesign-org.json');
   const person = fx.people.find(p => p.id === viewer);
@@ -86,7 +92,9 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     const s = db.segments.find(x => x.id === id), fx = fixture('redesign-market.json').spend.offering.segments.find(x => x.id === id);
     return {segment: {id, name: s?.name || id, who: s?.who || '', color: s?.color || 'gray', rank: db.segments.indexOf(s)},
       answers: fx ? {changed: 'Two rivals now bundle release checks into their CI plans.', money: 'Most of it is CI plans, not stand-alone checks.',
-        players: 'Northwind leads on bundles; Globex competes on price.'} : {},
+        players: 'Northwind leads on bundles; Globex competes on price.',
+        reach: 'Most buyers come through the CI plan admin, then the team lead.',
+        saying: 'Teams want checks that do not slow the pipeline.'} : {},
       briefing: fx ? fixture('redesign-briefing.json').briefing : null,
       sizes: {year: 2025, dimension: 'offering', basis: 'product', chosen: fx?.size || null, rolled_usd: fx?.rolled_usd || null,
         estimates: fx?.estimates || [], disagree: false, bases: []},
@@ -161,9 +169,13 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
       const doc = status => ({id: 'v-' + status, n: status === 'draft' ? null : 7, status, guide: 'default', summary: COMPANY_TEXT.summary,
         vision: '', sections: {serve: COMPANY_TEXT.serve, sell: COMPANY_TEXT.sell, not: COMPANY_TEXT.not, extra: {}}, bets: [], note: '',
         revision: db.revision, updated_at: '2026-11-03T09:00:00Z', updated_by: 'human:ana', published_at: '2026-11-03T09:00:00Z', published_by: 'human:ana'});
+      // The count of the segments' own changes: the draft differs by them, so Publish is offered (strategy-page.js).
       return json({...(owner ? {draft: doc('draft')} : {}), current: doc('published'), bets: [], label: 'Bets', label_one: 'Bet', may_edit: owner,
+        segment_changes: owner ? db.segments.filter(s => Object.keys(s.own).length).length : 0,
         website: 'https://acme.example', goals_by_bet: {}, live_by_bet: {}, health_by_bet: {}});
     }
+    // Finance access: a finance viewer's row (everything); anyone else has no row, so no Finance beyond their own budgets.
+    if (p === '/api/v2/finance/access') return json({teammates: finance ? [{teammate: 'human:' + me.id, default: 'everything', grants: [], rights: ['finance.admin'], budgets: 0}] : []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});
@@ -243,8 +255,10 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
+  // A toast from the step before is not part of the page under review.
+  await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
   await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 
-module.exports = {openStrategy, PHONE, DESKTOP, sideways, shot};
+module.exports = {openStrategy, PHONE, DESKTOP, SEGMENTS, sideways, shot};
