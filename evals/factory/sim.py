@@ -551,7 +551,7 @@ class Run:
             last = max(x for x in (events.get(tid), H.parse_ts(row["updated_at"]), self.acted.get(tid)) if x)
             if self.tick_at is not None and last > self.tick_at:
                 self.idle[tid] = 0.0  # something happened on it since the last tick
-            elif self.waiting(w, row, bot, now, held, parents, queued):
+            elif self.waiting(w, row, bot, now, held, parents, queued) and not self.day_capped(w, tid):
                 self.idle[tid] += hours
             limit = self.limit_for(row["title"], bot.slug)
             if limit is not None and self.idle[tid] >= limit - 1e-6 and tid not in self.stuck:
@@ -696,6 +696,28 @@ class Run:
         if row["status"] == "open" and bot.role == "builder" and w.slots(bot.slug) >= w.board.slots:
             return False  # its slots are full: the task waits in line, which is no stall
         return True
+
+    def day_capped(self, w, tid):
+        """Whether the daily resume limit holds this task now: it is stranded (no progress since its last resume) and
+        DAY_LIMIT resumes fell in the 24 hours up to now (backend/stranded_resume.py state). That wait is the product's
+        documented rule, so the stuck check does not count it; the late hours and the explain name it."""
+        from backend import hubdb as H
+        from backend import stranded_resume as SR
+
+        now = w.now()
+        recent = sum(
+            1
+            for r in w.sql(
+                "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=?",
+                (tid, SR.RESUMED),
+            )
+            if now - dt.timedelta(hours=24) <= H.parse_ts(r["created_at"]) <= now
+        )
+        if recent < SR.DAY_LIMIT:
+            return False
+        with w.store.read() as c:
+            row = H.task(c, tid)
+            return row is not None and bool(SR.stranded(c, row, H.now()))
 
     def limit_for(self, title, slug):
         """The hours a task may wait with its owner free: the scenario's first allowance that names its owner and title
