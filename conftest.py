@@ -56,6 +56,44 @@ def _recording_init(self, *args, **kwargs):
 
 _store.Store.__init__ = _recording_init
 
+# DIAG (diagnostic commit, reverted before the fix): where each pooled connection was opened, and a report when one is
+# freed still open, with the test that opened it and the test that was running when it was freed.
+import threading as _diag_threading  # noqa: E402
+import traceback as _diag_tb  # noqa: E402
+
+_diag_connect = _store.Store.connect
+
+
+def _diag_connect_origin(self, factory=None, check_same_thread=True):
+    c = _diag_connect(self, factory=factory, check_same_thread=check_same_thread)
+    if factory is not None:
+        c._diag_origin = (
+            os.environ.get("PYTEST_CURRENT_TEST", "?"),
+            _diag_threading.current_thread().name,
+            "".join(_diag_tb.format_stack(limit=45)),
+        )
+        cls = type(c)
+        if "_diag_del" not in cls.__dict__:
+
+            def _diag_del(self):
+                try:
+                    self.total_changes
+                except Exception:
+                    return
+                opened, thread, stack = getattr(self, "_diag_origin", ("?", "?", ""))
+                sys.__stderr__.write(
+                    f"DIAG-LEAK {type(self).__name__} opened in {opened} on thread {thread}; "
+                    f"freed open during {os.environ.get('PYTEST_CURRENT_TEST', '?')}\n{stack}DIAG-END\n"
+                )
+                sys.__stderr__.flush()
+
+            cls._diag_del = True
+            cls.__del__ = _diag_del
+    return c
+
+
+_store.Store.connect = _diag_connect_origin
+
 
 def pytest_addoption(parser):
     parser.addoption(
