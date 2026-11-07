@@ -1,5 +1,5 @@
 /* ui/styles/skeleton.css — The one loading placeholder: shaped blocks while a first read is in flight (skelRows in
-   app/core.js draws rows the size of the list that replaces them, so nothing jumps when the data lands), and the same
+   app/core.ts draws rows the size of the list that replaces them, so nothing jumps when the data lands), and the same
    shimmer on a picture, a file or a card body still loading. One sweep, one colour pair (theme tokens, so light and dark
    follow), one corner radius for bars and blocks; a placeholder standing in for a card keeps that card's corners.
    Under reduced motion it holds still. */

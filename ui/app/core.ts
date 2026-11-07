@@ -1,4 +1,4 @@
-/* ui/app/core.js — State-free basics: route constants, $, esc, md
+/* ui/app/core.ts — State-free basics: route constants, $, esc, md
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -32,19 +32,30 @@ const MAIL = '#/mail';                // server-stored mail copies; #/inbox redi
 const LEARNINGS = '#/learnings';     // the nightly learning run: what each night changed (ui/app/learnings.js)
 const MESSAGING = '#/messaging';       // selected Message bot: setup, schedules, and example messages
 // Bot notices still flow through /api/v2/messages?unread=1. People read mail on #/mail, not live Gmail.
-const $ = (s, r=document) => r.querySelector(s);
-/** @param {unknown} s @returns {string} */
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// `$()` returns an untyped element, as it always has. A typed `E | null` return is inferred from the annotation at each
+// call (`const feedback: HTMLElement = $('#x')` would read `HTMLElement | null`), which broke the typed .ts callers on
+// main. A TypeScript caller casts the result: `$('#x') as HTMLInputElement | null`.
+// biome-ignore lint/suspicious/noExplicitAny: the untyped element is any by contract (see the comment above)
+type UntypedElement = any;
+const $ = (s: string, r: ParentNode = document): UntypedElement => r.querySelector(s);
+// The entities `esc` writes for the five characters that matter in markup.
+const ESC_ENTITY: Record<string, string> = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => ESC_ENTITY[c] ?? c);
 // The one filter icon: every button that opens or applies filters shows it, with no word (aria-label carries it).
-const filterIcon = (size = 14) => `<svg viewBox="0 0 14 14" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path d="M2 3.5h10M4 7h6M5.8 10.5h2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+const filterIcon = (size = 14): string => `<svg viewBox="0 0 14 14" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path d="M2 3.5h10M4 7h6M5.8 10.5h2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 // A shaped placeholder for a list that is still loading (styles/skeleton.css): `n` rows of uneven width, so the page
 // keeps its layout and does not jump when the rows arrive. `card` drops the dividers for a list inside a card.
 const SKEL_W = [62, 44, 71, 53, 38, 66, 49, 57];
-const skelRows = (n = 5, {card = false, dot = true} = {}) => `<div class="skel${card ? ' skel-card' : ''}" aria-busy="true" aria-label="Loading">${
+const skelRows = (n = 5, {card = false, dot = true} = {}): string => `<div class="skel${card ? ' skel-card' : ''}" aria-busy="true" aria-label="Loading">${
   Array.from({length: n}, (_, i) => `<div class="skel-row">${dot ? '<span class="skel-dot"></span>' : ''}<span class="skel-bar" style="width:${SKEL_W[i % SKEL_W.length]}%"></span><span class="skel-bar skel-end"></span></div>`).join('')}</div>`;
 // A person is typing in `el`: a text field has focus or holds something other than its default. A poll or
 // a same-route redraw must leave such a form alone (checkboxes and selects save when changed, so they do not count).
-const formBusy = el => !!el && [...el.querySelectorAll('textarea, input:not([type=checkbox], [type=radio], [type=hidden], [type=button], [type=submit])')]
+// `el` is an element, or a stand-in with the one method used here: computer-detail.js passes one (its fields, just read).
+// The selector matches only input and textarea, so the filter keeps every field an element yields.
+type FormScope = {querySelectorAll(selector: string): Iterable<Element>} | null | undefined;
+const formBusy = (el: FormScope): boolean => !!el && [...el.querySelectorAll('textarea, input:not([type=checkbox], [type=radio], [type=hidden], [type=button], [type=submit])')]
+  .filter((f): f is HTMLInputElement | HTMLTextAreaElement => f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement)
   .some(field => field === document.activeElement || field.value !== field.defaultValue);
 // Redraw `root` from `html`, touching only what changed. The same markup as last time leaves it alone; otherwise only
 // the top-level children whose markup differs are replaced, so the unchanged rows keep their nodes (focus, the place
@@ -52,15 +63,21 @@ const formBusy = el => !!el && [...el.querySelectorAll('textarea, input:not([typ
 // a whole list for one changed row kept the desktop app's page busy. `full(root, html)` draws instead when a replaced
 // row holds a visual card (chat keeps those through visualSwap), or when someone else changed root's children since.
 // Returns whether anything changed.
-const PATCH_SRC = new WeakMap();
-function patchHTML(root, html, full = (el, h) => { el.innerHTML = h; }) {
+/** What patchHTML last drew into a box: the markup it was given, each top-level child's markup, and the child nodes. */
+interface CorePatchSource {
+  html: string;
+  src: (string | null)[];
+  nodes: ChildNode[];
+}
+const PATCH_SRC = new WeakMap<Element, CorePatchSource>();
+function patchHTML(root: Element, html: string, full: (el: Element, h: string) => void = (el, h) => { el.innerHTML = h; }): boolean {
   const was = PATCH_SRC.get(root), kids = root.childNodes;
   const same = was && was.nodes.length === kids.length && was.nodes.every((n, i) => n === kids[i]);
   if (same && was.html === html) return false;
   const t = document.createElement('template');
   t.innerHTML = html;
-  const fresh = [...t.content.childNodes], src = fresh.map(n => n.nodeType === 1 ? n.outerHTML : n.nodeValue);
-  const draw = () => {
+  const fresh = [...t.content.childNodes], src = fresh.map(n => n instanceof Element ? n.outerHTML : n.nodeValue);
+  const draw = (): boolean => {
     full(root, html);
     PATCH_SRC.set(root, {html, src, nodes: [...root.childNodes].length === src.length ? [...root.childNodes] : []});
     return true;
@@ -70,7 +87,7 @@ function patchHTML(root, html, full = (el, h) => { el.innerHTML = h; }) {
   while (a < was.src.length && a < src.length && was.src[a] === src[a]) a++;
   while (b < was.src.length - a && b < src.length - a && was.src[was.src.length - 1 - b] === src[src.length - 1 - b]) b++;
   const gone = was.nodes.slice(a, was.nodes.length - b), added = fresh.slice(a, fresh.length - b);
-  if (gone.some(n => n.nodeType === 1 && (n.matches('figure.vcard') || n.querySelector('figure.vcard')))) return draw();
+  if (gone.some(n => n instanceof Element && (n.matches('figure.vcard') || n.querySelector('figure.vcard')))) return draw();
   const after = was.nodes[was.nodes.length - b] || null;
   for (const n of gone) n.remove();
   for (const n of added) root.insertBefore(document.adoptNode(n), after);
@@ -79,15 +96,15 @@ function patchHTML(root, html, full = (el, h) => { el.innerHTML = h; }) {
 }
 // patchHTML for a box every poll redraws. Unchanged markup is kept only while the controls still match it: a button a
 // click left disabled ("Resuming…") or a box ticked by hand is drawn fresh, as before.
-function patchLiveHTML(root, html) {
-  if (root.querySelector('button:disabled') || [...root.querySelectorAll('input[type=checkbox]')].some(b => b.checked !== b.defaultChecked))
+function patchLiveHTML(root: Element, html: string): boolean {
+  if (root.querySelector('button:disabled') || [...root.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].some(b => b.checked !== b.defaultChecked))
     PATCH_SRC.delete(root);
   return patchHTML(root, html);
 }
 // Bot text (final replies, status notes, playbooks) is untrusted: every render goes through safeMd.
-const md = s => safeMd(s);
+const md = (s: string): string => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs
-async function copyText(value) {
+async function copyText(value: string): Promise<void> {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
   const area = document.createElement('textarea'); area.value = value; area.style.position = 'fixed'; area.style.opacity = '0';
   const focused = document.activeElement;
@@ -95,18 +112,22 @@ async function copyText(value) {
   try {
     area.select();
     if (!document.execCommand('copy')) throw new Error('Clipboard unavailable');
-  } finally { area.remove(); focused?.focus({preventScroll:true}); }
+  } finally {
+    area.remove();
+    // Only an HTML or SVG element has focus(); the original called it on any element, which threw for the rest.
+    if (focused instanceof HTMLElement || focused instanceof SVGElement) focused.focus({preventScroll:true});
+  }
 }
 // A dialog whose first control is the ✕ in its header opens with the focus on its heading (or itself) instead: the browser would
 // otherwise put the focus, and a focus ring, on the ✕ before anyone has pressed a key. Tab still reaches the ✕ next.
 // A dialog that focuses a field of its own after opening, or marks one autofocus, keeps that choice.
 if (typeof HTMLDialogElement !== 'undefined') {
   const showModal = HTMLDialogElement.prototype.showModal;
-  HTMLDialogElement.prototype.showModal = function (...args) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement, ...args: []) {
     const result = showModal.apply(this, args);
-    const first = document.activeElement, head = first?.closest?.('.tmodal-head, header, .notes-modal-close, .msg-message-head, .doc-viewer-head');
-    const heading = head && this.contains(head) && !first.hasAttribute('autofocus') && first.matches('button')
-      ? head.querySelector('h1, h2, h3, strong') || this : null;
+    const first = document.activeElement, head = first?.closest('.tmodal-head, header, .notes-modal-close, .msg-message-head, .doc-viewer-head');
+    const heading = head && first && this.contains(head) && !first.hasAttribute('autofocus') && first.matches('button')
+      ? head.querySelector<HTMLElement>('h1, h2, h3, strong') || this : null;
     if (heading) { if (!heading.hasAttribute('tabindex')) heading.tabIndex = -1; heading.focus({preventScroll: true}); }
     return result;
   };

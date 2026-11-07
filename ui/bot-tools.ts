@@ -23,7 +23,7 @@ interface BtInboxBots {
 }
 // The page's get(path) from ui/app/api.ts: resolves with the parsed JSON body.
 type BtGet = <T>(path: string) => Promise<T>;
-// The page's esc from ui/app/core.js.
+// The page's esc from ui/app/core.ts.
 type BtEsc = (value: unknown) => string;
 // window.toolIcons from ui/tool-icons.js. The fallback below has no has(); the real one does.
 interface BtIcons {

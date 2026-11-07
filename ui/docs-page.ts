@@ -217,7 +217,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
     <div id="docs-setup"></div>
     <div class="docs-workspace${selected ? ' has-selection' : ''}"><aside class="docs-browser" aria-label="Docs" id="docs-browser"><p class="docs-loading">Loading…</p></aside>
     <article class="docs-reader" id="docs-reader">${selected ? `<a class="docs-back" href="${docsHref('', archived ? {archived: '1'} : {})}">‹ Docs</a>` : ''}</article></div>`;
-  // The page was drawn just above: these lookups are the elements it drew (`$` is untyped, core.js).
+  // The page was drawn just above: these lookups are the elements it drew (`$` is untyped, core.ts).
   const feedback: HTMLElement = $('#docs-feedback');
   const say = (message: string) => { feedback.textContent = message || ''; feedback.hidden = !message; };
   const reload = () => { if (S.route.startsWith(DOCS)) pageCompanyDocs(); };
