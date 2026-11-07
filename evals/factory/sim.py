@@ -544,7 +544,7 @@ class Run:
                 self.idle[tid] = 0.0  # something happened on it since the last tick
             elif self.waiting(w, row, bot, now, held, parents, queued):
                 self.idle[tid] += hours
-            limit = self.limit_for(row["title"])
+            limit = self.limit_for(row["title"], bot.slug)
             if limit is not None and self.idle[tid] >= limit - 1e-6 and tid not in self.stuck:
                 self.stuck[tid] = {
                     "title": row["title"],
@@ -571,11 +571,11 @@ class Run:
             return False  # its slots are full: the task waits in line, which is no stall
         return True
 
-    def limit_for(self, title):
-        """The hours a task may wait with its owner free: the scenario's allowance for it (None: not counted), else
-        STUCK_HOURS."""
+    def limit_for(self, title, slug):
+        """The hours a task may wait with its owner free: the scenario's first allowance that names its owner and title
+        gives it (None: not counted), else STUCK_HOURS."""
         for a in self.scenario.stuck:
-            if not a.match or a.match in title:
+            if (not a.owner or slug.startswith(a.owner)) and (not a.match or a.match in title):
                 return a.hours
         return STUCK_HOURS
 
@@ -715,12 +715,14 @@ class Run:
 
 @dataclass
 class Allowance:
-    """A task that may wait longer than STUCK_HOURS with its owner free, and why. `match` names the tasks by their title
-    (empty: every task); `hours` None means the task is not counted at all."""
+    """A task that may wait longer than STUCK_HOURS with its owner free, and why. It names the tasks by owner (a prefix
+    of the bot's slug, empty: any bot) and by title (a substring, empty: any task); both must match. `hours` None means
+    the task is not counted at all, which only fleet stand-ins (inert bots) may use."""
 
     reason: str
     hours: float | None = None
     match: str = ""
+    owner: str = ""
 
 
 @dataclass

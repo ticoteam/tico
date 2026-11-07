@@ -4,7 +4,7 @@ fixes it when it is a known gap today, so a failing check reads as "not built ye
 from collections import Counter
 
 from .board import design_board
-from .sim import Allowance, Scenario, at, tickets
+from .sim import Scenario, at, tickets
 from .world import START
 
 from backend.step_age import LATE_HOURS as STUCK_HOURS  # imported after world, which sets the test environment
@@ -506,13 +506,6 @@ SCENARIOS = [
         "A ticket keeps an old open blocker; it merges and must still ship.",
         setup=lambda run, w, team: tickets(run, w, 3),
         during=stale_blocker,
-        stuck=(
-            Allowance(
-                "the leftover blocker is a lead's task, not Dev work: the sim's Head of Engineering works only its sweep",
-                None,
-                "Restore an old check",
-            ),
-        ),
         checks=standard(),
     ),
     Scenario(

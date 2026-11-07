@@ -23,6 +23,7 @@ FLEET_STUCK = (
         "checks cover whether claims resume",
         None,
         "Routine",
+        owner="fleet-",
     ),
 )
 PACKET_STUCK = FLEET_STUCK + (
@@ -30,6 +31,7 @@ PACKET_STUCK = FLEET_STUCK + (
         "the packet's bot is a fleet stand-in: its turns do nothing, so the packet task never moves",
         None,
         "Acme packet",
+        owner=PACKET_BOT,
     ),
 )
 

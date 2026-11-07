@@ -1,16 +1,15 @@
 # pyright: strict
 """The owner's plate and the asks a bot puts to her. Head of Engineering asks the owner, each sweep, what to do with a
 ticket that sits with no move; it reports to her, one level below. A builder asks her directly too, two levels below,
-which the rules must route or refuse (#2879, merged). Three things must hold: the owner's plate stays under ten items,
-no ask comes from a bot more than one level away, and no question is asked twice, nor one whose default is reversible
-(a bot goes ahead on that step itself, so there is nothing to ask). Duplicates and reversible-default asks are #2880,
-still open: on main they are filed, so their checks fail until it lands."""
+which #2879 lets through only about a task she handed it (reach.handed). Three things must hold: the owner's plate stays
+under ten items, no ask comes from a bot two levels down about a task it was not handed, and no question is asked
+twice, nor one whose default is reversible (a bot goes ahead on that step itself, so there is nothing to ask).
+Duplicate and reversible-default asks are #2880 (merged): their checks guard it. The checks are regression guards now,
+so none of them names a gap."""
 
 from evals.factory.scenarios import Scenario, standard, tickets
 
 PLATE_LIMIT = 10
-GAP_ASKS = "#2880"
-GAP_LEVEL = "#2879"
 
 
 def level(run, slug):
@@ -28,11 +27,15 @@ def plate_under(run):
 
 
 def no_ask_from_far(run):
-    """No ask from a bot two or more levels below the owner is filed (the rule routes it through its manager)."""
-    asks = [a for a in run.w.asks if a["status"] < 300]
-    far = [a for a in asks if level(run, a["bot"]) > 1]
-    tried = [a for a in run.w.asks if level(run, a["bot"]) > 1]
-    return not far, f"{len(far)} filed, {len(tried) - len(far)} refused, from bots two levels down"
+    """Today's rule (#2879, reach.handed): an ask from a bot two or more levels below the owner is filed only about a task
+    the person handed that bot (requester is the person, owner the bot). Any other such ask fails.
+    TODO Phase 2: builder questions go to the manager (then no far ask is filed, handed or not)."""
+    filed = [a for a in run.w.asks if a["status"] < 300 and level(run, a["bot"]) > 1]
+    not_handed = [a for a in filed if not a["handed"]]
+    return not not_handed, (
+        f"{len(not_handed)} filed about tasks the person did not hand the bot, {len(filed) - len(not_handed)} about "
+        "tasks it was handed"
+    )
 
 
 def no_duplicate_asks(run):
@@ -62,10 +65,10 @@ SCENARIOS = [
         },
         hours=12,
         checks=standard(
-            ("the owner's plate stays under ten items", GAP_ASKS, plate_under),
-            ("no ask from a bot more than one level away", GAP_LEVEL, no_ask_from_far),
-            ("no question asked twice", GAP_ASKS, no_duplicate_asks),
-            ("no ask whose default is reversible", GAP_ASKS, no_reversible_asks),
+            ("the owner's plate stays under ten items", None, plate_under),
+            ("no ask from a bot two levels down about a task it was not handed", None, no_ask_from_far),
+            ("no question asked twice", None, no_duplicate_asks),
+            ("no ask whose default is reversible", None, no_reversible_asks),
         ),
     ),
 ]

@@ -371,16 +371,34 @@ class Bot:
         """What the bot owes from an earlier turn, done first on its next one, whatever woke it."""
         return None
 
-    def ask_owner(self, text, topic, reversible=False):
+    def ask_owner(self, text, topic, reversible=False, task=None):
         """A decision put to the owner the way a bot asks one (POST task-questions, as `hub task question` does): a question
-        task on the person's plate. Each ask is kept for the checks with the status the server answered."""
+        task on the person's plate. Each ask is kept for the checks with the status the server answered, the task it is
+        about, and whether the person handed that task to this bot (requester is the person, owner is the bot: the
+        exemption reach.handed gives, #2879), read before the ask is filed."""
         w = self.world
+        handed = bool(task) and bool(
+            w.sql(
+                "SELECT 1 FROM tasks WHERE id=? AND requester_id='human:ana' AND owner_id=? "
+                "AND status NOT IN ('done','closed','declined')",
+                (task, f"bot:{self.slug}"),
+            )
+        )
         body = {"question": text, "on": "ana", "why": "", "topic": topic}
         if reversible:
             body["if_no_answer"] = {"do": "go ahead with the default", "kind": "reversible"}
         status, _ = w.request("post", "task-questions", body, token=self.token)
         w.asks.append(
-            {"at": w.now(), "bot": self.slug, "text": text, "topic": topic, "reversible": reversible, "status": status}
+            {
+                "at": w.now(),
+                "bot": self.slug,
+                "text": text,
+                "topic": topic,
+                "reversible": reversible,
+                "status": status,
+                "task": task,
+                "handed": handed,
+            }
         )
         return "asked the owner" if status < 300 else f"ask refused ({status})"
 
@@ -620,7 +638,9 @@ class Builder(Bot):
         directly, two levels below the owner, so the rules route or refuse it)."""
         asked = None
         if task and self.style.get("asks") and self.chance("asks"):
-            asked = self.ask_owner(f"Should I keep going on {task['title']}?", f"builder {task['title']}")
+            asked = self.ask_owner(
+                f"Should I keep going on {task['title']}?", f"builder {task['title']}", task=task["id"]
+            )
         return "; ".join(filter(None, (asked, self._settle()))) or None
 
     def _settle(self):
@@ -862,6 +882,7 @@ class Lead(Bot):
                     f"{t['title']} has sat at {step.name} with no move. What should happen to it?",
                     f"{t['title']} {self.world.now():%Y-%m-%d %H}",
                     reversible=bool(self.style.get("reversible")) and self.chance("reversible"),
+                    task=t["id"],
                 )
         return ("told owners of " + ", ".join(told)) if told else "swept: nothing stuck"
 
