@@ -108,6 +108,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "done_at",
                             "closed_at",
                             "closed_by_id",
+                            "segment_id",
                         ):
                             if row.get(field) is None:
                                 row.pop(field, None)
