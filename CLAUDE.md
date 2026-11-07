@@ -41,7 +41,7 @@ bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once p
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
 `heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code. At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
-turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
+turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote). `--hosted` (or `TICO_REMOTE_HOSTED=1`) runs on a GitHub-hosted runner instead, for when RunsOn cannot launch: no RunsOn cache, its own cap of 6 that RunsOn runs do not count against, and `--cpus` is ignored.
 The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
 goes to RunsOn by default. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). There is no budget on how many tests the suite has: write as many as a change needs, as long as each one

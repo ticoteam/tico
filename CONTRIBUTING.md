@@ -27,6 +27,8 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
+`python3 scripts/remote.py -- <command>` runs a command on a fresh RunsOn VM. `--hosted` (or `TICO_REMOTE_HOSTED=1`) runs it on a GitHub-hosted runner instead, under its own cap of 6 that RunsOn runs do not count against; use it when RunsOn cannot launch.
+
 Run both locally before you open a pull request. GitHub Actions lints the pull request again (the PR checks workflow), and the merge queue runs the selected
 tests on the merged result before a change lands, so a failure shows there too. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
