@@ -384,12 +384,26 @@ class Bot:
                 (task, f"bot:{self.slug}"),
             )
         )
+        # An earlier question of this bot on the same topic that still waits on the person, read before this ask is filed:
+        # a repeat filed anyway, not folded into it, is a duplicate; a repeat after the first was answered is a new question.
+        waiting = any(
+            a["bot"] == self.slug
+            and a["topic"] == topic
+            and a["question"]
+            and w.sql(
+                "SELECT 1 FROM tasks WHERE id=? AND questions IS NOT NULL AND answer IS NULL "
+                "AND status IN ('open','doing','waiting','review','ready')",
+                (a["question"],),
+            )
+            for a in w.asks
+        )
         body = {"question": text, "on": "ana", "why": "", "topic": topic}
         if reversible:
             body["if_no_answer"] = {"do": "go ahead with the default", "kind": "reversible"}
         status, reply = w.request("post", "task-questions", body, token=self.token)
         # The product folds a question into the open one on its topic (`folded`): nothing new reaches the person.
         folded = isinstance(reply, dict) and bool(reply.get("folded"))
+        question = reply["task"]["id"] if status < 300 and not folded and isinstance(reply, dict) else None
         w.asks.append(
             {
                 "at": w.now(),
@@ -401,6 +415,8 @@ class Bot:
                 "task": task,
                 "handed": handed,
                 "folded": folded,
+                "question": question,
+                "waiting": bool(waiting),
             }
         )
         return "asked the owner" if status < 300 else f"ask refused ({status})"

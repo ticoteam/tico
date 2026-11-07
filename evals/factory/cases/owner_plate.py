@@ -39,14 +39,12 @@ def no_ask_from_far(run):
 
 
 def no_duplicate_asks(run):
-    """No question is put to the owner twice while the first still waits on her. An ask the product folds into the open
-    question on its topic (`folded`) is one card, not a second question, so it does not count."""
+    """No question is put to the owner again while the first still waits on her. A repeat on the same topic is folded
+    into the open question (`folded`), one card, so it does not count. A repeat filed anyway while the first still waits
+    (`waiting`, read by the bot before it files) is the duplicate; one filed after the first was answered is a new question."""
     filed = [a for a in run.w.asks if a["status"] < 300 and not a["folded"]]
-    seen: dict[str, int] = {}
-    for a in filed:
-        seen[a["text"]] = seen.get(a["text"], 0) + 1
-    dupes = sum(n - 1 for n in seen.values() if n > 1)
-    return dupes == 0, f"{dupes} duplicate asks of {len(filed)} filed"
+    dupes = [a for a in filed if a["waiting"]]
+    return not dupes, f"{len(dupes)} duplicate asks of {len(filed)} filed"
 
 
 def no_reversible_asks(run):
