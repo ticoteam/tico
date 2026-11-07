@@ -711,6 +711,14 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 
 ### When nobody answers
 
+A reversible, internal default is not asked at all: a question whose `if_no_answer` has kind `reversible` is refused
+before anything is written (`422 ask_default_go_ahead`, "do your default now and record what you did in one line on
+the task"). The bot acts and leaves one line on its task, which shows in Updates, and the person can undo it. Sends,
+spending and deletes, and questions with no default, are still asked. When the owner turns off **Bots go ahead on
+their recommendation**, a reversible default is asked as before. A question is also refused when the person already
+has an open one that covers it, from any bot (`422 ask_duplicate`): the same task, the same question, or nearly the
+same words. The refusal names the open one and the bot waits on it (`hub task relate <task> blocked_by <id>`).
+
 `keeper` is the system and cannot answer. A question to it, including a system-filed task's requester, goes to the
 asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
 Bot states use the runner's claim check. An onboarding manager cannot take a report's question, so Tico tries

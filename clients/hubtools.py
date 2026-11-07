@@ -1361,7 +1361,9 @@ def task_list(api, args):
     "(`then`); several picks (`multi`) mark the ones you recommend; no ids, paths, tool names or error output outside "
     "`body`, or it is refused with what to fix, as the person's asking criteria may (ask_refused). One open question "
     "per topic: asked again while your earlier one on the same topic (same `topic`, else the same parent) is open, "
-    "it updates that one (`folded: true`).",
+    "it updates that one (`folded: true`). Refused before anything is written: a question whose default is "
+    "reversible and internal (ask_default_go_ahead: just do it and note it on your task), and one an open question "
+    "to the same person already covers (ask_duplicate: wait on that one).",
     {
         "question": _s("The question, readable with no other context", maxLength=300),
         "on": _s("The person who decides: their id"),
@@ -1414,9 +1416,9 @@ def task_list(api, args):
             "additionalProperties": False,
             "required": ["do", "kind"],
             "description": "What you will do if they don't answer, e.g. do: \"Yes\" (an option) or a short "
-            "plain sentence. A reversible, internal step goes ahead on its own after the team's days "
-            "(default 3) or `by`; a send, spending or a delete waits for an answer. Unanswered asks expire "
-            "after 14 days",
+            "plain sentence. A reversible, internal step is not asked: the question is refused "
+            "(ask_default_go_ahead), so do it and note it in one line on your task. Give a default for a send, "
+            "spending or a delete: it waits for an answer. Unanswered asks expire after 14 days",
             "properties": {
                 "do": _s("What you will do: one of the options, or one plain sentence", maxLength=300),
                 "kind": {

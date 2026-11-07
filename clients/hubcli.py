@@ -2114,14 +2114,16 @@ def parser():
     s.add_argument(
         "--if-no-answer",
         dest="if_no_answer",
-        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence",
+        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence. Only for a step that "
+        "sends, spends or deletes: a reversible, internal default is refused (ask_default_go_ahead), so just do it and "
+        "note it on your task",
     )
     s.add_argument(
         "--default-kind",
         dest="default_kind",
         choices=["reversible", "send", "spend", "delete"],
-        help="what that step is, required with --if-no-answer; only reversible (internal, undoable) goes "
-        "ahead on its own: a send, spending or a delete waits for an answer",
+        help="what that step is, required with --if-no-answer; a reversible (internal, undoable) step is not asked: "
+        "do it and say so in one line on your task. A send, spending or a delete waits for an answer",
     )
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.add_argument(

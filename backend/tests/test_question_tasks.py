@@ -198,6 +198,7 @@ def test_one_open_question_task_per_topic(api):
 
 
 def test_the_if_no_answer_default_goes_ahead_at_by(api):
+    keep_asking(api)  # this case asks with a reversible default on purpose (backend/ask_refusals.py)
     work, attempt = _work(api)
     by = H.shift(H.now(), days=4)
     card = _ask(
@@ -206,6 +207,7 @@ def test_the_if_no_answer_default_goes_ahead_at_by(api):
         "Send the Acme recap on Friday?",
         if_no_answer={"do": "Yes", "kind": "reversible", "by": by},
     )["task"]
+    keep_asking(api, on=True)
     assert card["if_no_answer"]["kind"] == "reversible"
     item = next(i for i in _cards(api) if i["id"] == card["id"])
     assert item["ask"]["goes_ahead_at"] and item["recommend"]["option"] == "Yes"
@@ -452,6 +454,7 @@ def test_a_board_row_carries_no_empty_question_fields(api):
 def test_a_default_on_a_restricted_page_title_leaves_no_event_naming_it_to_outsiders(api, kind):
     """A date-driven close copies its default's words: the picked page's title goes ahead (or the question expires,
     naming it), and the events that close writes stay redacted for a person outside the page's audience."""
+    keep_asking(api)  # this case asks with a reversible default on purpose (backend/ask_refusals.py)
     from backend.auth import Identity
     from backend.tests.test_file_reviews import ask as review_ask
     from backend.tests.test_files import turn
@@ -535,3 +538,12 @@ def test_answer_and_file_reviews_filter_each_source_page_for_a_reader_who_cannot
     sql = api.post("/api/v2/sql", json={"sql": "SELECT * FROM events"}, headers=headers("cara-test"))
     assert sql.status_code == 200, sql.text
     assert secret not in json.dumps(sql.json()["rows"]), "an event naming the restricted page reached an outsider"
+
+
+def keep_asking(api, on=False):
+    """Set the team's "bots go ahead" rule. Off, a bot may ask with a reversible default (backend/ask_refusals.py);
+    turned back on after, that ask goes ahead at its deadline, as one filed before the refusal does."""
+    from backend import team_rules
+
+    with api.app.state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"bots_go_ahead": on})
