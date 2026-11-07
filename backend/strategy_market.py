@@ -44,8 +44,6 @@ COLORS = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")
 MOVED_BY_SEGMENT = (
     "goals",
     "tasks",
-    "fin_budgets",
-    "fin_contacts",
     "market_briefings",
     "market_sizes",
     "market_figures",
@@ -182,17 +180,6 @@ def _segment(c, segment_id):
     return row
 
 
-def bump_finance_view(c, why):
-    """A change to who is tagged with a segment moves the finance view version, which cached finance views key on
-    (backend/finance/store/access.py bump_view), as the org chart's triggers do for the roster. A no-op where the
-    finance tables are not there."""
-    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fin_view_versions'").fetchone():
-        return
-    from .finance.store import access as FA  # lazy: the finance store does not import the segment modules
-
-    FA.bump_view(c, why, H.now())
-
-
 def untag(c, actor, segment_id):
     """A segment that is not one of the company's has no teammate tagged with it: its tags go, and the event names them.
     A teammate's tags on the company's segments are unchanged."""
@@ -201,7 +188,9 @@ def untag(c, actor, segment_id):
     ]
     if members:
         c.execute("DELETE FROM segment_members WHERE segment_id=?", (segment_id,))
-        bump_finance_view(c, "segment tags")
+        from .finance import actions as FA  # lazy: Finance's tables are named in backend/finance only
+
+        FA.segment_tags_changed(c, "segment tags")
         H.event(c, actor, "segment.untagged", segment_id, {"members": members})
 
 
@@ -281,7 +270,9 @@ def follow_merge(c, actor, segment_id, into_id):
         )
     c.execute("DELETE FROM segment_members WHERE segment_id=?", (segment_id,))
     if had:
-        bump_finance_view(c, "segment tags")
+        from .finance import actions as FA
+
+        FA.segment_tags_changed(c, "segment tags")
     c.execute("UPDATE strategy_bets SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
     c.execute(
         "UPDATE market_sizes SET segment_id=?, status='proposed', updated_at=? WHERE segment_id=? AND status='accepted' "
@@ -292,6 +283,9 @@ def follow_merge(c, actor, segment_id, into_id):
     for table in MOVED_BY_SEGMENT:
         if "segment_id" in _columns(c, table):
             c.execute(f"UPDATE {table} SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
+    from .finance import actions as FA
+
+    FA.segment_merged(c, segment_id, into_id)
     _move_draft_text(c, actor, segment_id, into_id)
 
 

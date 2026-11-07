@@ -13,7 +13,8 @@ from backend import migrations
 from backend import segments as SG
 from backend import strategy as S
 from backend import strategy_market as SM
-from backend.finance.store import access as FA
+from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn
@@ -453,7 +454,7 @@ def test_a_change_to_who_is_tagged_moves_the_finance_view_version(api):
 
     def version():
         with api.app.state.store.read() as c:
-            return FA.view_version(c)
+            return FR.view_version(c)
 
     before = version()
     post(api, "segments/members", {"member": "bot:ops", "segments": [first]})
@@ -474,7 +475,7 @@ def test_a_change_to_who_is_tagged_moves_the_finance_view_version(api):
 
 def test_the_finance_view_bump_does_nothing_where_the_finance_tables_are_absent():
     conn = sqlite3.connect(":memory:")
-    SM.bump_finance_view(conn, "segment tags")
+    FA.segment_tags_changed(conn, "segment tags")
     assert conn.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 

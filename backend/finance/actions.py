@@ -27,6 +27,7 @@ from .core import org as O
 from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named
+from .store import access as SA
 from .store import actions as SX
 from .store import budgets as SB
 from .store import usage as SU
@@ -1147,3 +1148,23 @@ def scrub_dev_copy(c: sqlite3.Connection, at: str) -> dict[str, int]:
         removed["fin_actions"] = SX.drop_waiting(c)
     removed.update(SX.empty_tables(c, [table for table in DEV_COPY_EMPTIED if table in present]))
     return removed
+
+
+def _has_column(c: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in c.execute(f"PRAGMA table_info({table})"))
+
+
+def segment_merged(c: sqlite3.Connection, from_id: str, to_id: str) -> None:
+    """A segment merged into another (backend/strategy_market.py follow_merge): the budgets and finance contacts that
+    named the one it merged from name the one it merged into. A table the database does not have is skipped."""
+    for table in ("fin_budgets", "fin_contacts"):
+        if _has_column(c, table, "segment_id"):
+            c.execute(f"UPDATE {table} SET segment_id=? WHERE segment_id=?", (to_id, from_id))
+
+
+def segment_tags_changed(c: sqlite3.Connection, why: str) -> None:
+    """Who is tagged with a segment changed: the finance view version moves, and cached finance views key on it
+    (backend/finance/store/access.py bump_view). A no-op where the finance tables are not there."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fin_view_versions'").fetchone():
+        return
+    SA.bump_view(c, why, tico_db.now())

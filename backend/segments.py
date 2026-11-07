@@ -125,7 +125,9 @@ def _set_ranks(c: sqlite3.Connection, actor: str, ids: list[str]) -> None:
 
 
 def _bump_finance_view(c: sqlite3.Connection, why: str) -> None:
-    cast(Callable[[sqlite3.Connection, str], None], SM.bump_finance_view)(c, why)
+    from .finance import actions as FA  # lazy: Finance reads the segment tags (backend/finance/segmentation.py)
+
+    FA.segment_tags_changed(c, why)
 
 
 def _event(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Row) -> None:
