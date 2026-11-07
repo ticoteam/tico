@@ -137,7 +137,7 @@ async function pipelineReviewApprove(): Promise<void> {
   state.busy = true; state.message = '';
   pipelineReviewRender();
   try {
-    const result = await pipelineApprove(item.task_id, item.requirement_id, pipelineReviewNoteValue());
+    const result = await pipelineApprove(item, pipelineReviewNoteValue());
     if (!pipelineReviewState) return;
     const at = state.index;
     state.items = state.items.filter(other => other !== item);

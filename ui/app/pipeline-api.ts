@@ -1,20 +1,22 @@
 /* ui/app/pipeline-api.ts — The one client the pipeline views call: fetch wrappers over the pipeline routes. Every route
-   shape the UI codes against is here, so a route that changes is changed in this file only. Classic script: its
-   globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
+   path and payload the UI codes against is here, so a route that changes is changed in this file only. The server
+   sends requirement states as met / waiting / out_of_date / failed / none; this file maps `none` to the UI's `missing`
+   and reshapes the review queue and manager rail into the view models the views read. Classic script: its globals are
+   shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 type PipelineReqState = 'met' | 'waiting' | 'out_of_date' | 'failed' | 'missing';
 
-/** One requirement on a ticket: the server sends it only on a ticket whose stage has requirements. */
+/** One requirement on a ticket: the board's dot (id, name, state) or the ticket's full row, mapped to this shape. */
 interface PipelineRequirement {
   id: string;
   name: string;
   state: PipelineReqState;
-  /** The actor id of whoever the requirement waits on (human:ana, bot:b2), or null. */
+  /** The actor the requirement waits on (the reviewer), or null. The board dots do not carry it. */
   next_actor: string | null;
-  /** What stands on the ticket for it, e.g. "3 images" or "Approved by Chris". */
+  /** What stands on the ticket for it: the decision's reason, or the attachment's source. */
   detail?: string;
-  /** Whether this person may mark it met (a pipeline editor, not the manager bot). */
+  /** Whether this person may mark it met. The routes do not say; the ticket view leaves the button off until they do. */
   can_mark_met?: boolean;
 }
 
@@ -26,21 +28,29 @@ interface PipelineAttachment {
   detail?: string;
 }
 
+/** One item of the ▶ queue: a requirement of one ticket that waits on this reviewer. Built from the queue row. */
 interface PipelineReviewItem {
   task_id: string;
   requirement_id: string;
   task_title?: string;
   stage_name?: string;
   pipeline_id?: string;
-  /** The assignee (an actor, bot or person) whose work this is, for "Message <assignee>". */
+  /** The assignee for "Message <assignee>". The queue does not name one, so this is null. */
   assignee?: { id: string; name: string } | null;
   why: string;
+  /** The bot's note. The queue does not carry one, so this is empty. */
   bot_note: string;
   attachments: PipelineAttachment[];
-  /** Who holds the review right now, or null when nobody does. */
-  claim: { by: string; expires_at: string } | null;
-  /** Set on the last requirement of a stage: where Approve moves the ticket. */
+  /** Another reviewer holding the item, or null. */
+  claim: { by: string } | null;
+  /** Where Approve moves the ticket on the stage's last requirement. The queue does not say, so this is null. */
   moves_to?: string | null;
+  /** Late items sort first in the queue. */
+  late: boolean;
+  /** The work version, attachment digest and requirement version the reviewer saw. Approve sends them back. */
+  work_version: number;
+  attachment_digest: string | null;
+  requirement_version: number;
 }
 
 interface PipelineReviewQueue {
@@ -81,23 +91,193 @@ interface PipelineManagerView {
   actions: { id: string; label: string }[];
 }
 
-const pipelineRoute = (path: string): string => '/v2/pipelines' + path;
-const reviewPath = (taskId: string, requirementId: string): string =>
-  `/review/${encodeURIComponent(taskId)}/${encodeURIComponent(requirementId)}`;
+/** The server's requirement state, as the ticket and board send it. */
+type ServerReqState = 'met' | 'waiting' | 'out_of_date' | 'failed' | 'none';
 
-/** The reviewer's queue for one pipeline: over-limit items first, then the oldest. */
-async function pipelineReviewQueue(pipelineId: string): Promise<PipelineReviewQueue> {
-  return get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/review-queue`)) as Promise<PipelineReviewQueue>;
+interface ServerDot {
+  id: string;
+  name: string;
+  state: ServerReqState;
 }
 
-/** Approve a requirement. A 409 means the work changed since the item was shown: the caller reloads the queue. */
-async function pipelineApprove(taskId: string, requirementId: string, note: string): Promise<PipelineApproveResult> {
-  return post(pipelineRoute(reviewPath(taskId, requirementId) + '/approve'), { note }) as Promise<PipelineApproveResult>;
+/** One requirement of GET /api/v2/tasks/{id}/requirements (the ticket's detail row). */
+interface ServerRequirementDetail {
+  id: string;
+  name: string;
+  kind: string;
+  stage_id: string;
+  stage: string;
+  state: ServerReqState;
+  why: string | null;
+  reviewed_by: string;
+  reviewer_id: string | null;
+  version: number;
+  decision: { id: string; verdict: string; requirement_version: number; at: string } | null;
+  attachment: { id: string; source: 'file' | 'blob' | 'link'; digest: string; by: string; at: string } | null;
+}
+
+interface ServerQueueItem {
+  task_id: string;
+  title: string;
+  pipeline_id: string;
+  pipeline: string;
+  stage_id: string;
+  stage: string;
+  requirement_id: string;
+  requirement: string;
+  requirement_version: number;
+  kind: string;
+  work_version: number;
+  attachment: { id: string; source: 'file' | 'blob' | 'link'; url: string | null; file_id?: string | null } | null;
+  attachment_digest: string | null;
+  why: string;
+  since: string;
+  late: boolean;
+  claimed_by: string | null;
+  claimed_by_me: boolean;
+}
+
+interface ServerRun {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: 'ok' | 'failed' | 'skipped';
+  error: string | null;
+}
+
+interface ServerAction {
+  id: string;
+  task_id: string | null;
+  action: string;
+  target_actor: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+interface ServerRail {
+  pipeline_id: string;
+  missed_runs: number;
+  last_run: ServerRun | null;
+  over_limit: { task_id: string; title: string; stage: string; hours: number; limit_hours: number; since: string }[];
+  log: (ServerRun | ServerAction)[];
+}
+
+const pipelineRoute = (path: string): string => '/v2/pipelines' + path;
+/** A review write: the requirement of one ticket, under the pipelines prefix (C's route base). */
+const reviewPath = (taskId: string, requirementId: string): string =>
+  `/tasks/${encodeURIComponent(taskId)}/requirements/${encodeURIComponent(requirementId)}`;
+
+const REQ_STATE: Record<ServerReqState, PipelineReqState> = {
+  met: 'met', waiting: 'waiting', out_of_date: 'out_of_date', failed: 'failed', none: 'missing',
+};
+
+const ATTACH_KIND: Record<string, PipelineAttachment['kind']> = { file: 'file', blob: 'file', link: 'link' };
+
+/** A board dot, as the requirement the board shows. The board has no reviewer, so next_actor is null. */
+function requirementFromDot(dot: ServerDot): PipelineRequirement {
+  return { id: dot.id, name: dot.name, state: REQ_STATE[dot.state] ?? 'missing', next_actor: null };
+}
+
+/** A queue row, as the review view shows it. The row has one attachment; the view takes a list. */
+function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
+  const a = row.attachment;
+  return {
+    task_id: row.task_id,
+    requirement_id: row.requirement_id,
+    task_title: row.title,
+    stage_name: row.stage,
+    pipeline_id: row.pipeline_id,
+    assignee: null,
+    why: row.why,
+    bot_note: '',
+    attachments: a
+      ? [{ id: a.id, label: a.url || a.file_id || 'Attachment', kind: ATTACH_KIND[a.source] ?? 'file', url: a.url ?? undefined }]
+      : [],
+    claim: row.claimed_by && !row.claimed_by_me ? { by: row.claimed_by } : null,
+    moves_to: null,
+    late: row.late,
+    work_version: row.work_version,
+    attachment_digest: row.attachment_digest,
+    requirement_version: row.requirement_version,
+  };
+}
+
+/** A ticket's requirement row, as the ticket view shows it. */
+function requirementFromDetail(row: ServerRequirementDetail): PipelineRequirement {
+  const detail = row.state === 'met' || row.state === 'none' ? undefined : row.why ?? undefined;
+  return {
+    id: row.id,
+    name: row.name,
+    state: REQ_STATE[row.state] ?? 'missing',
+    next_actor: row.state === 'met' ? null : row.reviewer_id,
+    detail,
+  };
+}
+
+/** The manager rail, as the manager view shows it: failed runs and actions in one log, newest first. */
+function managerViewFromRail(rail: ServerRail): PipelineManagerView {
+  const log: PipelineManagerLogLine[] = rail.log.map(entry => {
+    if ('started_at' in entry) {
+      return entry.status === 'failed'
+        ? { at: entry.started_at, text: entry.error || 'Manager pass failed', kind: 'error' as const }
+        : { at: entry.started_at, text: `Manager pass ${entry.status}`, kind: 'info' as const };
+    }
+    return {
+      at: entry.created_at,
+      text: entry.note ? `${entry.action}: ${entry.note}` : entry.action,
+      kind: 'info' as const,
+      task_id: entry.task_id,
+    };
+  });
+  return {
+    last_run: rail.last_run,
+    missed_runs: rail.missed_runs,
+    late: rail.over_limit.map(item => ({
+      task_id: item.task_id,
+      title: item.title,
+      stage_name: item.stage,
+      age_minutes: Math.round(item.hours * 60),
+    })),
+    log,
+    actions: [],
+  };
+}
+
+/** The ticket's requirements on the board (their dots), for the card's requirement dots. */
+function pipelineBoardDots(dots: ServerDot[]): PipelineRequirement[] {
+  return dots.map(requirementFromDot);
+}
+
+/** The requirements that count on one ticket, with who decided and what is attached: the ticket page's list. */
+async function pipelineTaskRequirements(taskId: string): Promise<PipelineRequirement[]> {
+  const res = await get(`/v2/tasks/${encodeURIComponent(taskId)}/requirements`) as { requirements: ServerRequirementDetail[] };
+  return res.requirements.map(requirementFromDetail);
+}
+
+/** The reviewer's queue for one pipeline: Late items first, then the oldest. */
+async function pipelineReviewQueue(pipelineId: string): Promise<PipelineReviewQueue> {
+  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/review/queue`)) as { items: ServerQueueItem[] };
+  return { items: res.items.map(reviewItemFromRow) };
+}
+
+/**
+ * Approve a requirement, as the reviewer saw it: the work version, attachment digest and requirement version come from
+ * the item. A 409 means the work changed since the item was shown: the caller reloads the queue.
+ */
+async function pipelineApprove(item: PipelineReviewItem, note: string): Promise<PipelineApproveResult> {
+  const res = await post(pipelineRoute(reviewPath(item.task_id, item.requirement_id) + '/approve'), {
+    work_version: item.work_version,
+    attachment_digest: item.attachment_digest,
+    requirement_version: item.requirement_version,
+    note: note || null,
+  }) as { decision_id: string; advanced: boolean };
+  return { decision_id: res.decision_id, moved_to: res.advanced ? item.moves_to ?? 'next stage' : null };
 }
 
 /** Take back an approval made in the last 10 seconds. */
 async function pipelineUndo(decisionId: string): Promise<{ ok: boolean }> {
-  return post(pipelineRoute(`/decisions/${encodeURIComponent(decisionId)}/undo`), {}) as Promise<{ ok: boolean }>;
+  const res = await post(pipelineRoute(`/decisions/${encodeURIComponent(decisionId)}/undo`), {}) as { undone: boolean };
+  return { ok: res.undone };
 }
 
 /** Send the item back to its assignee with a note. The requirement reopens; nothing is approved. */
@@ -106,17 +286,18 @@ async function pipelineSendBack(taskId: string, requirementId: string, note: str
 }
 
 /** Message the pipeline manager about one item. The manager decides or forwards it. */
-async function pipelineMessageManager(taskId: string, requirementId: string, note: string): Promise<{ ok: boolean }> {
-  return post(pipelineRoute(reviewPath(taskId, requirementId) + '/message-manager'), { note }) as Promise<{ ok: boolean }>;
+async function pipelineMessageManager(taskId: string, requirementId: string, text: string): Promise<{ ok: boolean }> {
+  await post(pipelineRoute(reviewPath(taskId, requirementId) + '/message-manager'), { text });
+  return { ok: true };
 }
 
 /** Mark one requirement met by hand, with a reason. Logged; new work makes it out of date like any approval. */
 async function pipelineMarkMet(taskId: string, requirementId: string, why: string): Promise<{ decision_id: string }> {
-  return post(pipelineRoute(`/tasks/${encodeURIComponent(taskId)}/requirements/${encodeURIComponent(requirementId)}/mark-met`),
-    { why }) as Promise<{ decision_id: string }>;
+  return post(pipelineRoute(reviewPath(taskId, requirementId) + '/mark-met'), { why }) as Promise<{ decision_id: string }>;
 }
 
 /** The manager's status for one pipeline: last run, late cards, the log. */
 async function pipelineManagerView(pipelineId: string): Promise<PipelineManagerView> {
-  return get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/manager`)) as Promise<PipelineManagerView>;
+  const rail = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/manager`)) as ServerRail;
+  return managerViewFromRail(rail);
 }
