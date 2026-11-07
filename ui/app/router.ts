@@ -30,7 +30,7 @@ function route(hash = location.hash) {
   S.route = LAST_ROUTE = hash || UPDATES;
   // The tab address Settings wrote for itself is still Settings: a redraw (route() called again) keeps the page as it is.
   if (from === SETTINGS && S.route === SETTINGS_ADDRESS) S.route = LAST_ROUTE = SETTINGS;
-  if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_PRESENCE.timer = null; }
+  if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer ?? undefined); SETTINGS_PRESENCE.timer = null; }
   const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
   const botHere = botOf(S.route);
   document.body.classList.toggle('bot-page', !!botHere);   // a phone gives the bot page the whole screen
