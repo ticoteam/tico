@@ -136,7 +136,7 @@ def test_a_charge_splits_by_each_bots_platform_spend_and_the_team_follows(books:
         assert by_team(c, "6300") == {"sales": 100_000}
         row = ATT.in_force(c, line)
         assert row is not None and str(row["source"]) == "platform" and row["rule_id"] is None
-        assert [(s.teammate, s.share_bps) for s in ATT.parse_splits(str(row["splits_json"]))] == [(A, 6000), (B, 4000)]
+        assert [(s.teammate, s.share_bps) for s in ATT.parse_splits(str(row["splits"]))] == [(A, 6000), (B, 4000)]
 
 
 def test_spend_no_bot_owns_stays_unattributed_and_lowers_the_shares(books: Store):
@@ -149,7 +149,7 @@ def test_spend_no_bot_owns_stays_unattributed_and_lowers_the_shares(books: Store
         assert by_mate(c, "6300") == {A: 48_000, B: 32_000, "": 20_000}  # 4800 and 3200, the rest 2000
         line = _line(c, str(posted["entry_id"]), "6300")
         row = ATT.in_force(c, line)
-        assert row is not None and sum(s.share_bps for s in ATT.parse_splits(str(row["splits_json"]))) == 8000
+        assert row is not None and sum(s.share_bps for s in ATT.parse_splits(str(row["splits"]))) == 8000
 
 
 def test_two_charges_in_a_month_each_count_only_the_spend_after_the_one_before(books: Store):
@@ -183,7 +183,7 @@ def test_a_book_keeps_at_most_nine_bots_and_the_rest_joins_the_unattributed(book
         posted = spend(c, "6300", 100_000, day="2026-10-12", vendor=g["vendor"])
         row = ATT.in_force(c, _line(c, str(posted["entry_id"]), "6300"))
         assert row is not None
-        mates = [s.teammate for s in ATT.parse_splits(str(row["splits_json"]))]
+        mates = [s.teammate for s in ATT.parse_splits(str(row["splits"]))]
         assert len(mates) == 9 and "bot:ten-0" not in mates and "bot:ten-9" in mates
 
 
@@ -346,3 +346,26 @@ def test_the_platform_share_module_names_the_window_and_the_contact(books: Store
         keys = PS.contact_keys(load(c, AT), "google_ads")
         assert g["vendor"] in keys
         assert PS.window(load(c, AT), keys, "2026-10-15") == ("2026-09-15", "2026-10-15")
+
+
+def test_an_unpaid_platform_bill_follows_the_split_in_the_cash_view(books: Store):
+    """A bill to the platform's own contact is an accrual on the P&L and an unpaid cash correction. The correction takes
+    the platform share too, so the cash view by teammate follows the split of the spend."""
+    g = google(books)
+    put(books, g["a"], [("2026-10-05", 60_000)], "2026-10-01", "2026-10-15")
+    put(books, g["b"], [("2026-10-06", 40_000)], "2026-10-01", "2026-10-15")
+    with books.transaction() as c:
+        made = act(
+            c,
+            OWNER,
+            "bill_create",
+            {
+                "vendor_id": g["vendor"],
+                "bill_date": "2026-10-12",
+                "lines": [{"account_id": account(c, "6300"), "amount": 100_000}],
+            },
+        )
+        assert made.status == "committed", made.reason
+        assert act(c, OWNER, "bill_approve", {"bill_id": str(made.result["bill_id"])}).status == "committed"
+        assert by_mate(c, "6300") == {A: 60_000, B: 40_000}
+        assert by_mate(c, "6300", "fin_cash_rollups") == {A: -60_000, B: -40_000}
