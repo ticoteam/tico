@@ -7,7 +7,7 @@ work, and a bot whose profile does not pull its own work (a reviewer) never star
 
 Every SWEEP_MINUTES the scheduler calls `sweep`. A task is stranded when:
 - it is `doing`, owned by an active bot that is not paused, held or draining, whose computer was seen in the last few
-  minutes (check_pools.online), and which has no run queued or going;
+  minutes (check_pools.online), and which has no resume of its own queued or going;
 - the bot reads it (H.bot_reads_task), and it is not a roadmap item;
 - no job for it is queued, held, leased, running, waiting for input or uncertain, and no run is live on it;
 - nothing is recorded to wait on: no hold (a move to Blocked, a snooze, a task quarantine), no follow-up time, deferral
@@ -346,8 +346,9 @@ def _live(c: sqlite3.Connection, row: dict[str, Any]) -> bool:
 
 
 def _bot_ready(c: sqlite3.Connection, slug: str) -> bool:
-    """Whether the bot can take a resume now: online and not held (check_pools.online), not draining, and with no run of
-    its own queued or going (a busy bot gets its resume once that work is done)."""
+    """Whether the bot can take a resume now: online and not held (check_pools.online), not draining, and with no resume
+    of its own still queued or going. Its other work does not hold a resume back: the wake waits in line behind that
+    work, so a bot that is never idle still gets its resumes (one at a time)."""
     from . import check_pools as _check_pools
 
     check_pools: Any = _check_pools
@@ -358,8 +359,9 @@ def _bot_ready(c: sqlite3.Connection, slug: str) -> bool:
         return False
     return (
         c.execute(
-            f"SELECT 1 FROM jobs j WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {cast(str, H.unheld_sql())} "
-            "LIMIT 1",
+            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+            f"WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {cast(str, H.unheld_sql())} "
+            "AND json_extract(m.refs,'$.wake')='resume' AND json_extract(m.refs,'$.stranded')=1 LIMIT 1",
             (slug,),
         ).fetchone()
         is None
