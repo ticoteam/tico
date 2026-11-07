@@ -40,7 +40,7 @@ def test_setup_makes_the_factories_pipelines_links_and_goals(tmp_path):
     assert [
         s["name"]
         for s in rows(c, "SELECT name FROM task_steps WHERE type_id=? ORDER BY position", by_name["Sales"]["id"])
-    ] == ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost"]
+    ] == ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost", "Closed"]  # the Closed stage holds closed cards
     # Leads and customers live in the CRM, so no revenue link crosses Marketing, Sales and Success (only Product spawns).
     crossed = rows(
         c,
@@ -228,3 +228,18 @@ def test_task_types_say_each_steps_warn_time_and_who_may_edit_rules(tmp_path, mo
         view = shown.json().get("task", shown.json())
         assert view["step"]["name"] == "Drafting" and view["step"]["limit_minutes"] == 2880
         assert "check_pool" not in view["step"] and "flow" not in view["step"]
+
+
+def test_two_replace_runs_in_a_row_change_nothing_the_second_time(tmp_path):
+    """Replace is idempotent: the stages a pipeline is created with are the ones a replace makes, so the replace that
+    follows the one that made the pipelines keeps every stage id, moves no card and writes no event."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+    before = snapshot(c)
+    events = rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"]
+    cards = rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id")
+    again = S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+    assert again["changes"] == [] and again["unresolved"] == []
+    assert snapshot(c) == before
+    assert rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"] == events
+    assert rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id") == cards

@@ -224,14 +224,19 @@ def _manager(conn: sqlite3.Connection, names: list[str]) -> str | None:
     return None
 
 
-def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[str, str]], made: list[str]) -> None:
-    """replace=True on a type with no role: its open cards are closed, and its stages become the preset's, in its order. A
-    "Closed" stage is added last when the preset has no stage of that name, to hold the closed cards. The cards move to
-    that holding stage before any other stage is removed, so no removed stage is in use. Writes nothing when the stages
-    already match. Never done to a type that holds a role (Engineering, Product): its stages carry rules and flows."""
-    want = [dict(s) for s in stages]
-    if not any(str(s["name"]).lower() == "closed" for s in want):
+def _pipeline_stages(spec: Row) -> list[dict[str, str]]:
+    """The one stage list a pipeline is made with and replaced to. A pipeline without a role gets a "Closed" stage last
+    when its preset names none, to hold closed cards. A role's stages are the preset's as written: their flows own them."""
+    want = [dict(s) for s in spec["stages"]]
+    if not spec.get("role") and not any(str(s["name"]).lower() == "closed" for s in want):
         want.append({"name": "Closed", "status": "closed"})
+    return want
+
+
+def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[str, str]], made: list[str]) -> None:
+    """replace=True on a type with no role: its stages become `stages` (from _pipeline_stages, the list it was made with),
+    in that order. Writes nothing when the stages already match. Never done to a type that holds a role."""
+    want = [dict(s) for s in stages]
 
     def shape(steps: list[Row]) -> list[tuple[str, str]]:
         return [(str(s["name"]).lower(), str(s["status"])) for s in steps]
@@ -363,12 +368,12 @@ def _pipeline(
 ) -> str:
     existing = _existing(conn, spec)
     if existing is None:
-        row = H.type_create(conn, actor, spec["name"], spec["stages"], mover=True, numbered=True)
+        row = H.type_create(conn, actor, spec["name"], _pipeline_stages(spec), mover=True, numbered=True)
         made.append(f"pipeline {spec['name']}")
     else:
         row = existing
         if replace and not existing.get("role"):
-            _restage(conn, actor, existing, spec["stages"], made)
+            _restage(conn, actor, existing, _pipeline_stages(spec), made)
         if str(row["name"]).lower() != str(spec["name"]).lower():
             H.type_update(conn, actor, row["id"], name=spec["name"], mover=True)
             made.append(f"renamed {row['name']} to {spec['name']}")
