@@ -8,6 +8,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import pipeline_manager as PM
+from backend import pipeline_overview as OV
 from backend import task_holds
 from backend.tests.test_api import api, get  # noqa: F401
 
@@ -159,6 +160,7 @@ def test_a_hold_pauses_the_limit_and_the_clock_starts_again_at_the_release(api):
         type_id = pipeline(c)
         c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
         task = ticket(c, type_id, created=base - timedelta(hours=2))
+        visit(c, task["id"], type_id, "Building", base - timedelta(hours=2))
         task_holds.put(c, task["id"], "blocked", stamp(base - timedelta(hours=1)))
         assert PM.over_limit(c, type_id, base) == []
         task_holds.release(c, task["id"], "blocked", stamp(base - timedelta(minutes=30)))
@@ -166,6 +168,22 @@ def test_a_hold_pauses_the_limit_and_the_clock_starts_again_at_the_release(api):
         [item] = PM.over_limit(c, type_id, base + timedelta(minutes=40))
         assert item["task_id"] == task["id"] and item["limit_hours"] == 1
         assert item["limit_minutes"] == 60  # the Warn after value the rail prefers; limit_hours stays for older clients
+
+
+def test_one_ticket_is_late_on_the_rail_and_the_overview_at_the_same_instant(api):
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        task = ticket(c, type_id)
+        visit(c, task["id"], type_id, "Building", base - timedelta(minutes=60))
+        since = "2000-01-01T00:00:00.000000Z"
+        for at, late in ((base - timedelta(minutes=1), False), (base, True)):
+            rail_late = [item["task_id"] for item in PM.rail(c, type_id, at)["late"]]
+            overview = OV._counts(c, [type_id], "1=1", PM.stamp_of(at), since)[type_id]
+            assert rail_late == ([task["id"]] if late else []), at
+            assert overview["overdue"] == (1 if late else 0), at
 
 
 def test_the_backup_is_asked_once_when_the_card_is_past_its_limit(api, woken):

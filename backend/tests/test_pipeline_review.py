@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 
 from backend import access
 from backend import hubdb as H
+from backend import pipeline_links as L
+from backend import pipeline_overview
 from backend import pipeline_review as R
 from backend.app import create_app
 from backend.auth import Identity
@@ -320,6 +322,29 @@ def test_undo_inside_ten_seconds_reverts_the_decision_and_the_move(world, monkey
     refused("already_undone", R.undo, w.c, ANA, done["decision_id"])
     # The undone approval no longer counts, so it can be approved again.
     assert w.approve(w.signoff)["advanced"] is True
+
+
+def test_an_undone_approval_across_a_link_leaves_no_edge_in_the_flow_map(world):
+    w = world
+    success = H.type_create(
+        w.c,
+        ANA,
+        "Success",
+        [{"name": "Onboarding", "status": "open"}, {"name": "Live", "status": "done"}],
+        mover=True,
+    )["id"]
+    L.create_link(w.c, ANA, w.review, success, "move")
+    w.approve(w.mockup)
+    w.visit()
+    done = w.approve(w.signoff)
+    assert w.step_of() != w.review  # the ticket went across the link
+    edges = pipeline_overview.read(w.c, ANA, visible_sql="1=1")["edges"]
+    assert [e["count"] for e in edges] == [1]
+    assert R.undo(w.c, ANA, done["decision_id"])["moved_back"] is True
+    assert w.step_of() == w.review
+    assert [e["count"] for e in pipeline_overview.read(w.c, ANA, visible_sql="1=1")["edges"]] == [0]
+    returned = w.c.execute("SELECT returned_at FROM pipeline_handoffs").fetchone()[0]
+    assert returned is not None
 
 
 def test_undo_is_refused_after_ten_seconds_and_after_the_ticket_moved_on(world, monkeypatch):

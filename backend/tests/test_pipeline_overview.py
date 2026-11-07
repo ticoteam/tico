@@ -88,6 +88,12 @@ def test_the_numbers_equal_direct_counts_and_follow_link_order(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (marketing_steps["Doing"],))
         c.execute("UPDATE tasks SET updated_at=?, labels='[\"ads\"]' WHERE id=?", (ago(hours=3), old["id"]))
+        # The late clock is the open stage visit: the old card has been in Doing for three hours.
+        c.execute(
+            "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_by, entered_at) "
+            "VALUES (?,?,?,?,'initial',NULL,?)",
+            (H.new_id(), old["id"], marketing, marketing_steps["Doing"], ago(hours=3)),
+        )
         c.execute(
             "UPDATE tasks SET status='done', done_at=?, step_id=?, created_at=? WHERE id=?",
             (ago(hours=1), sales_steps["Done"], ago(days=3), done["id"]),

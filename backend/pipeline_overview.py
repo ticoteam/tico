@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
-from . import hubdb, pipeline_review, pipeline_rights
+from . import hubdb, pipeline_manager as PM, pipeline_review, pipeline_rights
 from .store import Problem
 
 if TYPE_CHECKING:
@@ -139,25 +139,22 @@ def _pipelines(c: "sqlite3.Connection", actor: str) -> list[Row]:
 
 
 def _counts(c: "sqlite3.Connection", ids: list[str], seen: str, now: str, since: str) -> dict[str, Row]:
-    """Per pipeline: open cards, overdue cards (past their stage's Warn after, held time not counted) and cards done in
-    the period. One grouped query each."""
+    """Per pipeline: open cards, overdue cards (late by pipeline_manager.late_tickets, the rule the manager's rail reads) and
+    cards done in the period. The open cards are one query; the Late check is the manager's, over the same rows."""
     out: dict[str, Row] = {i: {"cards": 0, "overdue": 0, "done": 0} for i in ids}
     if not ids:
         return out
-    held = "SELECT task_id FROM task_holds WHERE released_at IS NULL"
-    for r in _rows(
+    open_rows = _rows(
         c,
-        "SELECT t.type_id AS pid, COUNT(*) AS cards, SUM(CASE WHEN s.limit_minutes IS NOT NULL "
-        "AND t.status<>'waiting' AND t.id NOT IN (" + held + ") "
-        "AND (julianday(?) - julianday(coalesce(v.entered_at, t.updated_at))) * 1440 > s.limit_minutes "
-        "THEN 1 ELSE 0 END) AS overdue "
-        f"FROM (SELECT * FROM tasks WHERE ({seen})) t "
-        "LEFT JOIN task_steps s ON s.id=t.step_id "
-        "LEFT JOIN stage_visits v ON v.task_id=t.id AND v.left_at IS NULL "
-        f"WHERE t.type_id IN ({_marks(ids)}) AND t.status NOT IN ({_marks(FINISHED)}) GROUP BY t.type_id",
-        [now, *ids, *FINISHED],
-    ):
-        out[str(r["pid"])].update(cards=int(r["cards"] or 0), overdue=int(r["overdue"] or 0))
+        f"SELECT id, type_id, step_id, status, created_at FROM tasks WHERE ({seen}) AND type_id IN ({_marks(ids)}) "
+        f"AND status NOT IN ({_marks(FINISHED)})",
+        [*ids, *FINISHED],
+    )
+    late = PM.late_tickets(c, open_rows, now)
+    for r in open_rows:
+        bucket = out[str(r["type_id"])]
+        bucket["cards"] += 1
+        bucket["overdue"] += 1 if r["id"] in late else 0
     for r in _rows(
         c,
         f"SELECT type_id AS pid, COUNT(*) AS n FROM tasks WHERE ({seen}) AND status='done' AND done_at>=? "
@@ -230,7 +227,7 @@ def _handoffs(c: "sqlite3.Connection", seen: str, since: str) -> dict[str, list[
         f"SELECT h.pipeline_link_id AS lid, h.created_at AS at, coalesce({start}, t.created_at) AS entered "
         "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
         "LEFT JOIN tasks t ON t.id=h.source_task_id "
-        f"WHERE h.created_at>=? AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))",
+        f"WHERE h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))",
         [since],
     ):
         a, b = H.parse_ts(r["entered"]), H.parse_ts(r["at"])
@@ -264,8 +261,8 @@ def _inputs(c: "sqlite3.Connection", firsts: dict[str, str], seen: str, since: s
     handed = ""
     if _columns(c, "pipeline_handoffs"):
         handed = (
-            "AND id NOT IN (SELECT target_task_id FROM pipeline_handoffs "
-            "UNION SELECT source_task_id FROM pipeline_handoffs)"
+            "AND id NOT IN (SELECT target_task_id FROM pipeline_handoffs WHERE returned_at IS NULL "
+            "UNION SELECT source_task_id FROM pipeline_handoffs WHERE returned_at IS NULL)"
         )
     guest = "guest" if "guest" in _columns(c, "tasks") else "NULL"
     tasks = _rows(

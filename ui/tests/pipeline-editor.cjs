@@ -1,6 +1,7 @@
 // The pipeline editor (ui/app/pipeline-editor.ts), opened from the pencil by the pipeline's name on the Tasks page.
 //  - the pencil shows only where GET /api/v2/pipelines/{id}/rights says the reader may edit;
-//  - settings: prefix, owner and manager save through PATCH /v2/pipelines/{id}/settings;
+//  - settings: goal, judge, factory, private (with who may see it), prefix, owner and manager save through
+//    PATCH /v2/pipelines/{id}/settings, read back from GET /v2/pipelines/{id}/settings;
 //  - a stage: rename, move, add and remove save the whole list through the task-type route; Warn after saves minutes
 //    (hours and days converted) or "Don't warn" (null);
 //  - a requirement: + Require saves the kind's own shape, a person reviewer is needed, an edit sends PUT, Retire sends DELETE;
@@ -22,7 +23,9 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
   const errors = [], writes = [];
   const state = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, steps: steps()},
     reqs: {s2: [{id: 'r1', name: 'Screenshot', kind: 'attachment', needs: {formats: ['image'], newer_than_change: true, is_work: false}, reviewed_by: 'nobody', reviewer_id: null}]},
-    links: []};
+    links: [],
+    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', judge_model: null, visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: null, members: [], judge_models: ['haiku-5.5', 'jev', 'sonnet'], default_judge_model: 'haiku-5.5'},
+    factories: [{id: 'f1', name: 'Product', goal: null, owner_id: null, manager_id: null, position: 0}, {id: 'f2', name: 'Growth', goal: null, owner_id: null, manager_id: null, position: 1}]};
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover, config: {company_name: 'Acme Bikes'}};
@@ -64,7 +67,20 @@ async function open(browser, {viewport = {width: 1280, height: 820}, may = true,
     if (stageReqs) { (state.reqs[stageReqs[1]] ||= []).push({id: 'r2', ...body}); return json({requirement: {id: 'r2'}}); }
     if (p === '/api/v2/requirements/r1' && method === 'PUT') { state.reqs.s2[0] = {id: 'r1', ...body}; return json({requirement: {}}); }
     if (p === '/api/v2/requirements/r1' && method === 'DELETE') { state.reqs.s2 = []; return json({requirement: {}}); }
-    if (p === '/api/v2/pipelines/dev/settings') { Object.assign(state.type, {prefix: body.prefix ?? state.type.prefix, pipeline_owner_id: body.owner_id ?? state.type.pipeline_owner_id, manager: body.manager_id ?? state.type.manager}); return json({}); }
+    if (p === '/api/v2/pipelines/dev/settings' && method === 'GET') return json(state.settings);
+    if (p === '/api/v2/pipelines/dev/settings') {
+      const s = state.settings;
+      if ('prefix' in body) { s.prefix = body.prefix; state.type.prefix = body.prefix; }
+      if ('owner_id' in body) { s.owner_id = body.owner_id; state.type.pipeline_owner_id = body.owner_id; }
+      if ('manager_id' in body) { s.manager_id = body.manager_id; state.type.manager = body.manager_id; }
+      if ('goal' in body) s.goal = body.goal || null;
+      if ('judge_model' in body) s.judge_model = body.judge_model || null;
+      if (body.visibility) { s.visibility = body.visibility; if (body.visibility === 'members') s.factory_id = null; }
+      if ('factory_id' in body) s.factory_id = body.factory_id || null;
+      if (body.members) s.members = body.members;
+      return json(s);
+    }
+    if (p === '/api/v2/factories') return json({factories: state.factories});
     const limit = p.match(/^\/api\/v2\/pipeline-stages\/(\w+)$/);
     if (limit) { state.type.steps.find(s => s.id === limit[1]).limit_minutes = body.limit_minutes; return json({}); }
     if (p.startsWith('/api/v2/preferences/')) return json({key: 'tasks.view', value: null});
@@ -98,6 +114,32 @@ async function desktop(browser) {
   await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
   await page.waitForFunction(() => document.querySelector('[data-pe-setting=manager_id]').value === 'bot:lead');
   assert.deepEqual(last(writes, '/api/v2/pipelines/dev/settings'), {manager_id: 'bot:lead'});
+  // Goal saves on blur; Judge shows the default when none is set, then saves its choice; Factory picks a live one;
+  // Private sends the visibility, then who may see it, and a private pipeline has no factory.
+  const nextSettings = () => page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/v2/pipelines/dev/settings');
+  assert.equal(await page.locator('[data-pe-setting=judge_model]').inputValue(), 'haiku-5.5');
+  let saving = nextSettings();
+  await page.locator('[data-pe-setting=goal]').fill('Launch the spring line');
+  await page.locator('[data-pe-setting=goal]').blur();
+  assert.deepEqual((await saving).postDataJSON(), {goal: 'Launch the spring line'});
+  await page.waitForFunction(() => document.querySelector('[data-pe-setting=goal]').value === 'Launch the spring line');
+  saving = nextSettings();
+  await page.locator('[data-pe-setting=judge_model]').selectOption('jev');
+  assert.deepEqual((await saving).postDataJSON(), {judge_model: 'jev'});
+  saving = nextSettings();
+  await page.locator('[data-pe-setting=factory_id]').selectOption('f2');
+  assert.deepEqual((await saving).postDataJSON(), {factory_id: 'f2'});
+  saving = nextSettings();
+  await page.locator('[data-pe-private]').check();
+  assert.deepEqual((await saving).postDataJSON(), {visibility: 'members'});
+  await page.waitForFunction(() => document.querySelector('[data-pe-setting=factory_id]').disabled);
+  saving = nextSettings();
+  await page.locator('[data-pe-member][value="human:sam"]').check();
+  assert.deepEqual((await saving).postDataJSON(), {members: ['human:sam']});
+  saving = nextSettings();
+  await page.locator('[data-pe-private]').uncheck();
+  assert.deepEqual((await saving).postDataJSON(), {visibility: 'company'});
+  await page.waitForFunction(() => !document.querySelector('[data-pe-setting=factory_id]').disabled);
   // Warn after: days convert to minutes; Don't warn sends null.
   await page.locator('[data-pe-warn=s1]').click();
   await page.locator('[data-pe-warn-n]').fill('2');

@@ -2,7 +2,8 @@
 """The Tico Team setup: the factories, pipelines, stages, links and goals a company starts from. `apply_factory_setup` is
 idempotent: a second run finds everything it made and changes nothing. A pipeline that exists is adopted, never
 duplicated: the Dev tickets type (role engineering) becomes Engineering and the Product roadmap type (role
-product-roadmap) becomes Product, each keeping its own stages. Open cards are wiped only with `replace=True`.
+product-roadmap) becomes Product, each keeping its own stages. Open cards are closed, and a role-less pipeline gets the
+preset's stages, only with `replace=True`. A link whose stage does not exist is refused with replace, else reported.
 
 The route is POST /api/v2/pipelines/setup, for the company's owner and Admins."""
 
@@ -225,20 +226,44 @@ def _manager(conn: sqlite3.Connection, names: list[str]) -> str | None:
     return None
 
 
-def _wipe(conn: sqlite3.Connection, actor: str, row: Row, made: list[str]) -> None:
-    """replace=True: close the pipeline's open cards, move every card to a closed stage and drop the other stages. Never
-    done to a type that holds a role (Engineering, Product): its stages carry rules and flows."""
-    steps = _rows(conn, "SELECT id, status FROM task_steps WHERE type_id = ? ORDER BY position", (row["id"],))
-    closed = [s for s in steps if s["status"] in CLOSING]
-    if not closed:
-        return
-    for task in _rows(conn, f"SELECT id FROM tasks WHERE type_id = ? AND status IN {OPEN_STATUSES}", (row["id"],)):
-        H.task_close(conn, actor, task["id"], note="Closed by pipeline setup (replace)")
-    conn.execute("UPDATE tasks SET step_id = ? WHERE type_id = ?", (closed[0]["id"], row["id"]))
-    H.type_update(
-        conn, actor, row["id"], steps=[{"id": closed[0]["id"], "name": "Closed", "status": "closed"}], mover=True
+def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[str, str]], made: list[str]) -> None:
+    """replace=True on a type with no role: its open cards are closed, and its stages become the preset's, in its order. A
+    "Closed" stage is added last when the preset has no stage of that name, to hold the closed cards. The cards move to
+    that holding stage before any other stage is removed, so no removed stage is in use. Writes nothing when the stages
+    already match. Never done to a type that holds a role (Engineering, Product): its stages carry rules and flows."""
+    want = [dict(s) for s in stages]
+    if not any(str(s["name"]).lower() == "closed" for s in want):
+        want.append({"name": "Closed", "status": "closed"})
+
+    def shape(steps: list[Row]) -> list[tuple[str, str]]:
+        return [(str(s["name"]).lower(), str(s["status"])) for s in steps]
+
+    current = _rows(
+        conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position, id", (row["id"],)
     )
-    made.append(f"cleared {row['name']}")
+    if shape(current) == shape(want):
+        return
+    open_cards = _rows(conn, f"SELECT id FROM tasks WHERE type_id = ? AND status IN {OPEN_STATUSES}", (row["id"],))
+    for task in open_cards:
+        H.task_close(conn, actor, task["id"], note="Closed by pipeline setup (replace)")
+    if open_cards:
+        made.append(f"cleared {row['name']}")
+    cards = _one(conn, "SELECT id FROM tasks WHERE type_id = ? LIMIT 1", (row["id"],)) is not None
+    if cards and not any(str(s["name"]).lower() == "closed" for s in current):
+        keep = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in current]
+        H.type_update(conn, actor, row["id"], steps=[*keep, {"name": "Closed", "status": "closed"}], mover=True)
+        current = _rows(
+            conn, "SELECT id, name, status FROM task_steps WHERE type_id = ? ORDER BY position, id", (row["id"],)
+        )
+    by_name = {str(s["name"]).lower(): s for s in current}
+    if cards:
+        conn.execute("UPDATE tasks SET step_id = ? WHERE type_id = ?", (by_name["closed"]["id"], row["id"]))
+    final: list[dict[str, Any]] = []
+    for s in want:
+        old = by_name.get(str(s["name"]).lower())
+        final.append({"id": old["id"], "name": s["name"], "status": s["status"]} if old else dict(s))
+    H.type_update(conn, actor, row["id"], steps=final, mover=True)
+    made.append(f"set up the stages of {row['name']}")
 
 
 def _adopt(conn: sqlite3.Connection, actor: str, row: Row, spec: Row, made: list[str]) -> None:
@@ -345,7 +370,7 @@ def _pipeline(
     else:
         row = existing
         if replace and not existing.get("role"):
-            _wipe(conn, actor, existing, made)
+            _restage(conn, actor, existing, spec["stages"], made)
         if str(row["name"]).lower() != str(spec["name"]).lower():
             H.type_update(conn, actor, row["id"], name=spec["name"], mover=True)
             made.append(f"renamed {row['name']} to {spec['name']}")
@@ -391,7 +416,8 @@ def _pipeline(
     return ident
 
 
-def _link(conn: sqlite3.Connection, actor: str, spec: Row, pipelines: dict[str, str], made: list[str]) -> None:
+def _link(conn: sqlite3.Connection, actor: str, spec: Row, pipelines: dict[str, str], made: list[str]) -> str | None:
+    """Makes one of the preset's links (once). Returns the link's name when its stage does not exist, so nothing is made."""
     from . import pipeline_links
 
     stage = _one(
@@ -399,10 +425,13 @@ def _link(conn: sqlite3.Connection, actor: str, spec: Row, pipelines: dict[str, 
         "SELECT id FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE",
         (pipelines[spec["from"]], spec["stage"]),
     )
-    if stage is None or pipeline_links.link_for_stage(conn, str(stage["id"])) is not None:
-        return
+    if stage is None:
+        return f"{spec['from']} {spec['stage']} to {spec['to']}"
+    if pipeline_links.link_for_stage(conn, str(stage["id"])) is not None:
+        return None
     pipeline_links.create_link(conn, actor, str(stage["id"]), pipelines[spec["to"]], spec["mode"])
     made.append(f"link {spec['from']} {spec['stage']} to {spec['to']}")
+    return None
 
 
 def apply_factory_setup(
@@ -411,22 +440,35 @@ def apply_factory_setup(
     """Make the preset's factories, pipelines, stages, links and goals. Idempotent: what exists is adopted (and given a
     goal, prefix, factory or manager only where it has none), never duplicated or overwritten. A manager bot is set when
     one named like "<Name> Manager" exists, else left unset. `replace=True` also closes the open cards of an existing,
-    role-less pipeline and drops its old stages.
+    role-less pipeline and makes its stages the preset's. A link whose stage cannot be made is refused (422, nothing is
+    written) with replace; without it the link is left out and named under `unresolved`.
 
-    {"preset", "factories": {name: id}, "pipelines": {name: id}, "changes": [what was made or changed]}."""
+    {"preset", "factories": {name: id}, "pipelines": {name: id}, "changes": [what was made or changed],
+    "unresolved": [links left out]}."""
+    from .store import Problem
+
     if preset not in PRESETS:
         H.refuse(c, actor, "kind", f"Unknown preset {preset}; the choices are {', '.join(PRESETS)}")
     spec = PRESETS[preset]
     made: list[str] = []
+    unresolved: list[str] = []
     c.execute("SAVEPOINT pipeline_setup")
     try:
         factories = {f["name"]: _factory(c, actor, f, i, made) for i, f in enumerate(spec["factories"])}
         pipelines = {p["name"]: _pipeline(c, actor, p, factories, replace, made) for p in spec["pipelines"]}
         for link in spec["links"]:
-            _link(c, actor, link, pipelines, made)
+            missing = _link(c, actor, link, pipelines, made)
+            if missing:
+                unresolved.append(missing)
         for pipe in spec["pipelines"]:
             for req in pipe.get("requirements", []):
                 _requirement(c, actor, pipelines[pipe["name"]], req, made)
+        if unresolved and replace:
+            raise Problem(
+                "unresolved",
+                "These links name a stage the setup does not make: " + "; ".join(unresolved),
+                422,
+            )
     except BaseException:
         c.execute("ROLLBACK TO pipeline_setup")
         c.execute("RELEASE pipeline_setup")
@@ -434,7 +476,13 @@ def apply_factory_setup(
     c.execute("RELEASE pipeline_setup")
     if made:
         H.event(c, actor, "pipeline.setup", preset, {"changes": made, "replace": replace})
-    return {"preset": preset, "factories": factories, "pipelines": pipelines, "changes": made}
+    return {
+        "preset": preset,
+        "factories": factories,
+        "pipelines": pipelines,
+        "changes": made,
+        "unresolved": unresolved,
+    }
 
 
 class PipelineSetupBody(BaseModel):

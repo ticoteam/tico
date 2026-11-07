@@ -15,7 +15,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import hubdb
-from . import pipeline_rights
+from . import pipeline_judges, pipeline_rights
 from .models import Contract
 from .store import Problem
 
@@ -41,6 +41,9 @@ RUBRIC_MAX = 2000
 NAME_MAX = 80
 LIMIT_MAX_MINUTES = 60 * 24 * 365
 EVERY_MIN, EVERY_MAX = 5, 24 * 60
+GOAL_MAX = 200
+MEMBERS_MAX = 50
+VISIBILITIES = ("company", "members")
 # The fields a requirement's definition holds; a version keeps exactly these.
 DEFINITION = (
     "name",
@@ -70,12 +73,19 @@ class RequirementBody(Contract):
 
 
 class PipelineSettingsBody(Contract):
-    """What a pipeline's owner or an admin sets. Every field is optional; a field left out stays as it is."""
+    """What a pipeline's owner or an admin sets. Every field is optional; a field left out stays as it is. The route
+    passes only the fields the body sent, so for goal, judge_model and factory_id an empty value (or null) clears it;
+    visibility and members are left alone when null."""
 
     prefix: str | None = Field(default=None, max_length=2)
     owner_id: str | None = Field(default=None, max_length=128)
     manager_id: str | None = Field(default=None, max_length=128)
     manager_every_minutes: int | None = Field(default=None, ge=EVERY_MIN, le=EVERY_MAX)
+    goal: str | None = Field(default=None, max_length=GOAL_MAX)
+    judge_model: str | None = Field(default=None, max_length=32)
+    visibility: Literal["company", "members"] | None = None
+    members: list[str] | None = Field(default=None, max_length=MEMBERS_MAX)
+    factory_id: str | None = Field(default=None, max_length=128)
 
 
 class StageLimitBody(Contract):
@@ -323,9 +333,83 @@ def set_prefix(conn: "sqlite3.Connection", actor: str, pipeline_id: str, prefix:
     return value
 
 
+def _judge_model(value: str | None) -> str | None:
+    """A pipeline's judge model: one of pipeline_judges.MODELS, or None (the default) for an empty value."""
+    if not value:
+        return None
+    if value not in pipeline_judges.MODELS:
+        raise Problem("validation", f"The judge model is one of: {', '.join(pipeline_judges.MODELS)}", 422)
+    return value
+
+
+def _member_ref(value: object) -> str:
+    """A pipeline member as its actor reference: "human:<id>" for a person (the "person:" form is accepted) or "bot:<slug>"."""
+    ref = str(value or "").strip()
+    if ref.startswith("person:"):
+        ref = "human:" + ref[len("person:") :]
+    kind, _, ident = ref.partition(":")
+    if kind not in ("human", "bot") or not ident.strip():
+        raise Problem("validation", "A member is a person (person:<id>) or a bot (bot:<slug>)", 422)
+    return ref
+
+
+def _factory_live(conn: "sqlite3.Connection", factory_id: str) -> bool:
+    return (
+        conn.execute("SELECT 1 FROM factories WHERE id=? AND retired_at IS NULL", (factory_id,)).fetchone() is not None
+    )
+
+
+def _may_read(
+    conn: "sqlite3.Connection", actor: str, pipeline_id: str, visibility: str, owner: object, manager: object
+) -> bool:
+    """A members-only pipeline shows to its owner, its manager, its members and whoever may edit its rules."""
+    if visibility != "members":
+        return True
+    if actor in (owner, manager) or pipeline_rights.may_edit_rules(conn, actor, pipeline_id):
+        return True
+    return (
+        conn.execute(
+            "SELECT 1 FROM pipeline_members WHERE pipeline_id=? AND actor_id=?", (pipeline_id, actor)
+        ).fetchone()
+        is not None
+    )
+
+
+def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any]:
+    """A pipeline's settings: what its owner and admins see and set. A null judge_model is the default judge."""
+    row = conn.execute(
+        "SELECT id, name, prefix, goal, judge_model, pipeline_visibility AS visibility, factory_id, "
+        "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes FROM task_types WHERE id=?",
+        (pipeline_id,),
+    ).fetchone()
+    members = conn.execute(
+        "SELECT actor_id FROM pipeline_members WHERE pipeline_id=? ORDER BY actor_id", (pipeline_id,)
+    ).fetchall()
+    return {**dict(row), "members": [str(m[0]) for m in members]}
+
+
+def settings_read(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> dict[str, Any]:
+    """A pipeline's settings for a reader who may see it, with the judge models a pipeline may be given. A members-only
+    pipeline is not found by anyone outside it."""
+    row = conn.execute(
+        "SELECT pipeline_visibility, pipeline_owner_id, manager FROM task_types WHERE id=?", (pipeline_id,)
+    ).fetchone()
+    if row is None or not _may_read(conn, actor, pipeline_id, str(row[0]), row[1], row[2]):
+        raise Problem("not_found", "No such pipeline", 404)
+    return {
+        **settings_view(conn, pipeline_id),
+        "judge_models": list(pipeline_judges.MODELS),
+        "default_judge_model": pipeline_judges.DEFAULT_MODEL,
+    }
+
+
 def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    """Change the pipeline's prefix, owner, manager or manager cadence. Only its owner and admins may."""
-    found = conn.execute("SELECT id FROM task_types WHERE id=?", (pipeline_id,)).fetchone()
+    """Change the pipeline's settings. Only its owner and admins may. `body` holds the fields the caller sent; every one is
+    checked before anything is written, so a refused call changes nothing.
+
+    A private pipeline (visibility members) sits outside every factory: setting it clears factory_id, and naming a factory
+    for one is refused. Members replaces the whole list. The change is logged as pipeline.settings."""
+    found = conn.execute("SELECT id, pipeline_visibility FROM task_types WHERE id=?", (pipeline_id,)).fetchone()
     if found is None:
         raise Problem("not_found", "No such pipeline", 404)
     _may_edit(conn, actor, pipeline_id)
@@ -333,6 +417,24 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
         raise Problem("validation", "A pipeline's owner is a person", 422)
     if body.get("manager_id") is not None and not str(body["manager_id"]).startswith("bot:"):
         raise Problem("validation", "A pipeline manager is a bot", 422)
+    visibility = str(body.get("visibility") or found[1] or "company")
+    sets: dict[str, Any] = {}
+    if "goal" in body:
+        sets["goal"] = (body["goal"] or "").strip() or None
+    if "judge_model" in body:
+        sets["judge_model"] = _judge_model(body["judge_model"])
+    if body.get("visibility") is not None:
+        sets["pipeline_visibility"] = body["visibility"]
+        if body["visibility"] == "members":
+            sets["factory_id"] = None
+    if "factory_id" in body:
+        factory = str(body["factory_id"] or "").strip()
+        if factory and visibility == "members":
+            raise Problem("validation", "A private pipeline sits outside every factory", 422)
+        if factory and not _factory_live(conn, factory):
+            raise Problem("validation", "No live factory has that id", 422)
+        sets["factory_id"] = factory or None
+    members = None if body.get("members") is None else list(dict.fromkeys(_member_ref(m) for m in body["members"]))
     if body.get("prefix") is not None:
         set_prefix(conn, actor, pipeline_id, body["prefix"])
     now = H.now()
@@ -347,13 +449,17 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
             "UPDATE task_types SET manager_every_minutes=?, updated_at=? WHERE id=?",
             (int(body["manager_every_minutes"]), now, pipeline_id),
         )
+    if sets:
+        columns = ", ".join(f"{column}=?" for column in sets)
+        conn.execute(f"UPDATE task_types SET {columns}, updated_at=? WHERE id=?", (*sets.values(), now, pipeline_id))
+    if members is not None:
+        conn.execute("DELETE FROM pipeline_members WHERE pipeline_id=?", (pipeline_id,))
+        conn.executemany(
+            "INSERT INTO pipeline_members (pipeline_id, actor_id, created_at) VALUES (?,?,?)",
+            [(pipeline_id, ref, now) for ref in members],
+        )
     H.event(conn, actor, "pipeline.settings", pipeline_id, {k: v for k, v in body.items() if v is not None})
-    row = conn.execute(
-        "SELECT id, name, prefix, pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes "
-        "FROM task_types WHERE id=?",
-        (pipeline_id,),
-    ).fetchone()
-    return dict(row)
+    return settings_view(conn, pipeline_id)
 
 
 def set_stage_limit(conn: "sqlite3.Connection", actor: str, stage_id: str, minutes: int | None) -> dict[str, Any]:
@@ -369,6 +475,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
     """The requirement, pipeline settings and stage limit routes. Reads need a signed-in company member; every write
     goes through pipeline_rights, so a bot is refused unless it is the pipeline's owner."""
     db: Any = store  # Store is untyped, so its connections are Any here, not partially unknown
+    guard: Any = auth  # Auth is untyped here too, so its checks are Any, not partially unknown
 
     @app.get("/api/v2/pipeline-stages/{stage_id}/requirements")
     def stage_requirements(request: Request, stage_id: str) -> dict[str, Any]:
@@ -416,13 +523,22 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
         return mutate(request, Nothing(), write)
 
+    @app.get("/api/v2/pipelines/{pipeline_id}/settings")
+    def pipeline_settings_read(request: Request, pipeline_id: str) -> dict[str, Any]:
+        """The pipeline's settings and the judge models it may be given. A members-only pipeline is a 404 to anyone outside it."""
+        who = request.state.identity
+        guard.domain(who)
+        with db.read() as c:
+            return settings_read(c, who.actor, pipeline_id)
+
     @app.patch("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings(request: Request, pipeline_id: str, body: PipelineSettingsBody) -> dict[str, Any]:
-        """The pipeline's prefix, owner, manager and manager cadence. The pipeline's owner and admins only."""
+        """The pipeline's prefix, owner, manager, manager cadence, goal, judge model, visibility, members and factory.
+        Only the fields sent change. The pipeline's owner and admins only."""
         who = request.state.identity
 
         def write(c: "sqlite3.Connection") -> dict[str, Any]:
-            return update_settings(c, who.actor, pipeline_id, body.model_dump())
+            return update_settings(c, who.actor, pipeline_id, body.model_dump(exclude_unset=True))
 
         return mutate(request, body, write)
 
