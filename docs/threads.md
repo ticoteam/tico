@@ -255,7 +255,7 @@ thread yet and sends no event ([Webhooks](webhooks.md)).
 `hub conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
 map onto threads as follows: a bot's main chat becomes its Home, and a person's personal chat with a bot moves into
 that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
-chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay with their owner. A
+chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are. A
 bot's shared chat becomes a thread for its members, a task's discussion stays with the task, and a direct conversation
 becomes a thread among its participants.
 
