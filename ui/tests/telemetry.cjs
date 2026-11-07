@@ -1,8 +1,8 @@
 // The real SDK must scrub outgoing events and discard retries after sign-out, including late failures.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 const {chromium} = require('playwright');
+const {uiFile} = require('./support/page.cjs');
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -18,10 +18,10 @@ const {chromium} = require('playwright');
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.hostname === 'acme.test') {
-        const file = url.pathname === '/observability.js' ? 'observability.js'
-          : url.pathname === '/assets/observability-vendors.js' ? 'assets/observability-vendors.js' : null;
+        const file = url.pathname === '/observability.js' ? uiFile('observability.ts')
+          : url.pathname === '/assets/observability-vendors.js' ? uiFile('assets/observability-vendors.js') : null;
         return route.fulfill({contentType: file ? 'text/javascript' : 'text/html',
-          body: file ? fs.readFileSync(path.join(__dirname, '..', file), 'utf8') : '<script src="/observability.js"></script>'});
+          body: file ? fs.readFileSync(file, 'utf8') : '<script src="/observability.js"></script>'});
       }
       if (url.hostname === 'us.i.posthog.com') {
         if (route.request().method() === 'OPTIONS') return route.fulfill({headers: cors, body: ''});

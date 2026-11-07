@@ -1,20 +1,35 @@
 /* Tools > Slack channels: which channels bots may read and post in (docs/slack.md). An owner or an admin adds one,
    names the bots that read it, and says whether bots may post there. Bots' Slack reads follow this list. */
 'use strict';
+
+// The state /v2/slack/channels answers with. get() and post() are untyped JS, so these shapes are declared, not checked.
+interface SlackBot { id: string; name: string; }
+interface SlackChannelRow {
+  channel: string; id?: string | null; name?: string | null; source?: string; readers: string[]; post?: boolean; note?: string | null;
+}
+interface SlackRegistryFile { present?: boolean; imported?: boolean; channels?: number; }
+interface SlackChannelsState { bots?: SlackBot[]; registry_file?: SlackRegistryFile | null; channels?: SlackChannelRow[]; }
+interface Window {
+  mountSlackChannels: (host: HTMLElement | null) => Promise<void>;
+}
+
+// The `!`: the markup this file just drew always has the element; a missing one throws on first use, as the old lookup did.
+function chanEl<T extends Element>(root: ParentNode, selector: string): T { return root.querySelector<T>(selector)!; }
+
 window.mountSlackChannels = async function (host) {
   if (!host) return;
-  const text = value => { const s = document.createElement('span'); s.textContent = value ?? ''; return s.innerHTML; };
-  let state;
+  const text = (value: unknown) => { const s = document.createElement('span'); s.textContent = String(value ?? ''); return s.innerHTML; };
+  let state: SlackChannelsState;
   try { state = await get('/v2/slack/channels'); }
-  catch (error) { host.innerHTML = `<div class="empty">${text(error.message)}</div>`; return; }
+  catch (error) { host.innerHTML = `<div class="empty">${text(errorMessage(error, ''))}</div>`; return; }
   if (!host.isConnected) return;
   const bots = state.bots || [];
-  const botName = id => (bots.find(b => b.id === id) || {}).name || id;
-  const file = state.registry_file || {};
+  const botName = (id: string) => bots.find(b => b.id === id)?.name || id;
+  const file: SlackRegistryFile = state.registry_file || {};
   const importNote = file.present && !file.imported
     ? `<p data-slack-import><span>registry/slack-channels.yaml lists ${Number(file.channels)} channel${file.channels === 1 ? '' : 's'}.</span>
         <button type="button" class="ghost" data-slack-import-go>Import</button></p>` : '';
-  const options = row => bots.filter(b => !row.readers.includes(b.id))
+  const options = (row: SlackChannelRow) => bots.filter(b => !row.readers.includes(b.id))
     .map(b => `<option value="${text(b.id)}">${text(b.name)}</option>`).join('');
   const rows = (state.channels || []).map(row => {
     const fromFile = row.source === 'file';
@@ -36,33 +51,38 @@ window.mountSlackChannels = async function (host) {
       <label>Note<input name="note" maxlength="500" autocomplete="off"></label>
       <button class="primary" type="submit">Add channel</button></form>
     <p role="status" data-slack-status></p>`;
-  const status = host.querySelector('[data-slack-status]');
+  const status = chanEl<HTMLElement>(host, '[data-slack-status]');
   const refresh = () => window.mountSlackChannels(host);
-  const change = async (path, body) => {
+  const change = async (path: string, body: Record<string, unknown>) => {
     try { await post(path, body); await refresh(); }
-    catch (error) { status.textContent = error.message; }
+    catch (error) { status.textContent = errorMessage(error, ''); }
   };
-  host.querySelector('[data-slack-import-go]')?.addEventListener('click', event => {
-    event.target.disabled = true;
+  host.querySelector<HTMLButtonElement>('[data-slack-import-go]')?.addEventListener('click', event => {
+    if (event.target instanceof HTMLButtonElement) event.target.disabled = true;
     change('/v2/slack/channels/import', {});
   });
-  host.querySelector('[data-slack-add]').onsubmit = event => {
+  const addForm = chanEl<HTMLFormElement>(host, '[data-slack-add]');
+  addForm.onsubmit = event => {
     event.preventDefault();
-    const form = event.target;
-    change('/v2/slack/channels', {channel: form.channel.value.trim(), post: form.post.checked, note: form.note.value.trim(),
-      readers: [...form.reader.selectedOptions].map(o => o.value)});
+    change('/v2/slack/channels', {channel: chanEl<HTMLInputElement>(addForm, '[name=channel]').value.trim(), post: chanEl<HTMLInputElement>(addForm, '[name=post]').checked, note: chanEl<HTMLInputElement>(addForm, '[name=note]').value.trim(),
+      readers: [...chanEl<HTMLSelectElement>(addForm, '[name=reader]').selectedOptions].map(o => o.value)});
   };
-  host.querySelectorAll('tr[data-channel]').forEach(tr => {
+  host.querySelectorAll<HTMLTableRowElement>('tr[data-channel]').forEach(tr => {
     const channel = tr.dataset.channel;
     tr.querySelector('[data-slack-remove]')?.addEventListener('click', () => {
       if (confirm(`Take ${channel} off the list?`)) change('/v2/slack/channels/remove', {channel});
     });
-    tr.querySelectorAll('[data-slack-unread]').forEach(b => b.addEventListener('click',
-      () => change('/v2/slack/channels/remove', {channel, reader: b.dataset.slackUnread})));
-    tr.querySelector('[data-slack-reader]')?.addEventListener('change', event => {
-      if (event.target.value) change('/v2/slack/channels', {channel, readers: [event.target.value]});
+    tr.querySelectorAll<HTMLElement>('[data-slack-unread]').forEach(b => {
+      b.addEventListener('click', () => change('/v2/slack/channels/remove', {channel, reader: b.dataset.slackUnread}));
     });
-    tr.querySelector('[data-slack-post]')?.addEventListener('change', event => change('/v2/slack/channels', {channel, post: event.target.checked}));
-    tr.querySelector('[data-slack-note]')?.addEventListener('change', event => change('/v2/slack/channels', {channel, note: event.target.value.trim()}));
+    tr.querySelector('[data-slack-reader]')?.addEventListener('change', event => {
+      if (event.target instanceof HTMLSelectElement && event.target.value) change('/v2/slack/channels', {channel, readers: [event.target.value]});
+    });
+    tr.querySelector('[data-slack-post]')?.addEventListener('change', event => {
+      if (event.target instanceof HTMLInputElement) change('/v2/slack/channels', {channel, post: event.target.checked});
+    });
+    tr.querySelector('[data-slack-note]')?.addEventListener('change', event => {
+      if (event.target instanceof HTMLInputElement) change('/v2/slack/channels', {channel, note: event.target.value.trim()});
+    });
   });
 };

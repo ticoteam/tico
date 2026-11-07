@@ -5,8 +5,26 @@
    path on a 24x24 canvas, filled with currentColor so it follows the theme. A service without a
    logo here (the server names one in `logo_key`) is drawn as its first two letters in a tinted circle. */
 'use strict';
+
+// The helpers on window.toolIcons. Each takes any value a page holds and checks it itself, so callers need no guard.
+interface ToolIconRef {
+  logo_key?: unknown;
+  name?: unknown;
+}
+interface ToolIconsApi {
+  keys: string[];
+  has(key: unknown): boolean;
+  markup(tool: ToolIconRef | null | undefined): string;
+  initials(name: unknown): string;
+  hue(name: unknown): number;
+}
+// Set below; absent until this script has run.
+interface Window {
+  toolIcons?: ToolIconsApi;
+}
+
 (function () {
-  const PATHS = {
+  const PATHS: Record<string, string> = {
     github: 'M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12',
     slack: 'M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z',
     gmail: 'M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z',
@@ -32,30 +50,33 @@
     zoom: 'M5.033 14.649H.743a.74.74 0 0 1-.686-.458.74.74 0 0 1 .16-.808L3.19 10.41H1.06A1.06 1.06 0 0 1 0 9.35h3.957c.301 0 .57.18.686.458a.74.74 0 0 1-.161.808L1.51 13.59h2.464c.585 0 1.06.475 1.06 1.06zM24 11.338c0-1.14-.927-2.066-2.066-2.066-.61 0-1.158.265-1.537.686a2.061 2.061 0 0 0-1.536-.686c-1.14 0-2.066.926-2.066 2.066v3.311a1.06 1.06 0 0 0 1.06-1.06v-2.251a1.004 1.004 0 0 1 2.013 0v2.251c0 .586.474 1.06 1.06 1.06v-3.311a1.004 1.004 0 0 1 2.012 0v2.251c0 .586.475 1.06 1.06 1.06zM16.265 12a2.728 2.728 0 1 1-5.457 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0zm-4.82 0a2.728 2.728 0 1 1-5.458 0 2.728 2.728 0 0 1 5.457 0zm-1.06 0a1.669 1.669 0 1 0-3.338 0 1.669 1.669 0 0 0 3.338 0z',
   };
 
-  const escapeText = value => String(value == null ? '' : value).replace(/[&<>"']/g,
-    ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[ch]);
+  const escapeText = (value: unknown): string => String(value == null ? '' : value).replace(/[&<>"']/g,
+    // `as`: a table keyed by exactly the five characters the pattern matches. `?? ch`: unreachable, every match is a key.
+    ch => (({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch] ?? ch));
 
   // The same name always gets the same hue, so a tool keeps its colour from one bot to the next.
-  function hue(name) {
+  function hue(name: unknown): number {
     let hash = 0;
     for (const ch of String(name || '')) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
     return hash % 360;
   }
 
   // The first two letters of the name, "Fi" for Fireflies.
-  function initials(name) {
+  function initials(name: unknown): string {
     const letters = Array.from(String(name || '').replace(/[^\p{L}\p{N}]+/gu, '')).slice(0, 2);
-    return letters.length ? letters[0].toUpperCase() + letters.slice(1).join('').toLowerCase() : '?';
+    const first = letters[0];
+    return first === undefined ? '?' : first.toUpperCase() + letters.slice(1).join('').toLowerCase();
   }
 
-  const has = key => Object.prototype.hasOwnProperty.call(PATHS, key);
+  // String(key) is the property name the lookup would use, so any value gets the same answer as before.
+  const has = (key: unknown): boolean => Object.hasOwn(PATHS, String(key));
 
   /* The icon's inner markup: an <svg> for a known logo, else the two letters. The caller wraps it in
      its own round element and tints it from `hue`. */
-  function markup(tool) {
+  function markup(tool: ToolIconRef | null | undefined): string {
     const key = tool && tool.logo_key;
     return has(key)
-      ? `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="${PATHS[key]}"/></svg>`
+      ? `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="${PATHS[String(key)]}"/></svg>`
       : `<span class="tool-initials" aria-hidden="true">${escapeText(initials(tool && tool.name))}</span>`;
   }
 
