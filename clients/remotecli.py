@@ -97,6 +97,17 @@ def _rules_args(args):
     return args
 
 
+def json_list_file(path, flag):
+    """The JSON list a file holds. A file that is not one is refused by name, not by the parser's own message."""
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except ValueError as exc:  # JSONDecodeError, or a file that is not UTF-8
+        raise APIError("not_json_list", f"{flag} must be a JSON list: {exc}", 422) from None
+    if not isinstance(value, list):
+        raise APIError("not_json_list", f"{flag} must be a JSON list, not a JSON {type(value).__name__}", 422)
+    return value
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
@@ -554,8 +565,7 @@ def run(args, who=None):
     ):
         return via_tool(client, args)
     if fn == "gateway digest":
-        items = json.loads(Path(args.items_file).read_text(encoding="utf-8"))
-        return via_tool(client, args, items=items)
+        return via_tool(client, args, items=json_list_file(args.items_file, "--items-file"))
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -1029,11 +1039,11 @@ def run(args, who=None):
         return hubtools.lens_runs(client, {"lens": args.lens, "limit": args.limit})
     if fn.startswith("market watch "):
         return via_tool(client, args)
-    if fn == "market briefing latest":
+    if fn in ("market briefing latest", "market segments"):
         return via_tool(client, args)
     if fn == "market briefing post":
         body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
-        items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
+        items = json_list_file(args.items_file, "--items-file") if args.items_file else []
         answers = json.loads(Path(args.answers_file).read_text()) if args.answers_file else None
         return via_tool(client, args, body=body, items=items, answers=answers)
     if cmd == "market" and fn in MARKET_SPEND:
