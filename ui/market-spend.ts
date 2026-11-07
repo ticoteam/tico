@@ -353,17 +353,23 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
   const unsizedHtml = (list: MktSegment[]): string => `<div class="mkt-sec"><h4 class="mkt-lab">Not sized yet</h4><div class="mkt-chips">${list.map(s =>
     `<button class="mkt-pick${s.self ? ' self' : ''}" type="button" data-seg="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div></div>`;
 
+  // render() sets ctx.tree before it draws: a draw without it is a bug, and it throws a plain Error.
+  function drawnTree(): MktTree {
+    if (!ctx.tree) throw new Error('the market tree is not loaded');
+    return ctx.tree;
+  }
+
   function drawMap(map: HTMLElement, W: number): void {
     const H = mktChartH(W);
     map.style.height = H + 'px';
     // render() sets ctx.tree before it draws.
-    const laid = mktSquarify(ctx.tree!.drawn.map(g => ({g, value: g.value})), 0, 0, W, H);
+    const laid = mktSquarify(drawnTree().drawn.map(g => ({g, value: g.value})), 0, 0, W, H);
     map.innerHTML = laid.map(mktBoxHtml).join('');
   }
 
   // One dot per top segment: spend across (log when the range is wide), growth up, ours filled.
   function drawGrowth(area: HTMLElement, W: number): void {
-    const pts = mktGrowthPts(ctx.tree!);
+    const pts = mktGrowthPts(drawnTree());
     const H = mktChartH(W), m = {l: 46, r: 14, t: 14, b: 34};
     const xs = pts.map(g => g.seg.size.spend_usd), lo = Math.min(...xs), hi = Math.max(...xs);
     const log = lo > 0 && hi / lo > 20;
@@ -505,6 +511,13 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
   }
 
   // ---- events
+  // The seg a [data-seg] element names: the selector guarantees the attribute, so a missing one throws.
+  function segOf(el: HTMLElement): string {
+    const segName = el.dataset.seg;
+    if (segName === undefined) throw new Error('a [data-seg] element has no seg');
+    return segName;
+  }
+
   host.addEventListener('click', ev => {
     // Each selector here matches only elements that carry the attribute its dataset read names.
     const target = eventElement(ev);
@@ -514,11 +527,11 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
     if (basis) { if (basis.dataset.basis !== ctx.basis) { ctx.basis = basis.dataset.basis; void load(); } return; }
     if (target?.closest('[data-mkt-def]')) { openDefinition(); return; }
     const pick = target?.closest<HTMLElement>('[data-seg]');
-    if (pick) openPanel(pick.dataset.seg!);
+    if (pick) openPanel(segOf(pick));
   });
   host.addEventListener('keydown', ev => {
     const pick = ev.key === 'Enter' || ev.key === ' ' ? eventElement(ev)?.closest<HTMLElement>('[role=button][data-seg]') : null;
-    if (pick) { ev.preventDefault(); openPanel(pick.dataset.seg!); }
+    if (pick) { ev.preventDefault(); openPanel(segOf(pick)); }
   });
   // The panel is a dialog outside the page, so it listens for itself.
   function bindPanel(dlg: HTMLDialogElement): void {

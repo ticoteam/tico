@@ -53,6 +53,12 @@ interface IbAlertsCompanyControls {
 // The keys the preferences form draws as checkboxes.
 type IbAlertBox = IbAlertEvent | 'urgent_calls' | 'emergency_exception';
 
+// A page element the drawn markup must hold: a missing one throws a plain Error that names it.
+function alertsNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {
+  const el = root.querySelector<T>(selector);
+  if (!el) throw new Error(`${selector} is not on the page`);
+  return el;
+}
 async function inboxesAlerts(host: Element | null, ctx: Pick<InboxCtx, 'admin' | 'me' | 'live'>): Promise<void> {
   const current = await get<IbAlertState>('/v2/alerts/me', {fresh: true});
   if (!ctx.live() || !host?.isConnected) return;
@@ -117,9 +123,9 @@ async function inboxesAlerts(host: Element | null, ctx: Pick<InboxCtx, 'admin' |
   const work = async (form: Element, run: () => Promise<void>) => {
     const buttons = [...form.querySelectorAll('button')];
     buttons.forEach(b => { b.disabled = true; });
-    card.querySelector('[data-alert-error]')!.textContent = '';
+    alertsNeed('[data-alert-error]', card).textContent = '';
     try { await run(); }
-    catch (e) { if (ctx.live() && card.isConnected) card.querySelector('[data-alert-error]')!.textContent = errorMessage(e, 'Try again'); }
+    catch (e) { if (ctx.live() && card.isConnected) alertsNeed('[data-alert-error]', card).textContent = errorMessage(e, 'Try again'); }
     finally { buttons.forEach(b => { b.disabled = false; }); }
   };
   const add = card.querySelector<HTMLFormElement>('[data-alert-add]');
