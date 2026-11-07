@@ -232,16 +232,15 @@ async function restrictPerson(hub) {
     await phone.goto(hub.url + '/#/thread/' + (pair.thread || pair).id);
     await phone.locator('.thv-title', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
 
-    // The same phone: a bot's Home and DM are named in the top line, and each one switches the page.
+    // The same phone: a bot's Home is the chat, and the Incognito toggle switches it to the private DM and back.
     await phone.goto(hub.url + '/#/bot/' + BOT + '/home');
-    const selected = tab => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
-      tab, {timeout: t(15000)});
-    await selected('home');
-    assert.equal(await phone.locator('#btabs [data-bt="dm"]').innerText(), 'DM');
-    await phone.locator('#btabs [data-bt="dm"]').tap();
-    await selected('dm');
-    await phone.locator('#btabs [data-bt="home"]').tap();
-    await selected('home');
+    const phoneIncognito = phone.locator('#bot-incognito');
+    await phoneIncognito.waitFor({timeout: t(15000)});
+    assert.equal(await phoneIncognito.getAttribute('aria-pressed'), 'false', 'Home is the chat until Incognito is on');
+    await phoneIncognito.tap();
+    await phone.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'true', null, {timeout: t(15000)});
+    await phoneIncognito.tap();
+    await phone.waitForFunction(() => document.querySelector('#bot-incognito')?.getAttribute('aria-pressed') === 'false', null, {timeout: t(15000)});
     await phone.context().close();
 
     // Dana: opening a bot's DM tab makes nothing; the DM exists once she sends the first message.
