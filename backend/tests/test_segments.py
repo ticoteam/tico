@@ -791,6 +791,5 @@ def test_a_confirmed_customer_segment_card_stores_the_persons_choice(api):
     assert action["status"] == "pending"
     done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
     assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
-    with store.read() as c:
-        row = c.execute("SELECT segment_id, segment_sure FROM fin_contacts WHERE id=?", (cid,)).fetchone()
-    assert tuple(row) == (seg, 1)
+    row = next(r for r in get(api, "finance/contacts?q=Fabrikam")["contacts"] if r["id"] == cid)
+    assert (row["segment_id"], row["segment_sure"]) == (seg, True)

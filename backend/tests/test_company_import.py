@@ -1210,7 +1210,11 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
         (sizes["segment/bim"]["evidence_ids"],),
     )
     assert cited == [{"source_url": "https://example.com/bim"}]
-    assert rows(api, "SELECT properties FROM market_entities WHERE id='segment/bim'")[0]["properties"] == "{}"
+    # One of ours: its colour and rank are stamped when it joins (backend/segments.py), nothing else.
+    assert json.loads(rows(api, "SELECT properties FROM market_entities WHERE id='segment/bim'")[0]["properties"]) == {
+        "color": "blue",
+        "rank": 0,
+    }
     assert (
         rows(api, "SELECT count(*) AS n FROM market_edges WHERE rel='operates_in' AND dst='segment/bim'")[0]["n"] == 1
     )
