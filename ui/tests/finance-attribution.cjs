@@ -122,9 +122,9 @@ async function shot(page, name) {
       const tag = 'transactions';
       const {page, errors, writes} = await open(browser);
       await page.locator('tr[data-fin-tx="feed:f1"]').waitFor();
-      assert.equal((await cellOf(page, 'feed:f1', 5).innerText()).replace(/\s+/g, ' ').trim(),
+      assert.equal((await cellOf(page, 'feed:f1', 5).locator('.fin-chip').allInnerTexts()).map(t => t.trim()).join(' '),
         'Rental Google Ad Owner 50% Consumer 30% 20% unattributed', tag + ': split chips, the unattributed share last');
-      assert.equal((await cellOf(page, 'feed:f3', 5).innerText()).replace(/\s+/g, ' ').trim(), 'Rental Google Ad Owner 25% Consumer Google Ad Owner 25% +2',
+      assert.equal((await cellOf(page, 'feed:f3', 5).locator('.fin-chip').allInnerTexts()).map(t => t.trim()).join(' '), 'Rental Google Ad Owner 25% Consumer Google Ad Owner 25% +2',
         tag + ': two parts, then a +n chip for the rest');
       assert.equal(await cellOf(page, 'feed:f3', 5).locator('.fin-chip-muted').count(), 0, tag + ': a whole split shows no unattributed chip');
       assert.equal((await cellOf(page, 'feed:f2', 5).innerText()).trim(), 'Rental Marketing Manager', tag + ': a row without a split reads its tag');
