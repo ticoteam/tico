@@ -3112,12 +3112,15 @@ def create_app(settings=None):
             # A bot task now lives in the bot's chat room. Only this task's messages
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
+            # Each related ticket is read on its own: the pipeline-aware list rule (pipeline_rights.list_sql), so owning
+            # this ticket on a members-only pipeline grants no other ticket of it (its children, relations or counts).
+            related_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             child_rows = H._rows(
                 c.execute(
                     "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
                     + TR.CHILD_IDS
                     + ") AND ("
-                    + auth.task_sql(c, who)
+                    + related_sql
                     + ") ORDER BY (rank IS NULL), rank, created_at",
                     (tid,),
                 )
@@ -3160,7 +3163,7 @@ def create_app(settings=None):
             # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
             return {
                 "task": {
-                    **task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
+                    **task_view(row, c, visible_sql=related_sql, who=who),
                     "followers": task_followers_seen(c, who, row),
                 },
                 "events": history,

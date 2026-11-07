@@ -7,6 +7,7 @@ import uuid
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_requirements as R
+from backend import task_relations as TR
 from backend.auth import Identity
 from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
 from backend.tests.test_pipeline_foundation import T, insert
@@ -248,3 +249,24 @@ def test_flow_stats_and_ticket_filters_name_a_members_only_pipeline_to_no_one_ou
         assert "Legal" not in hidden[1]
     assert answer(f"tasks/flow?type={typ}", "ana-test")[0] == 200
     assert answer(f"tasks?step=Hush{tag}&limit=5", "ana-test")[0] == 200
+
+
+def test_a_non_member_who_owns_a_members_only_parent_sees_none_of_its_hidden_children_or_relations(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Legal" + tag, private=True)
+    parent = ticket(api, typ, "Parent " + tag, owner="human:cara", requester="human:ana")
+    hidden_child = ticket(api, typ, "Ben's " + tag, owner="human:ben", requester="human:ana")
+    own_child = ticket(api, typ, "Cara's " + tag, owner="human:cara", requester="human:ana")
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, "human:ana", hidden_child, parent, "parent", T)
+        TR._insert(c, "human:ana", own_child, parent, "parent", T)
+        TR._insert(c, "human:ana", parent, hidden_child, "blocks", T)
+
+    detail = get(api, f"tasks/{parent}", "cara-test")
+    assert detail["task"]["id"] == parent  # the owner reads the parent itself
+    assert {child["id"] for child in detail["children"]} == {own_child}
+    assert detail["task"]["parts"]["total"] == 1, detail["task"]["parts"]
+    related = {ref["id"] for refs in detail["task"]["relations"].values() for ref in refs}
+    assert hidden_child not in related
+    everyone = get(api, f"tasks/{parent}", "ana-test")
+    assert {child["id"] for child in everyone["children"]} == {hidden_child, own_child}
