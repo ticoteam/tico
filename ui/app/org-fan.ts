@@ -3,16 +3,18 @@
 'use strict';
 
 // ---- Team switcher (mobile): the bots you were just at, nearest the thumb, then the ones that need you
+/** A bot on the mobile team switcher: its slug, the count that need the person, and whether it is a recent one. */
+interface OrgFanBot { slug: string; n: number; recent?: boolean; }
 // The bots from the shared history (the desktop Team history uses the same list), then any from this
 // phone's older list (tico.org.recent) that the shared one has not seen.
-function orgRecent() {
-  let old = []; try { old = JSON.parse(localStorage.getItem('tico.org.recent') || '[]').filter(x => typeof x === 'string'); } catch {}
-  const bots = orgHistory().filter(k => k.startsWith('b:')).map(k => k.slice(2));
+function orgRecent(): string[] {
+  let old: string[] = []; try { old = JSON.parse(localStorage.getItem('tico.org.recent') || '[]').filter((x: unknown) => typeof x === 'string'); } catch {}
+  const bots: string[] = orgHistory().filter((k: string) => k.startsWith('b:')).map((k: string) => k.slice(2));
   return [...bots, ...old.filter(slug => !bots.includes(slug))];
 }
 // Bottom up: the eight most recent (most recent lowest), then every bot that needs you, most first.
 // "show the top 8 recent. Make sure they are easily clickable (bigger/spread out)".
-function orgFanBots() {
+function orgFanBots(): OrgFanBot[] {
   const shown = new Set(shownEmps().filter(orgBranchVisible).map(e => e.id));
   const recent = orgRecent().filter(slug => shown.has(slug)).slice(0, 8);
   const needs = [...shown].filter(slug => !recent.includes(slug))
@@ -30,22 +32,22 @@ function orgFanClose() {
 }
 // In a bot's chat on a phone, its icon left of the chat bar opens the same fan
 // over the bar: the four bots most recently opened (not this one), with Search on top of the stack.
-function orgFanChatBots(current) {
+function orgFanChatBots(current: string | undefined): OrgFanBot[] {
   const shown = new Set(shownEmps().filter(orgBranchVisible).map(e => e.id));
   return orgRecent().filter(slug => shown.has(slug) && slug !== current).slice(0, 4)
     .map(slug => ({slug, recent: true, n: needsMeCount(slug)}));
 }
-let ORG_FAN_FROM = null;
-function orgFanOpen(opts = {}) {
+let ORG_FAN_FROM: Element | null = null;
+function orgFanOpen(opts: {chat?: string; anchor?: Element | null} = {}) {
   const fan = $('#org-fan');
   clearTimeout(ORG_FAN_HIDE);        // a close just before (a back navigation) must not hide it again
   const chat = !!opts.chat;
   const bots = chat ? orgFanChatBots(opts.chat) : orgFanBots();
   if (!bots.length && !chat) { searchOpen(); return; }  // nothing recent and nothing waiting: pick one
-  const item = (b, i) => `<li><button class="org-fan-item" type="button" role="menuitem" data-org-bot="${esc(b.slug)}" style="--i:${i}">
+  const item = (b: OrgFanBot, i: number) => `<li><button class="org-fan-item" type="button" role="menuitem" data-org-bot="${esc(b.slug)}" style="--i:${i}">
       ${avatar(b.slug, 34)}<span>${empName(b.slug)}</span>${orgBranchMark(botRow(b.slug))}${treeLimitMark(b.slug)}${b.n ? `<span class="org-fan-badge" aria-label="${b.n} need you">${b.n}</span>` : ''}</button></li>`;
   // In a chat the bottom bar is hidden, so a menu button left of Search is the way back to the side menu.
-  const search = i => `<li class="org-fan-row"><button class="org-fan-item org-fan-menu" type="button" role="menuitem" data-org-menu aria-label="Open menu" aria-controls="side" aria-expanded="false" style="--i:${i}">
+  const search = (i: number) => `<li class="org-fan-row"><button class="org-fan-item org-fan-menu" type="button" role="menuitem" data-org-menu aria-label="Open menu" aria-controls="side" aria-expanded="false" style="--i:${i}">
       <span class="nav-icon org-fan-search-icon" aria-hidden="true">menu</span></button><button class="org-fan-item org-fan-search" type="button" role="menuitem" data-org-search style="--i:${i}">
       <span class="nav-icon org-fan-search-icon" aria-hidden="true">search</span><span>Search</span></button></li>`;
   fan.querySelector('.org-fan-list').innerHTML = bots.map(item).join('') + (chat ? search(bots.length) : '');
@@ -53,15 +55,16 @@ function orgFanOpen(opts = {}) {
   const at = opts.anchor?.getBoundingClientRect();
   fan.style.paddingBottom = at ? `${Math.max(0, window.innerHeight - at.top + 10)}px` : '';
   fan.hidden = false;
-  ORG_FAN_FROM = opts.anchor || $('#mobile-org');
-  ORG_FAN_FROM.setAttribute('aria-expanded', 'true');
+  const from: Element = opts.anchor || $('#mobile-org');
+  ORG_FAN_FROM = from;
+  from.setAttribute('aria-expanded', 'true');
   fan.classList.add('open');
 }
 $('#mobile-org').onclick = () => ($('#org-fan').hidden ? orgFanOpen() : orgFanClose());
-$('#org-fan').addEventListener('click', ev => {
-  const b = ev.target.closest('[data-org-bot]');
-  if (b) location.hash = '#/bot/' + encodeURIComponent(b.dataset.orgBot);
-  const find = ev.target.closest('[data-org-search]'), menu = ev.target.closest('[data-org-menu]'), from = ORG_FAN_FROM;
+$('#org-fan').addEventListener('click', (ev: MouseEvent) => {
+  const b = eventElement(ev)?.closest<HTMLElement>('[data-org-bot]');
+  if (b) location.hash = '#/bot/' + encodeURIComponent(b.dataset.orgBot!);
+  const find = eventElement(ev)?.closest('[data-org-search]'), menu = eventElement(ev)?.closest('[data-org-menu]'), from = ORG_FAN_FROM;
   orgFanClose();
   if (find) searchOpen();
   // The same drawer More opens; closing it hands focus back to what opened the fan.
