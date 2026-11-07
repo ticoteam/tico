@@ -202,7 +202,7 @@
  "hub_segment_order": "422 validation",
  "hub_segment_remove": "404 not_found",
  "hub_segment_show": "404 not_found",
- "hub_segment_strategy": "404 not_found",
+ "hub_segment_strategy": "422 validation",
  "hub_settings_ask": "404 not_found",
  "hub_settings_set": "404 not_found",
  "hub_settings_show": "404 not_found",
