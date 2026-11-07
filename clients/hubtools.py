@@ -3962,6 +3962,17 @@ def market_segment_tree(api, args):
 
 
 @tool(
+    "hub_market_segments",
+    "The company's segments side by side: each one's money, yearly spend, growth, our share and newest briefing "
+    "week, and the newest briefing items across the whole market and them, each tagged with its segment_id ('' is "
+    "the whole market).",
+    {},
+)
+def market_segments(api, args):
+    return api.get("market/segments/compare")
+
+
+@tool(
     "hub_market_size_list",
     "Every estimate of the market's segments (not rejected ones), each with its segment, method, "
     "arithmetic, parameters and evidence; one segment's with `segment`.",

@@ -54,6 +54,9 @@ does and what it returns. For any other command, run `hub <group> --help` first.
   that segment's briefing instead of the whole market's (step 3b).
 - `hub market briefing latest [--segment <segment id>]`: the newest briefing, with its items and the bets it touches; with
   `--segment`, that segment's.
+- `hub market segments`: the company's segments side by side, each with its money, yearly spend, growth, our share and
+  newest briefing week, and the newest briefing items across the whole market and them, each with its `segment_id`
+  (`''` is the whole market).
 - `hub strategy show`: the published strategy: its bets and what each one cites.
 - `hub lens list --market` and `hub lens run where-to-play --answers-file <file.json>`: the market lenses, and a lens run.
 

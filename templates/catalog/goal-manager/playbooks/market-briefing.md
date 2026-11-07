@@ -3,7 +3,7 @@
 A task titled "Market briefing: <title>". The server opens it when the Librarian's weekly briefing touches an active
 bet: an item names a market entity the bet cites, or the entity its thesis wrong-if watches. Budget 10 minutes.
 
-Inputs: the task's briefing title, `hub market briefing latest`, and the bets it touched.
+Inputs: the task's briefing title, its segment when it names one, `hub market briefing latest` (with `--segment` for a segment), and the bets it touched.
 
 **Never edit the strategy.** The only output is, at most, one `strategy_draft` proposal per bet that is no longer
 right. Doing nothing is a normal result.
@@ -11,6 +11,10 @@ right. Doing nothing is a normal result.
 ## 1. Read what touched
 
     hub market briefing latest
+
+When the task or its payload names a `segment_id`, the briefing is that segment's: read it with
+    hub market briefing latest --segment <segment_id>
+instead. Everything after this step is the same.
 
 `touched` lists the bets (their number, id and statement); `items` lists what happened, each with the entity ids it
 names. With `touched` empty, finish the task with one line and stop.

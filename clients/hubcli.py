@@ -3489,6 +3489,10 @@ def parser():
     s.add_argument("--basis", choices=["product", "platform"])
     s.add_argument("--year", type=int)
     s.set_defaults(fn="market spend")
+    s = market.add_parser(
+        "segments", help="the company's segments side by side, with the newest briefing items across them"
+    )
+    s.set_defaults(fn="market segments")
     s = market.add_parser("research", help="owner only: ask the Librarian to define and size the market")
     s.add_argument("description")
     s.set_defaults(fn="market research")

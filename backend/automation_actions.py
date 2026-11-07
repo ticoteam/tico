@@ -553,7 +553,7 @@ def _post_update(c, auto, run_id, args, values):
             c, SimpleNamespace(actor=author), MB.this_week(), title, body, None, source=source, segment_id=segment
         )
         out["briefing"] = posted["week"] if posted else None
-        text = _pointer(c, poster, title)
+        text = _pointer(c, poster, title, segment)
     if "updates" in to:
         # A warned step's text leads with its warn line (_warned_args): it goes on after the writing checks.
         from .org_rule_check import unwarned
@@ -566,15 +566,15 @@ def _post_update(c, auto, run_id, args, values):
     return out
 
 
-def _pointer(c, poster, title):
-    """The owner's daily update with one more line for the briefing (the same line is not added twice)."""
+def _pointer(c, poster, title, segment=""):
+    """The owner's daily update with one more line for the briefing. A segment's line links to that segment's page, the
+    whole market's to the market briefing. Each line is written once (a repeat replaces it); the other scope's stay."""
     from . import updates
 
     words = str(title).split()
-    line = (
-        f"- Market briefing: {' '.join(words[:POINTER_WORDS])}{'…' if len(words) > POINTER_WORDS else ''} "
-        f"([read]({BRIEFING_LINK}))"
-    )
+    link = f"#/strategy/segment/{segment}" if segment else BRIEFING_LINK
+    tail = f"([read]({link}))"
+    line = f"- Market briefing: {' '.join(words[:POINTER_WORDS])}{'…' if len(words) > POINTER_WORDS else ''} {tail}"
     row = c.execute(
         "SELECT body FROM updates WHERE bot=? AND kind='daily' AND day=?", (poster, updates.today())
     ).fetchone()
@@ -584,7 +584,7 @@ def _pointer(c, poster, title):
     body = str(row["body"] if row else "")
     bare = unwarned(body)
     warned = body[: len(body) - len(bare)]
-    kept = [x for x in bare.splitlines() if x.strip() and not x.startswith("- Market briefing:")]
+    kept = [x for x in bare.splitlines() if x.strip() and not (x.startswith("- Market briefing:") and x.endswith(tail))]
     return warned + "\n".join(kept[-(updates.BULLETS_MAX - 1) :] + [line])
 
 

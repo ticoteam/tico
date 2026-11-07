@@ -286,12 +286,14 @@ CLI: `hub market define`, `segment add|tree`, `size add|accept|reject|params|lis
 Each of the company's segments ([Strategy](strategy.md#segments)) has its own market: the daily briefing run posts one
 briefing per segment that has new items, with `--segment` (`playbooks/write-the-briefing.md`, step 3b). Its items are
 the ones whose entities are one of the segment's players or the segment itself, and its answers come from its own items
-and sizes. A segment with no new item gets no post.
+and sizes. A segment with no new item gets no post. One with items that touch no active bet is posted but opens no
+Strategy Bot task.
 
 A person asks for a segment's market with "Ask Librarian to research" on its page. That files a task titled
 `Market for <segment name>` whose body names the segment's id. The Librarian answers the five questions for that
 segment, posts its briefing, and sizes it per `playbooks/size-the-market.md`, filing the sizes proposed: the owner
-accepts them. While the task is open, another request returns it. The task's final note is what the asker reads.
+accepts them. While the task is open, another request returns it. The task's final note is what the asker reads. A bot asks
+the same way only when the bot-contact rules let it open a task with the Librarian; a refused bot gets a 403 and no task.
 
 ## Built-in
 

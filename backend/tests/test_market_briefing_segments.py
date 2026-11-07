@@ -8,11 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from backend import automation_actions as AA
 from backend import automations
 from backend import market_briefing as MB
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_automation_actions import act
 from backend.tests.test_market import _librarian, _seed
+from backend.tests.test_market_briefing import publish_bets
 from backend.tests.test_market_spend import defined
 
 WEEK = "2026-W44"
@@ -152,14 +154,49 @@ def test_a_segment_that_is_not_ours_is_a_404_on_post_and_on_read(seeded, events)
     assert get(seeded, "market/briefings")["briefings"] == [] and events == []
 
 
-def test_the_event_names_a_segment_and_the_whole_markets_payload_is_unchanged(seeded, events):
+def test_the_whole_markets_event_is_unchanged_and_a_segment_with_no_bet_sends_none(seeded, events):
     first, _ = ours_segment(seeded)
     post_briefing(seeded, body="Whole page.")
     post_briefing(seeded, first, body="Screening page.")
-    assert [data for _, _, data in events] == [
-        {"week": WEEK, "bets": []},
-        {"week": WEEK, "bets": [], "segment_id": first},
-    ]
+    assert [data for _, _, data in events] == [{"week": WEEK, "bets": []}]
+
+
+def test_a_segment_briefing_sends_its_event_only_when_it_touches_a_bet(seeded, events):
+    _, thesis = publish_bets(seeded)  # the thesis bet watches company/brightline
+    first, _ = ours_segment(seeded)
+    quiet = {"text": "Harborly hired a designer.", "kind": "signal", "entity_ids": ["company/harborly"]}
+    post_briefing(seeded, first, items=[quiet])
+    assert [data for _, _, data in events] == []
+    touching = {"text": "Brightline raised prices.", "kind": "change", "entity_ids": ["company/brightline"]}
+    post_briefing(seeded, first, items=[touching])
+    assert [data for _, _, data in events] == [{"week": WEEK, "bets": [thesis["id"]], "segment_id": first}]
+
+
+def test_the_owners_daily_line_links_a_segments_briefing_to_its_page(seeded):
+    first, _ = ours_segment(seeded)
+    with seeded.app.state.store.read() as c:
+        whole = AA._pointer(c, "librarian", "Week 44")
+        mine = AA._pointer(c, "librarian", "Screening week", first)
+    assert f"([read](#/strategy/segment/{first}))" in mine and "#/strategy/market/briefing" not in mine
+    assert "([read](#/strategy/market/briefing))" in whole
+
+
+def test_the_cli_and_the_tool_read_the_company_segments():
+    from clients import hubcli, hubtools
+
+    assert hubcli.parser().parse_args(["market", "segments"]).fn == "market segments"
+
+    class Api:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, path, **query):
+            self.calls.append((path, query))
+            return {}
+
+    fake = Api()
+    hubtools.market_segments(fake, {})
+    assert fake.calls == [("market/segments/compare", {})]
 
 
 def test_an_automation_posts_a_segments_briefing_and_refuses_one_that_is_not_ours(seeded):

@@ -823,9 +823,36 @@ def spend(conn, dimension="offering", basis="product", year=None):
     }
     tree = _tree(conn, root) if root else {"order": [], "depth": {}, "parent": {}, "rows": {}}
     result["name"] = (tree["rows"].get(root) or {}).get("name")  # the market's own name: its root segment's
-    ids = tree["order"]
-    if not ids:
+    if not tree["order"]:
         return result
+    result["segments"], total = _entries(conn, tree, dimension, basis, year, shared)
+    result["total"] = {k: round(v, 2) for k, v in total.items()}
+    return result
+
+
+def segment_entry(conn, segment_id, dimension="offering", basis="product", year=None):
+    """One segment's entry as `spend` shows it, for a segment the root's view does not reach: there is no market
+    definition, or the segment is outside its tree. The segment is then the root of its own tree; its entry does not
+    depend on the other segments. None when there is no such segment."""
+    defn = definition(conn)
+    shared = shared_values(defn)
+    year = int(year or (defn or {}).get("year") or datetime.now(timezone.utc).year)
+    below = _tree(conn, segment_id)
+    if segment_id not in below["rows"]:
+        return None
+    tree = {
+        "order": [segment_id, *below["order"]],
+        "depth": {segment_id: 0, **below["depth"]},
+        "parent": {segment_id: None, **{k: (segment_id if v is None else v) for k, v in below["parent"].items()}},
+        "rows": below["rows"],
+    }
+    entries, _ = _entries(conn, tree, dimension, basis, year, shared)
+    return next((e for e in entries if e["id"] == segment_id), None)
+
+
+def _entries(conn, tree, dimension, basis, year, shared):
+    """Each segment of the tree as `spend` shows it, in the tree's order, and the total: the roll-up of the top level."""
+    ids = tree["order"]
     marks = json.dumps(ids)
     sizes = {}
     for row in conn.execute(
@@ -872,11 +899,11 @@ def spend(conn, dimension="offering", basis="product", year=None):
         if tree["depth"][seg_id] == 1 and rolled[seg_id]:
             for key in total:
                 total[key] += rolled[seg_id][key]
+    entries = []
     for seg_id in ids:
         rows = sizes.get(seg_id, [])
         mine = [r for r in rows if r["basis"] == basis]
         chosen = chosen_of[seg_id]
-        level = tree["depth"][seg_id]
         players = []
         for entity_id in sorted(
             members.get(seg_id, ()), key=lambda e: (not figures.get((seg_id, e)), names.get(e, e).lower(), e)
@@ -889,12 +916,12 @@ def spend(conn, dimension="offering", basis="product", year=None):
                         "figures": figures.get((seg_id, entity_id), [])[:MAX_FIGURES],
                     }
                 )
-        result["segments"].append(
+        entries.append(
             {
                 "id": seg_id,
                 "name": tree["rows"][seg_id]["name"],
                 "parent": tree["parent"].get(seg_id),
-                "depth": level,
+                "depth": tree["depth"][seg_id],
                 "summary": tree["rows"][seg_id]["summary"],
                 "size": {**chosen, "accepted": chosen["status"] == "accepted"} if chosen else None,
                 "rolled_usd": rolled[seg_id],
@@ -906,8 +933,7 @@ def spend(conn, dimension="offering", basis="product", year=None):
                 "next": bool(MK.loads(tree["rows"][seg_id]["properties"], {}).get("next")),
             }
         )
-    result["total"] = {k: round(v, 2) for k, v in total.items()}
-    return result
+    return entries, total
 
 
 def _attach_evidence(conn, rows):

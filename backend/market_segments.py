@@ -57,6 +57,8 @@ _rolled = cast(
     MS._rolled,  # pyright: ignore[reportPrivateUsage]
 )
 _spend = cast(Callable[..., Row], MS.spend)
+_segment_entry = cast(Callable[..., Row | None], MS.segment_entry)
+_active_bets = cast(Callable[[Conn], list[Row]], MB.active_bets)
 _latest = cast(Callable[..., Row | None], MB.latest)
 _task_create = cast(Callable[..., Row], H.task_create)
 _event = cast(Callable[..., Any], H.event)
@@ -88,14 +90,36 @@ def _color(ent: Row) -> str | None:
 
 
 # ----------------------------------------------------------------------------- compare
+def _tagged(briefing: Row | None, segment_id: str) -> list[Row]:
+    """The briefing's items, each tagged with its scope and its week ('' is the whole market)."""
+    if not briefing:
+        return []
+    return [{**item, "segment_id": segment_id, "week": briefing["week"]} for item in briefing["items"]]
+
+
+def _round_robin(lists: list[list[Row]], limit: int) -> list[Row]:
+    """One item from each list in turn, until `limit` are taken, so no list crowds out the others."""
+    out: list[Row] = []
+    for i in range(max((len(rows) for rows in lists), default=0)):
+        for rows in lists:
+            if i < len(rows) and len(out) < limit:
+                out.append(rows[i])
+    return out
+
+
 def compare(c: Conn) -> dict[str, Any]:
-    """Every segment the company plays in, and the newest briefing items across them.
+    """Every segment the company plays in, and the newest briefing items across the whole market and them.
 
     Each segment: `money` is its accepted size in USD (`market_sizes.spend_usd`). `yearly_spend` is that money, or where
     the segment has no accepted size, the sum of its sub-segments' yearly spend at any depth (the roll-up `member_of`
     gives, counting accepted sizes only), or null. `growth` is the accepted size's `growth_pct`, a percent a year.
     `our_share` is the company's newest `market_figures` row for the segment with metric revenue or arr, over
-    `yearly_spend`, as a percent to one decimal. `briefing_week` is the week of the segment's newest briefing.
+    `yearly_spend`, as a percent to one decimal. Only a figure whose `as_of` is in the spend year counts: one from another
+    year leaves `our_share` null. `briefing_week` is the week of the segment's newest briefing.
+
+    `changed` is the newest briefing's items of the whole market (`segment_id` '') and of each segment, taken round-robin
+    across them so none crowds out the rest: at most CHANGED_MAX in all, newest week first. Each item carries its
+    `segment_id` and its `week`. The published active bets are read once for all the briefings.
     """
     defn = _definition(c)
     shared = _shared_values(defn)
@@ -117,9 +141,10 @@ def compare(c: Conn) -> dict[str, Any]:
         first.setdefault(row["segment_id"], row)
     accepted: dict[str, Row] = {sid: _effective(_size_row(row), shared) for sid, row in first.items()}
     rolled = _rolled(tree["order"], tree["parent"], {sid: accepted.get(sid) for sid in tree["order"]})
+    active = _active_bets(c)
 
     segments: list[Row] = []
-    changed: list[Row] = []
+    lists: list[list[Row]] = [_tagged(_latest(c, "", body=False, active=active), "")]
     for ent in ents:
         sid: str = ent["id"]
         own: Row = accepted.get(sid) or {}
@@ -131,13 +156,12 @@ def compare(c: Conn) -> dict[str, Any]:
             spend = own.get("spend_usd")
         figure = c.execute(
             "SELECT value FROM market_figures WHERE entity_id=? AND segment_id=? AND metric IN ('revenue','arr') "
-            "AND value IS NOT NULL ORDER BY as_of DESC, created_at DESC, id LIMIT 1",
-            (MK.OWN_COMPANY_ID, sid),
+            "AND value IS NOT NULL AND substr(as_of,1,4)=? ORDER BY as_of DESC, created_at DESC, id LIMIT 1",
+            (MK.OWN_COMPANY_ID, sid, str(year)),
         ).fetchone()
         share: float | None = round(figure["value"] / spend * 100, 1) if figure and spend and spend > 0 else None
-        briefing = _latest(c, sid, body=False)
-        if briefing:
-            changed.extend({**item, "segment_id": sid, "week": briefing["week"]} for item in briefing["items"])
+        briefing = _latest(c, sid, body=False, active=active)
+        lists.append(_tagged(briefing, sid))
         segments.append(
             {
                 "id": sid,
@@ -150,8 +174,9 @@ def compare(c: Conn) -> dict[str, Any]:
                 "briefing_week": briefing["week"] if briefing else None,
             }
         )
+    changed = _round_robin(lists, CHANGED_MAX)
     changed.sort(key=lambda item: item["week"], reverse=True)
-    return {"segments": segments, "changed": changed[:CHANGED_MAX]}
+    return {"segments": segments, "changed": changed}
 
 
 # ----------------------------------------------------------------------------- one segment's page
@@ -160,7 +185,11 @@ def page(c: Conn, sid: str) -> dict[str, Any]:
     as the market page shows them, its players, and the history of it, its sub-segments and its players."""
     ent = _entity(c, sid)
     view = _spend(c, DIMENSION, BASIS)
-    entry: Row = next((s for s in view["segments"] if s["id"] == sid), None) or {}
+    entry: Row = (
+        next((s for s in view["segments"] if s["id"] == sid), None)
+        or _segment_entry(c, sid, DIMENSION, BASIS, view["year"])  # no definition, or outside its tree
+        or {}
+    )
     briefing = _latest(c, sid)
     shown: Row = briefing or {}
     players: list[Row] = entry.get("players", [])
@@ -191,16 +220,15 @@ def page(c: Conn, sid: str) -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------- research
-def _like(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-def _open_research(c: Conn, title: str) -> str | None:
+def _open_research(c: Conn, sid: str) -> str | None:
+    """The open Librarian task that a research request filed for this segment. It is found by the segment's id (the
+    event's `segment_id`), so a renamed segment keeps its task, and a task that only has the same title does not count."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     row = c.execute(
-        f"SELECT id FROM tasks WHERE owner_id=? AND (title=? OR title LIKE ? ESCAPE '\\') AND status IN ({marks}) "
-        "ORDER BY created_at DESC LIMIT 1",
-        (LIBRARIAN, title, _like(title) + " (%", *H.ACTIVE_STATUSES),
+        "SELECT t.id FROM events e JOIN tasks t ON t.id = e.target "
+        f"WHERE e.action=? AND json_extract(e.detail, '$.segment_id')=? AND t.owner_id=? AND t.status IN ({marks}) "
+        "ORDER BY e.created_at DESC, e.id DESC LIMIT 1",
+        (RESEARCH_EVENT, sid, LIBRARIAN, *H.ACTIVE_STATUSES),
     ).fetchone()
     return row["id"] if row else None
 
@@ -218,17 +246,19 @@ def _free_title(c: Conn, actor: str, base: str) -> str:
 
 
 def research(c: Conn, auth: "Auth", who: Any, sid: str, note: str = "") -> dict[str, Any]:
-    """Ask the Librarian for one segment's five answers and its sizes. A person or a bot may ask. While a task for the
-    segment is open, asking again returns that task."""
+    """Ask the Librarian for one segment's five answers and its sizes. A person may ask. A bot may ask only when the
+    bot-contact rules let it open a task with the Librarian (else 403, and it gets no task). While a task for the segment
+    is open, asking again returns that task."""
     from . import getting_started as GS
     from . import rooms
 
     cast(Callable[[Any], object], auth.domain)(who)
+    cast(Callable[..., None], auth.require_bot_contact)(c, who, LIBRARIAN, kind="task")
     name: str = _entity(c, sid)["name"]
-    base = f"Market for {name}"[:200]
-    found = _open_research(c, base)
+    found = _open_research(c, sid)
     if found:
         return {"task_id": found, "created": False}
+    base = f"Market for {name}"[:200]
     librarian_running = cast(Callable[[Conn, str], object], GS._active)  # pyright: ignore[reportPrivateUsage]
     if not librarian_running(c, GS.LIBRARIAN):
         raise Problem("librarian", "The Librarian is not running yet. It starts once a computer hosts it.", 409)

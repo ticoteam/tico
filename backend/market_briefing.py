@@ -92,7 +92,7 @@ def _row(row, body=True):
     return out
 
 
-def _active(c):
+def active_bets(c):
     """The published strategy's active bets, in their Strategy page order."""
     published = S.current(c)
     return [b for b in (published or {}).get("bets") or [] if b.get("status") == "active"]
@@ -110,7 +110,7 @@ def _watching(bet):
 def touched(c, ids, active=None):
     """[{id, n, statement}] for these bet ids among the published version's active bets; `n` is the bet's number on
     the Strategy page (its place among the active ones), so a card can say "Bet 2"."""
-    active = _active(c) if active is None else active
+    active = active_bets(c) if active is None else active
     return [{"id": b["id"], "n": n, "statement": b["statement"]} for n, b in enumerate(active, 1) if b["id"] in ids]
 
 
@@ -131,9 +131,9 @@ def cadence(c, source):
     return "weekly" if trigger.get("type") == "schedule" and _once_a_week(trigger.get("cron")) else "daily"
 
 
-def _view(c, row, body=True):
+def _view(c, row, body=True, active=None):
     out = _row(row, body)
-    active = _active(c)
+    active = active_bets(c) if active is None else active
     out["touched"] = touched(c, set(out["bets"]), active)
     watching = {b["id"]: _watching(b) for b in active}
     for item in out["items"]:
@@ -159,12 +159,13 @@ def get(c, week, segment=""):
     return _view(c, row) if row else None
 
 
-def latest(c, segment="", body=True):
-    """The newest briefing of one scope, or None. `body=False` leaves the page out (the segment comparison reads many)."""
+def latest(c, segment="", body=True, active=None):
+    """The newest briefing of one scope, or None. `body=False` leaves the page out (the segment comparison reads many);
+    `active` passes in the published active bets when the caller has them already."""
     row = c.execute(
         "SELECT * FROM market_briefings WHERE segment_id=? ORDER BY week DESC LIMIT 1", (segment,)
     ).fetchone()
-    return _view(c, row, body) if row else None
+    return _view(c, row, body, active) if row else None
 
 
 # ----------------------------------------------------------------------------- writing
@@ -172,7 +173,7 @@ def bets_touched(c, items):
     """The ids of the active bets of the published strategy that cite one of the items' entities, or whose thesis
     wrong-if watches one."""
     ids = {e for item in items for e in item["entity_ids"]}
-    return [b["id"] for b in _active(c) if ids & _watching(b)]
+    return [b["id"] for b in active_bets(c) if ids & _watching(b)]
 
 
 def clip_answers(raw):
@@ -255,7 +256,9 @@ def post(c, who, week, title, body, items, source=None, answers=None, segment_id
     )
     # One event per week and scope; a replacement that touches other bets than before is a new occurrence for them.
     again = MK.loads(before["bets"], []) if before else []
-    if not before or (bets and set(bets) != set(again)):
+    # A segment's briefing reaches the Strategy Bot only when it touches a bet: one with none says nothing to it.
+    touches = bool(bets) or not segment
+    if (not before and touches) or (bets and set(bets) != set(again)):
         key = subject if not before else subject + "." + hashlib.sha256(",".join(sorted(bets)).encode()).hexdigest()[:6]
         # The whole market's payload stays the week and its bets; a segment's names the segment too.
         data = {"week": week, "bets": list(bets), **({"segment_id": segment} if segment else {})}

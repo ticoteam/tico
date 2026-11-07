@@ -761,7 +761,10 @@ ACTION_ARGS = {
     "assign": {"owner": "required: a person id or a bot slug", "text": "a note on the change (or note)"},
     "note": {"text": "the note (or note)", "bot": "with no task on the run: the bot to tell"},
     "wake_bot": {"bot": "the bot to wake (default the owner's bot)", "text": "its prompt (or prompt)"},
-    "post_update": {"text": "the update's text (or body); posted as the owner"},
+    "post_update": {
+        "text": "the update's text (or body); posted as the owner",
+        "segment_id": "with to market: that segment's briefing (segment/<slug>); left out, the whole market's",
+    },
     "call_webhook": {
         "webhook": "required: an outgoing webhook's id",
         "type": "the event type (default custom.automation)",
