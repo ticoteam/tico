@@ -508,7 +508,9 @@ async function botDetail(browser) {
     const d = page.locator('#task-modal'), row = page.locator('[data-task-detail="t-checkout"]');
     await row.locator('[data-task-detail-open]').waitFor();
     assert.equal(await row.locator('details, .tbody').count(), 0, 'no separate inline detail');
-    assert.equal(await row.locator('.task-status').count(), 1, 'Active needs per-task status');
+    // Doing names the status once, in the row's pill; the status line another tab needs is dropped when every row shares it.
+    assert.equal((await row.locator('.trow-head > .pill').textContent()).trim(), 'Doing', 'Active names each task status');
+    assert.equal(await row.locator('.task-status').count(), 0, 'Doing drops the status line every row shares');
     assert.equal(await page.locator('.bot-done .task-status, .bot-done .pill').count(), 0, 'Done already supplies status context');
     await page.evaluate(() => { window.botBefore = BOT; window.botWorkBefore = document.querySelector('#bot-work'); });
     await row.locator('[data-task-detail-open]').focus();
