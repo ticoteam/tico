@@ -1,7 +1,7 @@
 /* ui/app/redesign-market.js — Strategy › Market: one page of five questions, from the top (ui/market-page.js mounts
    it). The header names the market and opens the map; three tiles give its yearly spend, its fastest-growing segment and
    our share. Then What changed? (the latest briefing's items, GET /api/v2/market/briefings/latest; Read opens the whole
-   page, ui/market-briefing.js), Where is the money going? (the treemap and Size vs growth, ui/market-spend.js), Who are
+   page, ui/market-briefing.js), Where is the money going? (the treemap and Size vs growth, ui/market-spend.ts), Who are
    we up against? (the players in GET /api/v2/market/spend, a row opening its note), How does it reach buyers? (the value
    chain) and What are buyers saying? (Listening's posts per day by source over two weeks and the newest posts sent
    somewhere, GET /api/v2/listening/stats `daily` and `recent`, backend/listening.py timeline). Each question carries
@@ -56,7 +56,7 @@ const rdqTile = (label, big, small) => `<div class="mkt-tile-k"><div class="mkt-
 function rdqTilesHtml(data, revenue) {
   if (!mktSized(data)) return '';
   const total = Number(data.total?.spend_usd) || 0, out = [];
-  const tops = mktTree(data).drawn.map(g => g.seg).filter(s => s.size?.spend_usd != null && Number.isFinite(s.size.growth_pct));
+  const tops = mktGrowthPts(mktTree(data)).map(g => g.seg);
   const weight = tops.reduce((a, s) => a + s.size.spend_usd, 0);
   const growth = weight ? tops.reduce((a, s) => a + s.size.spend_usd * s.size.growth_pct, 0) / weight : null;
   if (total) out.push(rdqTile('Yearly spend', mktMoney(total), `${growth == null ? '' : rdqGrowth(growth) + ' a year '}${mktSureHtml(data)}`));
