@@ -47,6 +47,7 @@ Group = Literal[
     "location_class",
     "location_project",
     "class_project",
+    "segment",
 ]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
@@ -81,6 +82,12 @@ class FinanceConnectionRequest(Contract):
     token_creator_email: str | None = Field(None, max_length=200)
     server_ip: str | None = Field(None, max_length=64)
     history_from: str | None = Field(None, pattern=DAY)
+
+
+class ContactSegmentRequest(Contract):
+    """A customer's segment: a company segment's id, or "" for none."""
+
+    segment_id: str = Field(default="", max_length=80)
 
 
 class FinanceActionRequest(Contract):
@@ -219,11 +226,18 @@ def install(app, store, auth, mutate):
         limit: int = Query(200, ge=1, le=500),
         at: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
         view_as: str | None = None,
+        segment: str | None = Query(None, max_length=80),
     ):
         """The budgets the caller sees, each with where it stands today (amount, actual, held, remaining), or with
-        `at` in the period holding that day: the amount of the version in effect then."""
+        `at` in the period holding that day: the amount of the version in effect then. `segment` keeps the budgets whose
+        spend reports under that company segment (`unallocated` for none); each row says its own `segment` and its
+        `segment_effective`, which a child inherits from its parent when it has none."""
         actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+        return read(
+            lambda c: finance_reads.budgets(
+                c, actor, include_inactive=include_inactive, limit=limit, on=at, segment=segment
+            )
+        )
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(
@@ -241,10 +255,12 @@ def install(app, store, auth, mutate):
         teammates: Annotated[list[str] | None, Query()] = None,
         who: Literal["both", "bots", "people"] = "both",
         unattributed: bool = False,
+        segment: str | None = Query(None, max_length=80),
     ):
         """The P&L the caller sees: income and expense lines by period (past, current and projected columns), with
         budget and projection beside each actual; the expenses view filters by teams and teammates (several at once),
-        bots, people or both, and Unattributed."""
+        bots, people or both, and Unattributed. `segment` keeps the lines that count toward one company segment
+        (`unallocated` for none); projections are left out with it."""
         actor = as_viewer(request, view_as)
         return read(
             lambda c: finance_reads.pnl(
@@ -262,6 +278,7 @@ def install(app, store, auth, mutate):
                 teammates=teammates or (),
                 who=who,
                 unattributed=unattributed,
+                segment=segment,
             )
         )
 
@@ -648,6 +665,17 @@ def install(app, store, auth, mutate):
         return read(
             lambda c: finance_reads.contacts(c, actor, kind=kind, q=q, active=active, cursor=cursor, limit=limit)
         )
+
+    @app.get("/api/v2/finance/contacts/segment-review")
+    def finance_segment_review(
+        request: Request,
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """The customers whose segment is unset or a guess (segment_sure 0), by name: the list a person reviews."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.contacts(c, actor, cursor=cursor, limit=limit, review=True))
 
     @app.get("/api/v2/finance/chart")
     def finance_chart(
@@ -1086,6 +1114,9 @@ def install(app, store, auth, mutate):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
         is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen. Files it
         attaches must be Library files the asker may read."""
+        return _act(request, body)
+
+    def _act(request: Request, body: FinanceActionRequest):
         who = viewer(request)
         readable_files(request, who, body)
         audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
@@ -1132,6 +1163,18 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             now = finance_reads.action_for(c, who.actor, saved["action_id"])
         return audited({**saved, **now} if now else saved)
+
+    @app.post("/api/v2/finance/contacts/{contact_id}/segment")
+    def finance_contact_segment(request: Request, contact_id: ID, body: ContactSegmentRequest):
+        """Sets a customer's segment: a person's choice is final (segment_sure 1); a bot's is a guess (segment_sure 0)
+        that never overwrites a person's choice. Runs as the `contact_segment` action, so the Idempotency-Key header
+        and the approval rules are the actions' own."""
+        return _act(
+            request,
+            FinanceActionRequest(
+                kind="contact_segment", payload={"contact_id": contact_id, "segment_id": body.segment_id}
+            ),
+        )
 
     @app.get("/api/v2/finance/actions/{action_id}")
     def finance_action(request: Request, action_id: ID):

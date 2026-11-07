@@ -209,8 +209,9 @@ def contacts_page(
     active: bool | None = True,
     after: tuple[str, str] | None = None,
     most: int = 200,
+    review: bool = False,
 ) -> list[Any]:
-    """Contacts by name (then id)."""
+    """Contacts by name (then id). `review` keeps the ones whose segment is unset or a guess (segment_sure 0)."""
     sql = "SELECT * FROM fin_contacts WHERE book_id=?"
     args: list[object] = [book_id]
     if kinds:
@@ -222,6 +223,8 @@ def contacts_page(
     if q:
         sql += " AND (name LIKE ? ESCAPE '\\' OR emails LIKE ? ESCAPE '\\')"
         args += [like(q)] * 2
+    if review:
+        sql += " AND (segment_id IS NULL OR segment_id='' OR segment_sure=0)"
     if after:
         sql += " AND (name>? OR (name=? AND id>?))"
         args += [after[0], after[0], after[1]]

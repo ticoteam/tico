@@ -62,8 +62,8 @@ CREATE TABLE IF NOT EXISTS fin_dimensions (
 
 CREATE TABLE IF NOT EXISTS fin_line_tags (
   line_id TEXT NOT NULL REFERENCES fin_lines(id),
-  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom','location','class')), value TEXT NOT
-  NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom','location','class','segment')),
+  value TEXT NOT NULL,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (line_id, kind));
 
 CREATE TABLE IF NOT EXISTS fin_rollups (
@@ -397,6 +397,7 @@ CREATE INDEX IF NOT EXISTS fin_rollups_teammate ON fin_rollups(teammate, day);
 CREATE INDEX IF NOT EXISTS fin_rollups_vendor ON fin_rollups(vendor, day);
 CREATE INDEX IF NOT EXISTS fin_budgets_parent ON fin_budgets(book_id, parent_id);
 CREATE INDEX IF NOT EXISTS fin_budgets_account ON fin_budgets(account_id);
+CREATE INDEX IF NOT EXISTS fin_budgets_segment ON fin_budgets(book_id, segment_id);
 CREATE INDEX IF NOT EXISTS fin_holds_budget ON fin_holds(budget_id, status, held_on);
 CREATE INDEX IF NOT EXISTS fin_holds_expiry ON fin_holds(status, expires_at);
 CREATE INDEX IF NOT EXISTS fin_holds_source ON fin_holds(source, source_id);
@@ -443,6 +444,7 @@ CREATE INDEX IF NOT EXISTS fin_invoices_status ON fin_invoices(status, due_date)
 CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_date, id);
 CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
 CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
+CREATE INDEX IF NOT EXISTS fin_contacts_segment ON fin_contacts(book_id, segment_id);
 CREATE INDEX IF NOT EXISTS fin_vendor_aliases_contact ON fin_vendor_aliases(contact_id);
 CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
 CREATE INDEX IF NOT EXISTS fin_external_refs_local ON fin_external_refs(connection_id, local_table, local_id);
@@ -582,6 +584,11 @@ ADDED = (
     # the money-out row a money-in row refunds (migration 0037, backend/finance/refunds.py). A column, not raw: a
     # provider's update rewrites raw, and the link must survive it.
     ("fin_feed_txns", "refund_of", "TEXT"),
+    # the company segment a budget's spend reports under, and a customer's segment: segment_sure is 1 when a person
+    # set it, 0 for the Finance Manager's guess (spec: Money). Both are market segment ids, not rows of their own.
+    ("fin_budgets", "segment_id", "TEXT"),
+    ("fin_contacts", "segment_id", "TEXT"),
+    ("fin_contacts", "segment_sure", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

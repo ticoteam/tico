@@ -51,6 +51,53 @@ rest; a paged list's `next_cursor` carries on from the last row shown. Period co
 big on its own keeps its ids and amounts and has its long text and nested lists cut; a result that still does not fit
 comes back as `{"error": "too_big", "chars", "cap"}`.
 
+## Segments
+
+A company's segments are its market segments (`segment` entities the company operates in, backend/segments.py). Finance
+puts money by segment in three places, all through the Finance API (`/api/v2/finance/`). The hub tools and the `hub
+finance` commands do not expose these inputs yet.
+
+- **Budgets** take `segment` on `budget_create` and `budget_update`: one of the company's segment ids, or empty for
+  none. A child with no segment of its own reports under its nearest parent's; each budget row gives its own `segment`
+  and its `segment_effective`. `GET /api/v2/finance/budgets?segment=<id>` keeps the budgets whose spend reports under
+  that segment (`segment=unallocated` for none).
+- **Customers** take a segment with `contact_segment` (`contact_id`, `segment_id`; empty clears it), or with
+  `POST /api/v2/finance/contacts/{contact_id}/segment` and the body `{"segment_id": "<id or empty>"}`, which runs the same
+  action (its `Idempotency-Key` header works as for `POST /actions`). Only customers take one. A person's choice is final
+  (`segment_sure` true). A bot's choice is a guess (`segment_sure` false): a bot's guess can replace another guess, and
+  never a person's choice. `GET /api/v2/finance/contacts/segment-review` lists the customers whose segment is unset or a
+  guess, by name, with `cursor` and `limit`, for a person to review.
+- **Lines** take a `segment` tag through the existing line-tag path (`categorize`, and the banking and document tags).
+  The tag must be one of the company's segments.
+
+A line counts toward the segment named by its explicit tag; else the segment of the budget its spend counts against (the
+deepest budget that matches it, its parent's segment when it has none); else, for revenue, the segment of its customer;
+else Unallocated. Shared costs (payroll, engineering, AI seats) have no budget and stay Unallocated. There are no split
+rules in v1.
+
+The segment is read when a P&L is read, not stored on the rollups: a budget's or a customer's segment can change, and
+a stored one would need every past rollup rewritten. Each read looks up a scope's budget and customer once.
+
+**P&L by segment** is `GET /api/v2/finance/reports/pnl_by?by=segment` (with `start`, `end`, `basis`). Its `columns` are
+the company's segments in rank, then name order, each with `key`, `label`, `color`, `who` and `rank`, then `unallocated`
+and `total`. Its `rows` are `income`, `expense` and `contribution` (revenue minus that column's own costs); each row's
+`values` is keyed by column key. Total equals the P&L's income, expense and net for the same window. Budgets and
+projections are not split by segment in this read. `GET /api/v2/finance/pnl?segment=<id|unallocated>` keeps the lines
+that count toward one segment; its budgets are cut to it, and its projections are left out.
+
+Who sees what:
+
+- The owner, and anyone with the whole P&L (a company-wide `pnl` grant), sees every column, Unallocated and Total.
+- A segment's lead sees that segment's column only, with no Unallocated and no Total. A lead is a teammate dedicated to
+  the segment (tagged with it, not with All) whose manager is not. The view default `segment_lead` (`lead`, or `none` to
+  turn the lead view off for everyone) decides whether leads see their column.
+- A dedicated teammate who leads nothing gets no segment P&L, but reads the segment's budgets, read-only.
+- Anyone else is refused the segment P&L and sees none of the segment's budgets.
+- A bot follows the same rules by its ref (`bot:<id>`).
+
+Who is dedicated to a segment comes from the teammate tags (`segment_members`, owned by the segment build's
+teammates track). Until those tags exist, nobody is dedicated, so only the owner and full P&L viewers see segment columns.
+
 ## Tax
 
 Sales tax and 1099 workpapers (`/api/v2/finance/tax/`) are filed as a whole, so only someone who sees everything (the owner,

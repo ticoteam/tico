@@ -31,3 +31,39 @@ def require_ours(c, segment_id):
     if sid and sid not in ours_ids(c):
         raise Problem("not_found", f"{sid} is not one of the company's segments", 404)
     return sid
+
+
+# provisional: track A replaces these with the teammate tags and the leads of a segment (the finance and goals tracks
+# build against these names). Until segment_members exists they say nothing is tagged.
+def _has_members(c):
+    return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='segment_members'").fetchone() is not None
+
+
+def _actor(ref):
+    """A teammate ref as a finance actor: `person:<id>` is `human:<id>`, a `bot:<id>` stays as it is."""
+    kind, _, ident = str(ref).partition(":")
+    return "human:" + ident if kind == "person" else str(ref)
+
+
+def member_segments(c, ref):
+    """The segments a teammate ref (`person:<id>` or `bot:<id>`) is tagged with: segment ids, `ALL` for All segments."""
+    if not _has_members(c):
+        return []
+    rows = c.execute("SELECT segment_id FROM segment_members WHERE member=? ORDER BY segment_id", (ref,))
+    return [r[0] for r in rows]
+
+
+def leads(c, segment_id):
+    """The teammate refs that lead a segment: dedicated to it, and their manager is not."""
+    if not _has_members(c) or segment_id == ALL:
+        return []
+    members = [
+        r[0] for r in c.execute("SELECT member FROM segment_members WHERE segment_id=? ORDER BY member", (segment_id,))
+    ]
+    if not members:
+        return []
+    from .finance.store import tico as FT  # the org chart's reports-to, read the way Finance reads it
+
+    managers = FT.org(c, "").reports_to
+    dedicated = {_actor(m) for m in members}
+    return [m for m in members if managers.get(_actor(m), "") not in dedicated]

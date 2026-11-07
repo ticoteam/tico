@@ -23,7 +23,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from ..records import reads as RR
-from . import budgeting, delivery, posting, shared
+from . import budgeting, delivery, posting, segmentation, shared
 from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
@@ -266,6 +266,40 @@ def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         f"Add {f['kind']} {f['name']}",
         apply,
         facts={"contact.kind": str(f["kind"]), "counterparty": str(f["name"])},
+    )
+
+
+def contact_segment(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """A customer's segment (spec: Money). A person's choice is final (segment_sure 1). A bot's is the Finance Manager's
+    guess (segment_sure 0): it can be replaced by a bot's later guess, but never overwrites a person's choice."""
+    V.only(p, ("contact_id", "segment_id"))
+    old = SAP.get(ctx.c, "fin_contacts", V.text(p, "contact_id", 80))
+    if old is None or str(old["book_id"]) != ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such contact")
+    if str(old["kind"]) not in ("customer", "both"):
+        raise invalid("a segment is set on a customer")
+    _need_contact_rights(ctx, who, str(old["kind"]))
+    segment = segmentation.checked(ctx.c, V.opt_text(p, "segment_id", 80) or "")
+    was = str(old["segment_id"] or "")
+    by_person = who.startswith("human:")
+    if not by_person and int(old["segment_sure"] or 0) == 1 and segment != was:
+        raise denied("a person set this customer's segment; a bot cannot change it")
+    sure = 1 if by_person else int(old["segment_sure"] or 0) if segment == was else 0
+
+    def apply(aid: str) -> Result:
+        SAP.update(
+            ctx.c,
+            "fin_contacts",
+            str(old["id"]),
+            {"segment_id": segment or None, "segment_sure": sure, "updated_at": ctx.at},
+        )
+        return {"contact_id": str(old["id"]), "segment_id": segment or None, "segment_sure": bool(sure)}
+
+    return Plan(
+        K.default_gate(ctx.org, who, "contact_segment"),
+        f"Set {old['name']}'s segment to {segment or 'none'}",
+        apply,
+        facts={"contact.kind": str(old["kind"]), "counterparty": str(old["name"])},
     )
 
 
@@ -2521,6 +2555,7 @@ next_number, money_of = _next_number, _money
 PLANNERS = {
     "contact_create": contact_create,
     "contact_update": contact_update,
+    "contact_segment": contact_segment,
     "bill_create": bill_create,
     "bill_update": bill_update,
     "bill_approve": bill_approve,

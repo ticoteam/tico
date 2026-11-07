@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
 
-from . import budgeting, posting, shared
+from . import budgeting, posting, segmentation, shared
 from . import closing as CL
 from .context import Ctx
 from .core import budgets as B
@@ -94,10 +94,12 @@ def theirs(b: B.Budget, who: str) -> bool:
 
 
 def reads_budget(ctx: Ctx, who: str, b: B.Budget) -> bool:
-    """Whether `who` may read a budget: one their view covers, or their own, whatever else their view holds. A teammate
-    always sees their own budget (amount, spend, pace; numbers over private lines they lack stay cut, private_scope),
-    and nothing else of Finance unless granted. Writes still ask sees_budget and the rights."""
-    return theirs(b, who) or sees_budget(ctx, who, b)
+    """Whether `who` may read a budget: one their view covers, or their own, whatever else their view holds, or one
+    whose segment they are dedicated to (read-only, spec: Access). A teammate always sees their own budget (amount,
+    spend, pace; numbers over private lines they lack stay cut, private_scope), and nothing else of Finance unless
+    granted. Writes still ask sees_budget and the rights."""
+    segment = B.segment_of(ctx.budgets(), b)
+    return theirs(b, who) or sees_budget(ctx, who, b) or bool(segment) and segment in ctx.dedicated(who)
 
 
 def may_write(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> bool:
@@ -968,6 +970,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "amount",
             "effective_from",
             "raise_check",
+            "segment",
         ),
     )
     new = _budget_fields(
@@ -985,6 +988,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             parent_id=V.opt_text(p, "parent_id", 80) or "",
             owner=who,
             created_at=ctx.at,
+            segment=segmentation.checked(ctx.c, V.opt_text(p, "segment", 80)),
         ),
     )
     new = _ad_warns(ctx, p, new)
@@ -1053,11 +1057,13 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "amount",
             "effective_from",
             "raise_check",
+            "segment",
         ),
     )
     old = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, old)
-    new = _ad_warns(ctx, p, replace(_budget_fields(p, old), active=V.flag(p, "active", old.active)))
+    segment = segmentation.checked(ctx.c, V.opt_text(p, "segment", 80)) if "segment" in p else old.segment
+    new = _ad_warns(ctx, p, replace(_budget_fields(p, old), active=V.flag(p, "active", old.active), segment=segment))
     if new.active:
         B.check(new, ctx.budgets(), ctx.accounts, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
     elif any(b.parent_id == old.id and b.active for b in ctx.budgets().values()):
@@ -1444,11 +1450,16 @@ def view_defaults_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """What each role sees by default (spec §7.5, the Access page's "Edit defaults"): managers, everyone else, and
     whether managers see their department's payroll total. Owner-only; grants a manager made that the new defaults no
     longer back are suspended."""
-    V.only(p, ("manager", "member", "manager_payroll"))
-    picks = {"manager": VW.MANAGER_POLICIES, "member": VW.MEMBER_POLICIES, "manager_payroll": VW.PAYROLL_POLICIES}
+    V.only(p, ("manager", "member", "manager_payroll", "segment_lead"))
+    picks = {
+        "manager": VW.MANAGER_POLICIES,
+        "member": VW.MEMBER_POLICIES,
+        "manager_payroll": VW.PAYROLL_POLICIES,
+        "segment_lead": VW.SEGMENT_LEAD_POLICIES,
+    }
     wanted = {role: V.choice(p, role, options) for role, options in picks.items() if role in p}
     if not wanted:
-        raise invalid("name at least one of manager, member, manager_payroll")
+        raise invalid("name at least one of manager, member, manager_payroll, segment_lead")
     old = SA.defaults(ctx.c)
 
     def apply(aid: str) -> Result:
@@ -1459,7 +1470,12 @@ def view_defaults_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         suspended = suspend_unstanding(ctx)
         now = SA.defaults(ctx.c)
         return {
-            "defaults": {"manager": now.manager, "member": now.member, "manager_payroll": now.manager_payroll},
+            "defaults": {
+                "manager": now.manager,
+                "member": now.member,
+                "manager_payroll": now.manager_payroll,
+                "segment_lead": now.segment_lead,
+            },
             "suspended_grants": suspended,
             "view_version": version,
         }

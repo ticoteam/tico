@@ -471,6 +471,8 @@ def contact_row(ctx: Ctx, r: Any, admin: bool, owed: Row | None = None) -> Row:
         "tax_id_last4": r["tax_id_last4"] if admin else None,
         "recipient_id": r["payment_ref"],
         "active": bool(r["active"]),
+        "segment_id": r["segment_id"] or None,
+        "segment_sure": bool(r["segment_sure"] or 0),  # 1 when a person set it, 0 for a guess (spec: Money)
         "owed": owed or {},
         "created_at": str(r["created_at"]),
     }
@@ -496,9 +498,11 @@ def contacts(
     cursor: str | None = None,
     limit: int = 50,
     at: str | None = None,
+    review: bool = False,
 ) -> Row:
     """Vendors (to whoever sees payables) and customers (receivables) by name, with what their open bills and
-    invoices owe. `kind` is vendor|customer|both; a search matches name and email."""
+    invoices owe. `kind` is vendor|customer|both; a search matches name and email. `review` lists only customers whose
+    segment is unset or a guess, for the segment review list."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     if kind is not None and kind not in AP.CONTACT_KINDS:
@@ -506,7 +510,9 @@ def contacts(
     kinds = [
         k
         for k in AP.CONTACT_KINDS
-        if sees_contact_kind(ctx, view, k) and (kind is None or k == kind or (kind != "both" and k == "both"))
+        if sees_contact_kind(ctx, view, k)
+        and (kind is None or k == kind or (kind != "both" and k == "both"))
+        and (not review or k != "vendor")
     ]
     if not kinds:
         raise denied("contacts are not in your view")
@@ -516,7 +522,14 @@ def contacts(
     marks = decode_cursor(cursor)
     after = (marks[0], marks[1]) if len(marks) == 2 else None
     rows = SAP.contacts_page(
-        c, book_id=ctx.book.id, kinds=kinds, q=(q or "").strip()[:100], active=active, after=after, most=most + 1
+        c,
+        book_id=ctx.book.id,
+        kinds=kinds,
+        q=(q or "").strip()[:100],
+        active=active,
+        after=after,
+        most=most + 1,
+        review=review,
     )
     page = rows[:most]
     ids = [str(r["id"]) for r in page]

@@ -23,8 +23,9 @@ SOURCES = ("manual", "import", "bank", "card", "bill", "invoice", "payment", "us
 BASES = ("both", "accrual")
 DOC_SOURCES = ("bill", "invoice")
 # Tags on a line, one value per kind. Vendor is not a tag: it is the line's contact.
-# location, project and class name a shared record (backend/records, fin_dimensions); the others are text.
-TAG_KINDS = ("team", "teammate", "budget", "project", "custom", "location", "class")
+# location, project and class name a shared record (backend/records, fin_dimensions); the others are text. segment is
+# one of the company's segments (backend/segments.py), checked where the tag is written (shared.check_tags).
+TAG_KINDS = ("team", "teammate", "budget", "project", "custom", "location", "class", "segment")
 MAX_LINES = 500
 
 

@@ -55,6 +55,7 @@ ALL = (
     "rule_test",
     "contact_create",
     "contact_update",
+    "contact_segment",
     "account_create",
     "account_update",
     "right_grant",
@@ -136,6 +137,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     # phase 2: contacts are payables' or receivables' (the planner asks for the right the contact's kind needs)
     "contact_create": (R.AP, R.AR),
     "contact_update": (R.AP, R.AR),
+    "contact_segment": (R.AP, R.AR),
     "bill_create": R.AP,
     "bill_update": R.AP,
     "bill_approve": R.AP,
@@ -353,6 +355,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("rollover?", "bool", ""),
         ("amount?", "minor", "none: tracked with no amount"),
         ("effective_from?", "day", ""),
+        ("segment?", "str", "a company segment; empty for none (a child with none reports under its parent's)"),
     ),
     "budget_update": (
         ("budget_id", "str", ""),
@@ -364,6 +367,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("active?", "bool", ""),
         ("amount?", "minor", ""),
         ("effective_from?", "day", ""),
+        ("segment?", "str", "a company segment; empty to clear"),
     ),
     "allocation_set": (
         ("budget_id", "str", ""),
@@ -545,6 +549,10 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("active?", "bool", ""),
         ("seats?", "int", "vendors"),
         ("renewal_on?", "day", "vendors: a day, or empty to clear"),
+    ),
+    "contact_segment": (
+        ("contact_id", "str", "a customer"),
+        ("segment_id", "str", "a company segment; empty to clear"),
     ),
     "bill_create": (
         ("vendor_id", "str", "a vendor contact"),
@@ -807,6 +815,7 @@ WORDS: dict[str, str] = {
     "rule_test": "Run a rule over the last 90 days you can see; writes nothing.",
     "contact_create": "Add a vendor or customer.",
     "contact_update": "Change a vendor or customer.",
+    "contact_segment": "Set a customer's segment. A person's choice is final; a bot's is a guess a person can change.",
     "bill_create": "Record a bill as a draft (its lines hold budget).",
     "bill_update": "Change a bill (lines only while it is a draft).",
     "bill_approve": "Enter a draft bill: it posts to payables and its budget hold becomes spend.",

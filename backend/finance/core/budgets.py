@@ -48,6 +48,7 @@ class Budget:
     rollover: str = "none"
     active: bool = True
     created_at: str = ""
+    segment: str = ""  # the company segment its spend reports under ("" inherits its parent's, segment_of)
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,19 @@ def chain(budgets: Mapping[str, Budget], leaf: str) -> list[Budget]:
         out.append(budgets[at])
         at = budgets[at].parent_id
     return out
+
+
+def segment_of(budgets: Mapping[str, Budget], b: Budget) -> str:
+    """The segment a budget's spend reports under: its own, else its nearest parent's that has one ("" for none). A
+    child with no segment of its own inherits its parent's for reporting."""
+    node: Budget | None = b
+    seen: set[str] = set()
+    while node is not None and node.id not in seen:
+        if node.segment:
+            return node.segment
+        seen.add(node.id)
+        node = budgets.get(node.parent_id) if node.parent_id else None
+    return ""
 
 
 def matches(budget: Budget, charge: Charge, accounts: Mapping[str, Account], org: Org) -> bool:
