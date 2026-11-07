@@ -1149,6 +1149,39 @@ def task_worktree_attach(api, args):
 
 
 @tool(
+    "hub_requirements",
+    "The rules a pipeline stage sets (its requirements, with their kind, reviewer and version). Read-only.",
+    {"stage_id": _s("The pipeline stage (a task step id)")},
+    required=("stage_id",),
+)
+def requirements(api, args):
+    return api.get("pipeline-stages/" + args["stage_id"] + "/requirements")
+
+
+@tool(
+    "hub_requirement_attach",
+    "Attach evidence to a requirement of the ticket's current stage: a company file (source file, with file_id and "
+    "optionally file_version), an uploaded blob (source blob, with blob_id) or a link (source link, with url). The "
+    "requirement's reviewer must be able to read the ticket. Returns the attachment with its digest and work version.",
+    {
+        "task_id": TASK_ID,
+        "requirement_id": _s("The stage requirement to attach to"),
+        "source": {"type": "string", "enum": ["file", "blob", "link"]},
+        "file_id": _s("A company file (source file)"),
+        "file_version": {"type": "integer", "minimum": 1, "description": "The file version; left out, the current one"},
+        "blob_id": _s("An uploaded blob (source blob)"),
+        "url": _s("An http or https address (source link)"),
+    },
+    required=("task_id", "requirement_id", "source"),
+    writes=True,
+)
+def requirement_attach(api, args):
+    body = {k: args[k] for k in ("source", "file_id", "file_version", "blob_id", "url") if args.get(k) is not None}
+    path = f"tasks/{args['task_id']}/requirements/{args['requirement_id']}/attachments"
+    return api.post(path, body, key=_key(args))
+
+
+@tool(
     "hub_task_show",
     "One task with its history and conversation. For several tasks, hub_task_show_many reads them in one call.",
     {"id": TASK_ID},

@@ -773,6 +773,9 @@ class Scheduler:
             webhook_delivery.ensure()  # a delivery worker that died comes back on the next tick
         except Exception as exc:
             failures.append({"webhook_delivery": type(exc).__name__})
+        from . import pipeline_judges
+
+        pipeline_judges.dispatch(self.store, at, failures)  # bot-reviewed pipeline requirements, one guarded call
         self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Deadline work that cannot wait for Clean up (backend/maintenance_steps/clean_up.py holds the pruning). Marked
