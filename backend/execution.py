@@ -2818,7 +2818,8 @@ def obsolete_notices_sql(c):
     entered) once the task is at another step, unless a person's act caused it,
     a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
     the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
-    moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
+    moved it elsewhere), a stranded-task resume once its task has moved on, finished or changed owner since it was written
+    (stranded_resume.obsolete_sql), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
     The legacy per-task wakes (check_back, status_check, stalled, step_status) still queued unstarted are obsolete whatever
     the task says: the task roundup sends one list instead. A turn that started and yielded (a drain's time limit, a shared
     login's hold cap) is never one of them: it is the rest
@@ -2829,6 +2830,8 @@ def obsolete_notices_sql(c):
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
+    from . import stranded_resume
+
     return (
         "FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
         f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
@@ -2851,6 +2854,7 @@ def obsolete_notices_sql(c):
         "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
         "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM history_events "
         "e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.created_at>m.created_at AND e.actor_id<>m.sender_id)) "
+        f"OR ({stranded_resume.obsolete_sql()}) "
         "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
         "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
         "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
