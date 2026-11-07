@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import hubdb
 from . import pipeline_engine as E
+from . import pipeline_rights
 from . import step_age
 
 # hubdb is untyped: its functions are Any here (as in stranded_resume.py), not partially unknown.
@@ -599,7 +600,9 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots read the pipeline manager", 403)
         with store.read() as c:
-            out = rail(c, pipeline_id, datetime.now(timezone.utc), who.actor)
+            # A members-only pipeline the reader may not see has no rail: the same answer as one that is not there.
+            seen = pipeline_rights.may_see(c, who.task_actor or who.actor, pipeline_id)
+            out = rail(c, pipeline_id, datetime.now(timezone.utc), who.actor) if seen else None
         if out is None:
             raise Problem("not_found", "No such pipeline", 404)
         return out

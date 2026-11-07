@@ -7,8 +7,9 @@ import uuid
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_requirements as R
+from backend.auth import Identity
 from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
-from backend.tests.test_pipeline_foundation import T
+from backend.tests.test_pipeline_foundation import T, insert
 
 STEPS = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
 
@@ -130,3 +131,74 @@ def test_links_leave_out_a_members_only_pipeline_and_list_a_page_at_a_time(api):
     assert set(made) <= set(insider) and hidden in insider
     assert get(api, f"pipeline-links?pipeline={legal}", "cara-test")["links"] == []
     assert [link["id"] for link in get(api, f"pipeline-links?pipeline={legal}", "ana-test")["links"]] == [hidden]
+
+
+def ticket(api, typ, title, owner, requester="human:ana"):
+    """A ticket on a pipeline, public to the company but for the pipeline's own privacy."""
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, requester, title, "", owner, type=typ, step="Doing", lint=False)
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task["id"],))
+    return task["id"]
+
+
+def test_a_tickets_owner_and_requester_read_it_on_a_members_only_pipeline_they_are_not_on(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Counsel" + tag, private=True)
+    with api.app.state.store.transaction() as c:
+        insert(c, "bots", id="b-42", slug="counsel-bot", display_name="Counsel Bot", state="active", created_at=T)
+    owned_by_bot = ticket(api, typ, "Bot's " + tag, owner="bot:b-42")
+    asked_by_cara = ticket(api, typ, "Cara asked " + tag, owner="human:ben", requester="human:cara")
+    theirs = ticket(api, typ, "Ben's " + tag, owner="human:ben")
+
+    # A bot reads its own work on a pipeline it is not on (the API takes runner tokens for bots, so call the auth layer).
+    with api.app.state.store.read() as c:
+        assert api.app.state.auth.task(c, Identity("bot:b-42", "bot", ""), owned_by_bot)["id"] == owned_by_bot
+    get(api, f"tasks/{asked_by_cara}", "cara-test")  # so does the person who asked for it
+    get(api, f"tasks/{theirs}", "cara-test", expected=404)
+    get(api, f"tasks/{theirs}", "ben-test")  # its owner, who is on no pipeline roster
+    get(api, f"tasks/{theirs}", "ana-test")  # the pipeline's owner
+
+
+def test_ticket_lists_search_and_the_pipeline_view_leave_out_a_members_only_pipeline_but_keep_a_readers_own(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Counsel" + tag, private=True)
+    theirs = ticket(api, typ, "Ben's " + tag, owner="human:ben")
+    mine = ticket(api, typ, "Cara's " + tag, owner="human:cara")
+    asked = ticket(api, typ, "Asked " + tag, owner="human:ben", requester="human:cara")
+
+    def listed(token, path):
+        return {t["id"] for t in get(api, path, token)["tasks"]}
+
+    everything, readers_own = {theirs, mine, asked}, {mine, asked}
+    assert listed("ana-test", f"tasks?type={typ}&limit=500") == everything
+    assert listed("cara-test", f"tasks?type={typ}&limit=500") == readers_own
+    assert listed("ana-test", f"tasks?q={tag}&limit=500") == everything
+    assert listed("cara-test", f"tasks?q={tag}&limit=500") == readers_own
+    get(api, f"pipeline?type={typ}", "cara-test", expected=422)  # a hidden type is no type to her
+    assert get(api, f"pipeline?type={typ}", "ana-test")["total"] == 3
+
+
+def test_the_manager_rail_and_the_review_queues_leave_out_a_members_only_pipeline(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, steps = make_pipeline(api, "Counsel" + tag)  # company-wide until it goes private
+    task = ticket(api, typ, "Review " + tag, owner="human:ben")
+    with api.app.state.store.transaction() as c:
+        R.add(
+            c,
+            "human:ana",
+            steps["Doing"],
+            {"name": "Terms reviewed", "kind": "approval", "reviewed_by": "person", "reviewer_id": "human:cara"},
+        )
+
+    def queued(path):
+        return {item["task_id"] for item in get(api, path, "cara-test")["items"]}
+
+    assert task in queued("pipelines/review/queue")  # the reviewer sees it while the pipeline is company-wide
+    assert task in queued(f"pipelines/{typ}/review/queue")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET pipeline_visibility='members' WHERE id=?", (typ,))
+    assert task not in queued("pipelines/review/queue")
+    get(api, f"pipelines/{typ}/review/queue", "cara-test", expected=404)
+    get(api, f"pipelines/{typ}/stages/{steps['Doing']}/review/queue", "cara-test", expected=404)
+    get(api, f"pipelines/{typ}/manager", "cara-test", expected=404)
+    get(api, f"pipelines/{typ}/manager", "ana-test")

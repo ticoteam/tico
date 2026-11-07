@@ -65,3 +65,23 @@ def test_only_a_person_edits_rules_and_a_bot_owner_row_edits_nothing(tmp_path, m
     c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", ("bot:b-42", legal))
     assert not P.may_edit_rules(c, "bot:b-42", legal)
     assert "bot:b-42" not in P.editable_pipeline_ids(c, "bot:b-42", [legal])
+
+
+def test_the_company_owner_sees_a_members_only_pipeline_and_an_admin_does_not(tmp_path, monkeypatch):
+    admins_are_chris(monkeypatch)
+    monkeypatch.setattr(access, "owner_email", lambda conn: "ana@acme.example")  # the owner's address, not an Admin's
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    legal = H.type_create(c, ANA, "Legal", STEPS, mover=True)["id"]
+    c.execute(
+        "UPDATE task_types SET pipeline_owner_id=?, pipeline_visibility='members' WHERE id=?", ("human:ben", legal)
+    )
+
+    assert P.may_see(c, "human:ben", legal)  # the pipeline's own owner
+    assert P.may_see(c, ANA, legal)  # the company owner, who owns neither the pipeline nor a seat on its roster
+    assert not P.may_see(c, "human:chris", legal)  # an Admin, who edits rules but does not see the pipeline
+    assert P.may_edit_rules(c, "human:chris", legal)
+    assert P.visible_pipeline_ids(c, "human:chris", [legal]) == set()
+    insert(c, "pipeline_members", pipeline_id=legal, actor_id="human:cara", created_at=T)
+    assert P.may_see(c, "human:cara", legal)  # a member

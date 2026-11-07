@@ -128,6 +128,12 @@ def owner_and_admin_emails(c: Any) -> list[str]:
     return emails([owner, *(stored["admins"] if "admins" in stored else stored.get("bot_admins") or [])])
 
 
+def owner_email(c: Any) -> str:
+    """The company owner's address as stored, lowercase, or "" when none is stored: a members-only pipeline shows to the
+    person with this address (backend/pipeline_rights.py)."""
+    return str((_load_json(c, OWNER) or {}).get("email") or "").strip().lower()
+
+
 def load_access(c, settings):
     stored = _load_json(c, ACCESS)
     source = "owner" if stored else "environment"
