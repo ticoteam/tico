@@ -113,6 +113,7 @@
  "support file": "support_unreachable",
  "support send": "not_found",
  "task bulk": "validation",
+ "task check-back": "check_back",
  "task question": "identity",
  "task relate": "kind",
  "task run": "run-now",
