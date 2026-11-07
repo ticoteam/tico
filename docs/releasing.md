@@ -304,9 +304,10 @@ A `docs/` page, CHANGELOG.md or a GitHub file runs the tests that read it (by pa
 the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
 `scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
 a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
-fall back to the full default Python suite and core browser scripts. Runner/harness changes also run slow conformance on
+run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`). A conftest runs the tests below it
+while there are at most 25; a test that reaches a changed file only through a conftest fixture adds the smoke set. Runner/harness changes also run slow conformance on
 the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
-changes, or every browser script when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
+changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
 crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
@@ -345,7 +346,7 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
 takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
-GitHub release. The merge queue runs this full default suite on uncertain selections; known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
+GitHub release. The merge queue never runs the full default suite: an uncertain selection runs the smoke set, and known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
 
 ## Merge queue
