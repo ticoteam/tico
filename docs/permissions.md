@@ -175,7 +175,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   its reader may not read, directly or through a chain of such links. The file refusal of the message a reply answers is
   not yet applied to the reply in every place the reply is shown. A fix is in progress, and the file rule returns to
   these pages when it ships. The check does not read the words typed into a message or the files attached to it. An
-  attached file is checked on its own when opened. A Tico Mail Read grant on a letter's scan lets its holder open that
+  attached file is checked when opened, with each message it is attached to. A Tico Mail Read grant on a letter's scan lets its holder open that
   scan whatever it is attached to, and the grant does not open the task. Otherwise it is refused if it is linked to a
   task its reader may not read; if any message it is attached to is one its reader may not read; if it is a letter's
   file or proof that its reader may not read; if it is the poster or thumbnail of a media file that is refused to its
