@@ -646,6 +646,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
                     [--year YYYY]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
+    hub finance brief                      what changed in the money you may see: a few short lines
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
@@ -5098,6 +5099,8 @@ def parser():
         s.add_argument(flag)
     s.add_argument("--days", type=int)
     s.set_defaults(fn="finance metric")
+    s = fin.add_parser("brief", help="what changed in the money you may see: a few short lines")
+    s.set_defaults(fn="finance brief")
     s = fin.add_parser("act", help="ask for one Finance action (help lists kinds)")
     s.add_argument("kind")
     s.add_argument("--payload", type=_finance_payload, help="the kind's fields as JSON, or - to read stdin")

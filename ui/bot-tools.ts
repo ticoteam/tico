@@ -1,6 +1,6 @@
 /* A bot's tools (docs/creating-bots.md, "What people see about a bot's tools"), in two places.
    Beside the bot's name, after its runtime mark: one button, up to three small icons overlapped (the
-   service's logo when ui/tool-icons.js has it, the name's first two letters otherwise) and "+N" for the rest.
+   service's logo when ui/tool-icons.ts has it, the name's first two letters otherwise) and "+N" for the rest.
    It opens a short list, a line a tool (name, what it acts as, a problem), and "Manage" opens the full list.
    The model the bot runs on is left out there, since the runtime mark beside the name already says it. A red
    dot marks a tool with a problem.
@@ -21,11 +21,11 @@ type BtToolsPage = import('./types/api').ListBotToolsResponse & {report_error?: 
 interface BtInboxBots {
   bots?: Array<{bot: string; sources?: Array<{kind: string; name: string}>}>;
 }
-// The page's get(path) from ui/app/api.js: resolves with the parsed JSON body.
+// The page's get(path) from ui/app/api.ts: resolves with the parsed JSON body.
 type BtGet = <T>(path: string) => Promise<T>;
-// The page's esc from ui/app/core.js.
+// The page's esc from ui/app/core.ts.
 type BtEsc = (value: unknown) => string;
-// window.toolIcons from ui/tool-icons.js. The fallback below has no has(); the real one does.
+// window.toolIcons from ui/tool-icons.ts. The fallback below has no has(); the real one does.
 interface BtIcons {
   has?: (key: unknown) => boolean;
   markup: (tool: BtTool) => string;
@@ -295,7 +295,7 @@ declare var botTools: BtApi;
         ? `<span class="bt-problem">${esc(tool.problem)}</span>`
         : `${statusPill(tool.status)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
       rows.push(['Status', status]);
-      // Who else has it and its credentials live in Tools (ui/app/redesign-library.js).
+      // Who else has it and its credentials live in Tools (ui/app/redesign-library.ts).
       const open = tool.service ? `<a class="bt-open" href="#/tools/${encodeURIComponent(tool.service)}">Open in Tools</a>` : '';
       return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>${open}</div>`;
     }

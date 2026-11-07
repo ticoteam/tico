@@ -1,4 +1,4 @@
-/* Internal documents and external sources share Docs search. Ask opens the Ask panel (ui/app/ask-panel.js), which
+/* Internal documents and external sources share Docs search. Ask opens the Ask panel (ui/app/ask-panel.ts), which
    sees the page. */
 'use strict';
 
@@ -72,7 +72,7 @@ interface DocsSearchResult {
   results: DocsSearchHit[];
 }
 
-/** The page's entry point, which the router calls (ui/app/router.js). */
+/** The page's entry point, which the router calls (ui/app/router.ts). */
 declare var pageCompanyDocs: () => Promise<void>;
 
 let DOC_DATA: DocsPageData = {docs: [], linked: []};
@@ -159,7 +159,6 @@ async function docsSetup(slot: HTMLElement, {asked, current, openImport, reload}
         <button class="ghost" type="button" data-setup-skip>${asked ? 'Not now' : 'Skip for now'}</button></div></form></section>`;
   // The template just above draws the form and its named controls; the `!` lookups are those elements.
   const form = slot.querySelector<DocsSetupForm>('form')!, line = form.querySelector<HTMLElement>('[data-error]')!; // `!`: drawn above
-  const fail = (message: string) => { line.textContent = message; line.hidden = !message; form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = false; }; // `!`: drawn above
   form.querySelector<HTMLButtonElement>('[data-setup-import]')!.onclick = () => openImport(); // `!`: drawn above
   form.querySelector<HTMLButtonElement>('[data-setup-skip]')!.onclick = async () => { // `!`: drawn above
     slot.innerHTML = '';
@@ -168,11 +167,15 @@ async function docsSetup(slot: HTMLElement, {asked, current, openImport, reload}
   };
   form.onsubmit = async event => {
     event.preventDefault();
+    // The template above draws the submit button. A missing one throws here, where the old `!` lookup threw.
+    const submit = form.querySelector<HTMLButtonElement>('[type=submit]');
+    if (!submit) throw new Error('The docs setup form did not draw its submit button');
+    const fail = (message: string) => { line.textContent = message; line.hidden = !message; submit.disabled = false; };
     const sources = [...new Set(form.elements.sources.value.split(/[\s,]+/).map(word => word.trim()).filter(Boolean))];
     const note = form.elements.note.value.trim();
     if (!sources.length && !note) return fail('Add a link to your docs, or say where they are.');
     if (sources.length > 20) return fail('Up to 20 links at a time.');
-    fail(''); form.querySelector<HTMLButtonElement>('[type=submit]')!.disabled = true; // `!`: drawn above
+    fail(''); submit.disabled = true;
     try {
       const result: DocsSetupFiled = await post('/v2/librarian/setup/docs', {sources, note});
       DOCS_SETUP_SENT = {task: result.task_id, count: (result.sources || []).length};
@@ -230,7 +233,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   $('#docs-add-source').onclick = () => openLink(null);
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
-  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.js); what it sends carries this page.
+  // #docs-ask opens the Ask panel ([data-ask-open], ui/app/ask-panel.ts); what it sends carries this page.
 
   const cacheKey = archived ? 'archived' : 'active';
   const fresh = docsLoadAll(archived);

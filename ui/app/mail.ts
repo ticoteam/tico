@@ -69,6 +69,12 @@ const MAIL_LABEL: Record<string, string> = {INBOX: 'Messages', UNREAD: 'Unread',
   IMPORTANT: 'Important', DRAFT: 'Drafts', SPAM: 'Spam', TRASH: 'Trash'};
 let MAIL_LOAD = 0, MAIL_SEARCH = 0;
 let MAIL_ACC: MailPageAcc = {key: '', messages: [], cursor: null};
+// A page element the drawn markup must hold: a missing one throws a plain Error that names it.
+function mailNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {
+  const el = root.querySelector<T>(selector);
+  if (!el) throw new Error(`${selector} is not on the page`);
+  return el;
+}
 function mailForget() { MAIL_ACC = {key: '', messages: [], cursor: null}; }
 function mailParams(): MailPageState {
   const raw = (S.route.startsWith(MAIL) ? S.route.slice(MAIL.length) : '');
@@ -146,13 +152,13 @@ async function mailFill(st: MailPageState, append: boolean): Promise<void> {
 }
 function mailDrawList(st: MailPageState, listed: MailPageMessage[], boxes: MailPageBox[]): void {
   if (!listed.length) {
-    $('#mail-list')!.innerHTML = `<div class="empty">${st.q || st.label || st.attach
+    mailNeed('#mail-list').innerHTML = `<div class="empty">${st.q || st.label || st.attach
       ? 'Nothing matches this search.'
       : (boxes.some(b => b.synced_at) ? 'No messages in this mailbox.' : 'No synced messages yet.')}</div>`;
     return;
   }
   const filterBox = mailBoxParam(st.mailbox);
-  $('#mail-list')!.innerHTML = listed.map(m => `<button type="button" class="mail-row${st.thread === m.thread_id && (!filterBox || filterBox === m.mailbox) ? ' on' : ''}"
+  mailNeed('#mail-list').innerHTML = listed.map(m => `<button type="button" class="mail-row${st.thread === m.thread_id && (!filterBox || filterBox === m.mailbox) ? ' on' : ''}"
       data-thread="${esc(m.thread_id)}" data-mailbox="${esc(m.mailbox)}">
       <span class="when" title="${esc(fmt(m.date))}">${esc(mailWhen(m.date, m.epoch))}</span>
       <span>
@@ -176,11 +182,11 @@ async function mailMore(): Promise<void> {
 function mailSearchBox(): HTMLInputElement | null { return $('#mail-q') as HTMLInputElement | null; }
 async function pageMail(): Promise<void> {
   if (S.me && !S.me.mail_access) { location.hash = TASKS; return; }
-  $('#main')!.classList.add('mail-layout');
+  mailNeed('#main').classList.add('mail-layout');
   const st = mailParams();
   const load = ++MAIL_LOAD;
   if (!$('#mail-page')) {
-    $('#main')!.innerHTML = `<div id="mail-page">
+    mailNeed('#main').innerHTML = `<div id="mail-page">
       <div class="meeting-head"><div><h1>Message bots${betaPill('message_bots')}</h1></div></div>
       <div class="mail-shell">
         <nav class="mail-boxes" aria-label="Message bots"><h2>Message bots</h2><div class="mail-box-list" id="mail-box-list"></div></nav>
@@ -203,13 +209,13 @@ async function pageMail(): Promise<void> {
       </div>
     </div>`;
     const tabBar = $('.mail-tabs') as HTMLElement;
-    const searchBox = mailSearchBox()!;
+    const searchBox = mailNeed<HTMLInputElement>('#mail-q');
     ($('#mail-box-list') as HTMLElement).onclick = ev => {
-      const button = eventElement(ev)!.closest<HTMLElement>('[data-mailbox]'); if (!button) return;
+      const button = eventElement(ev)?.closest<HTMLElement>('[data-mailbox]'); if (!button) return;
       mailGo({mailbox: button.dataset.mailbox, thread: '', tbox: '', view: 'inbox'});
     };
     tabBar.onclick = ev => {
-      const button = eventElement(ev)!.closest<HTMLElement>('[data-mail-view]'); if (!button) return;
+      const button = eventElement(ev)?.closest<HTMLElement>('[data-mail-view]'); if (!button) return;
       mailGo({view: button.dataset.mailView});
     };
     tabBar.onkeydown = ev => {
@@ -223,32 +229,32 @@ async function pageMail(): Promise<void> {
     };
     searchBox.oninput = () => {
       clearTimeout(MAIL_SEARCH);
-      MAIL_SEARCH = setTimeout(() => mailGo({q: mailSearchBox()!.value.trim(), thread: ''}), 280);
+      MAIL_SEARCH = setTimeout(() => mailGo({q: mailNeed<HTMLInputElement>('#mail-q').value.trim(), thread: ''}), 280);
     };
     searchBox.onkeydown = ev => {
       if (ev.key === 'Enter') { ev.preventDefault(); clearTimeout(MAIL_SEARCH); mailGo({q: searchBox.value.trim(), thread: ''}); }
     };
     ($('#mail-chips') as HTMLElement).onclick = ev => {
-      const b = eventElement(ev)!.closest<HTMLElement>('[data-mail-chip]'); if (!b) return;
+      const b = eventElement(ev)?.closest<HTMLElement>('[data-mail-chip]'); if (!b) return;
       const cur = mailParams();
       if (b.dataset.mailChip === 'attach') mailGo({attach: !cur.attach, thread: ''});
       else mailGo({label: cur.label === b.dataset.mailChip ? '' : b.dataset.mailChip, thread: ''});
     };
     ($('#mail-list') as HTMLElement).onclick = ev => {
-      if (eventElement(ev)!.closest('[data-mail-more]')) { mailMore(); return; }
-      const row = eventElement(ev)!.closest<HTMLElement>('[data-thread]'); if (!row) return;
+      if (eventElement(ev)?.closest('[data-mail-more]')) { mailMore(); return; }
+      const row = eventElement(ev)?.closest<HTMLElement>('[data-thread]'); if (!row) return;
       const cur = mailParams();
       mailGo({mailbox: cur.mailbox || row.dataset.mailbox, thread: row.dataset.thread,
               tbox: row.dataset.mailbox});
     };
     ($('#mail-thread') as HTMLElement).onclick = ev => {
-      if (eventElement(ev)!.closest('.mail-back')) mailGo({thread: ''});
+      if (eventElement(ev)?.closest('.mail-back')) mailGo({thread: ''});
     };
   }
   if (load !== MAIL_LOAD) return;
   let boxes: MailPageBox[] = [];
   try { boxes = (await get<{mailboxes?: MailPageBox[] | null}>('/v2/mail/mailboxes')).mailboxes || []; }
-  catch (e) { if (load === MAIL_LOAD) $('#mail-list')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+  catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MAIL_LOAD) return;
   const mine = (S.me?.email || '').toLowerCase();
   if (!st.mailbox && boxes.length) {
@@ -300,7 +306,7 @@ async function pageMail(): Promise<void> {
   if (MAIL_ACC.key !== key) MAIL_ACC = {key, messages: [], cursor: null};
   if (!MAIL_ACC.messages.length) {
     try { await mailFill(st, false); }
-    catch (e) { if (load === MAIL_LOAD) $('#mail-list')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+    catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   }
   if (load !== MAIL_LOAD) return;
   const listed = MAIL_ACC.messages;
@@ -308,15 +314,15 @@ async function pageMail(): Promise<void> {
   if (split) split.classList.toggle('thread-open', !!st.thread);
   mailDrawList(st, listed, boxes);
   if (!st.thread) {
-    $('#mail-thread')!.innerHTML = '<div class="empty">Select a message to read the thread.</div>';
+    mailNeed('#mail-thread').innerHTML = '<div class="empty">Select a message to read the thread.</div>';
     return;
   }
-  $('#mail-thread')!.innerHTML = '<div class="empty">Loading thread…</div>';
+  mailNeed('#mail-thread').innerHTML = '<div class="empty">Loading thread…</div>';
   try {
     const t = await get<MailPageThread>(`/v2/mail/threads/${encodeURIComponent(st.thread)}?mailbox=${encodeURIComponent(filterBox || st.tbox || listed.find(m => m.thread_id === st.thread)?.mailbox || '')}`);
     if (load !== MAIL_LOAD) return;
     const subject = (t.messages[0] && t.messages[0].subject) || '(no subject)';
-    $('#mail-thread')!.innerHTML = `<button type="button" class="mail-back">← Messages</button>
+    mailNeed('#mail-thread').innerHTML = `<button type="button" class="mail-back">← Messages</button>
       <h2>${esc(subject)}</h2>
       ${t.messages.map(m => `<article class="mail-msg">
         <div class="meta"><span class="who">${esc(mailFrom(m))}</span>
@@ -328,6 +334,6 @@ async function pageMail(): Promise<void> {
         ${(m.attachments || []).length ? `<p class="muted" style="margin:8px 0 0">${m.attachments!.map(a => esc(a.name || a.filename || 'attachment')).join(' · ')}</p>` : ''}
       </article>`).join('')}`;
   } catch (e) {
-    if (load === MAIL_LOAD) $('#mail-thread')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
+    if (load === MAIL_LOAD) mailNeed('#mail-thread').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
   }
 }

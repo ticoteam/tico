@@ -1,4 +1,4 @@
-// Rules › Internal is Reach (docs/reach.md, ui/app/org-rules.js): the whole org chart with lines from the selected party
+// Rules › Internal is Reach (docs/reach.md, ui/app/org-rules.ts): the whole org chart with lines from the selected party
 // (0 red, N amber, a rule alone blue and dashed, each with a chip), and the party's panel beside it: who it can reach and
 // how much, the rules it follows (company and team rules folded), and its exceptions. Tapping a rule opens the rule's
 // panel; + Add rule opens Add rule with the party as Who; + Add exception searches a team, person or bot and opens the line
@@ -57,7 +57,7 @@ async function openReach(browser, {viewport = DESKTOP, hash = '#/rules', viewer 
     if (url.origin !== ORIGIN) return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push({method, path: p, body});

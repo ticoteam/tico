@@ -1,4 +1,4 @@
-/* Lenses are the Strategy section's second tab (ui/strategy-page.js): thought exercises run against the strategy, such as
+/* Lenses are the Strategy section's second tab (ui/strategy-page.ts): thought exercises run against the strategy, such as
    Blue Ocean or Scenarios (backend/lenses.py). The list shows each lens and the past runs; Run asks the lens's steps one at a
    time in a panel and goes to the run page, which draws the result: a summary, a chart in hand-written SVG, sections, how the
    result bears on the bets, and changes the owner may add to the draft. Nothing here publishes. */
@@ -22,7 +22,7 @@ type LensAnswers = Record<string, LensAnswer>;
 interface LensReadError { error: string; }
 type LensRead = LensAnswer | LensReadError | undefined;
 interface LensFlow { lens: LensDef; i: number; answers: LensAnswers; on: string; published: boolean; notice: string; }
-interface LensBet { id: string; status?: string; }
+interface LensBet { id: string; status?: string; rank?: number | null; }
 interface LensPage { load: number; timer: ReturnType<typeof setTimeout> | 0; bets: LensBet[]; label: string; watch: ResizeObserver | null; }
 interface LensAxis { name?: string; low?: string; high?: string; }
 interface LensCell { q: string; title?: string; text?: string; }
@@ -289,7 +289,7 @@ function lensFlowBind(dlg: HTMLDialogElement, flow: LensFlow, step: LensStep | n
     flow.i++; flow.notice = ''; lensFlowRender();
   };
   form.onsubmit = ev => { ev.preventDefault(); void go(false); };
-  dlg.querySelector<HTMLButtonElement>('[data-lens-back]')!.onclick = () => { if (save()) { flow.i = Math.max(0, flow.i - 1); flow.notice = ''; lensFlowRender(); } };  // lensFlowRender writes the Back button.
+  lensesNeed<HTMLButtonElement>('[data-lens-back]', dlg).onclick = () => { if (save()) { flow.i = Math.max(0, flow.i - 1); flow.notice = ''; lensFlowRender(); } };  // lensFlowRender writes the Back button.
   const skip = dlg.querySelector<HTMLButtonElement>('[data-lens-skip]');
   if (skip) skip.onclick = () => void go(true);
   for (const b of dlg.querySelectorAll<HTMLButtonElement>('[data-lens-on]')) b.onclick = () => { flow.on = b.dataset.lensOn ?? ''; for (const x of dlg.querySelectorAll<HTMLButtonElement>('[data-lens-on]')) x.setAttribute('aria-pressed', String(x === b)); };  // the selector matched buttons that have data-lens-on set.
@@ -299,7 +299,7 @@ function lensFlowBind(dlg: HTMLDialogElement, flow: LensFlow, step: LensStep | n
     const add = (after: Element | null): void => {
       if (rows.children.length >= LENS_MAX_LIST) return;
       const li = document.createElement('li'); li.innerHTML = lensRowHtml('').replace(/^<li>|<\/li>$/g, '');
-      (after ? after.after(li) : rows.append(li)); li.querySelector<HTMLInputElement>('input')!.focus();  // lensRowHtml always renders an input in a new row.
+      (after ? after.after(li) : rows.append(li)); lensesNeed<HTMLInputElement>('input', li).focus();  // lensRowHtml always renders an input in a new row.
     };
     rows.onkeydown = ev => {
       const input = eventElement(ev)?.closest<HTMLInputElement>('input');  // a key pressed in a row's input has an Element target.
@@ -313,7 +313,7 @@ function lensFlowBind(dlg: HTMLDialogElement, flow: LensFlow, step: LensStep | n
       const del = eventElement(ev)?.closest<HTMLButtonElement>('[data-lens-del]');
       if (!del) return;
       const li = del.closest('li')!;  // a [data-lens-del] button always sits in an li row (lensRowHtml).
-      if (rows.children.length > 1) li.remove(); else li.querySelector<HTMLInputElement>('input')!.value = '';  // every list row has an input (lensRowHtml).
+      if (rows.children.length > 1) li.remove(); else lensesNeed<HTMLInputElement>('input', li).value = '';  // every list row has an input (lensRowHtml).
     };
     dlg.querySelector<HTMLButtonElement>('[data-lens-add]')!.onclick = () => add(rows.lastElementChild);  // lensFlowRender writes the Add button.
   }
@@ -325,6 +325,12 @@ function lensFlowBind(dlg: HTMLDialogElement, flow: LensFlow, step: LensStep | n
   };
 }
 
+// A page element the drawn markup must hold: a missing one throws a plain Error that names it.
+function lensesNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {
+  const el = root.querySelector<T>(selector);
+  if (!el) throw new Error(`${selector} is not on the page`);
+  return el;
+}
 async function lensFlowRun(dlg: HTMLDialogElement, flow: LensFlow): Promise<void> {
   const buttons = [...dlg.querySelectorAll<HTMLButtonElement>('button')];
   buttons.forEach(b => { b.disabled = true; });
@@ -337,7 +343,7 @@ async function lensFlowRun(dlg: HTMLDialogElement, flow: LensFlow): Promise<void
     // Nothing published yet: the owner may run it on the draft instead.
     if (errorCode(error) === 'no_published') { flow.published = false; flow.on = 'draft'; flow.notice = 'Nothing is published yet. Run on the draft?'; lensFlowRender(); return; }
     buttons.forEach(b => { b.disabled = false; });
-    dlg.querySelector<HTMLButtonElement>('[data-lens-back]')!.disabled = flow.i === 0;  // the dialog still holds the Back button lensFlowRender rendered.
+    lensesNeed<HTMLButtonElement>('[data-lens-back]', dlg).disabled = flow.i === 0;  // the dialog still holds the Back button lensFlowRender rendered.
     toast(errorMessage(error, 'Could not run it'), true);
     return;
   }

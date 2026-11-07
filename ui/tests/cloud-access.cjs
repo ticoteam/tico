@@ -27,7 +27,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css'
-          : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/me') return json({id: 'ana', email: 'ana@boatyard.example', role, cloud: true, config: {company_name: 'Boatyard'}});
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], queued: [], cloud_access: cloud});
