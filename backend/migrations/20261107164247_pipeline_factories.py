@@ -1,7 +1,6 @@
 """Pipeline F0: factories. A factory groups pipelines (Product factory: Roadmap and Dev; Lead factory: Campaigns and Sales).
 A pipeline belongs to at most one factory: task_types.factory_id, NULL for a pipeline in none. This is schema only; no
-code reads or writes a factory yet. The pipelines view that names factory_id is created at boot (backend/pipeline_views.py),
-not here: it also names columns module code adds."""
+code reads or writes a factory yet."""
 
 
 def _columns(conn, table):

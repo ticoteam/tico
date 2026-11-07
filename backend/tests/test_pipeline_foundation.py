@@ -141,14 +141,12 @@ def test_the_f0_backfills_fill_a_booted_database_and_a_second_boot_changes_nothi
     assert c.execute("SELECT work_revision FROM tasks WHERE id=?", (active["id"],)).fetchone()[0] == 0
     assert (
         c.execute(
-            "SELECT factory_id, prefix, manager_every_minutes FROM pipelines WHERE id=?", (dev["id"],)
+            "SELECT factory_id, prefix, manager_every_minutes FROM task_types WHERE id=?", (dev["id"],)
         ).fetchone()["manager_every_minutes"]
         == 10
     )
     assert (
-        c.execute(
-            "SELECT limit_minutes FROM pipeline_stages WHERE id=?", (step_id(c, dev["id"], "Review"),)
-        ).fetchone()[0]
+        c.execute("SELECT limit_minutes FROM task_steps WHERE id=?", (step_id(c, dev["id"], "Review"),)).fetchone()[0]
         == 120
     )
     c.close()

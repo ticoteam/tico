@@ -10,8 +10,7 @@ tasks.work_revision: 0 for every task.
 
 task_types.role, task_types.manager and task_steps.flow are not added here. Module code adds them at boot, and their
 absence is read: roadmap_flow.migrate backfills the roles only while task_types.role is missing, and step_flow reads
-task_steps.flow to know whether flows exist. Adding them early would change that. The pipeline views name them and are
-created at boot, after they exist (backend/pipeline_views.py).
+task_steps.flow to know whether flows exist. Adding them early would change that.
 
 Every backfill fills only the rows it has not filled yet, so a second run changes nothing. Applied migrations are recorded
 in schema_migrations and not run again. The Dev tickets and Product roadmap types are made by module code after the

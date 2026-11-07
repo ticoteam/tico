@@ -1313,9 +1313,6 @@ class Store:
 
             _step_flow.ensure(c)
             _step_flow.seed(c)
-            from . import pipeline_views as _pipeline_views
-
-            _pipeline_views.ensure(c)  # after task_steps.flow, task_types.role and manager exist
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
 
