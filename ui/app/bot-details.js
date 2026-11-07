@@ -52,6 +52,15 @@ async function botSettingsHistoryLoad(slug) {
   } catch (error) { if (host.isConnected) host.textContent = error.message; }
 }
 
+// The bot's Segments card on its Info pane: its tags, and the owner's Segments menu (ui/app/segment-tags.ts).
+function botSegmentsPaint(slug) {
+  const card = $('#bot-segments'), bot = /** @type {any} */ (botRow(slug));
+  if (!card || !bot) return;
+  const ref = 'bot:' + bot.id, row = segTagRowHtml(ref);
+  card.hidden = !row;
+  card.innerHTML = row ? `<header><h2>Segments</h2></header>${row}` : '';
+  if (row) segTagRowWire(card, ref, bot.display_name || bot.id);
+}
 function botInfoRefresh(slug) {
   const bot = botRow(slug), host = $('#bot-setup-card');
   if (!bot || !host || botLimited(bot)) return;

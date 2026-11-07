@@ -424,6 +424,7 @@ async function pageBot(slug, tab) {
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
     <div id="bot-review-host">${botReviewHTML(slug)}</div>
+    <section class="card" id="bot-segments" hidden></section>
     ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
       <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
@@ -676,7 +677,7 @@ function showBotTab(tab) {
   if (view === 'history') void botHistoryLoad(BOT.slug);
   if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
-  if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
+  if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); botSegmentsPaint(BOT.slug); void segTagsLoad().then(() => botSegmentsPaint(BOT.slug)); }
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();

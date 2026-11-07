@@ -90,7 +90,7 @@ function rdoCard(n, {top = false} = {}) {
   const cls = ['rdo-card', n.kind === 'person' && 'person', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
   const label = title ? `${name} · ${title}` : name;
   return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
-    <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}</span></button>`;
+    <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}${segTagCard(segTagsOf(ref))}</span></button>`;
 }
 // A teammate and, under it on a rail, whoever reports to it inside the same group. A person who heads people or groups
 // has them side by side underneath instead, as the top person does. `ctx.group` draws a group in place of
@@ -252,7 +252,7 @@ async function pageRdOrg() {
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
-  const groups = await get('/v2/groups').catch(() => null);
+  const [groups] = await Promise.all([get('/v2/groups').catch(() => null), segTagsLoad()]);
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
   RDO.groupsTried = true;
   if (groups) RDO.groups = Array.isArray(groups) ? groups : groups.groups || [];
@@ -362,8 +362,10 @@ function rdoSheet(ref) {
   const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref), targets = rdoMoveTargets(from);
   const may = !targets || targets.length > 0;
   const id = ref.slice(ref.indexOf(':') + 1), href = ref.startsWith('person:') ? `#/person/${encodeURIComponent(id)}` : `#/bot/${encodeURIComponent(id)}`;
+  const segs = segTagRowHtml(ref);
   const body = `<div class="bd-fields rdo-sheet">
       <div class="bd-field"><span>Group</span><span data-rdo-home>${esc(rdoGroupName(from))}${led.length ? ` · lead of ${esc(led.map(rdoGroupName).join(', '))}` : ''}</span></div>
+      ${segs ? `<div class="bd-field"><span>Segments</span>${segs}</div>` : ''}
       ${may ? `<label class="bd-field"><span>Move to…</span><select name="to">${rdoGroupOptions(from, targets)}</select></label>` : ''}
       <a class="rdo-open" href="${href}">Open ${esc(name)}</a></div>`;
   const dlg = useDialog(name, body, async form => {
@@ -373,6 +375,7 @@ function rdoSheet(ref) {
     toast(`${name} moved to ${rdoGroupName(to)}`);
   }, () => void rdoReload());
   dlg.classList.add('rd-sheet', 'rdo-dialog');
+  segTagRowWire(dlg, ref, name, () => rdoDraw());
   const submit = dlg.querySelector('[type=submit]');
   if (may) submit.textContent = 'Move';
   else dlg.querySelector('.use-dialog-row').remove();

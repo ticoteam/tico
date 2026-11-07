@@ -12,6 +12,15 @@ const PERSON_TAB_LABELS = {assistant: 'Assistant', profile: 'Profile', slack: 'S
 function personCanEdit(p) {
   return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
 }
+// The teammate's Segments card: its tags, and the owner's Segments menu. Hidden until there is something to show.
+function personSegmentsPaint(p) {
+  const card = $('#person-segments');
+  if (!card || card.dataset.for !== p.id) return;
+  const row = segTagRowHtml('person:' + p.id);
+  card.hidden = !row;
+  card.innerHTML = row ? `<header><h2>Segments</h2></header>${row}` : '';
+  if (row) segTagRowWire(card, 'person:' + p.id, p.name || p.id);
+}
 function fieldEditor(label, value, {placeholder, rows, save}) {
   const current = String(value || '');
   return `<section class="card"><header><h2>${esc(label)}</h2>
@@ -84,6 +93,7 @@ function pagePerson(id, tab) {
     <section class="card tasks" id="person-tasks-card"><header><h2>Tasks</h2>
         <button class="ghost" type="button" id="person-task-add" aria-haspopup="dialog">+ Add task</button></header>
       <div id="person-tasks">Loading…</div></section>
+    <section class="card" id="person-segments" data-for="${esc(id)}" hidden></section>
     ${fieldEditor('Goals', p.goals, {placeholder: 'What they are trying to get done.', save: edit})}
     ${fieldEditor('Notes', p.notes, {placeholder: 'Working notes about this human. Visible to humans who can open this profile.', rows: 8, save: edit})}
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>
@@ -118,6 +128,8 @@ function pagePerson(id, tab) {
   </div>`;
   void headGoalsLoad('human:' + p.id);
   void personAccessLoad(p);
+  personSegmentsPaint(p);
+  void segTagsLoad().then(() => personSegmentsPaint(p));
   const dmButton = $('#person-dm');
   if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
   $('#ptabs').onclick = ev => {
