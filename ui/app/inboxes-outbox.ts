@@ -1,5 +1,5 @@
 /* ui/app/inboxes-outbox.ts — Letters out through Tico's Gateway: its page (#/tools/address/outbox) and its card on
-   Tools › Settings › Letters out. Registry: ui/app/inboxes.js. */
+   Tools › Settings › Letters out. Registry: ui/app/inboxes.ts. */
 'use strict';
 
 // The fields of the letters routes' answers that this page reads (api.d.ts has no type for them).

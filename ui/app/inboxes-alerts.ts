@@ -1,5 +1,5 @@
 /* ui/app/inboxes-alerts.ts — Personal phone alerts: Settings › General › Notifications (settings.js draws it into
-   #settings-notifications with a ctx of its own). The pills and card come from ui/app/inboxes.js. */
+   #settings-notifications with a ctx of its own). The pills and card come from ui/app/inboxes.ts. */
 'use strict';
 
 // The alert events a person can ask for, in the order the card draws them.
