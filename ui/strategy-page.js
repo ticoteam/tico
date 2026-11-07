@@ -9,6 +9,8 @@ let STRAT = null;          // the open page: {data, kpis, load, adding, editSect
 let STRAT_LOAD = 0;
 // The market cards' reads, each undefined while it loads and null when it could not be read: {segments, rivals, news, growth}.
 let STRAT_MKT = {};
+// The text of a card's read that failed, by key ('' when it did not): the card says why instead of showing none.
+let STRAT_MKT_FAIL = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
@@ -50,6 +52,7 @@ window.pageStrategy = async function pageStrategy() {
   main.classList.add('strategy-layout');
   const kept = S.lastRead.strategy;
   STRAT_MKT = {...(kept?.market || {})};
+  STRAT_MKT_FAIL = {};
   main.innerHTML = strategyHeadHtml('strategy') + `<div id="strat-body" class="strat-body">${kept ? '' : skelRows(6, {dot: false})}</div>`;
   const open = data => {
     STRAT = {data, kpis: [], load, adding: false, editSection: '', addSection: false, publishing: false};
@@ -122,9 +125,10 @@ function strategyPublishRefusal(data, view) {
 }
 
 // Whether the draft says anything the latest published version does not: its words, its sections, or its bets. A
-// segment's own text (sections.segments) is not compared: Publish is for the company's words, and a segment's change
-// is live in the draft as it is written.
+// segment's own text (sections.segments) is not compared word by word: a segment's change is live in the draft as it is
+// written. Its count (segment_changes, from GET /api/v2/strategy) still makes the draft differ, so Publish shows for it.
 function strategyDiffers(data) {
+  if ((data.segment_changes || 0) > 0) return true;
   const a = data.draft, b = data.current;
   if (!b) return !strategyBlank(a, data.bets || []);
   if (!a) return false;
@@ -344,7 +348,7 @@ function strategyNewsHtml() {
 // Reads one market card. Each lands on its own and redraws only its card.
 async function strategyMarketRead(key, load, fresh = false) {
   const opts = fresh ? {fresh: true} : undefined;
-  let value = null;
+  let value = null, failed = '';
   try {
     if (key === 'segments') value = (await get('/v2/segments', opts))?.segments || [];
     else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
@@ -358,9 +362,10 @@ async function strategyMarketRead(key, load, fresh = false) {
         S.me?.role === 'owner' ? get('/v2/market/insights', opts).catch(() => null) : null]);
       value = strategyNews(stats, insights);
     }
-  } catch { value = null; }
+  } catch (error) { failed = String(error?.message || 'Could not read it.'); }
   if (load !== STRAT_LOAD) return;
   STRAT_MKT[key] = value;
+  STRAT_MKT_FAIL[key] = failed;
   strategyPaintMarket(key);
 }
 function strategyPaintMarket(key) {
@@ -374,7 +379,7 @@ function strategyPaintMarket(key) {
   }
   if (key === 'segments') {
     const el = $('#strat-segs');
-    if (el) segmentListPaint(el, STRAT_MKT.segments, owner, () => void strategyMarketRead('segments', STRAT_LOAD, true));
+    if (el) segmentListPaint(el, STRAT_MKT.segments, owner, () => void strategyMarketRead('segments', STRAT_LOAD, true), STRAT_MKT_FAIL.segments);
     return;
   }
   const box = {rivals: '#strat-rivals', news: '#strat-news'}[key];

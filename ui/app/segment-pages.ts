@@ -88,21 +88,24 @@ function segRowHtml(seg: SegItem, i: number, n: number, owner: boolean): string 
 const SEG_PENCIL = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>';
 const SEG_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
-function segmentListHtml(list: SegItem[], owner: boolean): string {
+// The list's card: its head (the add button and the suggestion, one style), the add row when open, then the segments. A
+// failed read (`failed`, its text) shows where the list would be, and the add button stays.
+function segmentListHtml(list: SegItem[], owner: boolean, failed = ''): string {
   const add = owner && !SEG_LIST.adding ? '<button class="strat-add" type="button" data-seg-add>+ Segment</button>' : '';
-  const suggest = owner ? '<button class="ghost strat-mini" type="button" data-seg-suggest>Ask Assistant to suggest</button>' : '';
+  const suggest = owner ? '<button class="strat-add" type="button" data-seg-suggest>Ask Assistant to suggest</button>' : '';
   const head = `<div class="strat-card-head"><h2 class="strat-k" id="strat-segs-h">Segments</h2>${add}${suggest}</div>`;
   const form = owner && SEG_LIST.adding ? `<form class="seg-form seg-new" data-seg-new novalidate>
       <input type="text" name="name" maxlength="120" autocomplete="off" placeholder="Name" aria-label="Name" required>
-      <input type="text" name="who" maxlength="200" autocomplete="off" placeholder="Who it is for (optional)" aria-label="Who it is for">
+      <input type="text" name="who" maxlength="200" autocomplete="off" placeholder="Who it is for" aria-label="Who it is for">
       <span class="seg-form-acts"><button class="primary" type="submit">Add</button><button class="ghost" type="button" data-seg-cancel>Cancel</button></span></form>` : '';
+  if (failed) return `${head}${form}<p class="err">${esc(failed)}</p>`;
   const rows = list.map((seg, i) => segRowHtml(seg, i, list.length, owner)).join('');
   if (!rows) return `${head}${form}${form ? '' : '<p class="strat-none-s">None yet.</p>'}`;
   return `${head}${form}<ol class="seg-list" aria-labelledby="strat-segs-h">${rows}</ol>`;
 }
 
 // Draws the list into its card, then binds it. `list` undefined is still loading.
-function segmentListPaint(box: HTMLElement, list: SegItem[] | null | undefined, owner: boolean, again: () => void): void {
+function segmentListPaint(box: HTMLElement, list: SegItem[] | null | undefined, owner: boolean, again: () => void, failed = ''): void {
   if (SEG_LIST.box !== box) SEG_LIST = {box, list: [], owner, again, adding: false, editing: ''};
   SEG_LIST.owner = owner;
   SEG_LIST.again = again;
@@ -110,8 +113,9 @@ function segmentListPaint(box: HTMLElement, list: SegItem[] | null | undefined, 
     patchHTML(box, '<div class="strat-card-head"><h2 class="strat-k">Segments</h2></div>' + skelRows(3, {dot: false}));
     return;
   }
+  // null is a read that failed: the list says why, rather than that there are none.
   SEG_LIST.list = list || [];
-  patchHTML(box, segmentListHtml(SEG_LIST.list, owner));
+  patchHTML(box, segmentListHtml(SEG_LIST.list, owner, list === null ? failed || 'The segments did not load.' : ''));
   segmentListBind(box);
 }
 
