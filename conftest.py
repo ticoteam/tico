@@ -3,6 +3,7 @@
 import os
 import sys
 import threading
+import weakref
 from pathlib import Path
 
 os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fixtures/registry")
@@ -40,6 +41,20 @@ route_memo.install()
 
 import re  # noqa: E402
 import pytest  # noqa: E402
+
+from backend import store as _store  # noqa: E402
+
+# Every store a test makes, so its idle connections can be closed when the test ends (store_pools_close below).
+_test_stores = weakref.WeakSet()
+_store_init = _store.Store.__init__
+
+
+def _recording_init(self, *args, **kwargs):
+    _store_init(self, *args, **kwargs)
+    _test_stores.add(self)
+
+
+_store.Store.__init__ = _recording_init
 
 
 def pytest_addoption(parser):
@@ -158,6 +173,17 @@ def maintenance_runs_end(tmp_path):
             thread.join(timeout=60)
             if thread.is_alive():
                 pytest.fail("maintenance run still going 60 s after the test")
+
+
+@pytest.fixture(autouse=True)
+def store_pools_close():
+    """A store's idle connections stay open until the store is freed, and a store in a reference cycle is freed only by
+    the garbage collector, possibly during a later test, which then warns about the connections. Closing every store
+    the test made, when the test ends, closes those connections on the spot. A closed store still works: its next read
+    opens a new connection."""
+    yield
+    for store in list(_test_stores):
+        store.close()
 
 
 @pytest.fixture(scope="session")
