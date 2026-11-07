@@ -91,7 +91,7 @@ function rdoCard(n, {top = false} = {}) {
   const label = title ? `${name} · ${title}` : name;
   // The owner's Segments button sits over the card's top right, shown on a hover or a focus within it (ui/styles/redesign-strategy.css).
   const seg = segTagOwner() && !segNone('') ? `<button type="button" class="rdo-seg-btn" data-rdo-seg="${esc(ref)}" aria-haspopup="menu" aria-label="${esc('Segments for ' + name)}">Segments</button>` : '';
-  return `<span class="rdo-wrap"><button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
+  return `<span class="rdo-cardwrap"><button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
     <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}${segTagCard(segTagsOf(ref))}</span></button>${seg}</span>`;
 }
 // A teammate and, under it on a rail, whoever reports to it inside the same group. A person who heads people or groups
