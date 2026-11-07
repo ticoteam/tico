@@ -129,7 +129,7 @@ def test_the_attribution_right_is_needed_and_a_bot_with_it_commits_without_appro
         line = _line(c, str(posted["entry_id"]), "6100")
         denied = act(c, EVE, "attribute", {"line_id": line, "splits": _shares((CARA, 10000))})
         assert denied.code == DENIED
-        assert _by_teammate(c, "6100") == {"": 4_000}
+        assert _by_teammate(c, "6100") == {COLLEAGUE_BOT: 4_000}
         assert act(c, OWNER, "right_grant", {"teammate": COLLEAGUE_BOT, "right": "finance.attribution"}).status == (
             "committed"
         )
