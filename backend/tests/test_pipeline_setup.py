@@ -101,6 +101,22 @@ def test_replace_clears_open_cards_only_when_asked(tmp_path):
     assert rows(c, "SELECT status FROM tasks WHERE id=?", task["id"])[0]["status"] == "closed"
 
 
+def test_replace_on_a_booted_hub_makes_every_declared_link_and_a_second_run_changes_nothing(tmp_path):
+    c = fresh(tmp_path)
+    # The booted Marketing type has no Qualified stage, so the preset's Qualified -> Sales link is named, not made.
+    assert S.apply_factory_setup(c, ANA)["unresolved"] == ["Marketing Qualified to Sales"]
+    out = S.apply_factory_setup(c, ANA, replace=True)
+    assert out["unresolved"] == []
+    ids = {r["name"]: r["id"] for r in rows(c, "SELECT id, name FROM task_types")}
+    for link in S.PRESETS["tico_default"]["links"]:
+        stage = step_id(c, ids[link["from"]], link["stage"])
+        assert L.link_for_stage(c, stage)["to_pipeline_id"] == ids[link["to"]]
+    before = snapshot(c)
+    again = S.apply_factory_setup(c, ANA, replace=True)
+    assert again["changes"] == [] and again["unresolved"] == []
+    assert snapshot(c) == before
+
+
 def test_the_setup_and_requirements_routes(tmp_path):
     from fastapi.testclient import TestClient
 

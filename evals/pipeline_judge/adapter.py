@@ -1,6 +1,6 @@
 """The model side of the judge matrix. The server's judge (backend/pipeline_judges.py `judge_once`) judges each labeled case
-as it does in production; this file supplies only the model call, through the same Gateway clients the server uses, and
-adds the case's work and evidence text to the state (the server's state carries a description, not the file's contents).
+as it does in production: the state is built by the server's own `_state`, from the case's fields in the attributes the server
+reads from a Tico row. This file supplies only the model call, through the same Gateway clients the server uses.
 
 A model name picks its Gateway route, the one the server uses for it:
 
@@ -46,35 +46,31 @@ def _requirement(case):
     return {"id": f"req-{case['id']}", "name": req["name"], "rubric": req["rubric"], "pipeline_id": None}
 
 
+# The source a production attachment row carries (requirement_attachments.source) for each case kind.
+SOURCES = {"check": "check_run", "receipt": "receipt", "image": "blob"}
+
+
 def _attachment(case):
-    att = case.get("attachment") or {}
-    text = att.get("text") or ""
+    """The attachment as the server reads it from a Tico row: the text Tico would hold for it. An image has no text in
+    production (Tico reads none from it), so its case text is withheld and the judge sees the metadata only."""
+    att = case.get("attachment")
+    kind = (att or {}).get("kind")
+    text = None if kind in (None, "image") else (att.get("text") or "")
     return {
         "id": f"att-{case['id']}",
-        "source": f"{att.get('kind', 'none')}: {att.get('name', '')}".rstrip(": "),
-        "digest": hashlib.sha256(text.encode()).hexdigest()[:16] if text else "",
+        "source": SOURCES.get(kind, "file") if att else "",
+        "digest": hashlib.sha256((text or "").encode()).hexdigest()[:16] if text else "",
         "url": "",
         "file_version": 1,
-        "work_version": int(att.get("work_version") or 0),
+        "work_version": int((att or {}).get("work_version") or 0),
         "task_work_version": int(case["work"]["work_version"]),
-    }
-
-
-def _with_evidence(state, case):
-    """The server's state plus what a description of the evidence and the work would add: the work's fields, and the
-    attachment's text. Nothing is added that a person could not see."""
-    att = case.get("attachment") or {}
-    work = {k: v for k, v in case["work"].items() if k != "work_version"}
-    return {
-        **state,
-        "work": {**state["work"], **work},
-        "attachment": {**state["attachment"], "text": att.get("text") or "(nothing attached)"},
+        "text": text,
     }
 
 
 def state_for(case):
-    """The state the judge is sent for a case (what `judge_once` builds, plus the evidence)."""
-    return _with_evidence(P._state(_requirement(case), _attachment(case)), case)
+    """The state the judge is sent for a case: the server's `_state` over the case's attachment."""
+    return P._state(_requirement(case), _attachment(case))
 
 
 def _decide(name, key, url):
@@ -151,7 +147,7 @@ def judge_once(engine, case, model=""):
 
     def ask(name, state, questions, label):
         try:
-            return engine(name, _with_evidence(state, case), questions, label)
+            return engine(name, state, questions, label)
         except J.JudgeError as exc:
             failed.append(J.error_code(exc))
             raise

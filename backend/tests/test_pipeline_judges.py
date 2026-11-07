@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend import blobs as BL
 from backend import hubdb as H
 from backend import judge as backend_judge
 from backend import pipeline_engine as E
@@ -429,3 +430,79 @@ def test_the_judge_is_told_the_tickets_current_work_version_and_the_attachments_
     assert P.tick(store) == 1
     assert seen[0]["work"]["work_version"] == current
     assert seen[0]["attachment"]["work_version"] == attached_at
+
+
+def test_a_page_or_text_file_reaches_the_judge_cut_at_its_cap_and_an_image_has_no_text(tmp_path, monkeypatch):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    settings = _settings(path)
+    blobs = BL.Blobs(settings)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    req = R.add(
+        c,
+        ANA,
+        step_id(c, dev["id"], "Review"),
+        {
+            "name": "Release note",
+            "kind": "attachment",
+            "needs": {"formats": ["file", "image"]},
+            "reviewed_by": "bot",
+            "rubric": "The note says what shipped",
+        },
+    )
+    who = SimpleNamespace(task=lambda *a: None)
+    # A Tico page: a bot's file whose current version is text/html, longer than the judge's cap.
+    bot = "bot-release"
+    c.execute("INSERT INTO bots(id,slug,display_name,created_at) VALUES(?,?,?,?)", (bot, "release", "Release", H.now()))
+    long_html = ("<p>Shipped the new login page.</p>" * 400).encode()
+    page_digest = blobs.put(long_html, "text/html")
+    page_blob = BL.register(c, SimpleNamespace(actor=ANA), page_digest, len(long_html), "notes.html", "text/html")
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,"
+        "last_activity_at) VALUES('file-notes',?,'bot','notes','Release notes','file','text/html','tico_blob',1,?,?)",
+        (bot, H.now(), H.now()),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES('file-notes',1,?,?,?,'notes.html','text/html',?,?)",
+        (page_blob["id"], page_digest, len(long_html), ANA, H.now()),
+    )
+    c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES('file-notes',?,?)", (H.now(), H.now()))
+    task_page = H.task_create(c, ANA, "Ship the login page", "", ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c, who, SimpleNamespace(actor=ANA), task_page["id"], req["id"], {"source": "file", "file_id": "file-notes"}
+    )
+    # An image: Tico reads no text from it, so the judge is told there is none.
+    picture = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    picture_digest = blobs.put(picture, "image/png")
+    picture_blob = BL.register(c, SimpleNamespace(actor=ANA), picture_digest, len(picture), "shot.png", "image/png")
+    task_shot = H.task_create(c, ANA, "Ship the shot", "", ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c,
+        who,
+        SimpleNamespace(actor=ANA),
+        task_shot["id"],
+        req["id"],
+        {"source": "blob", "blob_id": picture_blob["id"]},
+    )
+    c.close()
+
+    store = Store(settings)
+    store.blobs = blobs
+    seen = []
+
+    def ask(model, state, questions, label):
+        seen.append(state)
+        return {"p": 0.5, "reason": "ok", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", ask)
+    assert P.tick(store) == 2
+    by_digest = {state["attachment"]["digest"]: state["attachment"] for state in seen}
+    page = by_digest[page_digest]
+    assert page["text"] == " ".join(["Shipped the new login page."] * 400)[: P.TEXT_CHARS]  # the page's words
+    assert len(page["text"]) == P.TEXT_CHARS and page["truncated"] is True
+    shot = by_digest[picture_digest]
+    assert shot["text"] is None and shot["truncated"] is False
