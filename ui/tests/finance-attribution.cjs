@@ -99,6 +99,9 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
 
 const tabs = page => page.locator('#fin-head [data-fin-tab]').allInnerTexts();
 const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+// What sticks out past the window's right edge (outermost first), to name in a failed sideways check.
+const wide = page => page.evaluate(() => [...document.querySelectorAll('#main *')].filter(el => el.getBoundingClientRect().right > innerWidth + 1
+  && !el.closest('.fin-scroll, [data-fin-tabs], .fin-tabs')).slice(0, 6).map(el => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${[...el.classList].join('.')} ${Math.round(el.getBoundingClientRect().right)}`).join(', '));
 // The actions a page sent (not dry runs): {kind, payload} in order.
 const sent = writes => writes.filter(w => w[1] === '/api/v2/finance/actions').map(w => w[2]).filter(b => b && !b.dry_run).map(b => ({kind: b.kind, payload: b.payload}));
 const cellOf = (page, id, n) => page.locator(`tr[data-fin-tx="${id}"] td`).nth(n);
@@ -250,7 +253,7 @@ async function shot(page, name) {
       const tag = 'phone';
       const {page, errors} = await open(browser, {viewport: PHONE, hash: '#/finance/attribution'});
       await page.locator('[data-fin-rule-row="0"]').waitFor();
-      assert.equal(await sideways(page), false, tag + ': the Attribution tab does not scroll sideways');
+      assert.equal(await sideways(page), false, tag + ': the Attribution tab does not scroll sideways: ' + await wide(page));
       await page.evaluate(() => { location.hash = '#/finance/transactions'; });
       await page.locator('tr[data-fin-tx="feed:f1"]').waitFor();
       await page.locator('tr[data-fin-tx="feed:f1"] td').first().click();
