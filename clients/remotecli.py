@@ -1027,7 +1027,7 @@ def run(args, who=None):
         return hubtools.lens_runs(client, {"lens": args.lens, "limit": args.limit})
     if fn.startswith("market watch "):
         return via_tool(client, args)
-    if fn == "market briefing latest":
+    if fn in ("market briefing latest", "market segments"):
         return via_tool(client, args)
     if fn == "market briefing post":
         body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
