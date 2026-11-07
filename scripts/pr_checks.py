@@ -890,6 +890,7 @@ def pure_ui_rename(old, new, similarity):
     )
 
 
+SCRIPT_MOUNTS = (("/tico/ui/", ""), ("/vendor/", "vendor/"))
 SCRIPT_SRC = re.compile(r"""<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 
 
@@ -903,6 +904,12 @@ def script_srcs(path, diff):
         for src in SCRIPT_SRC.findall(line):
             src = src.split("?", 1)[0].split("#", 1)[0]
             if src and not src.startswith("//") and not re.match(r"[a-z][a-z0-9+.-]*:", src, re.IGNORECASE):
+                # The page names its scripts by URL: /tico/ui/x is ui/x and /vendor/x is ui/vendor/x
+                # (backend/ui_bundle.py); a relative name sits beside the page.
+                for mount, there in SCRIPT_MOUNTS:
+                    if src.startswith(mount):
+                        src = there + src[len(mount) :]
+                        break
                 out.add(os.path.normpath(os.path.join(folder, src.lstrip("/"))))
     return sorted(out)
 
@@ -1533,6 +1540,17 @@ def main():
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
     args = parser.parse_args()
+    if args.action == "plan" and not os.environ.get("GITHUB_ACTIONS") and not os.environ.get("TICO_PLAN_LOCAL"):
+        # plan collects every test with pytest: minutes of load, and on a Mac without the CI packages it fails.
+        # To see what a change selects, call selection() with the changed files; it reads files and runs nothing.
+        print(
+            "pr_checks.py plan runs in CI only (it collects every test). For a local answer use selection():\n"
+            "  python3 -c 'import sys; sys.path.insert(0, \"scripts\"); import pr_checks; "
+            "print(pr_checks.selection([\"path/changed.py\"]))'\n"
+            "Set TICO_PLAN_LOCAL=1 to run it here anyway.",
+            file=sys.stderr,
+        )
+        return 2
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":

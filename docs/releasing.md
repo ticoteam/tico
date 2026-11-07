@@ -127,6 +127,11 @@ contains, so the approver reads the notes.
   canary update failed is closed too, as not on the canary: there is nothing to approve.
 - **Reading the notes.** `python3 scripts/release_train.py notes v0.5.200 v0.5.201` prints the notes for any range,
   read-only. It needs `GITHUB_TOKEN`.
+- **Pictures.** A candidate the canary runs also gets a "What it looks like" section above its notes: before and after
+  pictures of the pages it changes (see [Before and after screenshots](#before-you-tag)). They are made after the window
+  and the canary update, so neither waits for them, and approval does not wait for them either. The issue says the
+  pictures are on their way until they arrive, and says so with the run's link when they could not be made. Hotfixes get
+  no pictures.
 
 ### A release that did not publish
 
@@ -592,8 +597,10 @@ demo for the base tag and the candidate, and shoots each page that a changed `ui
 shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
 changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
 looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
-(`TICO_DEMO_NOW` sets the demo's "now"), so a ref compared with itself shoots no changed pair. The release train does
-not call the workflow yet.
+(`TICO_DEMO_NOW` sets the demo's "now"), so a ref compared with itself shoots no changed pair. The release train calls it
+for each candidate it ships (the `shots` job in `train.yml`), with stable's release as the base and the candidate as the
+head. The job uploads the folder as the artifact `release-shots-<version>`, and the `approval-shots` job puts its section
+on the approval issue (see [Approval](#approval)).
 
 ### Behaviour replay
 
