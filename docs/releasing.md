@@ -40,7 +40,9 @@ nothing is sent.
 pull request merged in the release repository; prereleases excepted). It wakes each ticket's QA owner (tickets
 tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
 Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
-Private tickets are counted but not named. The writer skips them; their owners handle any docs for changes people see.
+A private ticket the writer or the Release Manager may not open is named by its public title (and public summary) when
+it has one. Without one it is only counted: the task says to leave it out of the docs and release notes, and nobody is
+asked for its name. A ticket the reader may open is listed by its title as usual.
 The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
 (Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
 Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to

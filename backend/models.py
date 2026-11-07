@@ -2283,7 +2283,7 @@ class BotTaskCondition(Contract):
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done recently, or a
     custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
     filter, still accepted and stored as rows."""
 

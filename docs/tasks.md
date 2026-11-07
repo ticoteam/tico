@@ -202,7 +202,9 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks, In QA is `qa` and
 Post Release QA is `release_qa`; reviews send their feedback back to the Builder's Fixes step
 whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
-released steps never hold. Change any of it on the steps.
+released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
+Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing
+is left at Pending Release.
 
 GitHub access is reported restored only after a successful current head and checks read. An expired or canceled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
 
@@ -1064,7 +1066,7 @@ returns to the step it left, without advancing through the refused gate; back at
 gave during the hold moves it on then. An owner-declared hold
 is cleared by moving back to a working step. The active Building clock pauses while blocked;
 a separate blocked age alerts the type's manager after four hours, once per hold. The bot rail's
-Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs You tasks.
+Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs you tasks.
 
 A task also has a place within its step, `step_rank`, lower first, apart from `rank`, its place in
 its owner's queue. A task that enters a step, when it is created or its step, type or status
