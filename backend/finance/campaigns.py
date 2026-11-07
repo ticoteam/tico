@@ -26,17 +26,14 @@ from datetime import date
 from typing import Any
 
 from . import attribution as ATTR
-from . import platform_share as PS
+from . import visible as VIS
 from .context import Ctx, load
 from .core import dates
 from .core import kinds as K
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, invalid
-from .core.org import manager_of
 from .handlers import Plan, Result
 from .store import ads as SAD
-from .store import attribution as ATT
-from .store import ledger as SL
 
 MAX_TEXT = 80
 Row = dict[str, Any]
@@ -61,54 +58,6 @@ def per_conversion(spend: int, conversions: float) -> int | None:
     if conversions <= 0:
         return None
     return int(spend / conversions + 0.5)
-
-
-def _manages(ctx: Ctx, viewer: str, mate: str) -> bool:
-    return bool(mate) and (mate in ctx.org.reports(viewer) or manager_of(ctx.org, mate) == viewer)
-
-
-def _attributed(ctx: Ctx, viewer: str, platform: str, team: str, mate: str, first: str, last: str) -> bool:
-    """Whether the viewer sees a platform charge line in the window whose platform share names this owner."""
-    keys = PS.contact_keys(ctx, platform)
-    if not keys:
-        return False
-    marks = ",".join("?" * len(keys))
-    ids = [
-        str(r[0])
-        for r in ctx.c.execute(
-            "SELECT l.id FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id JOIN fin_attributions a "
-            "ON a.line_id=l.id AND a.superseded_at IS NULL WHERE l.book_id=? AND l.contact_id IN (" + marks + ") "
-            "AND l.entry_date BETWEEN ? AND ? AND e.status='posted' AND e.reverses_id IS NULL AND a.source='platform'",
-            [ctx.book.id, *keys, first, last],
-        )
-    ]
-    if not ids:
-        return False
-    found = SL.lines(ctx.c, ids)
-    in_force = ATT.in_force_rows(ctx.c, list(found))
-    for line_id, (_, line) in found.items():
-        row = in_force.get(line_id)
-        if row is None:
-            continue
-        splits = ATT.parse_splits(str(row["splits"]))
-        if not any((mate and s.teammate == mate) or (team and s.team == team) for s in splits):
-            continue
-        if ATTR.visible(ctx, viewer, line):
-            return True
-    return False
-
-
-def sees(ctx: Ctx, viewer: str, team: str, mate: str, platform: str, first: str, last: str) -> bool:
-    """The campaign rule (module docstring) for one owner: whether the viewer sees a campaign owned this way."""
-    if ctx.view(viewer).everything:
-        return True
-    if mate and mate == viewer:
-        return True
-    if team and (team in ctx.org.led_by(viewer) or ctx.org.team_of.get(viewer, "") in ctx.org.below(team)):
-        return True
-    if _manages(ctx, viewer, mate):
-        return True
-    return _attributed(ctx, viewer, platform, team, mate, first, last)
 
 
 def owner_json(team: str | None, mate: str | None, inherited: bool) -> Row:
@@ -140,11 +89,17 @@ def rows(ctx: Ctx, viewer: str, first: str, last: str) -> list[Row]:
         g["conversions"] += float(r["conversions"] or 0)
         if r["fetched_at"]:
             g["as_of"] = max(str(g["as_of"]), str(r["fetched_at"]))
-    out: list[Row] = []
-    for g in grouped.values():
+    owned: dict[str, tuple[Any, str | None, str | None]] = {}
+    for cid, g in grouped.items():
         r = g["campaign"]
         team, mate = campaign_owner(str(r["team_id"] or ""), str(r["teammate"] or ""), str(r["bot_slug"] or ""))
-        if not sees(ctx, viewer, team or "", mate or "", str(r["platform"]), first, last):
+        owned[cid] = (r, team, mate)
+    keys = {cid: (str(r["platform"]), team or "", mate or "") for cid, (r, team, mate) in owned.items()}
+    seen = VIS.campaigns_visible(ctx, viewer, set(keys.values()), first, last)
+    out: list[Row] = []
+    for cid, g in grouped.items():
+        r, team, mate = owned[cid]
+        if keys[cid] not in seen:
             continue
         spend, conv = int(g["spend"]), round(float(g["conversions"]), 2)
         out.append(
@@ -298,6 +253,5 @@ __all__ = [
     "per_conversion",
     "read",
     "rows",
-    "sees",
     "totals",
 ]

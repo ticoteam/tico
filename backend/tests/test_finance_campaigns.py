@@ -9,7 +9,9 @@ teammate who sees only their own campaigns is not covered here; the full-detail 
 
 from backend.credentials import Vault
 from backend.finance import ad_import as AI
+from backend.finance import budgeting
 from backend.finance import campaigns as CP
+from backend.finance.context import load
 from backend.finance import reads as RD
 from backend.finance.store import ads as SA
 from backend.finance.store import attribution as ATT
@@ -195,3 +197,137 @@ def test_the_campaign_month_is_the_one_asked_for(books: Store):
     with books.read() as c:
         assert CP.read(c, OWNER, "2026-11")["campaigns"] == []
     assert campaign_rows(books)[0]["id"] == campaign_id(books, g["a"])
+
+
+# ------------------------------------------------------------------------------------------------ visibility
+C = "bot:rental-social-ad-owner"  # a sibling bot under the same boss, owning nothing in these tests
+MANAGER = "bot:cmo"  # the boss of A, B and C
+
+
+def campaign_by_external(store: Store, account_id: str, external: str) -> str:
+    with store.read() as c:
+        return next(x.id for x in SA.campaigns(c, account_id) if x.external_id == external)
+
+
+def visible_ids(store: Store, reader: str, month: str = "2026-10") -> dict[str, set[str]]:
+    """The campaigns one reader sees, read by each surface that names them: the GET route and its reader, the campaigns
+    report, the campaign search kind. The three must agree."""
+    first, last = CP.month_window(month)
+    with store.read() as c:
+        route = {x["id"] for x in CP.read(c, reader, month)["campaigns"]}
+        report = {x["id"] for x in RD.report(c, reader, "campaigns", start=first, end=last)["rows"]}
+        search = {x["id"] for x in RD.search(c, reader, kind="campaign", q="sale", filters={"month": month})["results"]}
+    assert route == report == search, (reader, route, report, search)
+    return {"ids": route}
+
+
+def test_the_campaign_visibility_matrix_across_owners_managers_teams_and_full_detail(books: Store):
+    g = google(books)
+    feed(books, g["a"], "cx", "Fall sale", "2026-10-06", 0)  # zero spend this month: still listed, follows its owner
+    feed(books, g["a"], "cy", "Spring sale", "2026-10-05", 40_000, clicks=9, conv=1.0)  # inherited: account a's bot A
+    x = campaign_by_external(books, g["a"], "cx")
+    y = campaign_by_external(books, g["a"], "cy")
+    with books.transaction() as c:
+        assert act(c, OWNER, "campaign_owner_set", {"campaign_id": x, "teammate": B}).status == "committed"
+    # A teammate owner sees its own campaign; a manager sees everyone under it; another bot sees neither.
+    assert visible_ids(books, B)["ids"] == {x}
+    assert visible_ids(books, MANAGER)["ids"] == {x, y}
+    assert visible_ids(books, C)["ids"] == set()
+    # Full detail sees both.
+    assert visible_ids(books, OWNER)["ids"] == {x, y}
+    # A campaign owned by a team: a member of the team sees it, a bot outside the team does not.
+    with books.transaction() as c:
+        assert act(c, OWNER, "campaign_owner_set", {"campaign_id": x, "team": "sales"}).status == "committed"
+    assert x in visible_ids(books, "bot:ten-0")["ids"]
+    assert x not in visible_ids(books, "bot:bookkeeper")["ids"]
+
+
+def test_a_list_read_checks_the_platform_lines_once_for_every_campaign(books: Store, monkeypatch):  # type: ignore[no-untyped-def]
+    g = google(books)
+    feed(books, g["a"], "cx", "Fall sale", "2026-10-06", 5000)
+    feed(books, g["b"], "cz", "Winter sale", "2026-10-07", 7000)
+    with books.transaction() as c:
+        spend(c, "6300", 12_000, day="2026-10-12", vendor=g["vendor"])
+    from backend.finance import visible as VIS
+
+    calls = {"n": 0}
+    real = VIS._platform_attributed
+
+    def counted(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(VIS, "_platform_attributed", counted)
+    with books.read() as c:
+        CP.read(c, C, "2026-10")
+    assert calls["n"] <= 1
+
+
+# ------------------------------------------------------------------------------------------------ budgets
+def _bot_budget(store: Store, g: dict[str, str], teammate: str, parent: str) -> str:
+    with store.transaction() as c:
+        made = act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": f"Google {teammate}",
+                "teammate": teammate,
+                "vendor": g["vendor"],
+                "amount": 300_000,
+                "account_id": g["adv"],
+                "parent_id": parent,
+                "at_limit": "warn",
+            },
+            at=AT,
+        )
+        assert made.status == "committed", made
+        return str(made.result["budget_id"])
+
+
+def _company_budget(store: Store, g: dict[str, str]) -> str:
+    with store.transaction() as c:
+        made = act(
+            c,
+            OWNER,
+            "budget_create",
+            {"name": "Marketing", "amount": 1_000_000, "account_id": g["adv"], "at_limit": "warn"},
+            at=AT,
+        )
+        assert made.status == "committed", made
+        return str(made.result["budget_id"])
+
+
+def test_a_campaign_owner_is_charged_its_own_spend_and_nothing_is_counted_twice(books: Store):
+    g = google(books)
+    feed(books, g["a"], "cx", "Fall sale", "2026-10-06", 60_000)  # owned by B below
+    feed(books, g["a"], "cy", "Spring sale", "2026-10-05", 40_000)  # inherited: A
+    x = campaign_by_external(books, g["a"], "cx")
+    with books.transaction() as c:
+        assert act(c, OWNER, "campaign_owner_set", {"campaign_id": x, "teammate": B}).status == "committed"
+        spend(c, "6300", 100_000, day="2026-10-12", vendor=g["vendor"])  # the books' charge for the month: 1000
+    company = _company_budget(books, g)
+    budget_a = _bot_budget(books, g, A, company)
+    budget_b = _bot_budget(books, g, B, company)
+    with books.read() as c:
+        ctx = load(c, AT)
+        budgets = ctx.budgets()
+        live = {
+            "b": budgeting.actual(ctx, budgets[budget_b], "2026-10-01", "2026-10-31", live=True),
+            "a": budgeting.actual(ctx, budgets[budget_a], "2026-10-01", "2026-10-31", live=True),
+            "company": budgeting.actual(ctx, budgets[company], "2026-10-01", "2026-10-31", live=True),
+        }
+    assert live == {"b": 60_000, "a": 40_000, "company": 100_000}
+
+
+def test_with_no_campaign_owners_the_account_bot_carries_the_whole_month(books: Store):
+    g = google(books)
+    feed(books, g["a"], "cx", "Fall sale", "2026-10-06", 60_000)
+    feed(books, g["a"], "cy", "Spring sale", "2026-10-05", 40_000)
+    with books.transaction() as c:
+        spend(c, "6300", 100_000, day="2026-10-12", vendor=g["vendor"])
+    company = _company_budget(books, g)
+    budget_a = _bot_budget(books, g, A, company)
+    with books.read() as c:
+        ctx = load(c, AT)
+        assert budgeting.actual(ctx, ctx.budgets()[budget_a], "2026-10-01", "2026-10-31", live=True) == 100_000
