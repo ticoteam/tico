@@ -623,6 +623,7 @@ def _document(view, body, title, description, canonical="", preview=False, schem
         f"style-src {_hash(theme)} {_hash(css)}; script-src {_hash(script)}; img-src {img}; font-src {font}; "
         "connect-src 'self'; form-action 'self'; base-uri 'none'"
     )
+    icons = "" if preview else ICONS  # a preview is the owner's, in a sandbox: it has no tab to name
     public = _is_public(view)
     robots = "" if public else '<meta name="robots" content="noindex,nofollow,noarchive">'
     extra = f'<link rel="alternate" type="application/atom+xml" href="feed.xml" title="{_e(title)}">' if public else ""
@@ -633,7 +634,7 @@ def _document(view, body, title, description, canonical="", preview=False, schem
         f'<meta http-equiv="Content-Security-Policy" content="{_e(policy)}">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="referrer" content="strict-origin-when-cross-origin">'
-        f'{ICONS}{robots}<title>{_e(title)}</title><meta name="description" content="{_e(description)}">{extra}'
+        f'{icons}{robots}<title>{_e(title)}</title><meta name="description" content="{_e(description)}">{extra}'
         f'<style>{theme}</style><style>{css}</style></head><body>{body}<script>{script}</script></body></html>'
     )
 
