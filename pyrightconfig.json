@@ -12,7 +12,8 @@
   ],
   "strict": [
     "backend/finance",
-    "backend/records"
+    "backend/records",
+    "backend/row_shapes"
   ],
   "pythonPlatform": "Linux",
   "pythonVersion": "3.15",

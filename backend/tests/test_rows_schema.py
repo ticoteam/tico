@@ -11,82 +11,10 @@ from backend import rows
 from backend.config import Settings
 from backend.store import Store
 
-TABLES = {
-    rows.EmailSendingPolicyRow: "email_sending_policies",
-    rows.EmailSendRow: "email_sends",
-    rows.EmailSuppressedRecipientRow: "email_suppressed_recipients",
-    rows.EmailLegacyAutomationRow: "email_legacy_automations",
-    rows.EmailSendPreviewRow: "email_send_previews",
-    rows.EmailSendOperationRow: "email_send_operations",
-    rows.LetterOutboxRow: "letter_outboxes",
-    rows.LetterOutboxGrantRow: "letter_outbox_grants",
-    rows.LetterBotSettingRow: "letter_bot_settings",
-    rows.LetterRow: "letters",
-    rows.LetterProofRow: "letter_proofs",
-    rows.LetterSourceRow: "letter_sources",
-    rows.PageIdentityRow: "page_identities",
-    rows.AlertPreferenceRow: "alert_preferences",
-    rows.RecorderInstallRow: "recorder_installs",
-    rows.AlertCompanySettingRow: "alert_company_settings",
-    rows.PersonalAlertRow: "personal_alerts",
-    rows.PostalMailGrantRow: "postal_mail_grants",
-    rows.PostalMailSettingsRow: "postal_mail_settings",
-    rows.MeetingTaskLinkRow: "meeting_task_links",
-    rows.SuggestionRow: "suggestions",
-    rows.TaskRow: "tasks",
-    rows.PresenceRow: "presences",
-    rows.TaskCheckBackWakeRow: "task_check_back_wakes",
-    rows.TaskHoldRow: "task_holds",
-    rows.QuarantineHoldRow: "quarantine_holds",
-    rows.MaintenanceStepRow: "maintenance_steps",
-    rows.MaintenanceRunRow: "maintenance_runs",
-    rows.HeartbeatStepRow: "heartbeat_steps",
-    rows.HeartbeatBeatRow: "heartbeat_beats",
-    rows.HeartbeatStateRow: "heartbeat_states",
-    rows.MaintenanceRunStepRow: "maintenance_run_steps",
-    rows.MaintenanceListingRow: "maintenance_listings",
-    rows.MaintenanceHandoffRow: "maintenance_handoffs",
-    rows.MaintenanceRequestRow: "maintenance_requests",
-    rows.AttemptRow: "attempts",
-    rows.CloudMachineDeletionRow: "cloud_machine_deletions",
-    rows.CloudMachineEnrollmentFailureRow: "cloud_machine_enrollment_failures",
-    rows.RunnerRow: "runners",
-    rows.RunnerStateRow: "runner_states",
-    rows.ApprovalRow: "approvals",
-    rows.AttemptEventRow: "attempt_events",
-    rows.PrincipalRow: "principals",
-    rows.MemoryTidyPassRow: "memory_tidy_passes",
-    rows.MemoryTidyPacketRow: "memory_tidy_packets",
-    rows.ThreadRankingRow: "thread_rankings",
-    rows.ThreadPinRow: "thread_pins",
-    rows.MessageRouteRow: "message_routes",
-    rows.FeedbackRow: "feedbacks",
-    rows.UsageFactRow: "usage_facts",
-    rows.UsageMeterReadRow: "usage_meter_reads",
-    rows.BudgetNodeRow: "budget_nodes",
-    rows.HomeMergeRow: "home_merges",
-    rows.HomeMergeMessageRow: "home_merge_messages",
-    rows.HistoryEventRow: "history_events",
-    rows.BotSettingsRow: "bot_settings",
-    rows.ToolRow: "tools",
-    rows.ToolCheckRow: "tool_checks",
-    rows.ToolCallRow: "tool_calls",
-    rows.SkillRow: "skills",
-    rows.SkillVersionRow: "skill_versions",
-    rows.SkillProposalRow: "skill_proposals",
-    rows.SkillScreeningRow: "skill_screenings",
-    rows.SkillInstallRow: "skill_installs",
-    rows.SkillReceiptRow: "skill_receipts",
-    rows.SkillUsageRow: "skill_usages",
-    rows.SkillUsageDailyRow: "skill_usage_dailies",
-    rows.UnlistedSkillUsageDailyRow: "unlisted_skill_usage_dailies",
-    rows.SkillSuggestionRow: "skill_suggestions",
-    rows.SkillDeviceRow: "skill_devices",
-    rows.SkillDeviceCodeRow: "skill_device_codes",
-}
+TABLES = rows.TABLES
 
 
-# Tables with no TypedDict in backend/rows.py yet. Shrink-only: a table that gains a TypedDict must leave this list
+# Tables with no TypedDict in backend/row_shapes/ yet. Shrink-only: a table that gains a TypedDict must leave this list
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset(
     {
@@ -601,7 +529,7 @@ def test_every_table_has_a_row_shape_or_is_on_the_allowlist(fresh):
     typed = set(TABLES.values())
     assert typed <= tables, typed - tables
     assert not (UNTYPED & typed), "a table with a TypedDict leaves UNTYPED: " + ", ".join(sorted(UNTYPED & typed))
-    assert tables - typed - UNTYPED == set(), "new table(s) need a TypedDict in backend/rows.py: " + ", ".join(
+    assert tables - typed - UNTYPED == set(), "new table(s) need a TypedDict in backend/row_shapes/: " + ", ".join(
         sorted(tables - typed - UNTYPED)
     )
     assert UNTYPED - tables == set(), "stale UNTYPED entries (remove them): " + ", ".join(sorted(UNTYPED - tables))
