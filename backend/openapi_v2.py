@@ -2563,6 +2563,12 @@ SCHEMAS = {
             "description": "A Dev ticket at a working step (In Progress, a Fixes "
             "step): when it entered that step or came back to work; absent otherwise",
         },
+        requirements={
+            "type": "array",
+            "description": "Where each stage requirement of the ticket's current step stands "
+            "(backend/pipeline_engine.py); absent when the step has none",
+            "items": {"type": "object"},
+        },
         relations={
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, "

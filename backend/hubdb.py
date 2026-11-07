@@ -4761,6 +4761,10 @@ def _set_status(
             (_step_end(conn, step_id, row["id"]) if step_id else None, row["id"]),
         )
         _task_event(conn, row["id"], actor, "step", row.get("step_id"), step_id, note)
+        from . import pipeline_engine
+
+        if row:
+            pipeline_engine.on_step_change(conn, actor, row, type_id, step_id, ts)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
         if row.get("occurrence"):
@@ -7379,6 +7383,7 @@ def task_update(
     *,
     strict=True,
     heard=(),
+    override_requirements=False,
 ):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
@@ -7627,7 +7632,11 @@ def task_update(
                     exc.task_hold = {"task": task_id, "reason": exc.detail, "kind": "worktree"}
                     raise
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
-        from . import step_flow
+        from . import pipeline_engine, step_flow
+
+        # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
+        if step_id and row and step_id != row.get("step_id"):
+            pipeline_engine.check_move(conn, actor, {**row, "type_id": type_id}, step_id, override_requirements)
 
         if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):
             from . import review_gate

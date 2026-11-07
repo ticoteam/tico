@@ -57,6 +57,11 @@ TASK_ROWS = (
     "maintenance_listings",
     "maintenance_handoffs",
     "quarantine_holds",
+    # Where the ticket stands in its pipeline (backend/pipeline_engine.py): its stage stays, judgements, evidence, claims.
+    "stage_visits",
+    "stage_decisions",
+    "requirement_attachments",
+    "review_claims",
 )
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).

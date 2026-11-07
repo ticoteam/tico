@@ -23,6 +23,17 @@ from starlette.requests import ClientDisconnect
 from . import built_on
 from . import agents, app_delivery, mcp_oauth, oidc, views
 from . import outcome_stats
+from . import (
+    pipeline_engine,
+    pipeline_github_checks,
+    pipeline_judges,
+    pipeline_links,
+    pipeline_manager,
+    pipeline_overview,
+    pipeline_requirements,
+    pipeline_review,
+    requirement_attachments,
+)
 from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
@@ -1644,6 +1655,7 @@ def create_app(settings=None):
         value.pop("checkpoint_state", None)  # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)  # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)  # task_holds' clock, for the server only
+        value.pop("work_revision", None)  # pipeline_engine's change counter, for the server only
         # Most list rows have no accumulated clock; omit empty optional fields.
         for field in ("building_started_at", "building_seconds"):
             if not value.get(field):
@@ -1657,9 +1669,11 @@ def create_app(settings=None):
         typ = next((t for t in pipelines if t["id"] == row.get("type_id")), None)
         value["type"] = {"id": typ["id"], "name": typ["name"]} if typ else None
         step = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
-        # A step's check pool and flow are the type's settings (Settings > Tasks), not sent again on each of a board's tasks.
+        # A step's check pool, flow and warn time are the type's settings, not sent again on each of a board's tasks.
         value["step"] = (
-            {k: v for k, v in step.items() if k not in ("check_pool", "check_limit", "flow")} if step else None
+            {k: v for k, v in step.items() if k not in ("check_pool", "check_limit", "flow", "limit_minutes")}
+            if step
+            else None
         )
         if c is not None:
             value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
@@ -1813,6 +1827,7 @@ def create_app(settings=None):
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
         step_since = step_age.since_map(c, rows)
+        requirement_dots = pipeline_engine.dots_many(c, rows)  # empty unless a stage has requirements
         hold_marks = task_holds.marks(c, rows)
         waits = question_tasks.waiting_on_many(c, rows)
         result = []
@@ -1840,6 +1855,8 @@ def create_app(settings=None):
                     value["deferred"] = value["quiet"] = deferred  # `quiet`: the older name, one more release
             if row["id"] in step_since:
                 value["step_since"] = step_since[row["id"]]
+            if row["id"] in requirement_dots:
+                value["requirements"] = requirement_dots[row["id"]]
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -5771,6 +5788,15 @@ def create_app(settings=None):
     from .meeting_items import install_meeting_items
 
     install_meeting_items(app, store, mutate, task_create, auth)
+    pipeline_engine.install(app, store, mutate, auth)
+    pipeline_links.install(app, store, mutate, auth)
+    pipeline_requirements.install(app, store, mutate, auth)
+    requirement_attachments.install(app, store, mutate, auth)
+    pipeline_judges.install(app, store, mutate, auth)
+    pipeline_review.install(app, store, mutate, auth)
+    pipeline_manager.install(app, store, mutate, auth)
+    pipeline_overview.install(app, store, mutate, auth)
+    pipeline_github_checks.install(app, store, mutate, auth)
     from . import presence
 
     presence.install(app, store, mutate, auth)

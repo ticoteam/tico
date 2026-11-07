@@ -1,0 +1,6 @@
+/* ui/styles/pipeline.css: the pipeline editor's entry point and the pipeline surfaces that follow it. */
+
+/* The Edit pipeline button by the pipeline picker. An icon button's own display would win over the hidden attribute. */
+.tl-pipeline-edit[hidden] {
+  display: none;
+}
