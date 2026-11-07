@@ -181,7 +181,7 @@ def _nudge(c: sqlite3.Connection, row: dict[str, Any], told: str) -> None:
         f"{slug}, or take it yourself. Tico resumes it again only when something moves it."
     )
     try:
-        H.task_create(
+        made = H.task_create(
             c,
             H.KEEPER,
             f"{label}: builder {slug} made no progress in {NO_PROGRESS_LIMIT} runs"[:150],
@@ -190,6 +190,7 @@ def _nudge(c: sqlite3.Connection, row: dict[str, Any], told: str) -> None:
             deduplicate=False,
             lint=False,
         )
+        H._wake(c, H.task(c, made["id"]), told, body, {"wake": "nudge"}, trigger="stall_check")
     except H.Refused:
         return
 
