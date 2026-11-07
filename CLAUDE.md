@@ -39,7 +39,7 @@ load. On a computer several bots share, start a full suite, the browser scripts 
 bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
 "waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Better still, run them off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
-`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code. At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
+`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code: 75 when it never dispatched the run, 76 when the run ended without a result, and 2 for a bad command line (`--help` lists them). At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
 turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
 The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
