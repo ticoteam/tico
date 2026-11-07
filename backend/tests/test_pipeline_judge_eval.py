@@ -1,7 +1,10 @@
 """The pipeline judge matrix (evals/pipeline_judge/) without a model: the labeled cases are well formed and cover what the
-plan asks for, the dry run scores a fake oracle at the bar and a sloppy fake below it, and one case goes through the adapter's
+plan asks for, the dry run scores a fake oracle at the bar and a sloppy fake below it, and one case goes through the server's
 judge_once with a fake engine. The real-model run is on demand only and never runs here."""
 
+import pytest
+
+from clients import judge as J
 from evals.pipeline_judge import adapter, run
 
 
@@ -27,8 +30,6 @@ def test_the_dry_run_passes_the_oracle_and_fails_the_sloppy_judge_on_false_met(t
 
 
 def test_a_failed_call_counts_as_unsure_and_never_as_met():
-    from clients import judge as J
-
     def broken(case):
         raise J.JudgeError("unavailable", "down")
 
@@ -36,14 +37,40 @@ def test_a_failed_call_counts_as_unsure_and_never_as_met():
     assert result["false_met"] == 0 and result["unsure_rate"] == 1.0 and not result["passes_bar"]
 
 
-def test_judge_once_reads_the_probability_and_prices_the_call():
+def test_judge_once_goes_through_the_servers_judge_with_the_work_and_the_evidence():
     seen = {}
 
-    def engine(state, questions, label=None):
-        seen.update(state=state, label=label)
-        return {"answers": {"met": {"noul": 0.9}}, "usage": {"input_tokens": 1_000_000, "output_tokens": 0}, "ms": 12}
+    def engine(model, state, questions, label):
+        seen.update(model=model, state=state, label=label)
+        return {"p": 0.9, "reason": "ok", "provider": "t", "model": model, "cost_usd": 0.002, "latency_ms": 12}
 
-    p, cost, ms = adapter.judge_once(engine, run.load()[0], "haiku-5.5")
-    assert (p, ms) == (0.9, 12)
-    assert cost == adapter.PRICES["haiku-5.5"][0]
-    assert seen["state"]["attachment"]["work_version"] == seen["state"]["work"]["work_version"]
+    case = next(c for c in run.load() if c.get("trap") == "old_version")
+    p, cost, ms = adapter.judge_once(engine, case, "haiku-5.5")
+    assert (p, cost, ms) == (0.9, 0.002, 12)
+    assert seen["model"] == "haiku-5.5" and seen["label"] == adapter.QUESTION_SET
+    assert seen["state"]["work"]["work_version"] == case["work"]["work_version"]
+    assert seen["state"]["attachment"]["work_version"] == case["attachment"]["work_version"]
+    assert seen["state"]["attachment"]["work_version"] != seen["state"]["work"]["work_version"]
+    assert seen["state"]["attachment"]["text"] == case["attachment"]["text"]
+
+
+def test_a_model_call_that_fails_is_raised_to_the_caller_and_never_passes():
+    def broken(model, state, questions, label):
+        raise J.JudgeError("unavailable", "down")
+
+    with pytest.raises(J.JudgeError):
+        adapter.judge_once(broken, run.load()[0], "jev")
+
+
+def test_the_gateways_cost_is_kept_and_tokens_are_priced_when_it_gives_none():
+    assert adapter.cost_usd("haiku-5.5", {"cost_usd": 0.5, "prompt_tokens": 1_000_000}) == 0.5
+    assert adapter.cost_usd("haiku-5.5", {"prompt_tokens": 1_000_000, "completion_tokens": 0}) == (
+        adapter.PRICES["haiku-5.5"][0]
+    )
+
+
+def test_no_gateway_key_means_no_engine_for_any_model_and_nothing_is_sent():
+    for name in adapter.MODELS:
+        assert adapter.build_engine(name, {}) is None
+    with pytest.raises(ValueError):
+        adapter.build_engine("anthropic-direct", {"TICO_GATEWAY_KEY": "x"})
