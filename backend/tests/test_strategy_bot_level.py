@@ -226,13 +226,14 @@ def test_no_daily_limit_in_one_persons_needs_you_most_important_first(api):
         post(api, "kpis", {"name": f"Measure {n}", "owner": "me", "cadence": "weekly"})
     sync(api)
     mine = asks(api, OWNER)
-    assert len(mine) == 8 and mine[0]["kind"] == "vision"
+    # The seven out-of-date measures are one ask for the person, not seven (goal_asks KPIS_REF).
+    assert [a["kind"] for a in mine] == ["vision", "kpi_stale"] and mine[1]["title"] == "Add numbers for 7 measures"
     shown = get(api, "goals/needs-you")["items"]
-    assert len(shown) == 8 and all(i.get("task") for i in shown) and shown[0]["kind"] == "vision"
+    assert len(shown) == 2 and all(i.get("task") for i in shown) and shown[0]["kind"] == "vision"
     post(api, "tasks", {"title": "One more question", "body": "Why?", "owner": OWNER}, token=strategy_token)
     post(api, "tasks", {"title": "A question for Ben", "body": "Why?", "owner": "human:ben"}, token=strategy_token)
-    assert get(api, "strategy-bot")["asked_today"] == {OWNER: 9, "human:ben": 1}
-    assert get(api, "strategy-bot", token=strategy_token)["asked_today"] == {OWNER: 9, "human:ben": 1}
+    assert get(api, "strategy-bot")["asked_today"] == {OWNER: 3, "human:ben": 1}
+    assert get(api, "strategy-bot", token=strategy_token)["asked_today"] == {OWNER: 3, "human:ben": 1}
     assert get(api, "strategy-bot", token="cara-test")["asked_today"] == {}  # a member: only their own
 
 
