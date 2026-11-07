@@ -18,7 +18,8 @@ With no pool member free, the check waits on the ticket ("Waiting for a reviewer
 pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed,
 or the ticket leaves the step or finishes. The scheduler also retries waits every minute, so a reviewer coming
 online or gaining room can take one without another check finishing. A pool member only ever takes checks this way,
-never other work.
+never other work. A check left unanswered past its step's hours is filed again to another pool member when the step says
+so (`on_timeout: refile`, `verdict_moves._refile`), and that bot is not given the check again on this ticket.
 """
 
 import json
@@ -444,6 +445,17 @@ def _earlier_reviewers(c, ticket, step):
     return out
 
 
+def _refiled_bots(c, ticket, step):
+    """The bots that left a check at this step unanswered on this ticket: each was closed and filed again (`_refile`),
+    so none is given that check again."""
+    rows = c.execute(
+        "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_refiled' "
+        "AND new LIKE ?",
+        (ticket["id"], f"{step['id']}:%"),
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
 def _company_rank(c, slug, builder):
     """How a bot's model company orders it for a check of a build on the `builder` companies: 0 for another company,
     1 for one Tico can't name all of, which may be the builder's, 2 for the builder's own."""
@@ -461,7 +473,7 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     from . import step_flow
     from .check_independence import assess
 
-    excluded = set(exclude) | _earlier_reviewers(c, ticket, step)
+    excluded = set(exclude) | _earlier_reviewers(c, ticket, step) | _refiled_bots(c, ticket, step)
     kind = step_flow.check_kind(step)
     required = bool(kind) and step_flow.other_company(step) == "require"
     builder = builder_makers(c, ticket, whole=required) if kind else set()

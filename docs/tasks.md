@@ -190,7 +190,8 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `after_green` | A work step: green CI on a head newer than the one its check judged moves the ticket here (`merge` to merge next). Without it the owner moves the ticket on when its work is done. |
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
-| `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
+| `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. Without `on_timeout`, this is the rule. |
+| `on_timeout` | `refile`, on a review check with `timeout_hours`: an unanswered check past its hours is closed with a note naming the bot that did not answer, and the same check is filed again for the same head to another free pool bot, preferring another model family than the Builder's. The bot that did not answer and the earlier reviewers of the ticket are passed over. With no other free bot the check waits at the step as "Waiting for a reviewer", and the retry files it. The ticket never moves on by a timeout. |
 | `late_hours` | A ticket this long at a working step is listed as late on its manager's task roundup, and again every seven days while it stays late. Dev working steps default to 4. `status_hours` is still accepted but wakes no one. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
 | `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) lists it on the task roundup of `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot (a named person is not told by the roundup). Relisted once every `every_hours` (4) while over. |
@@ -201,7 +202,8 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 
 A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks. Review 1 sends its
 feedback back to the Builder's Fixes step whichever way it goes. Review 2's approval goes to the merge, and a fix made
-after it merges once CI is green on its head. Without QA steps, Review 2 has no timeout: an unanswered one waits for its reviewer. On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
+after it merges once CI is green on its head. Without QA steps, Review 1 and Review 2 both time out after an hour with `on_timeout: refile`: an unanswered check is filed
+again to another reviewer, never passed on (see `on_timeout`). On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
 In QA is `qa`, Post Release QA is `release_qa`, and In QA passes to the merge (skip tag `skip-qa`). Pending Release
 takes merged tickets, and released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
 Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing

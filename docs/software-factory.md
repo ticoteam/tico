@@ -11,17 +11,16 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 |---|---|---|---|
 | 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
-| 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
-| 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
-| 5 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
-| 6 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
-| 7 | Technical Writer | `docs-writer` (Technical Writer) | After each release, gets one task listing its tickets, updates the help docs for the changes people will see and writes the release notes |
-| 8 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
+| 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change; every change gets one |
+| 4 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
+| 5 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
+| 6 | Technical Writer | `docs-writer` (Technical Writer) | After each release, gets one task listing its tickets, updates the help docs for the changes people will see and writes the release notes |
+| 7 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
 Two leads sit above the line. **Head of Product** (`product-lead`) decides *what* to build: it triages feature ideas,
 writes the spec and acceptance tests, and keeps the roadmap. **Head of Engineering** (`engineering-lead`) decides
 *how*: it splits an approved spec into Dev tickets, picks the Builder and sets the merge rules. A small team can
-let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and QA, and add the
+let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
 
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
@@ -42,7 +41,6 @@ approval before merge even when the team's task review policy allows a fixes-onl
 - **For reliability, turn effort up.** Higher effort on the Builder, the reviewers and QA catches more before
   release.
 - **To save money:**
-  - drop Reviewer 2
   - run the reviewers on lower-effort or cheaper models, in a different family from the Builder where one is available
   - don't cut the Builder
 
@@ -57,9 +55,7 @@ approval before merge even when the team's task review policy allows a fixes-onl
    its model), or use a check model on a subtask (see [Tasks](tasks.md)).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
    reason on the ticket. There is no second round of the same review after fixes.
-4. **QA runs tests it didn't write.** Head of Product writes the acceptance tests in Given/When/Then form. Each is
-   tagged *check live*, *watch live* (unsafe to trigger in production: payments, sending, deleting, third-party
-   actions) or *not checkable live*.
+4. Validation skills attach evidence (tests, screenshots) to the ticket; a person approves each release from its notes and before/after screenshots.
 5. **No person in the loop by default**, except where Tico requires one: publishing, spending, sending and hiring.
    Each release asks a person for one approval, covering its roadmap moves, release notes and docs.
 6. **A blocked ticket stays at its step** and says why it is blocked and who it waits on.
@@ -108,7 +104,7 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | In Progress | doing | Builder | Building |
 | Review 1 | review | Builder | Reviewer 1 comments |
 | Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
-| Review 2 | review | Builder | Reviewer 2 comments on the updated change. Always runs, with no timeout: it waits for its reviewer. Its approval is the last review before the merge |
+| Review 2 | review | Builder | Reviewer 2 comments on the updated change. Always runs. Its approval is the last review before the merge |
 | Review 2 Fixes | doing | Builder | Builder acts on the feedback; once CI is green on the new head, the ticket merges |
 | Pending Release | review | Merge | Merged; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to the next step by itself |
 | Done | done | Release | Shipped in a published release |
@@ -118,6 +114,12 @@ Done and Closed fold into one strip at the end of the board: those tickets are u
 ticket stays at its step with a Waiting tag.
 
 - **Review 2 always runs**, for every change.
+- **On a board without QA steps, an unanswered check is filed again, never passed on.** When a check passes its hour with
+  no verdict, Tico closes it, records who did not answer, and files the same check for the same head to another free pool
+  bot, preferring another model family than the Builder. Bots that reviewed the ticket earlier and the one that did not
+  answer are passed over. With no free bot the check waits at its step as "Waiting for a reviewer", and the retry files
+  it once one frees up. On a board with QA steps, an unanswered review keeps its old timeout: the round is skipped and the
+  ticket moves on.
 - **A board that already has QA steps** (In QA, QA Fixes, Post Release QA) keeps them. On it, Review 2's changes go to
   Review 2 Fixes and the Builder moves the ticket to In QA, a QA pass makes the merge next, and a change nobody will see
   skips In QA and QA Fixes with the `skip-qa` tag.

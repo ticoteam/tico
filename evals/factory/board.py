@@ -16,7 +16,10 @@ class Check:
     passed: str  # where a pass goes: a step name, or MERGE (the builder merges next)
     other: str  # where changes, a fail or a reply with no verdict goes
     different_checker_from: tuple = ()  # steps whose checker may not take this one (a second opinion)
-    timeout_hours: float | None = 1.0  # an unanswered check is skipped after this long; None: it waits
+    timeout_hours: float = 1.0  # an unanswered check is handled after this long: passed on, or filed again (on_timeout)
+    on_timeout: str | None = (
+        None  # "refile" files an unanswered check again to another reviewer instead of passing it on
+    )
     skip_tag: str | None = None  # a ticket with this tag skips the step (the skip is recorded)
     gate: bool = False  # entering needs green CI and a test receipt at the head
     kind: str | None = None  # what the server's rules know the check as: "review", "qa" or "release_qa"
@@ -76,10 +79,11 @@ class Board:
 
 def dev_board(qa=False, review_timeout=1.0):
     """The engineering board. A review is feedback, not a gate: whatever it says, the ticket goes back to its builder,
-    who moves it on once the feedback is in (only the builder knows when). Review 2 always runs and has no timeout
-    there; its approval makes the merge next, and a fix made after it merges once CI is green on the new head. With
-    `qa`, the board keeps its QA steps instead: Review 2's changes go to In QA, which passes or fails, and its pass
-    makes the merge next."""
+    who moves it on once the feedback is in (only the builder knows when). Review 2 always runs; its approval makes the
+    merge next, and a fix made after it merges once CI is green on the new head. On this board an unanswered review is
+    filed again to another reviewer after its hour, and is never passed on. With `qa`, the board keeps its QA steps
+    instead: Review 2's changes go to In QA, which passes or fails, and its pass makes the merge next."""
+    refile = "refile" if not qa else None
     steps = [
         Step("On Deck", "open", assign="builder", backlog={"over": 10, "per": "step", "notify": ["manager"]}),
         Step("In Progress", "doing", work=True, next="Review 1"),
@@ -87,7 +91,13 @@ def dev_board(qa=False, review_timeout=1.0):
             "Review 1",
             "review",
             check=Check(
-                "reviewer", "Review 1 Fixes", "Review 1 Fixes", timeout_hours=review_timeout, gate=True, kind="review"
+                "reviewer",
+                "Review 1 Fixes",
+                "Review 1 Fixes",
+                timeout_hours=review_timeout,
+                on_timeout=refile,
+                gate=True,
+                kind="review",
             ),
         ),
         Step("Review 1 Fixes", "doing", work=True, next="Review 2", wake_after_hours=2),
@@ -99,8 +109,8 @@ def dev_board(qa=False, review_timeout=1.0):
                 "Review 2 Fixes" if qa else MERGE,
                 "Review 2 Fixes",
                 different_checker_from=("Review 1",),
-                # no timeout on the recommended board: a change waits for its reviewer, it never passes unreviewed
-                timeout_hours=review_timeout if qa else None,
+                timeout_hours=review_timeout,
+                on_timeout=refile,
                 gate=True,
                 kind="review",
             ),
@@ -158,8 +168,9 @@ def flows(board, bots):
                 on_fail=s.check.other,
                 gate=s.check.gate,
             )
-            if s.check.timeout_hours is not None:
-                flow["timeout_hours"] = s.check.timeout_hours
+            flow["timeout_hours"] = s.check.timeout_hours
+            if s.check.on_timeout:
+                flow["on_timeout"] = s.check.on_timeout
             if s.check.skip_tag:
                 flow["skip_tag"] = s.check.skip_tag
             if s.check.kind:

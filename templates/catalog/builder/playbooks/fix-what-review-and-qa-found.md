@@ -34,7 +34,7 @@ Run the checks at the new head and record the head commit. A check that did not 
 
 ## 5. Move on
 
-- Review 1 Fixes done: move to Review 2 for a change that needs a second review; otherwise move to In QA when the board has it, and to Review 2 when it does not.
+- Review 1 Fixes done: move to Review 2.
 - Review 2 Fixes done: move to In QA when the board has it; otherwise the merge is next, once the checks are green.
 - QA Fixes done: move back to In QA, with the fix and the test that now covers the failing case.
 

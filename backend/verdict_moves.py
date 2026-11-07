@@ -886,11 +886,39 @@ def skip(c, row):
     return out
 
 
+def _refile(c, ticket, step, hours, at):
+    """A check step with `on_timeout: refile` never passes its ticket on by the timeout. Each check still open `hours`
+    after it was filed is closed, with the bot that left it unanswered named, and filed again to another free pool bot
+    (or the ticket waits at the step for one, as any check does). The clock is the check's own filing time, so the new
+    check gets its full hours."""
+    from . import check_pools
+
+    stale = [
+        ch
+        for ch in _checks(c, ticket, step)
+        if ch["status"] in H.ACTIVE_STATUSES and (at - H.parse_ts(ch["created_at"])).total_seconds() >= hours * 3600
+    ]
+    if not stale:
+        return
+    for check in stale:
+        slug = H.actor_id(check["owner_id"])
+        note = f"No verdict in {hours:g} h from {slug}; Tico closed the check and filed it again."
+        H.task_close(c, H.KEEPER, check["id"], note=note, strict=False)
+        H._task_event(c, ticket["id"], H.KEEPER, "check_refiled", slug, f"{step['id']}:{check['id']}", note)
+    found = check_pools.pool(c, step["id"])
+    if not found:
+        return
+    pool_step, slugs, limit = found
+    row = H.task(c, ticket["id"])
+    check_pools._dispatch(c, row, pool_step, slugs, limit, check_pools._prs(c, row, pool_step), None)
+
+
 def timeouts(c, at=None):
     """Skip the round of each ticket at a check step past the step's `timeout_hours` with no verdict Tico acted on
     there: its open checks are closed and the ticket goes on as if the check passed with no comments. The clock starts
     when the ticket entered the step, so a check left open, one judged on an old head and one closed unanswered all end
-    the same way. Returns the tickets moved on."""
+    the same way. A step with `on_timeout: refile` is never skipped: `_refile` files its unanswered check again instead.
+    Returns the tickets moved on."""
     at = H.parse_ts(at or H.now())
     skipped = []
     timed = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%timeout_hours%'")]
@@ -898,11 +926,16 @@ def timeouts(c, at=None):
         hours = F.of(step).get("timeout_hours")
         if not hours or not F.is_check(step):
             continue
+        refile = F.of(step).get("on_timeout") == F.REFILE
         for (ticket_id,) in c.execute(
             f"SELECT id FROM tasks WHERE step_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
             (step["id"], *H.ACTIVE_STATUSES),
         ).fetchall():
             ticket = _ticket(c, H.task(c, ticket_id))
+            if refile:
+                if ticket:
+                    _refile(c, ticket, step, hours, at)
+                continue
             entered = c.execute(
                 "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
                 "AND new=? "

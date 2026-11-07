@@ -4,6 +4,7 @@ import json
 
 from backend import check_pools
 from backend import hubdb as H
+from backend import verdict_moves as V
 from backend.store import encode
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import HEAD, move, ticket as base_ticket
@@ -480,6 +481,89 @@ def test_review_2_goes_to_a_bot_other_than_reviewer_1(api):
     [second] = checks(api, task)
     assert second["title"] == "Review 2: PR #412"
     assert second["owner_id"] == "bot:rev-b", "rev-a has fewer open checks but did Review 1"
+
+
+def _past_the_hour():
+    """A time an hour and a minute on: the sweep's clock for a check filed now."""
+    from datetime import timedelta
+
+    return (H.parse_ts(H.now()) + timedelta(minutes=61)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def test_a_review_1_check_unanswered_past_its_hour_is_filed_again_to_another_reviewer(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [first] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, _past_the_hour()) == [], "a refile moves no ticket"
+    [again] = checks(api, task)
+    assert again["title"] == "Review 1: PR #412"
+    assert again["owner_id"] in ("bot:rev-a", "bot:rev-b") and again["owner_id"] != first["owner_id"]
+    with api.app.state.store.read() as c:
+        assert H.task(c, first["id"])["status"] == "closed"
+        assert _step(c, task) == "Review 1"
+        assert not c.execute(
+            "SELECT 1 FROM history_events WHERE subject_id=? AND kind='round_skipped'", (task["id"],)
+        ).fetchone()
+
+
+def test_a_review_2_check_unanswered_past_its_hour_goes_to_another_reviewer_but_not_review_1s(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    set_pool(api, task, "Review 2", ["rev-a", "rev-b", "rev-c"])
+    assert move(api, task).status_code == 200
+    [first] = checks(api, task)
+    assert first["owner_id"] == "bot:rev-a"
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
+    task = get(api, "tasks/" + task["id"])["task"]
+    assert move(api, task, "Review 2").status_code == 200
+    [second] = checks(api, task)
+    assert second["owner_id"] == "bot:rev-b"
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, _past_the_hour()) == []
+    [again] = checks(api, task)
+    assert again["title"] == "Review 2: PR #412"
+    assert again["owner_id"] == "bot:rev-c", "rev-a did Review 1 and rev-b left this check unanswered"
+
+
+def test_a_review_2_check_unanswered_with_no_other_free_reviewer_waits_at_review_2(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    set_pool(api, task, "Review 2", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [first] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
+    task = get(api, "tasks/" + task["id"])["task"]
+    assert move(api, task, "Review 2").status_code == 200
+    [second] = checks(api, task)
+    assert second["owner_id"] == "bot:rev-b"
+    with api.app.state.store.transaction() as c:
+        assert V.timeouts(c, _past_the_hour()) == [], "the ticket is not passed on by the timeout"
+    assert checks(api, task) == [], "rev-a did Review 1 and rev-b left this check unanswered: no one is free"
+    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
+    assert wait["label"] == "Waiting for a reviewer" and wait["title"] == "Review 2: PR #412"
+    with api.app.state.store.read() as c:
+        assert _step(c, task) == "Review 2"
+
+
+def test_a_refiled_review_1_check_that_approves_moves_the_ticket_on(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    checks(api, task)
+    with api.app.state.store.transaction() as c:
+        V.timeouts(c, _past_the_hour())
+    [again] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        _finish(c, "refiled-turn", again["owner_id"].split(":", 1)[1], again, "gpt-6-sol", "openai", "codex")
+        assert _step(c, task) == "Review 1 Fixes", "the refiled check's approval is the Review 1 verdict"
 
 
 def test_one_check_per_head_a_builder_check_already_open_is_kept(api):

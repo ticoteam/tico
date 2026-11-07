@@ -89,11 +89,34 @@ def max_at_check(slack=0.5):
             spans = run.w.check_waits(t["id"], until=run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
             for name, span in spans:
                 step = run.w.board.step(name)
-                # a check with no timeout waits for its reviewer, so it has no limit to hold it to
-                limit = step.check.timeout_hours if step and step.check else None
-                if limit is not None and span > limit + slack:
+                if step and step.check and span > step.check.timeout_hours + slack:
                     long.append(f"{t['title']} {name} {span:.1f}h")
         return not long, ", ".join(long[:6])
+
+    return check
+
+
+def reviewed_by_others(silent):
+    """Every ticket is merged and was judged at Review 1 and Review 2 by a bot other than the `silent` one, which was
+    still given checks in the run, so the refile was exercised rather than skipped."""
+    bot = "bot:" + silent
+
+    def check(run):
+        short = []
+        for t in run.final:
+            step = run.w.board.step(t["step"])
+            if not (step and step.merged):
+                short.append(f"{t['title']} not merged")
+                continue
+            for name in ("Review 1", "Review 2"):
+                judged = run.w.judged(t["id"], name)
+                if judged is None:
+                    short.append(f"{t['title']} {name} not judged")
+                elif judged["owner_id"] == bot:
+                    short.append(f"{t['title']} {name} judged by {silent}")
+        if not run.w.sql("SELECT 1 FROM tasks WHERE owner_id=? LIMIT 1", (bot,)):
+            short.append(f"{silent} was never given a check")
+        return not short, ", ".join(short[:6])
 
     return check
 
@@ -466,10 +489,13 @@ SCENARIOS = [
     ),
     Scenario(
         "silent_reviewer",
-        "One reviewer never reports back: its reviews time out and the round is skipped.",
+        "One reviewer never reports back: its checks time out and are filed again to another reviewer.",
         setup=lambda run, w, team: tickets(run, w, 6),
         styles={"reviewer-gpt": {"silent": 1.0}},
-        checks=standard(*REVIEW_TIMEOUT),
+        checks=standard(
+            *REVIEW_TIMEOUT,
+            ("every ticket merged, reviewed by other bots", None, reviewed_by_others("reviewer-gpt")),
+        ),
     ),
     Scenario(
         "fallback_model_stop",
