@@ -190,19 +190,22 @@ async function messagingOpenDigest(bot: string, digest: string): Promise<void> {
 }
 async function pageMessaging(): Promise<void> {
   if (S.me && !S.me.mail_access && S.me.role !== 'owner') { location.hash = TASKS; return; }
-  $('#main')!.classList.add('messaging-layout');
+  const main = $('#main')!;
+  main.classList.add('messaging-layout');
   const load = ++MESSAGING_LOAD;
   if (!$('#message-bot-page')) {
-    $('#main')!.innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail"><div class="empty">Loading message bot…</div></div>
+    main.innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail"><div class="empty">Loading message bot…</div></div>
       <dialog class="msg-message-dialog" id="msg-message-dialog"><div class="msg-message-head"><strong id="msg-message-title"></strong><button class="ghost" type="button" id="msg-message-close" aria-label="Close message">×</button></div><div class="msg-message-body" id="msg-message-body"></div></dialog></div>`;
     ($('#msg-message-close') as HTMLElement).onclick = () => ($('#msg-message-dialog') as HTMLDialogElement).close();
-    ($('#msg-detail') as HTMLElement).onclick = async ev => {
-      const source = eventElement(ev)!.closest<HTMLElement>('[data-msg-source]'); if (source) { messagingGo({source: source.dataset.msgSource}); return; }
+    const detailPanel = $('#msg-detail') as HTMLElement;
+    detailPanel.onclick = async ev => {
+      const hit = eventElement(ev)!;
+      const source = hit.closest<HTMLElement>('[data-msg-source]'); if (source) { messagingGo({source: source.dataset.msgSource}); return; }
       const bot = messagingParams().bot;
-      const mail = eventElement(ev)!.closest<HTMLElement>('[data-msg-mail]'); if (mail) { messagingOpenMail(mail.dataset.msgMailbox!, mail.dataset.msgMail!); return; }
-      const slack = eventElement(ev)!.closest<HTMLElement>('[data-msg-slack]'); if (slack) { messagingOpenSlack(bot, slack.dataset.msgChannel!, slack.dataset.msgSlack!); return; }
-      const digest = eventElement(ev)!.closest<HTMLElement>('[data-msg-digest]'); if (digest) { messagingOpenDigest(bot, digest.dataset.msgDigest!); return; }
-      const pause = eventElement(ev)!.closest<HTMLButtonElement>('[data-msg-pause]');
+      const mail = hit.closest<HTMLElement>('[data-msg-mail]'); if (mail) { messagingOpenMail(mail.dataset.msgMailbox!, mail.dataset.msgMail!); return; }
+      const slack = hit.closest<HTMLElement>('[data-msg-slack]'); if (slack) { messagingOpenSlack(bot, slack.dataset.msgChannel!, slack.dataset.msgSlack!); return; }
+      const digest = hit.closest<HTMLElement>('[data-msg-digest]'); if (digest) { messagingOpenDigest(bot, digest.dataset.msgDigest!); return; }
+      const pause = hit.closest<HTMLButtonElement>('[data-msg-pause]');
       if (!pause) return;
       pause.disabled = true;
       try {
@@ -212,7 +215,7 @@ async function pageMessaging(): Promise<void> {
         pageMessaging();
       } catch (e) { toast(errorMessage(e, ''), true); pause.disabled = false; }
     };
-    ($('#msg-detail') as HTMLElement).onchange = ev => {
+    detailPanel.onchange = ev => {
       const target = ev.target;
       if (target instanceof HTMLSelectElement && target.id === 'msg-source-select') messagingGo({source: target.value});
     };
@@ -220,11 +223,13 @@ async function pageMessaging(): Promise<void> {
   try { if (!MESSAGING_LIST) MESSAGING_LIST = await get<MessagingList>('/v2/messaging/bots'); }
   catch (e) { if (load === MESSAGING_LOAD) $('#msg-detail')!.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MESSAGING_LOAD) return;
+  const list = MESSAGING_LIST!;
+  const detailBox = $('#msg-detail')!;
   let state = messagingParams();
-  if (!state.bot && MESSAGING_LIST!.bots.length) { messagingGo({bot: MESSAGING_LIST!.bots[0]!.bot}); return; }
-  if (state.bot && !MESSAGING_LIST!.bots.some(b => b.bot === state.bot)) { messagingGo({bot: MESSAGING_LIST!.bots[0]?.bot || '', source: ''}); return; }
-  if (!state.bot) { $('#msg-detail')!.innerHTML = '<div class="empty">No bots are assigned to a visible messaging source.</div>'; return; }
-  $('#msg-detail')!.innerHTML = '<div class="empty">Loading bot activity…</div>';
+  if (!state.bot && list.bots.length) { messagingGo({bot: list.bots[0]!.bot}); return; }
+  if (state.bot && !list.bots.some(b => b.bot === state.bot)) { messagingGo({bot: MESSAGING_LIST!.bots[0]?.bot || '', source: ''}); return; }
+  if (!state.bot) { detailBox.innerHTML = '<div class="empty">No bots are assigned to a visible messaging source.</div>'; return; }
+  detailBox.innerHTML = '<div class="empty">Loading bot activity…</div>';
   try {
     const query = state.source ? `?source=${encodeURIComponent(state.source)}` : '';
     const detail = await get<MessagingDetail>(`/v2/messaging/bots/${encodeURIComponent(state.bot)}${query}`);
