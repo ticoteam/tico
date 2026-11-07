@@ -3039,9 +3039,17 @@ def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str |
     now = rows[0] if rows else None
     splits = SATT.parse_splits(str(now["splits_json"])) if now is not None else ()
     shares = CATT.shares_of(splits, line.amount)
+    source = str(now["source"]) if now is not None and splits else "tags"
+    rule_id = str(now["rule_id"]) if now is not None and splits and now["rule_id"] else None
+    rule = SATT.rule(c, rule_id) if rule_id else None
     return {
         "line_id": line_id,
-        "source": str(now["source"]) if now is not None and splits else "tags",
+        "source": source,
+        "rule_id": rule_id,
+        "rule_name": str(rule["name"]) if rule is not None else None,
+        "set_by": str(now["set_by"]) if now is not None else None,
+        "set_at": str(now["created_at"]) if now is not None else None,
+        "can_change": R.has(s.ctx.org, viewer, R.ATTRIBUTION, s.ctx.rights(viewer)),
         "tags": dict(line.tags),
         "amount": line.amount,
         "splits": _split_rows(splits, shares),
@@ -3055,10 +3063,10 @@ def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str |
                     for x in SATT.parse_splits(str(r["splits_json"]))
                 ],
                 "set_by": str(r["set_by"]),
-                "created_at": str(r["created_at"]),
+                "set_at": str(r["created_at"]),
                 "superseded_at": str(r["superseded_at"]) if r["superseded_at"] else None,
             }
-            for r in rows
+            for r in rows[: SATT.HISTORY_MAX]
         ],
     }
 
@@ -3071,6 +3079,7 @@ def attribution_rules(c: sqlite3.Connection, viewer: str, at: str | None = None)
     rows = SATT.rules(c, s.ctx.book.id)
     labels = SATT.rule_label_targets(c, s.ctx.book.id, rows)
     return {
+        "can_change": True,  # only holders of the right (or admin, or the owner) read the rules, and they all may change them
         "rules": [
             {
                 "id": str(r["id"]),
@@ -3085,8 +3094,9 @@ def attribution_rules(c: sqlite3.Connection, viewer: str, at: str | None = None)
                 ],
                 "enabled": bool(int(r["enabled"])),
                 "apply_from": str(r["apply_from"]) if r["apply_from"] else None,
+                "created_by": str(r["created_by"]),
                 "updated_at": str(r["updated_at"] or r["created_at"]),
             }
             for r in rows
-        ]
+        ],
     }

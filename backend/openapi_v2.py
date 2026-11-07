@@ -5451,6 +5451,7 @@ SCHEMAS.update(
                             "default_team": "n",
                             "grants": items({"type": "object", "additionalProperties": True}),
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                            "attribute": {"type": ["boolean", "null"]},
                             "may_grant": "b",
                             "budgets": "i",
                         }
@@ -5698,6 +5699,11 @@ SCHEMAS.update(
             {
                 "line_id": "s",
                 "source": "s",
+                "rule_id": "n",
+                "rule_name": "n",
+                "set_by": "n",
+                "set_at": "n",
+                "can_change": "b",
                 "tags": "o",
                 "amount": "i",
                 "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i", "amount": "i"})),
@@ -5709,7 +5715,7 @@ SCHEMAS.update(
                             "rule_id": "n",
                             "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
                             "set_by": "s",
-                            "created_at": "s",
+                            "set_at": "s",
                             "superseded_at": "n",
                         }
                     )
@@ -5727,10 +5733,12 @@ SCHEMAS.update(
                             "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
                             "enabled": "b",
                             "apply_from": "n",
+                            "created_by": "s",
                             "updated_at": "s",
                         }
                     )
-                )
+                ),
+                "can_change": "b",
             }
         ),
         "FinanceMercuryUsers": obj(

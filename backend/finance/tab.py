@@ -12,6 +12,7 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
+from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
@@ -1078,6 +1079,9 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
                 "default_team": team if team in visible else None,
                 "grants": [_grant_row(g, ctx) for g in mine],
                 "rights": rights,
+                # Whether the teammate may change attribution (finance.attribution; admin and owner imply it), shown
+                # where their rights are.
+                "attribute": R.has(org, m, R.ATTRIBUTION, ctx.rights(m)) if admin or m == viewer else None,
                 "may_grant": _may_grant(ctx, viewer, m, defaults),
                 "budgets": own.get(m, 0),
             }

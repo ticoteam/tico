@@ -55858,6 +55858,12 @@
                     "type": "string"
                   }
                 },
+                "attribute": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
                 "may_grant": {
                   "type": "boolean"
                 },
@@ -55866,6 +55872,7 @@
                 }
               },
               "required": [
+                "attribute",
                 "budgets",
                 "default",
                 "default_team",
@@ -56522,12 +56529,16 @@
                     "null"
                   ]
                 },
+                "created_by": {
+                  "type": "string"
+                },
                 "updated_at": {
                   "type": "string"
                 }
               },
               "required": [
                 "apply_from",
+                "created_by",
                 "enabled",
                 "id",
                 "match",
@@ -56537,9 +56548,13 @@
               ],
               "additionalProperties": true
             }
+          },
+          "can_change": {
+            "type": "boolean"
           }
         },
         "required": [
+          "can_change",
           "rules"
         ],
         "additionalProperties": true
@@ -58218,6 +58233,33 @@
           "source": {
             "type": "string"
           },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "set_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "set_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can_change": {
+            "type": "boolean"
+          },
           "tags": {
             "type": "object"
           },
@@ -58294,7 +58336,7 @@
                 "set_by": {
                   "type": "string"
                 },
-                "created_at": {
+                "set_at": {
                   "type": "string"
                 },
                 "superseded_at": {
@@ -58305,9 +58347,9 @@
                 }
               },
               "required": [
-                "created_at",
                 "id",
                 "rule_id",
+                "set_at",
                 "set_by",
                 "source",
                 "splits",
@@ -58319,8 +58361,13 @@
         },
         "required": [
           "amount",
+          "can_change",
           "history",
           "line_id",
+          "rule_id",
+          "rule_name",
+          "set_at",
+          "set_by",
           "source",
           "splits",
           "tags"
