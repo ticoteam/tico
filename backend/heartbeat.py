@@ -174,7 +174,7 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     from . import review_pages
 
     if ctx.app is not None:
-        review_pages.tick(github_app, pages=ctx.app.state.pages, blobs=ctx.app.state.blobs)
+        review_pages.tick(github_app, pages=ctx.app.state.pages, blobs=ctx.app.state.blobs, paced=True)
     # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
     from . import task_blocked
 

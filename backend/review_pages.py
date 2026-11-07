@@ -11,6 +11,8 @@ import html
 import json
 import logging
 import re
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -30,7 +32,9 @@ log = logging.getLogger(__name__)
 
 LINE = "Review page: "
 LINE_RE = re.compile(r"^Review page:[^\n]*$", re.M)
-TRIES = 3  # failed builds before the pull request body says why there is no page
+TRIES = 3  # failed attempts before the pull request body says why there is no page
+EVERY_S = 60  # how often the pass looks (backend/move_retry.py keeps the same rhythm)
+PER_PASS = 20  # pages a pass builds or edits; the rest are due on a later pass
 PICTURES_CAP = 6 * 1024 * 1024  # raw picture bytes; base64 adds a third, and the page cap is 10 MB
 SHOTS_ASK = (
     "This is the last review before merge. If the diff touches ui/, take before and after screenshots of the changed "
@@ -39,6 +43,10 @@ SHOTS_ASK = (
 )
 
 Row = dict[str, object]
+
+
+class Unbuildable(RuntimeError):
+    """A ticket no page can be built for. Its pull request line says why, and no pass tries it again."""
 
 
 # ------------------------------------------------------------------------------------------------ plain values
@@ -110,33 +118,49 @@ def queue(c: Any, task: Row | None, link_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ the pass
-def tick(service: Any, *, pages: Any, blobs: Any, store: Any = None) -> list[str]:
-    """One pass over the merged pull requests whose page is due. Each one's failure is its own: it is due again later,
-    and after TRIES failures the pull request body says why."""
+_lock = threading.Lock()
+_next = {"at": 0.0}
+
+
+def tick(service: Any, *, pages: Any, blobs: Any, store: Any = None, paced: bool = False) -> list[str]:
+    """One pass over the merged pull requests whose page is pending and due, oldest first, PER_PASS at most. `paced` is
+    the heartbeat's: it runs the pass at most every EVERY_S (as backend/move_retry.py does), and a caller that runs passes
+    itself, such as the factory sim, runs each one as it comes. Each one's failure is its own: it is due again later, and
+    after TRIES failures the pull request body says why, and no pass tries it again."""
+    if paced:
+        with _lock:
+            if time.monotonic() < _next["at"]:
+                return []
+            _next["at"] = time.monotonic() + EVERY_S
     store = store or service.store
     with store.read() as c:
         links = _query(
             c,
             "SELECT * FROM task_links WHERE kind='pr' AND state IN ('merged','shipped') "
-            "AND detail LIKE '%review_page%'",
+            "AND json_extract(detail,'$.review_page.state')='pending' "
+            "AND coalesce(json_extract(detail,'$.review_page.retry_at'),'')<=? "
+            "ORDER BY coalesce(json_extract(detail,'$.review_page.since'),''),id LIMIT ?",
+            (H.now(), PER_PASS),
         )
-    now = H.now()
     done: list[str] = []
     for link in links:
         detail = _row(H._json(link.get("detail"), {}))
         state = _row(detail.get("review_page"))
-        if _text(state, "state") != "pending" or _text(state, "retry_at") > now:
-            continue
+        link_id = _text(link, "id")
         try:
             _advance(service, pages, blobs, store, link, state)
-            done.append(_text(link, "id"))
+            done.append(link_id)
+        except Unbuildable as exc:
+            log.warning("review page for pull request %s: %s", link_id, exc)
+            _give_up(service, store, link, state, str(exc))
         except Exception:
-            log.exception("review page failed for pull request %s", _text(link, "id"))
+            log.exception("review page failed for pull request %s", link_id)
             _failed(service, store, link, state)
     return done
 
 
 def _advance(service: Any, pages: Any, blobs: Any, store: Any, link: Row, state: Row) -> None:
+    link_id = _text(link, "id")
     pr = _pull(service, link)
     body = _text(pr, "body")
     head = _text(_row(pr.get("head")), "sha")
@@ -146,34 +170,53 @@ def _advance(service: Any, pages: Any, blobs: Any, store: Any, link: Row, state:
             task = _task(c, _text(link, "task_id"))
             if task is None:
                 raise RuntimeError("the ticket of this pull request is gone")
+            builder = _builder(c, task)
             facts = _facts(c, blobs, task, link, pr)
-        result: object = pages.publish(None, _builder(task), _fields(task), render(facts))
+        result: object = pages.publish(None, builder, _fields(task), render(facts))
         file_id = _page_id(result)
-        _save(store, _text(link, "id"), {**state, "file_id": file_id})
+        if not file_id:
+            raise RuntimeError("the page was not published")
+        # Saved before the edit, so a failed edit keeps the page and retries the edit alone, never a second publish.
+        _save(store, link_id, {**state, "file_id": file_id})
     url = f"{store.settings.public_url}/#/page/{quote(file_id, safe='')}"
     _patch(service, link, with_review_line(body, url))
-    _save(store, _text(link, "id"), {"state": "done", "file_id": file_id, "head": head, "at": H.now()})
+    _save(store, link_id, {"state": "done", "file_id": file_id, "head": head, "at": H.now()})
 
 
 def _page_id(result: object) -> str:
     return _text(_row(_row(result).get("page")), "file_id")
 
 
+def _saved(store: Any, link_id: str) -> Row:
+    """The review page state as saved now. A failure after a save (the page's file_id, saved before its edit) must not
+    write back the state the pass started from."""
+    with store.read() as c:
+        rows = _query(c, "SELECT detail FROM task_links WHERE id=?", (link_id,))
+    return _row(_row(H._json(rows[0].get("detail"), {})).get("review_page")) if rows else {}
+
+
 def _failed(service: Any, store: Any, link: Row, state: Row) -> None:
     link_id = _text(link, "id")
+    state = _saved(store, link_id) or state
     tries = _int(state.get("tries")) + 1
     if tries < TRIES:
         _save(store, link_id, {**state, "tries": tries, "retry_at": _later(60 * 2**tries)})
         return
     reason = "could not update the pull request" if _text(state, "file_id") else "could not build it"
+    _give_up(service, store, link, {**state, "tries": tries}, reason)
+
+
+def _give_up(service: Any, store: Any, link: Row, state: Row, reason: str) -> None:
+    """The last word on a pull request's page: its line says why there is none, and the state is failed, which no pass
+    picks up again. The line is written best effort; if its edit fails too, the pull request simply has no line, and a
+    missing page never holds approval."""
+    link_id = _text(link, "id")
     try:
         pr = _pull(service, link)
         _patch(service, link, with_review_line(_text(pr, "body"), f"none ({reason})"))
     except Exception:
         log.exception("review page line for pull request %s could not be written", link_id)
-        _save(store, link_id, {**state, "tries": tries, "retry_at": _later(900)})
-        return
-    _save(store, link_id, {"state": "failed", "reason": reason, "tries": tries, "at": H.now()})
+    _save(store, link_id, {**state, "state": "failed", "reason": reason, "at": H.now()})
 
 
 def _save(store: Any, link_id: str, state: Row) -> None:
@@ -213,8 +256,14 @@ def _patch(service: Any, link: Row, body: str) -> None:
         raise RuntimeError(f"GitHub edit of the pull request answered {response.status_code}")
 
 
-def _builder(task: Row) -> Identity:
-    return Identity("bot:" + H.actor_id(_text(task, "owner_id")), "bot")
+def _builder(c: Any, task: Row) -> Identity:
+    """The page is published as the ticket's builder, a bot. A ticket owned by a person, or by a bot that is not in the
+    registry, gets no page: nothing is written under an id that is not a bot."""
+    owner = _text(task, "owner_id")
+    bot_id = H.actor_id(owner)
+    if not owner.startswith("bot:") or not bot_id or H.bot(c, bot_id) is None:
+        raise Unbuildable("ticket has no bot owner")
+    return Identity("bot:" + bot_id, "bot")
 
 
 def _fields(task: Row) -> dict[str, str]:
