@@ -85,13 +85,17 @@ def spec_published_once(run):
 
 
 def approved_by_person(run):
-    """ana's move was accepted, and the card reads Approved."""
+    """ana's move to Approved went through, and the card has been to Approved since (the board may move it on)."""
     if run.approved is None:
         return False, "the move to Approved never went out"
-    status, reply = run.approved
-    step = run.w.sql("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?", (run.card,))
-    name = step[0]["name"] if step else None
-    return status == 200 and name in ("Approved", "Building"), f"HTTP {status}, card at {name}"
+    status, _ = run.approved
+    moves = run.w.sql(
+        "SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=? AND e.kind='step' "
+        "AND e.actor_id='human:ana' AND e.new=(SELECT s.id FROM task_steps s JOIN tasks t ON t.type_id=s.type_id "
+        "WHERE t.id=e.subject_id AND s.name='Approved')",
+        (run.card,),
+    )
+    return status == 200 and bool(moves), f"HTTP {status}, {len(moves)} moves by ana to Approved"
 
 
 def builder_refused(run):
