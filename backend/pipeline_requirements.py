@@ -471,6 +471,25 @@ def set_stage_limit(conn: "sqlite3.Connection", actor: str, stage_id: str, minut
     return {"id": stage_id, "name": name, "limit_minutes": minutes}
 
 
+FINISHED_STATUSES = ("done", "closed", "declined")
+
+
+def affected_count(conn: "sqlite3.Connection", stage_id: str, label: str | None, visible_sql: str) -> dict[str, Any]:
+    """How many open tickets are at a stage now, and carry the label a requirement would apply to: the count the rule
+    editor shows before a requirement is saved. `visible_sql` is the reader's rule over the tasks table, so a ticket the
+    reader cannot see is not counted."""
+    _, name = _stage(conn, stage_id)
+    marks = ",".join("?" * len(FINISHED_STATUSES))
+    found = conn.execute(
+        f"SELECT COUNT(*) FROM (SELECT id, step_id, status FROM tasks WHERE ({visible_sql})) t "
+        f"WHERE t.step_id = ? AND t.status NOT IN ({marks}) "
+        "AND (? IS NULL OR EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id = tt.tag_id "
+        "WHERE tt.task_id = t.id AND g.key = ?))",
+        (stage_id, *FINISHED_STATUSES, label or None, label or None),
+    ).fetchone()
+    return {"stage": name, "label": label or None, "count": int(found[0] or 0)}
+
+
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:
     """The requirement, pipeline settings and stage limit routes. Reads need a signed-in company member; every write
     goes through pipeline_rights, so a bot is refused unless it is the pipeline's owner."""
@@ -483,6 +502,16 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         with db.read() as c:
             _stage(c, stage_id)
             return {"requirements": requirements_for_stage(c, stage_id)}
+
+    @app.get("/api/v2/pipeline-stages/{stage_id}/affected")
+    def stage_affected(request: Request, stage_id: str, label: str | None = None) -> dict[str, Any]:
+        """How many open tickets at this stage a requirement with this label would apply to right now, counting only the
+        tickets the reader may see. The rule editor shows it before a requirement is saved."""
+        who = request.state.identity
+        guard: Any = auth
+        with db.read() as c:
+            guard.domain(who)
+            return affected_count(c, stage_id, label, guard.task_sql(c, who))
 
     @app.get("/api/v2/requirements/{requirement_id}")
     def requirement_read(request: Request, requirement_id: str) -> dict[str, Any]:

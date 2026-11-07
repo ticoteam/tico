@@ -80,3 +80,26 @@ def test_a_bot_reviewed_attachment_needs_a_rubric_and_a_person_reviewer_is_named
     with pytest.raises(Problem) as no_person:
         R.add(c, ANA, stage, _body(reviewed_by="person", rubric=None))
     assert no_person.value.status == 422
+
+
+def test_the_affected_count_is_the_open_tickets_at_the_stage_with_the_label_and_the_readers_visibility(tmp_path):
+    """The rule editor shows how many open tickets at a stage a requirement would apply to, before it is saved. A
+    labelled requirement counts only tickets with that label, and a ticket the reader cannot see is not counted."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev, stage = _review_stage(c)
+    tickets = [H.task_create(c, ANA, f"Card {n}", "", ANA, type=dev["id"], step="Review", lint=False) for n in range(3)]
+    c.execute(
+        "INSERT INTO tags (id, key, label, created_at, updated_at) VALUES ('tg1', 'urgent', 'Urgent', ?, ?)",
+        (H.now(), H.now()),
+    )
+    c.execute("INSERT INTO task_tags (task_id, tag_id) VALUES (?, 'tg1')", (tickets[0]["id"],))
+
+    everything = R.affected_count(c, stage, None, "1")
+    urgent = R.affected_count(c, stage, "urgent", "1")
+    hidden = R.affected_count(c, stage, None, "0")
+
+    assert everything == {"stage": "Review", "label": None, "count": 3}
+    assert urgent == {"stage": "Review", "label": "urgent", "count": 1}
+    assert hidden["count"] == 0
