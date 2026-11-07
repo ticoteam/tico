@@ -5,6 +5,7 @@ file: the database decides, not a Python lock."""
 import json
 import threading
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_overview
 from backend import pipeline_review as R
+from backend import requirement_attachments as A
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
@@ -1461,3 +1463,51 @@ def test_not_validated_refuses_an_attachment_or_a_visit_the_reviewer_did_not_see
         **seen_kw,
     )
     assert done["verdict"] == "failed"
+
+
+def _attach_link(w, requirement, url):
+    """The real attach API: the same evidence, judged by the same writer checks a person's or a bot's attach goes through."""
+    return A.attach(
+        w.c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        w.task,
+        requirement,
+        {"source": "link", "url": url},
+    )
+
+
+def _digests(w, requirement):
+    rows = w.c.execute(
+        "SELECT digest, work_version FROM requirement_attachments WHERE task_id=? AND stage_requirement_id=? "
+        "ORDER BY created_at",
+        (w.task, requirement),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def test_the_same_evidence_attached_again_keeps_its_earliest_work_version(world):
+    """B4: a digest attached again on the same ticket keeps the earliest work version it was attached at (D33), so old
+    evidence cannot look fresh after the work changed; new evidence takes the current version."""
+    w = world
+    _attach_link(w, w.mockup, "https://example.test/first")
+    w.push()
+    _attach_link(w, w.mockup, "https://example.test/first")  # the same link again, after the work changed
+    first, again = _digests(w, w.mockup)[1:3]
+    assert first[0] == again[0]
+    assert [v for _, v in _digests(w, w.mockup)[1:3]] == [0, 0]
+    _attach_link(w, w.mockup, "https://example.test/second")  # new evidence is at the current work version
+    assert _digests(w, w.mockup)[-1][1] == w.revision()
+
+
+def test_a_stale_requirement_of_a_stage_the_ticket_left_takes_attachments_in_place(world):
+    """B9: a requirement of a stage the ticket has left, created before it left, takes evidence in place and does not move
+    the ticket; one created after it left is not held to, and the attach is refused."""
+    w = world
+    w.approve(w.mockup)
+    w.approve(w.signoff)  # the last requirement of Review: the ticket moves on
+    assert w.step_of() == w.shipped
+    _attach_link(w, w.mockup, "https://example.test/after-the-move")
+    assert w.step_of() == w.shipped
+    late = w.requirement("Late check", "attachment", "person", created_at="9999-12-31T00:00:00Z")
+    refused("conflict", _attach_link, w, late, "https://example.test/late")
