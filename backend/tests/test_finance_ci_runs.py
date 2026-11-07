@@ -131,15 +131,16 @@ def test_a_permit_with_a_bad_run_id_size_or_time_limit_is_refused_as_invalid(boo
 # ---------------------------------------------------------------------------------------------------- the daily share
 def test_the_daily_share_refuses_a_run_that_no_longer_fits_and_no_amount_means_no_gate(books):
     with books.transaction() as c:
+        task = ticket(c)
         assert FC.day_share(c, AT)[1] is None  # the CI budget starts with no amount
-        assert permit(c, ticket(c), remote_id="555555555551")["allowed"] is True  # no gate, no hold
+        assert permit(c, task, remote_id="555555555551")["allowed"] is True  # no gate, no hold
         set_ci_amount(c, 3_100)  # $31 in October: $1.00 a day
         share = FC.day_share(c, AT)[1]
         assert share == 100
         # 50 minutes on 16 vCPUs is 32 cents: three fit in $1.00, the fourth does not.
         for n in range(3):
-            assert permit(c, ticket(c), remote_id=f"66666666666{n}", cpus=16)["allowed"] is True
-        full = permit(c, ticket(c), remote_id="777777777777", cpus=16)
+            assert permit(c, task, remote_id=f"66666666666{n}", cpus=16)["allowed"] is True
+        full = permit(c, task, remote_id="777777777777", cpus=16)
         assert full["allowed"] is False and "today's CI share" in full["message"]
         held = c.execute("SELECT count(*), sum(amount) FROM fin_holds WHERE source='ci'").fetchone()
         assert held[0] == 3 and held[1] == 96
@@ -219,7 +220,8 @@ def test_an_unpermitted_remote_run_is_recorded_and_counted_not_blocked(books):
 
 
 # ---------------------------------------------------------------------------------------------------- Rules
-def test_the_rules_show_the_ticket_cap_in_dollars_and_the_daily_share_or_no_limit(books):
+def test_the_rules_show_the_ticket_cap_in_dollars_and_the_daily_share_or_no_limit(books, monkeypatch):
+    monkeypatch.setattr(ci_runs, "_now", lambda: AT)  # October's share, whatever month the suite runs in
     with books.read() as c:
         texts = [s["text"] for s in ci_runs.sentences(c)]
         assert texts[0].startswith("Remote test runs: up to 120 VM-minutes ($0.19) per ticket")

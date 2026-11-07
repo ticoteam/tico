@@ -699,7 +699,8 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
             **entry,
             "lines": [{**entry["lines"][0], "amount": 1_000_001}, {**entry["lines"][1], "amount": -1_000_001}],
         }
-        assert act(c, "bot:coder", "journal", big).status == "needs_approval"
+        result = act(c, "bot:coder", "journal", big)
+        assert result.status == "needs_approval", result
         assert (
             act(c, "bot:coder", "account_create", {"code": "6150", "name": "Tools", "type": "expense"}).status
             == "needs_approval"

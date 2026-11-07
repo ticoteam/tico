@@ -66,7 +66,7 @@ class Permit(Contract):
     """A builder's remote run asking to start: its ticket, the run's id (remote.py's), runner size and time limit."""
 
     task_id: str = Field(min_length=1, max_length=200)
-    remote_id: str = Field(min_length=12, max_length=12)
+    remote_id: str
     cpus: int
     minutes: int
 
