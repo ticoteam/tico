@@ -48,14 +48,18 @@ def work_events(api, task_id):
         ]
 
 
-@pytest.mark.parametrize("status", ["closed", "declined"])
-def test_closing_or_declining_asks_the_running_turn_to_stop(api, status):
+# A close with a note also queues the note for the owner bot, which the close cancels with the turn's run.
+@pytest.mark.parametrize(
+    "status,said",
+    [("closed", "Stopped 1 running turn; canceled 1 queued run."), ("declined", "Stopped 1 running turn.")],
+)
+def test_closing_or_declining_asks_the_running_turn_to_stop(api, status, said):
     machine, task, attempt, conversation = task_turn(api)
     who = requester(api, task["id"])
     with api.app.state.store.transaction() as c:
         finish(c, who, task["id"], status, "Not needed.")
     assert stop_flag(api, attempt["id"]) == who
-    assert work_events(api, task["id"]) == ["Stopped 1 running turn."]
+    assert work_events(api, task["id"]) == [said]
 
 
 def test_closing_cancels_the_queued_runs_on_it(api):
@@ -72,7 +76,7 @@ def test_closing_cancels_the_queued_runs_on_it(api):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (queued[0],)).fetchone()[0] == "canceled"
     assert stop_flag(api, attempt["id"]) == who
-    assert work_events(api, task["id"]) == ["Stopped 1 running turn; canceled 1 queued run."]
+    assert work_events(api, task["id"]) == ["Stopped 1 running turn; canceled 2 queued runs."]
 
 
 def test_the_turn_making_the_close_is_not_stopped(api):
@@ -86,7 +90,7 @@ def test_the_turn_making_the_close_is_not_stopped(api):
     finally:
         H.RUN.reset(token)
     assert stop_flag(api, attempt["id"]) is None
-    assert work_events(api, task["id"]) == []
+    assert not any(said.startswith("Stopped") for said in work_events(api, task["id"]))
 
 
 def test_closing_a_parent_stops_the_turn_running_on_its_subtask(api):
