@@ -203,9 +203,9 @@ function redesignAfterRoute() {
 }
 
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
-// from the Strategy tab and keeps it lit.
+// from the Strategy tab and keeps it lit. A segment's page keeps Strategy lit, with no Lenses link and no action slot.
 function redesignStrategyHead(tab) {
-  const on = ['lenses', 'brand'].includes(tab) ? 'strategy' : tab;
+  const on = ['lenses', 'brand', 'segment'].includes(tab) ? 'strategy' : tab;
   const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
   const sub = tab === 'strategy' || tab === 'lenses'
@@ -213,7 +213,7 @@ function redesignStrategyHead(tab) {
   return `<div class="strat-head rd-strat-head"><h1>Strategy</h1>
       <nav class="tabs slim strat-tabs" aria-label="Strategy">${tabs.map(([id, href, label]) =>
         `<a href="${href}" data-strat-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
-      <span class="spacer"></span>${sub}<div class="strat-actions" id="strat-actions"></div></div>`;
+      <span class="spacer"></span>${sub}${tab === 'segment' ? '' : '<div class="strat-actions" id="strat-actions"></div>'}</div>`;
 }
 
 // Org (ui/app/redesign-org.js) and the Market page (ui/app/redesign-market.js) are their own files.

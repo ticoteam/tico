@@ -115,10 +115,15 @@ function segmentListPaint(box: HTMLElement, list: SegItem[] | null | undefined, 
   segmentListBind(box);
 }
 
+// A write in flight (the list's, or the segment page's): no other click is taken until it lands.
+let SEG_WRITING = false;
 // A write, then the list read again. A refusal (its Problem text) stays on screen as a toast; the form stays open.
 async function segWrite(run: () => Promise<any>, fail: string): Promise<boolean> {
+  if (SEG_WRITING) return false;
+  SEG_WRITING = true;
   try { await run(); }
   catch (error) { toast(segErr(error, fail), true); return false; }
+  finally { SEG_WRITING = false; }
   SEG_LIST.again();
   return true;
 }
@@ -135,6 +140,7 @@ function segmentListBind(box: HTMLElement): void {
   const st = SEG_LIST;
   listenSegMenus();
   box.onclick = ev => {
+    if (SEG_WRITING) return;
     const target = ev.target as Element;
     const row = target.closest('[data-seg-id]') as HTMLElement | null;
     const id = row?.dataset.segId || '';
@@ -207,36 +213,49 @@ window.segmentPagesStop = function segmentPagesStop(): void {
 
 window.pageSegment = async function pageSegment(): Promise<void> {
   const load = ++SEG_PAGE_LOAD, id = segmentRouteId(S.route);
+  // A field left open on the last segment is not carried to this one.
+  SEG_PAGE_EDIT = '';
   const main = $('#main');
   main.classList.add('strategy-layout');
-  main.innerHTML = strategyHeadHtml('strategy') + `<div id="seg-body" class="seg-page">${skelRows(6, {dot: false})}</div>`;
-  let seg: SegDetail;
-  try { seg = await get('/v2/segments/' + id, {fresh: true}); }
+  main.innerHTML = strategyHeadHtml('segment') + `<div id="seg-body" class="seg-page">${skelRows(6, {dot: false})}</div>`;
+  let seg: SegDetail, sees: boolean;
+  try { [seg, sees] = await Promise.all([get('/v2/segments/' + id, {fresh: true}), segFinanceSees()]); }
   catch (error) {
     if (load === SEG_PAGE_LOAD && $('#seg-body')) $('#seg-body').innerHTML = `<p class="err">${esc(segErr(error, 'Could not load the segment'))}</p>`;
     return;
   }
   if (load !== SEG_PAGE_LOAD) return;
-  segPageDraw(seg, load);
+  segPageDraw(seg, load, sees);
 };
 
-function segPageDraw(seg: SegDetail, load: number): void {
+// Whether the viewer sees Finance beyond their own budgets. The Budget and P&L links follow it, as the sidebar's Finance
+// entry does (the same test, from the same one read per visit).
+async function segFinanceSees(): Promise<boolean> {
+  finProbeOnce();
+  await FIN_PROBE;
+  return !!finCapsOf(FIN_ACCESS, finMe())?.any;
+}
+
+function segPageDraw(seg: SegDetail, load: number, sees: boolean): void {
   const body = $('#seg-body');
   if (!body) return;
-  body.innerHTML = `${segHeadHtml(seg)}<div id="seg-strategy-box">${segStrategyHtml(seg)}</div>${segBetsHtml(seg)}<section class="seg-market mkt-host seg-mkt-host" id="seg-market" aria-label="Market"></section>`;
+  body.innerHTML = `${segHeadHtml(seg, sees)}<div id="seg-strategy-box">${segStrategyHtml(seg)}</div>${segBetsHtml(seg)}<section class="seg-market mkt-host seg-mkt-host" id="seg-market" aria-label="Market"></section>`;
   segBindStrategy(seg, load);
   void segMarketFill($('#seg-market'), seg.id, () => load === SEG_PAGE_LOAD);
 }
 
-function segHeadHtml(seg: SegDetail): string {
+// The segment's head: its name, who it is for, its teammates, and the pages that hold its numbers. Budget and P&L show
+// only to a viewer who sees Finance.
+function segHeadHtml(seg: SegDetail, sees: boolean): string {
   const id = encodeURIComponent(seg.id);
-  const links: [string, string][] = [[RD_GOALS, 'Goals'], [GR_ROUTE, 'Growth'], [RD_BUDGET, 'Budget'], [FIN_ROUTE + '/pnl', 'P&L']];
+  const links: [string, string, string][] = [[RD_GOALS, 'Goals', 'goals'], [GR_ROUTE, 'Growth', 'growth']];
+  if (sees) links.push([RD_BUDGET, 'Budget', 'budget'], [FIN_ROUTE + '/pnl', 'P&L', 'pnl']);
   return `<header class="seg-head">
       <div class="seg-title">${segDot(seg.color)}<h2>${esc(seg.name)}</h2></div>
       ${seg.who ? `<p class="seg-who-l">${esc(seg.who)}</p>` : ''}
       <div class="seg-meta">${segFacesHtml(seg.faces, seg.teammates)}
-        <nav class="seg-links" aria-label="Segment's pages">${links.map(([base, label]) =>
-          `<a href="${esc(base)}?segment=${id}">${label}</a>`).join('')}</nav></div></header>`;
+        <nav class="seg-links" aria-label="Segment's pages">${links.map(([base, label, key]) =>
+          `<a href="${esc(base)}?segment=${id}" data-seg-link="${key}">${label}</a>`).join('')}</nav></div></header>`;
 }
 
 // The strategy: each field, the company's own in grey until the segment changes it. The owner edits in place.
@@ -244,14 +263,14 @@ function segStrategyHtml(seg: SegDetail): string {
   const owner = !!seg.strategy?.draft;
   const rows = (seg.strategy?.fields || []).filter(f => owner || stratText(f.text)).map(f => segFieldHtml(f, owner)).join('');
   return `<section class="card strat-card seg-strat" id="seg-strategy" aria-label="Strategy">
-      <div class="strat-card-head"><h2 class="strat-k">Strategy</h2></div>${rows || '<p class="muted strat-empty">Nothing written for this segment yet.</p>'}</section>`;
+      <div class="strat-card-head"><h2 class="strat-k">Strategy</h2></div>${rows || '<p class="muted strat-empty">None yet</p>'}</section>`;
 }
 function segFieldHtml(f: SegField, owner: boolean): string {
   const editing = SEG_PAGE_EDIT === f.key;
   const label = f.changed ? 'This segment' : 'From company';
   const acts = !owner || editing ? '' : f.changed
-    ? `<button class="ghost strat-mini" type="button" data-seg-field-edit="${esc(f.key)}">Edit</button><button class="ghost strat-mini" type="button" data-seg-field-use="${esc(f.key)}">Use company's</button>`
-    : `<button class="ghost strat-mini" type="button" data-seg-field-edit="${esc(f.key)}">Change for this segment</button>`;
+    ? `<button class="linkish" type="button" data-seg-act="edit" data-seg-field-edit="${esc(f.key)}">Edit</button><button class="linkish" type="button" data-seg-act="use" data-seg-field-use="${esc(f.key)}">Use company's</button>`
+    : `<button class="linkish" type="button" data-seg-act="change" data-seg-field-edit="${esc(f.key)}">Change for this segment</button>`;
   const body = editing
     ? `<form class="seg-ed-form" data-seg-field-form="${esc(f.key)}" novalidate>
         <textarea name="text" rows="6" aria-label="${esc(f.title)}">${esc(f.text)}</textarea>
@@ -259,7 +278,7 @@ function segFieldHtml(f: SegField, owner: boolean): string {
     : stratText(f.text) ? `<div class="md strat-md${f.changed ? '' : ' seg-company'}">${safeMd(f.text)}</div>`
     : '<p class="muted strat-empty">Not written</p>';
   return `<div class="seg-field" data-seg-field="${esc(f.key)}">
-      <div class="seg-field-h"><h3 class="strat-k">${esc(f.title)}</h3><span class="seg-from${f.changed ? ' own' : ''}">${label}</span><span class="spacer"></span>${acts}</div>
+      <div class="seg-field-h"><h3 class="strat-k">${esc(f.title)}</h3><span class="seg-from${f.changed ? ' own' : ''}" data-seg-from="${f.changed ? 'segment' : 'company'}">${label}</span>${acts ? `<span class="seg-field-acts">${acts}</span>` : ''}</div>
       ${body}</div>`;
 }
 
@@ -275,6 +294,8 @@ function segBetsHtml(seg: SegDetail): string {
 // Writes one field of the segment's strategy (PUT /api/v2/segments/strategy, with the draft revision it was read at).
 // "" gives the company's text back. A changed draft (409) is read again whole.
 async function segWriteField(seg: SegDetail, load: number, key: string, text: string): Promise<void> {
+  if (SEG_WRITING) return;
+  SEG_WRITING = true;
   try {
     const out = await put('/v2/segments/strategy', {id: seg.id, revision: seg.strategy?.revision ?? null, sections: {[key]: text}});
     if (load !== SEG_PAGE_LOAD) return;
@@ -290,6 +311,8 @@ async function segWriteField(seg: SegDetail, load: number, key: string, text: st
       return;
     }
     toast(segErr(error, 'Could not save it'), true);
+  } finally {
+    SEG_WRITING = false;
   }
 }
 // Draws the strategy card again, keeping the rest of the page.
@@ -311,6 +334,7 @@ function segBindStrategy(seg: SegDetail, load: number): void {
   const box: HTMLElement | null = $('#seg-strategy-box');
   if (!box) return;
   box.onclick = ev => {
+    if (SEG_WRITING) return;
     const target = ev.target as Element;
     const edit = target.closest<HTMLElement>('[data-seg-field-edit]');
     if (edit) { SEG_PAGE_EDIT = edit.dataset.segFieldEdit || ''; segPageRefresh(seg, load); box.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return; }
@@ -326,6 +350,7 @@ function segBindStrategy(seg: SegDetail, load: number): void {
   form.onkeydown = ev => { if (ev.key === 'Escape') { SEG_PAGE_EDIT = ''; segPageRefresh(seg, load); } };
   form.onsubmit = ev => {
     ev.preventDefault();
+    if (SEG_WRITING) return;
     const text = area.value.trim();
     // Words the company already has are not a change for this segment; leaving them is the same as Cancel.
     if (text === stratText(field?.text) && field?.changed) { SEG_PAGE_EDIT = ''; segPageRefresh(seg, load); return; }
