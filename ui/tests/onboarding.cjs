@@ -213,7 +213,7 @@ function recruitFor({department, briefing, share}) {
       // The page's own modules come from disk: the page shares state with them (docs-page.ts
       // declares DOC_POLL, which route() clears on every navigation), so an empty stub would
       // break every route. Everything else that ends in .js still stubs out.
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
         const file = uiFile(module[1]);
         if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});

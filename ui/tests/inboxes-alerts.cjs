@@ -18,7 +18,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), path = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const file = path.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const file = path.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
       if (path.startsWith('/vendor/') && fs.existsSync(uiFile(path.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(path.slice(1)))});
       if (/\.(?:js|ts)$/.test(path)) return route.fulfill({contentType: 'application/javascript', body: ''});

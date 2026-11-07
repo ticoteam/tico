@@ -1,6 +1,7 @@
 // The real SDK must scrub outgoing events and discard retries after sign-out, including late failures.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {chromium} = require('playwright');
 const {uiFile} = require('./support/page.cjs');
 

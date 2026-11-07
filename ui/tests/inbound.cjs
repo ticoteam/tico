@@ -36,7 +36,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-      const file = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const file = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1)))});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});

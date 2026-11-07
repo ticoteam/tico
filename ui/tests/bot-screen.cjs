@@ -37,7 +37,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         const request = route.request(), p = new URL(request.url()).pathname;
         const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/api/me') return json({...me, cloud: true, registered: true, config: {version: '0.3.52', app_name: 'Tico'}});
