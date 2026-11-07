@@ -154,13 +154,13 @@ the `openrouter` provider offers every such model; enabling one vendor offers th
 
 ### The Tico AI Gateway
 
-The Gateway's picks (`tico-<department>-<level>[-fast][-<version>]`, for example `tico-sales-medium` or
-`tico-engineering-high-fast-1.0`; `backend/gateway_tiers.py`) run on pi through Tico's own Gateway, not OpenRouter. The
+The Gateway's picks (`tico-<level>[-fast][-<version>]`, level `xlow`, `low`, `medium`, `high` or `xhigh`, for example
+`tico-medium` or `tico-high-fast-1.0`; `backend/gateway_tiers.py`) run on pi through Tico's own Gateway, not OpenRouter. The
 catalog lists each tier at its current pinned version; any other id of the lineup (no version, an older version) resolves
-on lookup, and pi's `models.json` names the turn's model for the run. `tico-cheap-1.1`, `tico-cheap-1.0`, `tico-mid-1.0`
-and `tico-power-1.0` are the old lineup (`deprecated`, `lineup: old`): no picker offers them, but a bot already on one keeps
-running at its old price. In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
-Department, Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
+on lookup, and pi's `models.json` names the turn's model for the run. An id from before this lineup (one with a
+department, or the first lineup's) was rewritten once to its level's id and resolves as that id when it still arrives
+(`gateway_tiers.new_id`). In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
+Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
 exactly while the **Tico AI Gateway** connection in Settings > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a

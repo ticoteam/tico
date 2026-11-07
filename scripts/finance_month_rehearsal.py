@@ -1602,7 +1602,7 @@ def main() -> int:
     args = parser.parse_args()
     only = {s.strip() for s in args.only.split(",") if s.strip()}
     ledger = Ledger()
-    data_dir = Path(tempfile.mkdtemp(prefix="tico-finance-rehearsal-"))
+    data_dir = Path(tempfile.mkdtemp(prefix="tico-rehearsal-finance-"))
     log_dir = data_dir.parent / (data_dir.name + "-logs")
     stack = Stack(DEMO_PORT, FAKE_PORT, data_dir / "demo", log_dir)
     try:

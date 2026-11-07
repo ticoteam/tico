@@ -855,15 +855,6 @@ STABLE = [
         "CommentResult",
     ),
     (
-        "/api/v2/tasks/{tid}/comments/{mid}/resolve",
-        "post",
-        "Tasks",
-        "resolveTaskQuestion",
-        "Settle an open question answered elsewhere ({quote}: its asker or the task's owner bot), or withdraw it ({}: its "
-        "asker); it leaves every Needs you list and wakes nobody",
-        "CommentResult",
-    ),
-    (
         "/api/v2/tasks/{tid}/relations",
         "post",
         "Tasks",
@@ -995,7 +986,6 @@ STABLE = [
         "starts again from the top, with `restart`); without limit or cursor, the whole list",
         "NeedsYou",
     ),
-    ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
     (
         "/api/v2/needs-you/recommended",
         "post",
@@ -1018,14 +1008,6 @@ STABLE = [
         "Needs you",
         "taskSeen",
         "The caller opened the task: its open questions to them are read",
-        None,
-    ),
-    (
-        "/api/v2/needs-you/clarify",
-        "post",
-        "Needs you",
-        "clarifyAsk",
-        "Ask the bot behind a stale question whether it still matters, in clearer words",
         None,
     ),
     (
@@ -2113,8 +2095,9 @@ STABLE = [
         "Health",
         "saveSystemRoutine",
         "The owner or an admin: switch a system routine on or off, pick its schedule preset (15m, hourly, 4h, daily, "
-        "business) or its daily time",
-        "SystemRoutineUpdate",
+        "business) or its daily time; answers {job}: the routine's listing row, or for ask_deadlines (a Heartbeat step "
+        "with its own switch) its HeartbeatStep row",
+        "SystemRoutineSaved",
     ),
     (
         "/api/v2/system-routines/{key}/run",
@@ -2227,7 +2210,7 @@ def items(schema):
     return {"type": "array", "items": schema}
 
 
-ref = lambda name: {"$ref": "#/components/schemas/" + name}  # noqa: E731
+ref = lambda name: {"$ref": "#/components/schemas/" + name}
 ACTORS = {
     "type": "object",
     "additionalProperties": {"type": "string"},
@@ -3287,6 +3270,7 @@ SCHEMAS = {
             "area": "s",
             "kind": {"type": "string", "enum": ["product", "activity"]},
             "shipped_at": "s",
+            "published_at": "s",
             "unread": "b",
             "version": "s",
             "source": "s",
@@ -4907,6 +4891,24 @@ STABLE.extend(
             "FinanceRules",
         ),
         (
+            "/api/v2/finance/attribution-rules",
+            "get",
+            "Finance",
+            "listFinanceAttributionRules",
+            "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and "
+            "apply_from); needs the finance.attribution right or admin",
+            "FinanceAttributionRules",
+        ),
+        (
+            "/api/v2/finance/lines/{line_id}/attribution",
+            "get",
+            "Finance",
+            "getFinanceLineAttribution",
+            "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and "
+            "the line's history newest first, as far as the caller sees the line",
+            "FinanceLineAttribution",
+        ),
+        (
             "/api/v2/finance/bills",
             "get",
             "Finance",
@@ -5202,9 +5204,29 @@ STABLE.extend(
 )
 SCHEMAS.update(
     {
+        "FinanceBudgetState": obj(
+            {
+                "spent_from": {
+                    "type": "string",
+                    "enum": ["books", "platform", "mixed"],
+                    "description": "Where an ad budget's actual comes from: the books, the ad platform's daily spend "
+                    "or both (by month)",
+                },
+                "as_of": {
+                    "type": ["string", "null"],
+                    "description": "The ad platforms' last import, when their spend counts",
+                },
+                "reported": {
+                    "type": ["integer", "null"],
+                    "description": "Cents: an ad budget's platform spend shown beside actual and never in it (its vendor "
+                    "is not the platform's own contact, so nothing is swapped); null otherwise",
+                },
+            }
+        ),
+        "FinanceBudgetRow": obj({"id": "s", "name": "s", "platform": "s", "state": ref("FinanceBudgetState")}),
         "FinanceBudgets": obj(
             {
-                "budgets": items({"type": "object", "additionalProperties": True}),
+                "budgets": items(ref("FinanceBudgetRow")),
                 "more": "b",
                 "on": "s",
                 "view_version": "i",
@@ -5429,7 +5451,9 @@ SCHEMAS.update(
                             "default_team": "n",
                             "grants": items({"type": "object", "additionalProperties": True}),
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                            "attribute": {"type": ["boolean", "null"]},
                             "may_grant": "b",
+                            "budgets": "i",
                         }
                     )
                 ),
@@ -5671,6 +5695,52 @@ SCHEMAS.update(
                 )
             }
         ),
+        "FinanceLineAttribution": obj(
+            {
+                "line_id": "s",
+                "source": "s",
+                "rule_id": "n",
+                "rule_name": "n",
+                "set_by": "n",
+                "set_at": "n",
+                "can_change": "b",
+                "tags": "o",
+                "amount": "i",
+                "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i", "amount": "i"})),
+                "history": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "source": "s",
+                            "rule_id": "n",
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                            "set_by": "s",
+                            "set_at": "s",
+                            "superseded_at": "n",
+                        }
+                    )
+                ),
+            }
+        ),
+        "FinanceAttributionRules": obj(
+            {
+                "rules": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "match": obj({"kind": "s", "id": "s", "label": "s"}),
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                            "enabled": "b",
+                            "apply_from": "n",
+                            "created_by": "s",
+                            "updated_at": "s",
+                        }
+                    )
+                ),
+                "can_change": "b",
+            }
+        ),
         "FinanceMercuryUsers": obj(
             {"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n", "updated_at": "s"}))}
         ),
@@ -5736,7 +5806,13 @@ SCHEMAS.update(
                 "books_lines": items(obj({"id": "s", "code": "s", "name": "s"})),
                 "elsewhere": {
                     "type": ["object", "null"],
-                    "properties": {"tool_id": {"type": "string"}, "tool_name": {"type": "string"}},
+                    "description": "One of this tool's ad accounts another enabled import already reads (one import "
+                    "per ad account), so this one can't be switched on; null when none",
+                    "properties": {
+                        "tool_id": {"type": "string"},
+                        "tool_name": {"type": "string"},
+                        "account": {"type": "string", "description": "The ad account, as its platform shows it"},
+                    },
                 },
                 "month": "s",
                 "month_label": "s",
@@ -8701,7 +8777,7 @@ SCHEMAS['BotDreamView'] = obj(
                                         'text': 's',
                                         'mine': {
                                             'type': 'boolean',
-                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer',
+                                            'description': 'The question is put to the caller, who answers it at POST /api/v2/tasks/{tid}/answers with target {task}',
                                         },
                                     }
                                 ),
@@ -9622,6 +9698,100 @@ SCHEMAS.update(
             }
         ),
         'MeetingTaskRemoved': obj({'ok': 'b'}),
+    }
+)
+
+
+# The Heartbeat (backend/heartbeat.py): one short beat of ordered steps, every 10 s by default.
+INT_N = {"type": ["integer", "null"]}
+STABLE.extend(
+    [
+        (
+            "/api/v2/heartbeat",
+            "get",
+            "Health",
+            "getHeartbeat",
+            "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order "
+            "with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back "
+            "as `before`)",
+            "HeartbeatView",
+        ),
+        (
+            "/api/v2/heartbeat",
+            "put",
+            "Health",
+            "saveHeartbeat",
+            "The owner or an admin: set the seconds between beats, 5 to 60",
+            "HeartbeatView",
+        ),
+    ]
+)
+SCHEMAS.update(
+    {
+        "HeartbeatStep": obj(
+            {
+                "key": "s",
+                "name": "s",
+                "kind": {"enum": ["due", "recovery", "poll"]},
+                "kind_name": "s",
+                "every_s": INT_N,
+                "every": "s",
+                "switch": "b",
+                "on": "b",
+                "can_change": "b",
+                "last_run_at": "n",
+                "last_ms": INT_N,
+                "last_result": "n",
+                "last_did_at": "n",
+                "last_did": "n",
+                "last_error": "n",
+                "last_error_at": "n",
+                "failing": "b",
+                "runs_24h": "i",
+                "did_24h": "i",
+                "failed_24h": "i",
+            }
+        ),
+        # A beat whose failures repeat the newest row's is folded into it: `repeats` beats, the last at `last_repeated_at`.
+        "HeartbeatBeat": obj(
+            {
+                "id": "s",
+                "started_at": "s",
+                "total_ms": "i",
+                "did": "i",
+                "failed": "i",
+                "repeats": "i",
+                "last_repeated_at": "n",
+                "steps": items(
+                    obj({"key": "s", "name": "s", "text": "n", "ms": "i", "error": "n"}, required=["key", "ms"])
+                ),
+            }
+        ),
+        "HeartbeatView": obj(
+            {
+                "interval_s": "i",
+                "interval_min": "i",
+                "interval_max": "i",
+                "last_beat_at": "n",
+                "beats_24h": "i",
+                "quiet_beats": "i",
+                "quiet_since_at": "n",
+                "kinds": items(obj({"key": "s", "name": "s"})),
+                "steps": items(ref("HeartbeatStep")),
+                "beats": items(ref("HeartbeatBeat")),
+                "next": "n",
+                "can_change": "b",
+            }
+        ),
+        "SystemRoutineSaved": obj(
+            {
+                "job": {
+                    "anyOf": [ref("HeartbeatStep"), obj({"key": "s", "name": "s"})],
+                    "description": "The saved routine's row: a HeartbeatStep for ask_deadlines, "
+                    "else its GET /system-routines row",
+                }
+            }
+        ),
     }
 )
 

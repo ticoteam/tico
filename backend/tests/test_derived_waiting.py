@@ -7,6 +7,7 @@ import importlib.util
 from pathlib import Path
 
 from backend import hubdb as H, question_tasks as QT, task_holds, task_relations as TR
+from backend.tests.old_asks import old_ask
 from backend.tests.test_api import api, get, post  # noqa: F401  (fixture)
 from backend.tests.test_question_tasks import _answer, _bot_only_private_parent, _mark, _to, _to_ops, _work
 
@@ -178,7 +179,7 @@ def test_the_strategy_bots_merged_question_task_passes_its_answer_on_when_closed
     with api.app.state.store.read() as c:
         assert H.task(c, item["id"])["status"] == "done"
         for task_id in (first, second):
-            assert not H.open_task_asks(c, H.task(c, task_id))
+            assert not H.unanswered_ask(c, H.task(c, task_id))
         assert {r[0] for r in c.execute("SELECT state FROM strategy_merges WHERE merged_into=?", (item["id"],))} == {
             "answered"
         }
@@ -199,12 +200,11 @@ def _stage(c, *pairs):
 
 
 def _another_bots_ask(c, row):
-    H.say(
+    old_ask(
         c,
         "bot:cpo",
         "human:ana",
         "Which registrar do we use?",
-        kind="ask",
         conversation_id=row["conversation_id"],
         refs={"task": row["id"]},
     )

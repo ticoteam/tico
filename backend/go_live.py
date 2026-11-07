@@ -1,7 +1,7 @@
-"""Go-lives waiting for a computer to get a bot's repository (backend/app.py go_live).
+"""Go-lives waiting for a computer to get a bot's repository (backend/go_live_routes.py go_live).
 
 Each is one `registry_metadata` row, `go-live-pending:<bot>`: who asked, the options, the computer, and when it
-was asked. The computer's readiness report finishes it (app.py `finish_pending_go_live`). One that has not finished
+was asked. The computer's readiness report finishes it (go_live_routes.py `finish_pending_go_live`). One that has not finished
 within EXPIRY_DAYS is marked failed and the person who asked is told once; so is one that fails to finish. A failed
 row stays until the next go-live for that bot replaces it, so nothing is retried and nobody is told twice.
 """

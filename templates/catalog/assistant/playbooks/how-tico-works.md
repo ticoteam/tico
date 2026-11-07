@@ -5,7 +5,7 @@ Read this when a person asks why something is on their queue, or how to make it 
 ## What puts an item on Needs you
 - **A task a bot filed for the person** (`owner` is the person). Bots file these when they need a decision, a review, or a
   missing input. Most are routine output, not decisions.
-- **A bot's question** to the person. A question is answered in chat with `hub question answer`.
+- **A bot's question** to the person. A question is answered on its task: `hub task close <task id> --note "<reply>"`.
 - **An approval** (merge, publish, send, spend). Approvals wait until the person names them or says they don't need them.
 - **A hold**: a task marked waiting on the person.
 

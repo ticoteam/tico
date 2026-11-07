@@ -131,14 +131,14 @@ const tasks = (() => {
 
 // ---- e2e-needs-you
 const needsYou = (() => {
-  const QUESTION = 'Ship the beta on Nov 3?';
-  const ANSWER = 'Yes, Nov 3.';
+  // A question with no options is filed with Yes and No (question_tasks), so its card is a pick card with those two.
+  const QUESTION = 'Should we ship the beta on Nov 3?';
   return async ({hub, browser, phone}) => {
     const where = phone ? 'phone' : 'desktop';
-    const asked = await must(hub, 'engineering-lead', 'POST', 'messages', {
-      to: 'dana', text: QUESTION, kind: 'ask', needs_action: true,
+    const asked = await must(hub, 'engineering-lead', 'POST', 'task-questions', {
+      on: 'dana', question: QUESTION,
     }, 'the bot asks a question');
-    const questionId = asked.id;
+    const questionId = asked.task.id;
     const approval = await must(hub, 'builder-claude', 'POST', 'approvals', {
       kind: 'spend_limit', payload: {bot: 'builder-claude', daily_usd: 40},
     }, 'the bot asks for an approval');
@@ -151,16 +151,15 @@ const needsYou = (() => {
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
-    await page.locator(`[data-need-card="ask:${questionId}"]`).first().click();
+    await page.locator(`[data-need-card="task:${questionId}"]`).first().click();
     await page.locator('#need-card', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
-    await page.locator('#need-card .dc-note textarea[aria-label="Your answer"]').fill(ANSWER);
-    await page.locator('#need-card [data-dc="answer"]').first().click();
+    await page.locator('#need-card [data-dc="pick"]', {hasText: 'Yes'}).first().click();
     // The card sends the answer when its undo toast runs out, so the hub is read until the answer is there.
     const reply = await until(async () => {
-      const thread = await must(hub, 'dana', 'GET', `conversations/${asked.conversation_id}/messages`, undefined, 'read the thread');
-      return (thread.messages || []).find(m => m.kind === 'answer' && m.in_reply_to === questionId);
+      const got = await must(hub, 'dana', 'GET', `tasks/${questionId}/answers`, undefined, 'read the answers');
+      return (got.answers || [])[0];
     }, `${where}: the answer on the hub`);
-    assert.equal(reply.body, ANSWER, `${where}: the hub has the answer to the question`);
+    assert.ok(reply, `${where}: the hub has the answer to the question`);
     assertClean(page, `${where}: answered`);
 
     // The approval: approve it on its card.

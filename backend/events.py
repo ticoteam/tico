@@ -195,12 +195,6 @@ _MEDIA_TASKS = (
     "SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
     "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=NEW.blob_id"
 )
-_ASK_TASK = (
-    "(SELECT " + H.MESSAGE_TASK_SQL + " FROM messages m LEFT JOIN conversations cv "
-    "ON cv.id=m.conversation_id WHERE m.id={mid})"
-)
-
-
 _RUN_CONVERSATION = (
     "(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
     "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})"
@@ -502,20 +496,6 @@ TRIGGERS = [
         _row("tasks", "routine", "NEW.task_id"),
     ),
     (
-        "changes_task_asks_insert",
-        "INSERT",
-        "messages",
-        "NEW.kind IN ('ask','answer')",
-        _fan("ask", "SELECT " + _ASK_TASK.format(mid="NEW.id") + " AS id"),
-    ),
-    (
-        "changes_task_asks_update",
-        "UPDATE",
-        "messages",
-        f"NEW.kind='ask' AND ({_changed('answered_by_id', 'deleted_at', 'kind', 'superseded_at')})",
-        _fan("ask", "SELECT " + _ASK_TASK.format(mid="NEW.id") + " AS id"),
-    ),
-    (
         "changes_task_types_update",
         "UPDATE",
         "task_types",
@@ -564,8 +544,7 @@ TRIGGERS = [
             ref="NEW.id",
             conversation="NEW.conversation_id",
             where=_NOT_CARRIER,
-        )
-        + _needs("ask", "NEW.recipient_id", "NEW.sender_id", where="NEW.kind IN ('ask','answer')"),
+        ),
     ),
     # Delivery and read receipts move on every message a bot takes; they are not a change to show.
     (
@@ -583,8 +562,7 @@ TRIGGERS = [
             ref="NEW.id",
             conversation="NEW.conversation_id",
             where=f"({_changed('deleted_at')}) AND {_NOT_CARRIER}",
-        )
-        + _needs("ask", "NEW.recipient_id", where="NEW.kind='ask'"),
+        ),
     ),
     (
         "changes_messages_delete",
@@ -1372,8 +1350,6 @@ NEEDS = {
     "changes_tags_update": ("task_tags",),
     "changes_blob_media_insert": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_blob_media_update": ("task_assets", "bot_files", "bot_file_versions"),
-    "changes_task_asks_insert": ("conversations",),
-    "changes_task_asks_update": ("conversations", "messages.superseded_at"),
     "changes_messages_update": ("messages.superseded_at",),
     "changes_task_types_update": ("tasks.type_id",),
     "changes_task_steps_insert": ("tasks.step_id",),
@@ -1410,6 +1386,9 @@ _RETIRED = [
     "task_changes_link_insert",
     "task_changes_link_update",
     "task_changes_link_delete",
+    # The ask triggers (step 6d): asks are question tasks now, and no message is written as an ask.
+    "changes_task_asks_insert",
+    "changes_task_asks_update",
 ]
 
 

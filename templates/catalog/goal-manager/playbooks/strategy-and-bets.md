@@ -41,7 +41,7 @@ goal, a KPI or the strategy. An org change the owner asked for through their Ass
 `hub org reports-to`, where the server lets you. At level 3 only, `hub goal strategy-bot-decide` changes bot tasks. `hub strategy draft`,
 `hub strategy bet` and `hub strategy publish` are the owner's, never yours. The MCP tools have the same names (`hub_strategy_show`,
 `hub_lens_run`...).
-Ask a human a question with `hub task create --owner <person>`, another bot with `hub question ask`; answer a bot's question with
-`hub question answer`. A source you need and do not have is one task for the owner, at most once per source: look for an open task
+Ask a human a question with `hub task create --owner <person>`, another bot with `hub message send <bot> "<question>" --needs-action`; answer a bot's question with
+`hub message send <bot> "<answer>"`. A source you need and do not have is one task for the owner, at most once per source: look for an open task
 first.
 The exact arguments, by job, are in `playbooks/commands.md`.

@@ -74,7 +74,7 @@ class TurnLevels(Contract):
 
 class ConversationCreate(Contract):
     participants: list[ID] = Field(min_length=1, max_length=20)
-    kind: Literal["chat", "ask", "notice"] = "chat"
+    kind: Literal["chat", "notice"] = "chat"
     subject: str = Field(default="", max_length=300)
 
 
@@ -97,7 +97,7 @@ class MessageCreate(Contract):
     to: ID
     text: Text
     conversation_id: ID | None = None
-    kind: Literal["say", "ask", "notice", "steer"] = "say"
+    kind: Literal["say", "notice", "steer"] = "say"
     refs: dict = Field(default_factory=dict)
     in_reply_to: ID | None = None
     wait_s: int | None = Field(default=None, ge=0, le=300)
@@ -157,11 +157,6 @@ class PageChat(Contract):
     task_id: str | None = None
 
 
-class Answer(Contract):
-    text: Text
-    unknown: bool = False
-
-
 class TakeRecommendation(Contract):
     ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]  # the bot's ask the person says yes to
     version: Annotated[int, Field(strict=True, ge=1)] | None = (
@@ -193,10 +188,6 @@ class StaleAcceptAll(Contract):
     since is not in the list and stays; a row whose task changed is refused on its own."""
 
     rows: list[StaleShown] = Field(min_length=1, max_length=500)
-
-
-class ClarifyAsk(Contract):
-    ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]  # the stale bot ask to send the clarify prompt to
 
 
 Lane = Literal["company", "product"]
@@ -605,7 +596,6 @@ class TaskAnswer(Contract):
 
 class FileVersionEdit(Contract):
     note: Annotated[StrictStr, Field(max_length=500)] | None = None
-    ask: ReviewAsk | None = None
 
 
 class TaskComment(Contract):
@@ -614,7 +604,6 @@ class TaskComment(Contract):
     needs_action: bool = False
     approval_id: ID | None = None
     text: Text
-    ask: ReviewAsk | None = None
     attachments: list[Attachment] = Field(default_factory=list, max_length=10)
     # How the comment reaches the task's followers and whom it @mentions (docs/tasks.md): steer into each bot's
     # running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or goal:
@@ -622,11 +611,6 @@ class TaskComment(Contract):
     # may not direct the task's bots.
     delivery: Literal["steer", "queue", "defer", "goal"] | None = None
     defer_for: DeferFor | None = None
-
-
-class TaskAskResolve(Contract):
-    # The person's words from where they answered; without them the asker withdraws the question.
-    quote: Annotated[StrictStr, Field(min_length=1, max_length=4000)] | None = None
 
 
 class TaskReaders(Contract):
@@ -1856,6 +1840,7 @@ class SkillCopy(Contract):
 class SkillFile(Contract):
     """One text file of a skill folder. Its path and size are checked by the rules in clients/skills.py, not here."""
 
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)  # a file's own whitespace is its content
     path: str
     content: str
 
@@ -2114,7 +2099,7 @@ class BotDefinitionUpdate(Contract):
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
     # BotOps applying a person's own request: the id of that person's message to BotOps. The
-    # change is checked as that person, never as BotOps (backend/app.py update_bot).
+    # change is checked as that person, never as BotOps (backend/bot_status_routes.py update_bot).
     on_behalf_of: ID | None = None
 
     @model_validator(mode="after")
@@ -2298,7 +2283,7 @@ class BotTaskCondition(Contract):
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done recently, or a
     custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
     filter, still accepted and stored as rows."""
 
@@ -2405,12 +2390,54 @@ class GatewayFetch(Contract):
     max_tokens: int = Field(default=10000, ge=1000, le=50000)
 
 
+class GatewayDigest(Contract):
+    items: list[dict] = Field(
+        min_length=1, max_length=300
+    )  # {id, title, text, url, source, at}, checked by the Gateway
+    focus: str | None = Field(default=None, max_length=500)
+    style: Literal["brief", "full"] = "brief"
+
+
 class GatewayImage(Contract):
+    # tico-images-1.0 (the default, and what an install that has not updated sends) takes a category; the lineup 3 ids
+    # take one choice each: tico-images-low none, tico-images-high a category, tico-svg a quality. HQ checks the rest.
+    model: Literal["tico-images-1.0", "tico-images-low", "tico-images-high", "tico-svg"] = "tico-images-1.0"
     prompt: str = Field(min_length=1, max_length=4000)
-    category: Literal["storyboard", "photo", "character", "graphic"]
+    category: Literal["storyboard", "photo", "character", "graphic"] | None = None
+    quality: Literal["standard", "pro"] | None = None
     images: list[str] = Field(default_factory=list, max_length=4)  # base64 data URLs, checked by the Gateway
     size: str | None = Field(default=None, max_length=20)
     count: int = Field(default=1, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def one_choice_for_the_model(self):
+        chosen = {"category": self.category, "quality": self.quality}
+        if self.model == "tico-images-1.0" and (self.category is None or self.quality is not None):
+            raise ValueError("tico-images-1.0 takes a category")
+        if self.model == "tico-images-low" and any(chosen.values()):
+            raise ValueError("tico-images-low takes no category or quality")
+        if self.model == "tico-images-high" and (self.quality is not None or self.category == "storyboard"):
+            raise ValueError("tico-images-high takes a photo, graphic or character")
+        if self.model == "tico-svg" and (self.category is not None or self.images or self.size):
+            raise ValueError("tico-svg takes a quality, no references or size")
+        return self
+
+
+class GatewayVideo(Contract):
+    prompt: str = Field(min_length=1, max_length=4000)
+    seconds: int = Field(default=8, ge=3, le=15)
+    resolution: Literal["360p", "720p", "1080p", "4k"] = "720p"
+    aspect: Literal["16:9", "9:16"] = "16:9"
+    audio: bool = True
+    first_frame: str | None = Field(default=None, max_length=3_000_000)  # a base64 data URL, checked by the Gateway
+    last_frame: str | None = Field(default=None, max_length=3_000_000)
+
+    @model_validator(mode="after")
+    def frames_are_pictures(self):
+        for frame in (self.first_frame, self.last_frame):
+            if frame is not None and not frame.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
+                raise ValueError("a frame is a PNG or JPEG data URL")
+        return self
 
 
 class SystemUpdate(Contract):
@@ -2955,6 +2982,12 @@ class MaintenanceUpdate(Contract):
     paused: bool | None = None
     monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
+
+
+class HeartbeatUpdate(Contract):
+    """The seconds between Heartbeat beats (backend/heartbeat.py), 5 to 60."""
+
+    interval_s: int = Field(ge=5, le=60)
 
 
 class MaintenanceRunRequest(Contract):

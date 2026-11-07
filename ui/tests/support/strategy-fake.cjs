@@ -1,6 +1,6 @@
 // A stand-in hub for the Strategy content scripts (ui/tests/strategy-*.cjs): the org chart's groups and moves
-// (redesign CONTRACT §3), Market › Listening's stats with
-// `daily` and `recent`, and the latest market briefing, over fixtures/redesign-{org,listening,briefing}.json (the Acme
+// (redesign CONTRACT §3), Market's spend, value chain, companies and a note, Listening's stats with `daily` and
+// `recent`, and the latest market briefing, over fixtures/redesign-{org,market,listening,briefing}.json (the Acme
 // example) and goals, plus the boot stubs. Writes change what a page reads back and are recorded in `writes`.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,8 +25,10 @@ function listeningStats(now = new Date()) {
 
 // One page on the fake hub. viewer: who is signed in (ana owns Acme; ben leads Sales and so Outbound below it; cara
 // is in Engineering).
-// briefing: false answers {briefing: null}. listening: 403 answers the stats with that status.
-async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200} = {}) {
+// briefing: false answers {briefing: null}. listening: 403 answers the stats with that status. market: false is a
+// market with nothing in it yet.
+async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true} = {}) {
+  const mk = fixture('redesign-market.json');
   const fx = fixture('redesign-org.json');
   const person = fx.people.find(p => p.id === viewer);
   const me = viewer === fx.me.id ? fx.me : {id: viewer, name: person?.name || viewer, email: viewer + '@acme.example',
@@ -93,7 +95,11 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (p === '/api/v2/listening/destinations') return json(fixture('redesign-listening.json').destinations);
     if (p === '/api/v2/market/briefings/latest') return json(briefing ? fixture('redesign-briefing.json') : {briefing: null});
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [], total: 0});
+    if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});
+    if (p.startsWith('/api/v2/market/entities/')) return json(mk.note);
+    if (p === '/api/v2/market/spend') return json(market ? mk.spend[url.searchParams.get('dimension') || 'offering'] : {segments: [], total: {spend_usd: 0}});
+    if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
+    if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: null});
     // The Strategy Bot beside the tabs, and Goals.
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});

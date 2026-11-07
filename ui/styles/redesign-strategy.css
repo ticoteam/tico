@@ -121,34 +121,12 @@
 }
 @media (prefers-reduced-motion:reduce){.rdo-cv{transition:none}}
 
-/* ---------------------------------------------------------------- Market › Briefing: a front page */
-/* On a phone the Strategy tabs come first, the view switch under them. */
-@media (max-width:760px){#main:is(.rd-brief-layout,.rd-listen-layout) .strat-actions{order:3}}
-/* The view switch scrolls inside its own strip, as on Players (market-spend.css). */
-#main:is(.rd-brief-layout,.rd-listen-layout) .strat-actions{min-width:0;max-width:100%}
-.rdb-host{max-width:760px}
-.rdb{display:flex;flex-direction:column;gap:6px;padding:14px 18px 12px;border:1px solid var(--raised);border-radius:10px;background:var(--surface);box-shadow:0 8px 22px rgba(0,0,0,.22);font-family:Georgia,"Times New Roman",serif}
-.rdb-mast{text-align:center;font-size:var(--t-xl);font-weight:700;line-height:var(--lh-display);padding-bottom:5px;border-bottom:3px double var(--ink)}
-.rdb-date{display:flex;justify-content:space-between;gap:8px;padding:1px 0 6px;border-bottom:1px solid var(--line);font:500 var(--t-xs)/var(--lh-tight) var(--sans);color:var(--muted)}
-.rdb-hl{margin:2px 0 0;font-size:var(--t-xl);font-weight:700;line-height:var(--lh-tight);color:var(--ink)}
-.rdb-deck{margin:0;font-size:var(--t-md);font-style:italic;line-height:var(--lh);color:var(--muted)}
-.rdb-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;padding-top:7px;border-top:1px solid var(--line);font:var(--t-base)/var(--lh) var(--sans)}
-.rdb-cols h3{margin:0 0 3px;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
-.rdb-cols p{margin:0 0 5px}
-.rdb-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;padding-top:6px;border-top:1px solid var(--line);font:var(--t-sm)/var(--lh-tight) var(--sans);color:var(--muted)}
-.rdb-foot a{color:var(--muted)}
-.rdb-foot a:hover{color:var(--ink)}
-@media (max-width:760px){.rdb{padding:12px 14px 10px}.rdb-hl{font-size:var(--t-lg)}}
-
-/* ---------------------------------------------------------------- Market › Listening */
-.rdm{display:flex;flex-direction:column;gap:6px;max-width:1000px}
+/* ---------------------------------------------------------------- Market › What are buyers saying? (ui/app/redesign-market.js) */
 .rdm-hd{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:24px}
-.rdm-cap{letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 .rdm-leg{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;font-size:var(--t-xs);color:var(--muted)}
 .rdm-leg>span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .rdm-leg i{width:8px;height:8px;border-radius:2px;display:inline-block}
-.rdm-lnk{padding:0;border:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer;white-space:nowrap}
-.rdm-bars{display:flex;align-items:flex-end;height:130px;margin-top:22px;border-bottom:1px solid var(--line)}
+.rdm-bars{display:flex;align-items:flex-end;height:130px;margin-top:30px;border-bottom:1px solid var(--line)}
 .rdm-col{position:relative;flex:1;height:100%;display:flex;justify-content:center}
 .rdm-stk{width:min(22px,60%);height:100%;display:flex;flex-direction:column-reverse}
 .rdm-stk span{display:block;width:100%;flex:none;border-top:1px solid var(--surface)}
@@ -164,12 +142,11 @@ a.rdm-row:hover{background:var(--surface2)}
 .rdm-d{max-width:120px;overflow:hidden;text-overflow:ellipsis}
 .rdm-row.hl{background:var(--surface2);box-shadow:inset 2px 0 0 var(--ink)}
 .rdm-none{margin:10px 0 4px}
-.rdm-set{margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
+.rdm-set{margin-top:12px}
 @media (max-width:760px){
   .rdm-row{grid-template-columns:16px minmax(0,1fr) 30px;min-height:40px}
   .rdm-d{display:none}
   .rdm-leg{margin-left:0;order:3;flex-basis:100%}
-  .rdm-lnk{margin-left:auto}
 }
 
 /* ---------------------------------------------------------------- Strategy and Goals */

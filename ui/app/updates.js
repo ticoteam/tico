@@ -212,6 +212,8 @@ function updWriteBtn(u) {
   const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
   return `<button type="button" class="upd-act" data-upd-write aria-label="${label}" title="${label}"><span class="nav-icon" aria-hidden="true">edit</span></button>`;
 }
+// Bots often write Blocked: and Suggestion: lines with no bullet; markdown would fold each into the bullet above it.
+const updNormalizeBody = body => String(body ?? '').replace(/^[ \t]*(Blocked|Suggestion):/gm, '- $1:');
 // `kids` is the tree's toggle for the cards of this card's reports, on the name's line right of Archive (outside the
 // corner, so it never fades). The row under the update holds Edit on your own card and is gone without it.
 function updCard(u, i, state, kids = '') {
@@ -226,7 +228,7 @@ function updCard(u, i, state, kids = '') {
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
         <span class="upd-corner">${who.person ? '' : updReplyBtn(u)}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span>${kids}</div>
-      ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
+      ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(updNormalizeBody(body), {shortLinks: true})}</div>` : ''}
       <div class="upd-actions">${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}</div>
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
@@ -783,14 +785,27 @@ async function botLatestUpdate(slug) {
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
       <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
       <span class="spacer"></span>${all}</header>
-    <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>
+    <div class="upd-body md">${safeMd(updNormalizeBody(u.body), {shortLinks: true})}</div>
     <button type="button" class="rail-more" data-latest-more hidden>More</button>`;
   host.hidden = false;
   const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
-  more.hidden = body.scrollHeight <= body.clientHeight + 2;
   more.onclick = () => { const open = body.classList.toggle('open'); more.textContent = open ? 'Less' : 'More'; };
+  botLatestFoldMore(host);
+  // The fold depends on the text's rendered height, which a first measure can take before the webfonts load,
+  // so measure again once they are ready and whenever the rail changes size.
+  latestFold?.disconnect();
+  latestFold = new ResizeObserver(() => botLatestFoldMore(host));
+  latestFold.observe(host);
+  void document.fonts?.ready.then(() => botLatestFoldMore(host));
   BOT.latest = u.read ? null : u;
   botLatestSeen();
+}
+let latestFold = null;
+// "More" shows only when the folded text is cut off. An open text keeps its "Less" whatever it measures.
+function botLatestFoldMore(host) {
+  const body = host.querySelector('.upd-body'), more = host.querySelector('[data-latest-more]');
+  if (!body || !more || body.classList.contains('open')) return;
+  more.hidden = body.scrollHeight <= body.clientHeight + 2;
 }
 // Called when the rail is drawn or comes into view: an unread latest update it shows is now read.
 function botLatestSeen() {
@@ -811,7 +826,7 @@ async function botHistoryLoad(slug, before) {
   const html = items.map(u => `<article class="bot-history-item${u.read ? '' : ' unread'}">
       <div class="upd-meta"><b>${esc(new Date(u.day + 'T12:00:00').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</b>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${u.read ? '' : '<span class="upd-dot" aria-label="Unread"></span>'}</div>
-      <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div></article>`).join('');
+      <div class="upd-body md">${safeMd(updNormalizeBody(u.body), {shortLinks: true})}</div></article>`).join('');
   const more = r.next_before ? `<button type="button" class="ghost upd-more" data-bot-history-more="${esc(r.next_before)}">Load older</button>` : '';
   if (before) { host.querySelector('[data-bot-history-more]')?.remove(); host.insertAdjacentHTML('beforeend', html + more); }
   else host.innerHTML = (html || '<div class="empty">No updates yet.</div>') + more;

@@ -736,16 +736,6 @@ function taskDeliveryMode(state) {
   if (way === 'steer' && ways.includes('queue')) return 'queue';
   return 'defer:' + taskDeferDefault(state);
 }
-// What the chosen way does, said before sending.
-function taskDeliveryHint(state) {
-  const who = botDisplayName(state.data.comment_to.bot), mode = taskDeliveryMode(state), way = deliveryWay(mode);
-  const cd = state.data.comment_delivery;
-  if (way === 'queue') return `Queue: ${who} gets it after its current turn, or now.`;
-  if (way === 'goal') return `Set as goal: ${who} works toward this text in the task's session.`;
-  if (way === 'steer') return `Steer: into ${who}'s running turn now${cd.steers ? '' : ", or after it if it can't steer"}.`;
-  const f = deliveryFor(mode);
-  return `Defer: ${who} gets it with its next turn on this task${f === 'never' ? '' : `, at the latest in ${f}`}.`;
-}
 // Send's icon says the way the comment is sent; without a bot it is the plain arrow, with no caret.
 function taskDeliveryPaint(state) {
   const main = $('[data-task-main]', state.host), caret = $('[data-task-caret]', state.host);
@@ -771,8 +761,8 @@ function taskDeliveryMenu(state, open) {
 }
 function taskComposerToPaint(state) {
   const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
-  if (hint) hint.textContent = taskDeliverySplit(state) ? taskDeliveryHint(state)
-    : taskComposerTo(state.data?.comment_to, box?.value);
+  // No line for the way Send shows: Reaches N says it. This line only holds the no-bot notice.
+  if (hint) hint.textContent = taskDeliverySplit(state) ? '' : taskComposerTo(state.data?.comment_to, box?.value);
   taskDeliveryPaint(state);
   taskFootPaint(state);
 }
@@ -788,20 +778,10 @@ const taskReachMode = state => taskDeliverySplit(state) ? taskDeliveryMode(state
 function taskFootPaint(state) {
   const foot = $('.p-foot', state.host);
   if (!foot) return;
-  const list = taskFollowersOf(state);
-  composeFollowPaint(foot, 'task', Array.isArray(list) && !list.some(f => f.actor === myActor()));
   state.reach?.update();
 }
-// The Followers row changed (task-props.js): Follow under the box hides or shows with it.
+// The Followers row changed (task-props.js): who the box reaches changes with it.
 function taskFootRepaint() { if (TASK_CHAT?.data && taskChatCurrent(TASK_CHAT)) taskFootPaint(TASK_CHAT); }
-async function taskFollowAfterSend(state) {
-  const task = state.data?.task;
-  if (!task) return;
-  try {
-    const data = await put(`/v2/tasks/${encodeURIComponent(task.id)}/followers`, {following: true});
-    if (Array.isArray(data?.followers)) taskFollowersPaint(state.dialog, task, data.followers);
-  } catch (e) { toast(`Not followed: ${e.message}`, true); }
-}
 async function taskRunStop(state, button) {
   button.disabled = true; button.title = 'Stopping…';
   try {
@@ -978,7 +958,6 @@ async function taskCommentSend(state) {
   const status = $('[data-task-chat-status]', form);
   // The way Send shows is the way it goes; a task with no bot names none.
   const split = taskDeliverySplit(state), mode = split ? taskDeliveryMode(state) : '', shown = deliveryWay(mode);
-  const follow = composeFollowWanted($('.p-foot', form));
   // A disabled Send says why on hover; with an aria-label, the title is its screen-reader description too.
   taskDeliveryMenu(state, false);
   button.disabled = box.disabled = true; caret.disabled = true; button.title = 'Sending…'; status.textContent = '';
@@ -992,7 +971,6 @@ async function taskCommentSend(state) {
       return;
     }
     if (shown === 'goal') state.goalOnce = false;      // Set as goal was for this comment: back to the kept way
-    if (follow) void taskFollowAfterSend(state);
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);

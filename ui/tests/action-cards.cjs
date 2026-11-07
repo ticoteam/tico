@@ -28,8 +28,8 @@ function fixture() {
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',
-      summary: 'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.',
-      description: 'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.',
+      summary: 'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.',
+      description: 'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.',
       body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
       diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
     // A card stored before its route had a sentence: the description was the method and path.
@@ -38,7 +38,7 @@ function fixture() {
     // Chris's card from before the plain wording, as action_view sends it now: the title read from the stored body,
     // the old line moved under Details.
     act0: card('act0', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories', summary: '',
-      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-marketing-site (write)",
+      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-site (write)",
       description: 'Security Engineer: read-only on tico, besides its own repository.',
       body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
       diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
@@ -125,7 +125,7 @@ async function open(browser, state) {
     // Plain words first; the raw request only behind Details, closed.
     const repo = page.locator('.asst-card[data-action="act1"]');
     assert.equal(await repo.locator('[data-what]').innerText(),
-      'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.', 'repo: the sentence is the title');
+      'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.', 'repo: the sentence is the title');
     const details = repo.locator('details.asst-raw');
     assert.equal(await details.count(), 1, 'repo: one Details');
     assert.equal(await details.evaluate(d => d.open), false, 'repo: Details starts closed');

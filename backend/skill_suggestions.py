@@ -1,3 +1,4 @@
+# pyright: strict
 """Remove and promote suggestions for company skills (docs/skills.md#suggestions), made by the maintenance run's Suggest
 step and shown to admins on Library › Skills, Directory.
 
@@ -17,8 +18,10 @@ Tico Gateway, report their outcomes back to it and reach a role's bot through it
 the company's own installs and bots, an admin decides each one, and nothing about them leaves this install.
 """
 
+import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
@@ -28,6 +31,14 @@ from . import skill_usage as U
 from . import skills as SK
 from .store import Problem
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from fastapi import FastAPI
+
+    from .auth import Auth, Identity
+    from .store import Store
+
 PROMOTE_BOTS = 2
 PROMOTE_USES = 10
 OPEN_DAYS = 30  # an open suggestion expires after this long
@@ -36,15 +47,15 @@ LIST_CAP = 50
 KINDS = ("remove", "promote")
 
 
-def _stamp(at):
+def _stamp(at: datetime) -> str:
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def _id():
+def _id() -> str:
     return "sks_" + uuid.uuid4().hex[:24]
 
 
-def _listed(c, name):
+def _listed(c: sqlite3.Connection, name: str) -> bool:
     """Whether the name is in the directory now, or waits as a pending proposal: promoting it is moot."""
     return (
         c.execute(
@@ -56,13 +67,14 @@ def _listed(c, name):
     )
 
 
-def _active_bots(c):
+def _active_bots(c: sqlite3.Connection) -> set[str]:
     return {r[0] for r in c.execute("SELECT id FROM bots WHERE coalesce(state, '') <> 'archived'")}
 
 
-def candidates(c, at):
+def candidates(c: sqlite3.Connection, at: datetime) -> dict[tuple[str, str], dict[str, Any]]:
     """{(kind, subject): {name, target_type, target_id, uses_count, bots_count}} of what holds now."""
-    out = {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    r: dict[str, Any]
     for r in U.unused_installs(c, at):
         out[("remove", r["id"])] = {
             "name": r["skill_name"],
@@ -88,14 +100,14 @@ def candidates(c, at):
     return out
 
 
-def _close(c, row_id, status, now, by=None):
+def _close(c: sqlite3.Connection, row_id: str, status: str, now: str, by: str | None = None) -> None:
     c.execute(
         "UPDATE skill_suggestions SET status=?, closed_by_id=?, closed_at=?, updated_at=? WHERE id=? AND status='open'",
         (status, by, now, now, row_id),
     )
 
 
-def _resolved(c, row):
+def _resolved(c: sqlite3.Connection, row: sqlite3.Row) -> bool:
     """Whether an open suggestion that no longer holds went away because someone did it: the install is gone, or the
     skill is in the directory or proposed."""
     if row["kind"] == "remove":
@@ -103,7 +115,7 @@ def _resolved(c, row):
     return _listed(c, row["subject"])
 
 
-def refresh(c, at):
+def refresh(c: sqlite3.Connection, at: datetime) -> dict[str, int]:
     """One pass in a write transaction: expire the old, close what no longer holds, open what newly holds.
     Returns {made, closed}."""
     now = _stamp(at)
@@ -152,15 +164,15 @@ def refresh(c, at):
     return {"made": made, "closed": closed}
 
 
-def run(store, at=None):
+def run(store: "Store", at: datetime | None = None) -> dict[str, int]:
     """The Suggest step's skills part (backend/maintenance_steps/suggest.py): local data only, no model, no Gateway."""
     at = at or datetime.now(timezone.utc)
     with store.transaction() as c:
-        return refresh(c, at)
+        return refresh(cast(sqlite3.Connection, c), at)
 
 
 # ----------------------------------------------------------------------------- the page
-def _view(row, names):
+def _view(row: sqlite3.Row, names: dict[tuple[str, str], str]) -> dict[str, Any]:
     target = (row["target_type"], row["target_id"])
     return {
         "id": row["id"],
@@ -174,7 +186,7 @@ def _view(row, names):
     }
 
 
-def listing(c):
+def listing(c: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
     """The open suggestions that still stand (the install is still there; the name is still outside the directory)."""
     rows = [
         r
@@ -188,7 +200,7 @@ def listing(c):
     return {"suggestions": [_view(r, names) for r in rows]}
 
 
-def _open(c, sid, kind=None):
+def _open(c: sqlite3.Connection, sid: str, kind: str | None = None) -> sqlite3.Row:
     row = c.execute("SELECT * FROM skill_suggestions WHERE id=?", (sid,)).fetchone()
     if not row or (kind and row["kind"] != kind):
         raise Problem("not_found", "No such suggestion", 404)
@@ -197,7 +209,7 @@ def _open(c, sid, kind=None):
     return row
 
 
-def remove(c, auth, who, sid):
+def remove(c: sqlite3.Connection, auth: "Auth", who: "Identity", sid: str) -> dict[str, Any]:
     """Take the suggested install off (the same rights as uninstalling it), and close the suggestion as acted on."""
     row = _open(c, sid, "remove")
     install = c.execute("SELECT * FROM skill_installs WHERE id=?", (row["subject"],)).fetchone()
@@ -215,7 +227,7 @@ def remove(c, auth, who, sid):
     return {"id": sid, "status": "acted", "removed": bool(install)}
 
 
-def close(c, who, sid, status):
+def close(c: sqlite3.Connection, who: "Identity", sid: str, status: str) -> dict[str, str]:
     """Close a suggestion: `acted` after the page asked the bot to submit (promote only), or `dismissed`."""
     row = _open(c, sid, "promote" if status == "acted" else None)
     _close(c, sid, status, H.now(), H.actor_id(who.actor))
@@ -223,10 +235,10 @@ def close(c, who, sid, status):
     return {"id": sid, "status": status}
 
 
-def install(app, store, auth, mutate):
+def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[..., Any]") -> None:
     """Admin routes. Installed before backend/skills.py's, so `skills/suggestions` is not read as a skill's name."""
 
-    def admin(request):
+    def admin(request: Request) -> "Identity":
         who = request.state.identity
         auth.domain(who)
         if who.role not in SK.PEOPLE_AND_BOTS or not SK._admin(auth, who):

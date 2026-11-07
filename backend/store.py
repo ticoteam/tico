@@ -1191,7 +1191,7 @@ class Store:
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
-        weakref.finalize(self, _close_idle, self.pool)
+        self._pool_finalizer = weakref.finalize(self, _close_idle, self.pool)
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
@@ -2253,16 +2253,6 @@ class Store:
                     ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
                     ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
                     ("jobs_uncertain", "jobs(created_at) WHERE state='uncertain'"),
-                    # Open asks to someone, deleted or not (hubdb.tasks_asked_of), with conversation_id.
-                    (
-                        "messages_open_ask_to",
-                        "messages(recipient_id, conversation_id) WHERE kind='ask' AND answered_by_id IS NULL",
-                    ),
-                    # Replaced asks to someone (views.went_away, on every Needs you read).
-                    (
-                        "messages_superseded_asks_to",
-                        "messages(recipient_id, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL",
-                    ),
                     # PRs at a commit (github.pr_signal, on every check and status webhook): the
                     # query's expression word for word.
                     ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),
@@ -2372,12 +2362,15 @@ class Store:
                 # failure here is logged, never raised: the repair is tried again at the next start.
                 try:
                     Redesign.repair_inbox_prompts(c)
-                except Exception:  # noqa: BLE001 - startup goes on
+                except Exception:  # startup goes on
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
                 # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
                 # a no-op when nothing is staged (backend/question_tasks.py move_waits).
+                # The open asks 20261106131713_asks_to_question_tasks staged become question tasks or DMs first, so a
+                # moved wait finds the question task its ask became (backend/question_tasks.py move_asks).
                 from . import question_tasks as QuestionTasks
 
+                QuestionTasks.move_asks(c)
                 QuestionTasks.move_waits(c)
                 from . import releases as Releases
 
@@ -2520,7 +2513,14 @@ class Store:
         except sqlite3.Error:
             c.tainted = True
         with self.pool_lock:
-            if not c.tainted and c.pool_file == self.pool_file and len(self.pool) < POOL_IDLE:
+            # Once the store is freed, its finalizer has closed the idle connections: one given back after that would
+            # wait in a dead pool, open, until the garbage collector frees it (and warns).
+            if (
+                self._pool_finalizer.alive
+                and not c.tainted
+                and c.pool_file == self.pool_file
+                and len(self.pool) < POOL_IDLE
+            ):
                 self.pool.append(c)
                 return
         c.close()

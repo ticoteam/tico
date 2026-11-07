@@ -243,26 +243,6 @@
     {
       "fixable": true,
       "new": [
-        "question",
-        "ask"
-      ],
-      "old": [
-        "ask"
-      ]
-    },
-    {
-      "fixable": true,
-      "new": [
-        "question",
-        "answer"
-      ],
-      "old": [
-        "answer"
-      ]
-    },
-    {
-      "fixable": true,
-      "new": [
         "note",
         "list"
       ],

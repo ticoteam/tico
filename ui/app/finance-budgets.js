@@ -3,7 +3,7 @@
    to the month's end and where it warns. A double-click on an amount changes it from the month shown (budget_update,
    dry run first, as on the P&L); "+ Budget" adds one under a line, for a teammate or a vendor (budget_create). A row
    opens the rail: amount by month, warn at, at limit, owner. Shown to the owner and whoever holds finance.budgets
-   (finTabShown). Platform, pace_end, spent_from and as_of come from ad platform imports; a read without them draws
+   (finTabShown). Platform, pace_end, spent_from, as_of and reported come from ad platform imports; a read without them draws
    those cells blank.
    Reads: GET /api/v2/finance/budgets?at=&limit=500, /finance/pnl (the lines' names), /finance/reports/budget_vs_actual (a
    budget's amount by month). Writes: budget_create and budget_update through POST /api/v2/finance/actions.
@@ -16,20 +16,23 @@ const FIN_PLATFORM = {google_ads: 'Google Ads', meta_ads: 'Meta Ads'};
 const FIN_BUD_PERIODS = [['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_BUD_HISTORY = 6;   // months of amounts in the rail
 
-function finBudgetsPage() {
+// `mine`: My budget, the teammate's own budgets (a budget whose teammate they are) and nothing else, read only.
+function finBudgetsPage(mine = false) {
   const caps = finCaps(), B = FIN_BUD;
   if (!B.month) B.month = finToday().slice(0, 7);
-  FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0};
+  if (mine) B.q = '';
+  FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><input type="month" data-fin-month value="${B.month}" aria-label="Month"></label>
-      <label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>
-      <span class="spacer"></span>${caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
+      ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}
+      <span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bud">${skelRows(6, {dot: false})}</div>`, '', 'Selected budget');
   const body = $('#fin-body');
   body.querySelector('[data-fin-month]').onchange = ev => {
     if (!ev.target.value || ev.target.value === B.month) return;
     B.month = ev.target.value; finBudReset(); void finBudLoad();
   };
-  body.querySelector('[data-fin-q]').oninput = ev => { B.q = ev.target.value.trim().toLowerCase(); finBudDraw(); };
+  const q = body.querySelector('[data-fin-q]');
+  if (q) q.oninput = ev => { B.q = ev.target.value.trim().toLowerCase(); finBudDraw(); };
   body.onclick = ev => {
     if (ev.target.closest('[data-fin-bud-add]')) { finBudAdd(); return; }
     const tr = ev.target.closest('tr[data-fin-bud]');
@@ -62,12 +65,13 @@ async function finBudLoad() {
   // This month reads as of today; any other as of its first day (the version in effect then).
   const at = B.month === today.slice(0, 7) ? today : a;
   const view = caps.company ? 'company' : 'expenses';
+  // My budget reads no P&L: its rows are the teammate's own budgets, listed flat.
   const [bud, pnl] = await Promise.allSettled([get(`/v2/finance/budgets?at=${at}&limit=${FIN_BUD_LIMIT}${finAs()}`, {fresh: true}),
-    get(`/v2/finance/pnl?period=month&start=${a}&end=${z}&view=${view}${finAs()}`, {fresh: true})]);
+    state.mine ? Promise.resolve(null) : get(`/v2/finance/pnl?period=month&start=${a}&end=${z}&view=${view}${finAs()}`, {fresh: true})]);
   if (FIN?.bud !== state || state.load !== load || !$('#fin-bud')) return;
   if (bud.status === 'rejected') { $('#fin-bud').innerHTML = finFail(bud.reason); finRail(''); return; }
   state.read = bud.value || {};
-  state.rows = (state.read.budgets || []).filter(b => b.active);
+  state.rows = (state.read.budgets || []).filter(b => b.active && (!state.mine || b.teammate === caps.who));
   state.lines = Object.fromEntries((pnl.status === 'fulfilled' ? pnl.value?.rows || [] : []).map(r => [r.account_id, r]));
   state.hist = null;
   const ids = new Set(state.rows.map(b => b.id));
@@ -80,6 +84,7 @@ async function finBudLoad() {
 // budget and its children; budgets with no line known to the viewer last, under Other budgets.
 function finBudOrder() {
   const state = FIN.bud, ids = new Set(state.rows.map(b => b.id)), lines = state.lines;
+  if (state.mine) return [...state.rows].sort((x, y) => String(x.name).localeCompare(String(y.name))).map(b => ({b, depth: 0}));
   const roots = state.rows.filter(b => !b.parent_id || !ids.has(b.parent_id));
   const groups = new Map();
   for (const b of roots) {
@@ -124,9 +129,15 @@ function finBudAsOf(b) {
   const d = new Date(s.as_of), time = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
   return 'Platform data as of ' + (finIso(d) === finToday() ? time : `${finDayLabel(finIso(d))}, ${time}`);
 }
+// An ad budget not on the platform's own vendor keeps its books in Spent; the platform's figure shows under it.
+function finBudReported(b) {
+  const s = b.state || {};
+  if (s.reported == null || s.actual == null) return '';
+  return `<div class="muted fin-small" data-fin-bud-reported title="${esc(`Reported by ${finBudPlatform(b) || 'the platform'}, not in Spent`)}">Platform ${finUsd(s.reported)}</div>`;
+}
 const finBudMay = () => finCaps()?.may('finance.budgets');
 // An amount changes from the month shown, this month or a later one, on a monthly budget (as on a line's page).
-const finBudEditable = b => !!b && b.period === 'month' && !b.catch_all && FIN_BUD.month >= finToday().slice(0, 7) && finBudMay();
+const finBudEditable = b => !!b && !FIN.bud?.mine && b.period === 'month' && !b.catch_all && FIN_BUD.month >= finToday().slice(0, 7) && finBudMay();
 const finBudAmount = b => {
   const amount = b.state?.amount;
   if (amount == null) return '<span class="muted">No amount</span>';
@@ -153,12 +164,12 @@ function finBudDraw() {
     const asOf = finBudAsOf(b);
     return `<tr data-fin-bud="${esc(b.id)}" style="--d:${r.depth}"${B.sel === b.id ? ' class="fin-on"' : ''}><td>${esc(b.name)}</td><td>${platform}</td>
       <td class="fin-n${edit ? ' fin-edit' : ''}"${edit ? ` data-fin-bud-amt="${esc(b.id)}" tabindex="0" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[m - 1])}"` : ''}>${finBudAmount(b)}</td>
-      <td class="fin-n"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '<span class="muted">—</span>' : finUsd(s.actual)}</td>
+      <td class="fin-n"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '<span class="muted">—</span>' : finUsd(s.actual)}${finBudReported(b)}</td>
       <td>${pct == null ? '' : `<span class="fin-bar-m${finBudMeterCls(b, pct)}" role="img" aria-label="${pct}% used"><i style="width:${Math.min(100, pct)}%"></i></span>`}</td>
       <td class="fin-n">${pace}</td><td class="fin-n">${kids || s.amount == null ? '' : esc(b.warn_pct + '%')}</td></tr>`;
   }).join('');
   const head = `<tr><th>Budget</th><th>Platform</th><th class="fin-n">Budget / mo${finExcl(state.read)}</th><th class="fin-n">Spent</th><th>Used</th><th class="fin-n">Pace by ${FIN_MON[m - 1]} ${last}</th><th class="fin-n">Warn at</th></tr>`;
-  box.innerHTML = !state.rows.length ? finNote('No budgets yet.') : !rows ? finNote('No budgets match.')
+  box.innerHTML = !state.rows.length ? finNote(state.mine ? 'No budget yet.' : 'No budgets yet.') : !rows ? finNote('No budgets match.')
     : `<table class="fin-t fin-bud-t"><thead>${head}</thead><tbody>${rows}</tbody></table>${state.read.more ? finNote(`Showing the first ${FIN_BUD_LIMIT}`) : ''}`;
 }
 

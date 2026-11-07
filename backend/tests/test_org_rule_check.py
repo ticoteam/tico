@@ -8,12 +8,16 @@ Acme is the fictional company (backend/tests/test_org_rules.py's org): Ana owns 
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from backend import call_slots as CS
 from backend import org_rule_check as K
+from backend import thread_attention
+from backend import approval_expiry
 from backend import threads
+from backend.tests.test_question_tasks import keep_asking
 from backend import updates
 from backend.auth import Identity
 from backend.store import H
@@ -503,6 +507,75 @@ def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
 
 
+def age_holds(api, hours):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_holds SET created_at=?", (H.shift(H.now(), hours=-hours),))
+
+
+def sweep_holds(api):
+    with api.app.state.store.transaction() as c:
+        return approval_expiry.sweep(c, H.now())["held"]
+
+
+def ben_needs_you(api):
+    """The held writes Ben's Needs you lists (thread attention reads the same rows)."""
+    who = SimpleNamespace(actor="human:ben", via="", task_actor="", role="person")
+    with api.app.state.store.read() as c:
+        return [row["id"] for row in K.held_for(c, who, thread_attention.HELD_OPERATIONS)]
+
+
+def test_a_held_write_nobody_decides_for_a_day_is_kept_unsent_and_its_bot_is_told(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert ben_needs_you(api) == [held["id"]]
+    age_holds(api, 25)
+    assert sweep_holds(api) == [held["id"]]
+    row = hold_row(api, held["id"])
+    assert (row["state"], row["decided_by"]) == ("kept", H.KEEPER)
+    assert ben_needs_you(api) == []
+    assert bodies(api, "gold") == []  # the held text is written nowhere
+    # The bot that wrote it is told, not the person it was for.
+    told = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops' AND from_actor=?", (H.KEEPER,))
+    assert len(told) == 1 and "was not sent" in told[0]["body"] and "24 hours" in told[0]["body"]
+    assert sweep_holds(api) == []  # decided once
+
+
+def test_a_held_write_under_a_day_old_is_left_for_its_reviewer(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    age_holds(api, 23)
+    assert sweep_holds(api) == []
+    assert hold_row(api, held["id"])["state"] == "held"
+    assert ben_needs_you(api) == [held["id"]]
+
+
+def test_a_hold_a_person_decided_is_not_touched_by_the_sweep(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
+    age_holds(api, 48)
+    assert sweep_holds(api) == []
+    row = hold_row(api, held["id"])
+    assert (row["state"], row["decided_by"]) == ("kept", "human:ben")
+    assert sql(api, "SELECT body FROM notes WHERE to_actor='ana' AND body LIKE '%not sent%'") == []
+
+
+def test_the_sweep_expires_the_oldest_holds_up_to_its_batch_cap(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    ids = [say(api, f"Our favorite color is gold, number {n}")["held"]["id"] for n in range(3)]
+    with api.app.state.store.transaction() as c:
+        for hours, hold_id in zip((30, 27, 26), ids):
+            c.execute("UPDATE org_rule_holds SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-hours), hold_id))
+    with api.app.state.store.transaction() as c:
+        assert K.expire_unreviewed(c, H.now(), limit=2) == ids[:2]
+    assert [hold_row(api, i)["state"] for i in ids] == ["kept", "kept", "held"]
+    assert sweep_holds(api) == [ids[2]]
+
+
 def test_the_owner_lists_keeps_and_sends_every_bot_hold_even_when_its_named_reviewer_is_on_the_team(ruled):
     api, _ = ruled
     color_rule(api, reviewer="ben")
@@ -771,7 +844,7 @@ def test_rule_check_eval_cases_build_valid_requests():
 # ---- every route, the run's provenance, live text -----------------------------------------------------------------
 
 
-def test_a_conversation_message_and_both_answer_routes_are_checked(ruled):
+def test_a_conversation_message_is_checked(ruled):
     api, _ = ruled
     color_rule(api)
     origin = post(api, "chat/ops", {"text": "What is new?"})
@@ -782,17 +855,6 @@ def test_a_conversation_message_and_both_answer_routes_are_checked(ruled):
         post(api, f"conversations/{cid}/messages", {"text": "All clear."}, token="ops-test")["message"]["body"]
         == "All clear."
     )
-    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?", "conversation_id": cid})
-    got = post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token="ops-test")
-    assert got["held"] and bodies(api, "favorite color is teal") == []
-    task = task_for_ops(api)
-    got = post(
-        api,
-        f"tasks/{task['id']}/answers",
-        {"target": {"comment": "none"}, "other": "Favorite color is jade."},
-        token="ops-test",
-    )
-    assert got["held"] and bodies(api, "Favorite color is jade") == []
 
 
 def test_the_assistant_writing_as_itself_is_checked(ruled):
@@ -1074,26 +1136,6 @@ def test_send_anyway_after_the_rule_changed_checks_again_and_keeps_the_nonce(rul
     assert sent["hold"]["state"] == "sent" and len(bodies(api, "favorite color is gold")) == 1
 
 
-def test_send_anyway_of_a_question_runs_ask_ingest_outside_the_write(ruled, monkeypatch):
-    api, _ = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    from backend import ask_ingest
-
-    seen = []
-    real = ask_ingest.preflight
-
-    def spy(store, *args, **kw):
-        seen.append(bool(store.writer.queue))
-        return real(store, *args, **kw)
-
-    monkeypatch.setattr(ask_ingest, "preflight", spy)
-    held = say(api, "Our favorite color is gold, right?", kind="ask")["held"]
-    assert seen == []  # a held write skips ask ingest
-    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
-    post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
-    assert seen == [False]
-
-
 def test_a_mail_approval_is_spent_once(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
@@ -1292,34 +1334,6 @@ def send_anyway(api, hold_id, expected=200):
     return r.json()
 
 
-def pick_question(api, task_id, label, qid="q"):
-    """Ana's options-only question to ops on a task (no Other)."""
-    with api.app.state.store.transaction() as c:
-        return H.task_comment(
-            c,
-            "human:ana",
-            task_id,
-            "Which line goes out?",
-            wake=False,
-            ask={
-                "questions": [
-                    {
-                        "id": qid,
-                        "header": "Line",
-                        "question": "Which line goes out?",
-                        "multi": False,
-                        "other": False,
-                        "options": [
-                            {"label": label, "description": ""},
-                            {"label": "Something else", "description": ""},
-                        ],
-                    }
-                ],
-                "who": "bot:ops",
-            },
-        )
-
-
 def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
@@ -1327,10 +1341,6 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     aid, run = attempt["id"], attempt["token"]
     task = task_for_ops(api)
     held = [post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token=run)["held"]]
-    ask = post(
-        api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?", "conversation_id": msg["conversation_id"]}
-    )
-    held.append(post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token=run)["held"])
     assert all(held)
     # The run now carries a private task neither Ana nor the company task's readers may read.
     with api.app.state.store.transaction() as c:
@@ -1341,42 +1351,7 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
         assert hold_row(api, h["id"])["state"] == "held"
     assert bodies(api, "favorite color is red") == [] and bodies(api, "favorite color is teal") == []
     paths = [json.loads(hold_row(api, h["id"])["payload"])["provenance"]["path"] for h in held]
-    assert paths == [f"/api/v2/tasks/{task['id']}/comments", f"/api/v2/messages/{ask['id']}/answer"]
-
-
-def test_a_replayed_answer_keeps_the_run_it_came_from(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    r, msg, attempt = started_turn(api)
-    ask = post(
-        api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?", "conversation_id": msg["conversation_id"]}
-    )
-    held = post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token=attempt["token"])[
-        "held"
-    ]
-    send_anyway(api, held["id"])
-    answer = sql(api, "SELECT refs FROM messages WHERE body LIKE '%favorite color is teal%'")[0]
-    assert json.loads(answer["refs"])["turn_id"] == attempt["id"]
-
-
-def test_a_task_answer_replay_is_refused_once_the_run_turned_private(ruled):
-    api, judge = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    r, msg, attempt = started_turn(api)
-    task = task_for_ops(api)
-    question = pick_question(api, task["id"], "Our favorite color is red")
-    got = post(
-        api,
-        f"tasks/{task['id']}/answers",
-        {"target": {"comment": question["id"]}, "answers": {"q": ["Our favorite color is red"]}},
-        token=attempt["token"],
-    )
-    assert got["held"]
-    with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "human:ben", "Private plan", "Secret.", "human:ben", lint=False, private=True)
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], private["id"]))
-    send_anyway(api, got["held"]["id"], expected=403)
-    assert hold_row(api, got["held"]["id"])["state"] == "held"
+    assert paths == [f"/api/v2/tasks/{task['id']}/comments"]
 
 
 def test_send_anyway_refuses_once_the_task_changed(ruled):
@@ -1619,26 +1594,6 @@ def test_a_warned_hand_off_puts_its_line_before_the_note_already_there(ruled):
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
 
 
-def test_a_warned_answer_keeps_its_pick_and_its_reader_gets_the_line(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="warn")
-    task = task_for_ops(api)
-    label = "My favorite color is blue"
-    first = pick_question(api, task["id"], label)
-    got = post(api, f"messages/{first['id']}/answer", {"text": label}, token="ops-test")
-    assert "decision_open" not in got and got["answer"]["answers"] == {"q": [label]}
-    assert got["comment"]["body"].startswith("Warning:")
-    second = pick_question(api, task["id"], label, qid="q2")
-    got = post(
-        api,
-        f"tasks/{task['id']}/answers",
-        {"target": {"comment": second["id"]}, "answers": {"q2": [label]}},
-        token="ops-test",
-    )
-    assert got["rule_warning"] and got["answer"]["answers"] == {"q2": [label]}
-    assert got["comment"]["body"].startswith("Warning:")
-
-
 def test_automation_warnings_land_on_the_posted_text_and_the_hand_off_note(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")
@@ -1709,61 +1664,6 @@ def test_a_conversation_post_whose_recipient_moved_needs_a_new_check(ruled, monk
     held = post(api, f"conversations/{cid}/messages", {"text": text}, token="ops-test")["held"]
     assert json.loads(hold_row(api, held["id"])["destinations"]) == ["human:ben"]
     assert bodies(api, text) == []
-
-
-def ask_turn(api, label):
-    """A started turn of ops answering Ana's options-only question on its task (the job's message is the question)."""
-    r, msg, attempt = started_turn(api)
-    task = task_for_ops(api)
-    question = pick_question(api, task["id"], label)
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
-            (question["id"], attempt["id"]),
-        )
-    return r, attempt, task
-
-
-def answered(api):
-    """The structured answers written: each one's text and its picks."""
-    rows = sql(api, "SELECT body, refs FROM messages WHERE json_extract(refs,'$.answer') IS NOT NULL ORDER BY rowid")
-    return [(r["body"], json.loads(r["refs"])["answer"]["answers"]) for r in rows]
-
-
-def test_a_warned_completion_answers_an_options_question_with_its_pick(ruled):
-    api, _ = ruled
-    color_rule(api, if_broken="warn")
-    label = "My favorite color is blue"
-    r, attempt, task = ask_turn(api, label)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": label, "last_seq": 0},
-        token=r["token"],
-    )
-    got = answered(api)
-    assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
-
-
-def test_send_anyway_of_a_held_answer_resolves_its_pick_before_a_new_warning(ruled):
-    api, judge = ruled
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    label = "Our favorite color is blue and launch is Tuesday"
-    r, attempt, task = ask_turn(api, label)
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": label, "last_seq": 0},
-        token=r["token"],
-    )
-    hold = sql(api, "SELECT id FROM org_rule_holds WHERE operation='reply'")[0]["id"]
-    rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
-    judge.needles[LAUNCH] = "launch is"
-    send_anyway(api, hold)
-    got = answered(api)
-    assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
 
 
 # ---- chat, updates and task questions; the author of a replay; public task text; the fast path ----------------------
@@ -2133,6 +2033,7 @@ def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled
 def test_a_task_questions_options_and_card_lines_are_judged_with_it(ruled):
     api, judge = ruled
     color_rule(api)
+    keep_asking(api)
     options = [
         {"label": "Ship", "description": "Our favorite color is blue.", "then": "Ops ships it today"},
         {"label": "Wait", "then": "Ops waits a week"},
@@ -2449,33 +2350,6 @@ def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch)
     with api.app.state.store.transaction() as c:
         pointed = AA._pointer(c, "ops", "Northwind moved")
     assert pointed.startswith(line + "\n\n- Our favorite color is blue.\n- Market briefing:"), pointed
-
-
-def test_send_anyway_keeps_an_ask_refusal_audit_after_rolling_back_the_send(ruled):
-    api, rules = ruled
-    from backend import ask_ingest
-    from backend.tests.test_ask_ingest import FakeModel, assert_refused, calls, items, write_state
-
-    asks = FakeModel(kind="own_work")
-
-    def judge(state, questions, label=None):
-        return (
-            asks(state, questions, label)
-            if str(label).startswith(ask_ingest.QUESTION_SET)
-            else rules(state, questions, label)
-        )
-
-    api.app.state.judge = judge
-    color_rule(api, if_broken="escalate", reviewer="ben")
-    held = say(api, "Our favorite color is gold, right?", to="ben", kind="ask")["held"]
-    assert asks.calls == [], "org-rule holds skip the ask check until Send anyway"
-    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
-    before = write_state(api)
-    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
-    assert_refused(api, r, before)
-    [item], [call] = items(api), calls(api)
-    assert item["call_id"] == call["id"] and item["outcome"] == ask_ingest.SENT_BACK
-    assert hold_row(api, held["id"])["state"] == "held"
 
 
 @pytest.mark.parametrize("if_broken", ["block", "warn"])

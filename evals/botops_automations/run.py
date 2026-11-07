@@ -29,7 +29,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import checker  # noqa: E402
+import checker
 
 BOT = "botops"
 BUSY = ("running", "queued", "leased")

@@ -11,6 +11,8 @@ A bot's list has these lines, in this order, MAX_LINES in all (the rest are coun
   listed once;
 - an assignment the bot has not started an hour after it was given (backend/assigned_start.py): "Assigned, not started", listed
   once, its ledger row written when it is sent;
+- a bot's task Tico stopped resuming after three runs with no progress (backend/stranded_resume.py), on the list of the bot
+  that stop names (the owner's manager bot, else the owner): listed once, whatever the bot's sweeps;
 - a Dev ticket late at its step, on its manager's list (backend/step_age.py): "Late in <step>: N days", relisted after
   RELIST_DAYS;
 - an engineering exception on a manager's list that reads the exceptions list (backend/pipeline_exceptions.py), relisted
@@ -31,12 +33,13 @@ the later of the bot's last turn on it and the last time it was listed. That is 
 a change of the task itself (status, owner, step, due, title, body or acceptance; a task's creation row is not
 news, but a step or status set later on a task that had none is); a comment edited or deleted; a blocker taken off it; a
 blocker that finished (taken off by Tico: "a blocker is done", or kept on a roadmap item); or a subtask that finished, by
-someone other than the bot. A status change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank,
+someone other than the bot. A question task Tico sent back unanswered is not news there: its own line names it. A status change Tico made (a hub move) counts too. Tico's other bookkeeping (check-backs, rank,
 checkpoints, its wake notices) never counts.
 
 A task is quiet when nothing has changed on it for a day, and nothing holds it: no
 live blocker holds it (an open question task to a person is one), nothing is recorded to wait on (H.recorded_wait, which includes an unanswered ask), and no follow-up
-time is still to come. A task left in `waiting` that waits on nothing is quiet like any other. A quiet task is listed when it
+time is still to come. A task left in `waiting` that waits on nothing is quiet like any other. A bot's task in progress that
+the resume sweep still has in hand (backend/stranded_resume.py `handles`) is left to it, not listed quiet. A quiet task is listed when it
 was never listed or was last listed 7 or more days ago.
 
 A follow-up time (tasks.check_back_at) is set only by a person or a bot: its check_back_explicit history row names the
@@ -44,12 +47,14 @@ time. When it has come, the task is listed first on its owner bot's list as "Fol
 (the note trimmed), and the time is then cleared, so it is listed once. Tico sets no follow-up time of its own, and a
 task a person owns is on no bot's list. A date a snooze left behind is not a follow-up: it holds nothing, and a snooze in
 force hides the task (task_snooze.snoozed) until it ends.
+A held queued job does not hide a due follow-up.
 
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
 profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
-its own follow-up times only: never an idle, late, exception, backlog or assigned line. A manager and a doer get all
-of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
+its own follow-up times only: never an idle, late, exception or assigned line. The one exception is a backlog line for
+the type it manages (step_backlog's `manager` target): the team lead hears of its own board's backlog with sweeps off. A
+manager and a doer get all of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
 a person a line would name is never told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
@@ -95,7 +100,7 @@ DELIVERED_JOBS = (
     "completed",
 )  # a job that reached its bot: a turn on the task started
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, ASSIGNED, START, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(10)
+DUE, ASKS, ASSIGNED, START, STOPPED, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(11)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 # "waiting_on" is the stored wait before step 6b, still in older history.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
@@ -146,6 +151,9 @@ def _candidates(c, at, shared):
         )
     }
     actors |= {item["to"] for item in _shared(shared, "late", lambda: step_age.late_items(c, at))}
+    from . import stranded_resume
+
+    actors |= stranded_resume.told(c, at)
     actors |= {H.bot_actor(manager) for _, manager in _shared(shared, "types", lambda: _engineering_types(c))}
     actors |= {H.bot_actor(slug) for slug in _shared(shared, "blocked", lambda: _blocked_waits(c, at))}
     actors |= {
@@ -330,7 +338,7 @@ def _list(c, slug, at, shared, skip_tasks=(), *, allowed=None):
 
 def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
     """All eligible lines in list order, one per task, before the display cap."""
-    from . import rules, task_snooze as TS
+    from . import rules, stranded_resume, task_snooze as TS
 
     actor = H.bot_actor(slug)
     now = H.parse_ts(at)
@@ -346,21 +354,26 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
         )
     )
     for row in rows:
-        if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at) or _running(c, slug, row):
+        if not H.task_private_readable(c, actor, row) or TS.snoozed(row, at):
             continue
         private = H.task_private(c, row)
         follow = follow_up(c, row)
         if follow and H.parse_ts(row["check_back_at"]) <= now:
-            groups[DUE].append(
-                (
-                    row["check_back_at"],
-                    _item(
-                        row["id"], _line(row, _due_reason(follow, private), private), LISTED_KEY + row["id"], due=True
-                    ),
+            # A queued notice may be held by the task's wait; only a live turn can pick up its follow-up.
+            if not _running(c, slug, row, queued=False):
+                groups[DUE].append(
+                    (
+                        row["check_back_at"],
+                        _item(
+                            row["id"],
+                            _line(row, _due_reason(follow, private), private),
+                            LISTED_KEY + row["id"],
+                            due=True,
+                        ),
+                    )
                 )
-            )
             continue
-        if not sweeping:
+        if _running(c, slug, row) or not sweeping:
             continue
         last_turn = _last_turn(c, row, slug, actor)
         listed = _listed(c, row["id"])
@@ -379,6 +392,7 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
             H.parse_ts(quiet_since) <= cutoff
             and not _holds(c, row, at)
             and (listed is None or H.parse_ts(listed) <= relist)
+            and not stranded_resume.handles(c, row)
         ):
             span = _days(now - H.parse_ts(quiet_since))
             reason = (
@@ -397,9 +411,9 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
             + _blocked_by(c, slug, actor, at, shared)
         )
         if sweeping
-        else []
+        else _backlogs(c, slug, actor, at, shared, managed_only=True)
     )
-    for group, sort, item in _asks_back(c, slug, actor, at) + sweep_lines:
+    for group, sort, item in _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines:
         groups[group].append((sort, item))
     ordered, seen = [], set()
     for group in range(QUIET + 1):
@@ -627,6 +641,28 @@ def _asks_back(c, slug, actor, at):
     return out
 
 
+def _resume_stops(c, slug, actor, at):
+    """A bot's task Tico stopped resuming after runs with no progress (backend/stranded_resume.py), listed once on the list
+    of the bot the stop names, whatever its sweeps. A task it cannot read, or one already being run, is named nowhere."""
+    from . import stranded_resume
+
+    out = []
+    for event_id, when, row in stranded_resume.stops_for(c, actor, at):
+        key = _key("resume_stop", slug, event_id)
+        if _mark(c, key) is not None or not H.bot_reads_task(c, actor, row) or _running(c, slug, row):
+            continue
+        private = H.task_private(c, row)
+        runs = stranded_resume.NO_PROGRESS_LIMIT
+        if row["owner_id"] == actor:
+            reason = f"No progress after {runs} automatic resumes: finish it, hand it on or record what it waits on"
+        else:
+            reason = (
+                f"{_who(c, row['owner_id'])} made no progress after {runs} automatic resumes: help it on or close it"
+            )
+        out.append((STOPPED, when, _item(row["id"], _line(row, reason, private), key)))
+    return out
+
+
 def _assigned(c, slug, actor, at):
     """The bot's open assignments no run has started and no list has named (backend/assigned_start.py), one line each, listed
     once. The line writes the assignment's ledger row when it is sent, so the health check's "not started" still reads it."""
@@ -720,9 +756,16 @@ def _engineering_types(c):
     return out
 
 
-def _backlogs(c, slug, actor, at, shared):
+def _manages(c, actor, row):
+    """Whether `actor` is the bot that manages the row's type: the bot step_backlog names as its `manager`."""
+    found = H.resolve_bot(c, H.type_manager(c, row)) or {}
+    return bool(found) and H.bot_actor(found["id"]) == actor
+
+
+def _backlogs(c, slug, actor, at, shared, *, managed_only=False):
     """A step over its backlog (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there. Relisted
-    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing for its owner, as its wake did before."""
+    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing for its owner, as its wake did before.
+    `managed_only` keeps only the warnings of the type the bot manages (a sweeps-off bot's one backlog line)."""
     from . import step_backlog, task_snooze as TS
 
     out = []
@@ -730,6 +773,8 @@ def _backlogs(c, slug, actor, at, shared):
         if actor not in warning["targets"]:
             continue
         first = warning["first"]
+        if managed_only and not _manages(c, actor, first):
+            continue
         key = _key("backlog", slug, warning["key"])
         snoozed_for_owner = actor == first.get("owner_id") and TS.snoozed(first, at)
         if (
@@ -848,6 +893,11 @@ def _readable(c, actor, rows):
     return [row for row in rows if H.task_private_readable(c, actor, row)]
 
 
+# A question task Tico closed unanswered (still_needed sent it back) is not news on the task it was asked from: the
+# "no answer in two business days" line already names it. Args: Tico.
+_NOT_SENT_BACK = "NOT (t.questions IS NOT NULL AND t.answer IS NULL AND h.actor_id=?)"
+
+
 def _news(c, row, actor, base):
     """(count, latest time, what the latest was) of what others did on the task since `base`, or None."""
     tid, conv = row["id"], row["conversation_id"]
@@ -868,8 +918,9 @@ def _news(c, row, actor, base):
             c.execute(
                 "SELECT h.created_at, h.actor_id, t.id, t.owner_id, t.requester_id, t.private FROM history_events h "
                 "JOIN tasks t ON t.id=h.old WHERE h.subject_type='task' AND h.subject_id=? AND h.kind='blocked_by' "
-                "AND h.new IS NULL AND h.created_at>? AND h.actor_id IS NOT NULL AND h.actor_id<>? ORDER BY h.created_at DESC",
-                (tid, base, actor),
+                f"AND h.new IS NULL AND h.created_at>? AND h.actor_id IS NOT NULL AND h.actor_id<>? AND {_NOT_SENT_BACK} "
+                "ORDER BY h.created_at DESC",
+                (tid, base, actor, H.KEEPER),
             )
         ),
     )
@@ -883,8 +934,9 @@ def _news(c, row, actor, base):
                 "SELECT t.id, t.owner_id, t.requester_id, t.private, t.status, h.created_at AS at FROM task_relations r "
                 "JOIN tasks t ON t.id=r.from_task JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id "
                 f"AND h.kind='status' AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
-                f"WHERE r.to_task=? AND r.kind='blocks' AND t.status NOT IN ({_marks()}) ORDER BY h.created_at DESC",
-                (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES),
+                f"WHERE r.to_task=? AND r.kind='blocks' AND t.status NOT IN ({_marks()}) AND {_NOT_SENT_BACK} "
+                "ORDER BY h.created_at DESC",
+                (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES, H.KEEPER),
             )
         ),
     )
@@ -896,8 +948,9 @@ def _news(c, row, actor, base):
                 "SELECT t.id, t.owner_id, t.requester_id, t.private, t.status, h.created_at AS at FROM task_relations r "
                 "JOIN tasks t ON t.id=r.from_task JOIN history_events h ON h.subject_type='task' AND h.subject_id=t.id "
                 f"AND h.kind='status' AND h.new NOT IN ({_marks()}) AND h.created_at>? AND h.actor_id<>? "
-                f"WHERE r.to_task=? AND r.kind='parent' AND t.status NOT IN ({_marks()}) ORDER BY h.created_at DESC",
-                (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES),
+                f"WHERE r.to_task=? AND r.kind='parent' AND t.status NOT IN ({_marks()}) AND {_NOT_SENT_BACK} "
+                "ORDER BY h.created_at DESC",
+                (*H.ACTIVE_STATUSES, base, actor, tid, *H.ACTIVE_STATUSES, H.KEEPER),
             )
         ),
     )
@@ -953,14 +1006,15 @@ def _who(c, actor):
     return H.actor_name(c, actor) or actor
 
 
-def _running(c, slug, row):
-    """Whether a job for this bot in the task's conversation is queued, leased or running: it is being woken already."""
+def _running(c, slug, row, *, queued=True):
+    """Whether a job for this bot in the task's conversation is leased or running, including queued jobs by default."""
+    states = ("queued", "leased", "running") if queued else ("leased", "running")
     try:
         return (
             c.execute(
                 "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-                "AND j.state IN ('queued','leased','running') AND m.conversation_id=? LIMIT 1",
-                (slug, row["conversation_id"]),
+                f"AND j.state IN ({','.join('?' * len(states))}) AND m.conversation_id=? LIMIT 1",
+                (slug, *states, row["conversation_id"]),
             ).fetchone()
             is not None
         )

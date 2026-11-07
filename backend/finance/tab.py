@@ -12,12 +12,14 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
+from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
 from .core.org import Org
 from .store import access as SA
 from .store import ap as SAP
+from .store import attribution as SATT
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
@@ -39,6 +41,16 @@ GROUP_NAMES = {
 }
 OTHER_CODE = "6900"
 BILLS_EMAIL_KEY = "finance_bills_email"  # the install's bills address (actions.set_bills_email writes it)
+
+
+def _split_rows(row: Any | None) -> list[dict[str, object]]:
+    """A line's in-force attribution shares, as a transaction's `split`: none when the line counts as its tags."""
+    if row is None:
+        return []
+    return [
+        {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
+        for x in SATT.parse_splits(str(row["splits"]))
+    ]
 
 
 def page_size(limit: int) -> int:
@@ -584,6 +596,7 @@ def transactions(
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
+        held = SATT.in_force_rows(c, [str(r["line_id"]) for r in batch])
         stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in batch}))
         origins = {str(r["line_id"]): feed_origin(r) for r in batch}
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
@@ -627,6 +640,7 @@ def transactions(
                         "source": str(r["source"]),
                         "reversed": str(r["entry_status"]) == "reversed",
                         "tags": tagged,
+                        **({"split": split} if (split := _split_rows(held.get(str(r["line_id"])))) else {}),
                     },
                 )
             )
@@ -981,7 +995,8 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
         return "everything"
     if org_led and defaults.manager == "team_expenses":
         return "team_expenses"
-    return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
+    manages = org_led and defaults.manager != "none"  # "none": a manager sees what everyone else does
+    return "own_expenses" if manages or defaults.member == "own_expenses" else "none"
 
 
 def default_team(org: Org, manager: str) -> str | None:
@@ -1043,6 +1058,10 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     visible = {t.id for t in org.teams.values() if admin or t.id in led or t.id in shown_teams}
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
+    own: dict[str, int] = {}  # each teammate's own budgets (handlers.theirs): what their My budget page lists
+    for b in ctx.budgets().values():
+        if b.active and b.teammate:
+            own[b.teammate] = own.get(b.teammate, 0) + 1
     teammates: list[Row] = []
     for m in shown:
         mine = [g for g in grants if VW.applies(org, g, m)]
@@ -1060,7 +1079,11 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
                 "default_team": team if team in visible else None,
                 "grants": [_grant_row(g, ctx) for g in mine],
                 "rights": rights,
+                # Whether the teammate may change attribution (finance.attribution; admin and owner imply it), shown
+                # where their rights are.
+                "attribute": R.has(org, m, R.ATTRIBUTION, ctx.rights(m)) if admin or m == viewer else None,
                 "may_grant": _may_grant(ctx, viewer, m, defaults),
+                "budgets": own.get(m, 0),
             }
         )
     teams = [

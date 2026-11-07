@@ -142,7 +142,6 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await page.locator('#t-open .trow').first().waitFor();
       await page.locator('#bot-files .bf-row').first().waitFor();
       await page.locator('#bot-latest:not([hidden])').waitFor();
-      await page.locator('#bot-tool-strip .bts-stack .bts-icon').first().waitFor();
 
       assert.deepEqual(await railOrder(page), ['Tasks', 'Updates', 'Files'], scheme + ': Tasks leads');
       assert.equal(await page.locator('#pane-tasks .card').count(), 0, 'no cards in the rail');
@@ -160,35 +159,13 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
       // No routines on the rail: they are Automations now.
       assert.equal(await page.locator('#bot-recurring').count(), 0);
-      // Assigned to others is a tab now, not a folded section; Done Recently is a tab that stays closed.
+      // Assigned to others is a tab now, not a folded section; Done recently is a tab that stays closed.
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
-      // Tools beside the name: the runtime mark, then one stack of three icons (not the model again) and "+8".
-      const strip = page.locator('#bot-tool-strip');
-      const stack = strip.locator('.bts-stack');
+      // The top line keeps no tool icons; the Tools card under More lists them.
       assert.equal(await page.locator('.bot-nameline .rt').count(), 1);
-      assert.equal(await strip.locator('button').count(), 1, 'one button, not an icon each');
-      assert.deepEqual(await stack.locator('.bts-icon').evaluateAll(els => els.map(el => el.dataset.tool)), ['repo', 'posthog', 'slack']);
-      assert.equal((await stack.locator('.bts-more').innerText()).trim(), '+8');
-      assert.equal(await stack.getAttribute('aria-label'), 'Tools: 11');
-      assert.equal(await stack.locator('[data-tool=posthog] .bt-dot').count(), 1, 'a problem shows a dot');
-      if (shots) await page.screenshot({path: path.join(shots, `bot-page-desktop-${scheme}.png`)});
-      // It opens a list, one line a tool; Escape closes it and gives the button back its focus.
-      await stack.click();
-      const pop = page.locator('#bts-pop');
-      assert.equal(await stack.getAttribute('aria-expanded'), 'true');
-      assert.equal(await pop.locator('.bts-row').count(), 11);
-      assert.match(await pop.locator('.bts-row[data-tool=slack]').getAttribute('title'), /^Slack, Acme workspace, can read, post, channels #ops, #launch, Ready$/);
-      assert.match(await pop.locator('.bts-row[data-tool=posthog]').innerText(), /PostHog[\s\S]*Credential missing on Test Mac/);
-      await page.keyboard.press('Escape');
-      assert.equal(await pop.count(), 0);
-      assert.equal(await stack.evaluate(el => el === document.activeElement), true);
-      // From the keyboard, "Manage" opens the Tools card under More: a closed line a tool, the repositories sharing one.
-      await page.keyboard.press('Enter');
-      await page.locator('#bts-pop .bts-manage').waitFor();
-      await page.keyboard.press('Enter');
-      await page.waitForFunction(() => location.hash === '#/bot/cmo/tools');
-      assert.equal(await pop.count(), 0, 'leaving closes the list');
+      assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no tool icons in the top line');
+      await page.goto('https://tico-ui.test/#/bot/cmo/tools');
       const list = page.locator('#bot-tools');
       await list.locator('.bt-item').first().waitFor();
       assert.equal(await page.locator('#pane-more').isVisible(), true);

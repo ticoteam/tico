@@ -277,6 +277,10 @@ EMPTY = (
     "page_stats",
     "stat_board_approvals",
     "page_releases",
+    # The Heartbeat's step stats, beat log and counts (backend/heartbeat.py): the copy's own beats start them again.
+    "heartbeat_steps",
+    "heartbeat_beats",
+    "heartbeat_states",
 )
 # Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
 # in its scrub), so no Finance table name is written here.

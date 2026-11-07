@@ -42,11 +42,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import conftest  # noqa: E402,F401  isolates the registry and AWS credentials, as the contract tests do
-import uvicorn  # noqa: E402
+import conftest  # noqa: F401  isolates the registry and AWS credentials, as the contract tests do
+import uvicorn
 
-from backend import hubdb as H  # noqa: E402
-from backend.tests import test_api  # noqa: E402
+from backend import hubdb as H
+from backend.tests import test_api
 
 WRITE_P95_MS, EVENT_P95_S, BURST_P95_S = 150, 1.0, 2.0
 PRESETS = {"default": {}, "realistic": {"viewers": 50, "writers": 20, "rate": 1.0, "burst": 200}}

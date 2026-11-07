@@ -73,7 +73,7 @@ class RefusingGateway:
                     self.answer(
                         200,
                         {
-                            "model": "tico-decide-1.0",
+                            "model": "tico-decide-low",
                             "answers": answer_all(asked["questions"]),
                             "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001},
                         },
@@ -99,13 +99,13 @@ def refusing_gateway():
 def decide(base):
     """Decide asking the Gateway with a gateway key (backend/judge.py's first provider)."""
     result = J.gateway(KEY, G.decisions_url(base))({"team": "Acme"}, QUESTIONS)
-    assert (result["provider"], result["model"]) == ("Tico AI Gateway", "tico-decide-1.0")
+    assert (result["provider"], result["model"]) == ("Tico AI Gateway", "tico-decide-low")
     return "POST", "/v1/gateway/decisions"
 
 
 def write(base):
     """Writing on a Tico model through the Gateway's chat completions (backend/updates.py's waiting messages)."""
-    assert J.gateway_writer(lambda: KEY, base, "tico-cheap-1.0")("system", "user") == {"ok": True}
+    assert J.gateway_writer(lambda: KEY, base, "tico-low-1.0")("system", "user") == {"ok": True}
     return "POST", "/v1/gateway/chat/completions"
 
 
@@ -174,7 +174,9 @@ def test_the_user_agent_names_the_app_version_and_never_carries_a_bad_header_val
 
 # What names Tico HQ or the Gateway in a module, and what a module uses to send HTTP.
 HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO_GATEWAY_URL|/v1/gateway|gateway_url")
-SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
+SENDS = re.compile(
+    r"urllib\.request|httpx|\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|aiohttp|http\.client"
+)
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
     "backend/company_server.py": '"User-Agent": user_agent()',

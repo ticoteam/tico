@@ -33,7 +33,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from backend import providers as PROVIDERS  # noqa: E402  the one provider -> runtime -> model map
+from backend import providers as PROVIDERS  # the one provider -> runtime -> model map
 
 TEMPLATE_DIR = ROOT / "templates/environment-registry"
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")

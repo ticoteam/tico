@@ -12,11 +12,9 @@ from backend import views
 NOW = "2026-10-29T14:00:00.000Z"
 # TIDY's stale statistics (sqlite_stat1, 2026-10-29): only messages has rows.
 TIDY_STATS = [
-    ("messages", "messages_pending_conversation", "212 3"),
     ("messages", "messages_from_kind", "16209 181 99"),
     ("messages", "messages_reply_kind", "16209 6 6"),
     ("messages", "slack_task_completion_notices", "23 1 1 1"),
-    ("messages", "messages_open_asks", "16209 173 35 28 28"),
     ("messages", "messages_conversation", "16209 8 1"),
     ("messages", "messages_to_delivered", "16209 173 3"),
     ("messages", "sqlite_autoindex_messages_1", "16209 1"),
@@ -62,9 +60,9 @@ def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(
     text = plan(api, start_places.LIVE_TOTALS_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_runner_finished" not in text, text
-    # On messages_to_delivered the needs-you count walked every message to the person (31k on Tico Team).
+    # The needs-you "went away" count reads only the person's own tasks.
     text = plan(api, views.WITHDRAWN_ASKS_SQL, ("chris", NOW))
-    assert "SEARCH s USING INDEX messages_superseded_asks_to" in text, text
+    assert "SCAN tasks" not in text, text
 
 
 def register_worktree_computer(c, computer):

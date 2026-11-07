@@ -19,9 +19,9 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from fastapi import FastAPI  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from backend import hubdb as H, market as M  # noqa: E402
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from backend import hubdb as H, market as M
 
 
 def fixture(nodes, edges):

@@ -58,7 +58,7 @@ def depts(draft):
     return counts
 
 
-SPEC_COUNTS = {"everything": 72, "software": 50, "services": 37, "local": 40, "store": 38}
+SPEC_COUNTS = {"everything": 72, "software": 50, "services": 37, "local": 40, "store": 37}
 
 
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():

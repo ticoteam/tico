@@ -8,7 +8,10 @@ Run rows are kept 30 days (`automations.prune` drops only their step detail), so
 migration's mirrors) read them from there. A quiet run that repeats its job's last result is folded into that row, so a
 system job counts one run per row, with `count` the runs folded into it. The Maintenance run (backend/maintenance.py)
 keeps its own run log, `maintenance_runs`; anyone signed in sees it, as GET /api/v2/maintenance does, so its runs are
-listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.js)."""
+listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.js). The Heartbeat
+(backend/heartbeat.py) is treated the same: its mirror is never listed, and its runs (`system_runs` job `heartbeat`,
+quiet beats folded) are listed and counted under the list's Heartbeat row (ui/app/automations-heartbeat.js), for anyone
+signed in, as GET /api/v2/heartbeat is."""
 
 import json
 from datetime import timedelta
@@ -32,6 +35,8 @@ TASK_RULE = "tico.builtin.task_rule"  # a task rule's read-only mirror (redesign
 SYSTEM_RUN = "sys_"  # a system job's run id, so it never meets an automation run's
 MAINT = "maintenance"  # the Maintenance row's id and the run's owner: Tico itself
 MAINT_RUN = "mnt_"  # a Maintenance run's id here
+HEART = "heartbeat"  # the Heartbeat row's id, and its system job's key
+HEART_RUN = "hb_"  # a Heartbeat run's id here
 IDS_MAX = 500
 STEP_WORDS = {
     "filter": "Filter",
@@ -108,8 +113,10 @@ def hidden_jobs(c, settings):
 
 
 def shown(flow, hidden):
-    """Whether an automation is listed: not the mirror of a job `hidden_jobs` names."""
-    return not hidden or system_key(flow) not in hidden
+    """Whether an automation is listed: not the Heartbeat's mirror (the list's Heartbeat row stands for it), nor the
+    mirror of a job `hidden_jobs` names."""
+    key = system_key(flow)
+    return key != HEART and (not hidden or key not in hidden)
 
 
 def kind_of(flow):
@@ -382,6 +389,57 @@ def _maint_shown(c, trigger="", owner="", ids=""):
     )
 
 
+def heart_row(run):
+    status = _system_status(run)
+    return {
+        "id": HEART_RUN + run["id"],
+        "automation_id": HEART,
+        "automation_name": "Heartbeat",
+        "trigger": "system",
+        "owner_id": "tico",
+        "version": 1,
+        "trigger_ref": "system",
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": status,
+        "cost": run["cost_usd"] or 0,
+        "started_by": "Scheduled",
+        "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
+        "step_count": None,
+        "count": run["runs"] or 1,
+    }
+
+
+def _heart_shown(c, trigger="", owner="", ids=""):
+    """Whether the Heartbeat's runs are in a listing narrowed by trigger, owner and ids."""
+    kinds = {k for k in str(trigger or "").split(",") if k}
+    wanted = {i for i in str(ids or "").split(",") if i}
+    return (
+        H._has_table(c, "system_runs")
+        and (not kinds or "system" in kinds)
+        and (not owner or owner == "tico")
+        and (not wanted or HEART in wanted)
+    )
+
+
+def _spread(r, start, step):
+    """{bucket: runs} of one `system_runs` row inside the range from `start`, and how many runs it stands for. A folded
+    row stands for `runs` quiet repeats between first_started and started (its latest): they are spread evenly over that
+    time and only those inside the range count. A row from before first_started was kept counts once, at started."""
+    at = H.parse_ts(r["started_at"])
+    first, k = H.parse_ts(r["first_started_at"] or ""), max(int(r["runs"] or 1), 1)
+    if not first or first >= at or k == 1:
+        times = [at]
+    else:
+        times = [first + (at - first) * i / (k - 1) for i in range(k)]
+    buckets = {}
+    for t in times:
+        if t >= start:
+            b = int((t - start) / step)
+            buckets[b] = buckets.get(b, 0) + 1
+    return buckets, len(times)
+
+
 def system_runs_of(c, key, limit, before=""):
     """One system job's runs as an automation's run log shows them (GET /{id}/runs on its mirror)."""
     at = None
@@ -493,6 +551,23 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
                 (since, *marks, limit + 1),
             ).fetchall()
         ]
+    if status not in ("waiting", "held") and _heart_shown(c, trigger, owner, ids):
+        where = {
+            "done": " AND ok=1 AND finished_at IS NOT NULL",
+            "ok": " AND ok=1 AND finished_at IS NOT NULL",
+            "failed": " AND ok=0",
+            "running": " AND finished_at IS NULL",
+        }.get(status, "")
+        found += [
+            ("h", r)
+            for r in c.execute(
+                "SELECT * FROM system_runs WHERE job=? AND started_at>=?"
+                + where
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (HEART, since, *marks, limit + 1),
+            ).fetchall()
+        ]
     found.sort(key=lambda x: (x[1]["started_at"], x[1]["id"]), reverse=True)
     more = len(found) > limit
     found = found[:limit]
@@ -501,6 +576,8 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
         if src == "a"
         else system_row(r, jobs[r["job"]][0])
         if src == "s"
+        else heart_row(r)
+        if src == "h"
         else maint_row(r)
         for src, r in found
     ]
@@ -548,25 +625,12 @@ def stats(c, who, rng="1h", settings=None):
             "AND job IN (SELECT value FROM json_each(?))",
             (since, json.dumps(list(jobs))),
         ):
-            at = H.parse_ts(r["started_at"])
-            if not at:
+            if not H.parse_ts(r["started_at"]):
                 add(jobs[r["job"]], n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
                 continue
-            # A folded row stands for `runs` quiet repeats between first_started and started (its latest): they are
-            # spread evenly over that time and only those inside the range count. A row from before first_started
-            # was kept counts once, at started.
-            first, k = H.parse_ts(r["first_started_at"] or ""), max(int(r["runs"] or 1), 1)
-            if not first or first >= at or k == 1:
-                times = [at]
-            else:
-                times = [first + (at - first) * i / (k - 1) for i in range(k)]
-            buckets = {}
-            for t in times:
-                if t >= start:
-                    b = int((t - start) / step)
-                    buckets[b] = buckets.get(b, 0) + 1
+            buckets, total = _spread(r, start, step)
             for b, m in buckets.items():
-                add(jobs[r["job"]], b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / len(times))
+                add(jobs[r["job"]], b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / total)
     if _maint_shown(c):
         for r in c.execute(
             "SELECT CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? AS INTEGER) AS b, "
@@ -575,6 +639,18 @@ def stats(c, who, rng="1h", settings=None):
             (since[:23], width, since),
         ):
             add(MAINT, r["b"], r["n"], r["f"] or 0, r["cost"])
+    if _heart_shown(c):
+        start, step = H.parse_ts(since), timedelta(seconds=width)
+        for r in c.execute(
+            "SELECT started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE job=? AND started_at>=?",
+            (HEART, since),
+        ):
+            if not H.parse_ts(r["started_at"]):
+                add(HEART, n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
+                continue
+            buckets, total = _spread(r, start, step)
+            for b, m in buckets.items():
+                add(HEART, b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / total)
     totals = {"runs": 0, "failed": 0, "cost": 0.0, "buckets": [{"ok": 0, "failed": 0} for _ in range(n)]}
     for s in per.values():
         s["cost"] = round(s["cost"], 6)
@@ -604,7 +680,7 @@ def install(app, store, auth):
         request: Request,
         range: str = "1h",
         status: str = "",
-        trigger: str = "",  # noqa: A002
+        trigger: str = "",
         owner: str = "",
         ids: str = "",
         limit: int = 50,
@@ -620,7 +696,7 @@ def install(app, store, auth):
             return runs(c, who, range, status, trigger, owner, ids, limit, before, store.settings)
 
     @app.get("/api/v2/automations/stats")
-    def automations_stats(request: Request, range: str = "1h"):  # noqa: A002
+    def automations_stats(request: Request, range: str = "1h"):
         """Runs, failures and cost per automation you may see over the last `range` (5m, 1h, 24h, 7d), each split into
         buckets oldest first (10 of 30s, 12 of 5 min, 24 of an hour, 28 of 6 hours), and the totals the same way."""
         who = request.state.identity

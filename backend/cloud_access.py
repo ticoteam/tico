@@ -222,7 +222,7 @@ def _run(store, vault, settings):
     while True:
         try:
             sync(store, vault, settings)
-        except Exception:  # noqa: BLE001 - the next tick asks again
+        except Exception:  # the next tick asks again
             log.exception("Tico Cloud access check failed")
         with _guard:
             if not _again:

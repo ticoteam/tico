@@ -3,7 +3,7 @@
 
 The server asks its providers in this order, each failure falling through to the next (fail open), with the same keys
 the Slack gateway routes with:
-1. the Tico AI Gateway as `tico-decide-1.0`, with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
+1. the Tico AI Gateway as `tico-decide-low` (Decide Low), with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
    `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default), else the key and URL saved in Settings > Computers
    (backend/gateway_connection.py), read at each call;
 2. a customer's own TypeSafe key (`TYPESAFE_API_KEY` or `TICO_TYPESAFE_SECRET_ARN`), never set by default;

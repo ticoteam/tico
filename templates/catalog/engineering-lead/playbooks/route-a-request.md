@@ -32,7 +32,7 @@ the request and the Tools allow.
    per owner: a team choice, not a benchmark. Above it, say so in the proposal.
 4. **Write the proposal** on the task, under 120 words: **Route to** <owner>, **why** (the area and any earlier
    decision), **urgency** and the date it matters, **what they need** (links), and an **alternative** owner. Ask with
-   `hub task ask <id>` only if the owner or scope is unclear. Otherwise continue.
+   `hub task question "<question>" --on <person> --parent <id>` only if the owner or scope is unclear. Otherwise continue.
 5. **Carry out the requested work** only when the task asks for it and a Tool allows it:
    `hub task create --owner <slug> --title "<the ask>" --parent <id>` with the links. On a no or a change, write the
    correction into `knowledge/routing.md` as a present-tense rule, dated. Commit, then

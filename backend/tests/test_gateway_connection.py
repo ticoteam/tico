@@ -27,7 +27,7 @@ ERRORS = {
     "revoked_key": (401, "This gateway key was revoked."),
     "rate_limited": (429, "Too many refused keys from this address. Try again later."),
     "cap_reached": (429, "The Tico AI Gateway's monthly cap is reached."),
-    "unknown_model": (400, "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0."),
+    "unknown_model": (400, "Unknown model. Tico models: tico-low-1.0, tico-medium-1.0, tico-high-1.0."),
     "unsupported_field": (
         400,
         "Tico models here take text and tools only: no images, audio, files or more than one choice.",
@@ -75,7 +75,7 @@ class FakeGateway:
                 asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 data = json.dumps(
                     {
-                        "model": "tico-decide-1.0",
+                        "model": "tico-decide-low",
                         "answers": answer_all(asked["questions"]),
                         "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001},
                     }
@@ -225,7 +225,7 @@ def test_decide_asks_with_the_saved_key_falls_back_when_it_is_cleared_and_the_en
         fake.active(KEY, 0.1)
         assert decide() == "own"  # no key saved: the Gateway is not asked
         save(api, fake)
-        assert decide() == "tico-decide-1.0" and fake.calls[-1] == ("/v1/gateway/decisions", KEY)
+        assert decide() == "tico-decide-low" and fake.calls[-1] == ("/v1/gateway/decisions", KEY)
         delete(api, "providers/gateway")
         asked = len(fake.calls)
         assert decide() == "own" and len(fake.calls) == asked  # cleared: on to the next provider at once
@@ -234,7 +234,7 @@ def test_decide_asks_with_the_saved_key_falls_back_when_it_is_cleared_and_the_en
         monkeypatch.setattr(settings, "gateway_key", OTHER, raising=False)
         monkeypatch.setattr(settings, "gateway_url", fake.url + "/decisions", raising=False)
         api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)
-        assert decide() == "tico-decide-1.0" and fake.calls[-1] == ("/v1/gateway/decisions", OTHER)
+        assert decide() == "tico-decide-low" and fake.calls[-1] == ("/v1/gateway/decisions", OTHER)
 
 
 def test_only_the_owner_changes_it_and_only_the_owner_sees_its_state(api, monkeypatch):
@@ -269,27 +269,21 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         put(
             api,
             "providers",
-            {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]},
+            {"enabled": ["anthropic"], "model": "tico-medium-1.0", "expected_revision": view["revision"]},
         )
         view = get(api, "providers")
-        assert view["default"] == {"runtime": "pi", "model": "tico-general-medium-1.0"} and "tico" in view["enabled"]
+        assert view["default"] == {"runtime": "pi", "model": "tico-medium-1.0"} and "tico" in view["enabled"]
         rows = {
             m["id"]: m
             for m in get(api, "models")["models"]
             if m["provider"] == "tico" and not m.get("deprecated") and not m.get("meeting")
         }
-        assert len(rows) == 60 and all(m.endswith("-1.0") for m in rows)
-        assert (rows["tico-general-medium-1.0"]["label"], rows["tico-general-medium-1.0"]["description"]) == (
-            "General · Medium 1.0",
+        assert len(rows) == 10 and all(m.endswith("-1.0") for m in rows)
+        assert (rows["tico-medium-1.0"]["label"], rows["tico-medium-1.0"]["description"]) == (
+            "Medium 1.0",
             "Claude Sonnet 5.5 underneath",
         )
-        assert rows["tico-sales-low-fast-1.0"]["tier"] == {
-            "department": "sales",
-            "level": "low",
-            "fast": True,
-            "version": "1.0",
-            "auto": False,
-        }
+        assert rows["tico-low-fast-1.0"]["tier"] == {"level": "low", "fast": True, "version": "1.0", "auto": False}
         delete(api, "providers/gateway")
         assert "tico" not in get(api, "providers")["enabled"]
         with api.app.state.store.read() as c:
@@ -317,74 +311,35 @@ def new_bot(api, slug, expected=200, **choice):
     )
 
 
-def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(api, monkeypatch):
+def test_an_id_from_before_lineup_3_is_saved_and_run_as_the_id_it_is_now(api, monkeypatch):
     setup(api, monkeypatch)
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)
         view = get(api, "providers")
-        refused = put(
-            api,
-            "providers",
-            {"enabled": ["anthropic"], "model": "tico-cheap-1.0", "expected_revision": view["revision"]},
-            expected=422,
-        )
-        assert "retired" in json.dumps(refused)
-        # A default saved as Cheap 1.0 before 1.1 shipped.
         put(
             api,
             "providers",
-            {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]},
+            {"enabled": ["anthropic"], "model": "tico-sales-medium-1.0", "expected_revision": view["revision"]},
         )
-        with api.app.state.store.transaction() as c:
-            stored = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='providers'").fetchone()[0])
-            c.execute(
-                "UPDATE registry_metadata SET value=? WHERE key='providers'",
-                (json.dumps({**stored, "runtime": "pi", "model": "tico-cheap-1.0"}),),
-            )
-        # Saving something else keeps it, and a bot that names no model is made on it.
-        view = get(api, "providers")
-        put(
-            api,
-            "providers",
-            {"enabled": ["anthropic", "openai"], "model": "tico-cheap-1.0", "expected_revision": view["revision"]},
-        )
-        assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-cheap-1.0"}
-        new_bot(api, "scout")
-        with api.app.state.store.read() as c:
-            assert BS.read(c, H.resolve_bot(c, "scout")["id"])["model"] == "tico-cheap-1.0"
-        # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
-        new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
-        view = get(api, "providers")
-        put(
-            api,
-            "providers",
-            {"enabled": ["anthropic"], "model": "tico-general-low-1.0", "expected_revision": view["revision"]},
-        )
-        view = get(api, "providers")
-        put(
-            api,
-            "providers",
-            {"enabled": ["anthropic"], "model": "tico-cheap-1.0", "expected_revision": view["revision"]},
-            expected=422,
-        )
-        # A bot already on it still runs there.
-        put_bot_on(api, "ops", "tico-cheap-1.0")
+        assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-medium-1.0"}
+        # A bot an older peer left on a first-lineup id runs on the level it is now.
+        put_bot_on(api, "ops", "tico-cheap-1.1")
         machine = runner(api)
         assign(api, machine, "ops")
         ready(api, machine, ["ops"])
         post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
         config = claim(api, machine, "ops")["config"]
-        assert (config["runtime"], config["model"]) == ("pi", "tico-cheap-1.0")
+        assert (config["runtime"], config["model"]) == ("pi", "tico-low-1.0")
 
 
 def test_openrouter_never_serves_a_tico_model_and_no_default_fallback_spends_the_key(api, monkeypatch):
     from backend import providers
 
-    tico = providers.MODEL_BY_ID["tico-mid-1.0"]
+    tico = providers.MODEL_BY_ID["tico-medium-1.0"]
     assert not providers.serves("openrouter", tico) and providers.serves("tico", tico)
     assert providers.serves("openrouter", providers.MODEL_BY_ID["kimi-k3"])
-    record = {"enabled": ["tico"], "runtime": "pi", "model": "tico-mid-1.0", "auto_fallback": True}
+    record = {"enabled": ["tico"], "runtime": "pi", "model": "tico-medium-1.0", "auto_fallback": True}
     assert providers.default_fallbacks(record) == []
     # A Tico company default doesn't reach the fallbacks through another provider on pi: that one's own model does.
     record = {**record, "enabled": ["anthropic", "openrouter", "tico"]}
@@ -440,7 +395,7 @@ def test_the_key_goes_only_to_an_https_or_exact_loopback_url_and_never_follows_a
         shown = post(api, "providers/gateway/check", {})
         assert shown["state"] == "bad_url" and shown["working"] is False
         with api.app.state.store.read() as c:
-            assert gateway_connection.run_credentials(c, api.app.state.vault, None, "tico-mid-1.0") == []
+            assert gateway_connection.run_credentials(c, api.app.state.vault, None, "tico-medium-1.0") == []
         assert len(fake.calls) == 1 and elsewhere.calls == []
 
 
@@ -609,7 +564,7 @@ def test_only_a_run_on_a_tico_model_is_handed_the_key(api, monkeypatch):
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)
-        put_bot_on(api, "ops", "tico-mid-1.0")
+        put_bot_on(api, "ops", "tico-medium-1.0")
         put_bot_on(api, "finance", "kimi-k3")
         machine = runner(api)
         for bot in ("ops", "finance"):
@@ -617,7 +572,7 @@ def test_only_a_run_on_a_tico_model_is_handed_the_key(api, monkeypatch):
         ready(api, machine, ["ops", "finance"])
         post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
         attempt = claim(api, machine, "ops")
-        assert attempt["gateway"] is True and attempt["config"]["model"] == "tico-mid-1.0"
+        assert attempt["gateway"] is True and attempt["config"]["model"] == "tico-medium-1.0"
         handed = handed_to(api, machine, attempt)
         assert handed["TICOAI_GATEWAY_KEY"]["value"] == KEY
         assert handed["TICOAI_GATEWAY_URL"]["value"] == fake.url
@@ -640,7 +595,7 @@ def test_the_key_goes_to_the_runner_alone_never_to_the_run(api, monkeypatch, on)
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)
-        put_bot_on(api, "ops", "tico-mid-1.0")
+        put_bot_on(api, "ops", "tico-medium-1.0")
         if on == "claude_with_a_tico_fallback":
             with api.app.state.store.transaction() as c:
                 config = BS.read(c, 'ops')
@@ -652,7 +607,7 @@ def test_the_key_goes_to_the_runner_alone_never_to_the_run(api, monkeypatch, on)
                         'runtime': 'claude',
                         'harness': 'claude',
                         'model': 'opus-5-5',
-                        'fallback': {'harness': 'pi', 'model': 'tico-mid-1.0'},
+                        'fallback': {'harness': 'pi', 'model': 'tico-medium-1.0'},
                     },
                 )
         machine, stranger = runner(api), runner(api, label="Other Mac")
@@ -685,7 +640,7 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
         fake.active(KEY, 0.1)
         save(api, fake)
     started_on_tico = change == "bot_from_tico"
-    put_bot_on(api, "ops", "tico-mid-1.0" if started_on_tico else "kimi-k3")
+    put_bot_on(api, "ops", "tico-medium-1.0" if started_on_tico else "kimi-k3")
     if change == "default_to_tico":
         with api.app.state.store.transaction() as c:
             config = BS.read(c, 'ops')
@@ -704,10 +659,10 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
     else:
         post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
-    assert attempt["config"]["model"] == ("tico-mid-1.0" if started_on_tico else "kimi-k3")
+    assert attempt["config"]["model"] == ("tico-medium-1.0" if started_on_tico else "kimi-k3")
     # While the run is under way, the setting moves.
     if change == "bot_to_tico":
-        put_bot_on(api, "ops", "tico-mid-1.0")
+        put_bot_on(api, "ops", "tico-medium-1.0")
     elif change == "bot_from_tico":
         put_bot_on(api, "ops", "kimi-k3")
     elif change == "default_to_tico":
@@ -718,13 +673,13 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
             {
                 "enabled": ["openrouter", "tico"],
                 "runtime": "pi",
-                "model": "tico-general-medium-1.0",
+                "model": "tico-medium-1.0",
                 "expected_revision": record["revision"],
             },
         )
     else:
         monkeypatch.setattr(
-            check_models, "of", lambda c, task_id, bot: {"runtime": "pi", "model": "tico-mid-1.0", "harness": "pi"}
+            check_models, "of", lambda c, task_id, bot: {"runtime": "pi", "model": "tico-medium-1.0", "harness": "pi"}
         )
     assert attempt["gateway"] is started_on_tico
     handed = handed_to(api, machine, attempt)
@@ -740,7 +695,7 @@ def test_a_tico_bot_is_ready_with_the_connection_not_an_openrouter_grant(api, mo
     setup(api, monkeypatch)
     from backend import readiness
 
-    put_bot_on(api, "ops", "tico-mid-1.0")
+    put_bot_on(api, "ops", "tico-medium-1.0")
     machine = runner(api)
     assign(api, machine, "ops")
     post(
@@ -759,13 +714,13 @@ def test_a_tico_bot_is_ready_with_the_connection_not_an_openrouter_grant(api, mo
         token=machine["token"],
     )
     with api.app.state.store.read() as c:
-        verdict = readiness.can_run(c, "ops", "pi", model="tico-mid-1.0")
+        verdict = readiness.can_run(c, "ops", "pi", model="tico-medium-1.0")
     assert verdict["can_run"] is False and "Tico AI Gateway is not connected" in verdict["problem"]
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)
     with api.app.state.store.read() as c:
-        assert readiness.can_run(c, "ops", "pi", model="tico-mid-1.0")["can_run"] is True
+        assert readiness.can_run(c, "ops", "pi", model="tico-medium-1.0")["can_run"] is True
 
 
 def finish(api, machine, attempt, error, **result):
@@ -798,7 +753,7 @@ def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch, at, retry
     # The clock is pinned so the retry time does not depend on when the suite runs.
     monkeypatch.setattr(H, "now", lambda: at)
     setup(api, monkeypatch)
-    put_bot_on(api, "ops", "tico-mid-1.0")
+    put_bot_on(api, "ops", "tico-medium-1.0")
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -825,7 +780,7 @@ def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch, at, retry
 
 def tico_run(api, monkeypatch):
     setup(api, monkeypatch)
-    put_bot_on(api, "ops", "tico-mid-1.0")
+    put_bot_on(api, "ops", "tico-medium-1.0")
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -944,7 +899,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
         c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (at,))
     ready(api, machine, ["ops"])
     retried = claim(api, machine, "ops")
-    assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
+    assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-medium-1.0"
 
 
 def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_after_a_minute(api, monkeypatch):
@@ -995,7 +950,7 @@ def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_aft
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     ready(api, machine, ["ops"])
     again = claim(api, machine, "ops")
-    assert again and again["config"]["model"] == "tico-mid-1.0" and not again["config"].get("primary_held")
+    assert again and again["config"]["model"] == "tico-medium-1.0" and not again["config"].get("primary_held")
 
 
 @pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])
@@ -1110,7 +1065,7 @@ def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(a
     """Ben reads the bot and its company task, not Ana's private one: an ordinary held run of the first doesn't let
     the refusal of the second show him its words."""
     setup(api, monkeypatch)
-    put_bot_on(api, "ops", "tico-mid-1.0")
+    put_bot_on(api, "ops", "tico-medium-1.0")
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -1260,7 +1215,7 @@ def test_a_tico_fallback_the_gateway_refused_reads_as_the_gateway(api, monkeypat
                 'runtime': 'claude',
                 'harness': 'claude',
                 'model': 'opus-5-5',
-                'fallback': {'harness': 'pi', 'model': 'tico-mid-1.0'},
+                'fallback': {'harness': 'pi', 'model': 'tico-medium-1.0'},
             },
         )
     machine = runner(api)
@@ -1325,7 +1280,7 @@ def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, act
         assert shown["state"] == "not_ready" and shown["working"] is True
         assert shown["message"].startswith("Not ready: the Gateway at this URL doesn't serve Tico models yet")
         assert {r["id"]: r for r in get(api, "health")["checks"]}["gateway"]["status"] == "warn"
-    put_bot_on(api, "ops", "tico-mid-1.0")
+    put_bot_on(api, "ops", "tico-medium-1.0")
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -1390,12 +1345,12 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
         put(
             api,
             "providers",
-            {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]},
+            {"enabled": ["anthropic"], "model": "tico-medium-1.0", "expected_revision": view["revision"]},
         )
         # The Inbox template says Low; a bot with no template, or one that names its own model, is not touched.
         made = new_bot(api, "mailwatch", template="inbox")
         plain = new_bot(api, "plain")
-        own = new_bot(api, "chosen", template="inbox", model="tico-general-high-1.0", harness="pi", effort="high")
+        own = new_bot(api, "chosen", template="inbox", model="tico-high-1.0", harness="pi", effort="high")
         with api.app.state.store.read() as c:
             models = dict(
                 c.execute(
@@ -1406,8 +1361,8 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
             )
             stored = BS.read(c, H.resolve_bot(c, "mailwatch")["id"])
         assert models == {
-            "mailwatch": "tico-general-low-1.0",
-            "plain": "tico-general-medium-1.0",
-            "chosen": "tico-general-high-1.0",
+            "mailwatch": "tico-low-1.0",
+            "plain": "tico-medium-1.0",
+            "chosen": "tico-high-1.0",
         }, (made, plain, own)
-        assert stored["model"] == "tico-general-low-1.0" and stored["gateway"] == {"level": "low"}
+        assert stored["model"] == "tico-low-1.0" and stored["gateway"] == {"level": "low"}

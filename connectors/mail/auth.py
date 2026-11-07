@@ -103,7 +103,7 @@ def mint_token(mailbox, service):
     Only the supervisor reads them. The scopes travel with the token so a turn refuses what was not granted."""
     creds = credentials(mailbox, SERVICE_SCOPES[service], key_only=True)
     if not creds.token:
-        from google.auth.transport.requests import Request  # noqa: PLC0415
+        from google.auth.transport.requests import Request
 
         creds.refresh(Request())
     return creds.token, creds.expiry.isoformat() if creds.expiry else "", getattr(creds, "_tico_granted", None)
@@ -123,7 +123,7 @@ def supervisor_token(mailbox, scopes):
         )
     if not service:
         raise Failure("mail access through the runner covers one service at a time", "Ask for gmail or calendar.")
-    from runner_support import credential_socket  # noqa: PLC0415
+    from runner_support import credential_socket
 
     try:
         return credential_socket.request_mail(path, os.environ["HUB_TOKEN"], service, mailbox)
@@ -172,7 +172,7 @@ def workspace_credentials(mailbox, scopes=None):
     if not service:
         raise Failure(f"{mailbox}'s Google access is given one service at a time", "Ask for gmail or calendar.")
     try:
-        from google.oauth2.credentials import Credentials  # noqa: PLC0415
+        from google.oauth2.credentials import Credentials
     except ImportError:
         raise Failure(
             "the google-auth library is not installed",
@@ -194,7 +194,7 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
     if not key_only and path is None:
         granted = supervisor_token(mailbox, scopes)
         if granted:
-            from google.oauth2.credentials import Credentials  # noqa: PLC0415
+            from google.oauth2.credentials import Credentials
 
             creds = Credentials(token=granted["token"])
             if isinstance(granted.get("scopes"), list):  # a connected account: what it granted
@@ -206,7 +206,7 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
     if not key_file_present(path) and oauth.broker_configured():
         return workspace_credentials(mailbox, scopes)
     try:
-        from google.oauth2 import service_account  # noqa: PLC0415
+        from google.oauth2 import service_account
     except ImportError:
         raise Failure(
             "the google-auth library is not installed",
@@ -229,9 +229,9 @@ def person_credentials(mailbox, found, scopes=None):
         if not chosen:
             oauth.service_scopes(found, "gmail", mailbox)
     try:
-        from google.auth.exceptions import RefreshError, TransportError  # noqa: PLC0415
-        from google.auth.transport.requests import Request  # noqa: PLC0415
-        from google.oauth2.credentials import Credentials  # noqa: PLC0415
+        from google.auth.exceptions import RefreshError, TransportError
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
     except ImportError:
         raise Failure(
             "the google-auth library is not installed",
@@ -286,7 +286,7 @@ def source(mailbox, path=None):
 
 def build_service(api, version, mailbox, scopes=None, path=None):
     try:
-        from googleapiclient.discovery import build  # noqa: PLC0415
+        from googleapiclient.discovery import build
     except ImportError:
         raise Failure(
             "the google-api-python-client library is not installed",

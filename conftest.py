@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fixtures/registry")
@@ -144,6 +145,19 @@ def pytest_sessionfinish(session, exitstatus):
         session.config.get_terminal_writer().line(
             "ERROR: no tests were collected; check the test paths and the -m / -k filters", red=True, bold=True
         )
+
+
+@pytest.fixture(autouse=True)
+def maintenance_runs_end(tmp_path):
+    """A scheduler tick starts its maintenance run on a thread that outlives the test. Join those runs here, before the
+    test's tmp_path is removed at teardown: a run still going would find its database gone (tmp_path is the dependency
+    that makes this teardown run first)."""
+    yield
+    for thread in threading.enumerate():
+        if thread.name == "maintenance-run":
+            thread.join(timeout=60)
+            if thread.is_alive():
+                pytest.fail("maintenance run still going 60 s after the test")
 
 
 @pytest.fixture(scope="session")

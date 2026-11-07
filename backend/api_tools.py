@@ -313,6 +313,24 @@ def hidden_keys(c, who, admins, auth=None):
     return out
 
 
+def hidden_ids(c, who, admins, auth=None):
+    """The event targets `who` never reads (backend/sql.py `events`, so history and POST /api/v2/sql): each tool they
+    may not see, its keys, and the keys deleted from it (`tool.key_deleted` on the tool names them)."""
+    tools = [t["id"] for t in private_tools(c) if not visible(c, who, t, admins, auth)]
+    if not tools:
+        return set()
+    out = set(tools)
+    for tid in tools:
+        out.update(k["id"] for k in _keys(c, tid))
+    gone = c.execute(
+        "SELECT json_extract(detail,'$.credential') FROM events WHERE action='tool.key_deleted' AND target IN (%s)"
+        % ",".join("?" * len(tools)),
+        tools,
+    )
+    out.update(str(r[0]) for r in gone if r[0])
+    return out
+
+
 def key_hidden(c, who, credential_id, admins, auth=None):
     """Whether this credential is a key of a tool `who` may not see: the vault then answers as if it did not exist."""
     try:
@@ -973,9 +991,25 @@ def _drop_key(c, who, key_id):
     from .computer_keys import before_delete
 
     refuse_finance_key(c, [key_id])
+    key = c.execute("SELECT * FROM credentials WHERE id=?", (key_id,)).fetchone()
     before_delete(c, who, key_id)
-    c.execute("DELETE FROM credential_grants WHERE credential_id=?", (key_id,))
+    grants = c.execute("DELETE FROM credential_grants WHERE credential_id=?", (key_id,)).rowcount
     c.execute("DELETE FROM credentials WHERE id=?", (key_id,))
+    if key is not None:
+        key_gone(c, who, key, grants)
+
+
+def key_gone(c, who, key, grants):
+    """The events a deleted key leaves, whichever route deleted it: `credential.deleted` on the key, with its last name
+    and its tool (history names the key from it to whoever could see it), and `tool.key_deleted` on its tool."""
+    tid = key["tool_id"] if "tool_id" in key.keys() else None
+    tool = c.execute("SELECT id,audience FROM tools WHERE id=?", (tid,)).fetchone() if tid else None
+    detail = {"name": key["name"], "env": key["env"], "grants": grants}
+    if tool is not None:
+        detail |= {"tool": tool["id"], "private": tool["audience"] is not None}
+    H.event(c, who.actor, "credential.deleted", key["id"], detail)
+    if tool is not None:
+        H.event(c, who.actor, "tool.key_deleted", tool["id"], {"credential": key["id"], "name": key["name"]})
 
 
 def set_audience(c, who, tool, value, admins, auth=None):
@@ -1191,8 +1225,7 @@ def delete_key(c, who, vault, tool_id, key_id):
     require_admin(c, who, vault.admins)
     _readable(c, who, tool_id, vault.admins)
     key = _tool_key(c, tool_id, key_id)
-    _drop_key(c, who, key_id)
-    H.event(c, who.actor, "tool.key_deleted", tool_id, {"credential": key_id, "name": key["name"]})
+    _drop_key(c, who, key["id"])
     return {"deleted": True, "id": key_id}
 
 
@@ -1534,7 +1567,7 @@ def index_page(c, who, auth, settings, admins, limit=INDEX_LIMIT_MAX, cursor="")
 
 def install(app, store, auth, settings):
     """The routes. The vault is read from app.state at each call (a test swaps its cipher after start)."""
-    vault = lambda: app.state.vault  # noqa: E731
+    vault = lambda: app.state.vault
 
     def change(request, body, authorize, fn):
         v = vault()

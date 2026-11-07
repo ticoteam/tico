@@ -398,6 +398,41 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
     assert revoked.value.status == 409
 
 
+def test_the_assistant_answers_the_persons_own_question_tasks_and_no_one_elses(api):
+    from backend import question_tasks as QT
+
+    with api.app.state.store.transaction() as c:
+        mine = QT.ask_alone(c, "bot:ops", "human:ben", "Ship the zip fix in the next release?")
+        hers = QT.ask_alone(c, "bot:ops", "human:ana", "Approve the budget?")
+        secret = H.task_create(
+            c, "human:ben", "Review the confidential packet", "Confidential packet.", "human:ben", private=True
+        )
+    r, attempt = assistant_turn(api, "ben-test", "Yes, ship the zip fix")
+    token = attempt["token"]
+    # Ben's own question task is readable on his Assistant's turn; Ana's question and his non-question task are not.
+    assert get(api, "tasks/" + mine["id"], token)["task"]["id"] == mine["id"]
+    for task in (hers, secret):
+        hidden = api.get("/api/v2/tasks/" + task["id"], headers=headers(token))
+        assert hidden.status_code in (403, 404), hidden.text
+        assert "Approve the budget" not in hidden.text and "Confidential" not in hidden.text
+    answered = asked(
+        api,
+        "tasks/" + mine["id"],
+        {"version": mine["version"], "status": "done", "note": "Yes, ship the zip fix"},
+        token,
+        "turn",
+    )["task"]
+    assert answered["status"] == "done" and answered["note"] == "Yes, ship the zip fix"
+    denied = api.post(
+        "/api/v2/tasks/" + hers["id"],
+        json={"version": hers["version"], "status": "done", "note": "Yes"},
+        headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"},
+    )
+    assert denied.status_code in (403, 404), denied.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, hers["id"])["status"] != "done"
+
+
 def asked(api, path, body, token, ref, expected=200):
     """A write of the assistant's turn that cites the person's message asking for it."""
     r = api.post("/api/v2/" + path, json=body, headers={**headers(token), "X-Tico-On-Behalf-Of": ref})
@@ -495,7 +530,7 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
         turn, {"id": spend, "note": "Not now", "on_behalf_of": "turn"}
     )
     assert declined["decision"] == "declined" and declined["decided_by_id"] == "human:ben"
-    assert {"hub_approval_decline", "hub_question_answer"} <= {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "hub_approval_decline" in {t["name"] for t in hubtools.listing(kind="assistant")}
     assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
     with pytest.raises(APIError) as refused:
         hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})
@@ -660,8 +695,10 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
 
 
 def needs_you_queue(api):
-    """Ben's Needs you: old publish batches, a merge and a spend for him to decide, a bot's question to him, and an
-    approval and a question for Ana that his Assistant must never touch."""
+    """Ben's Needs you: old publish batches, a merge and a spend for him to decide, a bot's question to him (a question
+    task), and an approval and a question for Ana that his Assistant must never touch."""
+    from backend import question_tasks as QT
+
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
         mine = H.task_create(c, "human:ben", "Run the launch", "Ben decides its sends.", "human:ben")["id"]
@@ -677,9 +714,18 @@ def needs_you_queue(api):
         hers = H.approval_request(
             c, "bot:ops", "publish", {"url": "https://acme.example/ana", "content_sha256": "f" * 64}
         )["id"]
-        ask = H.say(c, "bot:ops", "human:ben", "Launch on Oct 1 or Oct 8?", kind="ask")["id"]
-        her_ask = H.say(c, "bot:ops", "human:ana", "Which logo?", kind="ask")["id"]
+        # A private standalone card is one his Assistant cannot read, so his question hangs off a shared task.
+        launch = H.task_create(c, "human:ben", "Plan the launch", "Pick the day.", "bot:ops")
+        ask = QT.ask_plain(c, "bot:ops", "human:ben", "Launch on Oct 1 or Oct 8?", parent=launch)["id"]
+        her_ask = QT.ask_alone(c, "bot:ops", "human:ana", "Which logo?")["id"]
     return {"old": old, "merge": merge, "spend": spend, "hers": hers, "ask": ask, "her_ask": her_ask}
+
+
+def answer_step(task_id, text):
+    return {
+        "path": f"/api/v2/tasks/{task_id}/answers",
+        "body": {"target": {"task": task_id}, "answers": {}, "other": text},
+    }
 
 
 def decision(api, aid):
@@ -718,10 +764,10 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     # Ana's approval and question never go on his card.
     decline = {"decision": "declined", "note": "Before the reset"}
     steps = [{"path": "/api/v2/approvals/" + aid, "body": decline} for aid in q["old"]]
-    steps.append({"path": f"/api/v2/messages/{q['ask']}/answer", "body": {"text": "Oct 8"}})
+    steps.append(answer_step(q["ask"], "Oct 8"))
     for theirs in (
         {"path": "/api/v2/approvals/" + q["hers"], "body": decline},
-        {"path": f"/api/v2/messages/{q['her_ask']}/answer", "body": {"text": "The blue one"}},
+        answer_step(q["her_ask"], "The blue one"),
     ):
         post(
             api,
@@ -749,11 +795,13 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     }
     assert card["diff"][1]["field"] == "Answer 1 bot question, under a week old"
     assert "post-0" in card["diff"][2]["field"] and "40 days old" in card["diff"][2]["field"]
-    assert "Oct 8" in card["diff"][-1]["field"]
+    assert "Oct 8" in card["diff"][-1]["field"] and "Launch on Oct 1 or Oct 8?" in card["diff"][-1]["field"]
     assert all(decision(api, aid) is None for aid in q["old"])  # nothing ran yet
     done = post(api, f"assistant/actions/{card['id']}/confirm", {}, token="ben-test")["action"]
     assert done["status"] == "done" and not done["result"]["error"], done["result"]
     assert [decision(api, aid) for aid in q["old"]] == ["declined"] * 3
+    with api.app.state.store.read() as c:
+        assert H.task(c, q["ask"])["status"] == "done" and H.task(c, q["her_ask"])["status"] == "open"
     # One he asked for runs directly when the turn cites his message, as him, via the assistant.
     asked(api, "approvals/" + q["spend"], {"decision": "declined", "note": "Not this month"}, token, "turn")
     assert decision(api, q["spend"]) == "declined"
@@ -762,11 +810,8 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
             "SELECT actor,detail FROM events WHERE action='approval.decide' AND target=?", (q["spend"],)
         ).fetchone()
         assert row["actor"] == "human:ben" and H._json(row["detail"], {})["via"] == "assistant"
-        answers = dict(c.execute("SELECT in_reply_to,sender_id FROM messages WHERE kind='answer'").fetchall())
-        assert answers.get(q["ask"]) == "human:ben" and q["her_ask"] not in answers
     # Others' items stay as they were, whatever is cited.
     asked(api, "approvals/" + q["hers"], decline, token, "turn", expected=403)
-    asked(api, f"messages/{q['her_ask']}/answer", {"text": "Blue"}, token, "turn", expected=404)  # C1: 404
     assert decision(api, q["hers"]) is None and decision(api, q["merge"]) is None
 
 

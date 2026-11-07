@@ -62,6 +62,9 @@ TABLE = (
 NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
+# A shipped file whose work a later file does now. Its up() is not run: it imports ask_routing, which step 6c removed,
+# and 20261106131713_asks_to_question_tasks moves every open ask, system asks included. Its row and checksum stay.
+SUPERSEDED = {"20261105034511_resend_system_asks"}
 
 
 class MigrationError(RuntimeError):
@@ -213,7 +216,8 @@ def _run(conn, migration):
         try:
             before = _broken_references(conn) if keys_off else None
             if module:
-                module.up(conn)
+                if migration.version not in SUPERSEDED:
+                    module.up(conn)
             else:
                 for statement in statements(migration.path.read_text(encoding="utf-8")):
                     conn.execute(statement)

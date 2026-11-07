@@ -78,7 +78,7 @@ function finSrcCols(r) {
     const at = sync?.last_ok_at || sync?.last_sync_at || r.balance_as_of;
     last = at ? ago(at) : '';
     status = sync?.status === 'disconnected' ? ['idle', 'Disconnected'] : sync?.status === 'reconnect' ? ['fail', 'Reconnect']
-      : err ? ['fail', 'Error'] : !sync ? ['idle', '—']
+      : err && !finSyncNote(sync) ? ['fail', 'Error'] : !sync ? ['idle', '—']
       : sync.status === 'new' ? ['waiting', 'Starting'] : sync.history === 'importing' ? ['waiting', 'Importing']
       : sync.history === 'checking' ? ['waiting', 'Checking amounts'] : ['ok', 'OK'];
   }
@@ -124,7 +124,7 @@ function finSrcRail() {
     ${r.kind !== 'connection' && r.available_balance != null && r.available_balance !== r.balance ? finKv('Available', finUsd(r.available_balance)) : ''}
     ${money ? finKv('Books as', finMapCell(r, admin)) : ''}
     ${mine.length ? `<h3 class="fin-h">Accounts</h3>${mine.map(x => finKv((x.name || '') + (x.last4 ? ' ••' + x.last4 : ''), finMapCell(x, admin))).join('')}` : ''}
-    ${sync?.last_ok_at ? finKv('Last sync', esc(ago(sync.last_ok_at))) : ''}${sync?.last_error ? finKv(sync.status === 'reconnect' ? 'Reason' : 'Error', esc(FIN_RECONNECT[sync.last_error] || sync.last_error), 'fin-bad') : ''}
+    ${sync?.last_ok_at ? finKv('Last sync', esc(ago(sync.last_ok_at))) : ''}${sync?.last_error ? finSyncError(sync) : ''}
     ${books ? finBooksRail(r) : ''}
     ${feed.length ? `<h3 class="fin-h">Feed</h3>${feed.map(([k, v]) => finKv(k, String(v))).join('')}` : ''}
     ${cards.length ? `<h3 class="fin-h">Cards</h3>${cards.map(([k, v]) => finKv(k, String(v))).join('')}` : ''}
@@ -332,6 +332,25 @@ function finConnectBooks(provider) {
 }
 // Why a books connection needs a person (backend/finance/books_link.py): its codes, in words.
 const FIN_RECONNECT = {reconnect_required: 'Sign-in expired', vault_pending: 'Saving sign-in', vault_write_failed: 'Sign-in not saved'};
+// Why a sync failed, in a few words. The texts come from the adapters' error_text (backend/finance/mercury.py, brex.py,
+// stripe.py), the syncs' missing-key line (sync.py, brex_sync.py, stripe_sync.py) and the books (books_link.py,
+// xero.py); anything else is "Sync failed". The raw text stays in the title.
+/** @type {Array<[RegExp, string]>} */
+const FIN_SYNC_WHY = [
+  [/could not (refresh|give) the \w+ access token/, 'Key expired'],
+  [/ (token|key) is missing/, 'Key missing'],
+  [/refused the (token|key|write)/, 'Key lacks access'],
+  [/ said 429\b|rate.?limit/i, 'Rate limited, retrying'],
+  [/ did not answer| said 5\d\d\b/, 'Provider down'],
+];
+const finSyncWhy = text => FIN_RECONNECT[text] || FIN_SYNC_WHY.find(([re]) => re.test(text))?.[1] || 'Sync failed';
+// A Brex pass that read keeps its notes in last_error with the status active (brex_sync.py _notes): plain sentences, so
+// they show as they are, as a note.
+const finSyncNote = sync => sync?.provider === 'brex' && sync.status === 'active' && !!sync.last_error;
+function finSyncError(sync) {
+  if (finSyncNote(sync)) return finKv('Note', esc(sync.last_error));
+  return finKv(sync.status === 'reconnect' ? 'Reason' : 'Error', `<span title="${esc(sync.last_error)}">${esc(finSyncWhy(sync.last_error))}</span>`, 'fin-bad');
+}
 const FIN_MIRROR = {on: 'On', backfill: 'Backfilling', backfilling: 'Backfilling', off: 'Off', stopped: 'Off'};
 const FIN_OUTBOX = [['pending', 'Waiting'], ['sent', 'Sent'], ['failed', 'Failed'], ['withheld', 'Withheld']];
 // A books connection: whether it is the books (mirror), what waits to be written to it, and the owner's switch.
@@ -578,14 +597,14 @@ function finViewAsPick() {
     finViewAs(form.elements.who.value);
   });
 }
-// The company's defaults (§7.5): owners see everything; managers and everyone else as set here; revenue, the
-// balance sheet, payables and receivables stay the owners' unless granted.
+// The company's defaults (§7.5): owners see everything; managers and everyone else as set here (nothing until the owner
+// opens it up); revenue, the balance sheet, payables and receivables stay the owners' unless granted.
 function finDefaultsEdit() {
   const d = FIN.acc.defaults || {}, opt = (v, l, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`;
   finDialog('Edit defaults', `<label>Owners<select disabled><option>Everything</option></select></label>
-    <label>Managers<select name="manager">${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}</select></label>
+    <label>Managers<select name="manager">${opt('none', 'Same as everyone else', d.manager)}${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}</select></label>
     <label>Managers' payroll<select name="manager_payroll">${opt('totals', 'Totals', d.manager_payroll)}${opt('hidden', 'Hidden', d.manager_payroll)}</select></label>
-    <label>Everyone else<select name="member">${opt('own_expenses', 'Own expenses', d.member)}${opt('none', 'Nothing', d.member)}</select></label>
+    <label>Everyone else<select name="member">${opt('none', 'Nothing', d.member)}${opt('own_expenses', 'Own expenses', d.member)}</select></label>
     <label>Revenue, balance sheet, payables, receivables<select disabled><option>Owners only</option></select></label>`, 'Save', async form => {
     const pick = Object.fromEntries(['manager', 'member', 'manager_payroll'].map(k => [k, form.elements[k].value]).filter(([k, v]) => v && v !== d[k]));
     if (!Object.keys(pick).length) return;

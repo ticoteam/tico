@@ -135,7 +135,7 @@ def may_read(c, who):
 
 
 def require_run(c, who, auth, aid):
-    """The checks the run list makes (app.py turns): the bot, the conversation, the message and the run itself."""
+    """The checks the run list makes (bot_status_routes.py turns): the bot, the conversation, the message and the run itself."""
     attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
     if not attempt:
         raise Problem("not_found", "Turn not found", 404)

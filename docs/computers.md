@@ -127,7 +127,7 @@ for its turns. Upgraded runners opt in after a successful heartbeat and keep the
 
 ### The turn fixer
 
-A built-in system routine, **Turn fixer**, checks every computer every 10 seconds. It is plain code: no AI and no
+A [Heartbeat](heartbeat.md) step, **Turn fixer**, checks every computer on every beat (every 10 seconds by default). It is plain code: no AI and no
 cost. It frees only turns that are proven dead: a start a person stopped, or a turn whose lease is lost and whose
 computer no longer runs its bot (the computer was removed, or its latest claim does not list the bot). A slow reply or
 a healthy wait keeps its place. The task and its history stay, and the task gets a note: **Tico freed a dead start,
