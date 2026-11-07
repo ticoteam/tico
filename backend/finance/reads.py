@@ -1962,7 +1962,10 @@ SEARCH_KINDS = (
     "po",
     "estimate",
 )
-NAMED_ONLY_KINDS = ("account", "vendor")  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
+NAMED_ONLY_KINDS = (
+    "account",
+    "vendor",
+)  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10  # results per kind when no kind is named
 
@@ -2110,7 +2113,9 @@ def _unattributed_total(s: _Seen, a: date, z: date) -> tuple[int, int, bool]:
     lost = False
     after: tuple[str, str] | None = None
     while True:
-        batch = SL.unattributed_lines(s.ctx.c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids, after, UNATTRIBUTED_CHUNK)
+        batch = SL.unattributed_lines(
+            s.ctx.c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids, after, UNATTRIBUTED_CHUNK
+        )
         kept, cut = _unattributed_visible(s, batch)
         lost = lost or cut
         amount += sum(int(r["amount"]) for r in kept)
@@ -2163,7 +2168,9 @@ def unattributed(
                 "source": str(r["source"]),
             }
         )
-    nxt = tab.encode_cursor([str(page[-1]["entry_date"]), str(page[-1]["id"])]) if len(fetched) > most and page else None
+    nxt = (
+        tab.encode_cursor([str(page[-1]["entry_date"]), str(page[-1]["id"])]) if len(fetched) > most and page else None
+    )
     return {
         "lines": lines,
         "next_cursor": nxt,

@@ -153,4 +153,3 @@ def records_visible(
             excl=record in lost,
         )
     return out
-

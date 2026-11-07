@@ -886,9 +886,7 @@ def install(app, store, auth, mutate):
         """The Unattributed queue (backend/finance/visible.py's rule, cut to the caller): the P&L lines in the period
         (this month by default) with no team, no teammate and no attribution in force, newest first, paged by cursor."""
         actor = as_viewer(request, view_as)
-        return read(
-            lambda c: finance_reads.unattributed(c, actor, start=start, end=end, cursor=cursor, limit=limit)
-        )
+        return read(lambda c: finance_reads.unattributed(c, actor, start=start, end=end, cursor=cursor, limit=limit))
 
     @app.get("/api/v2/finance/close/{month}")
     def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):

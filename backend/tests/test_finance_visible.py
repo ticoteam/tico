@@ -25,7 +25,10 @@ def _post(c) -> dict[str, str]:
         for name in ("Acme Cloud", "Mixed Co", "Payroll Co")
     }
     made = act(
-        c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")}
+        c,
+        OWNER,
+        "account_create",
+        {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
     )
     assert made.status == "committed", made.reason
     private = {"account_id": str(made.result["account_id"]), "others_see": "totals"}

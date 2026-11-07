@@ -528,13 +528,12 @@ def contacts(
     )
     # A customer shows to the receivables view; a vendor (or both) shows to the payables view, or when its name may show
     # under the one view rule (visible.py): a vendor the reader sees a line of, with no line of it private to them.
-    named = VB.named_all_time(
-        ctx, view, [str(r["id"]) for r in fetched if str(r["kind"]) in ("vendor", "both")]
-    )
+    named = VB.named_all_time(ctx, view, [str(r["id"]) for r in fetched if str(r["kind"]) in ("vendor", "both")])
     rows = [
         r
         for r in fetched
-        if sees_contact_kind(ctx, view, str(r["kind"])) or (str(r["kind"]) != "customer" and named.get(str(r["id"]), False))
+        if sees_contact_kind(ctx, view, str(r["kind"]))
+        or (str(r["kind"]) != "customer" and named.get(str(r["id"]), False))
     ]
     page = rows[:most]
     ids = [str(r["id"]) for r in page]
