@@ -597,6 +597,34 @@ def test_a_check_is_filed_again_when_every_pool_bot_has_timed_out_once(api):
         assert _step(c, task) == "Review 1"
 
 
+def test_a_second_review_goes_to_a_bot_that_timed_out_earlier_before_the_review_1_bot(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    set_pool(api, task, "Review 2", ["rev-a", "rev-b", "rev-c"])
+    assert move(api, task).status_code == 200
+    [first] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
+    task = get(api, "tasks/" + task["id"])["task"]
+    assert move(api, task, "Review 2").status_code == 200
+    [second] = checks(api, task)
+    assert second["owner_id"] == "bot:rev-b"
+    with api.app.state.store.transaction() as c:
+        V.timeouts(c, _past_the_hour())
+    [third] = checks(api, task)
+    assert third["owner_id"] == "bot:rev-c", "rev-b left its check unanswered: rev-c is still fresh"
+    with api.app.state.store.transaction() as c:
+        V.timeouts(c, _past_the_hour())
+    [fourth] = checks(api, task)
+    assert fourth["owner_id"] == "bot:rev-b", (
+        "rev-b timed out earlier and is not the one just refiled: it goes before rev-a, who did Review 1"
+    )
+    with api.app.state.store.read() as c:
+        assert H.task(c, third["id"])["status"] == "closed"
+        assert _step(c, task) == "Review 2"
+
+
 def test_a_refiled_review_1_check_that_approves_moves_the_ticket_on(api):
     team(api)
     task = ticket(api, RECEIPT)

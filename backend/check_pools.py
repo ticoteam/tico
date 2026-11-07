@@ -490,10 +490,11 @@ def _screen(c, ticket, step, slugs, limit, exclude=()):
     """`ranked`, and each pool bot's state for this check: (free members best first, why none is free, {slug: state}).
 
     Free bots come in tiers, so a ticket waits at a step only while every bot is busy, rate-limited or offline, never
-    because every bot was excluded: a bot that has not timed out on this ticket first (tier 0); an earlier reviewer of
-    the ticket only when no other bot is left in the pool (tier 1); a bot that timed out earlier on this ticket, which
-    may only have been busy (tier 2); and last the bot whose check was just refiled (tier 3). The states name what
-    passed each bot over, so a refile or a wait says which bots it skipped and why.
+    because every bot was excluded. A second review goes to a different bot than the first wherever one is free: a bot
+    that has not timed out on this ticket first (tier 0); a bot that timed out earlier on this ticket, but is not the
+    one just refiled, which may only have been busy (tier 1); an earlier reviewer of the ticket only when no other bot
+    is left in the pool, a bot that timed out earlier counting as left (tier 2); and last the bot whose check was just
+    refiled (tier 3). The states name what passed each bot over, so a refile or a wait says which bots it skipped and why.
     """
     from . import step_flow
     from .check_independence import assess
@@ -544,10 +545,10 @@ def _screen(c, ticket, step, slugs, limit, exclude=()):
         # Model company only orders the free bots, so it ranks first; eligibility, workload and idle time break ties.
         rank = _company_rank(c, slug, builder) if builder and not required else 0
         ready[slug] = (rank, 0 if decision["eligible"] else 1, held, idle)
-    # An earlier reviewer is the only bot for the check when no other bot is left: one that is not timed out on this
-    # ticket and is not blocked for good.
+    # An earlier reviewer is free only when no other bot is left: a bot that is not an earlier reviewer, not the one
+    # just refiled, and not blocked for good. A bot that timed out earlier on this ticket counts as left.
     others_left = any(
-        s not in earlier and s not in timed and blocked.get(s, ("",))[0] not in PERMANENT
+        s not in earlier and s != latest and blocked.get(s, ("",))[0] not in PERMANENT
         for s in set(ready) | set(blocked)
     )
     why, state, free = set(), {}, []
@@ -567,9 +568,9 @@ def _screen(c, ticket, step, slugs, limit, exclude=()):
             tier, msg = None, ""
             if slug in earlier:
                 if not others_left:
-                    tier, msg = 1, "free, as the only bot left in the pool"
+                    tier, msg = 2, "free, as the only bot left in the pool"
             elif slug in timed:
-                tier, msg = (3, "free as a last resort") if slug == latest else (2, "free again")
+                tier, msg = (3, "free as a last resort") if slug == latest else (1, "free again")
             else:
                 tier, msg = 0, "free"
             if tier is not None:
