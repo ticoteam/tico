@@ -1267,7 +1267,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => location.hash === '#/finance/pnl?view=expenses');
       await page.locator('.fin-pl').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions', 'Access'], tag + ': only the tabs in view');
-      assert.deepEqual(await page.locator('[data-fin-seg="view"] button').allInnerTexts(), ['Expenses'], tag + ': no Company view');
+      // One view (Expenses) and no switch: the View control shows only when there is more than one (finance-pnl.js views).
+      assert.equal(await page.locator('[data-fin-seg="view"]').count(), 0, tag + ': no Company or By segment view to switch to');
       assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': no budget editing without the right');
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count() > 0, true, tag + ': lines drill down');
       const priv = page.locator('.fin-ln:has-text("Payroll (private)")');
