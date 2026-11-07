@@ -91,7 +91,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await model.locator('[data-tier-fast]').isChecked(), false);
     assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), '1.0');
     assert.equal(await model.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M', 'the rendered Gateway line names the window');
-    // The model and effort label ends in the context window the catalog gives (format.js modelContextWords).
+    // The model and effort label ends in the context window the catalog gives (format.ts modelContextWords).
     const labels = await page.evaluate(() => ['claude-opus-5-5', 'gpt-6.1-sol', 'gemini-3.8-flash', 'grok-4.6', 'deepseek-v4.1-flash',
       'tico-medium-1.0', 'tico-high-fast-1.0'].map(id => settingsChoiceLabel('', id, 'high')));
     assert.match(labels[0], / · high · 1M$/, 'Opus 5.5 says its 1M window');

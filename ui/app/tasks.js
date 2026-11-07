@@ -450,7 +450,7 @@ function taskStatusGroups(items, {always = []} = {}) {
 // columns: [{id, name, hint, kind, items, drop, fold, foldable}] — readable columns share spare width; an empty one is
 // a 34px strip, and so is a folded run of backlog or finished steps (`fold`, ui/app/task-board.js). `drop` is the step
 // a card dropped on the column moves to; a board with any is one cards are dragged on.
-// The Dev tickets step a release ships from; its header gets Release now (settings-release.js fills it).
+// The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
 function boardColumnsHTML(columns, {head = ''} = {}) {
   const anyWork = columns.some(c => c.items.length);

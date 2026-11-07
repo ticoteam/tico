@@ -476,7 +476,7 @@ function tasksReadFull(state, opts = {}) {
   getForgetTagged(p => p.startsWith('/v2/tasks'));
   return tasksFullStart(state, opts);
 }
-// Pulled down at the top on a touch screen (pull-refresh.js): the list, Needs you and the counts read again.
+// Pulled down at the top on a touch screen (pull-refresh.ts): the list, Needs you and the counts read again.
 async function tasksPulled(state) {
   const [ok] = await Promise.all([tasksReadFull(state), v2Refresh().catch(() => {})]);
   if (TASKS_ST !== state) return;
