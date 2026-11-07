@@ -41,7 +41,9 @@ function tasks() {
 function queue() {
   const row = (task_id, title, stage, requirement_id, requirement, why, attachment) => ({task_id, title, pipeline_id: 'dev-tickets',
     pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: 'attachment',
-    work_version: 3, attachment, attachment_digest: attachment ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false});
+    work_version: 3, attachment, attachment_digest: attachment ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
+    assignee: {id: 'bot:b1', name: 'Builder'}, bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
+    reviewer_id: ME, can_mark_met: true});
   return {items: [
     row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
       {id: 'a1', source: 'link', url: 'https://example.test/shot.png'}),

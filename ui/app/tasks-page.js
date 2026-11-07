@@ -653,5 +653,6 @@ function tasksRender(state) {
   }
   tasksSelectionPaint(state);
   if (tasksScopePaint(state)) tasksHeadFit(state);
+  pipelineRailSync(state);
   fbSync();
 }

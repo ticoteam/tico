@@ -1233,6 +1233,7 @@ function taskPeekOpen(state, key, opts = {}) {
   if (opts.quick && d.open) {
     d.dataset.task = task.id;
     d.innerHTML = hubModalHTML(task, taskItem(task), {peek: true});
+    void taskRequirementsLoad(d);
     taskModalBind(d, task);
     state.peekTimer = setTimeout(() => { if (state.peek === key && d.open) void taskModalShow(task, d); }, 160);
   } else void taskModalShow(task, d);

@@ -132,6 +132,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   taskLiveFocusKeep(d);
   const keptForm = sameTask ? taskFormCapture(d) : {fields: [], folds: []};
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
+  void taskRequirementsLoad(d);
   adopt(); taskFormAdopt(d, keptForm);
   taskModalBind(d, task);
   taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
@@ -173,6 +174,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
+  void taskRequirementsLoad(d);
   adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});

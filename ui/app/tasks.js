@@ -24,6 +24,7 @@ const TASK_VIEWS = [['foryou', 'You'], ['list', 'Open'], ['board', 'Board'], ['s
 const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
 const ACTIVE_TASK_STATUSES = 'open,doing,waiting,review,ready,declined';
+/** @type {any} */
 let TASKS_ST = null;
 const teamOf = id => botRow(id)?.team || '';
 // A run of a schedule (a routine before it became an automation): not work a person asked for, so Done lists leave it out.
@@ -370,9 +371,8 @@ function taskRelChip(t) {
   const words = `${n} related task${n === 1 ? '' : 's'}`;
   return `<span class="bcard-rel tnum" role="img" aria-label="${esc(words)}" title="${esc(words)}"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4L6.6 8M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>${n}</span>`;
 }
-// A Dev ticket at a working step says how long it has been there; past four hours it turns amber, when its manager is
-// told (backend/step_age.py). Time spent waiting is not counted: the server restarts the clock when it comes back.
-const STEP_LATE_MS = 4 * 3600e3;
+// A ticket says how long it has been at its step only once it is past the stage's limit (pipelineStepLate). Time spent
+// waiting is not counted: the server restarts the clock when it comes back (backend/step_age.py).
 // Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
 function taskBuilderActors(t) {
   if (!t || taskFinished(t) || t.status === 'declined' || pipelineType(t)?.role !== 'engineering') return [];
@@ -397,9 +397,10 @@ function taskBuilderNoticesRefresh() {
 }
 function taskStepAge(t) {
   const since = Date.parse(t?.step_since || ''); if (!since) return '';
-  const late = Date.now() - since >= STEP_LATE_MS, age = ageShort(t.step_since);
-  const words = `At ${t.step?.name || 'this step'} for ${age === 'now' ? 'under a minute' : age}${late ? ': over 4 hours' : ''}`;
-  return `<span class="bcard-step-age tnum${late ? ' late' : ''}" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
+  if (!pipelineStepLate(t)) return '';          // the time in a step shows only past the stage's limit (pipeline-rail.ts)
+  const age = ageShort(t.step_since);
+  const words = `At ${t.step?.name || 'this step'} for ${age === 'now' ? 'under a minute' : age}: past its limit`;
+  return `<span class="bcard-step-age tnum" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
 }
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
 // question, the owner's face and the age.
@@ -452,12 +453,12 @@ function taskStatusGroups(items, {always = []} = {}) {
 // a card dropped on the column moves to; a board with any is one cards are dragged on.
 // The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
-function boardColumnsHTML(columns, {head = ''} = {}) {
+function boardColumnsHTML(columns, {head = '', cls = ''} = {}) {
   const anyWork = columns.some(c => c.items.length);
   const narrow = c => c.fold || anyWork && !c.items.length;
   const sizes = columns.map(c => narrow(c) ? '34px' : 'minmax(260px,1fr)').join(' ');
   const drag = columns.some(c => c.drop);
-  return `${head}<div class="board work"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
+  return `${head}<div class="board work${cls ? ' ' + cls : ''}"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
     const empty = !column.fold && anyWork && !column.items.length;
     const count = column.fold ? column.count ?? '' : column.items.length;
     const drop = column.drop ? ` data-drop-step="${esc(column.drop)}"` : '';

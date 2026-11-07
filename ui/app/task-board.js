@@ -345,6 +345,7 @@ function taskBoardSave(state, t, body, fields, refused) {
       state.boardMoves.delete(id);
       state.tasks = state.tasks.map(x => String(x.id) === id && Number(x.version) <= Number(t.version) ? t : x);
       if (e.status === 409) toast('Changed elsewhere. Showing the latest.', true);
+      else if (pipelineOverrideOffer(state, t, body, fields, e)) { /* a pipeline editor may move it anyway (task-requirements.ts) */ }
       else taskRefusedSet(state, t, `${refused}: ${e.message || 'refused'}`);
       tasksRender(state);
     }

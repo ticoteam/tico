@@ -18,9 +18,33 @@ let pipelineReviewState: {
   undo: { decisionId: string; item: PipelineReviewItem; index: number; timer: number } | null;
 } | null = null;
 
-/** The "▶ N for you" count for one pipeline's board: the tickets whose requirement waits on this person. */
-function pipelineForYouCount(items: { task: { requirements?: PipelineRequirement[] | null } }[], me: string): number {
-  return items.reduce((n, item) => n + (item.task.requirements ?? []).filter(req => req.state === 'waiting' && req.next_actor === me).length, 0);
+/** The queue rows that wait on this person, by ticket: the board dots do not say who reviews, the queue does. */
+const pipelineMine = new Map<string, number>();
+let pipelineMineFor = '';
+let pipelineMineAt = 0;
+
+/** The "▶ N for you" count for a set of cards: the queue rows on them that are this person's. */
+function pipelineForYouCount(items: { task: { id: string } }[]): number {
+  return items.reduce((n, item) => n + (pipelineMine.get(String(item.task.id)) ?? 0), 0);
+}
+
+/** Reads the queue for the pipeline on show (at most once a minute) and redraws the cards when the count moved. */
+async function pipelineMineSync(pipelineId: string, force = false): Promise<void> {
+  if (!pipelineId) return;
+  if (!force && pipelineId === pipelineMineFor && Date.now() - pipelineMineAt < 60000) return;
+  pipelineMineFor = pipelineId;
+  pipelineMineAt = Date.now();
+  let queue: PipelineReviewQueue;
+  try { queue = await pipelineReviewQueue(pipelineId); } catch { return; }
+  if (pipelineMineFor !== pipelineId) return;
+  const me = myActor();
+  const next = new Map<string, number>();
+  for (const item of queue.items) if (item.reviewer_id === me) next.set(item.task_id, (next.get(item.task_id) ?? 0) + 1);
+  const same = next.size === pipelineMine.size && [...next].every(([id, n]) => pipelineMine.get(id) === n);
+  if (same) return;
+  pipelineMine.clear();
+  next.forEach((n, id) => pipelineMine.set(id, n));
+  tasksRender(TASKS_ST);
 }
 
 /** The ▶ button for a count (the pipeline's, or one stage's when `stage` names it), or '' when nothing waits on this person. */
@@ -92,7 +116,7 @@ function pipelineReviewRender(): void {
         ${item.bot_note ? `<p class="pipe-review-bot">Bot: ${esc(item.bot_note)}</p>` : ''}
       </section>
       <aside class="pipe-review-side">
-        <h2 class="pipe-h">Why you</h2>
+        <h2 class="pipe-h">${!item.reviewer_id || item.reviewer_id === myActor() ? 'Why you' : 'Why'}</h2>
         <p>${esc(item.why)}</p>
         <label class="pipe-review-note-label">Note
           <textarea name="note" rows="3" placeholder="Note">${esc(state.note)}</textarea></label>
@@ -100,6 +124,7 @@ function pipelineReviewRender(): void {
         <div class="pipe-review-sendback">
           <button type="button" class="btn" data-review-send="assignee">Message ${esc(assignee)}</button>
           <button type="button" class="btn" data-review-send="manager">Message manager</button>
+          ${item.can_mark_met ? '<button type="button" class="btn" data-review-send="met">Mark met</button>' : ''}
         </div>
         <button type="button" class="pipe-review-approve" data-review-approve ${state.busy ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>
         <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_id)} to ${esc(item.moves_to)}` : ''}</p>
@@ -138,6 +163,7 @@ async function pipelineReviewApprove(): Promise<void> {
   pipelineReviewRender();
   try {
     const result = await pipelineApprove(item, pipelineReviewNoteValue());
+    void pipelineMineSync(state.pipelineId, true);
     if (!pipelineReviewState) return;
     const at = state.index;
     state.items = state.items.filter(other => other !== item);
@@ -167,6 +193,7 @@ async function pipelineReviewUndo(): Promise<void> {
   state.undo = null;
   try {
     await pipelineUndo(undo.decisionId);
+    void pipelineMineSync(state.pipelineId, true);
     state.items.splice(undo.index, 0, undo.item);
     state.index = undo.index; state.tab = 0; state.note = '';
     state.message = '';
@@ -177,7 +204,7 @@ async function pipelineReviewUndo(): Promise<void> {
 }
 
 /** Sends the item back to its assignee or to the manager with the note. Nothing is approved. */
-async function pipelineReviewSend(to: 'assignee' | 'manager'): Promise<void> {
+async function pipelineReviewSend(to: 'assignee' | 'manager' | 'met'): Promise<void> {
   const state = pipelineReviewState;
   const item = state?.items[state.index];
   const note = pipelineReviewNoteValue();
@@ -186,7 +213,9 @@ async function pipelineReviewSend(to: 'assignee' | 'manager'): Promise<void> {
   state.busy = true; state.message = '';
   try {
     if (to === 'assignee') await pipelineSendBack(item.task_id, item.requirement_id, note);
+    else if (to === 'met') await pipelineMarkMet(item.task_id, item.requirement_id, note);
     else await pipelineMessageManager(item.task_id, item.requirement_id, note);
+    void pipelineMineSync(state.pipelineId, true);
     if (!pipelineReviewState) return;
     state.items = state.items.filter(other => other !== item);
     state.index = Math.min(state.index, Math.max(0, state.items.length - 1));
@@ -224,5 +253,5 @@ document.addEventListener('click', (event: MouseEvent) => {
   const tab = target.closest<HTMLElement>('[data-review-tab]');
   if (tab && pipelineReviewState) { pipelineReviewState.tab = Number(tab.dataset.reviewTab) || 0; pipelineReviewRender(); return; }
   const send = target.closest<HTMLElement>('[data-review-send]');
-  if (send) void pipelineReviewSend(send.dataset.reviewSend === 'manager' ? 'manager' : 'assignee');
+  if (send) void pipelineReviewSend(send.dataset.reviewSend === 'manager' ? 'manager' : send.dataset.reviewSend === 'met' ? 'met' : 'assignee');
 });

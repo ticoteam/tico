@@ -89,3 +89,117 @@
   .pipe-review-approve { height: 56px; }
   .pipe-review-toast { left: 16px; right: 16px; transform: none; justify-content: space-between; }
 }
+
+/* The manager's rail beside the stages (ui/app/pipeline-rail.ts). It is a column of the Tasks page; folded it is a strip
+   with the avatar. A ticket's peek takes its place while open. */
+.tasks-page.has-rail { --rail-w: 320px; grid-template-columns: minmax(0, 1fr) var(--rail-w); }
+.tasks-page.has-rail.rail-hidden { --rail-w: 44px; }
+.tasks-page.has-rail.peek-open { grid-template-columns: minmax(0, 1fr) var(--peek-w); }
+.tasks-page.has-rail.peek-open > .pipe-rail { display: none; }
+.pipe-rail { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 13px; }
+.pr-strip { display: none; align-items: flex-start; justify-content: center; width: 100%; padding: 14px 0; border: 0; background: none; cursor: pointer; }
+.pipe-rail.collapsed .pr-strip { display: flex; }
+.pipe-rail.collapsed .pr-panel { display: none; }
+.pr-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.pr-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
+.pr-who { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.pr-who b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-ran { font-size: 12px; color: var(--muted); }
+.pr-ran.warn { color: var(--wait-ink); }
+.pr-x { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 20px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+.pr-x:hover { background: var(--surface2); color: var(--ink); }
+.pr-tabs { display: flex; gap: 4px; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+.pr-tab { font: inherit; font-size: 12px; height: 28px; padding: 0 10px; border-radius: 5px; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.pr-tab.on { background: var(--surface2); color: var(--ink); }
+.pr-body { flex: 0 1 auto; max-height: 46%; overflow-y: auto; padding: 4px 0 8px; border-bottom: 1px solid var(--line); }
+.pr-sec { padding-bottom: 6px; }
+.pr-sec > .pipe-h { padding: 10px 16px 4px; }
+.pr-list { margin: 0; padding: 0; list-style: none; }
+.pr-late { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 6px 16px; border: 0;
+  background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.pr-late:hover { background: var(--surface2); }
+.pr-late-id { font-weight: 600; }
+.pr-late-what { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-late-age { color: var(--wait-ink); }
+.pr-line { display: grid; grid-template-columns: 40px 8px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 16px; font-size: 12px; }
+.pr-when { color: var(--muted); }
+.pr-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--idle); align-self: center; }
+.pr-warn .pr-dot { background: var(--wait); }
+.pr-error .pr-dot { background: var(--fail); }
+.pr-text { overflow-wrap: anywhere; }
+.pr-empty { margin: 0; padding: 10px 16px; color: var(--muted); }
+.pr-chat { flex: 1 1 0; min-height: 160px; display: flex; flex-direction: column; overflow: hidden; }
+.pr-chat > .thv { flex: 1 1 auto; min-height: 0; }
+.pr-bar, .pr-scrim { display: none; }
+
+/* A phone: one stage at a time under a row of stage chips; the rail is a bar above the bottom navigation that opens the
+   same panel as a sheet. */
+.pchips { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.pchips::-webkit-scrollbar { display: none; }
+.pchip { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 12px; border-radius: 16px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; scroll-snap-align: start; }
+.pchip::before { content: ""; position: absolute; inset: -6px -2px; }
+.pchip.on { background: var(--surface2); border-color: var(--accent); }
+.pchip-n { color: var(--muted); font-size: 12px; }
+.pchip-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
+.pipe-next { display: block; width: 100%; min-height: 44px; margin-top: 8px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.pipe-phone { min-height: 40vh; }
+
+@media (min-width: 601px) and (max-width: 760px) {
+  .tasks-page.has-rail { display: grid; }
+  .tasks-page.has-rail .tasks-pane { overflow-y: auto; }
+}
+@media (max-width: 600px) {
+  .tasks-page.has-rail { display: block; }
+  .tasks-page.has-rail > .pipe-rail { position: fixed; z-index: 41; left: 0; right: 0; bottom: 0; top: 12vh; border-left: 0; border-top: 1px solid var(--line);
+    border-radius: 14px 14px 0 0; transform: translateY(105%); visibility: hidden; transition: transform .2s ease, visibility .2s; box-shadow: 0 -8px 24px rgba(0, 0, 0, .35); }
+  .tasks-page.has-rail > .pipe-rail.sheet-open { transform: none; visibility: visible; }
+  .pipe-rail.collapsed .pr-panel { display: flex; }
+  .pr-strip { display: none !important; }
+  .pr-body { max-height: 40%; }
+  .pr-tab { height: 44px; padding: 0 12px; }
+  .pr-x { width: 44px; height: 44px; }
+  .pr-late { min-height: 44px; align-items: center; }
+  .pr-bar { position: fixed; z-index: 17; left: 12px; right: 12px; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);
+    display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); }
+  .pr-bar-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+  .pr-bar-text b { font-weight: 600; }
+  .pr-bar-text span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-bar-late { color: var(--wait-ink); font-size: 12px; white-space: nowrap; }
+  .pr-chev { color: var(--muted); }
+  .pr-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, .4); }
+  body.pipe-sheet-open .pr-scrim { display: block; }
+  body.pipe-sheet-open .pr-bar { display: none; }
+  .tasks-pane { padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 84px); }
+}
+
+/* Evidence on a requirement, and Attach to (ui/app/task-requirements.ts). */
+.task-req-files { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.task-req-files li { padding: 2px 0; overflow-wrap: anywhere; }
+.task-req-old { color: var(--wait-ink); }
+.task-req-attach { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
+.task-req-attach-menu { position: absolute; left: 0; top: calc(100% - 4px); z-index: 10; min-width: 200px; display: flex; flex-direction: column; padding: 4px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
+.task-req-attach-menu[hidden], .task-req-attach-form[hidden] { display: none; }
+.task-req-attach-menu button { min-height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.task-req-attach-menu button:hover { background: var(--surface); }
+.task-req-attach-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 100%; }
+.task-req-attach-for { font-weight: 600; }
+.task-req-attach-form input[type=url] { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.task-req-file { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; }
+@media (max-width: 600px) {
+  .task-req-attach .ghost, .task-req-attach .primary, .task-req-attach-form input[type=url], .task-req-file, .task-req-attach-menu button { min-height: 44px; }
+}
+
+/* Move anyway: a refused drag past unmet requirements, for a pipeline editor. */
+.pipe-override { width: min(360px, calc(100vw - 32px)); padding: 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface2); color: var(--ink); }
+.pipe-override::backdrop { background: rgba(0, 0, 0, .4); }
+.pipe-override form { display: flex; flex-direction: column; gap: 10px; }
+.pipe-override p { margin: 0; }
+.pipe-override label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.pipe-override input { height: 36px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.pipe-override-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pipe-override-actions button { min-height: 36px; }
+@media (max-width: 600px) { .pipe-override-actions button { min-height: 44px; } }

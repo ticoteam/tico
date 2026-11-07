@@ -1,5 +1,6 @@
 'use strict';
 
+/** @type {any[]} */
 let TASK_TYPES = [];
 let TASK_TYPES_LOADING = null;
 const PIPELINE_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
@@ -88,7 +89,9 @@ function taskPipelineBoard(items, state, head = '') {
   const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
   let lead = 0;
   while (lead < working.length && working[lead].status === 'open') lead++;
+  const phone = pipelinePhone();
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
+  if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
   const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
@@ -106,15 +109,17 @@ function taskPipelineBoard(items, state, head = '') {
   if (finished.length && folds.finished) columns.push(strip('finished', finished, finished[0].id, 'Finished'));
   else finished.forEach((step, i) => columns.push({...stepColumn(step), foldable: i ? '' : 'finished'}));
   const STEP_KIND = {open: 'starting', doing: 'doing', waiting: 'waiting', review: 'review', ready: 'review', done: 'done', closed: 'closed', declined: 'needs'};
-  const me = myActor();
   for (const column of columns) {
     column.items.sort(taskByStepRank);
-    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items, me), type.id, column.name)});
+    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.name)});
     const step = type.steps.find(step => step.id === column.id);
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
-  const play = pipelineForYouHTML(pipelineForYouCount(items, me), type.id);
-  return boardColumnsHTML(columns, {head: head + (play ? `<div class="pipe-play-row">${play}</div>` : '')});
+  const play = pipelineForYouHTML(pipelineForYouCount(items), type.id);
+  const top = head + (play ? `<div class="pipe-play-row">${play}</div>` : '');
+  const one = phone ? pipelinePhoneBoard(state, columns) : null;
+  if (one) return boardColumnsHTML([one.column], {head: top + one.chips, cls: 'pipe-phone'}) + one.next;
+  return boardColumnsHTML(columns, {head: top});
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
   || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));

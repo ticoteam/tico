@@ -16,8 +16,23 @@ interface PipelineRequirement {
   next_actor: string | null;
   /** What stands on the ticket for it: the decision's reason, or the attachment's source. */
   detail?: string;
-  /** Whether this person may mark it met. The routes do not say; the ticket view leaves the button off until they do. */
+  /** Whether this person may mark it met: the pipeline's owner or an Admin (the routes do not say; see pipelineMayEditRules). */
   can_mark_met?: boolean;
+  /** attachment, field, approval or run. Only the ticket's detail rows carry it. */
+  kind?: string;
+  /** The evidence attached to it, newest first (attachment requirements, on the ticket page). */
+  attachments?: PipelineReqAttachment[];
+}
+
+/** One piece of evidence attached to a requirement: a file, an upload or a link. */
+interface PipelineReqAttachment {
+  id: string;
+  source: 'file' | 'blob' | 'link' | 'check_run' | 'receipt';
+  url: string | null;
+  file_id: string | null;
+  by: string | null;
+  at: string;
+  work_version: number;
 }
 
 interface PipelineAttachment {
@@ -35,15 +50,19 @@ interface PipelineReviewItem {
   task_title?: string;
   stage_name?: string;
   pipeline_id?: string;
-  /** The assignee for "Message <assignee>". The queue does not name one, so this is null. */
+  /** The assignee for "Message <assignee>", or null. */
   assignee?: { id: string; name: string } | null;
   why: string;
-  /** The bot's note. The queue does not carry one, so this is empty. */
+  /** The bot's note, or empty. */
   bot_note: string;
+  /** The reviewer the item waits on (the claimant, else the configured one). */
+  reviewer_id?: string | null;
+  /** Whether the viewer may mark it met by hand. */
+  can_mark_met?: boolean;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. */
   claim: { by: string } | null;
-  /** Where Approve moves the ticket on the stage's last requirement. The queue does not say, so this is null. */
+  /** Where Approve moves the ticket on the stage's last requirement, or null. */
   moves_to?: string | null;
   /** Late items sort first in the queue. */
   late: boolean;
@@ -74,6 +93,8 @@ interface PipelineManagerLate {
   title: string;
   stage_name: string;
   age_minutes: number;
+  /** The stage's "Warn after", in minutes. */
+  limit_minutes: number;
 }
 
 interface PipelineManagerLogLine {
@@ -81,9 +102,13 @@ interface PipelineManagerLogLine {
   text: string;
   kind: 'error' | 'warn' | 'info';
   task_id?: string | null;
+  /** What the manager did (an action row), e.g. propose_rule; absent for a pass. */
+  action?: string;
 }
 
 interface PipelineManagerView {
+  /** The manager bot's reference (task_types.manager), or null when the pipeline has none. */
+  manager: string | null;
   last_run: PipelineManagerRun | null;
   missed_runs: number;
   late: PipelineManagerLate[];
@@ -135,6 +160,12 @@ interface ServerQueueItem {
   late: boolean;
   claimed_by: string | null;
   claimed_by_me: boolean;
+  assignee: { id: string; name: string } | null;
+  bot_note: string;
+  moves_to: { stage_id: string; name: string } | null;
+  /** The claimant, else the configured reviewer. */
+  reviewer_id: string | null;
+  can_mark_met: boolean;
 }
 
 interface ServerRun {
@@ -156,6 +187,7 @@ interface ServerAction {
 
 interface ServerRail {
   pipeline_id: string;
+  manager?: string | null;
   missed_runs: number;
   last_run: ServerRun | null;
   over_limit: { task_id: string; title: string; stage: string; hours: number; limit_hours: number; since: string }[];
@@ -187,14 +219,16 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     task_title: row.title,
     stage_name: row.stage,
     pipeline_id: row.pipeline_id,
-    assignee: null,
+    assignee: row.assignee ?? null,
     why: row.why,
-    bot_note: '',
+    bot_note: row.bot_note ?? '',
+    reviewer_id: row.reviewer_id ?? null,
+    can_mark_met: !!row.can_mark_met,
     attachments: a
-      ? [{ id: a.id, label: a.url || a.file_id || 'Attachment', kind: ATTACH_KIND[a.source] ?? 'file', url: a.url ?? undefined }]
+      ? [{ id: a.id, label: a.url || a.file_id || 'Attachment', kind: ATTACH_KIND[a.source] ?? 'file', ...(a.url ? { url: a.url } : {}) }]
       : [],
     claim: row.claimed_by && !row.claimed_by_me ? { by: row.claimed_by } : null,
-    moves_to: null,
+    moves_to: row.moves_to?.name ?? null,
     late: row.late,
     work_version: row.work_version,
     attachment_digest: row.attachment_digest,
@@ -210,11 +244,12 @@ function requirementFromDetail(row: ServerRequirementDetail): PipelineRequiremen
     name: row.name,
     state: REQ_STATE[row.state] ?? 'missing',
     next_actor: row.state === 'met' ? null : row.reviewer_id,
-    detail,
+    ...(detail ? { detail } : {}),
+    kind: row.kind,
   };
 }
 
-/** The manager rail, as the manager view shows it: failed runs and actions in one log, newest first. */
+/** The manager rail, as the manager view shows it: one log, errors first, then newest first. */
 function managerViewFromRail(rail: ServerRail): PipelineManagerView {
   const log: PipelineManagerLogLine[] = rail.log.map(entry => {
     if ('started_at' in entry) {
@@ -227,9 +262,13 @@ function managerViewFromRail(rail: ServerRail): PipelineManagerView {
       text: entry.note ? `${entry.action}: ${entry.note}` : entry.action,
       kind: 'info' as const,
       task_id: entry.task_id,
+      action: entry.action,
     };
   });
+  const rank = (line: PipelineManagerLogLine): number => (line.kind === 'error' ? 0 : 1);
+  log.sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at));
   return {
+    manager: rail.manager ?? null,
     last_run: rail.last_run,
     missed_runs: rail.missed_runs,
     late: rail.over_limit.map(item => ({
@@ -237,6 +276,7 @@ function managerViewFromRail(rail: ServerRail): PipelineManagerView {
       title: item.title,
       stage_name: item.stage,
       age_minutes: Math.round(item.hours * 60),
+      limit_minutes: Math.round(item.limit_hours * 60),
     })),
     log,
     actions: [],
@@ -300,4 +340,36 @@ async function pipelineMarkMet(taskId: string, requirementId: string, why: strin
 async function pipelineManagerView(pipelineId: string): Promise<PipelineManagerView> {
   const rail = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/manager`)) as ServerRail;
   return managerViewFromRail(rail);
+}
+
+// ------------------------------------------------------------------ evidence attached to a requirement
+
+const attachPath = (taskId: string, requirementId: string): string =>
+  `/v2/tasks/${encodeURIComponent(taskId)}/requirements/${encodeURIComponent(requirementId)}/attachments`;
+
+/** The evidence on one requirement of a ticket, newest first. */
+async function pipelineAttachments(taskId: string, requirementId: string): Promise<PipelineReqAttachment[]> {
+  const res = await get(attachPath(taskId, requirementId)) as { attachments: PipelineReqAttachment[] };
+  return res.attachments;
+}
+
+/** Attach a link as evidence. */
+async function pipelineAttachLink(taskId: string, requirementId: string, url: string): Promise<void> {
+  await post(attachPath(taskId, requirementId), { source: 'link', url });
+}
+
+/** Attach a company file by id (its current version). */
+async function pipelineAttachFile(taskId: string, requirementId: string, fileId: string, version?: number): Promise<void> {
+  await post(attachPath(taskId, requirementId), { source: 'file', file_id: fileId, ...(version ? { file_version: version } : {}) });
+}
+
+/** Upload a file to the ticket (POST /v2/tasks/{id}/files), then attach what the server stored as evidence. */
+async function pipelineAttachUpload(taskId: string, requirementId: string, file: File): Promise<void> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('name', file.name);
+  const response = await formFetch(API + `/v2/tasks/${encodeURIComponent(taskId)}/files`, form);
+  const body = await response.json().catch(() => ({})) as { file_id?: string; version?: number; error?: unknown };
+  if (!response.ok || !body.file_id) throw apiFailure(body as FailureBody, response);
+  await pipelineAttachFile(taskId, requirementId, body.file_id, body.version);
 }
