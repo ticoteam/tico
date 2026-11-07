@@ -431,7 +431,7 @@ def config_view(c, settings, who=None):
         value["visual_files"] = "" if settings.visual_origin else tico_storage.visual_address(c)[0]
     value["in_docker"] = running_in_docker()  # the first run offers a Linux computer first when the server is one
     value["version"] = releases.version()
-    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.js)
+    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.ts)
     value["update"] = hosted_updates.notice(c, settings)  # with the release Tico support scheduled, if any
     if who is not None and who.role in ("owner", "human"):
         value["changelog"] = changelog.summary(c, settings, who.actor)
@@ -441,7 +441,7 @@ def config_view(c, settings, who=None):
     value["support_on"] = support_asks.support_on(settings)  # the page hides "Want help setting up?" without it
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
-    value["beta"] = beta.listing()  # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
+    value["beta"] = beta.listing()  # the Beta pill and Help's Beta list (ui/app/state.ts betaPill)
     from . import update_feeds
 
     value["update_feeds"] = update_feeds.status()  # what Subscribe to updates can send (settings-bot-editor.js)

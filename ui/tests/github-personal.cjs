@@ -1,4 +1,4 @@
-// Tools > GitHub with a personal account (ui/github-connect.js): a connected personal account says it is installed on
+// Tools > GitHub with a personal account (ui/github-connect.ts): a connected personal account says it is installed on
 // the account, that new bots wait for a person to create their repository, and links to the App's settings and the
 // uninstall page on github.com/settings. Without a connection, the form asks for one account or organization name.
 // Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.

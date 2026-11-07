@@ -1,10 +1,10 @@
-/* The app's shell (ui/app/redesign.js, ui/app/strategy-budget.js): what keys off html.redesign (set at boot) or a class
+/* The app's shell (ui/app/redesign.ts, ui/app/strategy-budget.ts): what keys off html.redesign (set at boot) or a class
    only that code adds. */
 
 /* Sidebar: what moved out of the rail. Company's and Library's pages sit under them. */
 html.redesign #nav-inboxes-section{display:none!important}
-/* Rows and folds as this browser last left them, marked on <html> by ui/theme.js before the first paint and kept with
-   the rows by ui/app/redesign.js (rdNavPaint, rdLibSync) after, so the app's code never moves a row. */
+/* Rows and folds as this browser last left them, marked on <html> by ui/theme.ts before the first paint and kept with
+   the rows by ui/app/redesign.ts (rdNavPaint, rdLibSync) after, so the app's code never moves a row. */
 html:not(.nav-finance) #nav-finance,html:not(.nav-welcome) #nav-welcome{display:none}
 html.nav-lib-shut #rd-lib,html.nav-co-shut #rd-co,html:not(.nav-rules-open) #rd-rules{display:none}
 html.nav-lib-shut .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle) .section-chev,html.nav-co-shut .rd-co-toggle .section-chev{transform:none}

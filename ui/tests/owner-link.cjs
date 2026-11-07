@@ -1,5 +1,5 @@
 // The owner sign-in link of a server Tico hosts (TICO_AUTH_PROXY=owner-link), in a browser against a real server
-// (ui/tests/support/owner_link_server.py), with the app's real ui/app/session.js:
+// (ui/tests/support/owner_link_server.py), with the app's real ui/app/session.ts:
 //  - the emailed link /auth/owner-link#<secret>: opening it spends nothing, the secret leaves the address bar and is
 //    never in a request's address, the button signs in and lands in the app;
 //  - a session that lapses: the banner's Sign in again goes to the link page with ?next=, which shows the page that

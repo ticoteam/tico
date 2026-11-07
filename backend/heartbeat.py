@@ -14,7 +14,7 @@ What a beat did is stored small (migration 20261106094503_heartbeat): each beat 
 (also the server's liveness, `liveness`); a `heartbeat_beats` row only for a beat where a step did something or failed
 (repeated failures fold); a step's `heartbeat_steps` row only when it did something, failed, changed its result or is
 timed from its last run, else every 5 minutes, its counts kept in memory between (`_Memory`). The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
-quiet repeats folded. Its screen is ui/app/automations-heartbeat.js (GET/PUT /api/v2/heartbeat)."""
+quiet repeats folded. Its screen is ui/app/automations-heartbeat.ts (GET/PUT /api/v2/heartbeat)."""
 
 import json
 import logging

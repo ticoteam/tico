@@ -31,7 +31,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
       if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:`(${markedStub})()`});
       const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
       if(p==='/')return route.fulfill({contentType:'text/html',body:html});
-      const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if(ui){
         const file=uiFile(ui[1]);
         if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});

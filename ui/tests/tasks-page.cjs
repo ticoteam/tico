@@ -124,12 +124,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(bots);
@@ -1614,7 +1614,7 @@ async function recheckFinal(browser) {
   assert.equal(held.length, 1, 'the save\'s reload is on its way');
   await second.page.evaluate(() => refresh(false));                   // the poll starts while the save's reload is on its way
   await second.page.waitForTimeout(300);
-  assert.equal(held.length, 1, 'the poll shares the reload already on its way (ui/app/api.js)');
+  assert.equal(held.length, 1, 'the poll shares the reload already on its way (ui/app/api.ts)');
   holding = false;
   for (const release of held) release();
   await second.page.waitForFunction(() => !document.querySelector('[data-task-key="tt-access"]') && TASKS_ST.peek && TASKS_ST.peek !== 'tt-access', null, {timeout: t(10000)});

@@ -1,4 +1,4 @@
-// The Company page (ui/app/company-page.js) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
+// The Company page (ui/app/company-page.ts) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
 // the page in a sandboxed frame, a share panel and Manage; a member has no tab and no way in by address. The section: Transparency warns before Open and says what stops being visible before
 // anything is taken away, and sends nothing on Cancel. The queue puts a held edition first with its reason. Approve shows
 // only to the person an approval is addressed to and goes through the approvals API. Override needs a note. Text from a
@@ -144,7 +144,7 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const payload = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method === 'PUT' && p.endsWith('/disclosure') && hub.disclosureDelay)

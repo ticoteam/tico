@@ -1,4 +1,4 @@
-// The Liquid Dot stays cheap (ui/app/liquid-dot.js, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
+// The Liquid Dot stays cheap (ui/app/liquid-dot.ts, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
 // CDP, fixtures only:
 // - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
@@ -34,7 +34,7 @@ async function open(browser) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true});
@@ -180,7 +180,7 @@ const round = v => Math.round(v * 10) / 10;
     }
 
     // ---- Opening and closing (the row, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
-    // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.js askSync).
+    // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.ts askSync).
     await page.evaluate(() => {
       const seen = window.__askMut = [], name = n => n.id || String(n.className || n.nodeName);
       new MutationObserver(list => list.forEach(r => {

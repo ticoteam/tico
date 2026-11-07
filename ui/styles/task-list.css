@@ -223,7 +223,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-step-age.late{font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
 .bcard .age{min-width:20px;text-align:right}
 
-/* ---- the side peek: the task's own view (ui/app/task-modal.js), narrower */
+/* ---- the side peek: the task's own view (ui/app/task-modal.ts), narrower */
 #task-peek{position:relative;inset:auto;grid-column:2;grid-row:1;width:auto;max-width:none;height:auto;max-height:none;min-height:0;margin:0;padding:0;
   border:0;border-left:1px solid var(--line);border-radius:0;box-shadow:none;background:var(--surface);overflow-y:auto;z-index:4}
 #task-peek:not([open]){display:none}
