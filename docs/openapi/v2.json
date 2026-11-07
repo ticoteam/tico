@@ -16894,6 +16894,23 @@
               "default": false,
               "title": "Unattributed"
             }
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Segment"
+            }
           }
         ],
         "responses": {
