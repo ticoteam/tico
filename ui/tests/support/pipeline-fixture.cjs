@@ -50,6 +50,15 @@ function tasks() {
   ];
 }
 
+// The tasks with the stage the fake server has moved them to (state.stage), so a list or a ticket read shows the move.
+function placed(list, state) {
+  return list.map(t => {
+    const stage = state.stage[t.id];
+    if (!stage) return t;
+    return {...t, step_id: stage, step: {...steps.find(s => s.id === stage), type_id: 'dev-tickets'}};
+  });
+}
+
 // The attachments a ticket's requirement shows (GET /v2/tasks/{id}/requirements): the file pinned to the version it was
 // attached as, and no link. The read view (backend/requirement_attachments.py views) gives format, name and href.
 const ATTACHED = {
@@ -83,7 +92,9 @@ function queue(state) {
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
   ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate};
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate,
+    // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
+    stage: {}, moved: {}};
   let shown = manager ? {...type, manager: 'product-manager'} : type;
   if (ownerOnly) { const {can_edit_rules, ...rest} = shown; shown = {...rest, pipeline_owner_id: ME}; }
   if (noRequirements) shown = {...shown, has_requirements: false};
@@ -147,10 +158,10 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
       if (state.refuseMove && !body.override_requirements) return json({error: {code: 'requirement', detail: 'Screenshots is not met'}}, 422);
       return json({task: {...tasks().find(t => t.id === mv[1]), ...(body.step ? {step_id: body.step, step: {...steps.find(x => x.id === body.step), type_id: 'dev-tickets'}} : {}), version: 2}});
     }
-    if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: tasks(), next_offset: null});
+    if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: placed(tasks(), state), next_offset: null});
     const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
     if (one && req.method() === 'GET') {
-      const found = tasks().find(t => t.id === one[1]);
+      const found = placed(tasks(), state).find(t => t.id === one[1]);
       return json({task: found, children: [], parent: null, comments: [], events: [], messages: [], mover: true});
     }
     const pipe = p.match(/^\/api\/v2\/pipelines\/([^/]+)\/review\/queue$/);
@@ -168,12 +179,28 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
       state.posts.push({path, body});
       if (path.endsWith('/approve')) {
         if (state.refuseApprove) { state.refuseApprove = false; return json({error: {code: 'stale', detail: 'changed'}}, 409); }
-        state.lastDone = path.replace(/^tasks\/([^/]+)\/requirements\/([^/]+)\/approve$/, '$1:$2');
+        const [, taskId, reqId] = path.match(/^tasks\/([^/]+)\/requirements\/([^/]+)\/approve$/);
+        state.lastDone = `${taskId}:${reqId}`;
         state.removed.add(state.lastDone);
-        return json({decision_id: 'dec-1', advanced: false});
+        // The approval is the ticket's last requirement when every other one is met or not on this stage: the ticket then
+        // moves to the next stage, and the decision remembers where it was so Undo can put it back.
+        const found = tasks().find(t => t.id === taskId);
+        const last = (found?.requirements || []).every(r => r.id === reqId || r.state === 'met' || r.state === 'none');
+        if (last) {
+          const at = state.stage[taskId] || found.step_id;
+          const next = steps[steps.findIndex(x => x.id === at) + 1];
+          state.moved['dec-1'] = {task: taskId, from: state.stage[taskId] ?? null};
+          if (next) state.stage[taskId] = next.id;
+        }
+        return json({decision_id: 'dec-1', advanced: last});
       }
       if (path.startsWith('decisions/') || path.endsWith('/undo')) {
         if (state.lastDone) state.removed.delete(state.lastDone);
+        const moved = state.moved['dec-1'];
+        if (moved) {
+          if (moved.from) state.stage[moved.task] = moved.from; else delete state.stage[moved.task];
+          delete state.moved['dec-1'];
+        }
         return json({undone: true});
       }
       if (path.endsWith('/send-back') || path.endsWith('/message-manager')) {
