@@ -7,9 +7,9 @@ software: a web frontend your team builds, a script, another service. This page 
 ## The contract
 
 - **Spec:** `GET /api/v2/openapi.json` on your server (OpenAPI 3.1). It needs a sign-in, like the API; there is no
-  public schema, and FastAPI's own `/docs` and `/openapi.json` pages are off. The same document as a file:
-  `python3 -m backend.openapi_v2 > openapi-v2.json`, run in this repository. The spec is generated from the code, not
-  committed.
+  public schema, and FastAPI's own `/docs` and `/openapi.json` pages are off. The same document as a file, for each
+  release: `https://github.com/ticoteam/tico/releases/latest/download/openapi-v2.json`. Or generate it from any checkout
+  with `python3 -m backend.openapi_v2 > openapi-v2.json`. The spec is generated from the code, not committed.
 - **Base:** your server's address, for example `https://tico.example.com`. Every stable route is under `/api/v2/`,
   plus `/auth/login`, `/auth/token` and `/auth/token/revoke` for signing in.
 - **Format:** JSON in, JSON out, UTF-8. Timestamps are ISO 8601 in UTC (`2026-09-29T13:50:46.836453Z`).

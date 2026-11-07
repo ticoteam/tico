@@ -415,7 +415,7 @@ The v2 spec only grows within v2, everything else is internal, and unknown respo
 Pin your generated client to the spec you built against and watch [CHANGELOG.md](../CHANGELOG.md), where API additions
 are listed under "Added".
 
-To generate a typed client, feed `GET /api/v2/openapi.json` (or the file `python3 -m backend.openapi_v2` prints) to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
+To generate a typed client, feed `GET /api/v2/openapi.json` (or the release's `openapi-v2.json`, the same document) to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
 are described loosely on purpose (`additionalProperties` is open), so treat the generated types as a floor.
 
 ## Security
