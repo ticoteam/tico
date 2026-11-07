@@ -325,6 +325,26 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 
 
+def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
+    """A ceiling of 10 full validations a UTC day, manual dispatches included: a hosted job counts today's full runs
+    before any RunsOn VM starts, and every job that would start a VM waits for it."""
+    ci, on = _workflow("ci.yml")
+    jobs = ci["jobs"]
+    assert jobs["ceiling"]["runs-on"] == "ubuntu-24.04"
+    assert jobs["ceiling"]["permissions"] == {"actions": "read"}
+    step = next(step for step in jobs["ceiling"]["steps"] if "ceiling reached" in step.get("run", ""))
+    assert step["if"] == "inputs.plan == ''" and step["env"]["CAP"] == "10"
+    assert "$CAP full runs today; ceiling reached" in step["run"] and "created=$today" in step["run"]
+
+    def waits_for_ceiling(name):
+        needs = jobs[name].get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        return "ceiling" in needs or any(waits_for_ceiling(dep) for dep in needs)
+
+    vms = [name for name, job in jobs.items() if "runs-on=" in str(job["runs-on"])]
+    assert "candidate" in vms and all(waits_for_ceiling(name) for name in vms)
+
+
 def test_the_window_checks_out_the_whole_tree_it_diffs_and_never_keeps_its_token():
     train, _ = _workflow("train.yml")
     checkout = next(step for step in train["jobs"]["window"]["steps"] if step.get("id") == "checkout")
