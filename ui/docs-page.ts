@@ -118,8 +118,8 @@ function docsMenu(menu: HTMLElement, button: HTMLElement): void {
     menu.style.top = `${Math.min(rect.bottom + 4, innerHeight - menu.offsetHeight - 12)}px`;
     menu.style.left = `${Math.max(12, Math.min(rect.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 12))}px`;
   });
-  // A click's target is the element clicked, so `closest` is there; the `as` only narrows the DOM's EventTarget type.
-  menu.addEventListener('click', event => { if ((event.target as Element).closest('button,a')) menu.hidePopover(); });
+  // A click's target is an Element (eventElement, ui/app/dom.ts), so closest() is there.
+  menu.addEventListener('click', event => { if (eventElement(event)?.closest('button,a')) menu.hidePopover(); });
 }
 // ---------------------------------------------------------------- setting up Docs
 // The first-run question (backend/librarian_setup.py): where the docs are. The links become sources at once and one
@@ -179,8 +179,8 @@ async function docsSetup(slot: HTMLElement, {asked, current, openImport, reload}
       DOC_CACHE_KEY = '';                      // the new sources are in the list at once
       if (asked) location.hash = docsHref(); else reload();
     } catch (error) {
-      // `as`: a thrown value is unknown; api.js throws an ApiFailure whose body.error is an object (or a message string, with no code).
-      fail((((error as ApiFailure | undefined)?.body?.error as {code?: string} | undefined)?.code) === 'librarian_off' ? 'Docs setup is off right now.' : errorMessage(error, 'That did not go through.'));
+      // errorCode (ui/app/errors.ts) reads body.error.code of the thrown ApiFailure; a value without one gives ''.
+      fail(errorCode(error) === 'librarian_off' ? 'Docs setup is off right now.' : errorMessage(error, 'That did not go through.'));
     }
   };
 }
@@ -310,12 +310,12 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
       .catch((error: unknown) => { if (current()) say('Search failed: ' + errorMessage(error, '')); });
   };
   browser.onclick = event => {
-    // A click's target is the element clicked: `as` narrows the DOM's EventTarget to the Element `closest` needs.
-    const item = (event.target as Element).closest<HTMLAnchorElement>('a.docs-item, a.docs-link-main, a.docs-source-all');
+    // A click's target is an Element (eventElement, ui/app/dom.ts), so `?.` skips the closest() calls for anything else.
+    const item = eventElement(event)?.closest<HTMLAnchorElement>('a.docs-item, a.docs-link-main, a.docs-source-all');
     if (item && docsDirty() && !confirm('Discard your changes to this doc?')) { event.preventDefault(); return; }
-    if ((event.target as Element).closest('[data-docs-import]')) openImport(); // `as`: the click target, as above
-    const add = (event.target as Element).closest('[data-docs-link]'); if (add) openLink(null); // `as`: the click target, as above
-    const edit = (event.target as Element).closest<HTMLElement>('[data-link-edit]'); // `as`: the click target, as above
+    if (eventElement(event)?.closest('[data-docs-import]')) openImport();
+    const add = eventElement(event)?.closest('[data-docs-link]'); if (add) openLink(null);
+    const edit = eventElement(event)?.closest<HTMLElement>('[data-link-edit]');
     if (edit) openLink(linked.find(l => l.id === edit.dataset.linkEdit));
     if (item) DOC_BROWSER_SCROLL = browser.scrollTop;
     // A phone shows the list or the doc, not both: a result opened there leaves the search behind.
@@ -346,8 +346,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   // ---------------------------------------------------------------- the reader
   const reader: HTMLElement = $('#docs-reader');  // drawn above
   reader.addEventListener('click', event => {
-    // `as`: a click in the reader; its target is an Element (same reasoning as the browser click above).
-    if ((event.target as Element).closest('.docs-back') && docsDirty() && !confirm('Discard your changes to this doc?')) event.preventDefault();
+    // A click in the reader targets an Element (eventElement, ui/app/dom.ts), as in the browser handler above.
+    if (eventElement(event)?.closest('.docs-back') && docsDirty() && !confirm('Discard your changes to this doc?')) event.preventDefault();
   });
   const back = `<a class="docs-back" href="${docsHref('', archived ? {archived: '1'} : {})}">‹ Docs</a>`;
   // No doc open: the docs changed most recently, so the page opens on something to read.
@@ -385,10 +385,12 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
       reader.innerHTML = back + `<header class="docs-reader-head"><div class="docs-reader-title"><h2>${esc(source.title)}</h2><p class="docs-meta">${esc(source.repo || DocsSearch.hostOf(source.url))}${source.reference ? ' · ' + esc(source.reference) : ''}${source.path ? ' · ' + esc(source.path) : ''}</p><p class="docs-meta">${esc(sourceStatus(source))}</p></div><div class="docs-tools"><a class="docs-tool" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Open original</a>${source.repo ? '<button class="docs-tool" id="source-refresh">' + (source.status === 'failed' ? 'Retry' : 'Refresh now') + '</button>' : ''}${canEditLink(source) ? '<button class="docs-tool" id="source-edit">Edit</button>' : ''}</div></header>
         <div class="docs-source-files">${documents.map(doc => `<a class="docs-recent-row" href="${docsHref(doc.id, {revision: doc.commit})}"><span class="docs-recent-title">${esc(doc.title)}</span><span class="docs-recent-folder">${esc(doc.path)}</span></a>`).join('')}</div>`;
       $('#source-edit')?.addEventListener('click', () => openLink(source));
-      $('#source-refresh')?.addEventListener('click', async (event: MouseEvent) => {
-        (event.target as HTMLButtonElement).disabled = true;   // `as`: the button this listener is on (its target)
+      // The button holds only text, so the click's target is the button: the listener keeps that button for its own disabled flag.
+      const refreshButton: unknown = $('#source-refresh');
+      if (refreshButton instanceof HTMLButtonElement) refreshButton.addEventListener('click', async () => {
+        refreshButton.disabled = true;
         try { await post('/v2/doc-sources/' + encodeURIComponent(sourceId) + '/refresh', {}); reload(); }
-        catch (error) { say(errorMessage(error, '')); (event.target as HTMLButtonElement).disabled = false; } // `as`: as above
+        catch (error) { say(errorMessage(error, '')); refreshButton.disabled = false; }
       });
       if (['queued', 'preparing', 'updating'].includes(source.status))
         setTimeout(() => { if (current() && !document.querySelector('dialog[open]')) reload(); }, 5000);
@@ -424,8 +426,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   try { doc = (await get<DocsPageResult>('/v2/docs/' + encodeURIComponent(selected))).doc; }
   catch (error) {
     if (!current()) return;
-    // `as`: a thrown value is unknown; api.js throws an ApiFailure, which carries the HTTP status.
-    reader.innerHTML = back + `<div class="empty">${(error as ApiFailure).status === 404 ? 'That doc does not exist, or it was archived.' : esc(errorMessage(error, ''))}</div>`;
+    // errorStatus (ui/app/errors.ts) reads the HTTP status api.js puts on a thrown ApiFailure; other values have none.
+    reader.innerHTML = back + `<div class="empty">${errorStatus(error) === 404 ? 'That doc does not exist, or it was archived.' : esc(errorMessage(error, ''))}</div>`;
     return;
   }
   if (!current()) return;
@@ -457,13 +459,17 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   $('#doc-history').onclick = () => DocsEditor.history(doc, {canRestore: canChange, onRestored: saved => {
     if (location.hash === docsHref(saved.id)) reload(); else location.hash = docsHref(saved.id);
   }});
-  $('#doc-lock')?.addEventListener('click', async (event: MouseEvent) => {
-    (event.target as HTMLButtonElement).disabled = true;   // `as`: the button this listener is on (its target)
+  // The button holds only text, so the click's target is the button: the listener keeps that button for its own disabled flag.
+  const lockButton: unknown = $('#doc-lock');
+  if (lockButton instanceof HTMLButtonElement) lockButton.addEventListener('click', async () => {
+    lockButton.disabled = true;
     try { await writeRequest('PATCH', '/v2/docs/' + encodeURIComponent(doc.id), {version: doc.version, locked: !doc.locked}); reload(); }
-    catch (error) { say(errorMessage(error, '')); (event.target as HTMLButtonElement).disabled = false; } // `as`: as above
+    catch (error) { say(errorMessage(error, '')); lockButton.disabled = false; }
   });
-  $('#doc-archive')?.addEventListener('click', async (event: MouseEvent) => {
-    (event.target as HTMLButtonElement).disabled = true;   // `as`: the button this listener is on (its target)
+  // The button holds only text, so the click's target is the button: the listener keeps that button for its own disabled flag.
+  const archiveButton: unknown = $('#doc-archive');
+  if (archiveButton instanceof HTMLButtonElement) archiveButton.addEventListener('click', async () => {
+    archiveButton.disabled = true;
     try {
       if (doc.archived) {
         const saved: DocsPageResult = await post(`/v2/docs/${encodeURIComponent(doc.id)}/restore`, {version: doc.version});
@@ -473,7 +479,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
         location.hash = docsHref(); docsArchiveUndo(saved.doc);
       }
     }
-    catch (error) { say(errorMessage(error, '')); (event.target as HTMLButtonElement).disabled = false; } // `as`: as above
+    catch (error) { say(errorMessage(error, '')); archiveButton.disabled = false; }
   });
 
   // On this page: headings get anchors, and a contents list when there is enough to navigate.
@@ -501,8 +507,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
     toc.querySelector<HTMLElement>('summary')!.onclick = event => { if (side()) event.preventDefault(); }; // `!`: drawn above
     // In place: the hash stays the doc's, and the heading scrolls into view.
     toc.querySelector<HTMLElement>('nav')!.onclick = event => {   // `!`: drawn above
-      // `as`: a click's target is the element clicked; closest() finds the contents link above it.
-      const a = (event.target as Element).closest<HTMLAnchorElement>('a[data-section]'); if (!a) return;
+      // A click's target is an Element (eventElement, ui/app/dom.ts); closest() finds the contents link above it.
+      const a = eventElement(event)?.closest<HTMLAnchorElement>('a[data-section]'); if (!a) return;
       event.preventDefault();
       headings.find(h => h.id === a.dataset.section)?.scrollIntoView({block: 'start', behavior: 'smooth'});
       history.replaceState(null, '', location.pathname + location.search + a.getAttribute('href'));

@@ -12,10 +12,10 @@ type DocsResult = import('./types/api').InternalDocResult;
 type DocsSource = import('./types/api').DocSource;
 type DocsResearchFiled = import('./types/api').LibrarianResearchFiled;
 
-/** A version_conflict answer's details: who saved which version (the error body of the 409). */
+/** A version_conflict answer's details: who saved which version (the error body of the 409). A field the server did not send is undefined. */
 interface DocsConflict {
-  version: number;
-  updated_by_name?: string;
+  version: number | undefined;
+  updated_by_name: string | undefined;
 }
 
 /** The editor's form. The template in editor() draws each named control, so every field is there. */
@@ -76,11 +76,15 @@ declare var DocsEditor: DocsEditorApi;
 (function () {
   'use strict';
   const IMPORT_TYPES = '.md,.markdown,.txt,.html,.htm,.docx,.pdf';
-  // A thrown value is unknown. The API client throws an ApiFailure (ui/types/shared.d.ts) whose body.error is an
-  // object with a code, or a message string, which has no code: the same empty code as before.
-  const errorCode = (error: unknown): string => ((error as ApiFailure | undefined)?.body?.error as {code?: string} | undefined)?.code || '';
-  // The error body's details (a conflict's version and who saved it), or {} when the value has none.
-  const errorInfo = (error: unknown): DocsConflict => ((error as ApiFailure | undefined)?.body?.error || {}) as unknown as DocsConflict;
+  // The conflict details of a version_conflict answer (errorBody in ui/app/errors.ts gives {} when there are none). Each field
+  // is read with a typeof check, so a field the server did not send is undefined.
+  const docsConflictOf = (error: unknown): DocsConflict => {
+    const detail = errorBody(error);
+    return {
+      version: typeof detail.version === 'number' ? detail.version : undefined,
+      updated_by_name: typeof detail.updated_by_name === 'string' ? detail.updated_by_name : undefined,
+    };
+  };
 
   function dialog(html: string, {className = 'gs-form docs-dialog', label}: {className?: string; label?: string} = {}): HTMLDialogElement {
     const box = document.createElement('dialog');
@@ -154,7 +158,7 @@ declare var DocsEditor: DocsEditorApi;
       text.textContent = `${who} saved version ${info.version} while you were editing. Your text is still here.`;
       const keep = Object.assign(document.createElement('button'), {type: 'button', className: 'ghost', textContent: 'Keep mine and replace theirs'});
       const drop = Object.assign(document.createElement('button'), {type: 'button', className: 'ghost', textContent: 'Discard mine and load theirs'});
-      keep.onclick = () => { version = info.version; box.hidden = true; say('Save again to replace version ' + info.version + '.'); };
+      keep.onclick = () => { if (info.version !== undefined) version = info.version; box.hidden = true; say('Save again to replace version ' + info.version + '.'); };
       drop.onclick = () => onReload?.();
       const row = document.createElement('div'); row.className = 'docs-conflict-actions'; row.append(keep, drop);
       box.append(text, row);
@@ -176,7 +180,7 @@ declare var DocsEditor: DocsEditorApi;
         onSaved?.(saved.doc);
       } catch (error) {
         say('');
-        if (errorCode(error) === 'version_conflict') conflict(errorInfo(error));
+        if (errorCode(error) === 'version_conflict') conflict(docsConflictOf(error));
         else if (errorCode(error) === 'locked') fail('This doc was locked while you were editing. Only an owner or bot administrator can change it now.');
         else if (errorCode(error) === 'path_taken') fail('Another doc already uses that path. Choose a different one.');
         else fail(errorMessage(error, 'That did not save.'));
