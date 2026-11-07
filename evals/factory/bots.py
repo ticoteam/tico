@@ -821,10 +821,19 @@ class Lead(Bot):
             message.get("refs") or {}
         )
         if refs.get("wake") == "nudge" and refs.get("task"):
-            # The lead settles its own ticket about the stop, as it closes its sweep ticket: done, with what it did.
+            # The notice's task ref names the stopped ticket, and that is the turn's task, so the lead moves it. The lead
+            # settles its own ticket about the stop, the one Tico made for it ("<title>: builder ... made no progress in
+            # ..."), as it closes its sweep ticket: done, with what it did.
             told = self.reassign_once(refs["task"])
-            if task["status"] not in FINISHED:
-                self.world.update(task["id"], token=self.token, status="done", note=told)
+            stopped = next((t for t in self.world.tickets() if t["id"] == refs["task"]), None)
+            for nudge in self.world.tickets() if stopped else []:
+                if (
+                    nudge["owner_id"] == "bot:" + self.slug
+                    and nudge["status"] not in FINISHED
+                    and nudge["title"].startswith(stopped["title"] + ":")
+                    and "made no progress in" in nudge["title"]
+                ):
+                    self.world.update(nudge["id"], token=self.token, status="done", note=told)
             return told
         if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
             self.world.post(
