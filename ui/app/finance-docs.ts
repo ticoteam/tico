@@ -14,6 +14,9 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// One account of the chart of accounts as GET /v2/finance/chart sends it (the journal's and the bill's lines).
+type FinChartAccount = import('../types/api').FinanceChart['accounts'][number];
+
 const FIN_DOC = {
   bill: {list: 'bills', contact: 'vendor', contactKind: 'vendor', right: 'finance.ap', label: 'Bill', who: 'Vendor',
     search: 'Search vendors, bills',
@@ -343,10 +346,10 @@ async function finDocRun(kind, payload, done, btn) {
 
 // ----------------------------------------------------------------- what the forms pick from
 // The lines the viewer may post to for a bill, an invoice or a journal entry. Read once per page per form.
-async function finChart(use) {
+async function finChart(use: string): Promise<FinChartAccount[]> {
   FIN.chart ||= {};
   if (FIN.chart[use]) return FIN.chart[use];
-  const r = await get(`/v2/finance/chart?for=${use}${finAs()}`, {fresh: true});
+  const r = await get<import('../types/api').FinanceChart>(`/v2/finance/chart?for=${use}${finAs()}`, {fresh: true});
   return FIN.chart[use] = r?.accounts || [];
 }
 // The bank accounts the viewer may pay a bill from (finance.pay).
