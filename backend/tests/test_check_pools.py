@@ -72,10 +72,10 @@ def ticket(api, receipt):
     return task
 
 
-def busy(api, slug, title="Review 1: PR #77"):
-    """An open check `slug` holds on another ticket."""
+def busy(api, slug, title="Review 1: PR #77", change=None):
+    """An open check `slug` holds on another ticket (of the change `change`, unless it is the first for this slug)."""
     with api.app.state.store.transaction() as c:
-        other = H.task_create(c, "bot:cpo", f"Another change for {slug}", "x", "bot:cpo")
+        other = H.task_create(c, "bot:cpo", change or f"Another change for {slug}", "x", "bot:cpo")
         return H.task_create(c, "bot:cpo", title, "Check it.", "bot:" + slug, parent_id=other["id"])
 
 
@@ -562,7 +562,7 @@ def test_a_review_2_check_waits_while_the_only_other_bot_is_busy(api):
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
     busy(api, "rev-b", "Review 2: PR #77")
-    busy(api, "rev-b", "Review 2: PR #78")
+    busy(api, "rev-b", "Review 2: PR #78", change="Another change for rev-b, the second")
     task = get(api, "tasks/" + task["id"])["task"]
     assert move(api, task, "Review 2").status_code == 200
     assert checks(api, task) == [], "rev-a did Review 1 and rev-b is at its limit: the check waits"
