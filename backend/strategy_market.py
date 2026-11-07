@@ -300,9 +300,9 @@ def _columns(c, table):
 
 
 def leave_company_guard(c, who, segment_id):
-    """The entity routes (market/entities/{id}/retire, and a status "retired" write) never take one of the company's
-    segments out of the market. The owner's click does, through `remove_segment`, which ends its edges and its teammates'
-    tags first; anyone else, a bot included, gets 403."""
+    """The entity routes (market/entities/{id}/retire, and a status "retired" or "merged" write) never take one of the
+    company's segments out of the market. The owner's click does, through `remove_segment`, which ends its edges and its
+    teammates' tags first; anyone else, a bot included, gets 403."""
     if segment_id not in ours_ids(c):
         return
     from . import goal_routes
@@ -310,6 +310,17 @@ def leave_company_guard(c, who, segment_id):
     if not goal_routes.company_editor(who, tap=True):
         raise Problem("forbidden", f"{segment_id} is one of the company's segments; only the owner takes it out", 403)
     remove_segment(c, who.actor, segment_id)
+
+
+def merge_guard(c, who, segment_id):
+    """A merge (market/entities/{id}/merge) moves one of the company's segments into the one it merges into: its Us
+    edge, tags, bets and draft text go with it (`follow_merge`). Only the owner's click merges one; anyone else gets 403."""
+    if segment_id not in ours_ids(c):
+        return
+    from . import goal_routes
+
+    if not goal_routes.company_editor(who, tap=True):
+        raise Problem("forbidden", f"{segment_id} is one of the company's segments; only the owner merges it", 403)
 
 
 def remove_segment(c, actor, segment_id):
