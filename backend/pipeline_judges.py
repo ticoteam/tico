@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -205,6 +206,19 @@ def _gateway_haiku(store: "Store", state: dict[str, Any], questions: dict[str, A
     }
 
 
+def _base(requirement: dict[str, Any], attachment: dict[str, Any], chosen: str) -> dict[str, Any]:
+    """The result judge_once starts from, before any answer."""
+    return {
+        "requirement_id": requirement.get("id") or requirement.get("stage_requirement_id") or "",
+        "attachment_id": attachment.get("id") or "",
+        "model": chosen,
+        "provider": "",
+        "cost_usd": 0.0,
+        "latency_ms": 0,
+        "reason": "",
+    }
+
+
 def judge_once(
     c: sqlite3.Connection,
     requirement: dict[str, Any],
@@ -222,15 +236,7 @@ def judge_once(
     answer, or a call over the team's Decide cap (checked when `settings` is given) is unsure with p 0.5, never a pass.
     The caller's `c` is a read; no write transaction is held during the model call."""
     chosen = model or judge_model_of(c, requirement.get("pipeline_id"))
-    base: dict[str, Any] = {
-        "requirement_id": requirement.get("id") or requirement.get("stage_requirement_id") or "",
-        "attachment_id": attachment.get("id") or "",
-        "model": chosen,
-        "provider": "",
-        "cost_usd": 0.0,
-        "latency_ms": 0,
-        "reason": "",
-    }
+    base = _base(requirement, attachment, chosen)
 
     def unsure(why: str) -> dict[str, Any]:
         return {**base, "verdict": "unsure", "p": 0.5, "reason": why}
@@ -239,6 +245,22 @@ def judge_once(
         return unsure("This pipeline's judge model is not available")
     if settings is not None and judge.over_spend_cap(c, settings) is not None:
         return unsure("Decide has reached the team's monthly spend cap")
+    return _ask(base, requirement, attachment, engine)
+
+
+def _ask(
+    base: dict[str, Any],
+    requirement: dict[str, Any],
+    attachment: dict[str, Any],
+    engine: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None",
+) -> dict[str, Any]:
+    """The model call and its answer, with no connection: `base` is judge_once's starting result (model chosen and the
+    cap already checked). Safe to run while no database snapshot is held."""
+    chosen = base["model"]
+
+    def unsure(why: str) -> dict[str, Any]:
+        return {**base, "verdict": "unsure", "p": 0.5, "reason": why}
+
     ask = engine or ENGINE
     if ask is None:
         return unsure("No judge is configured on this server")
@@ -343,7 +365,8 @@ def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) 
 
 def tick(store: "Store", at: Any = None) -> int:
     """One judge pass: up to TICK_LIMIT waiting attachments, each asked and recorded. Returns how many were judged. Most
-    installs have no bot-reviewed requirement, so the first query finds none and the pass ends there."""
+    installs have no bot-reviewed requirement, so the first query finds none and the pass ends there. A read gathers each
+    job's inputs and is left before the model is asked; the decision is written in its own transaction."""
     db: Any = store
     with db.read() as c:
         if (
@@ -354,33 +377,67 @@ def tick(store: "Store", at: Any = None) -> int:
         ):
             return 0
         jobs = _waiting(c, TICK_LIMIT)
-    if not jobs:
-        return 0
-    ask = ENGINE or live_engine(store)
-    judged = 0
-    for job in jobs:
-        with db.read() as c:
+        asks: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+        for job in jobs:
             requirement = {
                 "name": job["name"],
                 "rubric": job["rubric"],
                 "pipeline_id": job["pipeline_id"],
                 "stage_requirement_id": job["stage_requirement_id"],
             }
-            result = judge_once(c, requirement, job, settings=db.settings, engine=ask)
+            # Resolve the model and the Decide cap now, on this read; the answer needs no connection.
+            capped = judge.over_spend_cap(c, db.settings) is not None
+            chosen = judge_model_of(c, job["pipeline_id"])
+            asks.append((job, requirement, _base(requirement, job, chosen) | {"capped": capped}))
+    if not asks:
+        return 0
+    engine = ENGINE or live_engine(store)
+    judged = 0
+    for job, requirement, base in asks:
+        capped = bool(base.pop("capped"))
+        if base["model"] not in MODELS:
+            result = {**base, "verdict": "unsure", "p": 0.5, "reason": "This pipeline's judge model is not available"}
+        elif capped:
+            result = {
+                **base,
+                "verdict": "unsure",
+                "p": 0.5,
+                "reason": "Decide has reached the team's monthly spend cap",
+            }
+        else:
+            result = _ask(base, requirement, job, engine)
         with db.transaction() as c:
             _record(c, job, result)
         judged += 1
     return judged
 
 
-def dispatch(store: "Store", at: Any, failures: list[dict[str, str]]) -> None:
-    """The scheduler's one call into this module. A failed pass is recorded on the pass's failures; the next tick finds
-    the same attachments still waiting."""
+_running = threading.Lock()  # one judge pass at a time
+
+
+def _pass(store: "Store", at: Any) -> None:
+    """The pass on its thread: a failure is logged and never stops the next pass."""
     try:
         tick(store, at)
-    except (JudgeError, sqlite3.Error, OSError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - a thread must not die silently; the next tick finds the work still waiting
         LOG.warning("The requirement judge pass failed: %s", type(exc).__name__)
+    finally:
+        _running.release()
+
+
+def dispatch(store: "Store", at: Any, failures: list[dict[str, str]]) -> threading.Thread | None:
+    """The scheduler's one call into this module. The pass runs on its own thread, so a slow model never holds a tick;
+    one pass at a time (a call while one runs returns at once and starts nothing). Returns the thread, or None."""
+    if not _running.acquire(blocking=False):
+        return None
+    try:
+        thread = threading.Thread(target=_pass, args=(store, at), name="pipeline-judges", daemon=True)
+        thread.start()
+    except RuntimeError as exc:
+        _running.release()
         failures.append({"pipeline_judges": type(exc).__name__})
+        return None
+    return thread
 
 
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:

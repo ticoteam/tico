@@ -2,6 +2,8 @@
 attachment is judged once, the model is called outside any write transaction, and a person is asked when the rule says
 so."""
 
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -276,3 +278,103 @@ def test_the_decide_models_go_through_the_engine_seam_and_the_ids_are_the_gatewa
     assert P.MODELS == {"haiku-5.5": "tico-low", "jev": "tico-decide-low", "sonnet": "tico-decide-medium"}
     assert P.DEFAULT_MODEL == "haiku-5.5"
     assert (P.MET_AT, P.NOT_MET_AT) == (0.8, 0.2)
+
+
+def _waiting_store(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    req = R.add(
+        c,
+        ANA,
+        step_id(c, dev["id"], "Review"),
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "Ok",
+        },
+    )
+    task = H.task_create(c, ANA, "Ship", "", ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task["id"],
+        req["id"],
+        {"source": "link", "url": "https://x.example"},
+    )
+    c.close()
+    return Store(_settings(path))
+
+
+def test_dispatch_returns_at_once_while_a_slow_judge_runs_and_a_second_dispatch_starts_nothing(tmp_path, monkeypatch):
+    store = _waiting_store(tmp_path)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def slow(model, state, questions, label):
+        calls.append(model)
+        started.set()
+        assert release.wait(5)
+        return {"p": 0.95, "reason": "ok", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", slow)
+    failures = []
+    first = P.dispatch(store, None, failures)
+    assert first is not None and started.wait(5)  # returned while the model is still being asked
+    assert first.is_alive()
+    assert P.dispatch(store, None, failures) is None  # a pass is running: nothing starts
+    release.set()
+    first.join(5)
+    assert not first.is_alive() and calls == ["haiku-5.5"] and failures == []
+    with store.read() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM stage_decisions").fetchone()[0] == 1
+
+
+def test_a_pass_that_raises_is_logged_and_the_next_pass_still_runs(tmp_path, monkeypatch, caplog):
+    store = _waiting_store(tmp_path)
+    boom = {"on": True}
+
+    def tick(s, at=None):
+        if boom["on"]:
+            raise OSError("disk")
+        return 0
+
+    monkeypatch.setattr(P, "tick", tick)
+    with caplog.at_level("WARNING", logger="tico.pipeline_judges"):
+        thread = P.dispatch(store, None, [])
+        assert thread is not None
+        thread.join(5)
+    assert "pass failed: OSError" in caplog.text
+    boom["on"] = False
+    again = P.dispatch(store, None, [])  # the guard was released
+    assert again is not None
+    again.join(5)
+
+
+def test_the_model_is_asked_with_no_read_snapshot_open(tmp_path, monkeypatch):
+    store = _waiting_store(tmp_path)
+    open_reads = {"n": 0}
+    real_read = store.read
+
+    @contextmanager
+    def counted():
+        open_reads["n"] += 1
+        try:
+            with real_read() as conn:
+                yield conn
+        finally:
+            open_reads["n"] -= 1
+
+    def ask(model, state, questions, label):
+        assert open_reads["n"] == 0, "a read was open while the model was asked"
+        return {"p": 0.95, "reason": "ok", "provider": "t", "model": model}
+
+    monkeypatch.setattr(store, "read", counted)
+    monkeypatch.setattr(P, "ENGINE", ask)
+    assert P.tick(store) == 1
