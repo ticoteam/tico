@@ -155,6 +155,11 @@ class Company:
         pipeline_links.create_link(self.c, ANA, self.stage(pipeline, stage), self.type[to], mode)
         self.c.commit()
 
+    def create_spawn_link(self, pipeline, stage, to):
+        """A spawn link from a stage to another pipeline, made by the real helper."""
+        pipeline_links.create_link(self.c, ANA, self.stage(pipeline, stage), self.type[to], "spawn")
+        self.c.commit()
+
     def push(self, task_id):
         """New work on the ticket (a push to its pull request): the work version moves on."""
         pipeline_engine.work_changed(self.c, task_id)
@@ -1098,3 +1103,20 @@ def test_a_person_who_is_neither_the_reviewer_nor_an_editor_cannot_file_not_vali
     co.c.rollback()
     assert caught.value.status == 403
     assert co.where(card) == ("Product", "Validate")
+
+
+# ----------------------------------------------------------------------------- ST10: the follow-up binds to the spawn that filed the subtasks
+def test_not_validated_files_into_the_spawn_that_filed_the_subtasks_not_a_nearer_link(co):
+    """ST10: a later In development -> Support spawn link is nearer Validate than the Review -> Engineering spawn that filed
+    the card's subtasks. The follow-up still goes into Engineering, the link whose handoff the card's subtasks came from."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.move(d41, "Done", actor=ANA)
+    co.create_spawn_link("Product", "In development", "Success")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    assert co.where(result["follow_up"]) == ("Engineering", "Todo")

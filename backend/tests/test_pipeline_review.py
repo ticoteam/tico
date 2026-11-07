@@ -1199,8 +1199,14 @@ def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_
     )
     # Making now waits on its Engineering subtasks: Review is the Validate stage and Not validated is offered.
     w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    # The follow-up goes through the link that filed this ticket's subtasks, so a real spawn handoff is recorded first.
+    link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
+    first_follow_up = L.spawn(w.c, link_row, w.task)
+    assert first_follow_up is not None
+    # The first follow-up is finished before Not validated files a second one: an open twin would be refused as a duplicate.
+    H.task_close(w.c, ANA, first_follow_up, note="Done")
     assert item()["can_not_validate"] is True
-    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review) is None, "a bot never gets the route"
+    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review, w.task) is None, "a bot never gets the route"
     # A stale work version or requirement version refuses, inside the transaction.
     refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev + 1, requirement_version=1)
     refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=2)
