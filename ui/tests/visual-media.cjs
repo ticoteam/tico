@@ -25,7 +25,8 @@ const SHORT = wav(20);
 const CHUNK = 64 * 1024;                        // the stand-in server answers at most this much per request
 
 const APP = 'https://app.test', VIS = 'https://visuals.test';
-const UI = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+const {uiFile} = require('./support/page.cjs');
+const UI = f => fs.readFileSync(uiFile(f), 'utf8');   // a .ts file is read as its compiled build/ui JavaScript
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true,

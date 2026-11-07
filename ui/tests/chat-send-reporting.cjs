@@ -1,6 +1,7 @@
 // Exercise the real pinned Sentry browser SDK and final wire scrubber with synthetic config only.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {chromium} = require('playwright');
 const {scrubSentry} = require('../../build/ui/observability.js');
 
@@ -9,7 +10,7 @@ const scrubbed = scrubSentry({message:'PRIVATE', request:{url:'PRIVATE'}, breadc
     {filename:'https://private.test/tico/ui/app/pill.js?token=PRIVATE',lineno:42,function:'PRIVATE'},
     {filename:'https://private.test/tico/ui/app.bundle.js',lineno:7},
     {filename:'https://private.test/customer-PRIVATE.js',lineno:1}]}}]}}, 'tico:' + 'a'.repeat(64),'test','test-503');
-assert.deepEqual(scrubbed.exception.values[0].stacktrace.frames,[{filename:'app/pill.ts',lineno:42},{filename:'app.bundle.js',lineno:7}]);
+assert.deepEqual(scrubbed.exception.values[0].stacktrace.frames,[{filename:'app/pill.js',lineno:42},{filename:'app.bundle.js',lineno:7}]);
 assert.doesNotMatch(JSON.stringify(scrubbed),/PRIVATE|private\.test|request|breadcrumbs/);
 
 (async () => {
