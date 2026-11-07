@@ -276,7 +276,7 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
         if kinds & {"run", "field"}:
             for record in _rows(
                 conn,
-                f"SELECT task_id, state, checks, detail FROM task_links WHERE kind = 'pr' AND task_id IN ({marks})",
+                f"SELECT task_id, url, state, checks, detail FROM task_links WHERE kind = 'pr' AND task_id IN ({marks})",
                 part,
             ):
                 links.setdefault(str(record["task_id"]), []).append(record)
@@ -328,7 +328,7 @@ def _run_state(task_id: str, requirement: Row, facts: _Facts, conn: sqlite3.Conn
     if source == "test_receipt":
         return _receipt_state(conn, task_id, prs)
     if source == "check_pool":
-        return _pool_state(conn, task_id, prs)
+        return _pool_state(conn, task_id, requirement, prs)
     return "none"
 
 
@@ -348,20 +348,34 @@ def _receipt_state(conn: sqlite3.Connection, task_id: str, prs: list[Row]) -> st
     return "failed" if "failed" in states else "met" if states == {"passed"} else "none"
 
 
-def _pool_state(conn: sqlite3.Connection, task_id: str, prs: list[Row]) -> str:
-    """The verdict the ticket's review checks hold at the pull request's head."""
-    from . import verdict_moves
+def _pool_state(conn: sqlite3.Connection, task_id: str, requirement: Row, prs: list[Row]) -> str:
+    """The verdict the ticket's review checks hold at each open pull request's head. Only checks filed at the requirement's
+    own stage count (a Review 1 approval never meets Review 2), and every open head needs a passing verdict of its own."""
+    from . import pr_identity, verdict_moves
 
     row = cast("Row | None", H.task(conn, task_id))
     if row is None:
         return "none"
-    checks = cast("list[Row]", verdict_moves.review_checks(conn, row))  # pyright: ignore[reportUnknownMemberType]
+    checks = [
+        check
+        for check in cast("list[Row]", verdict_moves.review_checks(conn, row))  # pyright: ignore[reportUnknownMemberType]
+        if cast("Row", check.get("check_step") or {}).get("id") == requirement["pipeline_stage_id"]
+    ]
     if not checks:
         return "none"
-    verdict: str | None = verdict_moves.verdict_at(checks, _head(prs[0]).lower())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-    if not verdict:
-        return "waiting"
-    return "met" if verdict in ("approve", "pass") else "failed"
+    states: set[str] = set()
+    for link in prs:
+        url = str(link.get("url") or "")
+        # A check that names a pull request counts only for that one; a check naming none counts for every head.
+        mine = [check for check in checks if not pr_identity.references(check) or verdict_moves.for_pr(check, url)]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]
+        verdict: str | None = verdict_moves.verdict_at(mine, _head(link).lower())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]
+        if not verdict:
+            states.add("waiting")
+        else:
+            states.add("met" if verdict in ("approve", "pass") else "failed")
+    if "failed" in states:
+        return "failed"
+    return "waiting" if "waiting" in states else "met"
 
 
 def _field_state(task: Row, requirement: Row, facts: _Facts) -> str:
@@ -390,6 +404,8 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
     if decision is not None and decision.get("requirement_attachment_id"):
         if attachment is None or attachment["id"] != decision["requirement_attachment_id"]:
             decision = None  # the evidence it judged was replaced or taken away
+    if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
+        decision = None  # no override stands in for a named person's approval (D10, D34)
     if decision is not None:
         verdict = str(decision["verdict"])
         same = decision.get("work_version") is None or int(decision["work_version"]) == revision
@@ -409,11 +425,35 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
         if int(attachment["work_version"]) != revision and _fresh_needed(requirement):
             return Standing(requirement, "out_of_date", None, attachment, "Attached before the last change")
         return Standing(requirement, "met" if requirement["reviewed_by"] == "nobody" else "waiting", None, attachment)
-    if kind == "field":
-        return Standing(requirement, _field_state(task, requirement, facts))
-    if kind == "run":
-        return Standing(requirement, _run_state(task_id, requirement, facts, conn))
-    return Standing(requirement, "waiting")  # an approval waits on its person
+    if kind == "approval":
+        return Standing(requirement, "waiting")  # an approval waits on its person
+    source = (
+        _field_state(task, requirement, facts) if kind == "field" else _run_state(task_id, requirement, facts, conn)
+    )
+    if source == "met" and requirement["reviewed_by"] != "nobody":
+        return Standing(requirement, "waiting")  # the source is ready; the reviewer (a person or a judge) still decides
+    return Standing(requirement, source)
+
+
+def applies(requirement: Row, labels: set[str]) -> bool:
+    """Whether a requirement applies to a ticket with these label keys (a requirement with applies_to_label only applies to
+    tickets carrying that label). The one rule every reader uses: the engine, the queue, the judges and the stage check."""
+    label = requirement.get("applies_to_label")
+    return not label or str(label) in labels
+
+
+def _pipelines_of(conn: sqlite3.Connection, stage_ids: list[str]) -> list[str]:
+    """The pipelines that own these stages, one query for the whole list."""
+    if not stage_ids:
+        return []
+    return [
+        str(r["type_id"])
+        for r in _rows(
+            conn,
+            "SELECT DISTINCT type_id FROM task_steps WHERE id IN (SELECT value FROM json_each(?)) AND type_id IS NOT NULL",
+            (json.dumps(sorted(set(stage_ids))),),
+        )
+    ]
 
 
 def _evaluate(
@@ -436,8 +476,7 @@ def _evaluate(
     out: dict[str, list[Standing]] = {}
     for task_id, rows in chosen.items():
         for requirement in rows:
-            label = requirement.get("applies_to_label")
-            if label and label not in facts.labels.get(task_id, set()):
+            if not applies(requirement, facts.labels.get(task_id, set())):
                 continue
             out.setdefault(task_id, []).append(_standing(conn, task_id, requirement, facts))
     return out
@@ -459,10 +498,13 @@ def standings(conn: sqlite3.Connection, rows: list[Row]) -> dict[str, list[Stand
     """{task id: where each requirement that counts stands}, for the tickets among `rows` (id, type_id, step_id) that
     are in a pipeline with requirements. A ticket with none is not in the answer."""
     rows = [r for r in rows if r.get("type_id") and r.get("step_id") and r.get("status") not in DONE]
-    by_stage = _requirements(conn, list(dict.fromkeys(str(r["type_id"]) for r in rows)))
+    visited = _visited(conn, _ids(rows))
+    seen = [stage_id for left in visited.values() for stage_id in left]
+    pipelines = list(dict.fromkeys([str(r["type_id"]) for r in rows] + _pipelines_of(conn, seen)))
+    by_stage = _requirements(conn, pipelines)
     if not by_stage:
         return {}
-    return _evaluate(conn, _scopes(rows, _visited(conn, _ids(rows))), by_stage)
+    return _evaluate(conn, _scopes(rows, visited), by_stage)
 
 
 def dots_many(c: sqlite3.Connection, rows: list[Row]) -> dict[str, list[dict[str, Any]]]:
@@ -632,19 +674,24 @@ def _unmet(found: list[Standing]) -> list[Standing]:
 
 def _forward_scope(conn: sqlite3.Connection, task_id: str, here: Row, target: Row | None) -> dict[str, str | None]:
     """The stages a forward move to `target` is held to: where the ticket is, the ones it passes through on the way, and
-    the ones it visited before the target (a stage it was moved back from, beyond the target, is not in the way). A move
-    to a stage it has been in before is a loop (review sends it back to rework): only the stage it leaves counts."""
+    every stage it visited and left (of any pipeline it passed through) that is not at or beyond the target. A stage it
+    was moved back from, at or after the target, is not in the way. Visits are never skipped: a loop back to a stage it has
+    been in is held to the same requirements as any other move, so a stale earlier requirement still blocks."""
     scope: dict[str, str | None] = {}
     same = target is not None and target["type_id"] == here["type_id"]
     seen = _visited(conn, [task_id]).get(task_id, {})
-    if target is not None and str(target["id"]) in seen:
-        return {str(here["id"]): None}  # a loop back to a stage it has been in (rework): only what it leaves counts
     for stage_id, left_at in seen.items():
         placed = stage(conn, stage_id)
-        if placed is None or placed["type_id"] != here["type_id"]:
+        if placed is None:
             continue
-        if not same or target is None or placed["position"] < target["position"]:
-            scope[stage_id] = left_at
+        if (
+            same
+            and target is not None
+            and placed["type_id"] == target["type_id"]
+            and placed["position"] >= target["position"]
+        ):
+            continue
+        scope[stage_id] = left_at
     if same and target is not None:
         for passed in stages(conn, str(here["type_id"])):
             if here["position"] < passed["position"] < target["position"]:
@@ -681,13 +728,15 @@ def check_move(
     override: bool = False,
     override_note: str | None = None,
 ) -> None:
-    """Before a ticket changes to `step_id`: refuse the move (rule "requirement") when the stage's requirements do not
+    """Before a ticket changes to `step_id`: refuse the move (rule "requirement") when the requirements that count do not
     allow it, unless a rule editor overrides them (logged). A pipeline with no requirements allows every move.
 
     Forward, every requirement that counts must be met: the stage the ticket is at, the stages it passes through and the
-    ones it visited. A rule editor may move it past them with `override`; that writes one `override` decision for each
-    requirement it passed, its reason the editor's `override_note` (override_reason). Backward, only a rule editor and Tico
-    itself (the legacy flows move as Tico) may move a ticket; the move is logged as `stage_move_back` by `on_step_change`."""
+    ones it visited (in any pipeline it has been in). A rule editor may move it past them with `override`, which writes one
+    `override` decision for each requirement it passed, its reason the editor's `override_note` (override_reason). A
+    protected approval (D10, D34) is never overridden: its named person has to approve it. Backward, only a rule editor and
+    Tico itself (the legacy flows move as Tico) may move a ticket; the move is logged as `stage_move_back` by
+    `on_step_change`."""
     task_id = str(row.get("id") or "")
     if not step_id or not task_id:
         return
@@ -695,14 +744,14 @@ def check_move(
     if now is None or not now["step_id"] or step_id == now["step_id"]:
         return
     pipeline_id = str(now["type_id"])
-    if not has_requirements(conn, pipeline_id):
-        return
     here, target = stage(conn, str(now["step_id"])), stage(conn, step_id)
     if here is None:
         return
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
     if target is not None and target["type_id"] == here["type_id"] and target["position"] < here["position"]:
-        if actor != H.KEEPER and not editor:
+        if (
+            has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor
+        ):  # the off switch: no rules, no gate
             H.refuse(
                 conn,
                 actor,
@@ -712,14 +761,92 @@ def check_move(
             )
         return
     scope = _forward_scope(conn, task_id, here, target)
-    unmet = _unmet(_evaluate(conn, {task_id: scope}, _requirements(conn, [pipeline_id])).get(task_id, []))
+    by_stage = _requirements(conn, _pipelines_of(conn, list(scope)) or [pipeline_id])
+    if not any(by_stage.get(stage_id) for stage_id in scope):
+        return  # the off switch: nothing this move is held to has requirements
+    unmet = _unmet(_evaluate(conn, {task_id: scope}, by_stage).get(task_id, []))
     if not unmet:
         return
     if override and editor:
+        protected = [s for s in unmet if s.requirement["kind"] == "approval"]
+        if protected:
+            H.refuse(
+                conn,
+                actor,
+                "requirement",
+                f"Can't leave {here['name']} yet: {_names(protected)}. A spec or release approval needs its named "
+                "person, so an override can't stand in for it.",
+                task=task_id,
+            )
         _record_override(conn, actor, task_id, unmet, override_reason(override_note))
         return
     hint = "" if editor else " A pipeline editor can move it on anyway."
     H.refuse(conn, actor, "requirement", f"Can't leave {here['name']} yet: {_names(unmet)}.{hint}", task=task_id)
+
+
+def check_forward(conn: sqlite3.Connection, actor: str, row: Row, type_id: str | None, step_id: str | None) -> None:
+    """Every forward status write (hubdb._set_status, not only task_update) is held to the same gate: a move that goes
+    forward a stage must pass `check_move`. A backward move is left to the legacy flows as before."""
+    if not step_id or step_id == row.get("step_id"):
+        return
+    before, after = stage(conn, row.get("step_id")), stage(conn, step_id)
+    if before is not None and after is not None and after["type_id"] == before["type_id"]:
+        if after["position"] < before["position"]:
+            return
+    check_move(conn, actor, {**row, "type_id": type_id}, step_id)
+
+
+def counts_on_card(conn: sqlite3.Connection, task_id: str, requirement: Row) -> bool:
+    """Whether a requirement is one the ticket is held to where it stands: one of its current stage, or one of a stage it
+    has left, as long as the requirement existed when it left. Such a stale requirement can be attached to, judged and
+    reviewed in place, without moving the ticket (D33)."""
+    task = _one(conn, "SELECT step_id FROM tasks WHERE id = ?", (task_id,))
+    if task is None:
+        return False
+    stage_id = str(requirement["pipeline_stage_id"])
+    if task["step_id"] == stage_id:
+        return True
+    left = _one(
+        conn,
+        "SELECT max(left_at) AS left_at FROM stage_visits WHERE task_id = ? AND pipeline_stage_id = ? AND left_at IS NOT NULL",
+        (task_id, stage_id),
+    )
+    return bool(left and left["left_at"] and str(requirement["created_at"]) <= str(left["left_at"]))
+
+
+def approval_problem(
+    conn: sqlite3.Connection, task_id: str, requirement: Row, attachment: Row | None
+) -> tuple[str, str] | None:
+    """What stops a person's approval of this requirement from standing now, as (code, message), or None. The rule's own
+    prerequisites are checked in the same write as the approval: an attachment must be current (attached at the work's
+    current version, when freshness is on) and in a format the rule takes; a field must be set; a run's source must have
+    passed. A person approves what is true now, never what the queue showed before it changed."""
+    task = _one(conn, "SELECT id, work_revision FROM tasks WHERE id = ?", (task_id,))
+    if task is None:
+        return ("not_found", "No such ticket")
+    requirement = {**requirement, "needs": _json(requirement.get("needs"))}
+    kind = str(requirement["kind"])
+    if kind == "attachment":
+        if attachment is None:
+            return ("nothing_to_approve", "Nothing is attached to approve")
+        if _fresh_needed(requirement) and int(attachment["work_version"]) != int(task["work_revision"] or 0):
+            return ("stale", "The attachment was attached before the last change")
+        formats: list[str] = requirement["needs"].get("formats") or []
+        if formats:
+            shown = requirement_attachments.views(conn, [attachment])[0]["format"]
+            if shown not in formats:
+                return ("not_ready", f"This requirement takes {', '.join(formats)}, not {shown}")
+        return None
+    if kind in ("field", "run"):
+        facts = _facts(conn, [task_id], [], {kind})
+        state = (
+            _field_state(facts.tasks[task_id], requirement, facts)
+            if kind == "field"
+            else _run_state(task_id, requirement, facts, conn)
+        )
+        if state != "met":
+            return ("not_ready", f"It is {STATE_WORDS.get(state, state)}: the source has not passed yet")
+    return None
 
 
 def _record_override(conn: sqlite3.Connection, actor: str, task_id: str, unmet: list[Standing], reason: str) -> None:

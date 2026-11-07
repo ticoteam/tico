@@ -205,7 +205,7 @@ def test_a_run_requirement_follows_the_pull_requests_checks(tmp_path):
 
 def test_only_editors_override_and_it_is_logged(tmp_path):
     c, board = pipeline(tmp_path)
-    requirement(c, board, "Drafting", "Lead approves")
+    requirement(c, board, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
     task = card(c, board, owner=BEN)["id"]
     error = refused(lambda: H.task_update(c, BEN, task, step="Review", override_requirements=True))
     assert error.rule == "requirement"
@@ -218,7 +218,7 @@ def test_only_editors_override_and_it_is_logged(tmp_path):
 
 def test_an_override_logs_the_reason_the_editor_gave(tmp_path):
     c, board = pipeline(tmp_path)
-    requirement(c, board, "Drafting", "Lead approves")
+    requirement(c, board, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
     task = card(c, board, owner=BEN)["id"]
     H.task_update(c, ANA, task, step="Review", override_requirements=True, note="Lead is on leave until Monday")
     decisions = rows(c, "SELECT verdict, reason FROM stage_decisions WHERE task_id=?", task)
@@ -227,7 +227,7 @@ def test_an_override_logs_the_reason_the_editor_gave(tmp_path):
 
 def test_an_override_without_a_note_logs_the_fixed_reason_and_a_long_note_fits_the_row(tmp_path):
     c, board = pipeline(tmp_path)
-    requirement(c, board, "Drafting", "Lead approves")
+    requirement(c, board, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
     blank, long = card(c, board, owner=BEN)["id"], card(c, board, owner=BEN)["id"]
     H.task_update(c, ANA, blank, step="Review", override_requirements=True, note="   ")
     H.task_update(c, ANA, long, step="Review", override_requirements=True, note="é" * 600)
@@ -239,7 +239,7 @@ def test_an_override_without_a_note_logs_the_fixed_reason_and_a_long_note_fits_t
 
 def test_moving_back_is_for_editors_and_the_keeper_and_is_logged(tmp_path):
     c, board = pipeline(tmp_path)
-    requirement(c, board, "Drafting", "Lead approves", reviewed_by="person")
+    requirement(c, board, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
     task = card(c, board, owner=BEN)["id"]
     H.task_update(c, ANA, task, step="Review", override_requirements=True)
     error = refused(lambda: H.task_update(c, BEN, task, step="Drafting"))
@@ -385,4 +385,44 @@ def test_a_loop_back_to_a_visited_stage_is_held_only_to_the_stage_it_leaves(tmp_
     H.task_update(c, ANA, task, step="Approved")
     H.task_update(c, ANA, task, step="Review")  # back to Review: a loop, an editor's move back
     c.execute("UPDATE tasks SET due_at=NULL WHERE id=?", (task,))
-    H.task_update(c, ANA, task, step="Approved")  # Review was visited: Drafting's lapsed due date is not in the way
+    # Drafting was visited and the card left it: its lapsed due date still holds the move on from Review
+    error = refused(lambda: H.task_update(c, ANA, task, step="Approved"))
+    assert error.rule == "requirement" and "Due" in error.detail
+    c.execute("UPDATE tasks SET due_at='2026-12-02' WHERE id=?", (task,))
+    H.task_update(c, ANA, task, step="Approved")
+
+
+def test_an_approval_is_never_overridden_by_a_move_or_a_mark_met(tmp_path):
+    c, board = pipeline(tmp_path)
+    requirement(c, board, "Drafting", "Lead approves")
+    task = card(c, board, owner=BEN)["id"]
+    error = refused(lambda: H.task_update(c, ANA, task, step="Review", override_requirements=True))
+    assert error.rule == "requirement" and "named person" in error.detail
+    assert rows(c, "SELECT * FROM stage_decisions WHERE task_id=?", task) == []
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (task,)).fetchone()[0] == step_id(
+        c, board["id"], "Drafting"
+    )
+
+
+def test_a_forward_move_through_set_status_is_held_by_the_same_gate(tmp_path):
+    c, board = pipeline(tmp_path)
+    requirement(c, board, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
+    task = card(c, board)["id"]
+    error = refused(lambda: H._set_status(c, ANA, H.task(c, task), step="Review"))
+    assert error.rule == "requirement" and "Due" in error.detail
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (task,)).fetchone()[0] == step_id(
+        c, board["id"], "Drafting"
+    )
+    c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
+    H._set_status(c, ANA, H.task(c, task), step="Review")
+    assert c.execute("SELECT step_id FROM tasks WHERE id=?", (task,)).fetchone()[0] == step_id(c, board["id"], "Review")
+
+
+def test_a_person_reviewed_field_waits_for_the_person_even_when_the_field_is_set(tmp_path):
+    c, board = pipeline(tmp_path)
+    req = requirement(c, board, "Drafting", "Due date", kind="field", needs={"field": "due"}, reviewed_by="person")
+    task = card(c, board)["id"]
+    c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
+    assert states(c, task) == {"Due date": "waiting"}
+    decide(c, task, req, verdict="met", judge="person")
+    assert states(c, task) == {"Due date": "met"}

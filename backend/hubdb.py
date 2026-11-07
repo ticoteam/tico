@@ -4728,6 +4728,11 @@ def _set_status(
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
+    if row is not None and step_id and step_id != row.get("step_id"):
+        # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine).
+        from . import pipeline_engine
+
+        pipeline_engine.check_forward(conn, actor, row, type_id, step_id)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective

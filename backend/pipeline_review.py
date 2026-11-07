@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_links, pipeline_rights, requirement_attachments
+from . import pipeline_engine, pipeline_links, pipeline_rights, requirement_attachments
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -219,15 +219,22 @@ def _fresh_required(requirement: Row) -> bool:
 
 def _met_in(requirement: Row, attachment: Row | None, decisions: list[Row], revision: int) -> Row | None:
     """The decision that makes the requirement met, from its decisions (newest first), or None. The newest met, override,
-    withdrawn or failed decision decides; a met one counts only at `revision` and for the attachment it judged."""
+    withdrawn or failed decision decides; a met one counts only at `revision` and while the attachment it judged is still
+    the one attached (taking it away unmeets it; an override is not about the attachment). No override stands in for an
+    approval (D10, D34)."""
     for decision in decisions:
         if decision["verdict"] not in (*MET_VERDICTS, "withdrawn", "failed"):
             continue
         if decision["verdict"] not in MET_VERDICTS:
             return None
+        if decision["verdict"] == "override" and requirement["kind"] == "approval":
+            return None
         if _fresh_required(requirement) and decision["work_version"] != revision:
             return None
-        if attachment and decision["attachment_digest"] and decision["attachment_digest"] != attachment["digest"]:
+        digest = decision["attachment_digest"]
+        if digest and attachment is not None and attachment["digest"] != digest:
+            return None
+        if digest and attachment is None and decision["verdict"] == "met":
             return None
         return decision
     return None
@@ -319,6 +326,7 @@ class _Facts:
         self.decisions: dict[Key, list[Row]] = {}
         self.attachments: dict[Key, Row] = {}
         self.visits: dict[str, Row] = {}
+        self.labels: dict[str, set[str]] = {}  # ticket id -> its label keys (a requirement may apply to one label)
         self.asked: set[Key] = set()  # (visit id, requirement id) the manager asked the backup about
 
     @classmethod
@@ -347,6 +355,13 @@ class _Facts:
             c, "SELECT * FROM stage_visits WHERE left_at IS NULL AND task_id IN (SELECT value FROM json_each(?))", tasks
         ):
             facts.visits.setdefault(visit["task_id"], visit)
+        for label in _read(
+            c,
+            "SELECT tt.task_id AS task_id, g.key AS key FROM task_tags tt JOIN tags g ON g.id = tt.tag_id "
+            "WHERE tt.task_id IN (SELECT value FROM json_each(?))",
+            tasks,
+        ):
+            facts.labels.setdefault(label["task_id"], set()).add(str(label["key"]))
         visit_ids = [visit["id"] for visit in facts.visits.values()]
         for asked in _read(
             c,
@@ -362,6 +377,9 @@ class _Facts:
     def state(self, task: Row, requirement: Row) -> str:
         key = (task["id"], requirement["id"])
         return _state_in(requirement, _revision(task), self.attachments.get(key), self.decisions.get(key, []))
+
+    def applies(self, task: Row, requirement: Row) -> bool:
+        return pipeline_engine.applies(requirement, self.labels.get(task["id"], set()))
 
     def why_sees(self, actor: str, task_id: str, requirement: Row) -> str | None:
         key = (task_id, requirement["id"])
@@ -417,9 +435,10 @@ def _named(owner: str, humans: dict[str, Any], bots: dict[str, Row]) -> str:
 
 
 def _bot_note(decisions: list[Row], work_version: int) -> str:
-    """The reason of the latest bot judgement on this requirement, when it is for the current work; else ''."""
+    """The reason of the latest judge's (a bot's or the LLM judge's) call on this requirement, when it is for the current
+    work; else ''."""
     for decision in decisions:
-        if decision["judge"] == "bot":
+        if decision["judge"] in ("llm", "bot"):
             return str(decision.get("reason") or "") if decision["work_version"] == work_version else ""
     return ""
 
@@ -582,11 +601,12 @@ def _queue_fields(
             item["requirement_id"]
         ].get("reviewer_id")
         item["can_mark_met"] = bool(rights[item["pipeline_id"]])
+        at_stage = tasks[item["task_id"]].get("step_id") == item["stage_id"]
         route_key = (item["pipeline_id"], item["stage_id"])
-        if route_key not in routes:
+        if at_stage and route_key not in routes:
             routes[route_key] = _not_validated_route(c, actor, *route_key) is not None
-        item["can_not_validate"] = routes[route_key]
-        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names)
+        item["can_not_validate"] = at_stage and routes[route_key]
+        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names) if at_stage else None
 
 
 def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
@@ -607,11 +627,14 @@ def _moves_to(
 ) -> Row | None:
     """Where the ticket goes if this item is the stage's last unmet requirement, the same destination approve uses;
     None while another requirement of the stage is unmet, or at the last stage."""
+    labels = facts.labels.get(item["task_id"], set())
     for other in live:
         if other["pipeline_stage_id"] != item["stage_id"] or other["id"] == item["requirement_id"]:
             continue
         if other.get("enforced_by"):
             continue  # a mirror of the review gate, which still decides it (as in `_stage_met`)
+        if not pipeline_engine.applies(other, labels):
+            continue
         key = (item["task_id"], other["id"])
         if _met_in(other, facts.attachments.get(key), facts.decisions.get(key, []), item["work_version"]) is None:
             return None
@@ -625,26 +648,34 @@ def queue_for(
     c: "sqlite3.Connection", actor: str, pipeline_id: str | None = None, stage_id: str | None = None
 ) -> list[Row]:
     """The items waiting for this reviewer, Late first, then oldest. `pipeline_id` and `stage_id` narrow it to one
-    pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none."""
+    pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none. An item
+    is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place."""
     if not str(actor or "").startswith("human:"):
         return []
-    sql = (
-        "SELECT t.id AS task_id, r.id AS requirement_id, r.pipeline_stage_id AS stage_id FROM stage_requirements r "
-        "JOIN tasks t ON t.step_id=r.pipeline_stage_id "
-        f"WHERE r.retired_at IS NULL AND r.reviewed_by IN ({','.join('?' * len(PERSON_REVIEWED))}) "
-        f"AND t.status IN ({','.join('?' * len(ACTIVE))}) "
+    people = ",".join("?" * len(PERSON_REVIEWED))
+    open_status = ",".join("?" * len(ACTIVE))
+    where = (
+        f"r.retired_at IS NULL AND r.reviewed_by IN ({people}) AND t.status IN ({open_status}) "
         "AND (r.reviewer_id=? OR r.backup_reviewer_id=? OR EXISTS (SELECT 1 FROM stage_decisions d "
         "WHERE d.task_id=t.id AND d.stage_requirement_id=r.id AND d.route_next_to=?))"
     )
     args: list[Any] = [*PERSON_REVIEWED, *ACTIVE, actor, actor, actor]
     if pipeline_id:
-        sql += " AND r.pipeline_id=?"
+        where += " AND r.pipeline_id=?"
         args.append(pipeline_id)
     if stage_id:
-        sql += " AND r.pipeline_stage_id=?"
+        where += " AND r.pipeline_stage_id=?"
         args.append(stage_id)
+    sql = (
+        "SELECT t.id AS task_id, r.id AS requirement_id, r.pipeline_stage_id AS stage_id FROM stage_requirements r "
+        f"JOIN tasks t ON t.step_id=r.pipeline_stage_id WHERE {where} "
+        "UNION SELECT t.id AS task_id, r.id AS requirement_id, r.pipeline_stage_id AS stage_id FROM stage_requirements r "
+        "JOIN stage_visits v ON v.pipeline_stage_id=r.pipeline_stage_id AND v.left_at IS NOT NULL "
+        "AND r.created_at<=v.left_at JOIN tasks t ON t.id=v.task_id "
+        f"WHERE {where}"
+    )
     now = _now()
-    pairs = _rows(c, sql, tuple(args))
+    pairs = _rows(c, sql, tuple([*args, *args]))
     tasks = _tasks(c, [pair["task_id"] for pair in pairs])
     live = _read(
         c,
@@ -658,7 +689,7 @@ def queue_for(
     for pair in pairs:
         task = tasks.get(pair["task_id"])
         requirement = requirements.get(pair["requirement_id"])
-        if task is None or requirement is None:
+        if task is None or requirement is None or not facts.applies(task, requirement):
             continue
         why = facts.why_sees(actor, task["id"], requirement)
         if why and facts.waits_on_person(task, requirement):
@@ -679,7 +710,7 @@ def _guard_item(c: "sqlite3.Connection", actor: str, task_id: str, requirement_i
     requirement = _requirement(c, requirement_id)
     if requirement.get("retired_at") or requirement["reviewed_by"] not in PERSON_REVIEWED:
         raise Declined("not_person_reviewed", "A person does not review this requirement", 409)
-    if task.get("step_id") != requirement["pipeline_stage_id"] or task.get("status") not in ACTIVE:
+    if task.get("status") not in ACTIVE or not pipeline_engine.counts_on_card(c, task_id, requirement):
         raise Declined("moved", "The ticket is no longer at this stage", 409)
     if _why_sees(c, actor, task_id, requirement) is None:
         raise Declined("not_yours", "This item is not waiting on you", 403)
@@ -855,7 +886,8 @@ def _next_destination(c: "sqlite3.Connection", requirement: Row) -> tuple[str, s
 
 
 def _stage_met(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
-    """Whether every live requirement of the stage is met, judged from one read of the stage's facts."""
+    """Whether every live requirement of the stage that applies to this ticket is met, judged from one read of the stage's
+    facts."""
     others = [
         other
         for other in _rows(
@@ -866,12 +898,15 @@ def _stage_met(c: "sqlite3.Connection", task: Row, requirement: Row) -> bool:
         if not other.get("enforced_by")  # a mirror of the review gate, which still decides it
     ]
     facts = _Facts.load(c, [task["id"]], others)
-    return all(facts.state(task, other) == "met" for other in others)
+    applying = [other for other in others if facts.applies(task, other)]
+    return all(facts.state(task, other) == "met" for other in applying)
 
 
 def _advance(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row) -> Row | None:
     """Moves the ticket on when its stage is fully met. Returns what moved ({from_type, from_step, to_type, to_step}),
     or None when it stays (not the last requirement, no next stage, or the engine refuses the move)."""
+    if task.get("step_id") != requirement["pipeline_stage_id"]:
+        return None  # a stale requirement of a stage the ticket has left is approved in place, and moves nothing
     if not _stage_met(c, task, requirement):
         return None
     destination = _next_destination(c, requirement)
@@ -918,13 +953,15 @@ def approve(
     *,
     work_version: int | None = None,
     attachment_digest: Any = CURRENT,
-    requirement_version: int | None = None,
+    requirement_version: int,
     note: str | None = None,
 ) -> Row:
-    """A person's Approve of what they saw (a version left out is not checked): `work_version`, `attachment_digest` and `requirement_version` come from the
-    queue item. It is refused when the work, the attachment or the requirement changed since, when someone else holds the
-    claim, or when the actor is not the person the item waits on. When it meets the last requirement of the stage the
-    ticket moves on. Returns the decision, whether it advanced and until when it can be undone."""
+    """A person's Approve of what they saw. `work_version`, `attachment_digest` and `requirement_version` come from the queue
+    item, and the requirement version is required (an approval of an older rule is refused, D33). The approval is refused
+    when the work, the attachment or the requirement changed since, when someone else holds the claim, when the actor is not
+    the person the item waits on, or when the rule's prerequisites do not hold now (freshness, format, a field set, a run
+    that passed). When it meets the last requirement of the stage the ticket moves on. Returns the decision, whether it
+    advanced and until when it can be undone."""
     with _atomic(c):
         task, requirement = _guard_item(c, actor, task_id, requirement_id)
         _check_claim(c, actor, task, requirement)
@@ -933,12 +970,14 @@ def approve(
             raise Declined("stale", "The work changed since you looked", 409, extra={"reason": "work"})
         if attachment_digest is not CURRENT and (current["digest"] if current else None) != attachment_digest:
             raise Declined("stale", "The attachment changed since you looked", 409, extra={"reason": "attachment"})
-        if requirement_version is not None and requirement_version != requirement["version"]:
+        if requirement_version != requirement["version"]:
             raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
-        if requirement["kind"] == "attachment" and current is None:
-            raise Declined("nothing_to_approve", "Nothing is attached to approve", 409)
         if _met_decision(c, task, requirement, current):
             raise Declined("already_met", "This requirement is already met", 409)
+        problem = pipeline_engine.approval_problem(c, task_id, requirement, current)
+        if problem is not None:
+            code, message = problem
+            raise Declined(code, message, 409, extra={"reason": "freshness" if code == "stale" else code})
         decision = _decide(c, actor, task, requirement, "met", _clip(note), current)
         moved = _advance(c, actor, task, requirement)
         if moved:
@@ -955,12 +994,46 @@ def approve(
     }
 
 
+def _spawned_by(c: "sqlite3.Connection", task_id: str, since: str) -> list[Row]:
+    """The live spawn handoffs a ticket made since `since` (the approval that moved it), each with its subtask."""
+    return _rows(
+        c,
+        "SELECT h.id AS handoff, h.target_task_id AS child, h.created_at AS filed, t.type_id AS type_id, "
+        "t.status AS status, t.step_id AS step_id FROM pipeline_handoffs h "
+        "JOIN pipeline_links l ON l.id = h.pipeline_link_id AND l.mode = 'spawn' "
+        "JOIN tasks t ON t.id = h.target_task_id "
+        "WHERE h.source_task_id = ? AND h.returned_at IS NULL AND h.created_at >= ? ORDER BY h.created_at, h.id",
+        (task_id, since),
+    )
+
+
+def _picked_up(c: "sqlite3.Connection", child: Row) -> bool:
+    """Whether a spawned subtask has been picked up: it is no longer open in its pipeline's first stage, or a step or
+    status change came after it was filed."""
+    first = pipeline_engine.first_stage(c, str(child["type_id"]))
+    if child["status"] != "open" or first is None or child["step_id"] != first["id"]:
+        return True
+    return (
+        _one(
+            c,
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('step','status') "
+            "AND created_at>? LIMIT 1",
+            (child["child"], child["filed"]),
+        )
+        is not None
+    )
+
+
 def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
-    """Takes back one's own approval within UNDO_SECONDS, and the move it caused. Refused after that, or once the ticket
-    went somewhere else since."""
+    """Takes back one's own approval within UNDO_SECONDS, and the move it caused. Refused after that, once the ticket is
+    no longer where the approval left it, and for a Not validated decision (it filed work for someone: the person closes
+    that follow-up instead). When the approval's exit spawned subtasks that nobody has picked up yet, they close with
+    "Approval undone" and the handoff is returned; if one was picked up, nothing changes."""
     _person(actor)
     with _atomic(c):
         decision = _one(c, "SELECT * FROM stage_decisions WHERE id=?", (decision_id,))
+        if decision is not None and decision["verdict"] == "failed" and decision["judge_actor"] == actor:
+            raise Declined("not_undoable", "A Not validated decision is not undone; close its follow-up instead", 409)
         if decision is None or decision["verdict"] != "met" or decision["judge_actor"] != actor:
             raise Declined("not_found", "No approval of yours to undo", 404)
         if decision["undone_at"]:
@@ -973,8 +1046,8 @@ def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
         except ValueError:
             outcome = {}
         moved = cast("Row | None", outcome.get("advanced"))
+        task = _task(c, decision["task_id"])
         if moved:
-            task = _task(c, decision["task_id"])
             # The approval's own move is the one step event since the decision; another one means it went on.
             steps = _rows(
                 c,
@@ -984,6 +1057,12 @@ def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
             )
             if task.get("step_id") != moved["to_step"] or len(steps) > 1:
                 raise Declined("moved_on", "The ticket has moved on", 409)
+            spawned = _spawned_by(c, decision["task_id"], decision["created_at"])
+            if any(_picked_up(c, child) for child in spawned):
+                raise Declined("already_started", "A follow-up this approval filed was already picked up", 409)
+            for child in spawned:
+                _hub().task_close(c, _hub().KEEPER, child["child"], note="Approval undone")
+                c.execute("UPDATE pipeline_handoffs SET returned_at=? WHERE id=?", (now, child["handoff"]))
             _hub().task_update(
                 c,
                 _hub().KEEPER,
@@ -998,6 +1077,10 @@ def undo(c: "sqlite3.Connection", actor: str, decision_id: str) -> Row:
                     "UPDATE pipeline_handoffs SET returned_at=? WHERE id=? AND returned_at IS NULL",
                     (now, moved["handoff"]),
                 )
+        else:
+            visit = _open_visit(c, decision["task_id"])
+            if decision["stage_visit_id"] and (visit is None or visit["id"] != decision["stage_visit_id"]):
+                raise Declined("moved_on", "The ticket has moved on", 409)
         c.execute("UPDATE stage_decisions SET undone_at=?, undone_by=? WHERE id=?", (now, actor, decision_id))
     return {"decision_id": decision_id, "undone": True, "moved_back": moved is not None}
 
@@ -1087,6 +1170,8 @@ def not_validated(
     with _atomic(c):
         task, requirement = _guard_item(c, actor, task_id, requirement_id)
         _check_claim(c, actor, task, requirement)
+        if task.get("step_id") != requirement["pipeline_stage_id"]:
+            raise Declined("moved", "The ticket is no longer at this stage", 409)
         if work_version is not None and _revision(task) != work_version:
             raise Declined("stale", "The work changed since you looked", 409, extra={"reason": "work"})
         if requirement_version is not None and requirement_version != requirement["version"]:
@@ -1148,8 +1233,10 @@ def mark_met(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: 
             raise Declined("not_found", "No such requirement", 404)
         if not pipeline_rights.may_edit_rules(c, actor, requirement["pipeline_id"]):
             raise Declined("forbidden", "Only the pipeline's owner and admins mark a requirement met", 403)
-        if task.get("step_id") != requirement["pipeline_stage_id"] or task.get("status") not in ACTIVE:
+        if task.get("status") not in ACTIVE or not pipeline_engine.counts_on_card(c, task_id, requirement):
             raise Declined("moved", "The ticket is no longer at this stage", 409)
+        if requirement["kind"] == "approval":
+            raise Declined("protected_approval", "A spec or release approval needs its named person to approve it", 409)
         current = _current_attachment(c, task_id, requirement_id)
         if _met_decision(c, task, requirement, current):
             raise Declined("already_met", "This requirement is already met", 409)
@@ -1161,7 +1248,7 @@ def mark_met(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: 
 class ReviewTarget(M.Contract):
     work_version: int = Field(ge=0)
     attachment_digest: str | None = Field(default=None, max_length=200)
-    requirement_version: int | None = Field(default=None, ge=1)
+    requirement_version: int = Field(ge=1)
     note: str | None = Field(default=None, max_length=2_000)
 
 
