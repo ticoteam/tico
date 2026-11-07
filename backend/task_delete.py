@@ -62,6 +62,7 @@ TASK_ROWS = (
     "stage_decisions",
     "requirement_attachments",
     "review_claims",
+    "pipeline_check_runs",
 )
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
