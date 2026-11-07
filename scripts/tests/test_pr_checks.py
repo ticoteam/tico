@@ -492,8 +492,10 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
     # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
     # seconds each) run for any test file change too.
+    # The three baseline test modules come with it too: the OWNED_DATA table in pr_checks.py names them by path, and a
+    # test-file change reaches that table (33 before the table: 30). Still far from the suite.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 31
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 34
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
@@ -1427,3 +1429,73 @@ def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder
     assert "backend/tests/test_icon_font.py" in plan["python"]
     assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
+
+
+OWNED_TESTS = {  # each test the baselines/ table lists, and the module it tests
+    "scripts/tests/test_lint_baseline.py": "lint_baseline",
+    "scripts/tests/test_pyright_baseline.py": "pyright_baseline",
+    "scripts/tests/test_baseline_files.py": "baseline_files",
+}
+
+
+def test_a_baseline_piece_runs_only_the_tests_that_own_its_folder():
+    # One piece used to select 930 Python tests through the generic data path: every module that globs *.json on an
+    # unknown folder reaches conftest. The owners' tests are the whole answer for a piece, however it changed.
+    owners = sorted(checks.OWNED_DATA["baselines/"])
+    assert set(owners) == set(OWNED_TESTS)
+    for changed in (
+        ["baselines/ruff/backend/hubdb.py.json"],  # changed
+        ["baselines/pyright/backend/store.py.json"],  # changed, in the other baseline
+        ["baselines/ruff/backend/removed.py.json"],  # deleted: the piece is no longer in the tree
+        ["baselines/ruff/backend/old.py.json", "baselines/ruff/backend/new.py.json"],  # renamed: old and new names
+    ):
+        plan = checks.selection(changed)
+        assert plan["python"] == owners, changed
+        assert plan["browser"] == [] and plan["uncertain"] == [], changed
+        assert not plan["caddy"] and not plan["contracts"], changed
+        assert plan["reason"] == "owned data: baselines/ runs its owners' tests", changed
+
+
+def test_a_ui_piece_runs_only_the_test_its_folder_lists(monkeypatch):
+    # No ui/ folder has an owner yet, so the table lists none. The same rule holds for any folder it does list.
+    monkeypatch.setitem(checks.OWNED_DATA, "ui/baselines/", ("scripts/tests/test_baseline_files.py",))
+    plan = checks.selection(["ui/baselines/chat.json", "ui/baselines/chat-two.json"])
+    assert plan["python"] == ["scripts/tests/test_baseline_files.py"]
+    assert plan["browser"] == [] and plan["uncertain"] == []
+
+
+def test_a_json_outside_the_owned_folders_keeps_the_generic_path(tmp_path, mapped, monkeypatch):
+    # A data file that no owner lists still runs the test that reads it, and the table changes nothing for it.
+    source(tmp_path, "backend/__init__.py", "")
+    source(tmp_path, "backend/tests/fixtures/contract.json", "{}\n")
+    source(
+        tmp_path,
+        "backend/tests/test_reads_contract.py",
+        "def test_x():\n    open('backend/tests/fixtures/contract.json').read()\n",
+    )
+    smoke_tree(tmp_path)
+    changed = ["backend/tests/fixtures/contract.json"]
+    plan = checks.selection(changed, root=tmp_path, core=[], added=[])
+    assert "backend/tests/test_reads_contract.py" in plan["python"]
+    monkeypatch.setattr(checks, "OWNED_DATA", {})
+    assert checks.selection(changed, root=tmp_path, core=[], added=[]) == plan
+
+
+TOP_BASELINES = re.compile(r"(?<![\w./-])baselines/")
+
+
+def test_owned_folders_list_existing_tests_of_their_scripts_and_only_the_owners_read_them():
+    for test, module in OWNED_TESTS.items():
+        assert (ROOT / test).is_file(), f"{test} is listed for baselines/ but does not exist"
+        assert module in (ROOT / test).read_text(encoding="utf-8"), f"{test} does not test {module}"
+    # The non-test Python files that name the baselines/ folder: the two owning scripts, and pr_checks.py (this table).
+    # Only the top-level folder: ui/baselines/ is the UI's own per-file counts (scripts/ui_baseline.py), not owned here.
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "*.py"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    readers = {
+        name
+        for name in tracked
+        if "tests/" not in name and TOP_BASELINES.search((ROOT / name).read_text(encoding="utf-8", errors="replace"))
+    }
+    assert readers == {"scripts/lint_baseline.py", "scripts/pyright_baseline.py", "scripts/pr_checks.py"}
