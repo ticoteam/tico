@@ -132,7 +132,7 @@ def test_a_revoked_grant_changes_the_next_read(books):
             {"subject": SELLER, "what": "expenses", "whose": "team", "whose_team": "web"},
         )
         assert grant.status == "committed", grant.reason
-        assert _by_vendor(c, SELLER) == {"Acme Cloud": (16_500, False)}
+        assert _by_vendor(c, SELLER) == {"Acme Cloud": (16_500, False), "Mixed Co": (2_000, True)}
         before = FR.view_version(c)
         assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
         assert FR.view_version(c) == before + 1
