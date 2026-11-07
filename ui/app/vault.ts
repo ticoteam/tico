@@ -85,8 +85,9 @@ function vaultEdit(row?: VaultEditRow) {
     <p class="err bot-editor-wide" id="vault-error"></p>
     <button class="primary" type="submit">Save credential</button></form>`);
   if (!dialog) return;
-  // The form, its error line and every field are drawn just above, each under its own name.
-  const form = dialog.querySelector<HTMLFormElement>('form')!;
+  // The template just above draws the form and its fields; without a form there is nothing to wire.
+  const form = dialog.querySelector<HTMLFormElement>('form');
+  if (!form) return;
   const field = (name: string) => form.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[name=${name}]`)!;
   form.onsubmit = async event => {
     event.preventDefault(); const button = form.querySelector<HTMLButtonElement>('[type=submit]')!; button.disabled=true;
@@ -112,7 +113,8 @@ function vaultShare(id: string) {
     <button class="primary" type="submit" ${choices.length?'':'disabled'}>Grant access</button><p class="err" id="vault-error"></p></form>`);
   if (!dialog) return;
   // The form, its submit button, its subject select and the revoke buttons are drawn just above.
-  const form = dialog.querySelector<HTMLFormElement>('form')!;
+  const form = dialog.querySelector<HTMLFormElement>('form');
+  if (!form) return;
   form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector<HTMLButtonElement>('button')!;button.disabled=true;
     try{await post(`/v2/credentials/${encodeURIComponent(id)}/grants`,{subject:form.querySelector<HTMLSelectElement>('[name=subject]')!.value});vaultClose();await vaultLoad();}
     catch(error){$('#vault-error').textContent=errorMessage(error, '');button.disabled=false;}};

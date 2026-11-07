@@ -31,12 +31,15 @@ async function renderSettingsCompany(): Promise<void> {
       <div class="row"><a class="ghost" href="${esc(v.portal_url)}" target="_blank" rel="noopener noreferrer" data-company-open>Open on app.tico.dev</a>
         <button class="ghost" type="button" data-company-disconnect>Disconnect</button></div>
       <p class="settings-cell-note" role="status" data-company-status></p>`;
-    // The status line and the button are drawn just above.
-    const status = host.querySelector<HTMLElement>('[data-company-status]')!;
-    const button = host.querySelector<HTMLButtonElement>('[data-company-disconnect]')!;
+    // The button is drawn just above. The status line is looked up where the click writes it, as in the form below.
+    const button = host.querySelector<HTMLButtonElement>('[data-company-disconnect]');
+    if (!button) return;
     button.onclick = async () => {
       if (!window.confirm(`Disconnect from ${company.name}?`)) return;
-      button.disabled = true; status.textContent = 'Disconnecting…';
+      button.disabled = true;
+      const status = host.querySelector<HTMLElement>('[data-company-status]');
+      if (!status) throw new Error('The company settings did not draw their status line');
+      status.textContent = 'Disconnecting…';
       try { await writeRequest('DELETE', '/v2/company/server-connection', undefined); await refreshConfig(); await renderSettingsCompany(); }
       catch (e) { status.textContent = errorMessage(e, ''); button.disabled = false; }
     };
@@ -54,15 +57,17 @@ async function renderSettingsCompany(): Promise<void> {
   const preview = form.querySelector<HTMLElement>('[data-company-preview]')!;
   const previewName = form.querySelector<HTMLElement>('[data-company-preview-name]')!;
   const connect = form.querySelector<HTMLButtonElement>('[data-company-connect]')!;
-  const status = form.querySelector<HTMLElement>('[data-company-status]')!;
   const submit = form.querySelector<HTMLButtonElement>('[type="submit"]')!;
   let shown: SettingsCompanyInfo | null = null, busy = false;
   const clear = () => { shown = null; preview.hidden = true; };
-  input.oninput = () => { clear(); status.textContent = ''; };
+  // The status line is looked up where it is written, so a missing one throws there, where the old `!` assertion did.
+  const statusLine = (): HTMLElement => { const line = form.querySelector<HTMLElement>('[data-company-status]'); if (!line) throw new Error('The company form did not draw its status line'); return line; };
+  input.oninput = () => { clear(); statusLine().textContent = ''; };
   const send = async (isPreview: boolean): Promise<void> => {
     if (busy || (!isPreview && !shown)) return;
     const code = input.value;
     busy = submit.disabled = connect.disabled = true;
+    const status = statusLine();
     status.textContent = isPreview ? 'Checking…' : 'Connecting…';
     try {
       const result: SettingsCompanyConnection = await post('/v2/company/server-connection', {code, preview: isPreview});
