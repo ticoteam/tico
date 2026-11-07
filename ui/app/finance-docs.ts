@@ -118,9 +118,8 @@ const finAskText = (who: string) => who ? `Approval from ${finWho(who)}` : 'Need
 
 // A dialog whose Save is a decision: the first Save is the dry run; when the rules ask for approval the dialog names
 // the approver and the button becomes Send. Changing the form asks again. `build(form)` returns [kind, payload].
-// F defaults to any so a caller whose callback names no form type (finance-books.ts, until it is typed) reads as it did.
-// biome-ignore lint/suspicious/noExplicitAny: the default keeps untyped callers as they were
-function finDecideDialog<F extends HTMLFormElement = any>(title: string, body: string, label: string,
+// F defaults to HTMLFormElement; every caller types its form callback, so F is inferred from that annotation.
+function finDecideDialog<F extends HTMLFormElement = HTMLFormElement>(title: string, body: string, label: string,
   build: (form: F) => FinDecision | Promise<FinDecision>, done: string) {
   let sig = '';
   const dlg = finDialog(title, body + '<p class="fin-ask" data-ask hidden></p><div data-impact hidden></div>', label, async (form: F) => {
