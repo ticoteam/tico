@@ -48,16 +48,6 @@ def names(c):
     return digest.hexdigest()[:12]
 
 
-def version(c):
-    """The newest change to any task (its row, tags, files, relations, ask, step), or where the
-    log begins when none is kept."""
-    row = c.execute("SELECT seq FROM changes WHERE topic='tasks' ORDER BY seq DESC LIMIT 1").fetchone()
-    if row:
-        return row[0]
-    first = E.oldest(c)
-    return first - 1 if first is not None else E.latest(c)
-
-
 def cursor(c, visible_sql):
     return f"{E.latest(c)}.{access(visible_sql)}"
 
@@ -75,25 +65,6 @@ def fresh(request, tag):
     return any(item.strip() == "*" or item.strip().removeprefix("W/") == bare for item in wanted.split(","))
 
 
-def digest(*parts):
-    return hashlib.sha256(json.dumps(parts, default=str, sort_keys=True).encode()).hexdigest()[:24]
-
-
-def list_tag(whole, rows):
-    """A task list's ETag: `whole` moves with any task change anywhere, `rows` only with the rows it answered."""
-    return f'W/"{whole}.{rows}"'
-
-
-def held(request):
-    """The (whole, rows) pairs the request's If-None-Match holds."""
-    out = []
-    for item in (request.headers.get("if-none-match") or "").split(","):
-        whole, _, rows = item.strip().removeprefix("W/").strip('"').partition(".")
-        if whole and rows:
-            out.append((whole, rows))
-    return out
-
-
 def not_modified(tag):
     return Response(status_code=304, headers={"ETag": tag})
 
@@ -109,15 +80,15 @@ def changed(c, after, visible_sql):
     if seq > newest or seq < floor:
         return None
     was = {}
-    for subject, ref, kind in c.execute(
-        "SELECT subject_id, ref, kind FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
+    for subject, ref, kind, at in c.execute(
+        "SELECT subject_id, ref, kind, created_at FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
     ):
         if kind == "bulk":  # one change to many tasks (events.FAN_CAP): read in full
             return None
         if subject:
             was.setdefault(subject, [])
             if ref:
-                was[subject].append(ref)
+                was[subject].append((ref, at))  # the snapshot and when it was replaced: its pipeline is then
     if len(was) > CAP:
         return None
     return was, f"{newest}.{tag}"
@@ -154,30 +125,60 @@ def gone(c, visible_sql, was, matched):
         )
     }
     for tid in missing:
-        if tid in readable or any(_could_read(c, visible_sql, tid, ref) for ref in was[tid]):
+        if tid in readable or any(_could_read(c, visible_sql, tid, ref, at) for ref, at in was[tid]):
             out.append(tid)
     return out
 
 
 def _pipeline_of(c, tid):
     """(known, type_id): the pipeline a ticket the change log names was on, from the ticket itself or, once it is deleted,
-    from the row its trash kept. `known` is False when neither says, and the caller fails closed."""
+    from the row its trash kept. When neither says, the pipeline is unknown: with no members-only pipeline in the company
+    no pipeline rule can apply, so the ticket counts as on none (`known` True). Otherwise `known` is False and the caller
+    fails closed."""
     row = c.execute("SELECT type_id FROM tasks WHERE id=?", (tid,)).fetchone()
     if row is not None:
         return True, row[0]
-    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_trash'").fetchone() is None:
-        return False, None
-    found = c.execute(
-        "SELECT json_type(rows,'$.rows.tasks[0].type_id'), json_extract(rows,'$.rows.tasks[0].type_id') "
-        "FROM task_trash WHERE task_id=?",
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_trash'").fetchone() is not None:
+        found = c.execute(
+            "SELECT json_type(rows,'$.rows.tasks[0].type_id'), json_extract(rows,'$.rows.tasks[0].type_id') "
+            "FROM task_trash WHERE task_id=?",
+            (tid,),
+        ).fetchone()
+        if found is not None and found[0] is not None:
+            return True, found[1]
+    # A purged or unreadable trash row keeps no snapshot.
+    private = c.execute("SELECT 1 FROM task_types WHERE pipeline_visibility='members' LIMIT 1").fetchone()
+    return private is None, None
+
+
+def _type_at(c, tid, at):
+    """(known, type_id): the pipeline a ticket was on just before `at`, from its type history (the type events name each
+    change of pipeline; creation writes none). With no type history the ticket never moved, so it is the pipeline it is on
+    (or, deleted, the one its trash kept)."""
+    # The change log stamps milliseconds, truncated, and the history event that made this change lands within a
+    # millisecond or two of that stamp: a type event that near is the change's own, so the pipeline before it is
+    # the one this snapshot names.
+    before = c.execute(
+        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='type' "
+        "AND julianday(created_at)<julianday(?)-0.002/86400.0 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (tid, at),
+    ).fetchone()
+    if before is not None:
+        return True, before[0]
+    first = c.execute(
+        "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='type' "
+        "ORDER BY created_at, rowid LIMIT 1",
         (tid,),
     ).fetchone()
-    if found is None or found[0] is None:  # a purged or unreadable trash row keeps no snapshot
-        return False, None
-    return True, found[1]
+    if first is not None:  # every change of pipeline writes one: the first one's old is where it began (None = untyped)
+        return True, first[0]
+    # Creation writes no type event, so no history means the ticket never changed pipeline: it was on the one it is on.
+    return _pipeline_of(c, tid)
 
 
-def _could_read(c, visible_sql, tid, ref):
+def _could_read(c, visible_sql, tid, ref, at=None):
+    """Whether the snapshot `ref` (owner, requester, privacy, readers) let its reader open the ticket. `at` is when that
+    snapshot was replaced: the pipeline then is the one the ticket was on, not the one it is on now."""
     try:
         # (owner, requester, private, readers): an older change has three parts, or a one-person `guest` fourth.
         owner, requester, private, readers = (json.loads(ref) + [None])[:4]
@@ -189,7 +190,7 @@ def _could_read(c, visible_sql, tid, ref):
         readers = json.dumps([readers])
     elif not isinstance(readers, str):
         readers = None
-    known, type_id = _pipeline_of(c, tid)
+    known, type_id = _type_at(c, tid, at) if at is not None else _pipeline_of(c, tid)
     if not known:  # the pipeline rule (pipeline_rights.list_sql) cannot be applied: the ticket is not read
         return False
     return (

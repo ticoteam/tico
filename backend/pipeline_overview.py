@@ -229,7 +229,8 @@ def _edges(c: "sqlite3.Connection", ids: list[str], seen: str, since: str) -> li
         "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
         "LEFT JOIN tasks t ON t.id=h.source_task_id "
         f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
-        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))), "
+        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen})))), "
         "ranked AS (SELECT a, b, mode, age, ROW_NUMBER() OVER (PARTITION BY a, b, mode ORDER BY age) AS rn, "
         "COUNT(*) OVER (PARTITION BY a, b, mode) AS n FROM hops) "
         "SELECT a, b, mode, n AS count, AVG(age) AS median_age FROM ranked "
@@ -277,10 +278,11 @@ def _sccs(nodes: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:
     return out
 
 
-def _laps(seq: list[Row]) -> list[float]:
-    """Completed laps in one card's move handoffs, in time order: a lap starts where the card leaves a pipeline and ends
-    when it comes back to that pipeline. A hop that does not follow on from the card's last one starts a new lap."""
-    out: list[float] = []
+def _laps(seq: list[Row]) -> list[tuple[float, Any]]:
+    """Completed laps in one card's hops, in time order, as (minutes, the time the lap ended): a lap starts where the card
+    leaves a pipeline and ends when it comes back to that pipeline. A hop that does not follow on from the card's last one
+    starts a new lap."""
+    out: list[tuple[float, Any]] = []
     pos: str | None = None
     first = ""
     began: Any = None
@@ -292,14 +294,16 @@ def _laps(seq: list[Row]) -> list[float]:
         pos = str(h["b"])
         ended = H.parse_ts(h["at"])
         if pos == first and began and ended:
-            out.append(max(0.0, (ended - began).total_seconds() / 60))
+            out.append((max(0.0, (ended - began).total_seconds() / 60), ended))
             pos = None
     return out
 
 
 def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: str, since: str) -> list[Row]:
-    """Cycles in the links the reader sees, with their completed laps (move handoffs of one card round a cycle). The
-    median lap time shows only from LOOP_MEDIAN_LAPS laps."""
+    """Cycles in the links the reader sees, with their completed laps in the period. A lap is one card's hops round a cycle
+    (move handoffs, and a spawned subtask's hops count under its parent, so the subtask's return ends the parent's lap). The
+    hops of a card that came back in the period are loaded whole, so a lap that left before the period still counts when it
+    returns in it. The median lap time shows only from LOOP_MEDIAN_LAPS laps."""
     groups = _sccs(ordered, [(str(r["from_pipeline_id"]), str(r["to_pipeline_id"])) for r in links])
     if not groups or not _columns(c, "pipeline_handoffs"):
         return []
@@ -307,23 +311,34 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
     m = _marks(members)
     hops = _rows(
         c,
-        "SELECT h.target_task_id AS task, l.from_pipeline_id AS a, l.to_pipeline_id AS b, h.created_at AS at "
-        "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
-        f"WHERE l.mode='move' AND l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
-        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
-        "ORDER BY h.target_task_id, h.created_at",
+        "SELECT h.source_task_id AS source, h.target_task_id AS task, l.mode AS mode, l.from_pipeline_id AS a, "
+        "l.to_pipeline_id AS b, h.created_at AS at FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
+        f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
+        "AND h.returned_at IS NULL AND h.target_task_id IN (SELECT target_task_id FROM pipeline_handoffs "
+        "WHERE created_at>=? AND returned_at IS NULL) "
+        f"AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen}))) "
+        "ORDER BY h.created_at, h.id",
         [*members, *members, since],
     )
+    # A spawned subtask's hops belong to its parent's lap.
+    parent_of = {str(h["task"]): str(h["source"]) for h in hops if h["mode"] == "spawn"}
     by_card: dict[str, list[Row]] = defaultdict(list)
     for h in hops:
-        by_card[str(h["task"])].append(h)
+        key = str(h["source"]) if h["mode"] == "spawn" else parent_of.get(str(h["task"]), str(h["task"]))
+        by_card[key].append(h)
+    since_at = H.parse_ts(since)
     rank = {pid: i for i, pid in enumerate(ordered)}
     out: list[Row] = []
     for group in sorted(groups, key=lambda g: min(rank.get(p, 0) for p in g)):
         inside = set(group)
         laps: list[float] = []
         for seq in by_card.values():
-            laps.extend(_laps([h for h in seq if str(h["a"]) in inside and str(h["b"]) in inside]))
+            laps.extend(
+                minutes
+                for minutes, ended in _laps([h for h in seq if str(h["a"]) in inside and str(h["b"]) in inside])
+                if ended >= since_at
+            )
         out.append(
             {
                 "pipelines": sorted(group, key=lambda p: rank.get(p, 0)),
@@ -344,14 +359,15 @@ def _last_done(c: "sqlite3.Connection", pipeline_id: str) -> str:
 
 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
-    """Per output stage: the cards that entered it in the period (a factory's done count)."""
-    if not stages or not _columns(c, "stage_visits"):
+    """Per output stage: the cards that entered it in the period (a factory's done count). Read from the step history, which
+    every move writes, so a pipeline with no stage requirements counts too; a card that re-enters a stage counts once."""
+    if not stages:
         return {}
     rows = _rows(
         c,
-        "SELECT v.pipeline_stage_id AS sid, COUNT(DISTINCT v.task_id) AS n FROM stage_visits v "
-        f"WHERE v.pipeline_stage_id IN ({_marks(list(stages.values()))}) AND v.entered_at>=? "
-        f"AND v.task_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY v.pipeline_stage_id",
+        "SELECT e.new AS sid, COUNT(DISTINCT e.subject_id) AS n FROM history_events e "
+        f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({_marks(list(stages.values()))}) "
+        f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY e.new",
         [*stages.values(), since],
     )
     return {str(r["sid"]): int(r["n"] or 0) for r in rows}
@@ -419,7 +435,8 @@ def read(
     days = PERIODS.get(period)
     if days is None:
         raise Problem("validation", "Period is 1d, 7d or 30d", 422)
-    seen = visible_sql or _own_cards(actor)
+    # Every aggregate reads only the cards the reader may open now: the caller's rule, then the members-only pipelines.
+    seen = pipeline_rights.list_sql(c, actor, visible_sql or _own_cards(actor))
     now = str(H.now())
     since = _stamp(H.parse_ts(now) - timedelta(days=days))
 
@@ -543,6 +560,8 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         reader: Any = store
         with reader.read() as c:
             guard.domain(who)
-            return {
-                "may_edit_rules": pipeline_rights.may_edit_rules(cast("sqlite3.Connection", c), who.actor, pipeline_id)
-            }
+            c = cast("sqlite3.Connection", c)
+            # A pipeline the reader may not see answers as a missing one does: the same reply, never a hidden pipeline's rules.
+            if not pipeline_rights.may_see(c, who.actor, pipeline_id):
+                return {"may_edit_rules": False}
+            return {"may_edit_rules": pipeline_rights.may_edit_rules(c, who.actor, pipeline_id)}

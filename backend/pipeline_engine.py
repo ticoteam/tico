@@ -454,14 +454,22 @@ def _field_state(task: Row, requirement: Row, facts: _Facts) -> str:
     return "met" if have else "none"
 
 
+def verdict_binds_attachment(decision: Row, attachment: Row | None) -> bool:
+    """The one verdict-binding rule, shared by the engine and the review reader: a verdict on one attachment (an approval or
+    a judge's) stands only while that attachment is the one still attached. An override names no attachment, so it stands
+    on the work version alone (its freshness is checked by the caller, as for any met)."""
+    if decision.get("verdict") == "override" or not decision.get("requirement_attachment_id"):
+        return True
+    return attachment is not None and str(attachment["id"]) == str(decision["requirement_attachment_id"])
+
+
 def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts) -> Standing:
     task = facts.tasks.get(task_id) or {"id": task_id, "work_revision": 0}
     revision = int(task.get("work_revision") or 0)
     key = (task_id, str(requirement["id"]))
     decision, attachment = facts.decisions.get(key), facts.attachments.get(key)
-    if decision is not None and decision.get("requirement_attachment_id"):
-        if attachment is None or attachment["id"] != decision["requirement_attachment_id"]:
-            decision = None  # the evidence it judged was replaced or taken away
+    if decision is not None and not verdict_binds_attachment(decision, attachment):
+        decision = None  # the evidence it judged was replaced or taken away
     if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
         decision = None  # no override stands in for a named person's approval (D10, D34)
     if decision is not None:
@@ -488,8 +496,11 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
     source = (
         _field_state(task, requirement, facts) if kind == "field" else _run_state(task_id, requirement, facts, conn)
     )
-    if source == "met" and requirement["reviewed_by"] != "nobody":
-        return Standing(requirement, "waiting")  # the source is ready; the reviewer (a person or a judge) still decides
+    # A field or run is a rule (D60): no judge reads it, so only a person's review waits on the source. A bot or
+    # bot-then-person review of one (rows from before the API refused it) reads as the rule itself, so no card waits
+    # for a reviewer nobody can reach.
+    if source == "met" and requirement["reviewed_by"] == "person":
+        return Standing(requirement, "waiting")  # the source is ready; the named person still decides
     return Standing(requirement, source)
 
 
@@ -739,7 +750,28 @@ def _settle_parent(conn: sqlite3.Connection, child_id: str) -> None:
         return
     found = _evaluate(conn, {str(parent_id): {stage_id: None}}, by_stage).get(str(parent_id), [])
     if found and all(s.state == "met" for s in found):
-        advance(conn, H.KEEPER, str(parent_id))
+        _advance_parent(conn, str(parent_id))
+
+
+def _advance_parent(conn: sqlite3.Connection, parent_id: str) -> None:
+    """Moves a parent on because its subtasks finished, in a savepoint of its own. A refusal (a requirement, or a spawn the
+    rules could not file) rolls back only the parent's move: the subtask's change that settled it stands, and the refusal is
+    logged on the parent (`auto_move_refused`) with its reason."""
+    from .store import Problem
+
+    conn.execute("SAVEPOINT settle_parent")
+    try:
+        result = advance(conn, H.KEEPER, parent_id)
+    except (H.Refused, Problem) as exc:
+        conn.execute("ROLLBACK TO settle_parent")
+        conn.execute("RELEASE settle_parent")
+        reason = str(cast("object", getattr(exc, "detail", None)) or exc)
+    else:
+        conn.execute("RELEASE settle_parent")
+        if result["moved"] or not result["reason"]:
+            return
+        reason = str(result["reason"])  # advance already undid its own move and says why it stayed
+    H._task_event(conn, parent_id, H.KEEPER, "auto_move_refused", None, None, reason)  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------------------------- decline
@@ -899,7 +931,11 @@ def check_move(
     unmet = _unmet(_evaluate(conn, {task_id: scope}, by_stage).get(task_id, []))
     if not unmet:
         return
-    if override and editor:
+    # An override passes each unmet requirement on its own pipeline's rules, so the actor must edit the rules of every
+    # pipeline that owns one of them (a destination's owner cannot override the source's requirements).
+    owners = {str(s.requirement["pipeline_id"]) for s in unmet}
+    editable = all(pipeline_rights.may_edit_rules(conn, actor, owner) for owner in sorted(owners))
+    if override and editable:
         protected = [s for s in unmet if s.requirement["kind"] == "approval"]
         if protected:
             H.refuse(
@@ -912,7 +948,7 @@ def check_move(
             )
         _record_override(conn, actor, task_id, unmet, override_reason(override_note))
         return
-    hint = "" if editor else " A pipeline editor can move it on anyway."
+    hint = "" if editable else " A pipeline editor can move it on anyway."
     H.refuse(conn, actor, "requirement", f"Can't leave {here['name']} yet: {_names(unmet)}.{hint}", task=task_id)
 
 

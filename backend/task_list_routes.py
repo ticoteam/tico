@@ -145,15 +145,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     who.task_actor,
                     sorted(request.query_params.multi_items()),
                 )
-                whole, held = reads.digest("tasks", reads.version(c), reads.names(c), *reader), reads.held(request)
-                for was_whole, was_rows in held:
-                    if was_whole == whole:
-                        return reads.not_modified(reads.list_tag(whole, was_rows))
                 rows, next_offset = visible_tasks(c, who, owner, requester, limit=limit, offset=offset, **filters)
                 brief_rows(rows)
-                part = reads.digest(rows, next_offset, *reader)
-                tag = reads.list_tag(whole, part)
-                if any(was_rows == part for _, was_rows in held):
+                # The validator is the answer itself and the reader's access. A change this reader cannot read (a
+                # hidden ticket, another team's) leaves it as it was, so it sends no new ETag for identical data.
+                tag = reads.etag("tasks", rows, next_offset, *reader)
+                if reads.fresh(request, tag):
                     return reads.not_modified(tag)
                 response.headers["ETag"] = tag
                 result = {"tasks": rows, "next_offset": next_offset, "cursor": reads.cursor(c, visible_sql)}
