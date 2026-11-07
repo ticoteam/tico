@@ -225,7 +225,15 @@ COPYRIGHT = "© 2025 Northwind Analytics, Inc. All rights reserved. Terms and pr
 
 def test_a_copyright_year_change_files_nothing(seeded, monkeypatch):
     watch(seeded)
-    pages(monkeypatch, BASE + "\n" + COPYRIGHT, BASE + "\n" + COPYRIGHT.replace("2025", "2026"))
+    texts = [BASE + "\n" + COPYRIGHT, BASE + "\n" + COPYRIGHT.replace("2025", "2026")]
+    reads = []
+
+    def fetch(url, *args, **kwargs):
+        # The fetcher's raw text goes through the real fetch_page, so normalize() drops the notice as on a live page.
+        reads.append(url)
+        return {"text": texts[min(len(reads), len(texts)) - 1]}
+
+    monkeypatch.setattr(W.F, "fetch", fetch)
     before = counts(seeded)
     assert check(seeded)["changed"] == 0
     assert check(seeded)["changed"] == 0

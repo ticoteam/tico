@@ -118,6 +118,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
         "onboarding_state": "onboarded",
         "stage": "active",
         "changed": False,
+        "routine": None,  # a starter that is not built in arms no routine here (onboarding._arm_built_in_starter)
     }
     assert api.get("/api/v2/bots/support", headers=who).json()["stage"] == "active"
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"
