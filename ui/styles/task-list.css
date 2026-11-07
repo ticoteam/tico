@@ -238,11 +238,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 #task-peek .task-props{order:-1;margin:2px 0 6px;padding:2px 0 6px;border-bottom:1px solid var(--line)}
 #task-peek .prop{min-height:28px}
 #task-peek .task-rail:not([hidden]){margin:8px 0;border-bottom:1px solid var(--line)}
-.tmodal-head .pill.tstatus{background:none;padding:0;font-size:var(--t-sm);font-weight:600;color:var(--ink)}
 .peek-tools{display:inline-flex;gap:2px;margin-left:4px}
-.peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted)}
+.peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted);flex:none}
 .peek-btn:hover{color:var(--ink)}
-/* Done and Close task in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
+/* Done and Close in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
 .tmodal-act{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:6px;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 .tmodal-act svg{flex:none}
 .tmodal-x svg{width:12px;height:12px}
@@ -355,9 +354,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tmodal:has(.task-layout)>.tmeta{margin:0 16px 8px;font-size:var(--t-sm)}
 /* a bot's task set waiting on you (`--on`) */
 .tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
-.tchip-blocked{flex:none;font-size:var(--t-xs);line-height:16px;padding:0 6px;border-radius:8px;background:var(--idle-bg);color:var(--muted)}
 .peek-pos{flex:none;font-size:var(--t-sm);color:var(--muted);cursor:default}
 .tmodal-age{flex:none}
+/* A phone's header has no room for the age too (its tooltip has it); a snoozed chip shortens rather than pushing the header wider */
+@media (max-width:480px){.tmodal-head .tmodal-age{display:none}}
+#task-modal .tmodal-head>.tchip-snoozed,#task-peek .tmodal-head>.tchip-snoozed{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .task-layout .tdesc{margin:4px 0 10px;font-size:var(--t-base);line-height:var(--lh-read);white-space:normal;background:none;padding:0;max-height:none}
 .task-layout .task-wait{margin:2px 0 10px;color:var(--muted);font-size:var(--t-base)}
 .task-layout .task-wait .lbl{display:inline;margin-right:4px}
