@@ -574,7 +574,7 @@ def listing(c, settings, bot, reads=None):
 
     app_row = read_cache.one(c, "SELECT org FROM github_app WHERE id='app'")
     if repo and not app_row and repo in tools:
-        repo["detail"] += "; uses the computer's own GitHub sign-in (the GitHub App is not connected)"
+        repo["detail"] += "; not backed up: GitHub is not connected"
     from .github_app import repo_of
 
     own = repo_of(state['row']['repo'] if state['row'] else '', settings.github_owner)
