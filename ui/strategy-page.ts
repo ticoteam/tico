@@ -107,6 +107,8 @@ interface StratSeg {
   parent?: string | null | undefined;
   depth?: number;
   rolled_usd?: {spend_usd?: number | string};
+  /** The selected size and the evidence behind it (market_spend.py). */
+  size?: {spend_usd?: number | string | null; evidence?: {source_url?: string}[]} | null;
 }
 interface StratSpend { segments?: StratSeg[]; definition?: unknown; total?: {spend_usd?: number | string} }
 interface StratRival { id: string; name: string; url?: string }
@@ -467,6 +469,32 @@ function strategyAddRowHtml(kind: string, placeholder: string) {
       <button type="submit" class="strat-add">Add</button></form>`;
 }
 const stratSk = () => skelRows(3, {dot: false});
+// The sources behind a segment's dollar figure, counted the way the spend API counts it (market_spend.py, rolled spend):
+// the selected size's own evidence when that size has a spend, else the sum of its parts' sources. A part with no source
+// makes the sum unsourced. http and https links only. A figure with no source is not shown (check (a), Nov 7).
+function strategySources(seg: StratSeg | undefined, segs: StratSeg[], seen = new Set<string>()): string[] {
+  if (!seg || seen.has(seg.id)) return [];
+  seen.add(seg.id);
+  const urls = new Set<string>();
+  if (seg.size && seg.size.spend_usd != null) {
+    for (const x of seg.size.evidence || []) { const url = x?.source_url || ''; if (/^https?:\/\//i.test(url)) urls.add(url); }
+    return [...urls];
+  }
+  for (const c of segs.filter(s => s.parent === seg.id && s.rolled_usd)) {
+    const part = strategySources(c, segs, seen);
+    if (!part.length) return [];
+    for (const u of part) urls.add(u);
+  }
+  return [...urls];
+}
+const strategyHost = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+// The tile's source line: up to two sources, each a link out, then how many more.
+function strategySourceLine(urls: string[]) {
+  const link = (u: string) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(strategyHost(u))}</a>`;
+  const more = urls.length > 2 ? ` +${urls.length - 2}` : '';
+  return `<small class="strat-src">${urls.slice(0, 2).map(link).join(' · ')}${more}</small>`;
+}
+
 function strategyWhereHtml(owner: boolean) {
   const spend = STRAT_MKT.spend;
   const segs = spend?.segments || [];
@@ -475,15 +503,21 @@ function strategyWhereHtml(owner: boolean) {
   if (spend === undefined) return head + stratSk();
   const add = owner ? strategyAddRowHtml('seg', 'Add a segment') : '';
   if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
-  const {drawn}: {drawn: StratGroup[]} = mktTree(spend);
+  const {drawn: sized}: {drawn: StratGroup[]} = mktTree(spend);
   const W = 200, H = 100, shown = new Set<string>();
   const pos = (r: StratRect) => `left:${(r.x / W * 100).toFixed(3)}%;top:${(r.y / H * 100).toFixed(3)}%;width:${(r.w / W * 100).toFixed(3)}%;height:${(r.h / H * 100).toFixed(3)}%`;
+  // A segment with no source is not drawn: its area would show a size nobody can trace. Its parts with no source are left out too.
+  const drawn = sized.filter(g => strategySources(g.seg, segs).length)
+    .map(g => ({...g, kids: g.kids.filter(k => strategySources(k.seg, segs).length)}));
   const tile = (seg: StratSeg, r: StratRect | null, value: number) => {
     shown.add(seg.id);
     const mark = seg.self ? 'Us' : seg.next ? 'Next' : '';
-    const title = `${seg.name}${value ? `: ${mktMoney(value)} a year, an estimate` : ''}`;
+    const urls = strategySources(seg, segs);
+    // No source, no dollar figure: the name stays, the figure goes.
+    const figure = urls.length && value ? value : 0;
+    const title = `${seg.name}${figure ? `: about ${mktMoney(figure)} a year, an estimate, from ${urls.map(strategyHost).join(', ')}` : ''}`;
     return `<div class="strat-tm${seg.self ? ' ours' : seg.next ? ' next' : ''}${owner ? ' pick' : ''}" data-seg="${esc(seg.id)}"${r ? ` style="${pos(r)}"` : ''}${owner
-      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}<b>${esc(seg.name)}</b>${value ? ` <span>${mktMoney(value)}</span>` : ''}${owner
+      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}<b>${esc(seg.name)}</b>${figure ? ` <span class="strat-est">~${mktMoney(figure)}</span>${strategySourceLine(urls)}` : ''}${owner
       ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button>` : ''}</div>`;
   };
   // One sized segment is not a map: then every segment is a plain tile.
@@ -501,8 +535,10 @@ function strategyWhereHtml(owner: boolean) {
   }).join('');
   const plain = segs.filter(s => !shown.has(s.id));
   const total = Number(spend.total?.spend_usd) || 0;
+  // The total counts every segment, so it is shown only when each sized segment has a source behind it.
+  const unsourced = segs.some(s => Number(s.rolled_usd?.spend_usd) > 0 && !strategySources(s, segs).length);
   return `${head}${tiles ? `<div class="strat-map">${tiles}</div>` : ''}${plain.length ? `<div class="strat-tm-plain">${plain.map(s => tile(s, null, mapped.length ? 0 : Number(s.rolled_usd?.spend_usd) || 0)).join('')}</div>` : ''}
-    ${tiles && total ? `<p class="strat-cap">About ${mktMoney(total)} a year</p>` : ''}${add}`;
+    ${tiles && total && !unsourced ? `<p class="strat-cap">About ${mktMoney(total)} a year</p>` : ''}${add}`;
 }
 
 // ---------------------------------------------------------------- Competitors and Related news
@@ -935,7 +971,9 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
     };
     where.onclick = ev => {
       if (!STRAT || STRAT !== state) return;
-      const target = eventElement(ev), x = target?.closest('[data-seg-x]'), tile = target?.closest<HTMLElement>('[data-seg]');
+      const target = eventElement(ev);
+      if (target?.closest('a')) return;   // a source link opens out; it does not target its tile
+      const x = target?.closest('[data-seg-x]'), tile = target?.closest<HTMLElement>('[data-seg]');
       if (x && tile) {
         const id = tile.dataset.seg, now = spend(), all = now?.segments || [], seg = all.find(s => s.id === id);
         if (!now || !seg) return;
