@@ -17,8 +17,9 @@ removed: the ids of employees the visitor took off the chart. Their direct repor
 What the chart keeps: a title is unique (the second of a repeat gets " 2", the third " 3"), and an id is a slug of the
 title. Channel seats follow the channel list's order, not the order they were picked in. An initiative tagged to a
 picked segment is owned by that segment's Product Owner and has no seat of its own; a product owner's reason names those
-initiatives, or counts them when the names would not fit a reason. reports_to is null at the top of the chart: that seat
-reports to the company's owner (draft.manager_of).
+initiatives, or counts them when the names would not fit a reason. reports_to is null for a seat with no manager in the
+chart (the Corporate, Support, initiative and industry Owners). A company file cannot say "no manager", so the app gives
+that seat its default manager (draft.manager_of): the department's lead, else the owner.
 """
 
 import json

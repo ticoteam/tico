@@ -334,7 +334,14 @@ def test_the_formula_rows_read_back_through_the_company_file_reader():
             row["reason"],
         )
         assert bot["template"] == row["template"] and bot["start"] is True
-        assert D.manager_of(draft, bot) == (row["reports_to"] or "chris")
+        if row["reports_to"]:
+            assert D.manager_of(draft, bot) == row["reports_to"]
+        else:
+            assert not bot.get("reports_to")  # no manager in the chart, so the file names none
+    # A seat with no manager in the chart takes the app's default: the department's lead, else the owner.
+    manager = {row["title"]: D.manager_of(draft, bot) for bot, row in zip(draft["bots"], rows)}
+    assert manager["Partnerships Owner"] == "sales-manager"  # the sales department's lead
+    assert manager["Finance Owner"] == "chris"  # the finance department has no lead
 
 
 # ---------------------------------------------------------------------------------------------- the contract
