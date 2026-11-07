@@ -161,20 +161,23 @@ def gone(c, visible_sql, was, matched):
 
 def _pipeline_of(c, tid):
     """(known, type_id): the pipeline a ticket the change log names was on, from the ticket itself or, once it is deleted,
-    from the row its trash kept. `known` is False when neither says, and the caller fails closed."""
+    from the row its trash kept. When neither says, the pipeline is unknown: with no members-only pipeline in the company
+    no pipeline rule can apply, so the ticket counts as on none (`known` True). Otherwise `known` is False and the caller
+    fails closed."""
     row = c.execute("SELECT type_id FROM tasks WHERE id=?", (tid,)).fetchone()
     if row is not None:
         return True, row[0]
-    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_trash'").fetchone() is None:
-        return False, None
-    found = c.execute(
-        "SELECT json_type(rows,'$.rows.tasks[0].type_id'), json_extract(rows,'$.rows.tasks[0].type_id') "
-        "FROM task_trash WHERE task_id=?",
-        (tid,),
-    ).fetchone()
-    if found is None or found[0] is None:  # a purged or unreadable trash row keeps no snapshot
-        return False, None
-    return True, found[1]
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_trash'").fetchone() is not None:
+        found = c.execute(
+            "SELECT json_type(rows,'$.rows.tasks[0].type_id'), json_extract(rows,'$.rows.tasks[0].type_id') "
+            "FROM task_trash WHERE task_id=?",
+            (tid,),
+        ).fetchone()
+        if found is not None and found[0] is not None:
+            return True, found[1]
+    # A purged or unreadable trash row keeps no snapshot.
+    private = c.execute("SELECT 1 FROM task_types WHERE pipeline_visibility='members' LIMIT 1").fetchone()
+    return private is None, None
 
 
 def _could_read(c, visible_sql, tid, ref):

@@ -284,3 +284,18 @@ def test_a_task_list_leaves_its_connection_to_the_pool(api, monkeypatch):
     for token in ("ana-test", "ben-test"):
         get(api, "tasks", token=token)
     assert opened == []
+
+
+def test_a_deleted_untyped_ticket_with_no_trash_row_is_reported_gone_to_its_reader(api):
+    # Its type is unknown once deleted and its trash snapshot purged. With no members-only pipeline in the company the
+    # pipeline rule cannot hide it, so its reader is told it is gone.
+    made = post(
+        api, "tasks", {"owner": "ben", "title": "Order lunch", "body": "Please."}
+    )  # on the general type: no pipeline
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT type_id FROM tasks WHERE id=?", (made["id"],)).fetchone()[0] == "general"
+    cursor = tasks(api, ACTIVE)["cursor"]
+    post(api, "tasks/" + made["id"] + "/delete", {})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
+    assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
