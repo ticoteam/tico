@@ -19,22 +19,36 @@ interface InboxCtx {
 }
 
 /** The inbox a kind's detail() resolves with: every kind gives these four, plus its own fields. */
-interface InboxResolved { kind: string; id: string; name: string; address: string; [field: string]: unknown; }
+interface InboxResolved {
+  kind: string;
+  id: string;
+  name: string;
+  address: string;
+  /** A mailbox's own fields, which inboxes-sending reads. */
+  mailbox?: { address?: string; level?: string } | null;
+  may?: { read?: boolean } | null;
+  can_manage?: boolean;
+  accesses?: InboxAccess[] | null;
+  [field: string]: unknown;
+}
+/** One share of a mailbox (inbox.accesses): who has it and at what level. */
+interface InboxAccess { grantee_type?: string; grantee_id?: string; name?: string; level?: string; }
 /** The Add tool item a kind lists under Tools; `admin` shows it to admins only. */
 interface InboxAddItem { label: string; admin?: boolean; open: (ctx: InboxCtx) => unknown; }
 /** One kind of inbox as inboxesKind is given it. */
 interface InboxKindSpec {
   label: string;
   order: number;
-  detail: (host: HTMLElement, id: string, ctx: InboxCtx) => Promise<InboxResolved | undefined>;
+  /** Resolves the inbox, or null/undefined when there is none to draw (inboxes-texts resolves null). */
+  detail: (host: HTMLElement, id: string, ctx: InboxCtx) => Promise<InboxResolved | null | undefined>;
   /** Its Activity tab. It resolves nothing a panel needs (inboxesDetail returns before the panels), so undefined. */
-  activity?: (host: HTMLElement, id: string, ctx: InboxCtx) => Promise<InboxResolved | undefined>;
+  activity?: (host: HTMLElement, id: string, ctx: InboxCtx) => Promise<InboxResolved | null | undefined>;
   add?: InboxAddItem;
 }
 /** A kind as the registry (INBOX_KINDS) holds it. */
 interface InboxKind extends InboxKindSpec { key: string; }
 /** A page of its own at #/tools/<key> (inboxesView). */
-interface InboxViewSpec { label: string; render: (host: HTMLElement, ctx: InboxCtx) => Promise<void>; }
+interface InboxViewSpec { label: string; order: number; render: (host: HTMLElement, ctx: InboxCtx) => Promise<void>; }
 interface InboxView extends InboxViewSpec { key: string; }
 /** One card on Tools › Settings (inboxesSetting). */
 /** `host` is `any` until inboxes-email.js is typed: its handler reads host.onchange as an Event with a nullable target, which

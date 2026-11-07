@@ -174,7 +174,7 @@ async function inboxesDetail(el: HTMLElement, kind: string, id: string, activity
       <div data-ib-detail-body>${skelRows(3, {card: true, dot: false})}</div><div data-ib-panels></div></div>`;
   }
   const host = el.querySelector<HTMLElement>('[data-ib-detail-body]')!, panels = el.querySelector<HTMLElement>('[data-ib-panels]')!;
-  let inbox: InboxResolved | undefined;
+  let inbox: InboxResolved | null | undefined;
   try { inbox = await (activity ? spec.activity! : spec.detail)(host, id, ctx); }
   catch (e) { if (ctx.live() && host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (!ctx.live() || !inbox || activity) return;
