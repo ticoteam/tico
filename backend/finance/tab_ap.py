@@ -516,8 +516,6 @@ def contacts(
     if kind is not None and kind not in AP.CONTACT_KINDS:
         raise invalid(f"kind is {'|'.join(AP.CONTACT_KINDS)}")
     kinds = [k for k in AP.CONTACT_KINDS if kind is None or k == kind or (kind != "both" and k == "both")]
-    if not view.sees_anything():
-        raise denied("contacts are not in your view")
     vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
     admin = view.everything  # the tax id's last 4 go to whoever sees everything, not to finance admins
     most = page_size(limit)
@@ -529,6 +527,10 @@ def contacts(
     # A customer shows to the receivables view; a vendor (or both) shows to the payables view, or when its name may show
     # under the one view rule (visible.py): a vendor the reader sees a line of, with no line of it private to them.
     named = VB.named_all_time(ctx, view, [str(r["id"]) for r in fetched if str(r["kind"]) in ("vendor", "both")])
+    # Refused unless the reader sees a contact kind or can name a vendor under the rule (a reader with no finance view
+    # at all, or only a right to act, is refused as before).
+    if not any(sees_contact_kind(ctx, view, k) for k in AP.CONTACT_KINDS) and not any(named.values()):
+        raise denied("contacts are not in your view")
     rows = [
         r
         for r in fetched

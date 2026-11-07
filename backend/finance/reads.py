@@ -116,7 +116,7 @@ def _cells(
                     location=location,
                     class_id=klass,
                     project=project,
-                    lines=int(r["line_count"]),
+                    lines=int(r["line_count"]) if "line_count" in r.keys() else 0,  # cash rollups count no lines
                 )
             )
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
