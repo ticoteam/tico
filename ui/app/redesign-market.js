@@ -178,7 +178,7 @@ async function mountMarketPage(shell) {
   ].filter(Boolean);
   const tiles = rdqTilesHtml(offering, revenue);
   shell.innerHTML = `<div class="mkt-pg"><header class="mkt-top"><h2>Market</h2>${name ? `<span class="mkt-name">${esc(name)}</span>` : ''}
-      <span class="spacer"></span><a class="ghost" href="${MARKET_MAP}">Open map</a></header>
+      <span class="spacer"></span><a class="ghost" href="${MARKET_ROUTE}">All segments</a><a class="ghost" href="${MARKET_MAP}">Open map</a></header>
     ${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
   const money = sized ? mktSpend(shell.querySelector('#mkt-money'), {offering, buyer}) : null;
   if (sizing) mktSizeForm(/** @type {HTMLElement} */ (shell.querySelector('#mkt-money')), offering.definition?.description);
