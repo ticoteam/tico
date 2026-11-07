@@ -86,8 +86,9 @@ function cloudMachineStatus(m: CloudMachineRow): string {
 }
 // The Computer value on the bot's page and in its Info for a bot on a cloud machine; '' for any other.
 function cloudMachineComputerHTML(e: CloudMachineBot): string {
+  if (!cloudMachineOn(e)) return '';
   const m = e.cloud_machine;
-  if (!m || !cloudMachineOn(e)) return '';
+  if (!m) return '';
   return `${cloudMachineShared(e) ? 'Shared' : 'Own'} cloud machine <span class="muted">· ${esc(cloudMachineStatus(m))}</span>`;
 }
 // Settings > Computers: which cloud machine a computer is.
@@ -100,8 +101,9 @@ function cloudMachineFacts(machine: CloudMachineBot): string {
 // held until Save bot (`stage`). The shared machine's are the company's: only owners and admins change them. Always on
 // never pauses, so Pause after is off while it is on.
 function cloudMachineRowHTML(e: CloudMachineBot): string {
+  if (!cloudMachineOn(e)) return '';
   const m = e.cloud_machine;
-  if (!m || !cloudMachineOn(e)) return '';
+  if (!m) return '';
   const scope = cloudMachineShared(e) ? 'shared' : 'own';
   const may = (scope === 'shared' ? settingsIsAdmin() : settingsCanManageBot(e)) ? '' : 'disabled';
   const names = CLOUD_SIZES?.length ? CLOUD_SIZES : CLOUD_SIZE_NAMES.map(name => ({name}));
@@ -182,7 +184,7 @@ function cloudSupportSet(view: import('../types/api').CloudSupportView | null | 
 }
 // "Tico support: on", "off" or "offline" for a computer that is a cloud machine, matched by HQ's key (the shared
 // machine's `_shared`, else its bot); '' for a helper that is not there, any other computer, or before the read.
-function cloudSupportWords(machine: CloudMachineBot | null | undefined): string {
+function cloudSupportWords(machine: Pick<CloudMachineBot, 'cloud_machine'> | null | undefined): string {
   const m = machine?.cloud_machine;
   if (!m || !CLOUD_SUPPORT.view) return '';
   const key = m.shared ? '_shared' : m.bot;

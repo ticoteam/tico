@@ -1,4 +1,4 @@
-/* ui/app/tools.js — Tools (#/tools): every way bots and people reach the outside world, one row each, and the router
+/* ui/app/tools.ts — Tools (#/tools): every way bots and people reach the outside world, one row each, and the router
    for every page under it. The list is GET /api/v2/tool-index (backend: one row an API tool, mailbox, phone number or
    Tico address, mailing address, Slack, GitHub, meeting importer, Listening, outgoing webhook, or a tool a bot
    declares with no row of its own); the hub filters the rows per reader and this page only draws them. Each row opens
@@ -29,8 +29,9 @@ interface ToolsListState { run: number; rows: ToolsRow[] | null; counts: Record<
 // An inbox kind as ui/app/inboxes.js registers it: the order it lists in, and its Add tool item when it has one.
 interface ToolsInboxKind { key: string; order: number; add?: { label: string; admin?: boolean; open: (ctx: unknown) => unknown }; }
 
-// The inbox kind registered under a key. INBOX_KINDS is declared `{}` in inboxes.js, so it is read with Reflect.get,
-// which is the same [[Get]] as INBOX_KINDS[key] and gives the kind's own type here.
+// The inbox kind registered under a key. INBOX_KINDS is declared `{}` in inboxes.js, so its entries have no type this
+// file can check. Reflect.get reads the same property as INBOX_KINDS[key], inherited names included as before; the return
+// type is the shape this file uses.
 const toolsInboxKind = (key: string): ToolsInboxKind | undefined => Reflect.get(INBOX_KINDS, key);
 
 const TOOLS_ROUTE = '#/tools';

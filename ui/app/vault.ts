@@ -86,7 +86,7 @@ function vaultEdit(row?: VaultEditRow) {
     <button class="primary" type="submit">Save credential</button></form>`);
   if (!dialog) return;
   // The form, its error line and every field are drawn just above, each under its own name.
-  const form = dialog.querySelector<HTMLFormElement>('form')!, errorBox = form.querySelector<HTMLElement>('#vault-error')!;
+  const form = dialog.querySelector<HTMLFormElement>('form')!;
   const field = (name: string) => form.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[name=${name}]`)!;
   form.onsubmit = async event => {
     event.preventDefault(); const button = form.querySelector<HTMLButtonElement>('[type=submit]')!; button.disabled=true;
@@ -95,7 +95,7 @@ function vaultEdit(row?: VaultEditRow) {
     if(secret)data.secret=secret;
     if(editing)data.expected_revision=row?.revision;
     try {await post('/v2/credentials'+(editing?'/'+encodeURIComponent(row?.id ?? ''):''),data);vaultClose();await vaultLoad();}
-    catch(error){errorBox.textContent=errorMessage(error, '');button.disabled=false;}
+    catch(error){$('#vault-error').textContent=errorMessage(error, '');button.disabled=false;}
   };
 }
 function vaultShare(id: string) {
@@ -111,12 +111,12 @@ function vaultShare(id: string) {
     <form id="vault-grant-form"><label>Grant access to<select name="subject" required>${choices.map(choice=>`<option value="${esc(choice.subject)}">${esc(choice.label)}</option>`).join('')}</select></label>
     <button class="primary" type="submit" ${choices.length?'':'disabled'}>Grant access</button><p class="err" id="vault-error"></p></form>`);
   if (!dialog) return;
-  // The form, its error line and the revoke buttons are drawn just above.
-  const form = dialog.querySelector<HTMLFormElement>('form')!, errorBox = dialog.querySelector<HTMLElement>('#vault-error')!;
+  // The form, its submit button, its subject select and the revoke buttons are drawn just above.
+  const form = dialog.querySelector<HTMLFormElement>('form')!;
   form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector<HTMLButtonElement>('button')!;button.disabled=true;
     try{await post(`/v2/credentials/${encodeURIComponent(id)}/grants`,{subject:form.querySelector<HTMLSelectElement>('[name=subject]')!.value});vaultClose();await vaultLoad();}
-    catch(error){errorBox.textContent=errorMessage(error, '');button.disabled=false;}};
+    catch(error){$('#vault-error').textContent=errorMessage(error, '');button.disabled=false;}};
   dialog.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach(button=>{button.onclick=async()=>{button.disabled=true;
     try{await post(`/v2/credentials/${encodeURIComponent(id)}/grants/${encodeURIComponent(button.dataset.revoke ?? '')}/revoke`);vaultClose();await vaultLoad();}
-    catch(error){errorBox.textContent=errorMessage(error, '');button.disabled=false;}};});
+    catch(error){$('#vault-error').textContent=errorMessage(error, '');button.disabled=false;}};});
 }

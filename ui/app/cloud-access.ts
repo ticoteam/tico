@@ -11,7 +11,7 @@
 // The cloud company's access state as HQ sends it: access is open, frozen or locked, with the reason and the billing page.
 interface CloudAccessState {
   access?: string;
-  reason?: string;
+  reason?: string | null;
   billing_url?: unknown;
   [key: string]: unknown;
 }
