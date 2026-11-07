@@ -256,6 +256,8 @@ const pastEdge = page => page.evaluate(() => [...document.querySelectorAll('#mai
       await page.locator('.seg-cmp').waitFor();
       // The whole market: its five questions at ?view=whole, back to the table from its header.
       await page.locator('.mkt-top a', {hasText: 'Whole market'}).click();
+      // The table is replaced at once; the compare view has its own What changed, so wait for the table to go.
+      await page.waitForFunction(() => location.hash === '#/strategy/market?view=whole' && !document.querySelector('.seg-cmp'));
       await page.locator('#mkt-q-changed').waitFor();
       assert.equal(await page.locator('.seg-cmp').count(), 0, tag + ': the whole market is not the table');
       await page.locator('.mkt-top a', {hasText: 'All segments'}).click();
