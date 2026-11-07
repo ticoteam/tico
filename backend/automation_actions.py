@@ -549,9 +549,10 @@ def _post_update(c, auto, run_id, args, values):
         title, body = _briefing(text, args.get("title"))
         # `segment_id` makes it that segment's briefing; the server refuses one that is not the company's.
         segment = str(args.get("segment_id") or "")
-        out["briefing"] = MB.post(
+        posted = MB.post(
             c, SimpleNamespace(actor=author), MB.this_week(), title, body, None, source=source, segment_id=segment
-        )["week"]
+        )
+        out["briefing"] = posted["week"] if posted else None
         text = _pointer(c, poster, title)
     if "updates" in to:
         # A warned step's text leads with its warn line (_warned_args): it goes on after the writing checks.
