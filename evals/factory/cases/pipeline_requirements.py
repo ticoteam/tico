@@ -2,27 +2,57 @@
 database in setup, as a pipeline's owner would configure them. Design must show a due date before the ticket moves to
 Build, and Build needs green GitHub checks on the pull request before it moves to Peer Check.
 
-The bots read the server's `requirement` refusal and act on it (bots.Builder.meet_requirements): they set the due date,
+The builders read the server's `requirement` refusal and act on it (RequirementBuilder here): they set the due date,
 and wait for CI. A push for fixes sends the checks back to pending, so the Build requirement is unmet again until CI
 passes on the new head. The checks read the facts themselves (task_links.checks, tasks.due_at) at every forward move the
 server makes, never the engine's own answer: no card leaves a stage with an unmet requirement, the situation did happen
 (the server refused a move and a push re-opened the requirement), and no call got a server error."""
 
+import datetime as dt
 import json
 
 from ..board import design_board
+from ..bots import Builder
 from ..scenarios import Scenario, standard, tickets
+from ..world import Refusal
 
 GATE = "stage requirements"
 DUE = {"name": "Due date set", "kind": "field", "needs": {"field": "due"}, "reviewed_by": "nobody"}
 CHECKS = {"name": "CI green", "kind": "run", "needs": {"source": "github_checks"}, "reviewed_by": "nobody"}
 
 
+REQUIREMENTS = {"Design": (DUE,), "Build": (CHECKS,)}  # what a ticket must show to leave each step, by step name
+
+
 def requirement_board():
-    board = design_board()
-    board.step("Design").requirements = (DUE,)
-    board.step("Build").requirements = (CHECKS,)
-    return board
+    return design_board()
+
+
+class RequirementBuilder(Builder):
+    """A builder that acts on a requirement refusal as a real one does on reading it: it sets what the ticket itself can
+    show (a due date) and moves again; for what only time brings (CI green at the head) it waits, and the next turn tries
+    again."""
+
+    def move(self, task, step):
+        try:
+            return super().move(task, step)
+        except Refusal as exc:
+            if not self.blocked_by_requirement(exc):
+                raise
+            return self.meet_requirements(task, step)
+
+    @staticmethod
+    def blocked_by_requirement(exc):
+        """Whether the server refused the move for a stage requirement ("Can't leave <stage> yet: <names>")."""
+        return "requirement" in exc.body and "leave" in exc.body
+
+    def meet_requirements(self, task, step):
+        w = self.world
+        asked = list(REQUIREMENTS.get(w.step_of(w.task(task["id"])), ()))
+        if any(r["kind"] == "field" and r["needs"].get("field") == "due" for r in asked):
+            w.update(task["id"], token=self.token, due=(w.now() + dt.timedelta(days=7)).strftime("%Y-%m-%dT17:00:00Z"))
+            return "set the due date, " + self.move(task, step)
+        return "waiting on " + ", ".join(r["name"] for r in asked)
 
 
 def seed(w):
@@ -31,7 +61,7 @@ def seed(w):
     with w.store.transaction() as c:
         for step in w.board.steps:
             ident = next(s["id"] for s in w.dev["steps"] if s["name"] == step.name)
-            for position, r in enumerate(step.requirements):
+            for position, r in enumerate(REQUIREMENTS.get(step.name, ())):
                 c.execute(
                     "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, "
                     "position, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -97,6 +127,8 @@ def _met(conn, task_id, kind, needs):
 
 
 def setup(run, w, team):
+    for bot in team.builders:
+        bot.__class__ = RequirementBuilder
     seed(w)
     watch(run, w)
     tickets(run, w, 6)

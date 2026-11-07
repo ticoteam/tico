@@ -14,7 +14,6 @@ A bot's `style` is how its model behaves, as probabilities per turn that does re
   only skips it posts none; a receipt the gate refused it puts right on its next turn
 Every number is drawn from the scenario's seeded random generator, so a run repeats exactly."""
 
-import datetime as dt
 import os
 from collections import Counter
 from .board import MERGE
@@ -587,28 +586,9 @@ class Builder(Bot):
             if "test receipt" in exc.body and "receipt_wording" in self.style:
                 last = next((p for p in reversed(self.posted) if p[1] == task["id"]), None)
                 self.owed[task["id"]] = "push" if last and last[3] in FAILING_RECEIPTS else "receipt"
-            if self.blocked_by_requirement(exc):
-                return self.meet_requirements(task, step)
             raise
         self.moves.append((self.world.now(), task["id"], step, None))
         return "moved to " + step
-
-    @staticmethod
-    def blocked_by_requirement(exc):
-        """Whether the server refused the move for a stage requirement ("Can't leave <stage> yet: <names>")."""
-        return "requirement" in exc.body and "leave" in exc.body
-
-    def meet_requirements(self, task, step):
-        """Act on a requirement refusal as a real builder does on reading it: set what the ticket itself can show (a due
-        date), then move again; for what only time brings (CI green at the head) wait, and the next turn tries again."""
-        w = self.world
-        here = w.board.step(w.step_of(w.task(task["id"])))
-        asked = list(here.requirements) if here else []
-        fixed = [r for r in asked if r["kind"] == "field" and r["needs"].get("field") == "due"]
-        if fixed:
-            w.update(task["id"], token=self.token, due=(w.now() + dt.timedelta(days=7)).strftime("%Y-%m-%dT17:00:00Z"))
-            return "set the due date, " + self.move(task, step)
-        return "waiting on " + ", ".join(r["name"] for r in asked)
 
     def settle(self):
         """A move the gate refused for its receipt, put right as a real builder does on reading the refusal: a clean
