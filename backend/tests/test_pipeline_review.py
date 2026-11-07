@@ -2,6 +2,7 @@
 advance, the 10-second undo, send-back, Message manager and Mark met. The concurrency cases use real connections to one
 file: the database decides, not a Python lock."""
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -153,7 +154,11 @@ class World:
             for i in R.queue_for(self.c, ANA)
             if i["task_id"] == (task or self.task) and i["requirement_id"] == (requirement or self.mockup)
         )
-        return {"work_version": item["work_version"], "attachment_digest": item["attachment_digest"]}
+        return {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
 
     def approve(self, requirement=None, actor=ANA, task=None, **kw):
         seen = {} if kw.get("seen") is False else self.view(requirement, task)
@@ -282,7 +287,7 @@ def test_approve_is_refused_after_a_push_an_attachment_swap_or_a_rule_change(wor
     assert refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen).extra["reason"] == "attachment"
     seen = w.view()
     w.c.execute("UPDATE stage_requirements SET version=2 WHERE id=?", (w.mockup,))
-    error = refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen, requirement_version=1)
+    error = refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen)
     assert error.extra["reason"] == "requirement"
     assert w.c.execute("SELECT count(*) FROM stage_decisions").fetchone()[0] == 0
     assert w.step_of() == w.review
@@ -295,7 +300,7 @@ def test_a_bot_never_approves_and_a_requirement_nobody_reviews_by_person_is_not_
     refused("not_person", R.claim, w.c, "bot:cmo", w.task, w.mockup)
     refused("not_person", R.mark_met, w.c, "bot:cmo", w.task, w.mockup, "ok")
     botted = w.requirement("Lint", "run", "bot", stage=w.review)
-    refused("not_person_reviewed", R.approve, w.c, ANA, w.task, botted, work_version=0)
+    refused("not_person_reviewed", R.approve, w.c, ANA, w.task, botted, work_version=0, requirement_version=1)
     # The table itself will not let an approval be reviewed by a bot.
     with pytest.raises(Exception, match="CHECK"):
         w.requirement("Bot sign-off", "approval", "bot")
@@ -313,7 +318,7 @@ def test_the_last_requirement_moves_the_ticket_on_and_an_earlier_one_does_not(wo
     assert decision["reason"] == "Looks right" and decision["requirement_version"] == 1
     assert '"advanced"' in decision["outcome"]
     # Nothing is left to approve at the stage the ticket has left.
-    refused("moved", R.approve, w.c, ANA, w.task, w.signoff, work_version=0)
+    refused("moved", R.approve, w.c, ANA, w.task, w.signoff, work_version=0, requirement_version=1)
 
 
 def test_a_met_requirement_goes_stale_when_the_work_changes_and_is_approved_again(world):
@@ -324,7 +329,8 @@ def test_a_met_requirement_goes_stale_when_the_work_changes_and_is_approved_agai
     assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "met"
     refused("already_met", R.approve, w.c, ANA, w.task, w.mockup, **seen)
     w.push()
-    assert w.view()["work_version"] == 1  # back in the queue at the new version
+    assert w.view()["work_version"] == 1  # back in the queue at the new version, with the attachment it was met on
+    w.attach(digest="d2")  # the work changed, so the mockup is attached again before it can be approved
     assert w.approve(w.mockup)["verdict"] == "met"
 
 
@@ -546,7 +552,11 @@ def test_the_routes_serve_the_queue_and_approve_and_undo_for_a_person_only(tmp_p
         assert client.get(f"/api/v2/pipelines/{w.pipeline}/stages/{w.review}/review/queue", headers=ana).json()["items"]
         assert client.get("/api/v2/pipelines/review/queue", headers=ben).json()["items"] == []
         path = f"/api/v2/pipelines/tasks/{w.task}/requirements/{w.signoff}"
-        body = {"work_version": item["work_version"], "attachment_digest": item["attachment_digest"]}
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
         refused_by_ben = client.post(path + "/approve", json=body, headers=ben)
         assert refused_by_ben.status_code == 422 and refused_by_ben.json()["error"]["code"] == "not_yours"
         stale = client.post(
@@ -571,13 +581,14 @@ def test_the_routes_serve_the_queue_and_approve_and_undo_for_a_person_only(tmp_p
 def test_the_engine_calls_approve_and_mark_met_with_no_versions_and_catches_hubdb_refused(world, monkeypatch):
     w = world
     monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: [])
-    assert R.approve(w.c, ANA, w.task, w.mockup)["verdict"] == "met"
+    assert R.approve(w.c, ANA, w.task, w.mockup, requirement_version=1)["verdict"] == "met"
     with pytest.raises(H.Refused) as caught:
-        R.approve(w.c, BEN, w.task, w.signoff)
+        R.approve(w.c, BEN, w.task, w.signoff, requirement_version=1)
     assert caught.value.rule == "not_yours"
     with pytest.raises(H.Refused):
         R.mark_met(w.c, BEN, w.task, w.signoff, "note")
-    assert R.mark_met(w.c, ANA, w.task, w.signoff, "note")["verdict"] == "override"
+    refused("protected_approval", R.mark_met, w.c, ANA, w.task, w.signoff, "note")  # an approval is never overridden
+    refused("already_met", R.mark_met, w.c, ANA, w.task, w.mockup, "note")
 
 
 def mixed_queue(path):
@@ -611,7 +622,7 @@ def mixed_queue(path):
     done = ticket("Done")
     w.attach(done, w.mockup, "done", attachment_id="a-done")
     w.visit(done, "2026-11-05T09:00:00.000000Z")
-    R.approve(w.c, ANA, done, w.mockup)
+    R.approve(w.c, ANA, done, w.mockup, requirement_version=1)
     sent = ticket("Sent")
     w.attach(sent, w.mockup, "sent", attachment_id="a-sent")
     w.visit(sent, "2026-11-02T10:00:00.000000Z")
@@ -726,6 +737,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -752,6 +764,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -789,6 +802,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -815,6 +829,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -841,6 +856,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": {"stage_id": "Shipped", "name": "Shipped"},
             },
             {
@@ -878,6 +894,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "The badge is too small",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": {"stage_id": "Review", "name": "Review"},
             },
             {
@@ -915,6 +932,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ben",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -941,6 +959,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -978,6 +997,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1004,6 +1024,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1030,6 +1051,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": True,
+                "can_not_validate": False,
                 "moves_to": None,
             },
         ],
@@ -1069,6 +1091,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": False,
+                "can_not_validate": False,
                 "moves_to": None,
             },
             {
@@ -1106,6 +1129,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "bot_note": "",
                 "reviewer_id": "human:ana",
                 "can_mark_met": False,
+                "can_not_validate": False,
                 "moves_to": None,
             },
         ],
@@ -1158,3 +1182,106 @@ def test_reviewer_id_is_the_claimant_and_a_plain_member_cannot_mark_met(world, m
     assert R.queue_for(w.c, BEN)[0]["reviewer_id"] == BEN
     (seen_by_ana,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff]
     assert seen_by_ana["reviewer_id"] == BEN
+
+
+def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_on_subtasks(world):
+    """Not validated works only on a stage that directly follows an In development stage holding a `subtasks` run, with
+    a spawn link from an earlier stage. The queue flag and the action share that rule. A bot never gets it."""
+    w = world
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    rev = w.revision()
+    # Review's requirement sits after Making, which waits on nothing: refused, and the queue does not offer it.
+    assert item()["can_not_validate"] is False
+    refused(
+        "not_validatable", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    # Making now waits on its Engineering subtasks: Review is the Validate stage and Not validated is offered.
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    assert item()["can_not_validate"] is True
+    assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review) is None, "a bot never gets the route"
+    # A stale work version or requirement version refuses, inside the transaction.
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev + 1, requirement_version=1)
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=2)
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screenshots never validated", work_version=rev, requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making" and done["follow_up"]
+
+
+def test_an_approval_refuses_an_attachment_attached_before_the_last_change(world):
+    w = world
+    w.push()
+    seen = w.view()
+    error = refused("stale", R.approve, w.c, ANA, w.task, w.mockup, **seen)
+    assert "attached before the last change" in error.detail
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE verdict='met'").fetchone()[0] == 0
+
+
+def test_the_approve_route_refuses_a_body_without_the_requirement_version(tmp_path):
+    ids = {"ana-test": Identity("human:ana", "owner", "ana@acme.example")}
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            w.attach()
+            w.approve(w.mockup)
+        ana = {"Authorization": "Bearer ana-test", "Idempotency-Key": "k-ana"}
+        (item,) = client.get("/api/v2/pipelines/review/queue", headers=ana).json()["items"]
+        body = {"work_version": item["work_version"], "attachment_digest": item["attachment_digest"]}
+        path = f"/api/v2/pipelines/tasks/{w.task}/requirements/{w.signoff}"
+        response = client.post(path + "/approve", json=body, headers=ana)
+        assert response.status_code == 422, response.text
+
+
+def test_undo_of_an_approval_that_did_not_move_the_ticket_is_refused_once_the_ticket_moved_on(world):
+    w = world
+    done = w.approve(w.mockup)
+    assert done["advanced"] is False
+    H.task_update(
+        w.c, ANA, w.task, step="Making"
+    )  # an editor moves it back: it is no longer where the approval left it
+    refused("moved_on", R.undo, w.c, ANA, done["decision_id"])
+
+
+def test_removing_the_attachment_a_person_approved_takes_the_approval_back(world):
+    w = world
+    w.approve(w.mockup)
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "met"
+    w.c.execute(
+        "UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=? AND stage_requirement_id=?",
+        (H.now(), ANA, w.task, w.mockup),
+    )
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) != "met"
+
+
+def test_an_earlier_stage_requirement_is_approved_in_place_and_does_not_move_the_ticket(world):
+    w = world
+    w.approve(w.mockup)
+    H.task_update(w.c, ANA, w.task, step="Making")  # the ticket left Review, and Making is still open
+    w.push()
+    w.attach(digest="d2")  # the mockup went stale when the work changed; it is attached again
+    done = w.approve(w.mockup)
+    assert done["advanced"] is False and w.step_of() == w.making
+
+
+def test_an_llm_judges_reason_shows_on_the_queue_row(world):
+    w = world
+    w.decide(w.mockup, "unsure", judge="llm", reason="The logo is blurry")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
+    assert item["bot_note"] == "The logo is blurry"
+
+
+def test_a_requirement_for_one_label_is_not_asked_of_a_ticket_without_that_label(world):
+    w = world
+    legal = w.requirement("Legal OK", "approval", "person", applies_to_label="legal")
+    assert legal not in {i["requirement_id"] for i in R.queue_for(w.c, ANA)}
+    w.c.execute(
+        "INSERT INTO tags (id, key, label, created_at, updated_at) VALUES ('tg-legal', 'legal', 'Legal', ?, ?)",
+        (H.now(), H.now()),
+    )
+    w.c.execute("INSERT INTO task_tags (task_id, tag_id) VALUES (?, 'tg-legal')", (w.task,))
+    assert legal in {i["requirement_id"] for i in R.queue_for(w.c, ANA)}

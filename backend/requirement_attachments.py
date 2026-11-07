@@ -76,7 +76,11 @@ def current(conn: "sqlite3.Connection", task_id: str, stage_requirement_id: str)
     return found[0] if found else None
 
 
-def _format_of(mime: str, name: str) -> str:
+def _format_of(mime: str, name: str, native_page: bool = False) -> str:
+    """The format a requirement's `formats` names for a piece of evidence: a Tico page (a `pages` row), a PDF, an image,
+    a video, or a plain file."""
+    if native_page:
+        return "page"
     lowered = (mime or "").lower()
     for prefix, kind in MIME_FORMATS.items():
         if lowered.startswith(prefix):
@@ -84,6 +88,18 @@ def _format_of(mime: str, name: str) -> str:
     if lowered == "application/pdf" or name.lower().endswith(".pdf"):
         return "page"
     return "file"
+
+
+def _native_pages(conn: "sqlite3.Connection", file_ids: list[str]) -> set[str]:
+    """The company files among `file_ids` that are live Tico pages (backend/pages.py), so a page satisfies a page format."""
+    if not file_ids or not H._has_table(conn, "pages"):
+        return set()
+    rows = conn.execute(
+        "SELECT file_id FROM pages WHERE file_id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL "
+        "AND archived=0",
+        (json.dumps(file_ids),),
+    ).fetchall()
+    return {str(r[0]) for r in rows}
 
 
 def views(conn: "sqlite3.Connection", rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -108,6 +124,7 @@ def views(conn: "sqlite3.Connection", rows: list[dict[str, Any]]) -> list[dict[s
             (json.dumps(blobs),),
         ).fetchall():
             media[str(found[0])] = (str(found[1]), str(found[2]))
+    pages = _native_pages(conn, sorted({str(r["file_id"]) for r in rows if r.get("file_id")}))
     out: list[dict[str, Any]] = []
     for r in rows:
         source = str(r.get("source") or "")
@@ -119,7 +136,8 @@ def views(conn: "sqlite3.Connection", rows: list[dict[str, Any]]) -> list[dict[s
         elif r.get("file_id") and r.get("file_version"):
             version = int(r["file_version"])
             mime, name = media.get(f"{r['file_id']}:{version}", ("", str(r["file_id"])))
-            fmt, href = _format_of(mime, name), f"/api/v2/files/{r['file_id']}/versions/{version}"
+            fmt = _format_of(mime, name, str(r["file_id"]) in pages)
+            href = f"/api/v2/files/{r['file_id']}/versions/{version}"
         else:
             fmt, name, href = "file", source.replace("_", " ").capitalize() or "File", None
         out.append({**r, "format": fmt, "name": name, "href": href})
@@ -188,13 +206,14 @@ def _source(conn: "sqlite3.Connection", auth: "Auth", who: Any, reviewer: str, b
         ).fetchone()
         if row is None:
             raise Problem("not_found", "No such file version", 404)
+        native = body["file_id"] in _native_pages(conn, [body["file_id"]])
         return {
             "blob_id": row["blob_id"],
             "file_id": body["file_id"],
             "file_version": version,
             "url": None,
             "digest": row["digest"],
-            "format": _format_of(row["mime"] or found["mime"], row["name"] or found["title"]),
+            "format": _format_of(row["mime"] or found["mime"], row["name"] or found["title"], native),
             "bot_id": found["bot_id"],
         }
     if source == "blob":
@@ -256,7 +275,9 @@ def attach(
         raise Problem("not_found", "No such requirement", 404)
     if req["kind"] != "attachment":
         raise Problem("validation", "This requirement takes no attachment", 422)
-    if task.get("type_id") != req["pipeline_id"] or task.get("step_id") != req["pipeline_stage_id"]:
+    from . import pipeline_engine
+
+    if not pipeline_engine.counts_on_card(conn, task_id, req):
         raise Problem("conflict", "The ticket is not at this requirement's stage", 409)
     reviewer = req["reviewer_id"] or actor
     if not _may_read(conn, reviewer, task):
@@ -269,6 +290,12 @@ def attach(
     if needs.get("is_work"):
         conn.execute("UPDATE tasks SET work_revision = work_revision + 1 WHERE id=?", (task_id,))
     work = conn.execute("SELECT work_revision FROM tasks WHERE id=?", (task_id,)).fetchone()
+    # The same evidence attached again keeps the earliest work version it was attached at on this ticket, so old evidence
+    # cannot look fresh after a change (D33). Removed attachments count too.
+    earliest = conn.execute(
+        "SELECT MIN(work_version) FROM requirement_attachments WHERE task_id=? AND digest=?", (task_id, what["digest"])
+    ).fetchone()
+    attached_at = int(earliest[0]) if earliest and earliest[0] is not None else (int(work[0]) if work else 0)
     now = H.now()
     row_id = H.new_id()
     conn.execute(
@@ -285,7 +312,7 @@ def attach(
             what["file_version"],
             what["url"],
             what["digest"],
-            int(work[0]) if work else 0,
+            attached_at,
             actor,
             now,
         ),

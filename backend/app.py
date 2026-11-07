@@ -72,6 +72,7 @@ from . import (
 )
 from . import task_privacy as privacy
 from . import task_relations as TR
+from . import pipeline_rights
 from . import task_roles as TRo
 from . import placement as placing
 from . import turns as turn_work
@@ -3018,10 +3019,12 @@ def create_app(settings=None):
         snoozed=None,
         by_id=False,
         exact=False,
+        viewer="",
     ):
         """The filters `GET /api/v2/tasks` takes, checked and resolved: (owner, requester, H.tasks keywords). A bulk
         change (`POST /api/v2/task-bulk`) selects with the same ones. `exact` refuses an owner or requester that names
-        nobody, where a list would quietly drop the filter: a bulk change must never widen to every task."""
+        nobody, where a list would quietly drop the filter: a bulk change must never widen to every task. `viewer` is the
+        reader's actor: a members-only pipeline it may not see is refused as an unknown type, and its steps are not named."""
         found_owner = H.resolve_actor(c, owner) if owner else None
         found_requester = H.resolve_actor(c, requester) if requester else None
         if exact and (owner and not found_owner or requester and not found_requester):
@@ -3041,12 +3044,16 @@ def create_app(settings=None):
         if lane and lane not in H.TASK_LANES:
             raise Problem("kind", "lane is company or product", 422)
         typ = H.type_get(c, type) if type else None
+        if typ and not pipeline_rights.may_see(c, viewer, typ["id"]):
+            typ = None
         if type and not typ:
             raise Problem("type", "No task type " + type, 422)
         step_ids = None
         if step:
-            # By id or name: in the type when one is given, else every type's step of that name.
-            steps = typ["steps"] if typ else H._rows(c.execute("SELECT id,name FROM task_steps"))
+            # By id or name: in the type when one is given, else every type's step of that name the reader may see.
+            hidden = pipeline_rights.hidden_pipeline_ids(c, viewer)
+            steps = typ["steps"] if typ else H._rows(c.execute("SELECT id,name,type_id FROM task_steps"))
+            steps = [s for s in steps if s.get("type_id") not in hidden]
             step_ids = [s["id"] for s in steps if step in (s["id"], s["name"])]
             if not step_ids:
                 raise Problem("step", "No step " + step + (" in " + typ["name"] if typ else ""), 422)
@@ -3105,12 +3112,15 @@ def create_app(settings=None):
             # A bot task now lives in the bot's chat room. Only this task's messages
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
+            # Each related ticket is read on its own: the pipeline-aware list rule (pipeline_rights.list_sql), so owning
+            # this ticket on a members-only pipeline grants no other ticket of it (its children, relations or counts).
+            related_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             child_rows = H._rows(
                 c.execute(
                     "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
                     + TR.CHILD_IDS
                     + ") AND ("
-                    + auth.task_sql(c, who)
+                    + related_sql
                     + ") ORDER BY (rank IS NULL), rank, created_at",
                     (tid,),
                 )
@@ -3153,7 +3163,7 @@ def create_app(settings=None):
             # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
             return {
                 "task": {
-                    **task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
+                    **task_view(row, c, visible_sql=related_sql, who=who),
                     "followers": task_followers_seen(c, who, row),
                 },
                 "events": history,

@@ -463,7 +463,7 @@ def test_a_page_or_text_file_reaches_the_judge_cut_at_its_cap_and_an_image_has_n
         {
             "name": "Release note",
             "kind": "attachment",
-            "needs": {"formats": ["file", "image"]},
+            "needs": {"formats": ["page", "file", "image"]},
             "reviewed_by": "bot",
             "rubric": "The note says what shipped",
         },

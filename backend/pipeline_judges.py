@@ -372,7 +372,10 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
            LEFT JOIN bot_file_versions v ON v.file_id = a.file_id AND v.version = a.file_version
            WHERE a.removed_at IS NULL
              AND r.kind = 'attachment' AND r.reviewed_by IN ('bot', 'bot_then_person')
-             AND r.rubric IS NOT NULL AND t.step_id = r.pipeline_stage_id
+             AND r.rubric IS NOT NULL
+             AND (t.step_id = r.pipeline_stage_id OR EXISTS (SELECT 1 FROM stage_visits v
+                  WHERE v.task_id = a.task_id AND v.pipeline_stage_id = r.pipeline_stage_id AND v.left_at IS NOT NULL
+                    AND r.created_at <= v.left_at))
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.requirement_attachment_id = a.id AND d.judge = 'llm')
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
@@ -439,6 +442,19 @@ def _open_visit(c: sqlite3.Connection, task_id: str) -> str | None:
     return str(found[0]) if found else None
 
 
+def _counts_after_leaving(c: sqlite3.Connection, job: dict[str, Any]) -> bool:
+    """Whether the requirement still counts for the ticket though it has left the stage: the ticket visited that stage and
+    the requirement existed when it left (the same rule as the engine's counts_on_card)."""
+    return (
+        c.execute(
+            "SELECT 1 FROM stage_visits v JOIN stage_requirements r ON r.id = ? WHERE v.task_id = ? "
+            "AND v.pipeline_stage_id = r.pipeline_stage_id AND v.left_at IS NOT NULL AND r.created_at <= v.left_at LIMIT 1",
+            (job["stage_requirement_id"], job["task_id"]),
+        ).fetchone()
+        is not None
+    )
+
+
 def _superseded(c: sqlite3.Connection, job: dict[str, Any]) -> str | None:
     """Why the answer for a waiting attachment no longer applies, or None when it still does. Checked in the write
     transaction that records the answer, against the state the job was read in (`read_at`, `visit_id`): the evidence, the
@@ -455,11 +471,15 @@ def _superseded(c: sqlite3.Connection, job: dict[str, Any]) -> str | None:
     if req is None or req[1] is not None or int(req[0] or 0) != int(job["requirement_version"] or 0):
         return "the requirement changed"
     task = c.execute("SELECT step_id, work_revision, status FROM tasks WHERE id=?", (job["task_id"],)).fetchone()
-    if task is None or task[0] != job["pipeline_stage_id"] or task[2] not in H.ACTIVE_STATUSES:
+    if task is None or task[2] not in H.ACTIVE_STATUSES:
+        return "the ticket left the stage"
+    on_stage = task[0] == job["pipeline_stage_id"]
+    if not on_stage and not _counts_after_leaving(c, job):
         return "the ticket left the stage"
     if int(task[1] or 0) != int(job["task_work_version"] or 0):
         return "the work changed"
-    if _open_visit(c, job["task_id"]) != job.get("visit_id"):
+    # A stale requirement of a stage the ticket has left is judged in place: the ticket moving on does not supersede it.
+    if on_stage and _open_visit(c, job["task_id"]) != job.get("visit_id"):
         return "the ticket moved on"
     ruled = c.execute(
         "SELECT 1 FROM stage_decisions WHERE task_id=? AND stage_requirement_id=? AND COALESCE(judge,'')<>'llm' "

@@ -39,8 +39,16 @@ interface PipelineRail {
 
 let pipelineRail: PipelineRail | null = null;
 let pipelineRailHidden = false;
-/** Task ids past their stage's "Warn after", from the manager's Late list: the cards that show "Nh in step". */
+/** Task ids past their stage's "Warn after", from the server's Late list: the cards that show "Nh in step". */
 const pipelineLateIds = new Set<string>();
+/** The pipeline on screen whose Late list is held, when it was last read, and the pending live reload. */
+let pipelineLateFor = '';
+let pipelineLateAt = 0;
+let pipelineLateTimer = 0;
+let pipelineLatePoll = 0;
+/** A live reload waits at least this long after the last read; the poll keeps the times moving with no event. */
+const PIPELINE_LATE_MS = 30000;
+const PIPELINE_LATE_POLL_MS = 300000;  // safety poll; live events do the rest
 /** The chip order of the phone's stages as last drawn, for swipes. */
 let pipelineStageOrder: string[] = [];
 
@@ -219,6 +227,46 @@ function pipelineRailChatEnsure(): void {
 
 // ---------------------------------------------------------------- loading and keeping it
 
+/** Reads the Late list of the pipeline on screen, rail open or not, and repaints the cards when it changed. */
+async function pipelineLateLoad(): Promise<void> {
+  const pipelineId = pipelineLateFor;
+  if (!pipelineId) return;
+  pipelineLateAt = Date.now();
+  let ids: string[];
+  try { ids = await pipelineLateTicketIds(pipelineId); } catch { return; }
+  if (pipelineLateFor !== pipelineId) return;
+  const next = new Set(ids);
+  const changed = next.size !== pipelineLateIds.size || [...next].some(id => !pipelineLateIds.has(id));
+  pipelineLateIds.clear();
+  next.forEach(id => pipelineLateIds.add(id));
+  if (changed && TASKS_ST) tasksRender(TASKS_ST);
+}
+
+/** Follows the pipeline on screen: its Late list is read when it shows and again every 5 minutes, so a card's
+    time moves on with no event. Another pipeline (or none) drops the old list. */
+function pipelineLateFollow(pipelineId: string): void {
+  if (pipelineId === pipelineLateFor) return;
+  pipelineLateFor = pipelineId;
+  pipelineLateIds.clear();
+  window.clearTimeout(pipelineLateTimer); pipelineLateTimer = 0;
+  window.clearInterval(pipelineLatePoll); pipelineLatePoll = 0;
+  if (!pipelineId) return;
+  pipelineLatePoll = window.setInterval(() => { void pipelineLateLoad(); }, PIPELINE_LATE_POLL_MS);
+  void pipelineLateLoad();
+}
+
+/** Called for each batch of live task events: when one touches the pipeline on screen, its Late list is read again,
+    at most once per PIPELINE_LATE_MS. */
+function pipelineLateLive(events: { id?: string | number; bulk?: boolean; gone?: boolean; task?: { type_id?: string } | null }[]): void {
+  if (!pipelineLateFor) return;
+  const cards = (TASKS_ST as unknown as { tasks: { id: string | number; type_id?: string }[] } | null)?.tasks ?? [];
+  const touches = events.some(d => d.bulk || d.gone || d.task?.type_id === pipelineLateFor
+    || cards.some(t => String(t.id) === String(d.id) && t.type_id === pipelineLateFor));
+  if (!touches || pipelineLateTimer) return;
+  const wait = Math.max(0, pipelineLateAt + PIPELINE_LATE_MS - Date.now());
+  pipelineLateTimer = window.setTimeout(() => { pipelineLateTimer = 0; void pipelineLateLoad(); }, wait);
+}
+
 async function pipelineRailLoad(): Promise<void> {
   const rail = pipelineRail;
   if (!rail) return;
@@ -226,12 +274,7 @@ async function pipelineRailLoad(): Promise<void> {
     const view = await pipelineManagerView(rail.pipelineId);
     if (pipelineRail !== rail) return;
     rail.view = view;
-    const late = new Set(view.late.map(item => item.task_id));
-    const changed = late.size !== pipelineLateIds.size || [...late].some(id => !pipelineLateIds.has(id));
-    pipelineLateIds.clear();
-    late.forEach(id => pipelineLateIds.add(id));
-    if (changed && TASKS_ST) tasksRender(TASKS_ST);       // the cards past their limit say so
-    else pipelineRailPaint(TASKS_ST);
+    pipelineRailPaint(TASKS_ST);
   } catch {
     // The manager's status is not there (an older server, or a pipeline with none): the rail shows what it has.
     if (pipelineRail === rail) pipelineRailPaint(TASKS_ST);
@@ -291,7 +334,6 @@ function pipelineRailLeave(): void {
   document.querySelectorAll('.pr-scrim, #pipe-rail-bar').forEach(node => node.remove());
   rail.host.remove();
   pipelineRail = null;
-  pipelineLateIds.clear();
 }
 
 /** Called after every draw of the Tasks page: keeps the rail for the pipeline on show (one with a manager, on the
@@ -302,6 +344,7 @@ function pipelineRailSync(state: PipelineTasksState): void {
   const ref = type?.manager ? String(type.manager).replace(/^bot:/, '') : '';
   const manager = ref ? 'bot:' + (botByRef(ref)?.id ?? ref) : '';
   const page = document.querySelector('.tasks-page');
+  pipelineLateFollow(type?.id ?? '');
   if (type) void pipelineMineSync(type.id);
   if (!type || !manager || !page) { pipelineRailLeave(); return; }
   if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== manager || !pipelineRail.host.isConnected) {

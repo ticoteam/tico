@@ -2,11 +2,13 @@
 requirements and attachments, and its links. A non-member gets nothing about it, a member gets it all, and a member whose
 membership is revoked gets nothing again. A list of links is paged, a page at a time."""
 
+import json
 import uuid
 
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_requirements as R
+from backend import task_relations as TR
 from backend.auth import Identity
 from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
 from backend.tests.test_pipeline_foundation import T, insert
@@ -171,7 +173,10 @@ def test_ticket_lists_search_and_the_pipeline_view_leave_out_a_members_only_pipe
 
     everything, readers_own = {theirs, mine, asked}, {mine, asked}
     assert listed("ana-test", f"tasks?type={typ}&limit=500") == everything
-    assert listed("cara-test", f"tasks?type={typ}&limit=500") == readers_own
+    get(api, f"tasks?type={typ}&limit=500", "cara-test", expected=422)  # a hidden type is no type to her
+    assert theirs not in listed("cara-test", "tasks?limit=500") and readers_own <= listed(
+        "cara-test", "tasks?limit=500"
+    )
     assert listed("ana-test", f"tasks?q={tag}&limit=500") == everything
     assert listed("cara-test", f"tasks?q={tag}&limit=500") == readers_own
     get(api, f"pipeline?type={typ}", "cara-test", expected=422)  # a hidden type is no type to her
@@ -202,3 +207,118 @@ def test_the_manager_rail_and_the_review_queues_leave_out_a_members_only_pipelin
     get(api, f"pipelines/{typ}/stages/{steps['Doing']}/review/queue", "cara-test", expected=404)
     get(api, f"pipelines/{typ}/manager", "cara-test", expected=404)
     get(api, f"pipelines/{typ}/manager", "ana-test")
+
+
+def test_the_affected_count_of_a_members_only_stage_is_not_found_to_a_non_member(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, steps = make_pipeline(api, "Legal" + tag, private=True)
+    ticket(api, typ, "Open " + tag, owner="human:ben")
+    path = f"pipeline-stages/{steps['Doing']}/affected"
+    get(api, path, "cara-test", expected=404)  # the same answer as a stage that does not exist
+    assert get(api, path, "ana-test")["count"] == 1
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO pipeline_members (pipeline_id, actor_id, created_at) VALUES (?,?,?)", (typ, "human:cara", T)
+        )
+    assert get(api, path, "cara-test")["count"] == 1
+
+
+def test_flow_stats_and_ticket_filters_name_a_members_only_pipeline_to_no_one_outside_it(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Legal" + tag, private=True)
+    with api.app.state.store.transaction() as c:
+        H.type_create(c, H.KEEPER, "Hush" + tag, [{"name": "Hush" + tag, "status": "doing"}])
+        hush = H.type_get(c, "Hush" + tag)["id"]
+        c.execute("UPDATE task_types SET pipeline_visibility='members' WHERE id=?", (hush,))
+    ticket(api, typ, "Open " + tag, owner="human:ben")
+
+    def answer(path, token):
+        response = api.get("/api/v2/" + path, headers=headers(token))
+        return response.status_code, response.text
+
+    # A hidden type is refused as an unknown one is, with the same error (the name it was given is the only difference).
+    for path, unknown in (
+        (f"tasks/flow?type={typ}", "tasks/flow?type=nope" + tag),
+        (f"tasks?type={typ}&limit=5", "tasks?type=nope" + tag),
+        (f"tasks?step=Hush{tag}&limit=5", "tasks?step=nope" + tag),
+    ):
+        hidden, missing = answer(path, "cara-test"), answer(unknown, "cara-test")
+        assert hidden[0] == missing[0] == 422, (path, hidden, missing)
+        assert hidden[1].replace(typ, "X").replace("Hush" + tag, "X").replace("nope" + tag, "X") == missing[1].replace(
+            "nope" + tag, "X"
+        ), (path, hidden, missing)
+        assert "Legal" not in hidden[1]
+    assert answer(f"tasks/flow?type={typ}", "ana-test")[0] == 200
+    assert answer(f"tasks?step=Hush{tag}&limit=5", "ana-test")[0] == 200
+
+
+def test_a_non_member_who_owns_a_members_only_parent_sees_none_of_its_hidden_children_or_relations(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Legal" + tag, private=True)
+    parent = ticket(api, typ, "Parent " + tag, owner="human:cara", requester="human:ana")
+    hidden_child = ticket(api, typ, "Ben's " + tag, owner="human:ben", requester="human:ana")
+    own_child = ticket(api, typ, "Cara's " + tag, owner="human:cara", requester="human:ana")
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, "human:ana", hidden_child, parent, "parent", T)
+        TR._insert(c, "human:ana", own_child, parent, "parent", T)
+        TR._insert(c, "human:ana", parent, hidden_child, "blocks", T)
+
+    detail = get(api, f"tasks/{parent}", "cara-test")
+    assert detail["task"]["id"] == parent  # the owner reads the parent itself
+    assert {child["id"] for child in detail["children"]} == {own_child}
+    assert detail["task"]["parts"]["total"] == 1, detail["task"]["parts"]
+    related = {ref["id"] for refs in detail["task"]["relations"].values() for ref in refs}
+    assert hidden_child not in related
+    everyone = get(api, f"tasks/{parent}", "ana-test")
+    assert {child["id"] for child in everyone["children"]} == {hidden_child, own_child}
+
+
+def test_the_change_feed_reads_a_deleted_ticket_while_a_members_only_pipeline_exists(api):
+    from backend.task_delete import delete_tasks
+
+    tag = uuid.uuid4().hex[:8]
+    public, _ = make_pipeline(api, "Sales" + tag)
+    make_pipeline(api, "Legal" + tag, private=True)  # the hidden pipeline the list rule reads the type against
+    gone_one = ticket(api, public, "Gone " + tag, owner="human:ben")
+    cursor = get(api, "tasks?limit=5", "cara-test")["cursor"]
+    kept = ticket(api, public, "Kept " + tag, owner="human:ben")
+    with api.app.state.store.transaction() as c:
+        report = delete_tasks(c, [gone_one], apply=True, actor="human:ana", keep_work=True)
+    assert report["applied"] is True, report
+
+    feed = get(api, f"tasks?changed_after={cursor}", "cara-test")
+    assert not feed.get("reset")
+    assert gone_one in feed["gone"]
+    assert [t["id"] for t in feed["tasks"]] == [kept]
+
+
+def test_a_change_to_a_ticket_nothing_records_is_not_read_when_a_members_only_pipeline_exists(api):
+    from backend import task_reads
+    from backend.pipeline_rights import list_sql
+
+    tag = uuid.uuid4().hex[:8]
+    make_pipeline(api, "Legal" + tag, private=True)
+    ghost = json.dumps(["human:ben", "human:ana", 0, None])
+    with api.app.state.store.read() as c:
+        visible = list_sql(c, "human:cara", "1")
+        assert task_reads._could_read(c, visible, "no-such-ticket", ghost) is False
+
+
+def test_an_empty_members_only_pipeline_leaves_a_non_members_list_etag_as_it_was(api):
+    first = api.get("/api/v2/tasks?limit=5", headers=headers("cara-test"))
+    assert first.status_code == 200 and first.headers["etag"]
+    make_pipeline(api, "Legal" + uuid.uuid4().hex[:8], private=True)  # empty, and hidden from her
+    again = api.get("/api/v2/tasks?limit=5", headers={**headers("cara-test"), "If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+
+
+def test_an_edit_to_a_ticket_a_non_member_cannot_read_leaves_her_labels_etag_as_it_was(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Legal" + tag, private=True)
+    hidden_ticket = ticket(api, typ, "Ben's " + tag, owner="human:ben")
+    first = api.get("/api/v2/tasks/labels", headers=headers("cara-test"))
+    assert first.status_code == 200 and first.headers["etag"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET title=? WHERE id=?", ("Renamed " + tag, hidden_ticket))
+    again = api.get("/api/v2/tasks/labels", headers={**headers("cara-test"), "If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304

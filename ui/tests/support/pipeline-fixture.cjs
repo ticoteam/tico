@@ -64,13 +64,16 @@ function queue(state) {
     pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement, requirement_version: 1, kind: attachment.format,
     work_version: 3, attachment, attachment_digest: 'sha256:aa', why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
     assignee: {id: 'bot:b1', name: 'Builder'}, bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
-    reviewer_id: ME, can_mark_met: true});
+    reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate'});
   const all = [
     row('D52', 'Assistant can approve a spec', 'Build', 'r-shots', 'Screenshots', 'The bot is unsure about shot 2',
       {id: 'a1', source: 'link', format: 'image', name: 'shot.png', href: 'https://example.test/shot.png', file_id: null, file_version: null}),
     row('D61', 'Pipeline stages + manager', 'Spec', 'r-spec61', 'Spec page', 'Spec needs your sign-off',
       {id: 'b1', source: 'file', format: 'pdf', name: 'spec.pdf', href: '/api/v2/files/f1/versions/2', file_id: 'f1', file_version: 2}),
   ];
+  // `validate`: a Validate item comes first, so a test can reach it without stepping through the others.
+  if (state.validate) all.unshift(row('D70', 'Validate the spec', 'Validate', 'r-val70', 'Validation', 'Measures did not hold',
+    {id: 'c1', source: 'link', format: 'page', name: 'Measures', href: 'https://example.test/measures', file_id: null, file_version: null}));
   return {items: all.filter(r => !state.removed.has(`${r.task_id}:${r.requirement_id}`))};
 }
 
@@ -78,9 +81,9 @@ function queue(state) {
 // `ownerOnly`: the type carries no can_edit_rules, only its owner, and the viewer is a member (E3: the rules controls follow
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
-  ownerOnly = false, member = false, claimedBy = null, noRequirements = false} = {}) {
+  ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false} = {}) {
   const state = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0};
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate};
   let shown = manager ? {...type, manager: 'product-manager'} : type;
   if (ownerOnly) { const {can_edit_rules, ...rest} = shown; shown = {...rest, pipeline_owner_id: ME}; }
   if (noRequirements) shown = {...shown, has_requirements: false};
@@ -102,6 +105,11 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
       const label = url.searchParams.get('label') || '';
       state.affectedReads.push(label);
       return json({stage: 'Build', label: label || null, count: label === 'urgent' ? 1 : 3});
+    }
+    if (p === '/api/v2/pipelines/dev-tickets/late') {
+      // The Late list the cards read (no manager needed): every late ticket of the pipeline, keyed by id.
+      state.lateReads = (state.lateReads || 0) + 1;
+      return json({late: Object.fromEntries(late.map(item => [item.task_id, {since: item.since, hours: item.hours, limit_hours: item.limit_hours}]))});
     }
     if (p === '/api/v2/pipelines/dev-tickets/manager') {
       state.managerReads++;
@@ -173,6 +181,11 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
         return json({ok: true, decision_id: 'dec-2'});
       }
       if (path.endsWith('/mark-met')) return json({decision_id: 'dec-3'});
+      if (path.endsWith('/not-validated')) {
+        // The server moves the item back and files one follow-up (D71): the item leaves the queue.
+        state.removed.add(path.replace(/^tasks\/([^/]+)\/requirements\/([^/]+)\/not-validated$/, '$1:$2'));
+        return json({decision_id: 'dec-4', verdict: 'failed', moved_back_to: 'In development', follow_up: 'D71'});
+      }
     }
     return json(unrouted(p));
   });

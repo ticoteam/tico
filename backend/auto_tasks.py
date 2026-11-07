@@ -680,7 +680,12 @@ def started(c, row, *, message=None):
         )
     steps = H.type_get(c, row['type_id'])['steps']
     step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
-    H._set_status(c, H.KEEPER, row, status='doing', step=step, note=START_NOTE)
+    try:
+        H._set_status(c, H.KEEPER, row, status='doing', step=step, note=START_NOTE)
+    except H.Refused as refused:
+        # A pipeline's requirements hold the ticket where it is: the start is logged on the ticket and nothing moves.
+        H.history_event(c, 'task', row['id'], H.KEEPER, 'auto_start_refused', note=refused.detail)
+        return H.task(c, row['id'])
     c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (row['id'],))
     H.recount(c, [row['owner_id'], row['requester_id']])
     # Each start is one run of Start assigned tasks (Settings > Routines, Automations).

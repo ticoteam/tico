@@ -92,7 +92,8 @@ class Company:
         return result
 
     def approve(self, task_id, requirement_id, actor=ANA):
-        result = pipeline_review.approve(self.c, actor, task_id, requirement_id)
+        version = self.c.execute("SELECT version FROM stage_requirements WHERE id = ?", (requirement_id,)).fetchone()[0]
+        result = pipeline_review.approve(self.c, actor, task_id, requirement_id, requirement_version=version)
         self.c.commit()
         return result
 
@@ -157,6 +158,10 @@ class Company:
         """New work on the ticket (a push to its pull request): the work version moves on."""
         pipeline_engine.work_changed(self.c, task_id)
         self.c.commit()
+
+    def revision(self, task_id):
+        """The work version (tasks.work_revision): it goes up on every change of the work."""
+        return self.c.execute("SELECT work_revision FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
 
     def attach(self, task_id, req_id, by=BUILDER, digest="sha-1", url="https://example.test/shot.png"):
         self.insert(
@@ -727,32 +732,64 @@ def test_a_bot_that_never_answers_makes_the_card_late_not_silent(co):
 
 # ----------------------------------------------------------------------------- merge queue
 def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(co):
-    from backend import github
+    """The real path: the queue's webhooks mark the removal for checking, the maintenance pass reads the pull request on
+    GitHub, and a removal that was not a merge ejects the card a stage back with the reason."""
+    from types import SimpleNamespace
+
+    from backend import github as G
 
     shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")  # the pipeline has requirements
     task = co.ticket("Engineering", "Doing", "Merge me")
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
     co.move(task, "In review", actor=ANA)
-    link_id = "lnk-pr-1"
-    detail = {
-        "head_sha": "abc123",
-        "merge_queue": {"state": "dequeued", "reason": "checks failed", "head": "abc123", "verify": True},
-    }
+    url = "https://github.com/acme/app/pull/7"
+    co.insert("repositories", id="repo-acme-app", full_name="acme/app", enabled=1, reachable=1)
     co.insert(
         "task_links",
-        id=link_id,
+        id="lnk-pr-1",
         task_id=task,
         kind="pr",
-        url="https://github.com/acme/app/pull/7",
+        url=url,
+        repo="acme/app",
+        number=7,
         state="open",
         added_by=BUILDER,
         created_at=stamp(),
-        detail=json.dumps(detail),
+        detail=json.dumps({"head_sha": "abc123"}),
     )
     co.c.commit()
-    github._settle_removal(co.c, link_id, {"state": "open", "merged": False, "head": {"sha": "abc123"}})
+    pr = {"html_url": url, "number": 7, "state": "open", "merged": False, "head": {"sha": "abc123"}}
+    G.pull_request(co.c, {"action": "enqueued", "pull_request": pr})
+    G.pull_request(co.c, {"action": "dequeued", "reason": "checks failed", "pull_request": pr})
     co.c.commit()
+    assert co.where(task) == ("Engineering", "In review")  # the webhook sends nothing for a removal that is not a merge
+    assert (
+        H.task_links(co.c, task)[0]["detail"]
+        and "verify" in json.loads(H.task_links(co.c, task)[0]["detail"])["merge_queue"]
+    )
+
+    reads = []
+
+    class GitHub:
+        """The maintenance pass's service: the pull request is still open at the removed head."""
+
+        store = co.store
+
+        def row(self, c=None):
+            return {"org": "acme"}
+
+        def mint(self, repos, permissions, **kw):
+            return "token", None
+
+        def _call(self, method, path, headers=None, **kw):
+            reads.append((method, path))
+            return SimpleNamespace(
+                status_code=200, json=lambda: {"state": "open", "merged": False, "head": {"sha": "abc123"}}
+            )
+
+    G.refresh_queue_removals(GitHub())
+    assert reads == [("GET", "/repos/acme/app/pulls/7")]
     assert co.where(task) == ("Engineering", "Doing")
     notes = [
         row[0]
@@ -762,6 +799,51 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
         )
     ]
     assert notes == ["checks failed"]
+    G.refresh_queue_removals(GitHub())
+    assert len(reads) == 1  # the removal was settled: nothing is read again
+
+
+def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_refuses_the_move(co):
+    """The real path: a linked pull request's head moves by webhook (synchronize). The new head is new work (the work
+    version goes up once, a redelivery of the same head does nothing), the met evidence goes out of date, and the card
+    will not move on until the requirement is checked again."""
+    from backend import github as G
+
+    task = co.ticket("Engineering", "Doing", "Push me")
+    url = "https://github.com/acme/app/pull/8"
+    co.insert(
+        "task_links",
+        id="lnk-pr-8",
+        task_id=task,
+        kind="pr",
+        url=url,
+        repo="acme/app",
+        number=8,
+        state="open",
+        added_by=BUILDER,
+        created_at=stamp(),
+        detail=json.dumps({"head_sha": "abc123"}),
+    )
+    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
+    co.attach(task, shots)
+    co.decide(task, shots, judge="llm", actor=PM)
+    assert co.dots(task)["Screenshots"]["state"] == "met"
+    before = co.revision(task)
+
+    moved = {"html_url": url, "number": 8, "state": "open", "merged": False, "head": {"sha": "def456"}}
+    G.pull_request(co.c, {"action": "synchronize", "pull_request": moved, "sender": {"login": "builder-bot"}})
+    co.c.commit()
+    after = co.revision(task)
+    assert after == before + 1
+    assert json.loads(H.task_links(co.c, task)[0]["detail"])["head_sha"] == "def456"
+    assert co.dots(task)["Screenshots"]["state"] == "out_of_date"
+    assert co.refused(task, "In review")
+
+    G.pull_request(
+        co.c, {"action": "synchronize", "pull_request": moved, "sender": {"login": "builder-bot"}}
+    )  # redelivery
+    co.c.commit()
+    assert co.revision(task) == after
 
 
 # ----------------------------------------------------------------------------- Mark met
@@ -790,6 +872,9 @@ def test_a_private_legal_pipeline_is_hidden_from_a_non_member(co):
     for hidden_from in (CAL, BEN):
         seen = pipeline_overview.read(co.c, hidden_from, "7d")
         assert co.type["Legal"] not in [p["id"] for p in seen["pipelines"]]
+        assert all(co.type["Legal"] not in (e["from"], e["to"]) for e in seen["edges"]), (
+            "the flow map draws no hidden stage"
+        )
         assert legal not in [i.get("requirement_id") for i in pipeline_review.queue_for(co.c, hidden_from)]
     mine = pipeline_overview.read(co.c, ANA, "7d")
     assert co.type["Legal"] in [p["id"] for p in mine["pipelines"]]
@@ -893,3 +978,50 @@ def test_the_spawned_ticket_is_owned_as_the_engineering_intake_pool_assigns_it(c
     (d41,) = subtasks(co, card)
     assert H.task(co.c, d41)["owner_id"] == "bot:eng"
     assert H.task(co.c, d41)["requester_id"] == BUILDER
+
+
+def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):
+    """O1: the approval filed the Engineering subtask. Undone while nobody has picked it up, the subtask closes and its
+    handoff is returned; a new approval files a new one. Once it is picked up, the undo is refused and nothing changes."""
+    card = review_card(co)
+    approved = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
+    (d41,) = subtasks(co, card)
+    pipeline_review.undo(co.c, ANA, approved["decision_id"])
+    co.c.commit()
+    assert co.where(card) == ("Product", "Review")
+    assert co.c.execute("SELECT status FROM tasks WHERE id=?", (d41,)).fetchone()[0] == "closed"
+    assert co.count("pipeline_handoffs", "target_task_id=? AND returned_at IS NOT NULL", d41) == 1
+    again = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
+    assert again["advanced"] is True
+    open_now = [t for t in subtasks(co, card) if t != d41]
+    assert len(open_now) == 1 and co.where(open_now[0]) == ("Engineering", "Todo")
+
+    picked = review_card(co, title="Light mode")
+    kept = co.approve(picked, co.requirement("Product", "Review", "Spec approved"))
+    (d_picked,) = [t for t in subtasks(co, picked)]
+    co.move(d_picked, "Doing", actor=ANA)
+    with pytest.raises(pipeline_review.Declined) as caught:
+        pipeline_review.undo(co.c, ANA, kept["decision_id"])
+    co.c.rollback()
+    assert caught.value.code == "already_started"
+    assert co.where(picked) == ("Product", "In development")
+    assert co.c.execute("SELECT status FROM tasks WHERE id=?", (d_picked,)).fetchone()[0] != "closed"
+
+
+def test_undo_refuses_a_not_validated_decision(co):
+    """O2: "Not validated" filed a follow-up and returned the card. It is not undone with the approval's undo; the person
+    closes that follow-up instead."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "done")
+    checked = co.requirement("Product", "Validate", "Validated")
+    co.attach(card, checked, url=VALIDATION)
+    result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
+    co.c.commit()
+    with pytest.raises(pipeline_review.Declined) as caught:
+        pipeline_review.undo(co.c, ANA, result["decision_id"])
+    co.c.rollback()
+    assert caught.value.code == "not_undoable"
+    assert co.where(card) == ("Product", "In development")

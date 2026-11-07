@@ -117,6 +117,9 @@ def left_out(hidden: set[str], actor: str, row: Mapping[str, object]) -> bool:
     return bool(type_id) and type_id in hidden and actor not in (row.get("owner_id"), row.get("requester_id"))
 
 
+_PRIVATE_SQL = "SELECT id FROM task_types WHERE pipeline_visibility='members'"
+
+
 def _quoted(value: object) -> str:
     """A SQL string literal (the quoting bot_access uses), for the WHERE fragment a list composes."""
     return "'" + str(value).replace("'", "''") + "'"
@@ -125,10 +128,13 @@ def _quoted(value: object) -> str:
 def list_sql(c: "sqlite3.Connection", actor: str, visible_sql: str) -> str:
     """`visible_sql` (Auth.task_sql) for a ticket list, a search, a count or a pipeline view: a members-only pipeline's
     tickets are left out for a reader who may not see it, except the ones the reader owns or requested. The execution
-    queues keep task_sql alone, so a runner still reaches every ticket it works."""
-    hidden = hidden_pipeline_ids(c, actor)
-    if not hidden:
-        return visible_sql
+    queues keep task_sql alone, so a runner still reaches every ticket it works.
+
+    The clause names only the members-only pipelines the reader may see, never the hidden ones, and it is always there:
+    the text a list's ETag hashes (task_reads.access) then moves with the reader's own access, not with a pipeline it
+    cannot see being created or changed."""
+    shown = sorted(visible_pipeline_ids(c, actor, [r[0] for r in c.execute(_PRIVATE_SQL).fetchall()]))
     own = f" OR owner_id={_quoted(actor)} OR requester_id={_quoted(actor)}" if actor else ""
-    listed = ",".join(_quoted(t) for t in sorted(hidden))
-    return f"({visible_sql}) AND (type_id IS NULL OR type_id NOT IN ({listed}){own})"
+    listed = ",".join(_quoted(t) for t in shown)
+    hidden = f"SELECT id FROM task_types WHERE pipeline_visibility='members' AND id NOT IN ({listed})"
+    return f"({visible_sql}) AND (type_id IS NULL OR type_id NOT IN ({hidden}){own})"
