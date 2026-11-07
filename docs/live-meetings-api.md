@@ -330,3 +330,19 @@ change clears it. A missing/stopped share returns 410; an obsolete generation or
 returns 409; an oversized image returns 413. The viewer clears/revokes its image on stop, errors,
 access loss, hiding the page or navigation. Frame fetching is separate from transcript refresh. Authorization and contended memory locks run on workers, never the ASGI event loop. A separate status request revokes the displayed image while a slow image download is pending.
 Screen lifecycle is ephemeral; it is not replayable from SSE.
+
+### Sharing a screen from Recorder
+
+In a live meeting the Mac Recorder's **Share screen** button opens a picker for one window or display. Viewers
+see it a few times a second, and the storage and bot limits above apply.
+
+Sharing a whole display needs Screen Recording permission in System Settings; without it, choose a window.
+Recorder's own windows are left out of display shares. Stopping the share ends it at once.
+
+While a share runs, making the meeting public asks you to confirm **Stop sharing and make public**. Confirming
+stops the share, then sets `team` visibility, so everyone in the company can open the meeting. **Cancel** keeps the
+share and the audience as they are.
+
+**Copy meeting link** is in the meeting's menu. It opens a sheet with the `link` above. The sheet copies the link
+straight away when the link is ready and one Tico is the only destination; otherwise press **Copy link**. A meeting
+that is not team-visible opens only for you and the people added in People.
