@@ -45,8 +45,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The ceiling on full validations: at most 10 a UTC day, manual dispatches included, counted from GitHub before any
+  # RunsOn VM starts. A hard backstop: the automatic window already dispatches at most one full validation a day
+  # (scripts/release_increment.py full_within_day). Incremental runs are not counted; every job that starts a VM waits here.
+  ceiling:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - name: Count today's full validations
+        if: inputs.plan == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CAP: '10'
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          count=$(gh api --paginate "repos/$REPO/actions/workflows/ci.yml/runs?event=workflow_dispatch&created=$today&per_page=100" \
+            --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | select(.created_at | startswith(\"$today\")) | select(.display_title | contains(\" (incremental on \") | not) | .id" | wc -l | tr -d ' ')
+          echo "$count full validations started today (UTC $today) besides this one"
+          if [ "$count" -ge "$CAP" ]; then echo "::error::$CAP full runs today; ceiling reached"; exit 1; fi
+
   # What to validate: the requested candidate against the requested published release.
   candidate:
+    needs: ceiling
     runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
