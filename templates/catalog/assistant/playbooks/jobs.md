@@ -51,8 +51,10 @@ tasks they own. The owned tasks are one kind of many.
      --where-id <id> --where-id <id> --note "<why>"`, one id per flag. MCP `hub_task_bulk`: `filter: {"ids": [...]}`,
      `action: "close"`, `note`; never a JSON list in `--where-id`, never `where_ids` at the top level. Or one
      `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
-   - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
-     it only when it is plainly done, a duplicate or replaced, and say so.
+   - A bot's task: when they named the set it is in ("close basically all", "all but these five"), close it too, as the
+     ask says. When you pick the set yourself ("leave less than N", "whatever you think"), do not close a bot's task still
+     in progress or waiting: that stops the bot's work. Act on its question instead, and close it only when it is plainly
+     done, a duplicate or replaced, and say so.
    - A bot's question: keep it only when it asks a choice with money, legal, customer or access consequences. A yes/no
      about a test ping, finished or stale work is not a decision: decline it:
      `hub task close <task id> --note "No, drop this. Do what you would do if no one answered."` The bot goes on.
@@ -61,7 +63,8 @@ tasks they own. The owned tasks are one kind of many.
      approve in a clear.
 4. Keep what needs them: a real decision on money, legal, a customer-facing reply, production access, or anything only
    they can answer. Do not act on it. Name each kept item with its link and why: a question or approval links to its
-   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`.
+   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`. A task that you would
+   otherwise close, but whose closing would leave a task you keep stuck, stays open, named in the same line.
 5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
    memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
@@ -71,7 +74,7 @@ tasks they own. The owned tasks are one kind of many.
    Needs you went from <before> to <after> (tasks <a> to <b>, questions <c> to <d>, approvals <e> to <f>).
    Closed <n> done or duplicate tasks. Say undo to reopen them.
    Declined <n> stale approvals and answered <n> bot questions with "No, drop this." Those cannot be undone.
-   Kept for you: [<task title>](#/task/<id>), <why>; [<approval title>](#/tasks?view=foryou), <why>.
+   Kept, one line each: [<task title>](#/task/<id>), <why>, <the question that settles it>.
 
 ## Bots and work
 

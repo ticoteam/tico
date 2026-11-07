@@ -85,6 +85,10 @@ tool's input schema rejects counts as invalid, as a CLI call the parser rejects 
 Write canned outputs shaped like the real routes (`backend/hubdb.py` `needs_you`, `task_origin`), with fictional people
 and companies only. Regexes are Python `re` against the call's words (`^task close`, not `task close`).
 
+`reply_max_words` and `reply_max_lines` (optional) cap the reply: at most that many words, and at most that many non-empty
+lines (a list is one line per item). The harness checks them, not the judge, so a long walk-through fails even when the
+judge likes it.
+
 The commands the assistant tools branch adds (`needs-you show`, `origin show`, `assistant change list|restore`) are in
 the cases, and the CI test allows them to be absent on main. Delete an entry from `NEW_COMMANDS` in the test when its
 command lands, so it is checked against the real parser.
@@ -122,7 +126,8 @@ keeping as a guard.
   Check health ones", "stop them from coming back"), carried as `history`.
 - `cases/live.yaml`: asks from the owner's real chat that went wrong: a model change across every bot, a short
   follow-up answer, an ambiguous reply that must not answer an open question for them, a routing change for one bot's
-  tasks with a rule, and "those" read as the items just listed (not the page they are on).
+  tasks with a rule, and "those" read as the items just listed (not the page they are on); a close-all ask that keeps five
+  and closes the rest, a five-item list one line each, and a self-picked target that must not close bot work in progress.
 - `cases/goals.yaml`: where the person stands on their goals, what to do today (at most three, the red goal first), a
   suggestion they turned down, work a bot can do (a task for the bot), the keep-going offer in a chat and when it stops, an
   ordinary chore with no offer, a non-owner's own area, and the morning message (one send, none on a quiet day, no retry

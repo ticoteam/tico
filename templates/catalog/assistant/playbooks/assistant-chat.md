@@ -35,7 +35,7 @@ Never read, quote or act on another person's chat.
 2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
 3. Act per kind as `playbooks/jobs.md`, "Clearing to a target", step 3: close by id and never by a status filter, in ONE `hub task bulk close`; decline approvals one each; decline or answer bots' questions. No card for any of this.
 4. For each big group, `hub origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
-5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why. Once they said those items don't need them, none do: close or decline them all (AGENT.md, Replies).
+5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why. Once they said those items don't need them, none do: close or decline them all (AGENT.md, Replies). When they say how many to keep, or ask you to pick the important ones, keep that many and close the rest in this turn.
 6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".
 
 ## Goals, agreed in words (the owner only)
