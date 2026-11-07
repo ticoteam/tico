@@ -9,19 +9,21 @@ INCIDENT = 'company-turn-incident'
 REASON = "Your company is at its limit; Tico is fixing what's stuck."
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS org_turn_waits(
- job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, created TEXT NOT NULL
+ job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL
 );
 """
 
 
 def saved(c, key):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (key,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
     return json.loads(row[0]) if row else {}
 
 
 def save(c, key, value):
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
-              (key, json.dumps(value)))
+    c.execute(
+        'INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (key, json.dumps(value)),
+    )
 
 
 def levels(c):
@@ -30,14 +32,20 @@ def levels(c):
     # every claim, and a full roster normalize was only used for this headcount.
     from . import people as P
     from . import read_cache
+
     def count():
         row = read_cache.metadata(c, 'people')
         doc = json.loads(row[0]) if row else {'people': H.humans(c)}
         return P.signed_in_count(doc)
+
     people = max(1, read_cache.value(c, ('signed_in_people',), count))
     configured = {'warning_per_person': 40, 'stop_per_person': 100, **saved(c, LEVELS)}
-    return {**configured, 'people': people, 'warning': people * configured['warning_per_person'],
-            'stop': people * configured['stop_per_person']}
+    return {
+        **configured,
+        'people': people,
+        'warning': people * configured['warning_per_person'],
+        'stop': people * configured['stop_per_person'],
+    }
 
 
 def in_use(c):
@@ -55,7 +63,8 @@ def in_use(c):
         "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND "
         "((coalesce(p.wait_reason,'')!='' AND p.wait_reason!=?) OR (coalesce(p.wait_reason,'')='' AND a.lease_until>? "
         "AND (NOT coalesce(p.managed,0) OR coalesce(p.start_until,'')>?)))))",
-        (REASON, now, now)).fetchone()[0]
+        (REASON, now, now),
+    ).fetchone()[0]
 
 
 def admission(c):
@@ -71,6 +80,7 @@ def snapshot(c, settings):
     Default so each claim_refusal in the pass reuses the same pools/groups/spend memo instead of rebuilding it per bot."""
     from . import usage_limits
     from .start_places import summary
+
     default = usage_limits.company(c)
     counts = dict(running=0, starting=0, waiting=0, queued=0)
     for row in c.execute('SELECT id FROM runners'):
@@ -109,11 +119,13 @@ def observe(c, settings, value=None, *, detailed=True):
         save(c, INCIDENT, incident)
     if value['at_stop']:
         # These jobs have not become turns yet: they remain queued and hold no place.
-        c.execute("INSERT OR IGNORE INTO org_turn_waits SELECT id,created FROM jobs WHERE state='queued'")
+        c.execute("INSERT OR IGNORE INTO org_turn_waits SELECT id,created_at FROM jobs WHERE state='queued'")
     if value['at_warning']:
         # Just below the stop the waiters keep their first claim on each freed place, across computers.
-        c.execute("DELETE FROM org_turn_waits WHERE NOT EXISTS "
-                  "(SELECT 1 FROM jobs j WHERE j.id=org_turn_waits.job_id AND j.state='queued')")
+        c.execute(
+            "DELETE FROM org_turn_waits WHERE NOT EXISTS "
+            "(SELECT 1 FROM jobs j WHERE j.id=org_turn_waits.job_id AND j.state='queued')"
+        )
     else:
         # Below the warning there is room for all of them and the queue's own order applies again. A waiter that
         # cannot run (its bot cooling off a usage limit, its login held) otherwise stayed one for good: every claim

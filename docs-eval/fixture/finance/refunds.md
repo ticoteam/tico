@@ -3,7 +3,7 @@
 ## Who can get a refund
 
 - **Annual plans** can be refunded within 14 days of the payment.
-- **Monthly plans** are not refundable. Cancelling stops the next charge, and the workspace stays active until the end of the period already paid for.
+- **Monthly plans** are not refundable. Canceling stops the next charge, and the workspace stays active until the end of the period already paid for.
 
 ## How a customer asks
 

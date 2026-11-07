@@ -1,5 +1,6 @@
 /* Rules (ui/app/org-rules.js): filters | list | side panel on a computer; on a phone the filters are a strip of pills,
-   the rows stack, and a panel is a full-screen sheet. The bot's Rules tab reuses the rows. */
+   the rows stack, and a panel is a full-screen sheet. Internal is the Reach map and its panel instead (below). The bot's
+   Rules tab reuses the rows. */
 #main.ru-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .ru{display:flex;flex-direction:column;height:100%;min-height:0}
 .ru-ph{display:flex;align-items:center;gap:14px;padding:8px 28px;min-height:48px;border-bottom:1px solid var(--line)}
@@ -9,7 +10,6 @@
 .ru-tabs a{padding:5px 10px;border-radius:var(--r-ctl);color:var(--muted);font-size:var(--t-sm);text-decoration:none;white-space:nowrap}
 .ru-tabs a:hover{color:var(--ink);background:var(--surface2)}
 .ru-tabs a.cur{color:var(--ink);background:var(--surface2);font-weight:600}
-.ru-cnt{color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
 .ru-acts{display:flex;gap:6px}
 .ru-pad{padding:14px 6px}
 .ru-body{flex:1;min-height:0;display:grid;grid-template-columns:190px minmax(0,1fr)}
@@ -28,7 +28,10 @@
 .ru-f[aria-pressed="true"]{background:var(--surface2);font-weight:600}
 .ru-n{flex:none;color:var(--muted);font-variant-numeric:tabular-nums}
 .ru-more{color:var(--muted)}
-.ru-toggle input{margin:0}
+.ru-adv-t{align-self:flex-start;border:0;background:none;padding:2px 0;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.ru-adv-t:hover{color:var(--ink)}
+.ru-adv{display:contents}
+.ru-adv[hidden]{display:none}
 .ru-fnone{padding:3px 6px;color:var(--muted);font-size:var(--t-sm)}
 
 /* lists */
@@ -39,13 +42,17 @@ a.ru-row:hover{background:var(--surface2);text-decoration:none}
 a.ru-row:hover *{text-decoration:none}
 .ru-row.sel{background:var(--surface2);box-shadow:inset 2px 0 0 var(--accent)}
 .ru-head{position:sticky;top:0;z-index:1;min-height:32px;background:var(--bg);color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
-.ru-int .ru-row{grid-template-columns:minmax(0,1fr) 140px 130px 110px}
 .ru-ext .ru-row{grid-template-columns:minmax(0,1fr) 150px 130px 110px}
 .ru-duet .ru-row{grid-template-columns:96px minmax(0,1fr) 84px 90px 140px 92px}
 /* with a panel open the list narrows; its columns give the rule the room */
-.ru.ru-open .ru-int .ru-row,.ru.ru-open .ru-ext .ru-row{grid-template-columns:minmax(0,1fr) 120px 110px 84px}
+.ru.ru-open .ru-ext .ru-row{grid-template-columns:minmax(0,1fr) 120px 110px 84px}
 .ru.ru-open .ru-duet .ru-row{grid-template-columns:88px minmax(0,1fr) 64px 72px 100px 84px}
 .ru-txt{min-width:0;overflow-wrap:anywhere;font-size:var(--t-md)}
+/* a teammate a rule names (@slug): a mention chip that opens them */
+.ru-at-w{white-space:nowrap}   /* a chip keeps the punctuation after it on its line */
+.ru-at-w .ru-at{padding-right:1px}   /* and sits close to it: "@Ana Rivera's" */
+.ru-at{display:inline;padding:0 3px;border-radius:4px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink);font-weight:500;white-space:nowrap;text-decoration:none;box-decoration-break:clone}
+a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent) 26%,transparent);text-decoration:none;cursor:pointer}
 .ru-c{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .ru-duet .ru-c[data-l=Routine]{white-space:normal}   /* "10 days before" wraps rather than cut */
 .ru-none{color:var(--muted)}
@@ -87,8 +94,16 @@ a.ru-row:hover *{text-decoration:none}
 .ru-fl{display:flex;flex-direction:column;gap:6px;min-width:0}
 .ru-lbl{color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .ru-opt{text-transform:none;letter-spacing:0;font-weight:400}
-.ru-form textarea,.ru-form select,.ru-form input:not([type=checkbox]){width:100%}
+.ru-form textarea,.ru-form select,.ru-form input:not([type=checkbox]):not([type=radio]){width:100%}
 .ru-form textarea{resize:vertical}
+/* the rule as it reads, mentions and all; an editor clicks it to edit the words */
+.ru-read{font-size:var(--t-md);line-height:var(--lh);overflow-wrap:anywhere}
+.ru-read[tabindex]{padding:5px 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);cursor:text}
+.ru-read[tabindex]:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line))}
+.ru-read[tabindex]:focus-visible{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
+.ru-read[hidden]{display:none}
+.ru-follow{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.ru-follow:empty{display:none}
 .ru-seg{display:inline-flex;align-self:flex-start;max-width:100%;padding:2px;gap:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface2);overflow-x:auto}
 .ru-seg button{padding:3px 10px;border:0;border-radius:4px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
 .ru-seg button[aria-pressed="true"]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--line)}
@@ -100,6 +115,7 @@ a.ru-row:hover *{text-decoration:none}
 .ru-chip button{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);font-size:10px;cursor:pointer}
 .ru-chip button:hover{background:var(--line);color:var(--ink)}
 .ru-form select.ru-addsel{width:auto;min-width:0;max-width:200px;height:26px;padding:0 6px;border-style:dashed;color:var(--muted);font-size:var(--t-sm)}
+.ru-hint{margin:0;color:var(--muted);font-size:var(--t-sm)}
 .ru-reviewer{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .ru-reviewer[hidden]{display:none}
 .ru-duebox{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-sm);text-decoration:none}
@@ -168,6 +184,100 @@ a.ru-row:hover *{text-decoration:none}
 .ru-more-row{display:block;width:100%;border:0;border-bottom:1px solid var(--line);background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 .ru-more-row:hover{background:var(--surface2);color:var(--ink)}
 
+/* Internal: Reach (docs/reach.md). The map (the Org tab's chart, redesign-strategy.css, always open) beside the selected
+   party's panel; a rule's panel takes the panel's place. The search sits in the header. */
+.ru[data-tab="internal"] .ru-body{grid-template-columns:minmax(0,1fr)}
+.ru.ru-open[data-tab="internal"] .ru-body{grid-template-columns:minmax(0,1fr) 400px}
+.ru[data-tab="internal"] .ru-filters{display:none}
+.ru[data-tab="internal"] .ru-list{padding:0;overflow:hidden}
+.rr-find{position:relative}
+.rr-q{width:320px}
+.rr-results{position:absolute;z-index:30;top:calc(100% + 4px);right:0;width:320px;max-height:320px;overflow-y:auto;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 6px 24px rgba(0,0,0,.16)}
+.rr-results[hidden]{display:none}
+.rr-opt{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border:0;border-radius:var(--r-ctl);background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+.rr-opt:hover,.rr-opt:focus-visible{background:var(--surface2)}
+.rr-on{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rr-k{flex:none;color:var(--muted);font-size:var(--t-xs)}
+.rr-none{margin:0;padding:4px 2px;color:var(--muted);font-size:var(--t-sm)}
+.rr{display:grid;grid-template-columns:minmax(0,1fr) 360px;height:100%;min-height:0}
+.ru-open .rr{grid-template-columns:minmax(0,1fr)}
+.ru-open .rr-side{display:none}
+.rr-pick{display:none}
+
+/* the map */
+.rr-map{position:relative;min-width:0;min-height:0}
+.rr-pane{position:absolute;inset:0;overflow:auto;isolation:isolate;overscroll-behavior:contain}
+.rr-sz{position:relative;margin:0 auto}
+.rr-cv{transition:none}
+/* More room between cards than the Org tab's chart, for the lines and their chips. */
+.rr-cv{--rdo-gap:22px;--rdo-col-px:26px;--rdo-drop:22px}
+.rr-cv .rdo-gb{gap:22px}
+.rr-cv .rdo-g{padding:22px 14px 14px}
+.rr-every{display:flex;padding:0 0 10px}
+.rr-all{height:30px;padding:0 12px;border:1px solid var(--raised);border-radius:var(--r-ctl);background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-base);font-weight:600;cursor:pointer}
+.rr-map :is(.rdo-card,.rr-all){position:relative;z-index:1;transition:opacity var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease)}
+.rr-map .rdo-tab{transition:opacity var(--dur-fast) var(--ease)}
+.rr-map [data-rr-party].on{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink);color:var(--ink)}
+.rr-map [data-rr-tone="zero"]{border-color:var(--fail)}
+.rr-map [data-rr-tone="cap"]{border-color:var(--wait)}
+.rr-map [data-rr-tone="rule"]{border-color:var(--run)}
+.rr-map [data-rr-tone="open"]{border-color:var(--ok)}
+.rr-map .rdo-tab[data-rr-tone]{color:var(--ink)}
+.rr-map.has-sel [data-rr-party]:not(.on,.in-team,[data-rr-tone]){opacity:.42}
+.rr-map.searching [data-rr-party]{opacity:.3}
+.rr-map.searching [data-rr-party].hit{opacity:1;box-shadow:0 0 0 2px var(--accent)}
+.rr-lines{position:absolute;left:0;top:0;z-index:0;overflow:visible;pointer-events:none}
+.rr-ln{stroke-width:2;fill:none}
+.rr-ln.zero{stroke:var(--fail)}.rr-ln.cap{stroke:var(--wait)}.rr-ln.rule{stroke:var(--run);stroke-dasharray:6 4}.rr-ln.open{stroke:var(--ok)}
+.rr-mk.zero{fill:var(--fail)}.rr-mk.cap{fill:var(--wait)}.rr-mk.rule{fill:var(--run)}.rr-mk.open{fill:var(--ok)}
+.rr-chips{position:absolute;left:0;top:0;z-index:2}
+.rr-chip{position:absolute;transform:translate(-50%,-50%);max-width:220px;height:22px;padding:0 9px;border:1px solid var(--line);border-radius:999px;background:var(--bg);color:var(--ink);font:500 var(--t-sm)/20px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.rr-chip[aria-disabled="true"]{cursor:default}
+.rr-chip.zero{border-color:var(--fail)}.rr-chip.cap{border-color:var(--wait)}.rr-chip.rule{border-color:var(--run)}.rr-chip.open{border-color:var(--ok)}
+
+/* the panel */
+.rr-side{min-width:0;min-height:0;overflow-y:auto;border-left:1px solid var(--line);background:var(--surface)}
+.rr-panel{display:flex;flex-direction:column;gap:20px;padding:16px 18px 24px}
+.rr-h{display:flex;align-items:center;gap:6px;min-height:28px}
+.rr-h h2{margin:0;min-width:0;font-size:var(--t-lg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rr-back{display:none}
+.rr-panel .err{margin:0}
+.rr-set{display:flex;flex-direction:column;gap:10px}
+.rr-set .ru-seg,.rr-dirs{display:grid;grid-template-columns:1fr 1fr;align-self:stretch}
+.rr-set .ru-seg button,.rr-dirs button{min-height:28px;overflow:hidden;text-overflow:ellipsis}
+.rr-cap{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:var(--t-base)}
+.rr-cap input{width:76px;font-variant-numeric:tabular-nums}
+.rr-cap input::placeholder{color:var(--muted);opacity:.75}
+.rr-from{color:var(--muted);font-size:var(--t-xs);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ru-txt .rr-from::before{content:"· "}
+.rr-sec{display:flex;flex-direction:column;gap:6px}
+.rr-sec>header{display:flex;align-items:center;gap:8px;min-height:28px}
+.rr-sec>header h3{flex:1;margin:0}
+.rr-inh-h{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:0 2px;border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+.rr-inh-h:hover{color:var(--ink)}
+.rr-inh-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rr-cx{display:inline-block;width:10px;font-size:12px;line-height:var(--lh-none)}
+.rr-inh-h[aria-expanded="true"] .rr-cx{transform:var(--chev-open,rotate(90deg))}
+.rr-inh-l{display:flex;flex-direction:column;padding:0 0 4px 20px}
+.rr-rule{display:block;padding:7px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-base);line-height:var(--lh-tight);overflow-wrap:anywhere;text-decoration:none}
+.rr-rule:hover{background:var(--surface2);text-decoration:none}
+.rr-rule.rr-sub{padding:3px 0 5px;border:0;color:var(--muted)}
+.rr-rule.rr-sub:hover{background:none;color:var(--ink)}
+.rr-line{display:flex;flex-direction:column;gap:3px;width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+button.rr-line:hover{background:var(--surface2)}
+.rr-line.ro{cursor:default}
+.rr-lt{display:flex;align-items:baseline;gap:6px;min-width:0}
+.rr-dir{flex:none;color:var(--muted);font-size:var(--t-sm)}
+.rr-who{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:500}
+.rr-n{flex:none;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
+.rr-n.zero{color:var(--fail)}.rr-n.cap{color:var(--wait-ink)}.rr-n.rule{color:var(--run)}.rr-n.open{color:var(--ok)}
+.rr-lr{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.rr-box{display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--bg)}
+.rr-box textarea{width:100%;resize:vertical}
+.rr-xres{display:flex;flex-direction:column}
+.rr-foot{display:flex;align-items:center;gap:8px}
+.rr-rm{color:var(--fail)}
+
 @media (max-width:760px){
   #main.ru-layout{overflow:auto;height:auto;padding:0 0 calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
   .ru{height:auto}
@@ -183,7 +293,7 @@ a.ru-row:hover *{text-decoration:none}
   .ru-f{flex:none;width:auto;min-height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:999px}
   .ru-f>span:first-child{overflow:visible}
   .ru-list{padding:0 12px 16px;overflow:visible}
-  .ru-row,.ru-int .ru-row,.ru-ext .ru-row,.ru-duet .ru-row,.ru-bot-int .ru-row,.ru-bot-ext .ru-row{display:flex;flex-wrap:wrap;gap:4px 10px;min-height:52px;padding:10px 4px}
+  .ru-row,.ru-ext .ru-row,.ru-duet .ru-row,.ru-bot-int .ru-row,.ru-bot-ext .ru-row{display:flex;flex-wrap:wrap;gap:4px 10px;min-height:52px;padding:10px 4px}
   .ru-table .ru-head{display:none}
   .ru-txt{flex-basis:100%}
   .ru-c{flex:none;max-width:100%;color:var(--muted);font-size:var(--t-xs)}
@@ -194,10 +304,26 @@ a.ru-row:hover *{text-decoration:none}
   .ru-prop{grid-template-columns:1fr auto;grid-template-areas:"t t" "w a";padding:10px 4px}
   .ru-pt{grid-area:t}.ru-pwho{grid-area:w}.ru-pacts{grid-area:a}
   .ru-side{position:fixed;inset:0;z-index:60;border:0;padding-bottom:env(safe-area-inset-bottom)}
+  html.strip .ru-side{top:var(--demo-h)}   /* below the demo banner */
   .ru-side-h{padding:max(10px,env(safe-area-inset-top)) 12px 10px}
   .ru-x{width:40px;height:40px}
   .ru-form{padding:14px 12px 24px}
   .ru-modal .ru-side-h{margin:-14px -12px 0}
   .ru-two{grid-template-columns:1fr}
   .ru-modal{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0}
+  /* Reach: the map on top (scrolls both ways), the party's panel under it once one is tapped; while searching, a
+     list of matches to pick from in place of the map */
+  .ru[data-tab="internal"] .ru-acts{order:4;flex-basis:100%;margin-left:0}
+  .rr-find,.rr-q{width:100%}
+  .rr-results{display:none!important}
+  .ru[data-tab="internal"] .ru-list{padding:0 0 16px;overflow:visible}
+  .rr{display:block;height:auto}
+  .rr-map{height:58dvh;border-bottom:1px solid var(--line)}
+  .rr.searching .rr-map{display:none}
+  .rr.searching .rr-pick{display:flex;flex-direction:column;padding:4px 8px}
+  .rr-pick .rr-opt{min-height:44px;padding:6px 8px;border-bottom:1px solid var(--line);border-radius:0}
+  .rr-side{display:none;border:0;background:none;overflow:visible}
+  .rr.picked .rr-side{display:block}
+  .rr-panel{padding:8px 12px 20px}
+  .rr-back{display:inline-flex;margin-left:-8px;font-size:22px}
 }

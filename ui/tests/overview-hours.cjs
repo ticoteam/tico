@@ -43,7 +43,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
+    await page.waitForFunction(() => location.hash === '#/home');
     await page.evaluate(() => location.hash = '#/overview/campus');
     const card = page.locator('#overview-hours');
     await card.locator('.ovh-plot').waitFor();

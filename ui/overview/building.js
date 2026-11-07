@@ -161,7 +161,7 @@ function faceTexture(face) {
   };
   if (face.svg) { img = new Image(); img.decoding = 'async'; img.onload = draw; img.src = face.svg; }
   else if (face.glyph) {
-    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=887fa52538ae)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
+    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=7a828c2a2f46)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
     symbolsFont.then(draw, () => {});
   }
   draw(); resources.add(tex); faceCache.set(key, tex); return tex;
@@ -723,8 +723,6 @@ function animate(now) {
   // Shadows follow anything that moves: storeys in flight, and the people on the storey in view.
   if (moving || inside || camTween) renderer.shadowMap.needsUpdate = true;
   composer ? composer.render(dt) : renderer.render(scene, camera); frames++;
-  // Expose actual render progress only to the synthetic browser check; production has no per-frame DOM writes.
-  if (window.__TICO_OVERVIEW_TEST_PROBE__) Object.assign(window.__TICO_OVERVIEW_TEST_PROBE__, {frame: frames, time: t, links: links.map(l => [l.from, l.to, l.kind])});
   if (frames === 2) { $('#loading').classList.add('gone'); loadingTimer = setTimeout(() => $('#loading').hidden = true, 250); document.body.dataset.sceneReady = 'true'; }
   frameId = requestAnimationFrame(animate);
 }

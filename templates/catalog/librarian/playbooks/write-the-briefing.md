@@ -1,40 +1,68 @@
 # Write the briefing
 
-Mondays, as the last step of `playbooks/curate-the-market.md`, after the sweep is filed. One briefing a week, one
-page, short enough to read in two minutes. With nothing worth saying, post nothing: an empty briefing is noise.
+The built-in Market briefing runs this playbook every day at 07:00 team time, as its own turn. The turn's reply is the
+briefing: the run posts it to Market as that week's briefing and adds one line pointing at it to the daily update. A daily
+run replaces the week's briefing. One short page, readable in two minutes. Nothing changed since yesterday: the reply is
+the one line `Nothing new in the market since yesterday.`, because an empty reply cannot be posted.
 
 ## 1. Gather the week
 
-- `hub market delta`: what changed in the graph since last Monday, with each change's source.
-- Insights applied this week from page monitors (`page-change` evidence): the pricing, changelog and careers moves.
-- Listening items you accepted this week (`hub listening item list --destination market`).
-- Customer themes the Social Media Manager or the owner reported that name a market entity.
-- The published strategy's bets and what they cite (`hub strategy show`): an item about an entity a bet cites is the
-  one that matters most, and goes first.
+Gather what changed since yesterday:
+
+- `hub market delta --since 1d`: the graph's changes, grouped by entity, each with its source.
+- `hub listening item list --destination market`: the items accepted since yesterday, which is what listening heard.
+- `hub strategy show`: the published bets, each with its `why` and `wrong_if`. An item about an entity a bet cites
+  matters most, and goes first.
 
 ## 2. Write the items
 
-Each item is one sentence of what happened, cited by its source domain, and the market entity ids it is about:
+The reply is text, so each point is one bullet: one sentence of what happened, its source domain and date in brackets,
+and the market entity it is about in square brackets:
 
-    {"text": "Example Co moved its Pro plan from 29 to 39 a seat (pricing page, Oct 24).",
-     "kind": "change", "entity_ids": ["company/example-co"]}
+    - Example Co moved its Pro plan from 29 to 39 a seat (pricing page, Oct 24). [company/example-co]
 
-`kind` is `change` (something a competitor did), `signal` (a customer or channel said it), `theme` (a pattern across
-several) or `size` (a market number). Tag every entity the item is about, not only the main one: the server uses the
-tags to work out which bets the week touches, and the Strategy Bot looks only at those. Write down what happened, never
-what the team should do about it; the bets are the Strategy Bot's and the owner's to weigh.
+When the items you gathered number more than about 20, `hub gateway digest --items-file <file>` (the `hub_gateway_digest` tool)
+groups them: order the bullets by its groups and leave out its `dropped` ids; each bullet still names its entity.
 
-## 3. Write the page and post it
+Group the bullets by what they touch (pricing, product, people, customers). When a bullet's entity is one an active bet
+cites, name the bet in the bullet ("touches the bet on <bet id>").
 
-The body is markdown: a short opening line, then the items grouped by what they touch (pricing, product, people,
-customers), each with its source. At most 600 characters an item and 20,000 for the page.
+Write down what happened, never what the team should do about it. The bets are the owner's and the Strategy Bot's to
+weigh.
 
-    hub market briefing post --week 2026-W44 --title "<a few words>" --body-file briefing.md --items-file items.json
+## 3. Tag the items and answer the questions, then reply with the page
 
-`--week` is the ISO week of the Monday you run on. Posting the same week again replaces it, so a late fix is the same
-command. The briefing becomes the market page `market/briefings/<week>` and the card on the Market page.
+The server works out which bets a briefing touches only from tagged items, never from the words, and the Market page's
+answer lines come only from the answers file. So post both before you reply:
+
+    hub market briefing post --week 2026-W44 --title "<a few words>" --body-file briefing.md --items-file items.json \
+      --answers-file answers.json
+
+`--week` is the ISO week of the day you run. `briefing.md` is the page you are about to reply with. The items file is a
+JSON list of `{"text", "kind", "entity_ids"}`, one per bullet: `text` the bullet's sentence, `kind` `change` (something a
+competitor did), `signal` (a customer or channel said it), `theme` (a pattern across several) or `size` (a market number),
+and `entity_ids` every entity it is about, not only the main one. At most 600 characters an item and 20,000 for the page.
+
+The answers file holds one plain sentence for each question on the Market page, as the graph, the sizes and this
+week's items show it today. 140 characters at most each; leave a key out when you have no answer, never write a
+placeholder:
+
+    {"changed": "Northwind bundles checks into CI; buyers ask for one bill.",
+     "money": "The low end is biggest and shrinking; storefront and scenes grow fastest.",
+     "players": "Northwind owns the low end; Initech is moving into ours.",
+     "reach": "Marketplaces for homes; installers for towns and shops.",
+     "saying": "Talk doubled this week; most of it is about price."}
+
+`changed` is what changed this week, `money` where the market's spend is and where it grows, `players` who we are
+up against, `reach` how the market reaches its buyers, and `saying` what buyers say in listening. With nothing new
+since yesterday, post no answers file: the week's answers stay.
+
+Then reply with the page: a one-line title of a few words, then the bullets under their groups. The run posts your reply
+as the week's briefing and keeps the items you tagged. A person who asks for a briefing in a task gets the same post.
 
 ## 4. Finish
 
-Name the week and the number of items in the sweep's report. Do not message the Strategy Bot: the server opens its task
-when the briefing touches a bet.
+Do not message the Strategy Bot about the briefing: the server opens its task when the items touch a bet.
+
+Done when: the reply is the page (or the one line when nothing changed), every bullet about a market entity was
+posted as a tagged item first, and the answers were posted with them.

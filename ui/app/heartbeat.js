@@ -1,26 +1,19 @@
-/* ui/app/heartbeat.js — The account status dot and its lines, Needs you, account menu label, download link
+/* ui/app/heartbeat.js — The account status dot and its lines, account menu label, download link
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Only urgent issues with a concrete human action interrupt the person. The full diagnostic
-// list remains in Settings, including temporary outages and bot execution reviews.
-const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
-const needsYouKey = issue => [issue.kind, issue.bot || '', issue.machine || '', issue.title].join('|');
-const NEEDS_YOU_KEY = 'tico.needsYou';
-function needsYouMemory() { try { return JSON.parse(localStorage.getItem(NEEDS_YOU_KEY) || '{}'); } catch { return {}; } }
-function needsYouRemember(patch) { try { localStorage.setItem(NEEDS_YOU_KEY, JSON.stringify({...needsYouMemory(), ...patch})); } catch {} }
-// One status dot, left of the person's name in the account button (Chris, Oct 22): coloured by the worst line,
-// red when something is broken and needs the person, amber for a warning or something that clears by itself.
-// The same lines head the account menu and a hover card on the dot, one plain line each with its fix. No line, no dot.
+// The account menu, its status dot and the hover card on the dot show two states only (Chris, Nov 4): Tico cannot be
+// reached, or bots are not running. Health's checks and the person's operation issues are listed in Settings > Health,
+// never here. The dot is coloured by the worst line: red when bots are not running, amber while the connection is lost.
 const ACCOUNT_HEALTH = '<a class="ghost" href="#/settings" data-gs-tab="health" title="Open Health in Settings">Fix</a>';
-const firstSentence = text => { const s = String(text || '').trim(); const m = s.match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : s).replace(/[.]$/, ''); };
-function accountIssueFix(issue) {
-  if (issue.kind === 'uncertain_work' && issue.bot) return `<button class="ghost" type="button" data-account-review="${esc(issue.bot)}">Review</button>`;
-  if (issue.restart && issue.machine) return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you to restart this computer">Open</button>';
-  if (issue.kind === 'machine' && issue.machine) return '<a class="ghost" href="#/settings" data-gs-tab="devices">Fix</a>';
-  if (issue.bot) return `<a class="ghost" href="#/bot/${esc(issue.bot)}/more" title="Open the bot">Fix</a>`;
-  return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you">Open</button>';
-}
+// The issues Settings asks a person to act on (ui/app/settings.js). Diagnostics that need nobody stay in Health.
+const needsPerson = issue => issue.needs_person === true && !!(issue.action || issue.restart);
+// With no computer online, no bot can run, so it is red like a stopped scheduler. Health lists the computers for owners
+// and admins; for anyone else there is no list, and this state is not shown.
+const noComputerOnline = () => {
+  const computers = window.hlComputers?.();
+  return Array.isArray(computers) && !computers.some(computer => computer.online);
+};
 function accountStatusLines() {
   const st = S.status, lines = [];
   if (!st) {
@@ -28,36 +21,10 @@ function accountStatusLines() {
     if (!S.statusPending) lines.push({level: 'warn', text: "Can't reach Tico. Trying again", fix: '<button class="ghost" type="button" data-account-retry>Retry</button>'});
   } else if (!st.keeper_alive) {
     lines.push({level: 'bad', text: st.cloud ? "Bots aren't running: the cloud scheduler stopped" : "Tico stopped on this computer, so bots aren't running", fix: ACCOUNT_HEALTH});
+  } else if (noComputerOnline()) {
+    lines.push({level: 'bad', text: "Bots aren't running: no computer is online", fix: ACCOUNT_HEALTH});
   }
-  for (const issue of (st?.health_issues || []).filter(needsPerson)) {
-    lines.push({level: issue.severity === 'warning' ? 'warn' : 'bad', text: [issue.title, issue.kind === 'machine' ? String(issue.detail || '').replace(/[.]$/, '') : firstSentence(issue.detail)].filter(Boolean).join(': '), fix: accountIssueFix(issue)});
-  }
-  // A computer offline for a moment (asleep, a restart) comes back by itself: Health calls it bad at once, but the
-  // server asks a person only after NEEDS_YOU_MINUTES (backend/views.py, "stopped checking in"). Until a machine issue
-  // needs this person, the offline checks are amber; with no computer set up at all, nothing clears, so red stays.
-  const attention = window.hlAttention?.() || [];
-  const machineNeedsYou = (st?.health_issues || []).some(issue => issue.kind === 'machine' && needsPerson(issue));
-  const computers = window.hlComputers?.();
-  const noComputer = Array.isArray(computers) && !computers.length;
-  const offlineComputers = (computers || []).filter(computer => !computer.online);
-  const namedOutages = new Set((st?.health_issues || []).filter(issue => issue.kind === 'machine' && needsPerson(issue)).map(issue => issue.machine));
-  // Omit the aggregate only when every offline computer has its own actionable line.
-  const allOutagesNamed = offlineComputers.length > 0 && offlineComputers.every(computer => namedOutages.has(computer.id));
-  const offline = new Set(['computers', 'waiting']);
-  // The aggregate keeps the affected bot names when no per-computer action covers them.
-  const computersLine = attention.some(check => check.id === 'computers');
-  const waiting = attention.find(check => check.id === 'waiting');
-  for (const check of attention) {
-    if ((check.id === 'computers' || check.id === 'waiting') && allOutagesNamed) continue;
-    if (check.id === 'waiting' && computersLine) continue;
-    const fix = check.fixes?.[0];
-    const level = check.status !== 'bad' ? 'warn' : offline.has(check.id) && !machineNeedsYou && !noComputer ? 'warn' : 'bad';
-    // A fix that leaves Tico (GitHub's settings, a provider's docs) opens in its own tab.
-    const away = /^https?:/.test(fix?.href || '') ? ' target="_blank" rel="noopener"' : '';
-    lines.push({level, text: [check.label, [firstSentence(check.summary), check.id === 'computers' && waiting ? firstSentence(waiting.summary) : ''].filter(Boolean).join('. ')].filter(Boolean).join(': '),
-      fix: fix ? window.hlFixHtml({...fix, label: 'Fix'}).replace(/^<(a|button) /, `<$1 title="${esc(fix.label)}"${away} `) : ACCOUNT_HEALTH});
-  }
-  return lines.sort((a, b) => (a.level === 'bad' ? 0 : 1) - (b.level === 'bad' ? 0 : 1));
+  return lines;
 }
 function renderAccountStatus() {
   const hb = $('#heartbeat');
@@ -80,7 +47,6 @@ function renderAccountStatus() {
 }
 function renderHeartbeat() {
   renderAccountStatus();
-  needsYouAutoOpen((S.status?.health_issues || []).filter(needsPerson));
 }
 // Desktop: hovering the dot shows the lines without opening the menu. A tap opens the menu, which starts with them.
 (() => {
@@ -100,141 +66,25 @@ function renderHeartbeat() {
 })();
 document.addEventListener('click', ev => {
   if (ev.target.closest('[data-account-retry]')) { void refresh(false); return; }
-  if (ev.target.closest('[data-account-needs-you]')) { needsYou(); return; }
-  const review = ev.target.closest('[data-account-review]');
-  if (review) executionReview(review.dataset.accountReview);
+  const restart = ev.target.closest('[data-runner-restart]');
+  if (restart) { void restartComputer(restart); return; }
 });
-// The first time a new issue that needs a person shows up, it opens in front of them, wherever
-// they are in the app. Closing it is remembered per issue, and Snooze quiets everything for an
-// hour, so a person is asked once, not on every poll.
-function needsYouAutoOpen(urgent) {
-  // Only an issue the server explicitly marked for a person opens by itself; anything else waits
-  // behind the sidebar alert. Never over another dialog: whatever the person is doing comes first.
-  const explicit = urgent.filter(needsPerson);
-  if (!explicit.length || document.querySelector('dialog[open], .needs-you')) return;
-  const memory = needsYouMemory();
-  if (memory.snoozedUntil && Date.now() < memory.snoozedUntil) return;
-  const seen = new Set(memory.seen || []);
-  if (explicit.every(issue => seen.has(needsYouKey(issue)))) return;
-  needsYou();
-}
-// A panel above the sidebar alert, not a modal: it pops open in front of the person without
-// trapping them or covering what they were doing, and it is not a <dialog>, so nothing that
-// waits for `dialog[open]` (the review it can launch, for one) is confused by it.
 // A computer with a Tico update restarts from here. The runner takes main when
 // that is safe and restarts once nothing is running, so the line can say nothing is interrupted.
 const runnerRestartButton = issue => issue.restart && issue.machine
   ? `<button class="primary" type="button" data-runner-restart="${esc(issue.machine)}">Restart</button>` : '';
-function bindRunnerRestart(root) {
-  root.querySelectorAll('[data-runner-restart]').forEach(button => {
-    button.onclick = async () => {
-      button.disabled = true; button.textContent = 'Restarting…';
-      const line = button.closest('.settings-issue')?.querySelector('p');
-      try {
-        const r = await post(`/v2/computers/${encodeURIComponent(button.dataset.runnerRestart)}/restart`, {});
-        if (line) line.textContent = r.running
-          ? `Restarting after ${r.running} run${r.running === 1 ? ' finishes' : 's finish'}.`
-          : 'Restarting now. Nothing is running, so nothing will be interrupted.';
-        button.textContent = 'Restarting';
-      } catch (e) { button.disabled = false; button.textContent = 'Restart'; toast(e.message, true); }
-    };
-  });
-}
-// A choice saved while the bot was busy keeps the run listed (backend execution.stopped_rows `decided`): its line says
-// what Tico will do and offers no second choice, which the server would refuse. Once some of a run's folded requests
-// have a choice, only that choice is offered, for the rest.
-const stoppedChosen = run => run.decided || run.jobs?.find(job => job.decided)?.decided;
-// Whether a settled line's choice still waits for the bot's turn: a choice the server already held (no `deferred` of
-// this page's own click) was saved while the bot was busy.
-const stoppedWaits = run => !run.jobs || run.jobs.some(job => job.deferred !== false);
-// A bot's stopped runs, one short line each: the task, why it stopped (saying so when that was a restart or a limit,
-// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule.
-// The issue's title opens that card (settings.js executionReview) with the evidence.
-const RETRY_HINT = 'The bot checks what already happened first';
-function stoppedLines(issue, list) {
-  if (!issue.runs?.length) return '';
-  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${decision === 'resume' ? ` title="${RETRY_HINT}"` : ''}${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
-  // When every run stopped the same routine way the card's own line already says it is not a bug.
-  const shared = issue.runs.every(run => run.routine && run.cause === issue.runs[0].cause);
-  const line = (run, i) => `<li class="stopped-line" data-run-row="${i}"${run.decided ? ` data-decided="${esc(run.decided)}"` : ''}>
-    <span class="stopped-name" title="${esc(run.title || '')}">${esc(run.title || 'A request you can’t open')}</span>
-    <span class="stopped-why">${esc(run.why)}${run.routine && !shared ? ' · not a bug' : ''}</span>
-    ${issue.can_review ? `<div class="stopped-picks">${run.retry ? button(run, i, 'resume', 'Try again', true) + button(run, i, 'dismiss', 'Don’t retry')
-      : button(run, i, 'dismiss', 'Don’t retry', true) + button(run, i, 'resume', 'Try again')}</div>` : ''}
-    <p class="stopped-result" data-result role="status" aria-live="polite">${run.decided ? esc(stoppedOutcome(run.decided, stoppedWaits(run))) : ''}</p></li>`;
-  list.push(issue);
-  return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
-    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more</p>` : ''}`;
-}
-function bindStoppedLines(panel, list) {
-  panel.querySelectorAll('[data-runs]').forEach(ul => {
-    const issue = list[+ul.dataset.runs];
-    ul.querySelectorAll('[data-run-row]').forEach(li => {
-      const run = issue.runs[+li.dataset.runRow], buttons = li.querySelectorAll('button'), result = li.querySelector('[data-result]');
-      buttons.forEach(button => button.onclick = async () => {
-        const decision = button.dataset.runDecision;
-        buttons.forEach(b => b.disabled = true);
-        result.classList.remove('err'); result.textContent = 'Saving choice…';
-        try {
-          await decideRun(run, decision);
-          li.dataset.decided = run.decided;
-          result.textContent = stoppedOutcome(run.decided, stoppedWaits(run));
-        } catch (e) {
-          result.classList.add('err'); result.textContent = e.message;
-          buttons.forEach(b => b.disabled = !!stoppedChosen(run) && b.dataset.runDecision !== stoppedChosen(run));
-          return;
-        }
-        if (!ul.querySelector('[data-run-row]:not([data-decided])')) void refresh(false);
-      });
-    });
-  });
-}
-// Saves one run's choice on each of its requests. A message folded into the run rides on it, so one choice settles them
-// all; a request already settled (an earlier click that stopped partway, or a choice saved while the bot was busy) is
-// not sent again. The run keeps the outcome, so Needs you closed and reopened before a refresh still shows it.
-async function decideRun(run, decision) {
-  for (const job of run.jobs.filter(job => !job.decided)) {
-    const done = await reconcileStopped(job, decision);
-    job.decided = decision; job.deferred = !!done.deferred;
-  }
-  run.decided = run.jobs.every(job => job.decided === decision) ? decision : 'mixed';
-  return run.decided;
-}
-// A card is a title, at most one short line and at most two buttons. The title is the way to the details (the stopped
-// runs card, the bot, the computer, Health), so Details and Open bot are not buttons of their own; what the server
-// wrote in full stays on the title's tooltip.
-const needsTitle = (text, tag, tip = '') => `<${tag} class="needs-title"${tip ? ` title="${esc(tip)}"` : ''}><span>${esc(text)}</span><span class="nav-icon" aria-hidden="true">chevron_right</span></${tag.split(' ')[0]}>`;
-const needsTitleTag = issue => issue.kind === 'uncertain_work' && issue.bot ? `button type="button" data-execution-review="${esc(issue.bot)}"`
-  : issue.machine && !issue.bot ? 'a href="#/settings" data-gs-tab="devices"'
-  : issue.bot ? `a href="#/bot/${esc(issue.bot)}/more"` : 'a href="#/settings" data-gs-tab="health"';
-function needsYou() {
-  document.querySelector('.needs-you')?.remove();
-  const issues = (S.status?.health_issues || []).filter(needsPerson);
-  const panel = document.createElement('section'); panel.className = 'needs-you';
-  panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Needs you');
-  const stopped = [];
-  // Listed runs say it themselves, so their issue's own line goes; otherwise the line is the detail's first sentence.
-  const full = issue => [issue.detail, issue.action !== 'review' && issue.action].filter(Boolean).join(' ');
-  const line = issue => issue.runs?.length || !issue.detail ? '' : `<p>${esc(firstSentence(issue.detail))}</p>`;
-  // The text and its lines take the full width; the actions sit under them, each as wide as its words.
-  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div>${needsTitle(issue.title, needsTitleTag(issue), full(issue))}${line(issue)}${stoppedLines(issue, stopped)}</div>
-    <div class="issue-buttons">${runnerRestartButton(issue)}</div></div>`;
-  panel.innerHTML = `<header><h2></h2><button class="ghost" data-close aria-label="Close">Close</button></header>
-    <div data-list>${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
-    <div class="row"><button class="ghost" data-snooze>Snooze for an hour</button><a class="ghost" href="#/settings">Open Settings</a></div>`;
-  const close = () => { needsYouRemember({seen: issues.map(needsYouKey)}); panel.remove(); };
-  panel.querySelector('[data-close]').onclick = close;
-  panel.querySelector('[data-snooze]').onclick = () => { needsYouRemember({snoozedUntil: Date.now() + 3600e3}); close(); };
-  panel.querySelectorAll('[data-execution-review]').forEach(button => {
-    button.onclick = () => { close(); executionReview(button.dataset.executionReview); };
-  });
-  panel.querySelectorAll('a[href]').forEach(a => a.addEventListener('click', close));
-  bindRunnerRestart(panel);
-  bindStoppedLines(panel, stopped);
-  const n = panel.querySelectorAll('[data-list] > .settings-issue:not([hidden])').length;
-  panel.querySelector('h2').textContent = n === 1 ? 'One thing needs you' : `${n} things need you`;
-  document.body.appendChild(panel);
-  return panel;
+// Sends the restart from any Restart button (the status line, the Settings checks) and says what it did on the
+// line the button sits in, if there is one.
+async function restartComputer(button) {
+  button.disabled = true; button.textContent = 'Restarting…';
+  const line = button.closest('.settings-issue')?.querySelector('p');
+  try {
+    const r = await post(`/v2/computers/${encodeURIComponent(button.dataset.runnerRestart)}/restart`, {});
+    if (line) line.textContent = r.running
+      ? `Restarting after ${r.running} run${r.running === 1 ? ' finishes' : 's finish'}.`
+      : 'Restarting now. Nothing is running, so nothing will be interrupted.';
+    button.textContent = 'Restarting';
+  } catch (e) { button.disabled = false; button.textContent = 'Restart'; toast(e.message, true); }
 }
 function renderAccount() {
   const el = $('#account'), me = S.me;
@@ -246,6 +96,7 @@ function renderAccount() {
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();
+  nativeOrgSync();
   // Only a session an identity proxy vouches for has anything to end; a bearer or the local app does not.
   $('#sign-out').hidden = !me.proxy_session;
 }

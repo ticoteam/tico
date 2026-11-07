@@ -41,12 +41,24 @@ function visualFrameOk(kind, src) {
 }
 // The approved address a page's frame shows from, or null for an Open card (pages, ui/app/pages.js).
 const visualPageSrc = src => { const ok = visualSrc({src}); return ok && visualFrameOk('page', ok) ? ok : null; };
-// An ACK can arrive after a live snapshot painted chips. Reuse only the open
-// threads' cached authorized data; no new read, draft reset or whole-page refresh.
+// An ACK can arrive after a live snapshot painted chips. Every place that draws visuals draws again from the data it
+// already holds: no new read, draft reset or whole-page refresh.
 function nativeVisualRepaint() {
   if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
   if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
     taskCommentsRender(TASK_CHAT, TASK_CHAT.data);
+  if (typeof THV_VIEWS !== 'undefined') for (const v of THV_VIEWS) if (!v.gone && v.state === 'ready') thvDraw(v);
+  // Pinned pages and the full page view: an Open card drawn before the ACK becomes its frame (pageCard keeps its page).
+  for (const el of document.querySelectorAll('.pg-card:not(.pg-framed)'))
+    if (el.pageData && typeof pageCard === 'function' && pageSrc(el.pageData)) el.replaceWith(pageCard(el.pageData, {size: el.pageSize}));
+  if (typeof PG !== 'undefined' && PG?.page && PG.shown === PG.page.version && pageSrc(PG.page) && !document.querySelector('#pg-view .pg-body iframe'))
+    void pageFullBody(PG);
+  // The Decide card's body (its note is left alone) and a task's question box (its ticks and note kept as a draft);
+  // neither while an answer from it is on its way, so its controls stay off.
+  if (typeof DEC !== 'undefined' && DEC && !DEC.busy) decidePaintBody(DEC);
+  if (typeof qcardRedraw === 'function')
+    for (const box of document.querySelectorAll('[data-qcard]:not([aria-busy="true"])'))
+      if (qcardShown(box)) { qcardDraft(box); qcardRedraw(box); }
 }
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
 // Without a separate visual address (Visuals always on, backend/visuals.py mode) a page or SVG is never served from
@@ -94,6 +106,10 @@ function visualCardHTML(f, key, state) {
 function visualCardsHTML(files, {key = '', chips = () => ''} = {}) {
   const cards = [], rest = [], shown = new Set(), keys = new Set();
   for (const f of Array.isArray(files) ? files : []) {
+    if (f?.removed && f.label && !f.file_id) {
+      cards.push(`<span class="vcard-note">${esc(f.label)}</span>`);
+      continue;
+    }
     const state = cards.length < VISUAL_INLINE_MAX ? visualState(f) : null;
     if (!state) { rest.push(f); continue; }
     let k = `${key}:${visualRef(f)}`;

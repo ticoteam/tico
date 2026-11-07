@@ -10,12 +10,15 @@ const fmt = iso => iso ? new Date(iso).toLocaleString(undefined, {weekday:'short
 // A relative time that keeps moving: the node holds its instant in data-ago and agoTick rewrites the words, so a
 // page that stays open never reads "0s ago" for minutes. `agoSpan` is the markup; the full date is its hover.
 const agoSpan = iso => `<span data-ago="${esc(iso)}" title="${esc(fmt(iso))}">${esc(ago(iso))}</span>`;
-function agoTick() {
-  for (const node of document.querySelectorAll('[data-ago]')) {
+function agoTick(root = document) {
+  for (const node of root.querySelectorAll('[data-ago]')) {
     const text = ago(node.dataset.ago);
     if (node.textContent !== text) node.textContent = text;
   }
 }
+// A thread's HTML without those words, to compare two draws on: "1m ago" turning "2m ago" alone rebuilds nothing
+// (typed replies, focus kept); agoTick(thread) moves the words instead.
+const agoStill = html => html.replace(/( data-ago="[^"]*"[^>]*>)[^<]*/g, '$1');
 setInterval(() => { if (!document.hidden) agoTick(); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) agoTick(); });
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -86,12 +89,12 @@ function modelWords(id) {
   if (/^gpt$/i.test(parts[0])) return ['GPT', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
   if (/^gpt/i.test(raw)) return raw.replace(/^gpt/i, 'GPT');
   if (/^gemini$/i.test(parts[0])) return ['Gemini', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
-  // Tico's own models, served by the Tico AI Gateway: tico-sales-medium-fast-1.0 is "Sales · Medium · Fast 1.0", the same
-  // without a version "Sales · Medium · Fast (auto)", and the ids from before the tiers "Mid 1.0 (old lineup)".
+  // Tico's own models, served by the Tico AI Gateway: tico-xhigh-fast-1.0 is "X-High · Fast 1.0", the same without a
+  // version "X-High · Fast (auto)".
   if (/^tico$/i.test(parts[0]) && parts.length > 1) {
     const rest = parts.slice(1), ver = /^\d+(\.\d+)?$/.test(rest[rest.length - 1]) ? rest.pop() : '';
-    if (rest.length === 1 && /^(cheap|mid|power|decide|classify)$/i.test(rest[0])) return `${cap(rest[0])} ${ver}`.trim() + ' (old lineup)';
-    return rest.map(cap).join(' · ') + (ver ? ' ' + ver : ' (auto)');
+    const level = w => ({xlow: 'X-Low', xhigh: 'X-High'})[w.toLowerCase()] || cap(w);
+    return rest.map(level).join(' · ') + (ver ? ' ' + ver : ' (auto)');
   }
   return raw;
 }
@@ -101,6 +104,11 @@ const modelChoiceWords = (model, effort, harness, ownHarness) => {
   if (!name) return '';
   const via = harness && ownHarness && harness !== ownHarness ? ` in ${harnessWords(harness)}` : '';
   return name + via + (effort ? ` · ${effort}` : '');
+};
+// "1M", "1.05M" or "500K": a model's context window in tokens (`context_tokens` on a MODEL_CATALOG row); '' when unknown.
+const modelContextWords = tokens => {
+  if (!(tokens > 0)) return '';
+  return tokens >= 1000000 ? `${+(tokens / 1000000).toFixed(2)}M` : `${Math.round(tokens / 1000)}K`;
 };
 
 // Shared with the bot page's state pill: lifecycle pause takes precedence over a running turn.

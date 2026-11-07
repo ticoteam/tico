@@ -13,8 +13,13 @@ CAPTURE = "/api/v2/support/diagnostics/capture"
 
 def test_a_reported_error_goes_in_the_attachment_redacted_and_reaches_hq_as_previewed(environment, hq):  # noqa: F811
     api = environment()
-    report = {"kind": "toast", "title": "Could not save: ana@acme.example token sk-abcdEFGH1234567890xyz",
-              "detail": "from https://intranet.acme.example/x?id=7 at 10.0.0.4", "ref": "run_1", "group": "toast:Could not save"}
+    report = {
+        "kind": "toast",
+        "title": "Could not save: ana@acme.example token sk-abcdEFGH1234567890xyz",
+        "detail": "from https://intranet.acme.example/x?id=7 at 10.0.0.4",
+        "ref": "run_1",
+        "group": "toast:Could not save",
+    }
     r = api.post(CAPTURE, headers=signed_in(), json={"report": report})
     assert r.status_code == 200, r.text
     preview = r.json()
@@ -30,16 +35,32 @@ def test_a_reported_error_goes_in_the_attachment_redacted_and_reaches_hq_as_prev
 
 def test_setup_check_rows_ride_in_the_report_and_unknown_fields_are_refused(environment):  # noqa: F811
     api = environment()
-    rows = [{"name": "HTTPS certificate", "status": "bad", "detail": "could not connect to acme.example:443",
-             "fix": "Open port 443", "source": "doctor"},
-            {"name": "Computers", "status": "warn", "detail": "1 offline", "fix": "", "source": "health"}]
-    r = api.post(CAPTURE, headers=signed_in(), json={"report": {"kind": "setup_check", "title": "1 of 2 checks fail", "checks": rows}})
+    rows = [
+        {
+            "name": "HTTPS certificate",
+            "status": "bad",
+            "detail": "could not connect to acme.example:443",
+            "fix": "Open port 443",
+            "source": "doctor",
+        },
+        {"name": "Computers", "status": "warn", "detail": "1 offline", "fix": "", "source": "health"},
+    ]
+    r = api.post(
+        CAPTURE,
+        headers=signed_in(),
+        json={"report": {"kind": "setup_check", "title": "1 of 2 checks fail", "checks": rows}},
+    )
     assert r.status_code == 200, r.text
     checks = json.loads(r.json()["text"])["report"]["checks"]
     assert [c["name"] for c in checks] == ["HTTPS certificate", "Computers"] and checks[0]["fix"] == "Open port 443"
     assert api.post(CAPTURE, headers=signed_in(), json={"report": {"kind": "toast", "secret": "x"}}).status_code == 422
     assert api.post(CAPTURE, headers=signed_in(), json={"report": {"kind": "anything"}}).status_code == 422
-    assert api.post(CAPTURE, headers=signed_in(), json={"report": {"kind": "setup_check", "checks": rows * 21}}).status_code == 422
+    assert (
+        api.post(
+            CAPTURE, headers=signed_in(), json={"report": {"kind": "setup_check", "checks": rows * 21}}
+        ).status_code
+        == 422
+    )
 
 
 def test_without_a_report_the_bundle_has_no_report_section(environment):  # noqa: F811
@@ -55,6 +76,7 @@ class FakeChecks:
 
     def _answer(self, name, *args):
         from setup.verify import Check
+
         self.asked.append((name, args))
         bad = name in self.failing
         return Check(name, not bad, f"{name} {'failed' if bad else 'ok'}", f"fix {name}" if bad else "")
@@ -79,8 +101,15 @@ def settings(**over):
 
 def test_setup_check_runs_doctors_https_checks_on_the_servers_own_addresses():
     checks = FakeChecks(failing={"tls"})
-    rows = setup_check.doctor_checks(settings(runner_url="https://run.acme.example", auth_proxy="oidc",
-                                              oidc_issuer="https://accounts.google.com", oidc_client_id="cid"), checks)
+    rows = setup_check.doctor_checks(
+        settings(
+            runner_url="https://run.acme.example",
+            auth_proxy="oidc",
+            oidc_issuer="https://accounts.google.com",
+            oidc_client_id="cid",
+        ),
+        checks,
+    )
     assert sorted(name for name, _ in checks.asked) == ["health", "runner", "signin", "tls"]
     assert ("signin", ("tico.acme.example", "google", "cid")) in checks.asked
     assert ("runner", ("run.acme.example",)) in checks.asked
@@ -102,13 +131,29 @@ def test_a_tico_on_this_computer_only_has_no_https_to_check():
 
 
 def test_health_lines_that_need_a_look_become_rows_with_their_fixes():
-    view = {"checks": [{"id": "a", "label": "Computers", "status": "bad", "summary": "No computer online",
-                        "fixes": [{"label": "Add a computer"}, {"label": "Open Settings"}]},
-                       {"id": "b", "label": "Version", "status": "ok", "summary": "current", "fixes": []},
-                       {"id": "c", "label": "Backups", "status": "warn", "summary": "Old", "fixes": []}]}
+    view = {
+        "checks": [
+            {
+                "id": "a",
+                "label": "Computers",
+                "status": "bad",
+                "summary": "No computer online",
+                "fixes": [{"label": "Add a computer"}, {"label": "Open Settings"}],
+            },
+            {"id": "b", "label": "Version", "status": "ok", "summary": "current", "fixes": []},
+            {"id": "c", "label": "Backups", "status": "warn", "summary": "Old", "fixes": []},
+        ]
+    }
     assert setup_check.health_checks(view) == [
-        {"name": "Computers", "status": "bad", "detail": "No computer online", "fix": "Add a computer; Open Settings", "source": "health"},
-        {"name": "Backups", "status": "warn", "detail": "Old", "fix": "", "source": "health"}]
+        {
+            "name": "Computers",
+            "status": "bad",
+            "detail": "No computer online",
+            "fix": "Add a computer; Open Settings",
+            "source": "health",
+        },
+        {"name": "Backups", "status": "warn", "detail": "Old", "fix": "", "source": "health"},
+    ]
 
 
 def test_the_setup_check_route_answers_a_person_and_refuses_a_bot(environment):  # noqa: F811
@@ -116,7 +161,7 @@ def test_the_setup_check_route_answers_a_person_and_refuses_a_bot(environment): 
     r = api.post("/api/v2/support/setup-check", headers=signed_in())
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["checks"][0]["name"] == "HTTPS" and body["checks"][0]["status"] == "info"     # the test server is local
+    assert body["checks"][0]["name"] == "HTTPS" and body["checks"][0]["status"] == "info"  # the test server is local
     assert "doctor" in body["doctor_only"] and body["failing"] == sum(c["status"] == "bad" for c in body["checks"])
     bot = api.post("/api/v2/support/setup-check", headers={"Authorization": "Bearer nope"})
     assert bot.status_code in (401, 403)

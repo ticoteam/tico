@@ -4,16 +4,17 @@ Tico connects the agents marked supported: a person adds one and it becomes a Ti
 under the line the person picks, or in the seat's place. Any other agent is a request. Requesting one adds a Recruiting
 seat for it (backend/lifecycle.py) that holds its place on the chart, and files the request with Tico's team through the
 support path (backend/support.py), so the team builds the connection. The first task a person gives the agent waits on
-the seat, as a task they own, until the agent connects. Cancelling a request tells Tico, declines that task when the
+the seat, as a task they own, until the agent connects. Canceling a request tells Tico, declines that task when the
 person may update it, and closes the seat.
 
 A request moves its seat through request_state: `filing` while Tico is being told (set in the transaction that makes the
-seat and its first task, before Tico is called), `requested` once Tico's ticket is kept, `cancelling` while a cancel is
-told to Tico, and `cancelled` when it is finished. lifecycle.refuse_if_requested keeps every change to the seat out of
+seat and its first task, before Tico is called), `requested` once Tico's ticket is kept, `canceling` while a cancel is
+told to Tico, and `canceled` when it is finished. lifecycle.refuse_if_requested keeps every change to the seat out of
 those states.
 
 Nothing here runs an agent or sends it work: a seat holds no work (backend/lifecycle.py).
 """
+
 import time
 import uuid
 from typing import Annotated
@@ -33,22 +34,78 @@ from .store import Problem, digest, encode
 from .support import CONTROL, SupportTicket, require_on, require_person
 
 AGENTS = (
-    {"id": "claude", "name": "Claude Code", "maker": "Anthropic", "site": "claude.com",
-     "line": "Codes in your repo on a Tico computer or in its cloud", "supported": True, "connect_id": "claude"},
-    {"id": "codex", "name": "Codex", "maker": "OpenAI", "site": "openai.com",
-     "line": "Takes a task, works in a sandbox, opens a PR", "supported": True, "connect_id": "codex"},
-    {"id": "devin", "name": "Devin", "maker": "Cognition", "site": "devin.ai",
-     "line": "Works in its own VM end to end, opens PRs", "supported": False, "connect_id": None},
-    {"id": "droids", "name": "Droids", "maker": "Factory", "site": "factory.ai",
-     "line": "Turns tickets into PRs; reviews and refactors", "supported": False, "connect_id": None},
-    {"id": "jules", "name": "Jules", "maker": "Google", "site": "jules.google",
-     "line": "Works on a repo in a cloud VM, opens PRs", "supported": False, "connect_id": None},
-    {"id": "copilot", "name": "Copilot coding agent", "maker": "GitHub", "site": "github.com",
-     "line": "Assign it an issue, it opens a PR", "supported": False, "connect_id": None},
-    {"id": "background", "name": "Background agents", "maker": "Cursor", "site": "cursor.com",
-     "line": "Runs coding tasks in the cloud from a prompt", "supported": False, "connect_id": None},
-    {"id": "openhands", "name": "OpenHands", "maker": "All Hands AI", "site": "all-hands.dev",
-     "line": "Open source; runs in its cloud or yours", "supported": False, "connect_id": None},
+    {
+        "id": "claude",
+        "name": "Claude Code",
+        "maker": "Anthropic",
+        "site": "claude.com",
+        "line": "Codes in your repo on a Tico computer or in its cloud",
+        "supported": True,
+        "connect_id": "claude",
+    },
+    {
+        "id": "codex",
+        "name": "Codex",
+        "maker": "OpenAI",
+        "site": "openai.com",
+        "line": "Takes a task, works in a sandbox, opens a PR",
+        "supported": True,
+        "connect_id": "codex",
+    },
+    {
+        "id": "devin",
+        "name": "Devin",
+        "maker": "Cognition",
+        "site": "devin.ai",
+        "line": "Works in its own VM end to end, opens PRs",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "droids",
+        "name": "Droids",
+        "maker": "Factory",
+        "site": "factory.ai",
+        "line": "Turns tickets into PRs; reviews and refactors",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "jules",
+        "name": "Jules",
+        "maker": "Google",
+        "site": "jules.google",
+        "line": "Works on a repo in a cloud VM, opens PRs",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "copilot",
+        "name": "Copilot coding agent",
+        "maker": "GitHub",
+        "site": "github.com",
+        "line": "Assign it an issue, it opens a PR",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "background",
+        "name": "Background agents",
+        "maker": "Cursor",
+        "site": "cursor.com",
+        "line": "Runs coding tasks in the cloud from a prompt",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "openhands",
+        "name": "OpenHands",
+        "maker": "All Hands AI",
+        "site": "all-hands.dev",
+        "line": "Open source; runs in its cloud or yours",
+        "supported": False,
+        "connect_id": None,
+    },
 )
 BY_ID = {agent["id"]: agent for agent in AGENTS}
 
@@ -58,34 +115,34 @@ def listing():
     return [dict(agent) for agent in AGENTS]
 
 
-OTHER = "other"                                                      # an agent not on the list: typed by the person
-STEPS = (lifecycle.REQUESTED, "building", "ready")                   # the stepper on the seat's Connecting page
-NAME_MAX = 120                                                       # an `other` name becomes the seat's title
+OTHER = "other"  # an agent not on the list: typed by the person
+STEPS = (lifecycle.REQUESTED, "building", "ready")  # the stepper on the seat's Connecting page
+NAME_MAX = 120  # an `other` name becomes the seat's title
 FIRST_TASK_MAX = 8000
 TASK_TITLE_MAX = 200
-FILING_WAIT_SECONDS = 30                                             # how long a repeat of a request in flight waits
+FILING_WAIT_SECONDS = 30  # how long a repeat of a request in flight waits
 
 
 class CloudAgentRequest(Contract):
     team: Annotated[str, Field(max_length=100)] = ""
     reports_to: Annotated[str, Field(max_length=200)] = ""
     first_task: Annotated[str, Field(max_length=FIRST_TASK_MAX)] = ""
-    name: Annotated[str, Field(max_length=NAME_MAX)] = ""     # `other` only
+    name: Annotated[str, Field(max_length=NAME_MAX)] = ""  # `other` only
 
 
 class SeatAgentRequest(Contract):
     agent: Annotated[str, Field(min_length=1, max_length=40)]
     first_task: Annotated[str, Field(max_length=FIRST_TASK_MAX)] = ""
-    name: Annotated[str, Field(max_length=NAME_MAX)] = ""     # `other` only
+    name: Annotated[str, Field(max_length=NAME_MAX)] = ""  # `other` only
 
 
-SEATLESS_TITLE = "Software engineer"   # the seat an add with no seat opens: every connected agent is a coding agent
+SEATLESS_TITLE = "Software engineer"  # the seat an add with no seat opens: every connected agent is a coding agent
 
 
 class CloudAgentAdd(Contract):
-    reports_to: Annotated[str, Field(max_length=200)] = ""   # the line the bot goes under, when no seat is named
-    seat_id: Annotated[str, Field(max_length=200)] = ""      # the seat the bot fills
-    team: Annotated[str, Field(max_length=100)] = ""         # the team the bot joins, when no seat is named
+    reports_to: Annotated[str, Field(max_length=200)] = ""  # the line the bot goes under, when no seat is named
+    seat_id: Annotated[str, Field(max_length=200)] = ""  # the seat the bot fills
+    team: Annotated[str, Field(max_length=100)] = ""  # the team the bot joins, when no seat is named
 
 
 def _other(name):
@@ -160,8 +217,11 @@ def _first_task(c, who, text):
         return H.task_create(c, who.actor, _task_title(text), text, who.actor, deduplicate=False)["id"]
     except H.Refused as exc:
         if exc.rule == "duplicate":
-            raise Problem("duplicate", "You already have an open task with this first line. Start the agent on a "
-                          "different one.", 409) from None
+            raise Problem(
+                "duplicate",
+                "You already have an open task with this first line. Start the agent on a different one.",
+                409,
+            ) from None
         raise Problem(exc.rule, exc.detail, 422) from None
 
 
@@ -191,21 +251,26 @@ def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, f
         placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
         joined = _joins(c, row, placed)
         if joined:
-            Groups.may_add(c, auth, who, joined)        # the agent joins this team when it connects
+            Groups.may_add(c, auth, who, joined)  # the agent joins this team when it connects
         kept, made = seat_id, 0
     else:
         placed = lifecycle.placement(auth, c, who, reports_to)
         joined = _joins(c, {"team": team}, placed)
         if joined:
-            Groups.may_add(c, auth, who, joined)        # a new seat the agent joins this team from
+            Groups.may_add(c, auth, who, joined)  # a new seat the agent joins this team from
         kept = lifecycle.create_seat(auth, c, who, agent["name"], "", placed, team)["id"]
         made = 1
     waiting = _first_task(c, who, first_task)
-    c.execute("UPDATE seats SET agent=?,agent_name=?,request_state=?,first_task=? WHERE id=?",
-              (agent["id"], agent["name"], lifecycle.FILING, waiting, kept))
+    c.execute(
+        "UPDATE seats SET agent=?,agent_name=?,request_state=?,first_task=? WHERE id=?",
+        (agent["id"], agent["name"], lifecycle.FILING, waiting, kept),
+    )
     reservation = uuid.uuid4().hex
-    c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
-              "VALUES(?,?,?,?,?,?,?,?)", (reservation, who.actor, key, digested, kept, "filing", H.now(), made))
+    c.execute(
+        "INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created_at,made) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (reservation, who.actor, key, digested, kept, "filing", H.now(), made),
+    )
     return reservation
 
 
@@ -222,13 +287,15 @@ def _reserve(store, auth, who, agent, key, digested, seat_id, reports_to, team, 
                 raise Problem("idempotency_conflict", "This key was used for different content", 409)
             if row and row["state"] == "filed":
                 return True, lifecycle.seat_record(c, row["seat_id"])
-            if row and row["created"] < H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS):
-                _release(c, who.actor, row)      # its first try never came back: this one takes the key
-                continue                         # committed on its own, so a refusal of the retry cannot undo it
+            if row and row["created_at"] < H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS):
+                _release(c, who.actor, row)  # its first try never came back: this one takes the key
+                continue  # committed on its own, so a refusal of the retry cannot undo it
             if not row:
                 return False, _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, first_task)
         if time.monotonic() > deadline:
-            raise Problem("requesting", "This request is still being filed. Try again in a moment.", 409, retryable=True)
+            raise Problem(
+                "requesting", "This request is still being filed. Try again in a moment.", 409, retryable=True
+            )
         time.sleep(0.2)
 
 
@@ -249,17 +316,21 @@ def _release(c, actor, row):
 
 def _recover_stale(c, seat_id=""):
     """Inside a write transaction: recover what a process that died mid-request left behind, once it is older than any live
-    request's window. A filing reservation is released, so its seat goes back to empty, and a cancelling seat goes back to
+    request's window. A filing reservation is released, so its seat goes back to empty, and a canceling seat goes back to
     requested, so its person can try again. Only `seat_id` is looked at when it is named, so a guarded action recovers the
     seat it touches without waiting for a restart."""
     stale = H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS)
     scope = " AND seat_id=?" if seat_id else ""
-    for row in c.execute("SELECT * FROM seat_requests WHERE state='filing' AND created<?" + scope,
-                         (stale, seat_id) if seat_id else (stale,)).fetchall():
+    for row in c.execute(
+        "SELECT * FROM seat_requests WHERE state='filing' AND created_at<?" + scope,
+        (stale, seat_id) if seat_id else (stale,),
+    ).fetchall():
         _release(c, row["actor"], row)
     scope = " AND id=?" if seat_id else ""
-    c.execute("UPDATE seats SET request_state=? WHERE request_state=? AND updated<?" + scope,
-              (lifecycle.REQUESTED, lifecycle.CANCELLING, stale) + ((seat_id,) if seat_id else ()))
+    c.execute(
+        "UPDATE seats SET request_state=? WHERE request_state=? AND updated_at<?" + scope,
+        (lifecycle.REQUESTED, lifecycle.CANCELING, stale) + ((seat_id,) if seat_id else ()),
+    )
 
 
 def recover(store, seat_id):
@@ -276,8 +347,9 @@ def release_abandoned(store):
         _recover_stale(c)
 
 
-def _request(request, store, auth, settings, who, agent_id, *, name="", first_task="", team="", reports_to="",
-             seat_id=""):
+def _request(
+    request, store, auth, settings, who, agent_id, *, name="", first_task="", team="", reports_to="", seat_id=""
+):
     """File the request with Tico, then keep the seat in the transaction that keeps Tico's ticket. The request is reserved
     under its Idempotency-Key first, so two identical requests file once, and a request that fails releases what it
     reserved."""
@@ -288,8 +360,18 @@ def _request(request, store, auth, settings, who, agent_id, *, name="", first_ta
     key = request.headers.get("idempotency-key") or ""
     if not key or len(key) > 200:
         raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
-    digested = digest(encode({"agent": agent["id"], "name": agent["name"], "first_task": first_task, "team": team,
-                              "reports_to": reports_to, "seat": seat_id}))
+    digested = digest(
+        encode(
+            {
+                "agent": agent["id"],
+                "name": agent["name"],
+                "first_task": first_task,
+                "team": team,
+                "reports_to": reports_to,
+                "seat": seat_id,
+            }
+        )
+    )
     done, value = _reserve(store, auth, who, agent, key, digested, seat_id, reports_to, team, first_task)
     if done:
         return value
@@ -311,8 +393,9 @@ def _request(request, store, auth, settings, who, agent_id, *, name="", first_ta
 
     try:
         # The ticket goes without the request's key: the reservation above is the key's record.
-        request.app.state.support.file(who, SupportTicket(message=_ticket_message(agent), kind="feedback",
-                                                          include_ids=False), "", on_filed=keep)
+        request.app.state.support.file(
+            who, SupportTicket(message=_ticket_message(agent), kind="feedback", include_ids=False), "", on_filed=keep
+        )
     except BaseException:
         with store.transaction() as c:
             held = c.execute("SELECT * FROM seat_requests WHERE id=?", (reservation,)).fetchone()
@@ -325,41 +408,43 @@ def _request(request, store, auth, settings, who, agent_id, *, name="", first_ta
 
 
 def _requested(c, seat_id):
-    """A seat that has a cloud agent request, open or cancelled. A closed one still answers, so a repeat cancel agrees."""
+    """A seat that has a cloud agent request, open or canceled. A closed one still answers, so a repeat cancel agrees."""
     row = c.execute("SELECT * FROM seats WHERE id=? AND agent<>''", (seat_id,)).fetchone()
     if not row:
         raise Problem("not_found", "No cloud agent is requested for this seat", 404)
     return row
 
 
-def _cancelled(c, seat_id):
-    return {**lifecycle.seat_record(c, seat_id), "closed": True, "request_state": lifecycle.CANCELLED}
+def _canceled(c, seat_id):
+    return {**lifecycle.seat_record(c, seat_id), "closed": True, "request_state": lifecycle.CANCELED}
 
 
 def _busy(state):
     if state == lifecycle.FILING:
-        return Problem("filing", "A cloud agent request for this seat is being filed. Try again in a moment.", 409,
-                       retryable=True)
-    return Problem("cancelling", "This seat's cloud agent request is being cancelled. Try again in a moment.", 409,
-                   retryable=True)
+        return Problem(
+            "filing", "A cloud agent request for this seat is being filed. Try again in a moment.", 409, retryable=True
+        )
+    return Problem(
+        "canceling", "This seat's cloud agent request is being canceled. Try again in a moment.", 409, retryable=True
+    )
 
 
 def _finish_cancel(c, who, row, name):
-    """Inside the transaction after Tico was told: the seat is cancelled and closed, and the first task is let go. It is
+    """Inside the transaction after Tico was told: the seat is canceled and closed, and the first task is let go. It is
     declined when the caller may update it, else it stays with its owner. Nothing here checks the caller's line again: the
-    seat has been `cancelling` since before Tico was told, so it cannot have moved."""
+    seat has been `canceling` since before Tico was told, so it cannot have moved."""
     seat_id = row["id"]
     if row["first_task"]:
-        _retire_task(c, who.actor, row["first_task"], f"Cancelled: the {name} request was withdrawn")
-    c.execute("UPDATE seats SET request_state=?,first_task='' WHERE id=?", (lifecycle.CANCELLED, seat_id))
+        _retire_task(c, who.actor, row["first_task"], f"Canceled: the {name} request was withdrawn")
+    c.execute("UPDATE seats SET request_state=?,first_task='' WHERE id=?", (lifecycle.CANCELED, seat_id))
     if row["closed_at"] is None:
         c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
         end_draft(c, row, "The seat was taken off the org chart")
-    H.event(c, who.actor, "seat.request_cancelled", seat_id, {"ticket": row["request_ticket"]})
+    H.event(c, who.actor, "seat.request_canceled", seat_id, {"ticket": row["request_ticket"]})
 
 
 def cancel_request(request, store, auth, settings, who, seat_id):
-    """Withdraw a seat's cloud agent request. The seat is marked cancelling first, so nothing changes it while Tico is
+    """Withdraw a seat's cloud agent request. The seat is marked canceling first, so nothing changes it while Tico is
     told on the request's ticket. Then it closes and the first task is let go. If Tico cannot be reached, or the last step
     fails, the request is requested again and the person can try once more. A repeat answers the same."""
     require_person(who)
@@ -367,25 +452,32 @@ def cancel_request(request, store, auth, settings, who, seat_id):
     recover(store, seat_id)
     with store.transaction() as c:
         row = _requested(c, seat_id)
-        if row["request_state"] == lifecycle.CANCELLED:
-            return _cancelled(c, seat_id)
-        if row["request_state"] in (lifecycle.FILING, lifecycle.CANCELLING):
+        if row["request_state"] == lifecycle.CANCELED:
+            return _canceled(c, seat_id)
+        if row["request_state"] in (lifecycle.FILING, lifecycle.CANCELING):
             raise _busy(row["request_state"])
         lifecycle.may_place_seat(auth, c, who, row)
-        ticket = (c.execute("SELECT * FROM support_tickets WHERE id=?", (row["request_ticket"],)).fetchone()
-                  if row["request_ticket"] else None)
+        ticket = (
+            c.execute("SELECT * FROM support_tickets WHERE id=?", (row["request_ticket"],)).fetchone()
+            if row["request_ticket"]
+            else None
+        )
         name = _agent_of(row)["name"]
-        c.execute("UPDATE seats SET request_state=?,updated=? WHERE id=?", (lifecycle.CANCELLING, H.now(), seat_id))
+        c.execute("UPDATE seats SET request_state=?,updated_at=? WHERE id=?", (lifecycle.CANCELING, H.now(), seat_id))
     try:
         if ticket is not None:
-            request.app.state.support.note(ticket, f"Cancelled: the {name} request was withdrawn. Nothing more is needed.")
+            request.app.state.support.note(
+                ticket, f"Canceled: the {name} request was withdrawn. Nothing more is needed."
+            )
         with store.transaction() as c:
             _finish_cancel(c, who, _requested(c, seat_id), name)
-            return _cancelled(c, seat_id)
+            return _canceled(c, seat_id)
     except BaseException:
         with store.transaction() as c:
-            c.execute("UPDATE seats SET request_state=? WHERE id=? AND request_state=?",
-                      (lifecycle.REQUESTED, seat_id, lifecycle.CANCELLING))
+            c.execute(
+                "UPDATE seats SET request_state=? WHERE id=? AND request_state=?",
+                (lifecycle.REQUESTED, seat_id, lifecycle.CANCELING),
+            )
         raise
 
 
@@ -405,11 +497,12 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     one first, a software engineer's in `team` under `reports_to`, named for the agent; it is in the same transaction, so a
     refusal below leaves no seat behind."""
     from .onboarding import BOTOPS
+
     seat_id, name = body.seat_id, ""
     if not seat_id:
         team = body.team.strip()
         if team:
-            Groups.may_add(c, auth, who, team)      # a new seat in this team, which the bot joins
+            Groups.may_add(c, auth, who, team)  # a new seat in this team, which the bot joins
         placed = lifecycle.placement(auth, c, who, body.reports_to)
         seat_id = lifecycle.create_seat(auth, c, who, SEATLESS_TITLE, agent["line"], placed, team)["id"]
         name = agent["name"]
@@ -417,38 +510,76 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     row = lifecycle.seat(c, seat_id)
     row = lifecycle.refuse_if_requested(row, c)
     placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
-    if str(row["reports_to"] or "").startswith(lifecycle.SEAT_PREFIX):
-        # A bot cannot report to a seat, and filling the seat above later would leave this bot under the wrong manager.
-        raise Problem("manager_seat", "Fill the seat this one reports to first", 409)
     team = _joins(c, row, placed)
     if team:
-        Groups.may_add(c, auth, who, team)          # the bot joins this team: the rule every add to a team obeys
+        Groups.may_add(c, auth, who, team)  # the bot joins this team: the rule every add to a team obeys
     card = recruiting.top_card(auth, onboarding, c, who, row)
     if not card:
-        raise Problem("template", "No Tico template fits this seat, so there is no repository to build the bot in. Hire "
-                      "from Recruit instead.", 409)
+        raise Problem(
+            "template",
+            "No Tico template fits this seat, so there is no repository to build the bot in. Hire "
+            "from Recruit instead.",
+            409,
+        )
     if not card["starter"] and not H.bot(c, BOTOPS):
         raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
     model = _model_for(agent["connect_id"])
     name = (name or row["title"])[:100]
     slug = onboarding.admin.pick_slug(c, name)
     record, rendered, description, instructions = recruiting.brief(c, onboarding, card, row)
-    settings_admin.create_bot(c, who, BotDefinitionCreate(
-        slug=slug, display_name=name, description=description[:2000], status="planned", repo="bot-" + slug,
-        thread_mode="personal", reports_to=lifecycle.bot_parent(c, placed) or None, shared=bool(card.get("shared")),
-        template=card["template"], model=model["id"], harness=agent["connect_id"], owners=[H.actor_id(who.actor)]))
-    setup_task = recruiting.onboard(c, who, onboarding, row, card, slug, name=name, description=description,
-                                    instructions=instructions, rendered=rendered, answers=record["answers"],
-                                    model=model["id"])
+    settings_admin.create_bot(
+        c,
+        who,
+        BotDefinitionCreate(
+            slug=slug,
+            display_name=name,
+            description=description[:2000],
+            status="planned",
+            repo="bot-" + slug,
+            thread_mode="personal",
+            reports_to=lifecycle.bot_parent(c, placed) or None,
+            shared=bool(card.get("shared")),
+            template=card["template"],
+            model=model["id"],
+            harness=agent["connect_id"],
+            owners=[H.actor_id(who.actor)],
+        ),
+    )
+    bot_id = H.resolve_bot(c, slug)["id"]
+    setup_task = recruiting.onboard(
+        c,
+        who,
+        onboarding,
+        row,
+        card,
+        bot_id,
+        name=name,
+        description=description,
+        instructions=instructions,
+        rendered=rendered,
+        answers=record["answers"],
+        model=model["id"],
+    )
     if team:
-        Groups._set_bot(c, slug, team)              # the team's group is the bot's own, as a team build's hire sets it
-    return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": seat_id,
-            "template": card["template"], "setup_task_id": setup_task}
+        Groups._set_bot(c, bot_id, team)  # the team's group is the bot's own, as a team build's hire sets it
+    return {
+        "bot": bot_id,
+        "slug": slug,
+        "harness": agent["connect_id"],
+        "model": model["id"],
+        "seat": seat_id,
+        "template": card["template"],
+        "setup_task_id": setup_task,
+    }
 
 
 def _seat_agent(c, who, row):
-    return {"seat": lifecycle.seat_view(c, row["id"]), "agent": _agent_of(row), "steps": list(STEPS),
-            "tasks": _waiting(c, who, row)}
+    return {
+        "seat": lifecycle.seat_view(c, row["id"]),
+        "agent": _agent_of(row),
+        "steps": list(STEPS),
+        "tasks": _waiting(c, who, row),
+    }
 
 
 def install(app, store, auth, settings, mutate, settings_admin, onboarding):
@@ -477,8 +608,18 @@ def install(app, store, auth, settings, mutate, settings_admin, onboarding):
         connection. `other` takes the agent's name or website in `name`."""
         who = request.state.identity
         auth.domain(who)
-        return _request(request, store, auth, settings, who, agent_id, name=body.name, first_task=body.first_task,
-                        team=body.team, reports_to=body.reports_to)
+        return _request(
+            request,
+            store,
+            auth,
+            settings,
+            who,
+            agent_id,
+            name=body.name,
+            first_task=body.first_task,
+            team=body.team,
+            reports_to=body.reports_to,
+        )
 
     @app.post("/api/v2/seats/{seat_id}/request-agent")
     def seat_request_agent(request: Request, seat_id: str, body: SeatAgentRequest):
@@ -486,8 +627,9 @@ def install(app, store, auth, settings, mutate, settings_admin, onboarding):
         connects."""
         who = request.state.identity
         auth.domain(who)
-        return _request(request, store, auth, settings, who, body.agent, name=body.name, first_task=body.first_task,
-                        seat_id=seat_id)
+        return _request(
+            request, store, auth, settings, who, body.agent, name=body.name, first_task=body.first_task, seat_id=seat_id
+        )
 
     @app.post("/api/v2/seats/{seat_id}/cancel-request")
     def seat_cancel_request(request: Request, seat_id: str):

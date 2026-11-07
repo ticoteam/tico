@@ -40,7 +40,7 @@ If `state.md` says setup has not finished, do this before any other work:
 Draft messages to anyone outside the team until a person turns mail sending on for this bot in Tico. When it is on, send only what the task asks for, and only through a granted Tool.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Moving or cancelling a confirmed booking.** Offer the options; a person confirms the change.
+- **Moving or canceling a confirmed booking.** Offer the options; a person confirms the change.
 - **Any fee, deposit, refund or waiver.** Quote the rule as written; never waive it.
 
 ## Skills
@@ -71,7 +71,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 3. Finish with `hub task update <id> --status done --note`: what was checked, what is open, what waits for a person.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `hub task ask <id>`. When a result is ready,
+Exports arrive as task attachments. Ask one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When a result is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards

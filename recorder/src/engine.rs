@@ -35,7 +35,12 @@ fn chunk_boundary(pending: &[f32]) -> Option<usize> {
     }
     let window = &pending[MIN_CHUNK_SAMPLES..pending.len().min(MAX_CHUNK_SAMPLES)];
     let energy = |frame: &[f32]| frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32;
-    let frames: Vec<f32> = window.chunks_exact(FRAME).map(energy).collect();
+    let frames: Vec<f32> = window
+        .as_chunks::<FRAME>()
+        .0
+        .iter()
+        .map(|frame| energy(frame))
+        .collect();
     let quietest = frames.iter().copied().fold(f32::INFINITY, f32::min);
     let mean = energy(&pending[..pending.len().min(MAX_CHUNK_SAMPLES)]);
     if quietest > (0.003_f32 * 0.003).max(mean * 0.06) && pending.len() < MAX_CHUNK_SAMPLES {
@@ -101,7 +106,7 @@ pub struct RecordingHandle {
     stop: mpsc::Sender<()>,
     status: Arc<Mutex<Status>>,
     worker: Option<JoinHandle<Result<()>>>,
-    cancelled: Arc<AtomicBool>,
+    canceled: Arc<AtomicBool>,
 }
 
 enum InputEvent {
@@ -112,7 +117,7 @@ enum InputEvent {
 
 struct InputPublisher {
     sender: mpsc::Sender<InputEvent>,
-    cancelled: Arc<AtomicBool>,
+    canceled: Arc<AtomicBool>,
 }
 struct CancelOnDrop(Arc<AtomicBool>);
 impl Drop for CancelOnDrop {
@@ -123,7 +128,7 @@ impl Drop for CancelOnDrop {
 impl InputPublisher {
     fn ready(&self, source: Source) -> Result<()> {
         ensure!(
-            !self.cancelled.load(Ordering::Acquire),
+            !self.canceled.load(Ordering::Acquire),
             "Recording stopped during input setup"
         );
         self.sender
@@ -131,7 +136,7 @@ impl InputPublisher {
             .map_err(|_| anyhow::anyhow!("Recording stopped during input setup"))
     }
     fn warning(&self, text: String) {
-        if !self.cancelled.load(Ordering::Acquire) {
+        if !self.canceled.load(Ordering::Acquire) {
             let _ = self.sender.send(InputEvent::Warning(text));
         }
     }
@@ -178,7 +183,7 @@ fn setup_inputs(
                 Ok(Ok(_)) => meeting_connected = true,
                 Ok(Err(error)) => {
                     ensure!(
-                        !inputs.cancelled.load(Ordering::Acquire),
+                        !inputs.canceled.load(Ordering::Acquire),
                         "Recording stopped during input setup"
                     );
                     failures.push(format!("Meeting audio unavailable: {error}."))
@@ -195,6 +200,9 @@ fn setup_inputs(
                 " Recording meeting audio only."
             });
         }
+        if !warning.is_empty() {
+            crate::diag!("audio: {warning}");
+        }
         inputs.warning(warning);
         Ok(())
     })
@@ -210,11 +218,13 @@ impl RecordingHandle {
         // Live text streams when Settings allow it; the key is read on the stream's own thread.
         let plan = settings::read(store.root())
             .ok()
-            .and_then(|config| stream::Plan::from_settings(&config));
-        Self::with_plan(store, id, plan, move |inputs| {
+            .and_then(|config| stream::Plan::from_settings(&config))
+            // Keep a settings-watching worker even while live text is off or not connected.
+            .or_else(|| stream::Plan::from_settings(&settings::Settings::default()));
+        Self::with_plan(store, id, plan, meeting_audio, move |inputs| {
             setup_inputs(
                 inputs,
-                || capture::start_microphone(microphone.as_deref()),
+                || capture::start_microphone_for_meeting(microphone.as_deref(), meeting_audio),
                 meeting_audio,
                 capture::start_meeting_audio,
             )
@@ -234,7 +244,7 @@ impl RecordingHandle {
         plan: Option<stream::Plan>,
         factory: impl FnOnce() -> Result<(Vec<Source>, String)> + Send + 'static,
     ) -> Result<Self> {
-        Self::with_plan(store, id, plan, move |inputs| {
+        Self::with_plan(store, id, plan, false, move |inputs| {
             let (sources, warning) = factory()?;
             for source in sources {
                 inputs.ready(source)?;
@@ -249,12 +259,13 @@ impl RecordingHandle {
         id: String,
         factory: impl FnOnce(&InputPublisher) -> Result<()> + Send + 'static,
     ) -> Result<Self> {
-        Self::with_plan(store, id, None, factory)
+        Self::with_plan(store, id, None, false, factory)
     }
     fn with_plan(
         store: Store,
         id: String,
         plan: Option<stream::Plan>,
+        observe_meeting: bool,
         factory: impl FnOnce(&InputPublisher) -> Result<()> + Send + 'static,
     ) -> Result<Self> {
         let existing = store.get(&id)?;
@@ -277,8 +288,8 @@ impl RecordingHandle {
             .max()
             .unwrap_or(0);
         let (stop, receiver) = mpsc::channel();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let cancelled_worker = cancelled.clone();
+        let canceled = Arc::new(AtomicBool::new(false));
+        let canceled_worker = canceled.clone();
         let status = Arc::new(Mutex::new(Status {
             phase: "starting".into(),
             ..Default::default()
@@ -294,8 +305,9 @@ impl RecordingHandle {
                     receiver,
                     shared.clone(),
                     factory,
-                    cancelled_worker,
+                    canceled_worker,
                     plan,
+                    observe_meeting,
                 );
                 if let Err(error) = &result {
                     let message = error.to_string();
@@ -315,7 +327,7 @@ impl RecordingHandle {
             stop,
             status,
             worker: Some(worker),
-            cancelled,
+            canceled,
         })
     }
     pub fn status(&self) -> Status {
@@ -325,7 +337,7 @@ impl RecordingHandle {
             .clone()
     }
     pub fn stop(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.canceled.store(true, Ordering::Release);
         let _ = self.stop.send(());
     }
     pub fn is_finished(&self) -> bool {
@@ -363,9 +375,23 @@ struct Writer {
     chunk_ms: f64,
     /// Live text for this input. It gets a copy of every resampled sample and never blocks.
     feed: Option<Feed>,
+    /// Since when the device has delivered only exact zeros (a muted or seized input).
+    silent_since: Option<Instant>,
+    silence_logged: bool,
 }
 impl Writer {
     fn new(source: Source, started: Instant, offset: u64, feed: Option<Feed>) -> Result<Self> {
+        crate::diag!(
+            "audio: {} started: {} at {} Hz{}",
+            source.channel.as_str(),
+            source.name,
+            source.sample_rate,
+            if source.live_input.is_some() {
+                " with voice processing"
+            } else {
+                ""
+            }
+        );
         let base_ms = offset as f64
             + source
                 .started
@@ -382,6 +408,8 @@ impl Writer {
             base_ms,
             chunk_ms: base_ms,
             feed,
+            silent_since: Some(Instant::now()),
+            silence_logged: false,
         })
     }
     fn pump(&mut self, store: &Store, id: &str) -> Result<()> {
@@ -397,16 +425,63 @@ impl Writer {
                     + packet.start_frame as f64 * 1000. / self.source.sample_rate as f64;
             }
             self.next_frame = Some(packet.start_frame + packet.len as u64);
+            self.watch_silence(&packet.samples[..packet.len]);
             let before = self.pending.len();
             self.resampler
                 .push(&packet.samples[..packet.len], &mut self.pending);
-            if let Some(feed) = &self.feed {
+            let processed = self
+                .source
+                .live_input
+                .as_ref()
+                .is_some_and(|aid| aid.processed.load(Ordering::Acquire));
+            if !processed && let Some(feed) = &self.feed {
                 let at_ms = self.chunk_ms + before as f64 * 1000. / OUTPUT_RATE as f64;
                 feed.push(at_ms, &self.pending[before..]);
             }
             self.flush(store, id, false)?;
         }
+        if let Some(aid) = &mut self.source.live_input {
+            while let Ok(packet) = aid.consumer.pop() {
+                if aid.processed.load(Ordering::Acquire)
+                    && let Some(feed) = &self.feed
+                {
+                    feed.push(
+                        self.base_ms + packet.start_frame as f64 * 1000. / OUTPUT_RATE as f64,
+                        &packet.samples[..packet.len],
+                    );
+                }
+            }
+        }
         Ok(())
+    }
+    /// Logs an input that delivers only exact zeros for 10 s, and when its signal returns.
+    /// Real microphones always carry some noise, so this means the input was muted or seized.
+    fn watch_silence(&mut self, samples: &[f32]) {
+        // Meeting audio is legitimately silent while nobody talks; only a mic never is.
+        if self.source.channel != Channel::Microphone || samples.is_empty() {
+            return;
+        }
+        let channel = self.source.channel.as_str();
+        if samples.iter().any(|sample| *sample != 0.) {
+            if let Some(since) = self.silent_since.take()
+                && self.silence_logged
+            {
+                crate::diag!(
+                    "audio: {channel} signal back after {} s of silence",
+                    since.elapsed().as_secs()
+                );
+            }
+            self.silence_logged = false;
+            return;
+        }
+        let since = *self.silent_since.get_or_insert_with(Instant::now);
+        if !self.silence_logged && since.elapsed() >= Duration::from_secs(10) {
+            self.silence_logged = true;
+            crate::diag!(
+                "audio: {channel} delivered only silence for 10 s ({})",
+                self.source.name
+            );
+        }
     }
     fn flush(&mut self, store: &Store, id: &str, final_buffer: bool) -> Result<()> {
         loop {
@@ -465,12 +540,25 @@ fn record(
     stop: mpsc::Receiver<()>,
     status: Arc<Mutex<Status>>,
     factory: impl FnOnce(&InputPublisher) -> Result<()> + Send + 'static,
-    cancelled: Arc<AtomicBool>,
+    canceled: Arc<AtomicBool>,
     plan: Option<stream::Plan>,
+    observe_meeting: bool,
 ) -> Result<()> {
     let started = Instant::now();
+    #[cfg(target_os = "macos")]
+    let _speaker_watch = observe_meeting.then(|| {
+        crate::speaker_names::Watch::start(
+            store.clone(),
+            id.to_owned(),
+            started,
+            offset,
+            canceled.clone(),
+        )
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = observe_meeting;
     let mut streams = plan.map(|plan| Streams::new(store.clone(), id.to_owned(), plan));
-    let _cancel_on_exit = CancelOnDrop(cancelled.clone());
+    let _cancel_on_exit = CancelOnDrop(canceled.clone());
     store.mutate(id, |record| {
         record.state = "recording".into();
         record.microphone.clear();
@@ -481,12 +569,12 @@ fn record(
     let (sender, inputs) = mpsc::channel();
     let publisher = InputPublisher {
         sender,
-        cancelled: cancelled.clone(),
+        canceled: canceled.clone(),
     };
     thread::Builder::new()
         .name("tico-input-setup".into())
         .spawn(move || {
-            if publisher.cancelled.load(Ordering::Acquire) {
+            if publisher.canceled.load(Ordering::Acquire) {
                 return;
             }
             let result =
@@ -496,10 +584,10 @@ fn record(
                 Ok(Err(error)) => Some(format!("{error:#}")),
                 Err(_) => Some("Audio input setup stopped unexpectedly".into()),
             };
-            if !publisher.cancelled.load(Ordering::Acquire) {
-                if let Some(error) = error {
-                    let _ = publisher.sender.send(InputEvent::Failed(error));
-                }
+            if !publisher.canceled.load(Ordering::Acquire)
+                && let Some(error) = error
+            {
+                let _ = publisher.sender.send(InputEvent::Failed(error));
             }
         })?;
     let mut writers: Vec<Writer> = Vec::new();
@@ -595,7 +683,7 @@ fn record(
             error: String::new(),
             sources: health,
         };
-        if cancelled.load(Ordering::Acquire) {
+        if canceled.load(Ordering::Acquire) {
             break;
         }
         ensure!(
@@ -609,7 +697,7 @@ fn record(
     }
     // Cancellation drops the receiver too. A late initializer's Source is closed by RAII
     // instead of joining the next recording or keeping an audio input alive after Stop.
-    cancelled.store(true, Ordering::Release);
+    canceled.store(true, Ordering::Release);
     drop(inputs);
     let stopped_warning = if writers.is_empty() {
         "Recording stopped before audio inputs connected. No audio was captured.".to_owned()
@@ -679,6 +767,7 @@ mod tests {
             health,
             consumer,
             stream: Box::new(Synthetic),
+            live_input: None,
         }
     }
     #[test]
@@ -865,11 +954,23 @@ mod tests {
         let mic_flag = mic_closed.clone();
         let late_flag = late_closed.clone();
         let (release, gate) = mpsc::channel();
+        let (fed_tx, fed_rx) = mpsc::channel();
         let handle =
             RecordingHandle::with_setup(store.clone(), recording.id.clone(), move |inputs| {
                 let (sink, consumer) = AudioSink::channel();
                 let health = sink.health.clone();
-                let _ = feed(sink, vec![0.2; 16000 * 56]);
+                // Speech-like pauses yield a normal chunk without making this setup test
+                // benchmark the 55-second continuous-signal boundary in a debug build.
+                let samples = (0..16000 * 46)
+                    .map(|n| {
+                        if n % 25600 < 20800 {
+                            (n as f32 * 0.12).sin() * 0.2
+                        } else {
+                            0.0005
+                        }
+                    })
+                    .collect();
+                let _ = fed_tx.send(feed(sink, samples));
                 inputs.ready(Source {
                     channel: Channel::Microphone,
                     name: "Synthetic mic".into(),
@@ -878,11 +979,13 @@ mod tests {
                     health,
                     consumer,
                     stream: Box::new(Tracked(mic_flag)),
+                    live_input: None,
                 })?;
                 inputs
                     .warning("Meeting audio is connecting. Microphone recording continues.".into());
-                // Long enough for a slow CI runner to cut the microphone's first chunk while this setup is held.
-                gate.recv_timeout(Duration::from_secs(30))?;
+                // The test owns the sender; dropping it on failure releases setup too.
+                // A wall-clock timeout here would accidentally unblock the very setup under test.
+                gate.recv()?;
                 let mut late = source(Channel::Meeting, 660.);
                 late.stream = Box::new(Tracked(late_flag));
                 inputs.ready(late)
@@ -895,11 +998,22 @@ mod tests {
         let during_setup = store.get(&recording.id).unwrap();
         assert!(
             !during_setup.chunks.is_empty(),
-            "Microphone audio was held behind the other input's setup"
+            "Microphone audio was held behind the other input's setup: status={:?}, state={}, warning={}",
+            handle.status(),
+            during_setup.state,
+            during_setup.warning
         );
         assert!(!during_setup.meeting_audio);
-        // Unbroken sound has no pause; at the 55 s limit it is cut mid-window.
-        assert_eq!(during_setup.chunks[0].signal.duration_ms, 42500);
+        assert!((30_000..=46_000).contains(&during_setup.chunks[0].signal.duration_ms));
+        let fed = fed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !fed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            fed.load(Ordering::Acquire),
+            "The fixture did not finish feeding its audio"
+        );
         let started = Instant::now();
         handle.finish().unwrap();
         assert!(
@@ -917,7 +1031,7 @@ mod tests {
         }
         assert!(
             late_closed.load(Ordering::Acquire),
-            "The cancelled initializer left an audio source open"
+            "The canceled initializer left an audio source open"
         );
         let saved = store.get(&recording.id).unwrap();
         assert_eq!(saved.state, "stopped");
@@ -928,7 +1042,7 @@ mod tests {
                 .iter()
                 .map(|chunk| chunk.signal.duration_ms)
                 .sum::<u64>(),
-            56000
+            46000
         );
         assert!(saved.chunks.iter().all(|chunk| chunk.channel == "me"));
         assert!(store.get(&next.id).unwrap().chunks.is_empty());
@@ -983,6 +1097,14 @@ mod tests {
         let flag = done.clone();
         thread::spawn(move || {
             for part in samples.chunks(1024 * 32) {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while sink.queued_capacity() < part.len() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Synthetic audio consumer stalled"
+                    );
+                    thread::sleep(Duration::from_millis(2));
+                }
                 sink.push_interleaved(part, 1);
                 thread::sleep(Duration::from_millis(20));
             }
@@ -1026,6 +1148,7 @@ mod tests {
                         health,
                         consumer,
                         stream: Box::new(Synthetic),
+                        live_input: None,
                     }],
                     String::new(),
                 ))
@@ -1097,5 +1220,52 @@ mod tests {
         let saved = store.get(&recording.id).unwrap();
         assert!(saved.meeting_audio && !saved.microphone.is_empty());
         assert!(saved.warning.is_empty());
+    }
+    #[test]
+    fn saved_wav_uses_raw_samples_with_processed_live_aid_and_plain_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Raw microphone").unwrap();
+        let (mut raw, consumer) = AudioSink::channel();
+        let (mut processed, aid_consumer) = AudioSink::channel();
+        let active = Arc::new(AtomicBool::new(true));
+        let source = Source {
+            channel: Channel::Microphone,
+            name: "raw".into(),
+            sample_rate: 16000,
+            started: Instant::now(),
+            health: raw.health.clone(),
+            consumer,
+            stream: Box::new(Synthetic),
+            live_input: Some(capture::LiveInput {
+                consumer: aid_consumer,
+                processed: active.clone(),
+            }),
+        };
+        let mut writer = Writer::new(source, Instant::now(), 0, None).unwrap();
+        for use_aid in [true, false] {
+            active.store(use_aid, Ordering::Release);
+            raw.push_interleaved(&[0.25; 1600], 1);
+            processed.push_interleaved(&[0.75; 1600], 1);
+            writer.pump(&store, &record.id).unwrap();
+        }
+        writer.flush(&store, &record.id, true).unwrap();
+        let saved = store.get(&record.id).unwrap();
+        let values: Vec<_> = saved
+            .chunks
+            .iter()
+            .flat_map(|c| {
+                hound::WavReader::open(store.audio_path(c).unwrap())
+                    .unwrap()
+                    .into_samples::<i16>()
+                    .map(Result::unwrap)
+            })
+            .collect();
+        assert_eq!(values.len(), 3200);
+        assert!(
+            values
+                .iter()
+                .all(|sample| (*sample as f32 / 32768. - 0.25).abs() < 0.001)
+        );
     }
 }

@@ -1,12 +1,13 @@
 /* ui/app/strategy-budget.js — Strategy > Budget (redesign): the org chart as one tree of budgets. The company on top, then
    the groups nested as on Org, people and bots under their group or manager, and the helpers in their own branch. A row
-   is a name, its spend against the limit that binds ("$5.70 / $6 · 30m", a thin bar) and a chip when it has task caps;
-   a group shows its pool against what everyone under it has spent. Groups fold (folded by default at 200 bots), a search
-   keeps the rows that match and what they sit in, and Near limit keeps what is near or over a limit, or paused.
-   Tapping a row edits it in a panel (a sheet on a phone): a bot's limits, a group's or the company's pool (and the
-   default for each bot), and a teammate's task caps both ways.
-   Reads: GET /api/v2/usage/limits (every bot's and pool's limits and `spent` in each window, in one read) and
-   GET /api/v2/task-caps. Writes: PUT /api/v2/usage/limits[/{bot}], PUT /api/v2/usage/pools/{company|groups/{id}}, and
+   is a name, what it spent over the period picked (7 days, 30 days, this month; a group or person adds up everyone under
+   it), the limit that binds when one is set ("95% · $6/30m", a thin bar) and a chip when it has task caps. Rows sit
+   under their parent by that spend, most first. Groups fold (folded by default at 200 bots), a search keeps the rows that
+   match and what they sit in, and Near limit keeps what is near or over a limit, or paused.
+   Tapping a row opens a panel (a sheet on a phone): where the period's spend went (models, top tasks), then a bot's
+   limits, a group's or the company's pool (and the default for each bot), and a teammate's task caps both ways.
+   Reads: GET /api/v2/usage/limits (every bot's and pool's limits and `spent` in each window, in one read),
+   GET /api/v2/usage?group=bot|model|task (the period's spend, backend/usage.py) and GET /api/v2/task-caps. Writes: PUT /api/v2/usage/limits[/{bot}], PUT /api/v2/usage/pools/{company|groups/{id}}, and
    PUT/DELETE /api/v2/task-caps (redesign CONTRACT §1). A save sends only what changed, so a limit the panel did not
    show (or did not touch) is never cleared. The hub decides who may change what; rows it says are not ours read only.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -23,6 +24,17 @@ const BUDGET_HOURLY = ['hourly_usd', 'Hour', 'hour_spent', 'hour', 'hourly'];
 const budgetPeriods = row => row?.hourly_usd != null || row?.own_hourly_usd != null
   ? [BUDGET_PERIODS[0], BUDGET_HOURLY, ...BUDGET_PERIODS.slice(1)] : BUDGET_PERIODS;
 const BUDGET_BIG = 30;      // more teammates than this and the groups start folded
+// The period a row's spend covers (useSpan, usage.js), kept for the next visit.
+const BUDGET_SPANS = [['7d', '7 days'], ['30d', '30 days'], ['month', 'This month']];
+const BUDGET_TOP_TASKS = 5;
+function budgetSavedSpan() {
+  let saved = '';
+  try { saved = JSON.parse(localStorage.getItem('tico.budget') || '{}')?.span || ''; } catch {}
+  return BUDGET_SPANS.some(([k]) => k === saved) ? saved : '30d';
+}
+function budgetSaveSpan(span) {
+  try { localStorage.setItem('tico.budget', JSON.stringify({span})); } catch {}
+}
 // "$27.38", "$80", "$5,000": cents only when there are any.
 const budgetMoney = n => {
   const v = Math.round(Number(n || 0) * 100) / 100;
@@ -48,17 +60,14 @@ function budgetBinding(row) {
   const ratio = ([k, , spent]) => row[k] > 0 ? (row[spent] || 0) / row[k] : Infinity;
   return set.reduce((best, p) => ratio(p) > ratio(best) ? p : best);
 }
-// What a row reads: {text, pct (null: no bar), tone, hot}. With no limit, today's spend.
+// A row's limit: {used ("95%"), of ("$6/30m"), pct (the bar, null: none), tone, hot}, from the window that binds.
 function budgetFigure(row, rollup) {
   const bind = row ? budgetBinding(row) : null;
-  if (!bind) {
-    const day = rollup?.day;
-    return {text: day == null ? '' : `${budgetMoney(day)} · day`, pct: null, tone: '', hot: !!row?.blocked};
-  }
+  if (!bind) return {used: '', of: '', pct: null, tone: '', hot: !!row?.blocked};
   const cap = row[bind[0]], spent = row[bind[2]] ?? rollup?.[bind[3]] ?? 0;
-  const pct = cap ? Math.min(100, Math.round(spent / cap * 100)) : 100;
+  const used = cap ? Math.round(spent / cap * 100) : 100, pct = Math.min(100, used);
   const tone = row.blocked || pct >= 100 ? 'bad' : pct >= 80 ? 'warn' : '';
-  return {text: `${budgetMoney(spent)} / ${budgetMoney(cap)} · ${bind[3]}`, pct, tone, hot: !!tone};
+  return {used: `${used}%`, of: `${budgetMoney(cap)}/${bind[3]}`, pct, tone, hot: !!tone};
 }
 
 // ----------------------------------------------------------------- the tree
@@ -95,9 +104,9 @@ function budgetTree(limits) {
     ? (a[0].order || 0) - (b[0].order || 0) : 0) || a[1] - b[1]).forEach(([k]) => { const kid = make(k, root); if (kid) root.kids.push(kid); });
   // Helpers and the bots the chart leaves out, each in a branch of its own at the end.
   const live = e => !['archived', 'planned'].includes(e.status);
-  const helpers = (S.emps || []).filter(e => live(e) && isHelperBot(e) && !nodes.has('bot:' + e.name));
-  const other = Object.keys(limits?.bots || {}).filter(slug => !nodes.has('bot:' + slug) && !helpers.some(e => e.name === slug));
-  for (const [key, name, slugs] of [['helpers', 'Helpers', helpers.map(e => e.name)], ['other', 'Other', other]]) {
+  const helpers = (S.emps || []).filter(e => live(e) && isHelperBot(e) && !nodes.has('bot:' + e.id));
+  const other = Object.keys(limits?.bots || {}).filter(slug => !nodes.has('bot:' + slug) && !helpers.some(e => e.id === slug));
+  for (const [key, name, slugs] of [['helpers', 'Helpers', helpers.map(e => e.id)], ['other', 'Other', other]]) {
     if (!slugs.length) continue;
     const node = {key, kind: 'branch', id: key, ref: '', name, parent: root, depth: 1, kids: []};
     nodes.set(key, node);
@@ -108,8 +117,23 @@ function budgetTree(limits) {
     root.kids.push(node);
   }
   budgetRollup(root, limits);
+  budgetOrder(root);
   return {root, nodes};
 }
+// The period's spend (null until it loads): a bot's own (its limit is its own), anything else everyone's under it. Each
+// node's rows sit by it, most first (ties: chart order).
+function budgetOrder(node) {
+  node.kids.forEach((k, i) => { if (k.at === undefined) k.at = i; });
+  const spend = BUDGET?.spend, own = node.kind === 'bot' && spend ? spend[node.id] || 0 : 0;
+  let sum = own;
+  for (const kid of node.kids) { budgetOrder(kid); sum += kid.total || 0; }
+  node.total = spend ? sum : null;
+  node.period = spend ? node.kind === 'bot' ? own : sum : null;
+  if (spend) node.kids.sort((a, b) => (b.period || 0) - (a.period || 0) || a.at - b.at);
+}
+// The bots a row's spend covers: a bot itself, anything else every bot under it.
+const budgetBotsUnder = node => node.kind === 'bot' ? [node.id] : node.kids.flatMap(budgetBotsDown);
+const budgetBotsDown = node => [...(node.kind === 'bot' ? [node.id] : []), ...node.kids.flatMap(budgetBotsDown)];
 const budgetGroupLead = id => (BUDGET?.groups || []).find(g => g.id === id)?.lead || '';
 // Each node's spend in each window, its own and everyone's under it, and how many teammates are under it.
 function budgetRollup(node, limits) {
@@ -137,7 +161,7 @@ const budgetCapFull = c => c.per_day > 0 && (c.count || 0) >= c.per_day;
 function budgetFigureOf(node) {
   if (node.memo) return node.memo;
   const row = budgetRow(node), fig = budgetFigure(row, budgetSpent(node));
-  if (node.kind === 'person' && !node.kids.length) fig.text = '';
+  fig.amt = node.period == null || (node.kind === 'person' && !node.kids.length) ? '' : useMoney(node.period);
   const caps = node.ref ? budgetCapsOf(node.ref) : [];
   fig.caps = caps.length;
   fig.capsFull = caps.some(c => c.sender === node.ref && budgetCapFull(c));
@@ -150,19 +174,33 @@ function budgetFigureOf(node) {
 function pageBudget() {
   const load = (BUDGET?.load || 0) + 1;
   const route = (S.route || '').split('?')[0], open = route.startsWith(RD_BUDGET + '/') ? decodeURIComponent(route.slice(RD_BUDGET.length + 1)) : '';
-  BUDGET = {load, limits: null, caps: [], groups: null, tree: null, q: BUDGET?.q || '', hot: !!BUDGET?.hot, open};
+  BUDGET = {load, limits: null, caps: [], groups: null, tree: null, q: BUDGET?.q || '', hot: !!BUDGET?.hot, open,
+    span: BUDGET?.span || budgetSavedSpan(), spend: null};
   const main = $('#main');
   main.classList.add('strategy-layout', 'budget-layout');
   main.innerHTML = strategyHeadHtml('budget') + `<div class="bt-top">
+      <div class="use-seg bt-seg" role="tablist" aria-label="Period">${BUDGET_SPANS.map(([k, label]) =>
+        `<button type="button" role="tab" data-bt-span="${k}" aria-selected="${k === BUDGET.span}">${label}</button>`).join('')}</div>
       <input type="search" class="bt-q" id="bt-q" placeholder="Search" aria-label="Search the budget" autocomplete="off" value="${esc(BUDGET.q)}">
       <button type="button" class="ghost bt-hot" data-bt-hot aria-pressed="${BUDGET.hot}">Near limit<span class="bt-hot-n" id="bt-hot-n"></span></button>
       <button type="button" class="ghost bt-all" data-bt-all>Expand all</button>
-      ${helpBubble('Each bar is the window nearest its limit. A group adds up everyone under it.')}</div>
+      ${helpBubble('Spend over the period. The bar is the limit nearest its cap.')}</div>
     <div id="bt-body" class="bt-body">${skelRows(6, {dot: false})}</div>`;
   let typing = null;
   $('#bt-q').oninput = ev => { clearTimeout(typing); typing = setTimeout(() => { BUDGET.q = ev.target.value.trim(); budgetDraw(); }, 80); };
   main.querySelector('[data-bt-hot]').onclick = ev => {
     BUDGET.hot = !BUDGET.hot; ev.currentTarget.setAttribute('aria-pressed', String(BUDGET.hot)); budgetDraw();
+  };
+  main.querySelector('.bt-seg').onclick = async ev => {
+    const b = ev.target.closest('[data-bt-span]'), state = BUDGET;
+    if (!b || b.dataset.btSpan === state.span) return;
+    state.span = b.dataset.btSpan; budgetSaveSpan(state.span);
+    main.querySelectorAll('[data-bt-span]').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+    const span = state.span;
+    await budgetSpendLoad(state);
+    if (BUDGET !== state || !state.tree || state.span !== span) return;
+    budgetOrder(state.tree.root);
+    budgetDraw();
   };
   main.querySelector('[data-bt-all]').onclick = () => {
     const open = !budgetAllOpen();
@@ -180,7 +218,7 @@ function pageBudget() {
 
 async function budgetLoad(state) {
   const [limits, caps, groups] = await Promise.allSettled([get('/v2/usage/limits', {fresh: true}),
-    get('/v2/task-caps', {fresh: true}), get('/v2/groups', {fresh: true})]);
+    get('/v2/task-caps', {fresh: true}), get('/v2/groups', {fresh: true}), budgetSpendLoad(state)]);
   if (BUDGET !== state || !$('#bt-body')) return;
   state.limits = limits.status === 'fulfilled' ? limits.value : null;
   state.limitsError = limits.status === 'rejected' ? limits.reason?.message || 'Spend did not load.' : '';
@@ -190,6 +228,21 @@ async function budgetLoad(state) {
   state.tree = budgetTree(state.limits);
   budgetDraw();
   if (state.open) { const key = state.open; state.open = ''; budgetReveal(key); budgetEdit(key); }
+}
+// GET /v2/usage for the period (`bots`: only those; none: everyone this person sees), as `group` rows.
+const budgetUsage = (span, group, bots) => {
+  const {from, to} = useSpan(span);
+  return get(`/v2/usage?group=${group}&from=${from}&to=${to}${bots ? '&bots=' + encodeURIComponent(bots.join(',')) : ''}`, {fresh: true});
+};
+// Each bot's spend over the period, API-equivalent as Usage shows it.
+async function budgetSpendLoad(state) {
+  const span = state.span;
+  try {
+    const r = await budgetUsage(span, 'bot');
+    if (state.span !== span) return;          // a later pick's answer wins
+    state.spend = Object.fromEntries((r?.rows || []).map(x => [x.bot, useSpend(x)]));
+    state.spendError = '';
+  } catch (e) { if (state.span === span) { state.spend = null; state.spendError = e.message || 'Spend did not load.'; } }
 }
 const budgetReload = () => BUDGET && $('#bt-body') ? budgetLoad(BUDGET) : null;
 
@@ -244,7 +297,7 @@ function budgetDraw() {
   $('#bt-hot-n').textContent = hotN ? ' ' + hotN : '';
   const all = $('[data-bt-all]'); if (all) all.textContent = budgetAllOpen() ? 'Collapse all' : 'Expand all';
   const rows = budgetRows();
-  const note = BUDGET.limitsError ? `<p class="muted bt-note">${esc(BUDGET.limitsError)}</p>` : '';
+  const note = [BUDGET.limitsError, BUDGET.spendError].filter(Boolean).map(e => `<p class="muted bt-note">${esc(e)}</p>`).join('');
   const empty = rows.length <= 1 && (BUDGET.q || BUDGET.hot) ? `<p class="muted bt-note">${BUDGET.hot && !BUDGET.q ? 'Nothing near a limit' : 'No matches'}</p>` : '';
   body.innerHTML = note + `<ul class="bt" aria-label="Budget">${rows.map(budgetRowHtml).join('')}</ul>` + empty;
 }
@@ -265,7 +318,8 @@ function budgetRowHtml(node) {
     + (fig.caps ? `<span class="pill bt-chip${fig.capsFull ? ' waiting' : ''}" title="Task caps">${fig.caps} ${fig.caps === 1 ? 'cap' : 'caps'}</span>` : '');
   const bar = fig.pct == null ? '' : `<span class="bt-bar" aria-hidden="true"><i style="width:${fig.pct}%"></i></span>`;
   const editable = node.kind !== 'branch';
-  const inner = `${budgetIcon(node)}<span class="bt-name">${esc(node.name)}</span>${count}${chips}<span class="bt-amt">${esc(fig.text)}</span>${bar}`;
+  const lim = fig.used ? `<span class="bt-lim">${esc(fig.used)}<span class="bt-of"> · ${esc(fig.of)}</span></span>` : '';
+  const inner = `${budgetIcon(node)}<span class="bt-name">${esc(node.name)}</span>${count}${chips}${lim}<span class="bt-amt">${esc(fig.amt)}</span>${bar}`;
   return `<li class="bt-r ${group ? 'is-g ' : ''}${fig.tone}" style="--d:${node.depth}">${fold}${editable
     ? `<button type="button" class="bt-main" data-bt-open="${esc(node.key)}">${inner}</button>`
     : `<div class="bt-main">${inner}</div>`}</li>`;
@@ -276,7 +330,7 @@ const budgetAdmin = () => !!BUDGET?.limits?.may_edit_default || S.me?.role === '
 // A teammate's home group, and whether this person leads it or a group above it (the hub's rule for caps).
 function budgetHome(ref) {
   const id = ref.slice(ref.indexOf(':') + 1);
-  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team) || '';
+  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team) || '';
 }
 const budgetMayCap = sender => budgetAdmin() || (BUDGET?.limits?.leads || []).includes(budgetHome(sender));
 function budgetMaySpend(node) {
@@ -296,7 +350,7 @@ function budgetManagers(sender) {
 // Who may send `receiver` capped tasks: every teammate it is a manager above.
 function budgetBelow(receiver) {
   const key = receiver.startsWith('person:') ? 'p:' + receiver.slice(7) : 'b:' + receiver.slice(4);
-  const refs = [...(S.emps || []).filter(e => !['archived', 'planned'].includes(e.status) && !isHelperBot(e)).map(e => 'bot:' + e.name),
+  const refs = [...(S.emps || []).filter(e => !['archived', 'planned'].includes(e.status) && !isHelperBot(e)).map(e => 'bot:' + e.id),
     ...(S.people || []).filter(p => !p.hidden).map(p => 'person:' + p.id)];
   return refs.filter(ref => ref !== receiver && goalOrgPlace(ref.replace(/^person:/, 'human:')).above.has(key))
     .sort((a, b) => budgetName(a).localeCompare(budgetName(b)));
@@ -372,8 +426,12 @@ function budgetEdit(key) {
       budgetWindowHtml(s.scope, p, s.value(p[0]), s.spent, s.hint(p[0]), may)).join('')}</section>`;
   }).join('');
   const capsHtml = node.ref ? budgetCapsHtml(node) : '';
+  const bots = node.kind === 'company' ? null : budgetBotsUnder(node);
+  const span = BUDGET.span, spanLabel = BUDGET_SPANS.find(([k]) => k === span)?.[1] || '';
+  const wentHtml = bots && !bots.length ? '' : `<section class="bt-sec" data-went><h3>${esc(spanLabel)}${node.period == null ? '' : ' · ' + esc(useMoney(node.period))}</h3>
+    <div class="bt-went" data-went-body>${skelRows(2, {dot: false})}</div></section>`;
   const editable = scopes.some(s => s.may ?? budgetMaySpend(node)) || /data-cap-add|name="cap"/.test(capsHtml);
-  const body = budgetHeldHtml(node) + spendHtml + capsHtml || '<p class="muted">Nothing to set here.</p>';
+  const body = budgetHeldHtml(node) + wentHtml + spendHtml + capsHtml || '<p class="muted">Nothing to set here.</p>';
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal bt-panel';
   dlg.setAttribute('aria-label', node.name);
@@ -383,7 +441,10 @@ function budgetEdit(key) {
     ${editable ? '<div class="bt-foot"><button type="button" class="ghost" data-close>Cancel</button><button type="button" class="primary" data-save>Save</button></div>' : ''}`;
   document.body.appendChild(dlg);
   dlg.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dlg.close(); });
-  dlg.onclose = () => dlg.remove();
+  // Leaving the page closes it: the panel sits on the body, not on #main.
+  const leave = () => dlg.close();
+  addEventListener('hashchange', leave);
+  dlg.onclose = () => { removeEventListener('hashchange', leave); dlg.remove(); };
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]');
   form.onsubmit = ev => { ev.preventDefault(); dlg.querySelector('[data-save]')?.click(); };
   form.addEventListener('change', ev => {
@@ -423,6 +484,19 @@ function budgetEdit(key) {
     }
   };
   dlg.showModal();
+  if (wentHtml) void budgetWent(dlg, span, bots);
+}
+// Where the period's spend went: by model, and the top tasks (a chat or check has none).
+async function budgetWent(dlg, span, bots) {
+  const box = dlg.querySelector('[data-went-body]');
+  const [models, tasks] = await Promise.allSettled([budgetUsage(span, 'model', bots), budgetUsage(span, 'task', bots)]);
+  if (!box.isConnected) return;
+  const lines = (r, n) => (r.status === 'fulfilled' ? r.value?.rows || [] : []).filter(x => useSpend(x) > 0).slice(0, n)
+    .map(x => `<div class="bt-line"><span title="${esc(x.name || '')}">${esc(x.name || '')}</span><span class="bt-spent">${esc(useMoney(useSpend(x)))}</span></div>`).join('');
+  const m = lines(models, 8), t = lines(tasks, BUDGET_TOP_TASKS);
+  const failed = models.status === 'rejected' ? models.reason?.message : '';
+  box.innerHTML = failed ? `<p class="muted">${esc(failed)}</p>` : !m && !t ? '<p class="muted">No spend</p>'
+    : `${m ? `<h4>Models</h4><div data-went="models">${m}</div>` : ''}${t ? `<h4>Top tasks</h4><div data-went="tasks">${t}</div>` : ''}`;
 }
 // The requests a save makes: for each limit row, only the windows whose value changed (empty clears one); for caps,
 // a PUT for each added or changed and a DELETE for each removed. Nothing else is sent, so nothing else changes.

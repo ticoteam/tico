@@ -1,20 +1,21 @@
-/* ui/app/redesign-library.js — Library › Tools: every tool the team has, who may use it and which ones have issues, in one
-   place. The tools are GET /api/v2/tools (each with the bots whose entries declare it, their write level and any
-   problem a computer reported); the credential vault (GET /api/v2/credentials, for whoever may open it) adds each
-   credential, who it is granted to and when a bot last used it; the groups (GET /api/v2/groups) let the list be
-   narrowed to a team, nested teams included. A row opens the tool's page (integrationDetail, ui/app/integrations.js)
-   beside the list on a computer, as its own screen on a phone; a credential no tool names is its own row.
-   Addresses: #/library/tools[/<service> | /credentials/<id>][?who=bot:<slug>|human:<id>|group:<id>&issues=1&q=…]. The old
-   ones (#/library/connections, #/integrations, #/credentials, Settings › Credentials) lead here.
+/* ui/app/redesign-library.js — Two Tools pages (ui/app/tools.js routes them) over the declared tools and the vault:
+   - Tools › Keys (#/tools/keys[/<service> | /credentials/<id>][?who=bot:<id>|human:<id>|group:<id>&issues=1&q=…]):
+     every tool a bot declares and every stored credential, who may use each and which ones have issues. A row opens
+     the tool's page (integrationDetail, ui/app/integrations.js) beside the list on a computer, as its own screen on a
+     phone; a credential no tool names is its own row.
+   - A declared tool's own page (#/tools/<service>): the same page full width under Tools, with Slack's and GitHub's
+     connect cards and, on Slack's, the threads linked to Slack channels.
+   The tools are GET /api/v2/tools (each with the bots whose entries declare it, their write level and any problem a
+   computer reported); the credential vault (GET /api/v2/credentials, for whoever may open it) adds each credential, who
+   it is granted to and when a bot last used it; the groups (GET /api/v2/groups) let the list be narrowed to a team,
+   nested teams included.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const RD_TOOLS = '#/library/tools';
-const RD_CONNECTIONS = '#/library/connections';   // the page's first name
 const LC_KIND_ICONS = {api: 'api', sql: 'inventory_2', browser: 'travel_explore', mail: 'mail', cli: 'code', mcp: 'link', credential: 'key_vertical'};
 const LC_CRED_KIND = {api_key: 'API key', password: 'Password', token: 'Token', file: 'File', connection: 'Connection'};
 const LC_LEVEL_RANK = {never: 0, approval: 1, allowed: 2};
-let LC = null;              // {rows, groups, items, error, root, loading, key, filter: {who, issues, q}, show}
+let LC = null;              // {rows, groups, items, error, root, loading, key, filter: {who, issues, q}, single}
 const lcPhone = () => matchMedia('(max-width:760px)').matches;
 // The filters ride in the address, so a reload, a shared link or a bot page's link opens the same list.
 function lcQuery(filter = LC?.filter || {}) {
@@ -25,10 +26,12 @@ function lcQuery(filter = LC?.filter || {}) {
   const text = q.toString();
   return text ? '?' + text : '';
 }
-const lcHref = key => RD_TOOLS + (key ? '/' + key.split('/').map(encodeURIComponent).join('/') : '') + lcQuery();
+const lcHref = key => TOOLS_KEYS + (key ? '/' + key.split('/').map(encodeURIComponent).join('/') : '') + lcQuery();
 
 // ----------------------------------------------------------------- the model: one item per tool or loose credential
 const lcBotName = slug => botDisplayName(slug);
+// The tools list names a bot by its id; one named by slug (a server from before ids, or an old link) is read as its id.
+const lcBotId = ref => botByRef(ref)?.id || ref;
 const lcPerson = id => (S.people || []).find(p => p.id === id) || (VAULT?.people || []).find(p => p.id === id) || {id, name: id};
 // Variables a tool names (CLOSE_API_KEY), from its page and from the entries bots declare; words like API are not one.
 const lcEnvs = row => [...new Set([...credEnvs(row.credentials), ...(row.connections || []).map(c => c.env)].filter(e => e && e.includes('_') && !e.includes('<')))];
@@ -37,14 +40,14 @@ function lcModel(rows) {
   const creds = VAULT?.credentials || [], used = new Set();
   const items = rows.map(row => {
     const bots = new Map(), people = new Map(), issues = [];
-    for (const c of row.connections || []) {
-      const was = bots.get(c.bot);
+    for (const conn of row.connections || []) {
+      const c = {...conn, bot: lcBotId(conn.bot)}, was = bots.get(c.bot);
       const level = c.write || row.writes;
       if (!was || LC_LEVEL_RANK[level] > LC_LEVEL_RANK[was.level]) bots.set(c.bot, {level, problem: c.problem || was?.problem || ''});
       else if (c.problem && !was.problem) was.problem = c.problem;
       if (c.problem) issues.push({bot: c.bot, text: c.problem});
     }
-    for (const bot of row.bots || []) if (!bots.has(bot)) bots.set(bot, {level: row.writes, problem: ''});
+    for (const bot of (row.bots || []).map(lcBotId)) if (!bots.has(bot)) bots.set(bot, {level: row.writes, problem: ''});
     const mine = row.status === 'removed' ? [] : vaultForIntegration(row);
     for (const cred of mine) {
       used.add(cred.id);
@@ -89,6 +92,7 @@ function lcGroupMembers(gid) {
   walk(gid);
   return {bots, people};
 }
+const lcWhoRef = who => who.startsWith('bot:') ? 'bot:' + lcBotId(who.slice(4)) : who;
 function lcShown() {
   const {who, issues, q} = LC.filter;
   const words = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -105,9 +109,10 @@ function lcGrouped(items) {
 // ----------------------------------------------------------------- the page
 async function pageRdTools() {
   const [path, query = ''] = S.route.split('?');
-  const key = path.slice(RD_TOOLS.length + 1).split('/').map(decodeURIComponent).join('/');
+  const key = path.slice(TOOLS_KEYS.length + 1).split('/').filter(Boolean).map(decodeURIComponent).join('/');
   const params = new URLSearchParams(query);
   $('#main').classList.add('lc-layout');
+  if (LC?.single) LC = null;
   if (LC?.loading && document.body.contains(LC.root)) {
     // The list is still loading for an earlier visit: wait for it, then draw only if this is still the route.
     const state = LC;
@@ -115,7 +120,8 @@ async function pageRdTools() {
     if (LC !== state || location.hash.split('?')[0] !== path) return;
   } else if (!LC || !document.body.contains(LC.root)) {
     $('#main').innerHTML = `<div class="lc" id="lc-root">
-      <header class="lc-ph"><h1>Tools</h1>${helpBubble('Who may use each tool, and what they may change there: read only, with approval, or freely.')}
+      <header class="lc-ph"><nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span></nav>
+        <h1>Keys</h1>${helpBubble('Who may use each tool, and what they may change there: read only, with approval, or freely.')}
         <span class="spacer"></span><button class="docs-ask" id="lc-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="lc-add"></span></header>
       <div class="lc-body"><aside class="lc-list" aria-label="Tools">
           <div class="lc-filters"><input class="lc-q" type="search" placeholder="Search" aria-label="Search tools" autocomplete="off">
@@ -125,7 +131,7 @@ async function pageRdTools() {
         <section class="lc-pane" aria-live="polite"><div id="int-detail"></div></section></div>
       <dialog class="bot-editor" id="credential-dialog" aria-label="Credential"></dialog></div>`;
     LC = {rows: null, groups: [], items: [], error: '', key: null, root: $('#lc-root'), loading: null,
-          filter: {who: params.get('who') || '', issues: params.get('issues') === '1', q: params.get('q') || ''}};
+          filter: {who: lcWhoRef(params.get('who') || ''), issues: params.get('issues') === '1', q: params.get('q') || ''}};
     const state = LC;
     lcWire();
     state.loading = Promise.all([
@@ -167,7 +173,7 @@ function lcWire() {
     // The open tool's access opens on the team picked; its back link keeps the filters.
     const facts = $('#tool-facts'), item = LC.items.find(i => i.key === LC.key);
     if (picked && facts && item?.row) facts.innerHTML = lcFactsHTML(item);
-    $('.lc-back')?.setAttribute('href', RD_TOOLS + lcQuery());
+    $('.lc-back')?.setAttribute('href', TOOLS_KEYS + lcQuery());
   };
   q.oninput = () => { LC.filter.q = q.value.trim(); changed(); };
   who.onchange = () => { LC.filter.who = who.value; changed(true); };
@@ -183,7 +189,7 @@ function lcDrawControls() {
   groups.filter(g => !ordered.includes(g)).forEach(g => ordered.push(g));   // a group whose parent is hidden
   const opt = (value, label) => `<option value="${esc(value)}">${esc(label)}</option>`;
   const people = (S.people || []).filter(p => !p.hidden && !p.archived);
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.name, lcBotName(e.name)]).sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, lcBotName(e.id)]).sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
   who.innerHTML = opt('', 'Everyone')
     + (ordered.length ? `<optgroup label="Teams">${ordered.map(g => opt('group:' + g.id, ' '.repeat(depth(g) * 2) + g.name)).join('')}</optgroup>` : '')
     + (people.length ? `<optgroup label="People">${people.map(p => opt('human:' + p.id, p.name || p.email || p.id)).join('')}</optgroup>` : '')
@@ -220,12 +226,13 @@ async function lcDrawDetail() {
   const key = LC.key, detail = $('#int-detail');
   if (!key) { detail.innerHTML = ''; return; }
   $('.lc-pane').scrollTop = 0;
-  const back = `<a class="lc-back" href="${RD_TOOLS + lcQuery()}" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>`;
+  const back = `<a class="lc-back" href="${TOOLS_KEYS + lcQuery()}" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>`;
   if (key.startsWith('credentials/')) { lcDrawCredential(key.slice(12), back); return; }
   detail.innerHTML = skelRows(4, {card: true});
-  const service = key;
-  await integrationDetail(service, ++INT_LOAD, {base: RD_TOOLS, head: back,
-    facts: () => lcFactsHTML(LC.items.find(i => i.key === service)),
+  // The page's facts come from this visit's list: a page that answers after the reader left (LC gone) still draws.
+  const service = key, state = LC;
+  await integrationDetail(service, ++INT_LOAD, {base: TOOLS_KEYS, head: back,
+    facts: () => lcFactsHTML(state.items.find(i => i.key === service)),
     after: page => { lcWireFacts(); lcMountConnect(page.service); }});
 }
 
@@ -260,7 +267,7 @@ function lcAccessHTML(item) {
 }
 // One stored credential: name and variable, whether a value is stored, when a bot last used it, and what may be done.
 function lcCredHTML(cred) {
-  const used = cred.last_used ? `used ${ago(cred.last_used)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
+  const used = cred.last_used_at ? `used ${ago(cred.last_used_at)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
   const acts = [
     VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${cred.stored ? 'Rotate' : 'Set'}</button>` : '',
     `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
@@ -269,7 +276,7 @@ function lcCredHTML(cred) {
   return `<div class="lc-cred" data-cred="${esc(cred.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
     <span class="lc-cn"><b>${esc(cred.name)}</b>${cred.env ? ` <span class="mono muted">${esc(cred.env)}</span>` : ''}</span>
     <span class="pill ${cred.stored ? 'ok' : 'fail'}">${cred.stored ? 'Set' : 'No value'}</span>
-    <span class="muted lc-used" title="${esc(cred.last_used ? fmt(cred.last_used) : '')}">${esc(used)}</span>
+    <span class="muted lc-used" title="${esc(cred.last_used_at ? fmt(cred.last_used_at) : '')}">${esc(used)}</span>
     <span class="lc-acts">${acts}</span></div>`;
 }
 // A variable the tool names that the vault does not hold: what the bots' computers say about it, and Add.
@@ -348,7 +355,7 @@ function lcDrawCredential(id, back) {
   detail.innerHTML = `<div class="meeting-head">${back}<div><h1>${esc(cred.name)}</h1></div></div>
     <div id="tool-facts">${lcIssuesHTML(item)}
     <section class="card lc-creds">${lcCredHTML(cred)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Value', cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
-      ${row('Changed', cred.updated && `<span title="${esc(fmt(cred.updated))}">${esc(ago(cred.updated))}</span>`)}</dl>
+      ${row('Changed', cred.updated_at && `<span title="${esc(fmt(cred.updated_at))}">${esc(ago(cred.updated_at))}</span>`)}</dl>
       ${VAULT?.can_manage ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
     <section class="card lc-access"><header><h2>Access <span class="muted">${(cred.grants || []).length}</span></h2></header>${grants}</section></div>`;
   lcWireFacts();
@@ -358,34 +365,135 @@ function lcDrawCredential(id, back) {
 function lcVaultChanged() {
   if (!LC?.rows || !document.body.contains(LC.root)) return;
   LC.items = lcModel(LC.rows);
-  lcDrawControls();
-  lcDrawList(LC.key);
+  if (!LC.single) { lcDrawControls(); lcDrawList(LC.key); }
   const key = LC.key || '';
   if (key.startsWith('credentials/')) {
     // A deleted credential leaves nothing to show: back to the list.
-    if (!LC.items.some(i => i.key === key)) { location.replace(RD_TOOLS + lcQuery()); return; }
-    lcDrawCredential(key.slice(12), `<a class="lc-back" href="${RD_TOOLS + lcQuery()}" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>`);
+    if (!LC.items.some(i => i.key === key)) { location.replace(TOOLS_KEYS + lcQuery()); return; }
+    lcDrawCredential(key.slice(12), `<a class="lc-back" href="${TOOLS_KEYS + lcQuery()}" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>`);
     return;
   }
   const facts = $('#tool-facts'), item = LC.items.find(i => i.key === key);
   if (facts && item) { facts.innerHTML = lcFactsHTML(item); }
 }
 
-// The redesign's router asks first (ui/app/redesign.js): Library › Tools, and every old address of what it holds.
-function rdToolsRoute(r) {
-  for (const old of [RD_CONNECTIONS, INTEGRATIONS]) if (rdUnder(r, old)) { rdToolsOpen(RD_TOOLS + r.slice(old.length)); return true; }
-  if (rdUnder(r, CREDENTIALS)) { rdToolsOpen(RD_TOOLS + '?show=credentials'); return true; }
-  if (rdUnder(r, RD_TOOLS)) { pageRdTools(); return true; }
-  return false;
+// ----------------------------------------------------------------- a declared tool's own page
+// The tool's page full width under Tools (#/tools/<service>): who has it, its credentials and issues, what its page
+// says, and Slack's and GitHub's connect cards. It reads what Keys reads, so a vault dialog's change redraws it alike.
+async function pageToolService(service) {
+  // A redraw of the same page (route() again, a poll) keeps it, and what is typed in its forms.
+  if (LC?.single && LC.key === service && document.body.contains(LC.root)) return;
+  $('#main').innerHTML =`<div class="tt tt-page" id="tool-service">
+    <nav class="tt-crumb" aria-label="Breadcrumb"><a href="${TOOLS_ROUTE}">Tools</a><span aria-hidden="true">›</span><span data-tl-crumb>${esc(service)}</span></nav>
+    <div id="int-detail">${skelRows(4, {card: true})}</div>
+    <dialog class="bot-editor" id="credential-dialog" aria-label="Credential"></dialog></div>`;
+  LC = {rows: null, groups: [], items: [], error: '', key: service, root: $('#tool-service'), loading: null, single: true,
+        filter: {who: '', issues: false, q: ''}};
+  const state = LC;
+  await Promise.all([
+    get('/v2/tools').then(r => r.integrations || []).catch(() => []),
+    vaultFetch().catch(() => null),
+    get('/v2/groups').catch(() => []),
+  ]).then(([rows, , groups]) => { state.rows = rows; state.groups = Array.isArray(groups) ? groups : groups?.groups || []; });
+  if (LC !== state) return;
+  state.items = lcModel(state.rows);
+  await integrationDetail(service, ++INT_LOAD, {base: TOOLS_ROUTE,
+    facts: () => lcFactsHTML(state.items.find(i => i.key === service)),
+    after: page => {
+      const crumb = state.root.querySelector('[data-tl-crumb]');
+      if (crumb) crumb.textContent = page.title;
+      lcWireFacts(); lcMountConnect(page.service);
+      if (page.service === 'slack') void lcSlackLinks(state);
+    }});
 }
-// An old address the redesign's router did not take (ui/app/router.js): Library › Tools at its new one, in place. The
-// router marked the rail for the old address, and the rail may already hold Tools (redesignNav ran first), so it is
-// marked again for the new one.
-function rdToolsOpen(hash) {
-  history.replaceState(null, '', hash);
-  S.route = LAST_ROUTE = location.hash;
-  renderTree();
-  pageRdTools();
+
+// Slack: threads linked to Slack channels (admins only; the rows are ui/app/thread-connect.js's).
+async function lcSlackLinks(state) {
+  const facts = $('#tool-facts');
+  if (!facts || !tcnAdmin()) return;
+  const live = () => LC === state && sec.isConnected;
+  const sec = document.createElement('section');
+  sec.className = 'card cn-sec'; sec.id = 'tool-slack-links';
+  sec.innerHTML = `<header><h2>Linked threads</h2>
+      <button type="button" class="ghost small settings-head-act" data-cn-open aria-expanded="false">Link a thread</button></header>
+    <div class="cn-form" hidden><select name="thread" aria-label="Thread"></select>
+      <button type="button" class="ghost small" data-cn-threads hidden>More threads</button>
+      <input name="channel" placeholder="#channel" aria-label="Slack channel" maxlength="200" autocomplete="off">
+      <label class="tcn-check"><input type="checkbox" name="history">Copy history</label>
+      <button type="button" class="primary small" data-cn-link>Link</button></div>
+    <span class="err cn-err" role="status"></span>
+    <ul class="cn-list" aria-label="Slack links"><li>${skelRows(2)}</li></ul>
+    <div class="row cn-xmore" hidden><button class="ghost" type="button">More</button></div>`;
+  (state.root.querySelector('.lc-connect:last-of-type') || facts).after(sec);
+  const list = sec.querySelector('.cn-list'), more = sec.querySelector('.cn-xmore'), err = sec.querySelector('.cn-err');
+  const form = sec.querySelector('.cn-form'), pick = form.querySelector('[name=thread]');
+  const failed = e => { err.textContent = e.message; };
+  let rows = [], cursor = '';
+  const draw = async () => {
+    const titles = await Promise.all(rows.map(l => tcnThreadTitle(l.thread_id)));
+    if (!live()) return;
+    list.innerHTML = rows.map((l, i) => tcnSlackRowHTML(l, titles[i])).join('') || '<li class="muted cn-none">No linked threads</li>';
+  };
+  const load = async (fresh = false) => {
+    const data = await get('/v2/slack/links?limit=50' + (!fresh && cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
+    if (!live()) return;
+    rows = (fresh ? [] : rows).concat(data.links || []);
+    cursor = data.next_cursor || '';
+    sec.querySelector('[data-cn-open]').hidden = data.available === false;
+    more.hidden = !cursor;
+    await draw();
+  };
+  more.querySelector('button').onclick = () => void load().catch(failed);
+  // The threads a channel can be linked to: roots open to the company or to their members, a page at a time.
+  let threadCursor = '', threadsRead = false;
+  const offered = new Set();
+  const loadThreads = async () => {
+    const r = await get('/v2/threads?limit=50' + (threadCursor ? '&cursor=' + encodeURIComponent(threadCursor) : ''), {fresh: true});
+    threadsRead = true;
+    threadCursor = r.next_cursor || '';
+    const linked = new Set(rows.map(l => l.thread_id));
+    const add = [...(r.attention || []), ...(r.threads || [])]
+      .filter(t => tcnSlackLinkable(t) && !t.archived_at && !offered.has(t.id) && !linked.has(t.id));
+    add.forEach(t => offered.add(t.id));
+    pick.insertAdjacentHTML('beforeend', add.map(t => `<option value="${esc(t.id)}">${esc(threadTitle(t))}</option>`).join(''));
+    form.querySelector('[data-cn-threads]').hidden = !threadCursor;
+    if (!offered.size && !threadCursor) pick.innerHTML = '<option value="" disabled selected>No threads to link</option>';
+  };
+  const toggle = open => { form.hidden = !open; sec.querySelector('[data-cn-open]').setAttribute('aria-expanded', String(open)); };
+  sec.querySelector('[data-cn-open]').onclick = () => {
+    toggle(form.hidden);
+    if (form.hidden) return;
+    if (!threadsRead) void loadThreads().catch(failed);
+    form.querySelector('[name=channel]').focus();
+  };
+  form.querySelector('[data-cn-threads]').onclick = () => void loadThreads().catch(failed);
+  form.querySelector('[name=channel]').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); form.querySelector('[data-cn-link]').click(); } };
+  form.querySelector('[data-cn-link]').onclick = async ev => {
+    const b = ev.currentTarget, channel = form.querySelector('[name=channel]').value.trim();
+    if (!pick.value) { err.textContent = 'Choose a thread'; return; }
+    if (!channel) { err.textContent = 'Name a channel'; return; }
+    b.disabled = true; err.textContent = '';
+    try {
+      await post('/v2/slack/links', {thread_id: pick.value, channel, history: form.querySelector('[name=history]').checked});
+      pick.selectedOptions[0]?.remove();
+      form.querySelector('[name=channel]').value = '';
+      toggle(false);
+      await load(true);
+    } catch (e) { failed(e); }
+    finally { b.disabled = false; }
+  };
+  list.onclick = async ev => {
+    const b = ev.target.closest('button'); if (!b) return;
+    const link = rows.find(l => l.id === b.closest('[data-link]')?.dataset.link); if (!link) return;
+    const drop = b.matches('[data-slack-unlink]');
+    if (drop && !confirm(`Unlink ${tcnChannel(link)}?`)) return;
+    b.disabled = true; err.textContent = '';
+    try { await tcnSlackAct(link, drop ? 'unlink' : 'resume'); await load(true); }
+    catch (e) { failed(e); b.disabled = false; }
+  };
+  try { await load(); }
+  catch (e) { if (live()) { list.innerHTML = ''; failed(e); } }
 }
-// Leaving the page drops its list, so coming back reads the hub again.
+
+// Leaving Tools drops the list, so coming back reads the hub again.
 function rdToolsStop() { LC = null; }

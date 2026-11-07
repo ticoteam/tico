@@ -5,6 +5,7 @@ strings, starts an empty chart from the company model closest to the company's s
 as it was) and, when the plan changed, keeps the draft from before the turn in `undo`. It records the parts each action
 changed (`changed`), so the page can show which part the chat updated.
 """
+
 import calendar
 import copy
 import datetime as dt
@@ -16,9 +17,22 @@ from .keys import scrub, scrub_all
 
 SPEC = {row["name"]: row for row in D.SPEC["actions"]}
 # A seat with no template yet reads like a role with nothing to set up: no routine, no tools, never a lead.
-SEAT_ROLES = [{"slug": seat["slug"], "template": seat["slug"], "name": seat["name"], "department": seat["department"],
-               "lead": False, "core": False, "summary": seat["summary"], "first_routine": "", "tools": [],
-               "recommend_when": [], "open": True} for seat in D.SEATS]
+SEAT_ROLES = [
+    {
+        "slug": seat["slug"],
+        "template": seat["slug"],
+        "name": seat["name"],
+        "department": seat["department"],
+        "lead": False,
+        "core": False,
+        "summary": seat["summary"],
+        "first_routine": "",
+        "tools": [],
+        "recommend_when": [],
+        "open": True,
+    }
+    for seat in D.SEATS
+]
 BY_SLUG = {role["slug"]: role for role in D.ROLES + SEAT_ROLES}
 BY_NAME = {role["name"].lower(): role for role in D.ROLES + SEAT_ROLES}
 NEVER_REMOVED = ("botops",)
@@ -34,10 +48,15 @@ def schema_error(schema, value, path="input"):
     items), or None."""
     kinds = schema.get("type")
     kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
-    tests = {"string": lambda v: isinstance(v, str), "boolean": lambda v: isinstance(v, bool),
-             "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-             "integer": lambda v: isinstance(v, int) and not isinstance(v, bool), "null": lambda v: v is None,
-             "array": lambda v: isinstance(v, list), "object": lambda v: isinstance(v, dict)}
+    tests = {
+        "string": lambda v: isinstance(v, str),
+        "boolean": lambda v: isinstance(v, bool),
+        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "null": lambda v: v is None,
+        "array": lambda v: isinstance(v, list),
+        "object": lambda v: isinstance(v, dict),
+    }
     if kinds and not any(tests[kind](value) for kind in kinds):
         return "%s must be %s" % (path, " or ".join(kinds))
     if value is None:
@@ -67,24 +86,60 @@ def schema_error(schema, value, path="input"):
 
 
 # ---------------------------------------------------------------------------------------------------- templates
-STOP = set("a an the and or of to for in on with our we us my i me is are be it that this they them help need want more "
-           "some any get have has do does work your from at by as".split())
+STOP = set(
+    "a an the and or of to for in on with our we us my i me is are be it that this they them help need want more "
+    "some any get have has do does work your from at by as".split()
+)
 # setup.js ALIASES: everyday words for a role, mapped to the template that does it.
 ALIASES = {
-    "seo": "seo-visibility", "social": "listening",
-    "social media": "listening", "blog": "content", "writer": "content", "copywriter": "content", "sdr": "sdr-research",
-    "recruiter": "recruiting", "qa": "issue-triage", "tester": "issue-triage", "reviewer": "pr-reviewer",
-    "code reviewer": "pr-reviewer", "engineer": "pr-reviewer", "support": "support", "customer support": "support",
-    "invoices": "billing", "invoicing": "billing", "payroll": "payroll", "legal": "general-counsel",
-    "lawyer": "general-counsel", "contracts": "legal-review", "hr": "people-hr", "chief of staff": "chief-of-staff",
-    "pr": "pr", "press": "pr", "ads": "paid-media", "release manager": "release-notes", "docs": "docs-writer",
-    "technical writer": "docs-writer", "note taker": "meeting-notes", "meeting notes": "meeting-notes",
-    "project manager": "meeting-notes", "goal manager": "goal-manager", "ceo bot": "goal-manager",
-    "librarian": "librarian", "assistant": "coo",
-    "botops": "botops", "cfo": "finance-lead", "cmo": "marketing-lead", "cto": "engineering-lead",
-    "cap table": "equity-manager", "equity": "equity-manager", "fundraising": "fundraising-manager",
-    "month-end close": "controller", "bookings": "scheduling-bookings", "scheduling": "scheduling-bookings",
-    "inspections": "quality-inspections", "quality": "quality-inspections",
+    "seo": "seo-visibility",
+    "social": "listening",
+    "social media": "listening",
+    "blog": "content",
+    "writer": "content",
+    "copywriter": "content",
+    "sdr": "sdr-research",
+    "recruiter": "recruiting",
+    "qa": "issue-triage",
+    "tester": "issue-triage",
+    "reviewer": "pr-reviewer",
+    "code reviewer": "pr-reviewer",
+    "engineer": "builder",
+    "support": "support",
+    "customer support": "support",
+    "invoices": "billing",
+    "invoicing": "billing",
+    "payroll": "payroll",
+    "legal": "general-counsel",
+    "lawyer": "general-counsel",
+    "contracts": "legal-review",
+    "hr": "people-hr",
+    "chief of staff": "chief-of-staff",
+    "pr": "pr",
+    "press": "pr",
+    "ads": "paid-media",
+    "release manager": "release-notes",
+    "docs": "docs-writer",
+    "technical writer": "docs-writer",
+    "note taker": "meeting-notes",
+    "meeting notes": "meeting-notes",
+    "project manager": "meeting-notes",
+    "goal manager": "goal-manager",
+    "ceo bot": "goal-manager",
+    "librarian": "librarian",
+    "assistant": "coo",
+    "botops": "botops",
+    "cfo": "finance-lead",
+    "cmo": "marketing-lead",
+    "cto": "engineering-lead",
+    "cap table": "equity-manager",
+    "equity": "equity-manager",
+    "fundraising": "fundraising-manager",
+    "month-end close": "controller",
+    "bookings": "scheduling-bookings",
+    "scheduling": "scheduling-bookings",
+    "inspections": "quality-inspections",
+    "quality": "quality-inspections",
 }
 
 
@@ -176,8 +231,9 @@ def deadline(text, today):
         except ValueError:
             raise Refusal("%s isn't a real date." % words) from None
     month_name = "(%s)" % "|".join(sorted(MONTHS, key=len, reverse=True))
-    m = re.fullmatch(r"%s\.? (\d{1,2})(?:st|nd|rd|th)?(?: (\d{4}))?" % month_name, words) \
-        or re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)? (?:of )?%s\.?(?: (\d{4}))?" % month_name, words)
+    m = re.fullmatch(r"%s\.? (\d{1,2})(?:st|nd|rd|th)?(?: (\d{4}))?" % month_name, words) or re.fullmatch(
+        r"(\d{1,2})(?:st|nd|rd|th)? (?:of )?%s\.?(?: (\d{4}))?" % month_name, words
+    )
     if when is None and m:
         groups = m.groups()
         name, day = (groups[0], groups[1]) if not groups[0].isdigit() else (groups[1], groups[0])
@@ -200,15 +256,20 @@ def deadline(text, today):
         # Checked before the arithmetic: "in 9999 years" is past the calendar's last year.
         if n * {"day": 1, "week": 7, "month": 31, "year": 366}[unit] > 3660:
             raise Refusal("That deadline is more than ten years away; pick a nearer one.")
-        when = today + dt.timedelta(days=n if unit == "day" else 7 * n) if unit in ("day", "week") \
+        when = (
+            today + dt.timedelta(days=n if unit == "day" else 7 * n)
+            if unit in ("day", "week")
             else _add_months(today, n * (12 if unit == "year" else 1))
+        )
     if when is None and re.fullmatch(r"(?:end of (?:the |this )?year|this year|eoy)", words):
         when = dt.date(today.year, 12, 31)
     if when is None and re.fullmatch(r"(?:end of (?:the |this )?quarter|this quarter|eoq)", words):
         when = _month_end(today.year, (today.month - 1) // 3 * 3 + 3)
     if when is None:
-        raise Refusal("I couldn't read that deadline as a date. Use a date like %s or words like \"March 1\"."
-                      % _next_day(today, 3, 1).isoformat())
+        raise Refusal(
+            "I couldn't read that deadline as a date. Use a date like %s or words like \"March 1\"."
+            % _next_day(today, 3, 1).isoformat()
+        )
     if when <= today:
         raise Refusal("That deadline (%s) has already passed; pick a later one." % when.isoformat())
     if when > today + dt.timedelta(days=3660):
@@ -220,7 +281,7 @@ def deadline(text, today):
 def next_id(draft, prefix):
     taken = {row["id"] for rows in (draft["bots"], draft["people"], draft["goals"]) for row in rows}
     while True:
-        candidate = "%s-%d" % (prefix[:D.LIMITS["id"] - 8], draft["seq"])
+        candidate = "%s-%d" % (prefix[: D.LIMITS["id"] - 8], draft["seq"])
         draft["seq"] += 1
         if candidate not in taken:
             return candidate
@@ -237,8 +298,9 @@ def _text(args, key, limit, needed=True):
 
 def find_bot(draft, ref):
     ref = str(ref or "").strip()
-    found = next((b for b in draft["bots"] if b["id"] == ref), None) \
-        or next(iter([b for b in draft["bots"] if b["title"].lower() == ref.lower()][:1]), None)
+    found = next((b for b in draft["bots"] if b["id"] == ref), None) or next(
+        iter([b for b in draft["bots"] if b["title"].lower() == ref.lower()][:1]), None
+    )
     if not found:
         raise Refusal("There's no bot \"%s\" on the chart." % ref[:80])
     return found
@@ -271,7 +333,9 @@ def _target(draft, ref, notes, add_people=False):
     person = _person_named(draft, ref)
     if person:
         return person["id"]
-    bot = next((b for b in draft["bots"] if not b["existing"] and (b["id"] == ref or b["title"].lower() == ref.lower())), None)
+    bot = next(
+        (b for b in draft["bots"] if not b["existing"] and (b["id"] == ref or b["title"].lower() == ref.lower())), None
+    )
     if bot:
         return bot["id"]
     role = find_role(ref)
@@ -280,7 +344,11 @@ def _target(draft, ref, notes, add_people=False):
         if on_chart:
             return on_chart["id"]
         raise Refusal("There's no %s on the chart yet. Add one first, or name someone else." % role["name"])
-    if add_people and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{0,%d}" % (D.LIMITS["name"] - 1), ref) and len(ref.split()) <= 4:
+    if (
+        add_people
+        and re.fullmatch(r"[A-Za-z][A-Za-z .'-]{0,%d}" % (D.LIMITS["name"] - 1), ref)
+        and len(ref.split()) <= 4
+    ):
         if not draft["people"]:
             # The visitor owns the company, not the first name a goal mentions.
             add_person(draft, "me", "Owner", owner=True)
@@ -298,13 +366,19 @@ def add_person(draft, name, role, owner=False):
         raise Refusal("A chart can have at most %d people." % D.LIMITS["people"])
     if _person_named(draft, name):
         raise Refusal("%s is already on the team." % name)
-    base = D.slugify(name)[:D.LIMITS["id"] - 8]
+    base = D.slugify(name)[: D.LIMITS["id"] - 8]
     taken = {row["id"] for rows in (draft["bots"], draft["people"], draft["goals"]) for row in rows}
     person_id = next_id(draft, base) if base in taken or (base == "you" and not me) else base
     person = {"id": person_id, "name": name, "role": role, "dept": D.dept_of(role), "owner": False, "isNew": True}
     founder = re.search(r"\b(ceo|founder|owner|president)\b", role, re.I) or me
-    if owner or not draft["people"] or (founder and not any(p["owner"] and re.search(r"\b(ceo|founder|owner)\b", p["role"], re.I)
-                                                              for p in draft["people"])):
+    if (
+        owner
+        or not draft["people"]
+        or (
+            founder
+            and not any(p["owner"] and re.search(r"\b(ceo|founder|owner)\b", p["role"], re.I) for p in draft["people"])
+        )
+    ):
         for other in draft["people"]:
             other["owner"] = False
         person["owner"] = True
@@ -314,13 +388,26 @@ def add_person(draft, name, role, owner=False):
 
 def _make_bot(draft, role, title, reason, start):
     taken = {row["id"] for rows in (draft["bots"], draft["people"], draft["goals"]) for row in rows}
-    ids = (role["slug"], D.slugify(title)[:D.LIMITS["id"]])
-    bot_id = next((c for c in (ids if title == role["name"] else ids[::-1]) if c not in taken), None) \
-        or next_id(draft, role["slug"])
-    return {"id": bot_id, "template": role["slug"], "title": title, "dept": role["department"], "lead": role["lead"],
-            "core": role["core"], "reason": reason, "start": start, "routine": role["first_routine"][:D.LIMITS["routine"]],
-            "tools": list(role["tools"]), "about": role["summary"][:D.LIMITS["summary"]], "runtime": None,
-            "existing": False, "isNew": True}
+    ids = (role["slug"], D.slugify(title)[: D.LIMITS["id"]])
+    bot_id = next((c for c in (ids if title == role["name"] else ids[::-1]) if c not in taken), None) or next_id(
+        draft, role["slug"]
+    )
+    return {
+        "id": bot_id,
+        "template": role["slug"],
+        "title": title,
+        "dept": role["department"],
+        "lead": role["lead"],
+        "core": role["core"],
+        "reason": reason,
+        "start": start,
+        "routine": role["first_routine"][: D.LIMITS["routine"]],
+        "tools": list(role["tools"]),
+        "about": role["summary"][: D.LIMITS["summary"]],
+        "runtime": None,
+        "existing": False,
+        "isNew": True,
+    }
 
 
 def _take_off(draft, gone):
@@ -336,15 +423,22 @@ def _take_off(draft, gone):
             goal["owner"] = D.owner_id(draft)
     removed = [r for r in draft.get("removed", []) if r["title"].lower() not in {b["title"].lower() for b in gone}]
     removed += [{"template": b["template"], "title": b["title"]} for b in gone]
-    draft["removed"] = removed[-D.LIMITS["removed"]:]
+    draft["removed"] = removed[-D.LIMITS["removed"] :]
 
 
 # What a model's name reads as in BotOps's line about it.
-MODEL_WORDS = {"everything": "everything Tico runs", "software": "a software company", "services": "a services firm",
-               "local": "a local service business", "store": "an online store"}
+MODEL_WORDS = {
+    "everything": "everything Tico runs",
+    "software": "a software company",
+    "services": "a services firm",
+    "local": "a local service business",
+    "store": "an online store",
+}
 # Signals that pick the model or say who the company sells to and how big it is: the model already answers them, so
 # they add no roles of their own. The rest ("has a support inbox", "uses GitHub") each add the roles that do that work.
-BROAD = {"sells_to_businesses", "sells_to_consumers", "small_team"} | {s for m in D.MODELS.values() for s in m["picks_when"]}
+BROAD = {"sells_to_businesses", "sells_to_consumers", "small_team"} | {
+    s for m in D.MODELS.values() for s in m["picks_when"]
+}
 
 
 def pick_model(signals):
@@ -375,8 +469,9 @@ def _core(draft):
     for row in D.MODELS["everything"]["core"]:
         role = BY_SLUG[row["template"]]
         if not any(b["template"] == role["slug"] for b in draft["bots"]):
-            draft["bots"].append(_make_bot(draft, role, row.get("title") or role["name"],
-                                           role["summary"][:D.LIMITS["reason"]], True))
+            draft["bots"].append(
+                _make_bot(draft, role, row.get("title") or role["name"], role["summary"][: D.LIMITS["reason"]], True)
+            )
 
 
 def seed(draft):
@@ -409,7 +504,9 @@ def seed(draft):
             continue
         if any(b["template"] == role["slug"] for b in draft["bots"]):
             continue
-        draft["bots"].append(_make_bot(draft, role, role["name"], "Fits what you said about how the company works.", False))
+        draft["bots"].append(
+            _make_bot(draft, role, role["name"], "Fits what you said about how the company works.", False)
+        )
         matched.append(role["name"])
     if key == "everything":
         line = "Nothing you said points to one kind of company, so we started from the Everything model"
@@ -441,8 +538,10 @@ def bot_add(draft, args, today, notes):
     role = find_role(args["template"])
     if not role:
         near = closest_role(args["template"])
-        raise Refusal("Tico has no \"%s\" template.%s" % (str(args["template"])[:80],
-                      " The closest is %s (%s)." % (near["name"], near["slug"]) if near else ""))
+        raise Refusal(
+            "Tico has no \"%s\" template.%s"
+            % (str(args["template"])[:80], " The closest is %s (%s)." % (near["name"], near["slug"]) if near else "")
+        )
     if role["slug"] in ("botops", "coo") and any(b["template"] == role["slug"] for b in draft["bots"]):
         raise Refusal("%s is already on the chart; there is only one." % role["name"])
     title = _text(args, "title", D.LIMITS["title"], needed=False) or role["name"]
@@ -471,8 +570,11 @@ def team_remove(draft, args, today, notes):
         raise Refusal("There's no %s team on the chart." % args["team"])
     _take_off(draft, gone)
     kept = [b["title"] for b in draft["bots"] if b["dept"] == args["team"] and b["existing"]]
-    return "Removed the %s team (%d bots).%s" % (args["team"], len(gone),
-                                                 " Kept your own %s." % ", ".join(kept) if kept else "")
+    return "Removed the %s team (%d bots).%s" % (
+        args["team"],
+        len(gone),
+        " Kept your own %s." % ", ".join(kept) if kept else "",
+    )
 
 
 def bot_rename(draft, args, today, notes):
@@ -496,8 +598,9 @@ def bot_set_reports_to(draft, args, today, notes):
             del bot["reports_to"]
         else:
             bot["reports_to"] = before
-        raise Refusal("That would make a loop: %s already manages the one you named, directly or through others."
-                      % bot["title"])
+        raise Refusal(
+            "That would make a loop: %s already manages the one you named, directly or through others." % bot["title"]
+        )
     return "%s now reports to %s." % (bot["title"], _name(draft, target))
 
 
@@ -506,7 +609,9 @@ def _tico_bot(draft, ref):
     routine or first job for them."""
     bot = find_bot(draft, ref)
     if bot["existing"]:
-        raise Refusal("%s is an agent you already run; its start, routine and first job stay as they are." % bot["title"])
+        raise Refusal(
+            "%s is an agent you already run; its start, routine and first job stay as they are." % bot["title"]
+        )
     return bot
 
 
@@ -563,8 +668,10 @@ def _aim(args, today, old=None):
     needed = ["unit"] + (["min", "max"] if out["direction"] == "range" else ["target", "deadline"])
     missing = [key for key in needed if out[key] in (None, "")]
     if missing:
-        raise Refusal("A measure needs its %s too. Ask the visitor, or leave the measure out until they say."
-                      % " and ".join(missing))
+        raise Refusal(
+            "A measure needs its %s too. Ask the visitor, or leave the measure out until they say."
+            % " and ".join(missing)
+        )
     return out
 
 
@@ -575,8 +682,11 @@ def goal_add(draft, args, today, notes):
     aim = _aim(args, today)
     owner = _target(draft, args["owner"], notes, add_people=True) if args.get("owner") else D.owner_id(draft)
     draft["goals"].append({"id": next_id(draft, "goal"), "title": title, "owner": owner, **aim, "isNew": True})
-    return "Added the goal \"%s\", owned by %s%s." % (title, _name(draft, owner),
-                                                      "" if aim["measure"] else "; its measure is not set yet")
+    return "Added the goal \"%s\", owned by %s%s." % (
+        title,
+        _name(draft, owner),
+        "" if aim["measure"] else "; its measure is not set yet",
+    )
 
 
 def goal_edit(draft, args, today, notes):
@@ -626,10 +736,19 @@ def person_set(draft, args, today, notes):
 def agent_set(draft, args, today, notes):
     job = _text(args, "job", D.LIMITS["summary"])
     runtime = args["runtime"]
-    dept = D.dept_of(job) or ("engineering" if re.search(r"code|engineer|\bpr\b|bug|github", job, re.I)
-                              or runtime in ("claude-code", "codex", "cursor", "devin", "copilot") else "operations")
-    fields = {"title": D.HARNESSES[runtime], "runtime": runtime, "about": job, "dept": dept,
-              "reason": ("Already yours: %s." % job.rstrip("."))[:D.LIMITS["reason"]]}
+    dept = D.dept_of(job) or (
+        "engineering"
+        if re.search(r"code|engineer|\bpr\b|bug|github", job, re.I)
+        or runtime in ("claude-code", "codex", "cursor", "devin", "copilot")
+        else "operations"
+    )
+    fields = {
+        "title": D.HARNESSES[runtime],
+        "runtime": runtime,
+        "about": job,
+        "dept": dept,
+        "reason": ("Already yours: %s." % job.rstrip("."))[: D.LIMITS["reason"]],
+    }
     if args.get("agent"):
         agent = next((b for b in draft["bots"] if b["id"] == args["agent"] and b["existing"]), None)
         if not agent:
@@ -638,8 +757,20 @@ def agent_set(draft, args, today, notes):
         return "Updated your %s." % agent["title"]
     if len(draft["bots"]) >= D.LIMITS["bots"]:
         raise Refusal("A chart can have at most %d bots." % D.LIMITS["bots"])
-    draft["bots"].append({"id": next_id(draft, runtime), "template": None, "lead": False, "core": False, "start": True,
-                          "routine": "", "tools": [], "existing": True, "isNew": True, **fields})
+    draft["bots"].append(
+        {
+            "id": next_id(draft, runtime),
+            "template": None,
+            "lead": False,
+            "core": False,
+            "start": True,
+            "routine": "",
+            "tools": [],
+            "existing": True,
+            "isNew": True,
+            **fields,
+        }
+    )
     return "Added your %s, now on the chart with a manager." % fields["title"]
 
 
@@ -665,9 +796,15 @@ def tools_set(draft, args, today, notes):
 
 
 # ---------------------------------------------------------------------------------------------------- the strategy
-STRATEGY_PARTS = {"summary": "the summary", "vision": "the vision", "serve": "Who we serve", "sell": "What we sell",
-                  "know": "What we know", "not": "What we won't do"}
-CHECK_DAYS = 90             # a new bet is looked at again this many days out
+STRATEGY_PARTS = {
+    "summary": "the summary",
+    "vision": "the vision",
+    "serve": "Who we serve",
+    "sell": "What we sell",
+    "know": "What we know",
+    "not": "What we won't do",
+}
+CHECK_DAYS = 90  # a new bet is looked at again this many days out
 
 
 def _strategy(draft):
@@ -703,8 +840,9 @@ def set_bet(draft, args, today, notes):
     bet = _bet(draft, args["id"])
     fields = ("statement", "why", "rules_out", "wrong_if", "check_by")
     if not any(key in args for key in fields):
-        raise Refusal("Say what to change: the statement, why, what it rules out, what would show it wrong, or when "
-                      "to check.")
+        raise Refusal(
+            "Say what to change: the statement, why, what it rules out, what would show it wrong, or when to check."
+        )
     if "statement" in args:
         bet["statement"] = _text(args, "statement", D.LIMITS["statement"])
     for key in ("why", "rules_out", "wrong_if"):
@@ -720,8 +858,10 @@ def add_bet(draft, args, today, notes):
     if len(bets) >= D.LIMITS["bets"]:
         raise Refusal("The strategy has %d bets, the most it holds. Drop one first." % D.LIMITS["bets"])
     taken = {b["id"] for b in bets}
-    bet = {"id": next("b%d" % n for n in range(1, D.LIMITS["bets"] + 1) if "b%d" % n not in taken),
-           "statement": _text(args, "statement", D.LIMITS["statement"])}
+    bet = {
+        "id": next("b%d" % n for n in range(1, D.LIMITS["bets"] + 1) if "b%d" % n not in taken),
+        "statement": _text(args, "statement", D.LIMITS["statement"]),
+    }
     for key in ("why", "rules_out", "wrong_if"):
         bet[key] = _text(args, key, D.LIMITS["bet_text"], needed=False)
     bet["check_by"] = (today + dt.timedelta(days=CHECK_DAYS)).isoformat()
@@ -735,8 +875,10 @@ def drop_bet(draft, args, today, notes):
     linked = [g for g in draft["goals"] if g.get("bet") == bet["id"]]
     for goal in linked:
         del goal["bet"]
-    return "Removed bet %s.%s" % (bet["id"][1:], " %d goal%s no longer tied to a bet." % (
-        len(linked), " is" if len(linked) == 1 else "s are") if linked else "")
+    return "Removed bet %s.%s" % (
+        bet["id"][1:],
+        " %d goal%s no longer tied to a bet." % (len(linked), " is" if len(linked) == 1 else "s are") if linked else "",
+    )
 
 
 def add_listening_request(draft, args, today, notes):
@@ -774,8 +916,9 @@ def step_go(draft, args, today, notes):
 def _name(draft, ident):
     if ident == "you":
         return "you"
-    found = next((p["name"] for p in draft["people"] if p["id"] == ident), None) \
-        or next((b["title"] for b in draft["bots"] if b["id"] == ident), None)
+    found = next((p["name"] for p in draft["people"] if p["id"] == ident), None) or next(
+        (b["title"] for b in draft["bots"] if b["id"] == ident), None
+    )
     return found or ident
 
 
@@ -812,11 +955,39 @@ def seat_fill(draft, args, today, notes):
     return "%s holds the %s seat." % (person["name"], bot["title"])
 
 
-ACTIONS = {fn.__name__: fn for fn in (
-    company_set, model_use, seat_fill, bot_add, bot_remove, bot_rename, bot_set_reports_to, bot_set_start, bot_set_routine, bot_set_first_job,
-    team_remove, goal_add, goal_edit, goal_remove, person_set, agent_set, rules_set_never, rules_set_review,
-    rules_use_defaults, tools_set, set_strategy_text, set_bet, add_bet, drop_bet, add_listening_request,
-    drop_listening_request, resize_market, step_go)}
+ACTIONS = {
+    fn.__name__: fn
+    for fn in (
+        company_set,
+        model_use,
+        seat_fill,
+        bot_add,
+        bot_remove,
+        bot_rename,
+        bot_set_reports_to,
+        bot_set_start,
+        bot_set_routine,
+        bot_set_first_job,
+        team_remove,
+        goal_add,
+        goal_edit,
+        goal_remove,
+        person_set,
+        agent_set,
+        rules_set_never,
+        rules_set_review,
+        rules_use_defaults,
+        tools_set,
+        set_strategy_text,
+        set_bet,
+        add_bet,
+        drop_bet,
+        add_listening_request,
+        drop_listening_request,
+        resize_market,
+        step_go,
+    )
+}
 
 
 def touched(before, after):
@@ -842,7 +1013,7 @@ class Turn:
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
-    empty chart was started from a company model, and `started` is BotOps's one line on which model and what it added.
+    empty chart was started from a company model, and `started_at` is BotOps's one line on which model and what it added.
     `changed` lists the parts the turn's actions changed (`touched`), in order; `market_note` is what the visitor said
     when they asked for the market to be sized again (`resize_market`), else None.
     """

@@ -70,17 +70,18 @@ Always:
    could not read.
 
 ## Growth
-Work on an Idea subtask carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
-Report the numbers the idea needs on the idea task, each with its source and date. Before an outward draft leaves (an ad,
+Before you plan or write for customers, read How we sell in `hub strategy show`.
+Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
 `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
-contact anyone for a channel, read `hub gtm show --section wishes`; a wish that blocks the work stops it. Keep your
+contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your
 channel's `why`, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`.
 Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks with exports attached. A question is `hub task ask <id>`, one open question per task. A
+Work arrives as tasks with exports attached. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A
 change a human must make is `hub task create --owner <person>` with the exact edit. Apply requested spend with your Tools; new public copy stays a draft until a person turns mail sending on in Tico. Read the funnel with `hub goal list` and, where connected, the
 CRM (read only).
 

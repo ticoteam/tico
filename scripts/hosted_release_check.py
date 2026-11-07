@@ -4,6 +4,7 @@
 Only ephemeral GitHub-hosted or RunsOn Ubuntu VMs may reclaim the fixed unused SDKs.
 Never tags, publishes, deploys, or uses a production installation.
 """
+
 import argparse
 import hashlib
 import json
@@ -16,9 +17,9 @@ import subprocess
 import sys
 import time
 
-GIB = 1024 ** 3
+GIB = 1024**3
 UNUSED_SDKS = ("/usr/local/lib/android", "/usr/share/dotnet", "/opt/ghc", "/usr/local/.ghcup")
-LOG_LIMIT = 5 * 1024 ** 2
+LOG_LIMIT = 5 * 1024**2
 
 
 def require(ok, reason):
@@ -36,16 +37,22 @@ def inputs(env):
 def runs_on(env):
     """A RunsOn VM: one EC2 instance launched for this one job and terminated after it."""
     instance = env.get("RUNS_ON_INSTANCE_ID", "")
-    return (re.fullmatch(r"i-[0-9a-f]{8,17}", instance) is not None
-            and env.get("RUNNER_NAME", "").startswith(f"runs-on--{instance}--"))
+    return re.fullmatch(r"i-[0-9a-f]{8,17}", instance) is not None and env.get("RUNNER_NAME", "").startswith(
+        f"runs-on--{instance}--"
+    )
 
 
 def hosted(env):
     kind = env.get("TICO_HOSTED_ENVIRONMENT")
-    require(env.get("GITHUB_ACTIONS") == "true" and (kind == "github-hosted" or (kind == "runs-on" and runs_on(env)))
-            and env.get("RUNNER_OS") == "Linux" and env.get("RUNNER_ARCH") == "X64"
-            and platform.system() == "Linux" and platform.machine() == "x86_64",
-            "requires an ephemeral GitHub-hosted or RunsOn Linux x64 VM; never run on a user or bot host")
+    require(
+        env.get("GITHUB_ACTIONS") == "true"
+        and (kind == "github-hosted" or (kind == "runs-on" and runs_on(env)))
+        and env.get("RUNNER_OS") == "Linux"
+        and env.get("RUNNER_ARCH") == "X64"
+        and platform.system() == "Linux"
+        and platform.machine() == "x86_64",
+        "requires an ephemeral GitHub-hosted or RunsOn Linux x64 VM; never run on a user or bot host",
+    )
 
 
 def output(command, cwd=None):
@@ -54,7 +61,9 @@ def output(command, cwd=None):
 
 def source(root, sha):
     require(output(["git", "rev-parse", "HEAD"], root) == sha, "candidate HEAD differs from requested SHA")
-    require(not output(["git", "status", "--porcelain", "--untracked-files=normal"], root), "candidate source is not clean")
+    require(
+        not output(["git", "status", "--porcelain", "--untracked-files=normal"], root), "candidate source is not clean"
+    )
     return output(["git", "rev-parse", "HEAD^{tree}"], root)
 
 
@@ -80,7 +89,7 @@ def fingerprint(root, kind):
     if kind == "runner":
         paths = [root / "runner-rs" / name for name in ("build.rs", "Cargo.toml", "Cargo.lock")]
         paths += list((root / "runner-rs/src").rglob("*"))
-        paths += list((root / "runner/harnesses").glob("*.toml"))
+        paths += list((root / "runner-rs/harnesses").glob("*.toml"))
         named = [(p.relative_to(root).as_posix(), p) for p in paths if p.is_file()]
     else:
         crate = root / "relay-rs"
@@ -102,8 +111,12 @@ def native_binaries(root):
         actual = output([str(binary), "--build-id"]).split()[-1]
         expected = fingerprint(root, kind)
         require(actual == expected, kind + " native binary does not match the candidate source")
-        result[kind] = {"path": str(binary), "build_id": actual, "expected_build_id": expected,
-                        "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+        result[kind] = {
+            "path": str(binary),
+            "build_id": actual,
+            "expected_build_id": expected,
+            "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        }
         if kind == "runner":
             result[kind]["version"] = output([str(binary), "--version"])
     return result
@@ -119,8 +132,10 @@ def gate_command(root, previous, part, shard):
     have nothing of their own to check. A candidate frozen before the desktop part has no desktop test to run, and one
     frozen before browser shards runs every browser script on the first browser VM."""
     require(part in PARTS or part is None, "unknown gate part")
-    require(shard is None or (part in ("python", "browser") and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
-            "a shard must be K/N and only for the python or browser part")
+    require(
+        shard is None or (part in ("python", "browser") and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
+        "a shard must be K/N and only for the python or browser part",
+    )
     command = [sys.executable, "scripts/release_checks.py", "--release", "--previous", previous]
     if part is None:
         return command
@@ -136,7 +151,7 @@ def gate_command(root, previous, part, shard):
 
 def collect(temp, report):
     """Only bounded text logs from this gate's own temp directory, never home/config/DB."""
-    budget = 50 * 1024 ** 2
+    budget = 50 * 1024**2
     log_root = temp / "tico-release-gate"
     require(not log_root.is_symlink(), "gate log root must not be a link")
     for path in sorted(log_root.glob("tico-release-check-*/*.log")):
@@ -176,22 +191,38 @@ def main():
     if args.mode == "collect":
         collect(temp, report)
         return 0
-    receipt = {"candidate_sha": sha, "previous_release": previous,
-               "workflow_sha": os.environ["TICO_VALIDATION_WORKFLOW_SHA"],
-               "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-               "architecture": platform.machine(), "python": platform.python_version(),
-               "cpu_count": os.cpu_count(), "started_unix": time.time(), "mode": args.mode,
-               "test_settings": {name: os.environ.get(name) for name in
-                                 ("TICO_PYTHON_WORKERS", "TICO_UI_JOBS", "TICO_UI_SLOWDOWN", "TICO_BROWSER_CHANNEL")},
-               "part": args.part, "shard": args.shard, "gate_started": False, "success": False}
+    receipt = {
+        "candidate_sha": sha,
+        "previous_release": previous,
+        "workflow_sha": os.environ["TICO_VALIDATION_WORKFLOW_SHA"],
+        "run_id": os.environ["GITHUB_RUN_ID"],
+        "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+        "architecture": platform.machine(),
+        "python": platform.python_version(),
+        "cpu_count": os.cpu_count(),
+        "started_unix": time.time(),
+        "mode": args.mode,
+        "test_settings": {
+            name: os.environ.get(name)
+            for name in ("TICO_PYTHON_WORKERS", "TICO_UI_JOBS", "TICO_UI_SLOWDOWN", "TICO_BROWSER_CHANNEL")
+        },
+        "part": args.part,
+        "shard": args.shard,
+        "gate_started": False,
+        "success": False,
+    }
     gate_clock = None
+
     def checkpoint():
         (report / (args.mode + ".json")).write_text(json.dumps(receipt, indent=2) + "\n")
+
     try:
         receipt["control_tree"] = source(Path(__file__).resolve().parents[1], receipt["workflow_sha"])
         receipt["source_tree"] = source(root, sha)
         receipt["disk"] = capacity(root, (35 if args.mode == "prepare" else 30) * GIB, os.environ)
-        receipt["docker"] = output(["docker", "info", "--format", "{{.ServerVersion}} {{.Architecture}} cpus={{.NCPU}} memory={{.MemTotal}}"])
+        receipt["docker"] = output(
+            ["docker", "info", "--format", "{{.ServerVersion}} {{.Architecture}} cpus={{.NCPU}} memory={{.MemTotal}}"]
+        )
         receipt["compose"] = output(["docker", "compose", "version", "--short"])
         require(not output(["docker", "ps", "-aq"]), "ephemeral Docker VM has existing containers")
         if args.mode == "prepare":
@@ -199,24 +230,47 @@ def main():
             return 0
         command = gate_command(root, previous, args.part, args.shard)
         if command is None:
-            note = ("candidate predates the desktop part; it has no desktop test" if args.part == "desktop"
-                    else "candidate predates browser shards; the first browser VM runs them all" if args.part == "browser"
-                    else "candidate predates split gates; the product VM runs its whole gate")
+            note = (
+                "candidate predates the desktop part; it has no desktop test"
+                if args.part == "desktop"
+                else "candidate predates browser shards; the first browser VM runs them all"
+                if args.part == "browser"
+                else "candidate predates split gates; the product VM runs its whole gate"
+            )
             receipt.update({"gate_state": "covered elsewhere", "success": True, "note": note})
             print(f"Nothing to run on this VM: {note}.", flush=True)
             return 0
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
-        receipt["native_binaries"] = native_binaries(root)
-        env = {**os.environ, "TMPDIR": str(gate_temp),
-               "TICO_SCREEN_RELAY_BIN": receipt["native_binaries"]["relay"]["path"]}
+        env = {**os.environ, "TMPDIR": str(gate_temp)}
+        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shards 1-2
+        # (release_checks.py NATIVE_SHARDS gives them the native test files; a shard without binaries refuses native tests).
+        # Browser tests use none. Where the binaries were placed, they must be the candidate's.
+        placed = (root / "runner-rs/target/release/tico-runner").exists()
+        if (
+            args.part == "python"
+            and not placed
+            and "native_first" not in (root / "scripts/release_checks.py").read_text()
+        ):
+            raise RuntimeError("candidate predates native-first python shards; every python VM needs the binaries")
+        if args.part in ("product", "desktop") or placed:
+            receipt["native_binaries"] = native_binaries(root)
+            env["TICO_SCREEN_RELAY_BIN"] = receipt["native_binaries"]["relay"]["path"]
         receipt.update({"command": command, "gate_start_requested": True, "gate_state": "starting"})
         checkpoint()  # Survives timeout/cancellation even when the finalizer cannot run.
         gate_clock = time.monotonic()
         with (report / "gate.log").open("w+b") as log:
-            process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            receipt.update({"gate_started": True, "gate_state": "running", "gate_pid": process.pid,
-                            "gate_started_unix": time.time()})
+            process = subprocess.Popen(
+                command, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            receipt.update(
+                {
+                    "gate_started": True,
+                    "gate_state": "running",
+                    "gate_pid": process.pid,
+                    "gate_started_unix": time.time(),
+                }
+            )
             checkpoint()
             for line in process.stdout:
                 log_line(log, line)

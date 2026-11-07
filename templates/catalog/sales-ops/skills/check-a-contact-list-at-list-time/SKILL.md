@@ -8,7 +8,7 @@ When to use: before a record is put on an outreach list or given a list date, an
 
 Steps:
 1. Labelling a record is not permission to contact it. Check the rules at the moment of listing, from current data.
-2. Apply the suppression rules in order: a protected status (customer, onboarding, cancelled, do not contact, bad fit); no usable phone or email; a negative status changed in the last 90 days; any contact by anyone on the team in the last 14 days; an open opportunity owned by another person; a hard bounce on the only address; an opt-out or blocked number on the channel.
+2. Apply the suppression rules in order: a protected status (customer, onboarding, canceled, do not contact, bad fit); no usable phone or email; a negative status changed in the last 90 days; any contact by anyone on the team in the last 14 days; an open opportunity owned by another person; a hard bounce on the only address; an opt-out or blocked number on the channel.
 3. Record the rule that removed each record. A record removed by two rules keeps both.
 4. Check the proposed owner against the open opportunity's owner again at the time of assignment.
 5. Count the records that pass. Write "not available" for any rule whose data you could not read, and count those records as not cleared.

@@ -141,9 +141,9 @@ function teamAddBot(group = null) {
   setDrawer(false);
   if (group === null) { void recruitPostJob(); return; }
   const bots = (S.emps || []).filter(e => e.team === group && e.status !== 'archived' && !isHelperBot(e));
-  const names = new Set(bots.map(e => 'b:' + e.name));
+  const names = new Set(bots.map(e => 'b:' + e.id));
   const head = bots.find(e => !names.has(orgBossKey({kind: 'bot', ...e})));
-  void recruitPostJob({team: group, reports_to: head?.name || ''});
+  void recruitPostJob({team: group, reports_to: head?.id || ''});
 }
 function teamAddHuman() {
   const dialog = teamAddDialog('Add human', `<form id="team-add-human">

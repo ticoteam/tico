@@ -1,6 +1,7 @@
 // Strategy › Budget (ui/app/strategy-budget.js) against a fake hub: the org chart as one tree of budgets. A small team
-// (fixtures/redesign-org.json with redesign-usage-limits.json and redesign-task-caps.json, the Acme example): the rows in
-// chart order, each with the window that binds, Paused and a caps chip; a group's pool against what is under it; search
+// (fixtures/redesign-org.json with redesign-usage-limits.json and redesign-task-caps.json, the Acme example): each row's
+// spend over the period picked (30 days unless changed, kept for the next visit), rows under their parent by it, the
+// window that binds, Paused and a caps chip; a group's pool against what is under it; where a row's spend went; search
 // keeping what a row sits in; Near limit; the editor as a panel (a sheet on a phone) whose save sends only what changed,
 // task caps both ways, and read only for whoever may not edit. Then Acme at 5 people and 200 bots in nested groups:
 // folded by default, quick to draw, expand and collapse all, search and Near limit. TICO_UI_SHOTS=<dir> saves screenshots.
@@ -101,12 +102,12 @@ function limitsFor(team, viewer) {
 }
 
 // ----------------------------------------------------------------- the fake hub
-async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana', hash = '#/strategy/budget', capsStatus = 200} = {}) {
+async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana', hash = '#/strategy/budget', capsStatus = 200, usageStatus = 200} = {}) {
   const person = team.people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: viewer === 'ana' ? 'owner' : 'member',
     company_role: viewer === 'ana' ? 'owner' : 'member', cloud: true};
   const config = {company_name: 'Acme'};
-  const writes = [];
+  const writes = [], usage = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -131,6 +132,20 @@ async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana'
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+    // The period's spend (backend/usage.py): a bot's week for 7 days, its month for longer; models and tasks split it.
+    if (p === '/api/v2/usage' && usageStatus !== 200) return json({error: {code: 'down', detail: 'Usage is down'}}, usageStatus);
+    if (p === '/api/v2/usage') {
+      const q = url.searchParams, group = q.get('group'), only = q.get('bots')?.split(',');
+      usage.push({group, from: q.get('from'), to: q.get('to'), bots: only || null});
+      const days = (Date.parse(q.get('to')) - Date.parse(q.get('from'))) / 864e5 + 1, w = days <= 7 ? 'week' : 'month';
+      const slugs = Object.keys(team.limits.bots).filter(s => !only || only.includes(s));
+      const spent = s => team.limits.bots[s].spent[w] || 0, total = slugs.reduce((t, s) => t + spent(s), 0);
+      const split = names => names.map(([name, share]) => ({value: name, name: name || 'Chats and other runs', est_cost_usd: total * share, subscription_equiv_usd: 0}));
+      const rows = group === 'bot' ? slugs.map(s => ({bot: s, name: s, est_cost_usd: spent(s) * 0.75, subscription_equiv_usd: spent(s) * 0.25}))
+        : group === 'model' ? split([['claude-sonnet-4-5', 0.7], ['gpt-5.1', 0.3]])
+        : split([['Ship the release', 0.4], ['', 0.3], ['Triage new issues', 0.2], ['Weekly report', 0.1], ['Idle', 0]]);
+      return json({group, rows, totals: {est_cost_usd: total, subscription_equiv_usd: 0}});
+    }
     // Spend (CONTRACT §1): a write lands, so the reload after a save reads it back.
     if (p === '/api/v2/usage/limits' && method === 'GET') return json(limitsFor(team, viewer));
     if (p === '/api/v2/usage/limits') { Object.assign(team.limits.default, body); return json(team.limits.default); }
@@ -157,12 +172,15 @@ async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana'
   await page.goto('http://tico-ui.test/' + hash);
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   await page.locator('[data-bt-open="company"]').waitFor();
-  return {page, errors, writes, team};
+  return {page, errors, writes, team, usage};
 }
 
 // ----------------------------------------------------------------- helpers
 const row = key => `.bt-r:has([data-bt-open="${key}"])`;
 const amount = (page, key) => page.locator(row(key) + ' .bt-amt').innerText();
+const limit = async (page, key) => (await page.locator(row(key) + ' .bt-lim').count()) ? page.locator(row(key) + ' .bt-lim').innerText() : '';
+// Under every row, its rows by the period's spend, most first.
+const bySpend = page => page.evaluate(() => [...BUDGET.tree.nodes.values()].every(n => n.kids.every((k, i) => !i || (n.kids[i - 1].period || 0) >= (k.period || 0))));
 const keys = page => page.locator('[data-bt-open]').evaluateAll(els => els.map(el => el.dataset.btOpen));
 const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
 async function shot(page, name) {
@@ -182,7 +200,7 @@ async function save(page) {
 }
 // Every row is one line, and nothing in the open editor runs past its edge.
 const oneLine = page => page.locator('.bt-main').evaluateAll(els => els.every(el => el.getBoundingClientRect().height <= 48));
-const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [...d.querySelectorAll('.bt-win,.bt-cap,.bt-foot,.tmodal-head')]
+const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [...d.querySelectorAll('.bt-win,.bt-cap,.bt-line,.bt-foot,.tmodal-head')]
   .every(el => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= innerWidth + 1));
 
 (async () => {
@@ -191,24 +209,35 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
     // A small team, the owner, on a computer.
     {
       const tag = 'small desktop';
-      const {page, errors, writes} = await open(browser);
-      assert.deepEqual(await keys(page), ['company', 'person:ana', 'bot:release', 'group:eng', 'bot:eng-lead',
-        'bot:builder', 'bot:reviewer', 'person:cara', 'group:web', 'bot:web-dev', 'group:sales', 'person:ben', 'bot:sales-lead', 'bot:sdr',
-        'group:outbound', 'bot:coo', 'bot:botops', 'bot:librarian', 'bot:mail-sorter', 'bot:goal-manager'], tag + ': the chart top down, helpers (the Strategy Bot too) last');
+      const {page, errors, writes, usage} = await open(browser);
+      assert.deepEqual(await keys(page), ['company', 'group:eng', 'group:web', 'bot:web-dev', 'bot:eng-lead', 'bot:builder', 'bot:reviewer',
+        'person:cara', 'group:sales', 'bot:sales-lead', 'bot:sdr', 'person:ben', 'group:outbound', 'person:ana', 'bot:release', 'bot:coo',
+        'bot:goal-manager', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': under each row, its rows by spend; helpers (the Strategy Bot too) in their branch');
+      assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
-      assert.equal(await amount(page, 'bot:builder'), '$5.70 / $6 · 30m', tag + ': a bot by the window that binds');
-      assert.equal(await amount(page, 'bot:goal-manager'), '$14 / $20 · day', tag + ': a day window binding says day');
-      assert.equal(await amount(page, 'company'), '$27.38 / $80 · 30m', tag + ': cents only when there are any');
-      assert.equal(await amount(page, 'bot:eng-lead'), '$2.50 / $3 · hour', tag + ': an hour limit not yet moved to 30 minutes still binds');
-      assert.equal(await amount(page, 'group:eng'), '$16.79 / $40 · 30m', tag + ': a group pool against everyone under it');
-      assert.equal(await amount(page, 'group:sales'), '$18 · day', tag + ': a group with no pool, what it spent today');
-      assert.equal(await amount(page, 'bot:sdr'), '$11 · day', tag + ': a bot with no limit, what it spent today');
+      assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '30 days', tag + ': 30 days to start');
+      const span = usage.find(u => u.group === 'bot');
+      assert.equal((Date.parse(span.to) - Date.parse(span.from)) / 864e5, 29, tag + ': 30 days, today too');
+      assert.equal(await amount(page, 'bot:builder'), '$150', tag + ': a bot, what it spent (billed and on subscriptions)');
+      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': and the window that binds');
+      assert.equal(await limit(page, 'bot:goal-manager'), '70% · $20/day', tag + ': a day window binding says day');
+      assert.equal(await amount(page, 'company'), '$771', tag + ': the company adds up everyone');
+      assert.equal(await limit(page, 'company'), '34% · $80/30m', tag + ': against its pool');
+      assert.equal(await amount(page, 'bot:eng-lead'), '$80.00', tag + ': a bot with reports, its own spend');
+      assert.equal(await limit(page, 'bot:eng-lead'), '83% · $3/hour', tag + ': an hour limit not yet moved to 30 minutes still binds');
+      assert.equal(await amount(page, 'group:eng'), '$395', tag + ': a group, everyone under it');
+      assert.equal(await limit(page, 'group:eng'), '42% · $40/30m', tag + ': against its pool');
+      assert.equal(await limit(page, 'group:sales'), '', tag + ': a group with no pool, no limit');
+      assert.equal(await amount(page, 'group:sales'), '$208', tag + ': what it spent');
+      assert.equal(await limit(page, 'bot:sdr'), '', tag + ': a bot with no limit');
       assert.equal(await amount(page, 'person:cara'), '', tag + ': a person with no reports has no spend of its own');
-      assert.equal(await amount(page, 'person:ana'), '$12 · day', tag + ': a person with reports adds them up (Release Manager; the Strategy Bot is a helper)');
+      assert.equal(await amount(page, 'person:ana'), '$100', tag + ': a person with reports adds them up (Release Manager; the Strategy Bot is a helper)');
+      assert.equal(await limit(page, 'bot:release'), '100% · $4/30m', tag + ': a held bot at its limit');
       assert.ok(await page.locator(row('bot:release') + ' .bt-paused').isVisible(), tag + ': a held bot says Paused');
       assert.ok(await page.locator(row('bot:release')).evaluate(el => el.classList.contains('bad')), tag + ': in the fail tone');
       assert.ok(await page.locator(row('bot:builder')).evaluate(el => el.classList.contains('warn')), tag + ': 95% warns');
       assert.equal(await page.locator(row('bot:builder') + ' .bt-bar i').evaluate(el => el.style.width), '95%', tag + ': the bar');
+      assert.equal(await page.locator(row('bot:sdr') + ' .bt-bar').count(), 0, tag + ': no limit, no bar');
       assert.equal(await page.locator(row('person:ana') + ' .bt-chip').innerText(), '3 caps', tag + ': a caps chip');
       assert.ok(await page.locator(row('bot:eng-lead') + ' .bt-chip.waiting').isVisible(), tag + ': a full cap waits');
       assert.equal(await page.locator('.bt-amt').first().evaluate(el => getComputedStyle(el).fontVariantNumeric), 'tabular-nums', tag + ': tabular numerals');
@@ -236,12 +265,31 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       await page.locator('[data-bt-open="bot:sdr"]').waitFor();
       assert.equal((await page.locator('#bt-hot-n').innerText()).trim(), '3', tag + ': how many are near a limit');
       await page.click('[data-bt-hot]');
-      assert.deepEqual(await keys(page), ['company', 'person:ana', 'bot:release', 'group:eng', 'bot:eng-lead', 'bot:builder'], tag + ': Near limit');
+      assert.deepEqual(await keys(page), ['company', 'group:eng', 'bot:eng-lead', 'bot:builder', 'person:ana', 'bot:release'], tag + ': Near limit');
       await shot(page, 'small-desktop-near-limit');
       await page.click('[data-bt-hot]');
 
-      // A bot: its four windows with what it spent; only what changed is sent; a bad amount says which.
+      // The period: 7 days reads each bot's week and the rows follow; limits stay; the choice is kept for the next visit.
+      await page.click('[data-bt-span="7d"]');
+      await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-amt')?.textContent === '$60.00');
+      const week = usage.filter(u => u.group === 'bot').at(-1);
+      assert.equal((Date.parse(week.to) - Date.parse(week.from)) / 864e5, 6, tag + ': 7 days, today too');
+      assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '7 days', tag + ': 7 days picked');
+      assert.ok(await bySpend(page), tag + ': still most spend first');
+      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': a limit does not move with the period');
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.budget')).span), '7d', tag + ': kept');
+      await page.click('[data-bt-span="30d"]');
+      await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-amt')?.textContent === '$150');
+
+      // A bot: where its spend went, then its four windows with what it spent; only what changed is sent; a bad amount says which.
       await edit(page, 'bot:builder');
+      assert.equal(await page.locator('dialog[open] [data-went] h3').innerText(), '30 DAYS · $150', tag + ': the period and its spend');
+      await page.locator('dialog[open] [data-went="tasks"]').waitFor();
+      assert.deepEqual(await page.locator('dialog[open] [data-went="models"] .bt-line > span:first-child').allInnerTexts(), ['claude-sonnet-4-5', 'gpt-5.1'], tag + ': by model');
+      assert.deepEqual(await page.locator('dialog[open] [data-went="models"] .bt-spent').allInnerTexts(), ['$105', '$45.00'], tag + ': with what each cost');
+      assert.deepEqual(await page.locator('dialog[open] [data-went="tasks"] .bt-line > span:first-child').allInnerTexts(),
+        ['Ship the release', 'Chats and other runs', 'Triage new issues', 'Weekly report'], tag + ': the top tasks, none that cost nothing');
+      assert.deepEqual(usage.filter(u => u.group !== 'bot').map(u => [u.group, u.bots]), [['model', ['builder']], ['task', ['builder']]], tag + ': for that bot alone');
       const panel = await page.locator('dialog.bt-panel[open]').boundingBox();
       assert.ok(Math.abs(panel.x + panel.width - DESKTOP.width) < 2 && panel.width <= 440 && panel.height >= DESKTOP.height - 2, tag + ': a panel on the right');
       assert.deepEqual(await page.locator('dialog[open] [data-scope="bot"] .bt-win > span:first-child').allInnerTexts(), ['30 min', 'Day', 'Week', 'Month'], tag + ': four windows');
@@ -258,7 +306,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.equal(await page.inputValue('dialog[open] [data-cap="bot:builder>bot:eng-lead"] input'), '5', tag + ': a new cap starts at 5');
       await page.fill('dialog[open] [data-cap="bot:builder>bot:eng-lead"] input', '4');
       await save(page);
-      await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-amt')?.textContent === '$5.70 / $7.50 · 30m');
+      await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-lim')?.textContent === '76% · $7.50/30m');
 
       // An hour limit not yet moved shows as its own row and is not sent back unless changed.
       await edit(page, 'bot:eng-lead');
@@ -267,8 +315,11 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       await page.fill('dialog[open] input[name="bot.daily_usd"]', '45');
       await save(page);
       // A group's pool, and the company's pool and the default for each bot.
+      usage.length = 0;
       await edit(page, 'group:eng');
       assert.equal(await page.locator('dialog[open] [data-scope="pool"] h3').innerText(), 'POOL', tag + ': a group edits its pool');
+      await page.locator('dialog[open] [data-went="models"]').waitFor();
+      assert.deepEqual(usage.find(u => u.group === 'model').bots.sort(), ['builder', 'eng-lead', 'reviewer', 'web-dev'], tag + ': where a group\'s went covers everyone under it');
       await page.fill('dialog[open] input[name="pool.daily_usd"]', '250');
       await save(page);
       await edit(page, 'company');
@@ -353,13 +404,24 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
     {
       const {page, errors} = await open(browser, {capsStatus: 404});
       assert.equal(await page.locator('.bt-chip').count(), 0, '404: no caps chips');
-      assert.equal(await amount(page, 'bot:builder'), '$5.70 / $6 · 30m', '404: spend still draws');
+      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', '404: spend still draws');
       assert.deepEqual(errors, [], '404: no page errors');
+      await page.close();
+    }
+    // The period's spend not answered: limits still draw, the rows say so once.
+    {
+      const {page, errors} = await open(browser, {usageStatus: 500});
+      assert.equal(await page.locator('#bt-body .bt-note').count(), 1, 'usage down: one note');
+      assert.equal(await amount(page, 'bot:builder'), '', 'usage down: no amount');
+      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', 'usage down: limits still draw');
+      assert.deepEqual(errors, [], 'usage down: no page errors');
       await page.close();
     }
     {
       const {page, errors} = await open(browser, {hash: '#/strategy/budget/bot:sdr'});
       await page.locator('dialog.bt-panel[open][aria-label="SDR"]').waitFor();
+      await page.evaluate(() => { location.hash = '#/overview'; });
+      await page.locator('dialog.bt-panel').waitFor({state: 'detached'});
       assert.deepEqual(errors, [], 'link: no page errors');
       await page.close();
     }
@@ -372,9 +434,10 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.equal(bots, 203, tag + ': 200 bots and 3 helpers');
       const folded = await keys(page);
       assert.ok(folded.length <= 16, tag + ': the groups start folded: ' + folded.length);
-      assert.deepEqual(folded.filter(k => k.startsWith('group:')), ['group:eng', 'group:sales', 'group:mkt', 'group:support', 'group:ops'], tag + ': the groups on top');
+      assert.deepEqual(folded.filter(k => k.startsWith('group:')).sort(), ['group:eng', 'group:mkt', 'group:ops', 'group:sales', 'group:support'], tag + ': the groups on top');
+      assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator(row('company') + ' .bt-n').innerText(), String(5 + bots), tag + ': the company counts everyone');
-      assert.match(await amount(page, 'group:eng'), /^\$[\d,.]+ \/ \$600 · day$/, tag + ': a group pool');
+      assert.match(await limit(page, 'group:eng'), /^\d+% · \$600\/day$/, tag + ': a group pool');
       await shot(page, 'big-desktop');
       // Drawing the whole tree, open, stays quick.
       const ms = await page.evaluate(() => {

@@ -22,7 +22,7 @@ window.mountMeetingImporters = async function (host, options) {
   host.innerHTML = (state.importers || []).filter(i => i.source !== 'fireflies' && (!only || i.source === only)).map(i => {
     const options = ['<option value="">Computer</option>'].concat(machines.map(m =>
       `<option value="${esc(m.id)}"${m.id === i.runner_id ? ' selected' : ''}>${esc(m.label)}${m.platform ? ' (' + esc(m.platform) + ')' : ''}${m.online ? '' : ' - offline'}</option>`)).join('');
-    const facts = i.enabled ? `<p class="muted" data-imp-facts>Last sync ${esc(when(i.last_success))} · last import ${esc(when(i.last_import))} · ${Number(i.imported_total) || 0} imported</p>` : '';
+    const facts = i.enabled ? `<p class="muted" data-imp-facts>Last sync ${esc(when(i.last_succeeded_at))} · last import ${esc(when(i.last_import))} · ${Number(i.imported_total) || 0} imported</p>` : '';
     const error = i.error ? `<p role="alert" data-imp-error>${esc(i.error)}</p>` : '';
     return `<form class="meeting-importer" data-importer="${esc(i.source)}" style="display:grid;gap:8px;padding:12px 0;${only ? '' : 'border-top:1px solid var(--line)'}">
       <div class="row"><strong>${esc(i.name)}</strong><span class="muted" data-imp-status>${esc(labels[i.status] || i.status)}</span></div>
@@ -33,7 +33,7 @@ window.mountMeetingImporters = async function (host, options) {
       <details${only && !i.enabled ? ' open' : ''}><summary>Set up credentials</summary>
         <p class="muted">On that computer, create <code>${esc(i.setup.file)}</code> (mode 600) with:</p>
         <pre>${i.setup.keys.map(k => esc(k) + '=').join('\n')}</pre>
-        <p class="muted">Steps: ${esc(i.setup.doc)}. Check, from the Tico folder: <code>runtime/runner-venv/bin/python -m runner importers-doctor</code></p></details>
+        <p class="muted">Steps: ${esc(i.setup.doc)}. Check, from the Tico folder: <code>runtime/runner-venv/bin/python -m runner_support importers-doctor</code></p></details>
       <p role="status" data-imp-message></p></form>`;
   }).join('') + (machines.length ? '' : '<p class="empty">Add a computer under Computers first.</p>');
   host.querySelectorAll('form[data-importer]').forEach(form => {

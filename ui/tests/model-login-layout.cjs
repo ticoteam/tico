@@ -1,6 +1,6 @@
 // A sign-in begins empty and receives its provider instructions on a later poll. Intrinsic dialog sizing must
-// give that content space in WebKit as well as Chromium, and keep Cancel reachable when the content must scroll.
-const {chromium, webkit} = require('playwright');
+// give that content space in WebKit, and keep Cancel reachable when the content must scroll.
+const {webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -20,10 +20,10 @@ async function check(engine) {
       await page.evaluate(() => {
         window.S = {config: {hosted: false}};
         window.writes = [];
-        window.row = {id: 'fixture', state: 'starting', created: new Date().toISOString(), lines: []};
+        window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
         window.post = async (url, body) => {
           writes.push({url, body});
-          if (url.endsWith('/cancel')) row.state = 'cancelled';
+          if (url.endsWith('/cancel')) row.state = 'canceled';
           if (url.endsWith('/code')) row.code_sent = true;
           return {...row};
         };
@@ -33,7 +33,7 @@ async function check(engine) {
       for (const runtime of ['codex', 'claude']) {
         await page.setViewportSize(viewport);
         await page.evaluate(runtime => {
-          row = {id: 'fixture', state: 'starting', created: new Date().toISOString(), lines: []};
+          row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
           TicoModelLogin.open({runnerId: 'box', runtime, machine: 'Acme computer', switchAccount: true});
         }, runtime);
         const dialog = page.locator('dialog.model-login[open]');
@@ -72,7 +72,7 @@ async function check(engine) {
         assert.ok(geometry.bodyScroll > geometry.bodyHeight, 'long instructions scroll inside the short dialog');
         assert.ok(geometry.actionTop >= 0 && geometry.actionBottom <= geometry.viewport, 'Cancel stays reachable');
         await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
-        await dialog.locator('[data-status][data-state=cancelled]').waitFor();
+        await dialog.locator('[data-status][data-state=canceled]').waitFor();
         assert.match(await dialog.locator('[data-status]').innerText(), /account signed in before still works/);
         await dialog.getByRole('button', {name: 'Close', exact: true}).last().click();
         await dialog.waitFor({state: 'detached'});
@@ -83,6 +83,8 @@ async function check(engine) {
   } finally { await browser.close(); }
 }
 (async () => {
-  for (const engine of [webkit, chromium]) await check(engine);
-  console.log('model sign-in layout: WebKit and Chromium, dynamic instructions, code entry, bounded content and cancel');
+  // WebKit only: the sizing bug was WebKit's (ee04afbc6), and the Chromium dialog flow, code entry and cancel are driven
+  // by model-login (loginHosted), so a second engine here repeated the same layout in the engine that was never wrong.
+  await check(webkit);
+  console.log('model sign-in layout: WebKit, dynamic instructions, code entry, bounded content and cancel');
 })().catch(error => { console.error(error); process.exit(1); });

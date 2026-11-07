@@ -68,7 +68,7 @@ async function lensListPage(load) {
   const names = Object.fromEntries(list.map(l => [l.id, l.name]));
   const prior = r => `<li><a class="lens-past" href="${lensRunHref(r.id)}" data-lens-run-row="${esc(r.id)}">
       <span class="lens-past-top"><b class="lens-name">${esc(r.name || names[r.lens] || r.lens)}</b>${r.on_draft ? '<span class="pill">draft</span>' : ''}${lensStatusPill(r.status)}
-        <span class="muted lens-past-when">${lensWhen(r.created)}</span></span>
+        <span class="muted lens-past-when">${lensWhen(r.created_at)}</span></span>
       ${lensFirstLine(r.result?.summary) ? `<span class="lens-past-sum">${esc(lensFirstLine(r.result.summary))}</span>` : ''}</a></li>`;
   $('#lens-body').innerHTML = `<div class="lens-wrap">${groups || '<p class="muted strat-empty">No lenses</p>'}
     <section class="lens-group" data-lens-group="runs"><h2 class="strat-k">Past runs</h2>
@@ -302,7 +302,7 @@ function lensRunRender(run) {
   if (!body || !LENS) return;
   LENS.watch?.disconnect(); LENS.watch = null;
   const owner = lensMayRun(), result = run.result || {};
-  const meta = [lensWhen(run.created), run.created_by ? esc(goalActorName(run.created_by)) : '', run.strategy_n ? `v${esc(run.strategy_n)}` : ''].filter(Boolean).join(' · ');
+  const meta = [lensWhen(run.created_at), run.created_by ? esc(goalActorName(run.created_by)) : '', run.strategy_n ? `v${esc(run.strategy_n)}` : ''].filter(Boolean).join(' · ');
   const head = `<div class="lens-head"><a class="ghost strat-back lens-back" href="${LENSES_ROUTE}">‹ Lenses</a>
       <h2 class="lens-title">${esc(run.name || run.lens)}</h2>
       <p class="lens-meta">${run.on_draft ? '<span class="pill">draft</span>' : ''}${run.status === 'done' ? '' : lensStatusPill(run.status)}<span>${meta}</span></p></div>`;

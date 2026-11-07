@@ -42,8 +42,10 @@ def bound_socket():
 
 def teammate_tokens(world):
     """Each test token the world accepts, keyed by the teammate it signs in as (human:ana -> ana)."""
-    return {identity.actor.split(":", 1)[1]: token
-            for token, identity in world.app.state.auth.settings.test_identities.items()}
+    return {
+        identity.actor.split(":", 1)[1]: token
+        for token, identity in world.app.state.auth.settings.test_identities.items()
+    }
 
 
 def main(argv=None):
@@ -56,7 +58,7 @@ def main(argv=None):
         parser.error("unknown seed: " + ", ".join(unknown) + "; known: " + ", ".join(sorted(SEEDS)))
     # SystemExit from the handler runs the finally below, so a stopped hub removes its temporary folder.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    world = Org().__enter__()     # starts the clock and the app; the lifespan runs under the world's test client
+    world = Org().__enter__()  # starts the clock and the app; the lifespan runs under the world's test client
     server = thread = None
     try:
         settings = world.app.state.auth.settings
@@ -65,18 +67,29 @@ def main(argv=None):
         settings.public_url = f"http://127.0.0.1:{port}"
         skipped = [name for name in names if SEEDS[name](world) is False]
         # The lifespan already ran under the test client, so uvicorn must not run it again.
-        server = uvicorn.Server(uvicorn.Config(world.app, host="127.0.0.1", port=port, log_level="warning",
-                                               lifespan="off"))
+        server = uvicorn.Server(
+            uvicorn.Config(world.app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        )
         thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
         thread.start()
-        for _ in range(600):   # a count, not a clock: the world's clock is frozen
+        for _ in range(600):  # a count, not a clock: the world's clock is frozen
             if server.started or not thread.is_alive():
                 break
             time.sleep(0.05)
         if not server.started:
             raise RuntimeError("the hub did not start")
-        print(json.dumps({"url": settings.public_url, "seeds": names, "skipped": skipped,
-                          "tokens": teammate_tokens(world), "runner": world.runner["token"]}), flush=True)
+        print(
+            json.dumps(
+                {
+                    "url": settings.public_url,
+                    "seeds": names,
+                    "skipped": skipped,
+                    "tokens": teammate_tokens(world),
+                    "runner": world.runner["token"],
+                }
+            ),
+            flush=True,
+        )
         while True:
             time.sleep(1)
     finally:

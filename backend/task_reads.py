@@ -29,7 +29,7 @@ from fastapi.responses import Response
 
 from . import events as E
 
-CAP = 500           # more changed tasks than one page: a full read is no dearer
+CAP = 500  # more changed tasks than one page: a full read is no dearer
 
 
 def access(visible_sql):
@@ -41,8 +41,9 @@ def access(visible_sql):
 def names(c):
     """A tag of the display names an answer is annotated with (backend/names.py)."""
     digest = hashlib.sha256()
-    for row in c.execute("SELECT 'human:'||id, name FROM humans UNION ALL SELECT 'bot:'||slug, display_name FROM bots "
-                         "ORDER BY 1"):
+    for row in c.execute(
+        "SELECT 'human:'||id, name FROM humans UNION ALL SELECT 'bot:'||id, display_name FROM bots ORDER BY 1"
+    ):
         digest.update(f"{row[0]}={row[1]}\n".encode())
     return digest.hexdigest()[:12]
 
@@ -108,9 +109,10 @@ def changed(c, after, visible_sql):
     if seq > newest or seq < floor:
         return None
     was = {}
-    for subject, ref, kind in c.execute("SELECT subject_id, ref, kind FROM changes WHERE topic='tasks' AND seq>? "
-                                        "ORDER BY seq", (seq,)):
-        if kind == "bulk":          # one change to many tasks (events.FAN_CAP): read in full
+    for subject, ref, kind in c.execute(
+        "SELECT subject_id, ref, kind FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
+    ):
+        if kind == "bulk":  # one change to many tasks (events.FAN_CAP): read in full
             return None
         if subject:
             was.setdefault(subject, [])
@@ -132,7 +134,8 @@ def around(c, ids):
         "UNION SELECT r.to_task FROM task_relations r JOIN up ON r.from_task=up.id WHERE r.kind='parent') "
         "SELECT id FROM up UNION SELECT to_task FROM task_relations WHERE from_task IN (SELECT id FROM changed) "
         "UNION SELECT from_task FROM task_relations WHERE to_task IN (SELECT id FROM changed)",
-        (json.dumps(list(ids)),))
+        (json.dumps(list(ids)),),
+    )
     return list(dict.fromkeys([*ids, *(row[0] for row in found)]))
 
 
@@ -143,8 +146,13 @@ def gone(c, visible_sql, was, matched):
     missing = [tid for tid in was if tid not in matched]
     if not missing:
         return out
-    readable = {row[0] for row in c.execute(
-        f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})", (json.dumps(missing),))}
+    readable = {
+        row[0]
+        for row in c.execute(
+            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(missing),),
+        )
+    }
     for tid in missing:
         if tid in readable or any(_could_read(c, visible_sql, tid, ref) for ref in was[tid]):
             out.append(tid)
@@ -153,9 +161,21 @@ def gone(c, visible_sql, was, matched):
 
 def _could_read(c, visible_sql, tid, ref):
     try:
-        # A change logged before a private task could have a guest (hubdb.task_reach) has three parts.
-        owner, requester, private, guest = (json.loads(ref) + [None])[:4]
+        # (owner, requester, private, readers): an older change has three parts, or a one-person `guest` fourth.
+        owner, requester, private, readers = (json.loads(ref) + [None])[:4]
     except (TypeError, ValueError):
         return False
-    return c.execute(f"SELECT 1 FROM (SELECT ? AS id, ? AS owner, ? AS requester, ? AS private, ? AS guest) "
-                     f"WHERE {visible_sql}", (tid, owner, requester, private, guest)).fetchone() is not None
+    if isinstance(readers, list):
+        readers = json.dumps(readers)
+    elif isinstance(readers, str) and readers and not readers.startswith("["):
+        readers = json.dumps([readers])
+    elif not isinstance(readers, str):
+        readers = None
+    return (
+        c.execute(
+            f"SELECT 1 FROM (SELECT ? AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS readers) tasks "
+            f"WHERE {visible_sql}",
+            (tid, owner, requester, private, readers),
+        ).fetchone()
+        is not None
+    )

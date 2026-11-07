@@ -62,6 +62,7 @@ start, through a staging folder renamed into place.
 
 All Docker and system calls go through one `System`, so the tests run every command with a fake.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -74,6 +75,7 @@ import ipaddress
 import json
 import os
 import re
+import urllib.parse
 import secrets
 import shutil
 import socket
@@ -102,12 +104,34 @@ ROUTER_CONTAINER, EDGE_PROJECT = "tico-cell-router", "tico-cell"
 ROUTER_HEALTH_HOST, ROUTER_HEALTH_PATH = "cell-health.invalid", "/cell-healthz"
 PROJECT_PREFIX = "tico-"
 LABEL = "tico.cell.company"
-SERVER_UID = 10001                      # the server image's user (Dockerfile)
-TUNNEL_UID = 65532                      # cloudflared's image runs as nonroot (uid and gid 65532)
+SERVER_UID = 10001  # the server image's user (Dockerfile)
+TUNNEL_UID = 65532  # cloudflared's image runs as nonroot (uid and gid 65532)
 
 # Never given to a company: our own names under the domain.
-RESERVED = frozenset({"hub", "admin", "accounts", "updates", "preview", "runner", "www", "api", "app", "mail", "status",
-                      "docs", "help", "support", "hq", "gateway", "hooks", "cloud", "tico", "team"})
+RESERVED = frozenset(
+    {
+        "hub",
+        "admin",
+        "accounts",
+        "updates",
+        "preview",
+        "runner",
+        "www",
+        "api",
+        "app",
+        "mail",
+        "status",
+        "docs",
+        "help",
+        "support",
+        "hq",
+        "gateway",
+        "hooks",
+        "cloud",
+        "tico",
+        "team",
+    }
+)
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$")
 MEMORY_RE = re.compile(r"^([1-9][0-9]{0,5})([mg])$")
 MEMORY_DEFAULT, MEMORY_MIN_MB, MEMORY_MAX_MB = "2g", 512, 16 * 1024
@@ -115,24 +139,75 @@ CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 SECRET_MAX = 64 * 1024
 HOSTED_DEFAULT, SIGNIN_LABEL = "invited", "Tico account"
 MAX_ALIASES = 5
+# A company's page host (docs/company-page.md): its public files come from a folder of the cell's own, mounted into the
+# company's server and read by the router. Only these three paths are served from the folder; the rest is the server's.
+PAGES = "pages"  # under the cell root: one folder per company with a page host
+PAGE_MOUNT = "/company-page-public"  # where the company's server writes its release folders (backend/company_page)
+PAGE_MOUNT_ROUTER = "/pages"  # where the router reads every company's folder, read-only
+PAGE_CACHE = "public, max-age=60"
+PAGE_PATHS = ("/", "/data.json", "/feed.xml", "/assets/*")  # the public files a page host serves from its folder
+# Requests with a reader's cookie or any query string go to the server: they are signed-in or paged reads.
+READER_COOKIE_GLOB = "*tico_reader=*"
+# The app's own cookies, removed from what a page host sends to the server (the reader's cookie stays): the bare or
+# __Host- names of the session and sign-in cookies, and this install's local session.
+APP_COOKIES_RE = "(?:^|;)[ ]*(?:__Host-)?tico_(?:session|login|local_session)[^=;]*=[^;]*"
 
 # --env-file: what a moved install brings. Never carried: keys the cell sets itself (with a value, in this render: see
 # `add`), the ones below (the cell's own or read back from .env by the next `add`, so a carried one would feed back),
 # and what belongs to a single-company install only.
 ENV_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
-CELL_ENV_KEYS = frozenset({
-    "TICO_TEAM_NAME", "TICO_COMPANY_NAME", "TICO_OWNER_EMAIL", "TICO_DOMAIN", "TICO_GATEWAY_INVITE",
-    "TICO_OWNER_LINK_HASH", "TICO_BACKUP_URL", "TICO_BACKUP_REGION", "TICO_BACKUP_ENDPOINT", "LITESTREAM_ACCESS_KEY_ID",
-    "LITESTREAM_SECRET_ACCESS_KEY", "TICO_COMPANY_FILE", "TICO_COMPANY_FILE_SHA256", "TICO_COMPANY_FILE_B64",
-    "TICO_COMPANY_FILE_S3", "TICO_COMPANY_FILE_S3_REGION", "TICO_COMPANY_FILE_DIR", "TICO_SAMPLE_COMPANY",
-    "TICO_UPDATES", "TICO_CELL", "TICO_HOSTED", "TICO_AUTH_PROXY", "TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID",
-    "TICO_OIDC_CLIENT_SECRET", "TICO_OIDC_LABEL", "TICO_ACCESS_ISSUER", "TICO_ACCESS_AUDIENCE", "TICO_TRUSTED_PROXIES",
-    "TICO_CLIENT_IP_HEADER", "TICO_EDGE_SUBNET", "TICO_EDGE_DYNAMIC_RANGE", "TICO_CLOUDFLARED_ADDRESS",
-    "TICO_INSTALL_PRESET", "TICO_MODELS_PRESET", "TICO_SUPPORT",
-    "CLOUDFLARE_TUNNEL_TOKEN", "COMPOSE_PROFILES", "COMPOSE_PROJECT_NAME", "TICO_UPDATER_URL", "TICO_TAG", "TICO_PORT",
-    "TICO_EXPECTED_AWS_ACCOUNT", "TICO_EXPECTED_AWS_ROLE"})
+CELL_ENV_KEYS = frozenset(
+    {
+        "TICO_TEAM_NAME",
+        "TICO_COMPANY_NAME",
+        "TICO_OWNER_EMAIL",
+        "TICO_DOMAIN",
+        "TICO_GATEWAY_INVITE",
+        "TICO_OWNER_LINK_HASH",
+        "TICO_BACKUP_URL",
+        "TICO_BACKUP_REGION",
+        "TICO_BACKUP_ENDPOINT",
+        "LITESTREAM_ACCESS_KEY_ID",
+        "LITESTREAM_SECRET_ACCESS_KEY",
+        "TICO_COMPANY_FILE",
+        "TICO_COMPANY_FILE_SHA256",
+        "TICO_COMPANY_FILE_B64",
+        "TICO_COMPANY_FILE_S3",
+        "TICO_COMPANY_FILE_S3_REGION",
+        "TICO_COMPANY_FILE_DIR",
+        "TICO_SAMPLE_COMPANY",
+        "TICO_UPDATES",
+        "TICO_CELL",
+        "TICO_HOSTED",
+        "TICO_AUTH_PROXY",
+        "TICO_OIDC_ISSUER",
+        "TICO_OIDC_CLIENT_ID",
+        "TICO_OIDC_CLIENT_SECRET",
+        "TICO_OIDC_LABEL",
+        "TICO_ACCESS_ISSUER",
+        "TICO_ACCESS_AUDIENCE",
+        "TICO_TRUSTED_PROXIES",
+        "TICO_CLIENT_IP_HEADER",
+        "TICO_EDGE_SUBNET",
+        "TICO_EDGE_DYNAMIC_RANGE",
+        "TICO_CLOUDFLARED_ADDRESS",
+        "TICO_INSTALL_PRESET",
+        "TICO_MODELS_PRESET",
+        "TICO_SUPPORT",
+        "CLOUDFLARE_TUNNEL_TOKEN",
+        "COMPOSE_PROFILES",
+        "COMPOSE_PROJECT_NAME",
+        "TICO_UPDATER_URL",
+        "TICO_TAG",
+        "TICO_PORT",
+        "TICO_EXPECTED_AWS_ACCOUNT",
+        "TICO_EXPECTED_AWS_ROLE",
+        "TICO_READER_ORIGIN",
+        "TICO_COMPANY_PAGE_DIR",
+    }
+)
 CELL_ENV_PREFIXES = ("TICO_CADDY", "TICO_TUNNEL")
-IMPORT_STAGING = ".data-import"         # beside data/: an import is unpacked here, then renamed into place
+IMPORT_STAGING = ".data-import"  # beside data/: an import is unpacked here, then renamed into place
 
 # Index i: port 20000+i, default network the i-th /24 of 10.208.0.0/12, edge network the i-th /28 of 10.224.0.0/16.
 PORT_BASE, MAX_COMPANIES = 20000, 4000
@@ -141,7 +216,7 @@ EDGE_NETS = ipaddress.ip_network("10.224.0.0/16")
 
 # The rule that keeps containers from the instance's role. IMDSv2 with hop limit 1 is the second lock (docs/cell.md).
 IMDS_RULE = ["DOCKER-USER", "-d", "169.254.169.254/32", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"]
-IMDS_LINE = "-A " + " ".join(IMDS_RULE)     # how `iptables -S DOCKER-USER` prints it
+IMDS_LINE = "-A " + " ".join(IMDS_RULE)  # how `iptables -S DOCKER-USER` prints it
 FIREWALL_SCRIPT = "usr/local/sbin/tico-cell-firewall"
 FIREWALL_UNIT = "etc/systemd/system/tico-cell-firewall.service"
 DOCKER_DROPIN = "etc/systemd/system/docker.service.d/tico-cell.conf"
@@ -151,12 +226,12 @@ DAEMON_SETTINGS = {"log-driver": "json-file", "log-opts": {"max-size": "10m", "m
 HEALTH_TIMEOUT = 300
 SNAPSHOTS_KEPT = 2
 DB_FILES = ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm")
-STOPPED = ("", "exited", "created", "dead")    # container states in which nothing has the database open
+STOPPED = ("", "exited", "created", "dead")  # container states in which nothing has the database open
 # Each company's updater (setup/cell_updater.py): this port on its default network's gateway address, nowhere else.
 UPDATER_PORT = 8090
 UPDATER_UNIT = "etc/systemd/system/tico-cell-updater.service"
 UPDATER_SERVICE = "tico-cell-updater.service"
-TOKEN_NAME = "updater-token"            # in <company>/control, the server's /control (docker/entrypoint.sh reads it)
+TOKEN_NAME = "updater-token"  # in <company>/control, the server's /control (docker/entrypoint.sh reads it)
 # The wake service (setup/cell_wake.py): the router sends a sleeping company's hosts here, naming the company in a
 # header the route itself sets (a visitor's own copy of it is replaced).
 WAKE_ADDRESS, WAKE_PORT = "127.0.0.1", 8082
@@ -170,12 +245,24 @@ HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 # A config reload (every add, remove, sleep and wake) leaves open WebSockets this long before closing them.
 STREAM_CLOSE_DELAY = "5m"
 HOLD_BODY = "Tico is starting. Try again in a few seconds."
-HEALTH_POLL = 0.15                      # seconds between /healthz probes while a server starts
+# Routes (`cell route`): a service on this host that is not a company (Tico's public demo), on its own hosts and
+# loopback ports, kept in <root>/routes/<name>.json. Its ports stay clear of the companies' and the cell's own.
+ROUTES = "routes"
+ROUTE_PORTS = range(1024, PORT_BASE)
+CELL_PORTS = frozenset(
+    {2019, ROUTER_PORT, ROUTER_PORT + 1, WAKE_PORT, UPDATER_PORT}
+)  # Caddy admin, router, tunnel metrics
+MAX_ROUTE_HOSTS, MAX_ROUTE_PORTS = 5, 2
+NOINDEX = "noindex, nofollow"
+ROBOTS_TXT = "User-agent: *\nDisallow: /\n"  # a literal newline inside a quoted Caddyfile token is kept
+HEALTH_POLL = 0.15  # seconds between /healthz probes while a server starts
 # A timed wake (`sleep --wake-at`): the record's wake_at, always UTC in this format, at most WAKE_AT_DAYS out when set.
 WAKE_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 WAKE_AT_DAYS = 31
-WAKE_AT_SHAPE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
-                           r"(Z|[+-][0-9]{2}:[0-9]{2})")
+WAKE_AT_SHAPE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
+    r"(Z|[+-][0-9]{2}:[0-9]{2})"
+)
 # A company's sleep policy (`set-sleep`, `add --sleep-minutes`): whole minutes idle before it sleeps; 0 = never sleeps.
 SLEEP_MINUTES_MAX = 1440
 
@@ -241,8 +328,9 @@ class System:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or (info.st_mode & 0o077 and info.st_uid != 0):
             os.close(fd)
-            raise CellError("secret_file", "--import-data: a regular file readable by its owner only (chmod 600), "
-                                           "or owned by root")
+            raise CellError(
+                "secret_file", "--import-data: a regular file readable by its owner only (chmod 600), or owned by root"
+            )
         return os.fdopen(fd, "rb")
 
     def linux(self) -> bool:
@@ -250,6 +338,7 @@ class System:
 
     def latest_release(self) -> str:
         from .wizard import _latest_release
+
         return _latest_release()
 
     def release_published(self, tag: str) -> bool | None:
@@ -261,7 +350,8 @@ class System:
                 r.read(1 << 20)
                 return r.status == 200
         except urllib.error.HTTPError as e:
-            return False if e.code == 404 else None
+            with e:
+                return False if e.code == 404 else None
         except OSError:
             return None
 
@@ -274,11 +364,15 @@ class System:
 
 # --- inputs ----------------------------------------------------------------------------------------------------
 
+
 def check_slug(value: str, *, new: bool = False) -> str:
     slug = value or ""
     if not SLUG_RE.fullmatch(slug) or "--" in slug:
-        raise CellError("bad_slug", "--company is 1 to 40 lowercase letters, digits and single hyphens, starting and "
-                                    "ending with a letter or digit")
+        raise CellError(
+            "bad_slug",
+            "--company is 1 to 40 lowercase letters, digits and single hyphens, starting and "
+            "ending with a letter or digit",
+        )
     if new and slug in RESERVED:
         raise CellError("reserved_name", f"{slug} is reserved for Tico's own use")
     return slug
@@ -295,8 +389,9 @@ def check_memory(value: str) -> str:
 def check_sleep_minutes(value: str, flag: str) -> int:
     text = (value or "").strip()
     if not re.fullmatch(r"[0-9]{1,4}", text) or int(text) > SLEEP_MINUTES_MAX:
-        raise CellError("bad_args", f"{flag} is a whole number of minutes from 0 to {SLEEP_MINUTES_MAX} "
-                                    "(0 = never sleeps)")
+        raise CellError(
+            "bad_args", f"{flag} is a whole number of minutes from 0 to {SLEEP_MINUTES_MAX} (0 = never sleeps)"
+        )
     return int(text)
 
 
@@ -330,6 +425,19 @@ def check_host(value: str, flag: str, cell_domain: str) -> str:
     return host
 
 
+def refuse_server_host(host: str, env: dict[str, str], flag: str) -> None:
+    """bad_domain when a page host is the app's, visuals' or runners' host in the company's settings: its server refuses
+    to start with that reader origin (backend/company_page/reader_app.py)."""
+    for key in ("TICO_PUBLIC_URL", "TICO_VISUAL_ORIGIN", "TICO_RUNNER_URL"):
+        value = (env.get(key) or "").strip()
+        try:
+            other = urllib.parse.urlsplit(value).hostname if value else None  # as backend/visuals.py hostname()
+        except ValueError:
+            other = None
+        if host and other and other.lower() == host:
+            raise CellError("bad_domain", f"{flag} {host} is the company's {key}")
+
+
 def carried_env(text: str) -> dict[str, str]:
     """--env-file: KEY=VALUE lines (comments and blank lines allowed), read as the cell reads .env. The errors name the
     line, never a value."""
@@ -354,6 +462,7 @@ def check_members(members: list) -> int:
     whole: an absolute name, a `..`, any symlink (the server makes none), a device, fifo or other special file, and an
     archive without hub.sqlite at its top (a tar of the folder itself, not its contents, would start an empty company).
     The size of its files in bytes."""
+
     def inside(name: str) -> str:
         parts = [p for p in name.split("/") if p not in ("", ".")]
         if name.startswith("/") or ".." in parts:
@@ -377,8 +486,9 @@ def check_members(members: list) -> int:
         if not name and not m.isdir():
             raise CellError("bad_archive", "--import-data: a member has no name")
     if "hub.sqlite" not in files:
-        raise CellError("bad_archive", "--import-data: no hub.sqlite at its top; archive the contents of /data "
-                                       "(tar -C /data .)")
+        raise CellError(
+            "bad_archive", "--import-data: no hub.sqlite at its top; archive the contents of /data (tar -C /data .)"
+        )
     return total
 
 
@@ -410,8 +520,11 @@ class Parser(argparse.ArgumentParser):
 
 
 def parser() -> Parser:
-    p = Parser(prog="python3 -m setup cell", description="Many companies' Tico servers on one shared host (docs/cell.md). "
-               "Prints one JSON object. Secrets come only from 0600 files.")
+    p = Parser(
+        prog="python3 -m setup cell",
+        description="Many companies' Tico servers on one shared host (docs/cell.md). "
+        "Prints one JSON object. Secrets come only from 0600 files.",
+    )
     sub = p.add_subparsers(dest="action", required=True, parser_class=Parser)
 
     def cmd(name, help):
@@ -422,12 +535,28 @@ def parser() -> Parser:
     i = cmd("init", "once per host: Docker, the router, the tunnel and the metadata firewall")
     i.add_argument("--tunnel-token-file", metavar="F", help="the Cloudflare tunnel's token (0600); kept for later runs")
     i.add_argument("--domain", help="the domain every company is a name under (default tico.team, or the saved one)")
+    i.add_argument(
+        "--page-domain",
+        metavar="DOMAIN",
+        help="the domain of the companies' page hosts (docs/company-page.md), "
+        "one wildcard route for all of them; kept when left out, \"\" clears it",
+    )
     a = cmd("add", "create or converge one company's server; answers once /healthz answers through the router")
     a.add_argument("--company", required=True, metavar="SLUG")
     a.add_argument("--domain", required=True, help="<slug>.<the cell's domain>, or with --own-domain any hostname")
     a.add_argument("--own-domain", action="store_true", help="staff, moving an install: --domain is its own hostname")
-    a.add_argument("--alias", action="append", metavar="HOST",
-                   help=f"another hostname for the same server (repeat, at most {MAX_ALIASES}); replaces the saved list")
+    a.add_argument(
+        "--alias",
+        action="append",
+        metavar="HOST",
+        help=f"another hostname for the same server (repeat, at most {MAX_ALIASES}); replaces the saved list",
+    )
+    a.add_argument(
+        "--page-host",
+        metavar="HOST",
+        help="the company's public page's hostname, such as acme.tico.page: its "
+        "files are served from the cell; kept when left out, \"\" clears it",
+    )
     a.add_argument("--owner-email", required=True)
     a.add_argument("--auth", required=True, choices=["oidc"])
     a.add_argument("--issuer", required=True)
@@ -443,29 +572,54 @@ def parser() -> Parser:
     a.add_argument("--version", help="the release to run, vX.Y.Z (default the installer's own release)")
     a.add_argument("--hosted", choices=list(st.HOSTED), help=f"TICO_HOSTED (default {HOSTED_DEFAULT})")
     a.add_argument("--signin-label", help=f"the sign-in button's name (default \"{SIGNIN_LABEL}\")")
-    a.add_argument("--env-file", metavar="F", help="settings carried from a moved install, KEY=VALUE (0600); kept "
-                   "in extra.env, replaced when given again")
-    a.add_argument("--import-data", metavar="FILE", help="a moved install's /data as .tar or .tar.gz, unpacked into an "
-                   "empty data folder before the first start")
-    a.add_argument("--sleep-minutes", metavar="N", help=f"the sleep policy: idle minutes before it sleeps, 0 to "
-                   f"{SLEEP_MINUTES_MAX} (0 = never); kept from the record when left out")
+    a.add_argument(
+        "--env-file",
+        metavar="F",
+        help="settings carried from a moved install, KEY=VALUE (0600); kept in extra.env, replaced when given again",
+    )
+    a.add_argument(
+        "--import-data",
+        metavar="FILE",
+        help="a moved install's /data as .tar or .tar.gz, unpacked into an empty data folder before the first start",
+    )
+    a.add_argument(
+        "--sleep-minutes",
+        metavar="N",
+        help=f"the sleep policy: idle minutes before it sleeps, 0 to "
+        f"{SLEEP_MINUTES_MAX} (0 = never); kept from the record when left out",
+    )
     a.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     cmd("list", "every company on this host")
-    for name, help in (("status", "one company"), ("stop", "stop one company's server; its data stays"),
-                       ("start", "start it again; answers once /healthz answers"),
-                       ("sleep", "stop its server; its first request starts it again (the wake service)"),
-                       ("wake", "start a sleeping company's server; answers once /healthz answers")):
+    for name, help in (
+        ("status", "one company"),
+        ("stop", "stop one company's server; its data stays"),
+        ("start", "start it again; answers once /healthz answers"),
+        ("sleep", "stop its server; its first request starts it again (the wake service)"),
+        ("wake", "start a sleeping company's server; answers once /healthz answers"),
+    ):
         c = cmd(name, help)
         c.add_argument("--company", required=True, metavar="SLUG")
         if name in ("start", "wake"):
             c.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT)
         if name == "sleep":
-            c.add_argument("--wake-at", metavar="TIME", help="a timed wake: an ISO-8601 UTC time such as "
-                           "2026-10-30T18:00:00Z, at most 31 days out; the wake service starts the company then")
+            c.add_argument(
+                "--wake-at",
+                metavar="TIME",
+                help="a timed wake: an ISO-8601 UTC time such as "
+                "2026-10-30T18:00:00Z, at most 31 days out; the wake service starts the company then",
+            )
     z = cmd("set-sleep", "a company's sleep policy, which its server reads (GET /sleep); no policy until set")
     z.add_argument("--company", required=True, metavar="SLUG")
-    z.add_argument("--minutes", required=True, metavar="N|default",
-                   help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy")
+    z.add_argument(
+        "--minutes",
+        required=True,
+        metavar="N|default",
+        help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy",
+    )
+    h = cmd("set-page-host", "a running company's page host (docs/company-page.md), without add's sign-in settings")
+    h.add_argument("--company", required=True, metavar="SLUG")
+    h.add_argument("--host", required=True, help="such as acme.tico.page; \"\" clears it (the folder is kept)")
+    h.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -473,10 +627,39 @@ def parser() -> Parser:
     r = cmd("remove", "remove one company's containers, route and (unless --keep-data) its folder")
     r.add_argument("--company", required=True, metavar="SLUG")
     r.add_argument("--keep-data", action="store_true", help="keep its folder, data and port for a later add")
+    o = cmd("route", "a service on this host that is not a company (the public demo): its hosts to its loopback ports")
+    o.add_argument("op", choices=["set", "remove", "list"])
+    o.add_argument("--name", metavar="NAME", help="the route's name (a slug)")
+    o.add_argument("--host", action="append", metavar="HOST", help=f"a hostname (repeat, at most {MAX_ROUTE_HOSTS})")
+    o.add_argument(
+        "--port",
+        action="append",
+        type=int,
+        metavar="PORT",
+        help=f"a loopback port (repeat, at most {MAX_ROUTE_PORTS}): the first healthy one is used",
+    )
+    o.add_argument(
+        "--noindex",
+        action="store_true",
+        help="X-Robots-Tag: noindex, nofollow and a robots.txt that disallows everything",
+    )
+    o.add_argument(
+        "--if-router-current",
+        action="store_true",
+        help="refuse (router_changed) unless the router's "
+        "file is what this checkout writes, checked under the cell lock",
+    )
+    o.add_argument(
+        "--router-only",
+        action="store_true",
+        help="leave the tunnel's routes for a later change (no "
+        "tunnel restart); the answer's tunnel_pending says whether one is due",
+    )
     return p
 
 
 # --- the cell --------------------------------------------------------------------------------------------------
+
 
 def _write_atomic(path: Path, text: str, mode: int = 0o644) -> bool:
     """Replace `path` in one step (a reader sees the old file or the new one); False when it already holds `text`."""
@@ -510,13 +693,18 @@ def networks(index: int) -> dict[str, str]:
     default = ipaddress.ip_network((int(DEFAULT_NETS.network_address) + index * 256, 24))
     edge = ipaddress.ip_network((int(EDGE_NETS.network_address) + index * 16, 28))
     base = int(edge.network_address)
-    return {"default_subnet": str(default), "default_gateway": str(default.network_address + 1),
-            "edge_subnet": str(edge), "edge_range": str(ipaddress.ip_network((base + 8, 29))),
-            "edge_gateway": str(edge.network_address + 1), "caddy_address": str(edge.network_address + 2),
-            "cloudflared_address": str(edge.network_address + 3)}
+    return {
+        "default_subnet": str(default),
+        "default_gateway": str(default.network_address + 1),
+        "edge_subnet": str(edge),
+        "edge_range": str(ipaddress.ip_network((base + 8, 29))),
+        "edge_gateway": str(edge.network_address + 1),
+        "caddy_address": str(edge.network_address + 2),
+        "cloudflared_address": str(edge.network_address + 3),
+    }
 
 
-def router_config(companies: list[dict]) -> str:
+def router_config(companies: list[dict], routes: list[dict] = ()) -> str:
     """The router's Caddyfile: each company's domain and aliases to its loopback port, anything else a 404. Plain HTTP on
     loopback only: the tunnel in front holds TLS. The forwarded scheme is https because that is what the visitor used.
 
@@ -529,85 +717,313 @@ def router_config(companies: list[dict]) -> str:
     leaves WebSockets open for STREAM_CLOSE_DELAY.
 
     A sleeping company's hosts go to the wake service instead, with the company named in WAKE_HEADER by the route
-    itself (header_up replaces any copy the visitor sent). A stopped one is answered 503 at once."""
-    lines = ["# Written by `python3 -m setup cell`; regenerated whenever a company is added, removed, stopped, started, "
-             "put to sleep or woken. Do not edit.",
-             "{", "\tadmin localhost:2019", "\tauto_https off", "\tpersist_config off", f"\thttp_port {ROUTER_PORT}",
-             f"\tdefault_bind {ROUTER_ADDRESS}", "}", ""]
-    held = [f"\t\tlb_try_duration {HOLD_FOR}", f"\t\tlb_try_interval {HOLD_EVERY}"]
-    errors = ["\thandle_errors {", "\t\theader Retry-After 5", f"\t\trespond \"{HOLD_BODY}\" 503", "\t}"]
+    itself (header_up replaces any copy the visitor sent). A stopped one is answered 503 at once.
+
+    A page host (page_site) serves its three public paths from disk first, and only those; see page_site. Routes
+    (`cell route`, route_site) come after every company, before the catch-all."""
+    lines = [
+        "# Written by `python3 -m setup cell`; regenerated whenever a company is added, removed, stopped, started, "
+        "put to sleep or woken. Do not edit.",
+        "{",
+        "\tadmin localhost:2019",
+        "\tauto_https off",
+        "\tpersist_config off",
+        f"\thttp_port {ROUTER_PORT}",
+        f"\tdefault_bind {ROUTER_ADDRESS}",
+        "}",
+        "",
+    ]
     for c in sorted(companies, key=lambda c: c["domain"]):
-        sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in hosts_of(c))
-        state = c.get("state")
-        if state == "stopped":
-            lines += [f"{sites} {{", "\trespond \"This Tico company is stopped.\" 503", "}", ""]
-        elif state == "sleeping":
-            lines += [f"{sites} {{", f"\treverse_proxy {WAKE_ADDRESS}:{WAKE_PORT} {{",
-                      f"\t\theader_up {WAKE_HEADER} {c['slug']}", "\t\theader_up X-Forwarded-Proto https", *held,
-                      "\t\tflush_interval -1", "\t}", *errors, "}", ""]
-        else:
-            lines += [f"{sites} {{", f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
-                      "\t\theader_up X-Forwarded-Proto https", *held, f"\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
-                      "\t}", *errors, "}", ""]
-    lines += [f"http://:{ROUTER_PORT} {{", f"\trespond {ROUTER_HEALTH_PATH} \"ok\" 200",
-              "\trespond \"No Tico company at this address.\" 404", "}"]
+        sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in [c["domain"], *c.get("aliases", [])])
+        lines += company_site(c, sites)
+        if c.get("page_host"):
+            lines += page_site(c)
+    for r in sorted(routes, key=lambda r: r["name"]):
+        lines += route_site(r)
+    lines += [
+        f"http://:{ROUTER_PORT} {{",
+        f"\trespond {ROUTER_HEALTH_PATH} \"ok\" 200",
+        "\trespond \"No Tico company at this address.\" 404",
+        "}",
+    ]
     return "\n".join(lines) + "\n"
 
 
+HELD = [f"\t\tlb_try_duration {HOLD_FOR}", f"\t\tlb_try_interval {HOLD_EVERY}"]
+HELD_ERRORS = ["\thandle_errors {", "\t\theader Retry-After 5", f"\t\trespond \"{HOLD_BODY}\" 503", "\t}"]
+
+
+def company_site(c: dict, sites: str) -> list[str]:
+    """One company's domain (and aliases) block: its server, the wake service while it sleeps, or a 503 when stopped."""
+    state = c.get("state")
+    if state == "stopped":
+        return [f"{sites} {{", "\trespond \"This Tico company is stopped.\" 503", "}", ""]
+    if state == "sleeping":
+        return [
+            f"{sites} {{",
+            f"\treverse_proxy {WAKE_ADDRESS}:{WAKE_PORT} {{",
+            f"\t\theader_up {WAKE_HEADER} {c['slug']}",
+            "\t\theader_up X-Forwarded-Proto https",
+            *HELD,
+            "\t\tflush_interval -1",
+            "\t}",
+            *HELD_ERRORS,
+            "}",
+            "",
+        ]
+    return [
+        f"{sites} {{",
+        f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
+        "\t\theader_up X-Forwarded-Proto https",
+        *HELD,
+        f"\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
+        "\t}",
+        *HELD_ERRORS,
+        "}",
+        "",
+    ]
+
+
+def page_site(c: dict) -> list[str]:
+    """A page host: GET or HEAD of exactly `/`, `/data.json` or `/feed.xml`, or of a file under `/assets/`, with no reader
+    cookie and no query string, is a file from the company's `current` release (`index.html` for `/`). A missing file
+    falls through to the company's
+    server, so an old or empty folder costs nothing. Everything else on the host goes to the server, or to the wake
+    service while it sleeps: those are the same proxies as the company's own host, with the same hold. The router
+    removes the Authorization header and the app's cookies from every request it sends on, so a visitor's bearer token
+    or app session never reaches the company's server through its page host. A stopped company answers 503 as its
+    other hosts do; its files stay in place for when it starts again.
+
+    The folder is the company's own (`<root>/pages/<slug>`, mounted read-only here at /pages): a route names only this
+    company's folder, and the slug was validated when the record was made."""
+    root = f"{PAGE_MOUNT_ROUTER}/{c['slug']}/current"
+    site = f"http://{c['page_host']}:{ROUTER_PORT}"
+    if c.get("state") == "stopped":
+        return [f"{site} {{", "\trespond \"This Tico company is stopped.\" 503", "}", ""]
+    guard = [
+        "\t\tmethod GET HEAD",
+        f"\t\tnot header Cookie {READER_COOKIE_GLOB}",
+        "\t\texpression \"{http.request.uri.query} == ''\"",
+    ]
+    lines = [f"{site} {{", "\trequest_header -Authorization", f"\trequest_header Cookie \"{APP_COOKIES_RE}\" \"\""]
+    for name, paths, file in (
+        ("page_index", "/", "index.html"),
+        ("page_files", "/data.json /feed.xml", "{path}"),
+        ("page_assets", "/assets/*", "{path}"),
+    ):
+        lines += [
+            f"\t@{name} {{",
+            *guard,
+            f"\t\tpath {paths}",
+            "\t\tfile {",
+            f"\t\t\troot {root}",
+            f"\t\t\ttry_files {file}",
+            "\t\t}",
+            "\t}",
+            f"\thandle @{name} {{",
+            f"\t\troot * {root}",
+            f"\t\theader Cache-Control \"{PAGE_CACHE}\"",
+            "\t\theader X-Content-Type-Options nosniff",
+            "\t\tfile_server",
+            "\t}",
+        ]
+    lines += ["\thandle {", *("\t" + line for line in proxy_lines(c)), "\t}", *HELD_ERRORS, "}", ""]
+    return lines
+
+
+def proxy_lines(c: dict) -> list[str]:
+    """The reverse proxy for an awake or sleeping company (the same as its domain's, so a page host holds alike)."""
+    if c.get("state") == "sleeping":
+        return [
+            f"\treverse_proxy {WAKE_ADDRESS}:{WAKE_PORT} {{",
+            f"\t\theader_up {WAKE_HEADER} {c['slug']}",
+            "\t\theader_up X-Forwarded-Proto https",
+            *HELD,
+            "\t\tflush_interval -1",
+            "\t}",
+        ]
+    return [
+        f"\treverse_proxy 127.0.0.1:{int(c['port'])} {{",
+        "\t\theader_up X-Forwarded-Proto https",
+        *HELD,
+        f"\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
+        "\t}",
+    ]
+
+
+def route_site(r: dict) -> list[str]:
+    """A route (`cell route set`): something on this host that is not a company, such as Tico's public demo, on hosts
+    of its own, sent to its loopback ports. With more than one port, the first port whose /healthz answers gets each
+    request (Caddy's active health check), so a second copy can start beside the first and take over when the first
+    stops, with no router reload. A route holds requests the way a company does. `noindex` adds
+    `X-Robots-Tag: noindex, nofollow` to every answer and serves a robots.txt that disallows everything."""
+    sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in r["hosts"])
+    ports = [int(p) for p in r["ports"]]
+    tag = [f"\theader X-Robots-Tag \"{NOINDEX}\""] if r.get("noindex") else []
+    robots = (
+        [
+            "\thandle /robots.txt {",
+            "\t\theader Content-Type \"text/plain; charset=utf-8\"",
+            f"\t\trespond \"{ROBOTS_TXT}\" 200",
+            "\t}",
+        ]
+        if r.get("noindex")
+        else []
+    )
+    health = (
+        [
+            "\t\t\tlb_policy first",
+            f"\t\t\thealth_uri {contract.HEALTH_PATH}",
+            "\t\t\thealth_interval 2s",
+            "\t\t\thealth_timeout 2s",
+            "\t\t\tfail_duration 5s",
+        ]
+        if len(ports) > 1
+        else []
+    )
+    return [
+        f"{sites} {{",
+        *tag,
+        *robots,
+        "\thandle {",
+        "\t\treverse_proxy " + " ".join(f"127.0.0.1:{p}" for p in ports) + " {",
+        "\t\t\theader_up X-Forwarded-Proto https",
+        *("\t" + line for line in HELD),
+        *health,
+        f"\t\t\tstream_close_delay {STREAM_CLOSE_DELAY}",
+        "\t\t}",
+        "\t}",
+        "\thandle_errors {",
+        *("\t" + line for line in tag),
+        "\t\theader Retry-After 5",
+        f"\t\trespond \"{HOLD_BODY}\" 503",
+        "\t}",
+        "}",
+        "",
+    ]
+
+
 def hosts_of(c: dict) -> list[str]:
-    return [c["domain"], *c.get("aliases", [])]
+    """Every host a company answers on: its domain, its aliases and its page host (the wake service checks these too)."""
+    return [c["domain"], *c.get("aliases", []), *([c["page_host"]] if c.get("page_host") else [])]
 
 
-def tunnel_hosts(domain: str, companies: list[dict]) -> list[str]:
-    """The company hosts the tunnel's `*.<domain>` does not match: Cloudflare's wildcard covers exactly one label."""
-    return sorted({h for c in companies for h in hosts_of(c)
-                   if not (h.endswith("." + domain) and "." not in h[:-len(domain) - 1])})
+def tunnel_hosts(
+    domain: str, companies: list[dict], page_domain: str | None = None, routes: list[dict] = ()
+) -> list[str]:
+    """The company and route hosts the tunnel's wildcards do not match: `*.<domain>` and, when set, `*.<page domain>`,
+    each covering exactly one label."""
+    covered = [domain] + ([page_domain] if page_domain else [])
+
+    def wildcard(h: str) -> bool:
+        return any(h.endswith("." + d) and "." not in h[: -len(d) - 1] for d in covered)
+
+    every = {h for c in companies for h in hosts_of(c)} | {h for r in routes for h in r["hosts"]}
+    return sorted(h for h in every if not wildcard(h))
 
 
-def tunnel_config(domain: str, hosts: list[str] = ()) -> str:
-    """cloudflared's routes: `hosts` (see tunnel_hosts), then the wildcard, all to the router; anything else a 404.
-    Without `hosts` it is the file every cell had before them, byte for byte (so no restart on upgrade)."""
+def tunnel_config(domain: str, hosts: list[str] = (), page_domain: str | None = None) -> str:
+    """cloudflared's routes: `hosts` (see tunnel_hosts), then the wildcards, all to the router; anything else a 404.
+    Without `hosts` and a page domain it is the file every cell had before them, byte for byte (so no restart on upgrade)."""
     service = f"    service: http://{ROUTER_ADDRESS}:{ROUTER_PORT}"
-    lines = ["# Written by `python3 -m setup cell init`: every company's name to the router; anything else a 404.",
-             "ingress:"]
+    lines = [
+        "# Written by `python3 -m setup cell init`: every company's name to the router; anything else a 404.",
+        "ingress:",
+    ]
     for h in hosts:
         lines += [f"  - hostname: \"{h}\"", service]
-    return "\n".join(lines + [f"  - hostname: \"*.{domain}\"", service, "  - service: http_status:404"]) + "\n"
+    lines += [f"  - hostname: \"*.{domain}\"", service]
+    if page_domain:
+        lines += [f"  - hostname: \"*.{page_domain}\"", service]
+    return "\n".join(lines + ["  - service: http_status:404"]) + "\n"
 
 
 def edge_compose(root: Path, tunnel: bool) -> str:
-    """The router and the tunnel: on the host's network, so they reach each company's loopback port; nothing else."""
-    lines = ["# Written by `python3 -m setup cell init`: the shared host's front door. Companies are separate projects.",
-             f"name: {EDGE_PROJECT}", "services:", "  router:", f"    image: {ROUTER_IMAGE}",
-             f"    container_name: {ROUTER_CONTAINER}", "    network_mode: host", "    restart: unless-stopped",
-             "    init: true", "    security_opt: [\"no-new-privileges:true\"]", "    cap_drop: [ALL]",
-             "    cap_add: [NET_BIND_SERVICE]",   # caddy's binary carries this as a file capability; exec fails without it
-             "    read_only: true", "    tmpfs: [/tmp]", "    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]",
-             "    volumes:", f"      - {root}/router:/etc/caddy:ro", "      - router-data:/data", "      - router-config:/config"]
+    """The router and the tunnel: on the host's network, so they reach each company's loopback port; nothing else. The
+    router also reads the page folders, read-only."""
+    lines = [
+        "# Written by `python3 -m setup cell init`: the shared host's front door. Companies are separate projects.",
+        f"name: {EDGE_PROJECT}",
+        "services:",
+        "  router:",
+        f"    image: {ROUTER_IMAGE}",
+        f"    container_name: {ROUTER_CONTAINER}",
+        "    network_mode: host",
+        "    restart: unless-stopped",
+        "    init: true",
+        "    security_opt: [\"no-new-privileges:true\"]",
+        "    cap_drop: [ALL]",
+        "    cap_add: [NET_BIND_SERVICE]",  # caddy's binary carries this as a file capability; exec fails without it
+        "    read_only: true",
+        "    tmpfs: [/tmp]",
+        "    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]",
+        "    volumes:",
+        f"      - {root}/router:/etc/caddy:ro",
+        "      - router-data:/data",
+        "      - router-config:/config",
+        f"      - {root}/{PAGES}:{PAGE_MOUNT_ROUTER}:ro",
+    ]
     if tunnel:
-        lines += ["  tunnel:", f"    image: {TUNNEL_IMAGE}", "    container_name: tico-cell-tunnel", "    network_mode: host",
-                  "    restart: unless-stopped", "    init: true", "    security_opt: [\"no-new-privileges:true\"]",
-                  "    cap_drop: [ALL]", "    read_only: true",
-                  "    command: tunnel --no-autoupdate --metrics 127.0.0.1:8081 --config /etc/cloudflared/cloudflared.yml run",
-                  f"    env_file: [{root}/tunnel.env]", "    volumes:", f"      - {root}/tunnel:/etc/cloudflared:ro",
-                  "    depends_on: [router]"]
+        lines += [
+            "  tunnel:",
+            f"    image: {TUNNEL_IMAGE}",
+            "    container_name: tico-cell-tunnel",
+            "    network_mode: host",
+            "    restart: unless-stopped",
+            "    init: true",
+            "    security_opt: [\"no-new-privileges:true\"]",
+            "    cap_drop: [ALL]",
+            "    read_only: true",
+            "    command: tunnel --no-autoupdate --metrics 127.0.0.1:8081 --config /etc/cloudflared/cloudflared.yml run",
+            f"    env_file: [{root}/tunnel.env]",
+            "    volumes:",
+            f"      - {root}/tunnel:/etc/cloudflared:ro",
+            "    depends_on: [router]",
+        ]
     lines += ["volumes:", "  router-data:", "  router-config:"]
     return "\n".join(lines) + "\n"
 
 
-def company_override(c: dict, data_dir: Path) -> str:
+def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
     """The control folder replaces the stock tico-control volume (Compose merges volumes by their target), so the cell
-    updater reads the token where the server reads it, and no other company's server mounts it."""
+    updater reads the token where the server reads it, and no other company's server mounts it. A page host adds its
+    folder of public files, read-write, and the two settings that name it (the company's server writes them there)."""
     n = networks(c["index"])
-    return "\n".join([
-        "# Written by `python3 -m setup cell`: what makes the stock compose.yaml beside it one company of many on a",
-        "# shared host. Its own data and control folders, a memory limit, its own two networks (so none collide), the",
-        "# cell marker, a label for `list`.",
-        "services:", "  server:", f"    mem_limit: {c['memory']}", f"    memswap_limit: {c['memory']}",
-        "    environment:", "      TICO_CELL:", "    labels:", f"      {LABEL}: {c['slug']}",
-        "    volumes:", f"      - {data_dir}:/data", f"      - {data_dir.parent / 'control'}:/control",
-        "networks:", "  default:", "    ipam:", "      config:", f"        - subnet: {n['default_subnet']}",
-        f"          gateway: {n['default_gateway']}"]) + "\n"
+    page = (
+        [f"      TICO_COMPANY_PAGE_DIR: {PAGE_MOUNT}", f"      TICO_READER_ORIGIN: https://{c['page_host']}"]
+        if c.get("page_host")
+        else []
+    )
+    mount = [f"      - {pages}:{PAGE_MOUNT}"] if c.get("page_host") and pages else []
+    return (
+        "\n".join(
+            [
+                "# Written by `python3 -m setup cell`: what makes the stock compose.yaml beside it one company of many on a",
+                "# shared host. Its own data and control folders, a memory limit, its own two networks (so none collide), the",
+                "# cell marker, a label for `list`, and its page folder when it has a page host.",
+                "services:",
+                "  server:",
+                f"    mem_limit: {c['memory']}",
+                f"    memswap_limit: {c['memory']}",
+                "    environment:",
+                "      TICO_CELL:",
+                *page,
+                "    labels:",
+                f"      {LABEL}: {c['slug']}",
+                "    volumes:",
+                f"      - {data_dir}:/data",
+                f"      - {data_dir.parent / 'control'}:/control",
+                *mount,
+                "networks:",
+                "  default:",
+                "    ipam:",
+                "      config:",
+                f"        - subnet: {n['default_subnet']}",
+                f"          gateway: {n['default_gateway']}",
+            ]
+        )
+        + "\n"
+    )
 
 
 def updater_url(index: int) -> str:
@@ -629,26 +1045,64 @@ def updater_unit(core: Path, python: str, root: Path) -> str:
     the cell's files and locks, the host's bridge addresses) and nothing a container would add. Its code is the core
     folder `init` ran from; only another `init` moves it. A stop waits for an update under way (TimeoutStopSec): the
     main process gets SIGTERM, finishes what it runs, then exits."""
-    return "\n".join([
-        "# Written by `python3 -m setup cell init`: each company's updater (setup/cell_updater.py, docs/cell.md).",
-        "[Unit]", "Description=Tico cell: each company's updater", "After=docker.service network-online.target",
-        "Wants=docker.service", "", "[Service]", "Type=simple", f"WorkingDirectory={core}",
-        f"ExecStart={python} -m setup.cell_updater --root {root}", "Restart=always", "RestartSec=5",
-        "KillMode=mixed", "TimeoutStopSec=1800", "NoNewPrivileges=yes", "PrivateTmp=yes", "",
-        "[Install]", "WantedBy=multi-user.target"]) + "\n"
+    return (
+        "\n".join(
+            [
+                "# Written by `python3 -m setup cell init`: each company's updater (setup/cell_updater.py, docs/cell.md).",
+                "[Unit]",
+                "Description=Tico cell: each company's updater",
+                "After=docker.service network-online.target",
+                "Wants=docker.service",
+                "",
+                "[Service]",
+                "Type=simple",
+                f"WorkingDirectory={core}",
+                f"ExecStart={python} -m setup.cell_updater --root {root}",
+                "Restart=always",
+                "RestartSec=5",
+                "KillMode=mixed",
+                "TimeoutStopSec=1800",
+                "NoNewPrivileges=yes",
+                "PrivateTmp=yes",
+                "",
+                "[Install]",
+                "WantedBy=multi-user.target",
+            ]
+        )
+        + "\n"
+    )
 
 
 def wake_unit(core: Path, python: str, root: Path) -> str:
     """The wake service as a systemd service: it runs `wake` (Docker, the company's files and locks, the router's
     reload), so it is root like the updater, and on loopback only. A stop waits a little for a start under way; one cut
     short is finished by the next request's `wake` (Compose's up is idempotent)."""
-    return "\n".join([
-        "# Written by `python3 -m setup cell init`: starts a sleeping company on its first request (setup/cell_wake.py).",
-        "[Unit]", "Description=Tico cell: wake sleeping companies", "After=docker.service network-online.target",
-        "Wants=docker.service", "", "[Service]", "Type=simple", f"WorkingDirectory={core}",
-        f"ExecStart={python} -m setup.cell_wake --root {root}", "Restart=always", "RestartSec=1",
-        "KillMode=mixed", "TimeoutStopSec=60", "NoNewPrivileges=yes", "PrivateTmp=yes", "",
-        "[Install]", "WantedBy=multi-user.target"]) + "\n"
+    return (
+        "\n".join(
+            [
+                "# Written by `python3 -m setup cell init`: starts a sleeping company on its first request (setup/cell_wake.py).",
+                "[Unit]",
+                "Description=Tico cell: wake sleeping companies",
+                "After=docker.service network-online.target",
+                "Wants=docker.service",
+                "",
+                "[Service]",
+                "Type=simple",
+                f"WorkingDirectory={core}",
+                f"ExecStart={python} -m setup.cell_wake --root {root}",
+                "Restart=always",
+                "RestartSec=1",
+                "KillMode=mixed",
+                "TimeoutStopSec=60",
+                "NoNewPrivileges=yes",
+                "PrivateTmp=yes",
+                "",
+                "[Install]",
+                "WantedBy=multi-user.target",
+            ]
+        )
+        + "\n"
+    )
 
 
 def _installer_version() -> str:
@@ -665,9 +1119,9 @@ class Cell:
         self.root, self.system, self.host = Path(root), system, Path(host_root)
         self.compose_source = compose_source or Path(__file__).resolve().parent.parent / "compose.yaml"
         self.secrets: list[str] = []
-        self.lock_wait = 900.0              # the cell updater waits for none: a held lock is another command at work
-        self.taken = ""                     # the snapshot the last `update` took or kept, for the updater's /status
-        self.direct = False                 # health on the server's own port, not through the router (`wake`)
+        self.lock_wait = 900.0  # the cell updater waits for none: a held lock is another command at work
+        self.taken = ""  # the snapshot the last `update` took or kept, for the updater's /status
+        self.direct = False  # health on the server's own port, not through the router (`wake`)
 
     # paths and records
     def dir(self, slug: str) -> Path:
@@ -680,7 +1134,9 @@ class Cell:
         try:
             return json.loads((self.root / "cell.json").read_text())
         except (OSError, ValueError):
-            raise CellError("not_initialized", "this host has no cell: run `python3 -m setup cell init` first") from None
+            raise CellError(
+                "not_initialized", "this host has no cell: run `python3 -m setup cell init` first"
+            ) from None
 
     def load(self, slug: str) -> dict | None:
         try:
@@ -732,8 +1188,21 @@ class Cell:
 
     def compose(self, slug: str, *args: str) -> list[str]:
         d = self.dir(slug)
-        return ["docker", "compose", "--project-name", project(slug), "--project-directory", str(d),
-                "--env-file", str(d / ".env"), "-f", str(d / "compose.yaml"), "-f", str(d / "compose.cell.yaml"), *args]
+        return [
+            "docker",
+            "compose",
+            "--project-name",
+            project(slug),
+            "--project-directory",
+            str(d),
+            "--env-file",
+            str(d / ".env"),
+            "-f",
+            str(d / "compose.yaml"),
+            "-f",
+            str(d / "compose.cell.yaml"),
+            *args,
+        ]
 
     def containers(self, slug: str = "") -> dict[str, dict]:
         """{slug: {"state", "health"}} for the cell's server containers, from one `docker ps`."""
@@ -748,8 +1217,15 @@ class Cell:
             labels = dict(p.split("=", 1) for p in str(row.get("Labels", "")).split(",") if "=" in p)
             name = labels.get(LABEL, "")
             status = str(row.get("Status", ""))
-            health = ("unhealthy" if "(unhealthy)" in status else "healthy" if "(healthy)" in status
-                      else "starting" if "health: starting" in status else "")
+            health = (
+                "unhealthy"
+                if "(unhealthy)" in status
+                else "healthy"
+                if "(healthy)" in status
+                else "starting"
+                if "health: starting" in status
+                else ""
+            )
             if name:
                 out[name] = {"state": str(row.get("State", "")), "health": health}
         return out
@@ -775,7 +1251,7 @@ class Cell:
         return r.returncode == 0 and bool(rules) and rules[0] == IMDS_LINE
 
     def wait_healthy(self, c: dict, started: float, timeout: int) -> int:
-        """Milliseconds from `started` (the command's start) until /healthz answers 200 through the router (with
+        """Milliseconds from `started_at` (the command's start) until /healthz answers 200 through the router (with
         `direct`, on the server's own loopback port: a sleeping company's route leads to the wake service); the wait
         itself is up to `timeout` seconds from now, so a slow image pull does not use it up."""
         deadline = self.system.monotonic() + max(timeout, 1)
@@ -790,15 +1266,20 @@ class Cell:
                 logs = self.system.run(self.compose(c["slug"], "logs", "--no-color", "--tail", "15", "server"))
                 tail = " | ".join(line.strip() for line in (logs.stdout or "").splitlines()[-15:] if line.strip())
                 where = f"on its port {c['port']}" if self.direct else "through the router"
-                raise CellError("unhealthy", self.scrub(f"{c['domain']} did not answer {contract.HEALTH_PATH} {where} "
-                                                        f"within {timeout}s" + (f"; last log lines: {tail}" if tail else "")))
+                raise CellError(
+                    "unhealthy",
+                    self.scrub(
+                        f"{c['domain']} did not answer {contract.HEALTH_PATH} {where} "
+                        f"within {timeout}s" + (f"; last log lines: {tail}" if tail else "")
+                    ),
+                )
             self.system.sleep(HEALTH_POLL)
 
     def write_router(self) -> bool:
         """Regenerate the Caddyfile from every company not removed and reload the router. A config the router refuses
         is replaced by the one it had, so a bad change never takes every company down."""
         path = self.root / "router" / "Caddyfile"
-        text = router_config(self.live_companies())
+        text = router_config(self.live_companies(), self.routes())
         try:
             old = path.read_text()
         except OSError:
@@ -806,12 +1287,26 @@ class Cell:
         if old == text:
             return False
         _write_atomic(path, text)
-        r = self.system.run(["docker", "exec", ROUTER_CONTAINER, "caddy", "reload", "--config", "/etc/caddy/Caddyfile",
-                             "--adapter", "caddyfile"])
+        r = self.system.run(
+            [
+                "docker",
+                "exec",
+                ROUTER_CONTAINER,
+                "caddy",
+                "reload",
+                "--config",
+                "/etc/caddy/Caddyfile",
+                "--adapter",
+                "caddyfile",
+            ]
+        )
         if r.returncode:
             if old is not None:
                 _write_atomic(path, old)
-            raise CellError("router_failed", self.scrub("the router refused the new config: " + (r.stderr or r.stdout).strip()[-400:]))
+            raise CellError(
+                "router_failed",
+                self.scrub("the router refused the new config: " + (r.stderr or r.stdout).strip()[-400:]),
+            )
         return True
 
     def edge(self) -> list[str]:
@@ -820,15 +1315,34 @@ class Cell:
     def live_companies(self) -> list[dict]:
         return [c for c in self.companies() if c.get("state") != "removed"]
 
-    def tunnel_text(self, domain: str) -> str:
-        return tunnel_config(domain, tunnel_hosts(domain, self.live_companies()))
+    def routes(self) -> list[dict]:
+        """Every route (`cell route set`), by name. A file that is not a route record is skipped, not fatal: the router
+        still gets every company."""
+        out = []
+        with contextlib.suppress(OSError):
+            for p in sorted((self.root / ROUTES).glob("*.json")):
+                with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+                    r = json.loads(p.read_text())
+                    if r["name"] == p.stem and r["hosts"] and r["ports"]:
+                        out.append(r)
+        return out
+
+    def pages_dir(self, slug: str) -> Path:
+        """A company's folder of public files for its page host (mounted into its server, read by the router)."""
+        return self.root / PAGES / slug
+
+    def tunnel_text(self, domain: str, page_domain: str | None = None) -> str:
+        return tunnel_config(
+            domain, tunnel_hosts(domain, self.live_companies(), page_domain, self.routes()), page_domain
+        )
 
     def write_tunnel(self) -> bool:
         """Under the cell lock: regenerate cloudflared's routes and, when the file changed and the tunnel runs, restart
         it (cloudflared reads them only when it starts, as `init` does). A restart that fails puts the old file back,
         so the next `add` or `remove` tries again."""
         path = self.root / "tunnel" / "cloudflared.yml"
-        text = self.tunnel_text(self.load_cell()["domain"])
+        cell = self.load_cell()
+        text = self.tunnel_text(cell["domain"], cell.get("page_domain"))
         try:
             old = path.read_text()
         except OSError:
@@ -838,25 +1352,36 @@ class Cell:
 
         def put(body: str) -> None:
             _write_atomic(path, body)
-            self.system.chown(path, TUNNEL_UID, TUNNEL_UID)     # a rewritten file comes back root-owned
+            self.system.chown(path, TUNNEL_UID, TUNNEL_UID)  # a rewritten file comes back root-owned
+
         put(text)
         if (self.root / "tunnel.env").exists():
             r = self.system.run([*self.edge(), "restart", "tunnel"])
             if r.returncode:
                 if old is not None:
                     put(old)
-                raise CellError("docker_failed", self.scrub("restarting the tunnel with its new routes: "
-                                                            + (r.stderr or r.stdout).strip()[-400:]))
+                raise CellError(
+                    "docker_failed",
+                    self.scrub("restarting the tunnel with its new routes: " + (r.stderr or r.stdout).strip()[-400:]),
+                )
         return True
 
     def image_present(self, version: str) -> bool:
-        return self.system.run(["docker", "image", "inspect", "--format", "{{.Id}}", f"{SERVER_IMAGE}:{version}"]).returncode == 0
+        return (
+            self.system.run(
+                ["docker", "image", "inspect", "--format", "{{.Id}}", f"{SERVER_IMAGE}:{version}"]
+            ).returncode
+            == 0
+        )
 
     def pull(self, version: str) -> None:
         """The release's image, without touching any .env (compose.yaml's image is SERVER_IMAGE:TICO_TAG)."""
         if not self.image_present(version):
-            self.run(["docker", "pull", "--quiet", f"{SERVER_IMAGE}:{version}"], "pull_failed",
-                     f"pulling {SERVER_IMAGE}:{version}")
+            self.run(
+                ["docker", "pull", "--quiet", f"{SERVER_IMAGE}:{version}"],
+                "pull_failed",
+                f"pulling {SERVER_IMAGE}:{version}",
+            )
 
     def up(self, slug: str, version: str) -> None:
         self.pull(version)
@@ -901,14 +1426,25 @@ class Cell:
         except CellError as r:
             r.detail = f"{new} did not come up ({err.detail}); {r.detail}"
             raise r from None
-        failed = CellError("update_failed", f"{new} did not come up ({err.detail}); back on {c['version']}"
-                           + (" with the database from before the update" if pending.get("snapshot") else ""))
+        failed = CellError(
+            "update_failed",
+            f"{new} did not come up ({err.detail}); back on {c['version']}"
+            + (" with the database from before the update" if pending.get("snapshot") else ""),
+        )
         failed.extra = {"version": c["version"]}
         raise failed from None
 
     def answer(self, c: dict, ready_ms: int, changed: bool) -> dict:
-        return {"ok": True, "company": c["slug"], "url": f"https://{c['domain']}", "port": c["port"], "ready_ms": ready_ms,
-                "version": c["version"], "changed": changed, "owner_link_file": str(self.dir(c["slug"]) / "owner-link.txt")}
+        return {
+            "ok": True,
+            "company": c["slug"],
+            "url": f"https://{c['domain']}",
+            "port": c["port"],
+            "ready_ms": ready_ms,
+            "version": c["version"],
+            "changed": changed,
+            "owner_link_file": str(self.dir(c["slug"]) / "owner-link.txt"),
+        }
 
     # --- commands --------------------------------------------------------------------------------------------
 
@@ -923,20 +1459,31 @@ class Cell:
         if not st.DOMAIN_RE.fullmatch(domain):
             raise CellError("bad_domain", "--domain is a plain domain such as tico.team")
         if saved.get("domain") and saved["domain"] != domain and self.companies():
-            raise CellError("bad_domain", f"this cell serves {saved['domain']} and has companies; it cannot move to {domain}")
+            raise CellError(
+                "bad_domain", f"this cell serves {saved['domain']} and has companies; it cannot move to {domain}"
+            )
         token = read_secret(args.tunnel_token_file, "--tunnel-token-file") if args.tunnel_token_file else ""
         if token:
             self.secrets.append(token)
             if not re.fullmatch(r"[A-Za-z0-9+/=_-]{20,4096}", token):
                 raise CellError("secret_file", "--tunnel-token-file: not a tunnel token")
+        # Kept when left out, as --domain is; "" clears it. Its wildcard routes every company's page host.
+        page_domain = saved.get("page_domain")
+        if args.page_domain is not None:
+            page_domain = (args.page_domain or "").strip().lower().strip(".") or None
+        if page_domain and (not st.DOMAIN_RE.fullmatch(page_domain) or page_domain == domain):
+            raise CellError("bad_domain", "--page-domain is a plain domain of its own, such as tico.page")
         with self.lock("cell"):
-            return self._init(saved, domain, token)
+            return self._init(saved, domain, token, page_domain)
 
-    def _init(self, saved: dict, domain: str, token: str) -> dict:
+    def _init(self, saved: dict, domain: str, token: str, page_domain: str | None = None) -> dict:
         changed = []
         if self.system.run(["docker", "compose", "version"]).returncode:
-            self.run(["sh", "-c", "set -eu\n" + "\n".join(remote.docker_install_lines("ubuntu", False))],
-                     "docker_failed", "installing Docker")
+            self.run(
+                ["sh", "-c", "set -eu\n" + "\n".join(remote.docker_install_lines("ubuntu", False))],
+                "docker_failed",
+                "installing Docker",
+            )
             changed.append("docker")
         if self.daemon_settings():
             self.run(["systemctl", "restart", "docker"], "docker_failed", "restarting Docker with the cell's settings")
@@ -945,29 +1492,32 @@ class Cell:
             changed.append("firewall")
         self.run([str(self.host / FIREWALL_SCRIPT)], "firewall_failed", "blocking the metadata service from containers")
         if not self.imds_blocked():
-            raise CellError("firewall_failed", "the DOCKER-USER rule that blocks 169.254.169.254 is not the chain's "
-                                               "first rule")
+            raise CellError(
+                "firewall_failed", "the DOCKER-USER rule that blocks 169.254.169.254 is not the chain's first rule"
+            )
 
-        for d in ("companies", "router", "tunnel", "locks"):
+        for d in ("companies", "router", "tunnel", "locks", PAGES):
             (self.root / d).mkdir(parents=True, exist_ok=True)
         os.chmod(self.root / "companies", 0o700)
         if token:
-            changed += ["tunnel token"] if _write_atomic(self.root / "tunnel.env", f"TUNNEL_TOKEN={token}\n", 0o600) else []
+            changed += (
+                ["tunnel token"] if _write_atomic(self.root / "tunnel.env", f"TUNNEL_TOKEN={token}\n", 0o600) else []
+            )
         tunnel = (self.root / "tunnel.env").exists()
-        routes_changed = _write_atomic(self.root / "tunnel" / "cloudflared.yml", self.tunnel_text(domain))
+        routes_changed = _write_atomic(self.root / "tunnel" / "cloudflared.yml", self.tunnel_text(domain, page_domain))
         # cloudflared runs as TUNNEL_UID and cannot read a root-owned directory: every init sets the owner again
         # (a file this run rewrote comes back root-owned, so it is covered too)
         os.chmod(self.root / "tunnel", 0o700)
         for f in (self.root / "tunnel", self.root / "tunnel" / "cloudflared.yml"):
             self.system.chown(f, TUNNEL_UID, TUNNEL_UID)
         caddyfile = self.root / "router" / "Caddyfile"
-        if not caddyfile.exists():      # the first run; later ones go through write_router, which reloads
+        if not caddyfile.exists():  # the first run; later ones go through write_router, which reloads
             _write_atomic(caddyfile, router_config([c for c in self.companies() if c.get("state") != "removed"]))
         if _write_atomic(self.root / "edge.yaml", edge_compose(self.root, tunnel)):
             changed.append("edge")
         edge = self.edge()
         self.run([*edge, "up", "-d", "--remove-orphans"], "docker_failed", "starting the router and tunnel")
-        if tunnel and routes_changed:   # cloudflared reads its routes only when it starts
+        if tunnel and routes_changed:  # cloudflared reads its routes only when it starts
             self.run([*edge, "restart", "tunnel"], "docker_failed", "restarting the tunnel with its routes")
             changed.append("tunnel routes")
         started = self.system.monotonic()
@@ -982,11 +1532,23 @@ class Cell:
         if self.wake_service():
             changed.append("wake")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
+        if page_domain:
+            cell["page_domain"] = page_domain
+        else:
+            cell.pop("page_domain", None)
         if cell != saved:
             _write_atomic(self.root / "cell.json", json.dumps(cell, indent=2, sort_keys=True) + "\n", 0o600)
             changed.append("cell.json")
-        return {"ok": True, "domain": domain, "root": str(self.root), "router": cell["router"], "tunnel": tunnel,
-                "companies": len(self.companies()), "changed": changed}
+        return {
+            "ok": True,
+            "domain": domain,
+            "root": str(self.root),
+            "router": cell["router"],
+            "tunnel": tunnel,
+            "companies": len(self.companies()),
+            "changed": changed,
+            **({"page_domain": page_domain} if page_domain else {}),
+        }
 
     def daemon_settings(self) -> bool:
         """Log rotation and live restore (a Docker restart leaves every company running). Keys already set are kept."""
@@ -1028,25 +1590,49 @@ class Cell:
 
     def firewall(self) -> bool:
         rule = " ".join(IMDS_RULE[1:])
-        script = "\n".join([
-            "#!/bin/sh",
-            "# Written by `python3 -m setup cell init`: containers on this host never reach the EC2 metadata service,",
-            "# so no company can use the host's AWS role. Run before Docker starts and again after (docs/cell.md).",
-            "# The rule must be the chain's first: a rule above it that accepts would be reached first.",
-            "set -eu", "iptables -N DOCKER-USER 2>/dev/null || true",
-            "first=$(iptables -S DOCKER-USER | grep -m1 '^-A DOCKER-USER ' || true)",
-            f"[ \"$first\" = \"{IMDS_LINE}\" ] || iptables -I DOCKER-USER 1 {rule}"]) + "\n"
-        unit = "\n".join([
-            "[Unit]", "Description=Tico cell: containers cannot reach the EC2 metadata service", "Before=docker.service",
-            "After=network-pre.target", "", "[Service]", "Type=oneshot", "RemainAfterExit=yes",
-            f"ExecStart=/{FIREWALL_SCRIPT}", "", "[Install]", "WantedBy=multi-user.target"]) + "\n"
+        script = (
+            "\n".join(
+                [
+                    "#!/bin/sh",
+                    "# Written by `python3 -m setup cell init`: containers on this host never reach the EC2 metadata service,",
+                    "# so no company can use the host's AWS role. Run before Docker starts and again after (docs/cell.md).",
+                    "# The rule must be the chain's first: a rule above it that accepts would be reached first.",
+                    "set -eu",
+                    "iptables -N DOCKER-USER 2>/dev/null || true",
+                    "first=$(iptables -S DOCKER-USER | grep -m1 '^-A DOCKER-USER ' || true)",
+                    f"[ \"$first\" = \"{IMDS_LINE}\" ] || iptables -I DOCKER-USER 1 {rule}",
+                ]
+            )
+            + "\n"
+        )
+        unit = (
+            "\n".join(
+                [
+                    "[Unit]",
+                    "Description=Tico cell: containers cannot reach the EC2 metadata service",
+                    "Before=docker.service",
+                    "After=network-pre.target",
+                    "",
+                    "[Service]",
+                    "Type=oneshot",
+                    "RemainAfterExit=yes",
+                    f"ExecStart=/{FIREWALL_SCRIPT}",
+                    "",
+                    "[Install]",
+                    "WantedBy=multi-user.target",
+                ]
+            )
+            + "\n"
+        )
         dropin = "\n".join(["[Service]", f"ExecStartPost=/{FIREWALL_SCRIPT}"]) + "\n"
         changed = _write_atomic(self.host / FIREWALL_SCRIPT, script, 0o755)
         changed = _write_atomic(self.host / FIREWALL_UNIT, unit) or changed
         changed = _write_atomic(self.host / DOCKER_DROPIN, dropin) or changed
         if changed:
             self.run(["systemctl", "daemon-reload"], "firewall_failed", "systemctl daemon-reload")
-            self.run(["systemctl", "enable", "tico-cell-firewall.service"], "firewall_failed", "enabling the firewall unit")
+            self.run(
+                ["systemctl", "enable", "tico-cell-firewall.service"], "firewall_failed", "enabling the firewall unit"
+            )
         return changed
 
     def add(self, args) -> dict:
@@ -1057,15 +1643,20 @@ class Cell:
         if args.own_domain:
             domain = check_host(domain, "--domain", cell["domain"])
         elif domain != f"{slug}.{cell['domain']}":
-            raise CellError("bad_domain", f"--domain must be {slug}.{cell['domain']} (or, moving an install of its own, "
-                                          "pass --own-domain)")
+            raise CellError(
+                "bad_domain",
+                f"--domain must be {slug}.{cell['domain']} (or, moving an install of its own, pass --own-domain)",
+            )
         aliases = None
-        if args.alias is not None:          # given: replaces the saved list (--alias "" alone clears it)
+        if args.alias is not None:  # given: replaces the saved list (--alias "" alone clears it)
             aliases = [check_host(a, "--alias", cell["domain"]) for a in args.alias if a.strip()]
             if len(aliases) > MAX_ALIASES:
                 raise CellError("bad_args", f"--alias is given at most {MAX_ALIASES} times")
             if len(set(aliases)) != len(aliases):
                 raise CellError("bad_domain", "--alias names the same host twice")
+        page_host = None  # not given: kept from the record; "" clears it
+        if args.page_host is not None:
+            page_host = check_host(args.page_host, "--page-host", cell["domain"]) if args.page_host.strip() else ""
         email = (args.owner_email or "").strip()
         if not st.EMAIL_RE.fullmatch(email) or re.search(r"[^A-Za-z0-9.@_+-]", email):
             raise CellError("bad_args", "--owner-email is not a plain email address")
@@ -1080,19 +1671,26 @@ class Cell:
         if args.version is not None and not VERSION_RE.fullmatch(args.version):
             raise CellError("bad_args", "--version is a release such as v1.2.3")
         memory = check_memory(args.memory) if args.memory is not None else None
-        sleep_minutes = check_sleep_minutes(args.sleep_minutes, "--sleep-minutes") \
-            if args.sleep_minutes is not None else None
+        sleep_minutes = (
+            check_sleep_minutes(args.sleep_minutes, "--sleep-minutes") if args.sleep_minutes is not None else None
+        )
         backup_given = [args.backup_url, args.backup_region, args.backup_credentials_file]
         if any(backup_given) and not all(backup_given):
             raise CellError("bad_args", "--backup-url, --backup-region and --backup-credentials-file go together")
-        if args.backup_url and not re.fullmatch(r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/[A-Za-z0-9._/-]*)?", args.backup_url):
+        if args.backup_url and not re.fullmatch(
+            r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/[A-Za-z0-9._/-]*)?", args.backup_url
+        ):
             raise CellError("bad_args", "--backup-url is s3://bucket/prefix")
         if args.backup_region:
             from .aws import REGION_RE
+
             if not REGION_RE.fullmatch(args.backup_region):
                 raise CellError("bad_args", "--backup-region is an AWS region such as us-west-2")
-        if args.company_name is not None and (not args.company_name.strip() or len(args.company_name) > 80
-                                              or any(ord(ch) < 32 for ch in args.company_name)):
+        if args.company_name is not None and (
+            not args.company_name.strip()
+            or len(args.company_name) > 80
+            or any(ord(ch) < 32 for ch in args.company_name)
+        ):
             raise CellError("bad_args", "--company-name is 1 to 80 characters on one line")
 
         client_secret = read_secret(args.client_secret_file, "--client-secret-file")
@@ -1101,7 +1699,9 @@ class Cell:
         if invite is not None:
             self.secrets.append(invite)
             if not st.INVITE_RE.fullmatch(invite):
-                raise CellError("secret_file", "--gateway-invite-file: not an invite code (8 to 200 letters, digits, - and _)")
+                raise CellError(
+                    "secret_file", "--gateway-invite-file: not an invite code (8 to 200 letters, digits, - and _)"
+                )
         keys = None
         if args.backup_credentials_file:
             keys = backup_keys(read_secret(args.backup_credentials_file, "--backup-credentials-file"))
@@ -1113,6 +1713,7 @@ class Cell:
         plan = None
         if args.company_file:
             from .wizard import gather_company_file
+
             probe = st.Settings()
             try:
                 gather_company_file(argparse.Namespace(company_file=args.company_file, company=None), probe)
@@ -1124,36 +1725,48 @@ class Cell:
             # Unpacked under this company's lock only (it can take minutes), then renamed into place under the cell's.
             staged = self.stage_import(args.import_data, self.dir(slug)) if args.import_data else None
             if staged:
-                cleanup.callback(self.drop_import, staged)     # whatever is left of it, once this is done
+                cleanup.callback(self.drop_import, staged)  # whatever is left of it, once this is done
             with self.lock("cell"):
                 if not self.imds_blocked():
-                    raise CellError("not_initialized", "containers on this host can reach the EC2 metadata service "
-                                                       "(the DOCKER-USER block is missing or not first); run "
-                                                       "`python3 -m setup cell init`")
+                    raise CellError(
+                        "not_initialized",
+                        "containers on this host can reach the EC2 metadata service "
+                        "(the DOCKER-USER block is missing or not first); run "
+                        "`python3 -m setup cell init`",
+                    )
                 old = self.load(slug)
                 if old and args.version and args.version != old["version"]:
                     # A new release migrates the database: that is `update`, with its snapshot and rollback.
-                    raise CellError("use_update", f"{slug} runs {old['version']}; change its release with `python3 -m "
-                                                  f"setup cell update --company {slug} --version {args.version}`")
+                    raise CellError(
+                        "use_update",
+                        f"{slug} runs {old['version']}; change its release with `python3 -m "
+                        f"setup cell update --company {slug} --version {args.version}`",
+                    )
                 aliases = (old or {}).get("aliases", []) if aliases is None else aliases
                 if domain in aliases:
                     raise CellError("bad_domain", f"--alias {domain} is the company's --domain")
-                mine = {domain, *aliases}
-                for other in self.live_companies():
-                    clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
-                    if clash:
-                        raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
+                host = (old or {}).get("page_host", "") if page_host is None else page_host
+                if host in {domain, *aliases} and host:
+                    raise CellError("bad_domain", f"--page-host {host} is one of the company's own hosts")
+                self.refuse_taken(slug, {domain, *aliases, *([host] if host else [])})
                 index = old["index"] if old else self.allocate()
                 d = self.dir(slug)
                 old_env = envfile.parse(_read(d / ".env"))
-                c = {"slug": slug, "domain": domain, "index": index, "port": PORT_BASE + index,
-                     "memory": memory or (old or {}).get("memory") or MEMORY_DEFAULT,
-                     "version": args.version or (old or {}).get("version") or self.default_version(),
-                     "hosted": args.hosted or (old or {}).get("hosted") or HOSTED_DEFAULT,
-                     "created": (old or {}).get("created") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                     "state": "running"}
+                c = {
+                    "slug": slug,
+                    "domain": domain,
+                    "index": index,
+                    "port": PORT_BASE + index,
+                    "memory": memory or (old or {}).get("memory") or MEMORY_DEFAULT,
+                    "version": args.version or (old or {}).get("version") or self.default_version(),
+                    "hosted": args.hosted or (old or {}).get("hosted") or HOSTED_DEFAULT,
+                    "created_at": (old or {}).get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "state": "running",
+                }
                 if aliases:
                     c["aliases"] = aliases
+                if host:
+                    c["page_host"] = host
                 sleep_minutes = sleep_minutes if sleep_minutes is not None else (old or {}).get("sleep_minutes")
                 if sleep_minutes is not None:
                     c["sleep_minutes"] = sleep_minutes
@@ -1162,17 +1775,39 @@ class Cell:
                 if plan is None and (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).exists():
                     data = (d / contract.COMPANY_FILE_DIR / contract.COMPANY_FILE_NAME).read_text().strip()
                     plan = (data, old_env.get("TICO_TEAM_NAME", ""))
-                name = (plan[1] if plan else "") or args.company_name or old_env.get("TICO_TEAM_NAME") \
+                name = (
+                    (plan[1] if plan else "")
+                    or args.company_name
+                    or old_env.get("TICO_TEAM_NAME")
                     or slug.replace("-", " ").title()
+                )
                 s = st.Settings(
-                    target="local", domain=domain, front_door="caddy", updater=False, company=name, owner_email=email,
-                    auth="oidc", issuer=issuer, client_id=args.client_id, client_secret=client_secret, signin_label=label,
-                    hosted=c["hosted"], hosted_zone=cell["domain"], preset="recommended", support="on",
+                    target="local",
+                    domain=domain,
+                    front_door="caddy",
+                    updater=False,
+                    company=name,
+                    owner_email=email,
+                    auth="oidc",
+                    issuer=issuer,
+                    client_id=args.client_id,
+                    client_secret=client_secret,
+                    signin_label=label,
+                    hosted=c["hosted"],
+                    hosted_zone=cell["domain"],
+                    preset="recommended",
+                    support="on",
                     gateway_invite=old_env.get("TICO_GATEWAY_INVITE", "") if invite is None else invite,
-                    tag=c["version"], company_file_data=plan[0] if plan else "",
-                    owner_link_hash=old_env.get("TICO_OWNER_LINK_HASH", ""))
+                    tag=c["version"],
+                    company_file_data=plan[0] if plan else "",
+                    owner_link_hash=old_env.get("TICO_OWNER_LINK_HASH", ""),
+                )
                 if keys:
-                    s.backup_url, s.backup_region, (s.backup_key_id, s.backup_secret) = args.backup_url, args.backup_region, keys
+                    s.backup_url, s.backup_region, (s.backup_key_id, s.backup_secret) = (
+                        args.backup_url,
+                        args.backup_region,
+                        keys,
+                    )
                 elif old_env.get("TICO_BACKUP_URL"):
                     s.backup_url, s.backup_region = old_env["TICO_BACKUP_URL"], old_env.get("TICO_BACKUP_REGION", "")
                     s.backup_key_id = old_env.get("LITESTREAM_ACCESS_KEY_ID", "")
@@ -1180,19 +1815,32 @@ class Cell:
                 self.secrets += [x for x in s.secrets() if x not in self.secrets]
                 n = networks(index)
                 s.trusted_proxies = f"127.0.0.1/32,::1/128,{n['default_gateway']}/32,{n['edge_gateway']}/32"
-                s.client_ip_header = "cf-connecting-ip"     # Cloudflare sets it at the edge; the router passes it on
+                s.client_ip_header = "cf-connecting-ip"  # Cloudflare sets it at the edge; the router passes it on
                 s.edge_subnet, s.edge_dynamic_range = n["edge_subnet"], n["edge_range"]
                 s.caddy_address, s.cloudflared_address = n["caddy_address"], n["cloudflared_address"]
                 d.mkdir(parents=True, exist_ok=True)
                 os.chmod(d, 0o700)
+                if host:
+                    # The server writes its release folders here (as its own user); the router reads them, so they are
+                    # world-readable, and the folder is kept when the host is cleared.
+                    pages = self.pages_dir(slug)
+                    pages.mkdir(parents=True, exist_ok=True)
+                    os.chmod(pages, 0o755)
+                    self.system.chown(pages, SERVER_UID, SERVER_UID)
                 if not s.owner_link_hash:
                     s.owner_link_hash = hosted.new_link(s, d / "owner-link.txt")
                 try:
                     env = s.to_env()
                 except MissingInput as e:
                     raise CellError("bad_args", self.scrub(str(e))) from None
-                env.update(TICO_PORT=str(c["port"]), COMPOSE_PROFILES="", COMPOSE_PROJECT_NAME=project(slug),
-                           TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR))
+                env.update(
+                    TICO_PORT=str(c["port"]),
+                    COMPOSE_PROFILES="",
+                    COMPOSE_PROJECT_NAME=project(slug),
+                    TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR),
+                )
+                if host:
+                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
                 env = cell_env(env, c)
                 # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
                 written = {k for k, v in env.items() if v}
@@ -1200,11 +1848,16 @@ class Cell:
                 ignored = sorted(k for k in extra if k in written or cell_owned(k))
                 extra = {k: v for k, v in extra.items() if v and k not in ignored}
                 env.update(extra)
+                refuse_server_host(host, env, "--page-host")
                 changed = False
                 if carried is not None:
-                    changed = _write_atomic(d / "extra.env", "# Carried from the install this company moved from "
-                                            "(`python3 -m setup cell add --env-file`). Keep it private (0600).\n"
-                                            + envfile.render(extra).split("\n", 1)[1], 0o600)
+                    changed = _write_atomic(
+                        d / "extra.env",
+                        "# Carried from the install this company moved from "
+                        "(`python3 -m setup cell add --env-file`). Keep it private (0600).\n"
+                        + envfile.render(extra).split("\n", 1)[1],
+                        0o600,
+                    )
                 if staged:
                     self.place_import(staged, d)
                     changed = True
@@ -1217,6 +1870,7 @@ class Cell:
                 with self.lock("cell"):
                     routed.append(self.write_router())
                     routed.append(self.write_tunnel())
+
             ready = self.launch(c, started, args.timeout, route)
             changed = changed or any(routed) or before.get("state") != "running" or before.get("health") != "healthy"
             answer = self.answer(c, ready, changed)
@@ -1229,8 +1883,9 @@ class Cell:
 
     def extra_env(self, slug: str) -> dict[str, str]:
         """extra.env (settings carried from a moved install), minus anything the cell owns; its values are secrets."""
-        values = {k: v for k, v in envfile.parse(_read(self.dir(slug) / "extra.env")).items()
-                  if v and not cell_owned(k)}
+        values = {
+            k: v for k, v in envfile.parse(_read(self.dir(slug) / "extra.env")).items() if v and not cell_owned(k)
+        }
         self.secrets += [v for v in values.values() if v not in self.secrets]
         return values
 
@@ -1260,7 +1915,7 @@ class Cell:
             d.mkdir(parents=True, exist_ok=True)
             os.chmod(d, 0o700)
             staging = d / IMPORT_STAGING
-            shutil.rmtree(staging, ignore_errors=True)     # left by a run that died half-way
+            shutil.rmtree(staging, ignore_errors=True)  # left by a run that died half-way
             staging.mkdir(mode=0o700)
             staged = (staging, size, created)
             try:
@@ -1281,13 +1936,13 @@ class Cell:
         """The unpacked archive becomes data/ in one rename (data/ is missing or empty: an empty one is replaced)."""
         data = d / "data"
         with contextlib.suppress(FileNotFoundError):
-            data.rmdir()            # empty (stage_import checked, under the same lock); refuses if it is not
+            data.rmdir()  # empty (stage_import checked, under the same lock); refuses if it is not
         os.rename(staged[0], data)
 
     def drop_import(self, staged: tuple[Path, int, bool]) -> None:
         staging, _, created = staged
         shutil.rmtree(staging, ignore_errors=True)
-        if created:                 # the folder was made only for the import: nothing else of the company is left
+        if created:  # the folder was made only for the import: nothing else of the company is left
             with contextlib.suppress(OSError):
                 staging.parent.rmdir()
 
@@ -1330,7 +1985,9 @@ class Cell:
             os.chmod(p, 0o700)
             self.system.chown(p, SERVER_UID, SERVER_UID)
         changed = _write_atomic(d / "compose.yaml", compose)
-        changed = _write_atomic(d / "compose.cell.yaml", company_override(c, data)) or changed
+        changed = (
+            _write_atomic(d / "compose.cell.yaml", company_override(c, data, self.pages_dir(c["slug"]))) or changed
+        )
         return self.updater_token(d) or changed
 
     def updater_token(self, d: Path) -> bool:
@@ -1340,7 +1997,7 @@ class Cell:
         with contextlib.suppress(OSError):
             if not path.is_symlink() and path.is_file() and path.stat().st_size >= 32:
                 return False
-            path.unlink()                   # empty, short, or not a plain file: replaced
+            path.unlink()  # empty, short, or not a plain file: replaced
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(secrets.token_urlsafe(32) + "\n")
@@ -1355,20 +2012,44 @@ class Cell:
 
     def list(self, args) -> dict:
         ps = self.containers() if self.companies() else {}
-        return {"ok": True, "companies": [
-            {"company": c["slug"], "url": f"https://{c['domain']}", "aliases": c.get("aliases", []), "port": c["port"],
-             "version": c["version"], "memory": c["memory"], "state": self.state_of(c, ps)} for c in self.companies()]}
+        return {
+            "ok": True,
+            "companies": [
+                {
+                    "company": c["slug"],
+                    "url": f"https://{c['domain']}",
+                    "aliases": c.get("aliases", []),
+                    "port": c["port"],
+                    "version": c["version"],
+                    "memory": c["memory"],
+                    "state": self.state_of(c, ps),
+                    **({"page_host": c["page_host"]} if c.get("page_host") else {}),
+                }
+                for c in self.companies()
+            ],
+        }
 
     def status(self, args) -> dict:
         c = self.company(args.company)
         ps = self.containers(c["slug"])
         state = self.state_of(c, ps)
         # A sleeping company is not probed: through the router, that would wake it.
-        healthy = state not in ("removed", "sleeping") and \
-            self.system.http_status(c["domain"], contract.HEALTH_PATH) == 200
-        return {"ok": True, "company": c["slug"], "url": f"https://{c['domain']}", "aliases": c.get("aliases", []),
-                "port": c["port"], "version": c["version"], "memory": c["memory"], "state": state, "healthy": healthy,
-                "container": ps.get(c["slug"], {"state": "", "health": ""})}
+        healthy = (
+            state not in ("removed", "sleeping") and self.system.http_status(c["domain"], contract.HEALTH_PATH) == 200
+        )
+        return {
+            "ok": True,
+            "company": c["slug"],
+            "url": f"https://{c['domain']}",
+            "aliases": c.get("aliases", []),
+            "port": c["port"],
+            "version": c["version"],
+            "memory": c["memory"],
+            "state": state,
+            "healthy": healthy,
+            "container": ps.get(c["slug"], {"state": "", "health": ""}),
+            **({"page_host": c["page_host"], "page_url": f"https://{c['page_host']}"} if c.get("page_host") else {}),
+        }
 
     def live(self, slug: str) -> dict:
         """The company's record, read under its lock (so another command cannot have changed it since); not_found when
@@ -1392,7 +2073,7 @@ class Cell:
             self.ensure_stopped(slug)
             route = c.get("state") != "stopped"
             c["state"] = "stopped"
-            _set_wake_at(c, None)           # no longer asleep, so no timed wake
+            _set_wake_at(c, None)  # no longer asleep, so no timed wake
             self.save(c)
             if route:
                 self.routed()
@@ -1404,12 +2085,12 @@ class Cell:
         with self.lock("company-" + slug):
             c = self.live(slug)
             before = self.containers(slug).get(slug, {})
-            route = c.get("state") != "running"     # stopped (503) or sleeping (the wake service): to the server now
+            route = c.get("state") != "running"  # stopped (503) or sleeping (the wake service): to the server now
             c["state"] = "running"
             _set_wake_at(c, None)
             self.save(c)
             if route:
-                self.routed()               # the router holds requests until the server answers
+                self.routed()  # the router holds requests until the server answers
             ready = self.launch(c, started, args.timeout)
         return self.answer(c, ready, before.get("state") != "running")
 
@@ -1451,8 +2132,7 @@ class Cell:
         c, ready, changed = self.wake_company(check_slug(args.company), args.timeout, started)
         return self.answer(c, ready, changed)
 
-    def wake_company(self, slug: str, timeout: int, started: float | None = None,
-                     due=None) -> tuple[dict, int, bool]:
+    def wake_company(self, slug: str, timeout: int, started: float | None = None, due=None) -> tuple[dict, int, bool]:
         """A sleeping company's server started under its lock, as `start` starts it (a pending update is finished or
         rolled back there too), healthy on its own port, then marked running and routed straight to it. A running one
         is only checked. A start that does not come up is stopped again, so the company sleeps and the next request
@@ -1490,6 +2170,68 @@ class Cell:
             if failed:
                 raise failed
         return c, ready, True
+
+    def refuse_taken(self, slug: str, mine: set[str]) -> None:
+        """domain_taken when another company or a route already answers on one of `mine`."""
+        for other in self.live_companies():
+            clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
+            if clash:
+                raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
+        for r in self.routes():
+            clash = sorted(mine & set(r["hosts"]))
+            if clash:
+                raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
+
+    def set_page_host(self, args) -> dict:
+        """A running company's page host (docs/company-page.md), or "" to clear it: what `add --page-host` sets, without
+        add's sign-in settings, so staff can turn on the page for a company that already runs. Its settings are
+        rewritten, its server restarts and the host is routed; a cleared host keeps the folder. The record carries
+        `page_pending` until the restarted server answers, so a run that failed is redone in full when given again; a
+        settled one only re-writes its routes."""
+        started = self.system.monotonic()
+        slug = check_slug(args.company)
+        cell = self.load_cell()
+        host = check_host(args.host, "--host", cell["domain"]) if (args.host or "").strip() else ""
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            if c.get("state") != "running":
+                raise CellError("not_running", f"{slug} is {c.get('state')}; start it before giving it a page host")
+            if host and host in {c["domain"], *c.get("aliases", [])}:
+                raise CellError("bad_domain", f"--host {host} is one of the company's own hosts")
+            if host == c.get("page_host", "") and not c.get("page_pending"):
+                with self.lock("cell"):
+                    routed = [self.write_router(), self.write_tunnel()]
+                return {"ok": True, "company": slug, "page_host": host or None, "changed": any(routed)}
+            d = self.dir(slug)
+            env = envfile.parse(_read(d / ".env"))
+            self.secrets += [v for k, v in env.items() if k in contract.SECRET_KEYS and v and v not in self.secrets]
+            refuse_server_host(host, env, "--host")
+            with self.lock("cell"):  # the host's owner is checked and recorded under one lock, as add does
+                self.refuse_taken(slug, {host} if host else set())
+                if host:
+                    pages = self.pages_dir(slug)
+                    pages.mkdir(parents=True, exist_ok=True)
+                    os.chmod(pages, 0o755)
+                    self.system.chown(pages, SERVER_UID, SERVER_UID)
+                    c["page_host"] = host
+                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                else:
+                    c.pop("page_host", None)
+                    env.pop("TICO_READER_ORIGIN", None)
+                    env.pop("TICO_COMPANY_PAGE_DIR", None)
+                c["page_pending"] = True
+                self.write_company(c, envfile.render(env), "")
+                self.save(c)
+
+            def route():
+                with self.lock("cell"):
+                    self.write_router()
+                    self.write_tunnel()
+
+            ready = self.launch(c, started, args.timeout, route)
+            c.pop("page_pending", None)
+            self.save(c)
+            return {**self.answer(c, ready, True), "page_host": host or None}
 
     def set_sleep(self, args) -> dict:
         """The company's sleep policy on its record (its server reads it through GET /sleep): N idle minutes, 0 for
@@ -1531,7 +2273,7 @@ class Cell:
             env_text = _read(d / ".env")
             self.secrets += [v for k, v in envfile.parse(env_text).items() if k in contract.SECRET_KEYS and v]
             extra = self.extra_env(slug)
-            running = c.get("state") not in ("stopped", "sleeping")     # one that is not stays as it is
+            running = c.get("state") not in ("stopped", "sleeping")  # one that is not stays as it is
             pending = c.get("pending")
             self.taken = (pending or {}).get("snapshot", "")
             if c["version"] == args.version:
@@ -1571,8 +2313,11 @@ class Cell:
         """`err` from before an update changed anything, after starting the old release again if it ran."""
         if running:
             r = self.system.run(self.compose(c["slug"], "up", "-d", "--remove-orphans"))
-            err.detail += (f"; still on {c['version']}" if not r.returncode else
-                           f"; starting {c['version']} again failed too: " + (r.stderr or r.stdout).strip()[-300:])
+            err.detail += (
+                f"; still on {c['version']}"
+                if not r.returncode
+                else f"; starting {c['version']} again failed too: " + (r.stderr or r.stdout).strip()[-300:]
+            )
         err.extra = {"version": c["version"]}
         return err
 
@@ -1586,8 +2331,10 @@ class Cell:
         if "hub.sqlite" not in found:
             return ""
         if any(not stat.S_ISREG(os.lstat(data / n).st_mode) for n in found):
-            raise CellError("snapshot_failed", "the database in data/ is not plain files (a symlink or other special "
-                                               "file); nothing was copied")
+            raise CellError(
+                "snapshot_failed",
+                "the database in data/ is not plain files (a symlink or other special file); nothing was copied",
+            )
         target = snaps / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{version}"
         try:
             target.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1615,8 +2362,9 @@ class Cell:
         try:
             self.ensure_stopped(slug)
         except CellError as e:
-            raise failed(f"could not stop {c['version']} to put {old} back, so its database was left as it is: "
-                         f"{e.detail}") from None
+            raise failed(
+                f"could not stop {c['version']} to put {old} back, so its database was left as it is: {e.detail}"
+            ) from None
         if pending.get("snapshot"):
             snapshot = self.dir(slug) / "snapshots" / pending["snapshot"]
             try:
@@ -1629,8 +2377,9 @@ class Cell:
                         shutil.copy2(snapshot / name, data / name)
                         self.system.chown(data / name, SERVER_UID, SERVER_UID)
             except OSError as e:
-                raise failed(f"could not put the database from {old} back ({e}); the server is stopped on "
-                             f"{c['version']}") from None
+                raise failed(
+                    f"could not put the database from {old} back ({e}); the server is stopped on {c['version']}"
+                ) from None
         env = self.dir(slug) / ".env"
         _write_atomic(env, _with_tag(_read(env), old), 0o600)
         c["version"] = old
@@ -1640,12 +2389,82 @@ class Cell:
             return
         r = self.system.run(self.compose(slug, "up", "-d", "--remove-orphans"))
         if r.returncode:
-            raise failed(f"{old} and its database are back, but starting it failed: "
-                         + (r.stderr or r.stdout).strip()[-300:])
+            raise failed(
+                f"{old} and its database are back, but starting it failed: " + (r.stderr or r.stdout).strip()[-300:]
+            )
         try:
             self.wait_healthy(c, self.system.monotonic(), timeout)
         except CellError as e:
             raise failed(f"{old} and its database are back, but it does not answer: {e.detail}") from None
+
+    def route(self, args) -> dict:
+        """A route: hosts that are not a company's, sent to a loopback port on this host (docs/cell.md, Routes). `set`
+        replaces the route's hosts and ports; `remove` drops it. Both rewrite the router (a reload, as `add` does) and,
+        unless --router-only, the tunnel's routes, restarting the tunnel when a host the wildcard misses came or went.
+        Every command that rewrites the router or tunnel keeps the routes."""
+        cell = self.load_cell()
+        if args.op == "list":
+            return {"ok": True, "routes": self.routes()}
+        if not args.name:
+            raise CellError("bad_args", "--name is required")
+        name = check_slug(args.name)
+        path = self.root / ROUTES / f"{name}.json"
+        with self.lock("cell"):
+            if getattr(args, "if_router_current", False):
+                # A checkout that may be older than the host's core (the demo's deploy): change nothing unless the
+                # router's file is what this checkout writes, read under the same lock the rewrite takes.
+                live = self.live_companies()
+                if _read(self.root / "router" / "Caddyfile") not in (
+                    router_config(live),
+                    router_config(live, self.routes()),
+                ):
+                    raise CellError(
+                        "router_changed",
+                        "the router's file is not what this checkout's cell writes for "
+                        "these companies; not touching it",
+                    )
+            if args.op == "set":
+                hosts = [check_host(h, "--host", cell["domain"]) for h in args.host or []]
+                ports = list(args.port or [])
+                if not hosts or len(hosts) > MAX_ROUTE_HOSTS or len(set(hosts)) != len(hosts):
+                    raise CellError("bad_domain", f"--host: 1 to {MAX_ROUTE_HOSTS} different hostnames")
+                if (
+                    not ports
+                    or len(ports) > MAX_ROUTE_PORTS
+                    or len(set(ports)) != len(ports)
+                    or any(p not in ROUTE_PORTS or p in CELL_PORTS for p in ports)
+                ):
+                    raise CellError(
+                        "bad_args",
+                        f"--port: 1 to {MAX_ROUTE_PORTS} different loopback ports from "
+                        f"{ROUTE_PORTS.start} to {ROUTE_PORTS.stop - 1}, not the cell's own",
+                    )
+                for c in self.live_companies():
+                    clash = sorted(set(hosts) & set(hosts_of(c)))
+                    if clash:
+                        raise CellError("domain_taken", f"{clash[0]} belongs to {c['slug']}")
+                for r in self.routes():
+                    clash = sorted(set(hosts) & set(r["hosts"])) if r["name"] != name else []
+                    if clash:
+                        raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
+                record = {"name": name, "hosts": hosts, "ports": ports, "noindex": bool(args.noindex)}
+                changed = _write_atomic(path, json.dumps(record, indent=2, sort_keys=True) + "\n", 0o600)
+            else:
+                changed = path.exists()
+                path.unlink(missing_ok=True)
+            routed = self.write_router()
+            tunneled = False if args.router_only else self.write_tunnel()
+            pending = (self.root / "tunnel.env").exists() and self.tunnel_text(
+                cell["domain"], cell.get("page_domain")
+            ) != _read(self.root / "tunnel" / "cloudflared.yml")
+        return {
+            "ok": True,
+            "route": name,
+            "changed": changed,
+            "router": routed,
+            "tunnel": tunneled,
+            "tunnel_pending": pending,
+        }
 
     def remove(self, args) -> dict:
         """The company's slot (its index, so its port) stays taken until the router no longer sends its domain there:
@@ -1668,6 +2487,7 @@ class Cell:
                 self.write_tunnel()
                 if not args.keep_data:
                     shutil.rmtree(d)
+                    shutil.rmtree(self.pages_dir(slug), ignore_errors=True)  # after the router stopped serving it
         return {"ok": True, "company": slug, "removed": True, "kept_data": bool(args.keep_data)}
 
 
@@ -1678,12 +2498,13 @@ def wake_at_text(value) -> str | None:
     for anything else, so the updater's POST /sleep and `sleep --wake-at` refuse the same values."""
     if value is None:
         return None
-    bad = CellError("bad_wake_at", "wake_at is an ISO-8601 UTC time such as 2026-10-30T18:00:00Z, at most "
-                    f"{WAKE_AT_DAYS} days out")
-    if not isinstance(value, str) or not WAKE_AT_SHAPE.fullmatch(value):   # ISO-8601 shape, not a loose parse
+    bad = CellError(
+        "bad_wake_at", f"wake_at is an ISO-8601 UTC time such as 2026-10-30T18:00:00Z, at most {WAKE_AT_DAYS} days out"
+    )
+    if not isinstance(value, str) or not WAKE_AT_SHAPE.fullmatch(value):  # ISO-8601 shape, not a loose parse
         raise bad
     text = value
-    if text.endswith("Z"):              # fromisoformat takes an offset, not the Z (before Python 3.11)
+    if text.endswith("Z"):  # fromisoformat takes an offset, not the Z (before Python 3.11)
         text = text[:-1] + "+00:00"
     try:
         when = datetime.datetime.fromisoformat(text)
@@ -1728,13 +2549,22 @@ def _with_tag(env_text: str, version: str, extra: dict[str, str] | None = None, 
     return envfile.render(cell_env(values, c) if c else values)
 
 
-def main(argv: list[str], *, system: System | None = None, root: str | Path | None = None,
-         host_root: str | Path = "/", compose_source: Path | None = None, out=None) -> int:
+def main(
+    argv: list[str],
+    *,
+    system: System | None = None,
+    root: str | Path | None = None,
+    host_root: str | Path = "/",
+    compose_source: Path | None = None,
+    out=None,
+) -> int:
     out = out or sys.stdout
-    cell = Cell(Path(root or os.environ.get("TICO_CELL_ROOT") or ROOT), system or System(), Path(host_root), compose_source)
+    cell = Cell(
+        Path(root or os.environ.get("TICO_CELL_ROOT") or ROOT), system or System(), Path(host_root), compose_source
+    )
     try:
         args = parser().parse_args(argv)
-        result = getattr(cell, args.action.replace("-", "_"))(args)     # set-sleep is set_sleep
+        result = getattr(cell, args.action.replace("-", "_"))(args)  # set-sleep is set_sleep
     except CellError as e:
         result = {"ok": False, "error": e.code, "detail": cell.scrub(e.detail), **e.extra}
     except Exception as e:  # noqa: BLE001  an answer HQ can read, even for a bug; the secrets scrubbed out of it

@@ -29,8 +29,8 @@ re-derive it. Figures name their source and the year.
 
 ## Definitions to keep fixed
 
-- **No-show**: booked, not attended, not cancelled before the cancellation window closed.
-- **Late cancellation**: cancelled inside the cancellation window.
+- **No-show**: booked, not attended, not canceled before the cancellation window closed.
+- **Late cancellation**: canceled inside the cancellation window.
 - **Clash**: two bookings for the same person, room or crew at overlapping times, or one booking that breaks an opening hour
   or a required buffer.
 

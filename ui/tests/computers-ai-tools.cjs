@@ -24,10 +24,10 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
     const tool = (name, runtime, version) => ({name, runtime, installed: true, version, managed: true, state: 'idle',
       wanted: true, pinned: false, update_available: false, detail: ''});
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
+    const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
       turn_summary: '3 running · 1 starting · 37 waiting for shared login (oldest 2 h) · 5 queued',
       turn_counts: {running: 3, starting: 1, waiting: 37, queued: 5, waits: []},
-      last_seen: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
+      last_seen_at: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
       update: {state: 'needs_update', label: 'Needs update', target: '0.3.53'}, inbox_only: false,
       readiness: {
         runtimes: {
@@ -53,16 +53,18 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         {bot: 'helper', profile: null, source: 'computer', runtime: 'claude', harness: 'claude', signed_in: true, problem: ''},
         {bot: 'ops', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''},
         {bot: 'writer', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''}]};
-    const empty = {id: 'empty', label: 'Spare server', operator: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen: at(-2000),
+    const empty = {id: 'empty', label: 'Spare server', owner_id: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen_at: at(-2000),
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}, harnesses: {}}, profiles: [], bot_connections: []};
     // Before its first report the server sends readiness_document(None) (backend/store.py).
-    const fresh = {id: 'fresh', label: 'Fresh Mac', operator: 'ana', bots: [], version: '', last_seen: at(-2000), readiness: {schema_version: 0, runtimes: {}, bots: {}}};
-    const revoked = {id: 'old', label: 'Old laptop', operator: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen: at(-86400000),
+    const fresh = {id: 'fresh', label: 'Fresh Mac', owner_id: 'ana', bots: [], version: '', last_seen_at: at(-2000), readiness: {schema_version: 0, runtimes: {}, bots: {}}};
+    const revoked = {id: 'old', label: 'Old laptop', owner_id: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen_at: at(-86400000),
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
     const writes = [];
     let presenceMode = 'fixed', presenceReads = 0, presenceOffset = 0;
     const heldPresence = [];
+    let holdRename = false;
+    const heldRenames = [];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -71,12 +73,20 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      if (req.method() !== 'GET') { writes.push({p, body: req.postDataJSON?.()}); return json({}); }
+      if (req.method() !== 'GET') {
+        writes.push({p, body: req.postDataJSON?.()});
+        if (p === '/api/v2/computers/box/label') {
+          const label = req.postDataJSON().label;
+          if (holdRename) { heldRenames.push(() => { box.label = label; return json({}); }); return; }
+          box.label = label;
+        }
+        return json({});
+      }
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0].toUpperCase() + name.slice(1),
-        status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', operator: 'ana'}})));
+        status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}})));
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
@@ -86,10 +96,10 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         presenceReads++;
         if (presenceMode === 'slow') { heldPresence.push(route); return; }
         if (presenceMode === 'failure') return json({error: 'Unavailable'}, 503);
-        if (presenceMode === 'live') box.last_seen = at(presenceOffset - 3000);
+        if (presenceMode === 'live') box.last_seen_at = at(presenceOffset - 3000);
         return json({machines: [box, empty, fresh, revoked], services: []});
       }
-      // The manifests' capabilities this page reads (runner/harnesses/*.toml).
+      // The manifests' capabilities this page reads (runner-rs/harnesses/*.toml).
       if (p === '/api/v2/providers') return json({enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'},
         providers: [{id: 'openai', label: 'OpenAI'}]});
       if (p === '/api/v2/models') return json({models: [{id: 'test-model', label: 'Test model', provider: 'openai', runtime: 'codex'}], harnesses: [
@@ -206,6 +216,58 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await dialog.locator('[data-inbox-only=box]').check();
     for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/runners/box/inbox-only'); i++) await page.waitForTimeout(20);
     assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only').body, {enabled: true});
+    // Rename: the name becomes a field; Escape and Cancel leave it; a blank name is not sent; Save renames.
+    const renamed = () => writes.filter(w => w.p === '/api/v2/computers/box/label');
+    const nameField = dialog.locator('[data-computer-rename-input]');
+    await dialog.locator('[data-computer-rename=box]').click();
+    assert.equal(await nameField.evaluate(el => el === document.activeElement), true);
+    assert.equal(await nameField.inputValue(), 'Team box');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#set-machines dialog.computer-detail[open]').count(), 1, 'Escape leaves the pop-up open');
+    assert.equal(await nameField.count(), 0);
+    await dialog.locator('[data-computer-rename=box]').click();
+    await nameField.fill('   ');
+    await dialog.locator('.computer-rename-form button[type=submit]').click();
+    await dialog.locator('[data-field-err]').waitFor();
+    assert.equal(renamed().length, 0);
+    await dialog.locator('[data-computer-rename-cancel]').click();
+    assert.equal(await dialog.locator('#computer-detail-title').innerText(), 'Team box');
+    await dialog.locator('[data-computer-rename=box]').click();
+    await nameField.fill('  Studio box ');
+    await nameField.press('Enter');
+    for (let i = 0; i < 100 && !renamed().length; i++) await page.waitForTimeout(20);
+    assert.deepEqual(renamed().map(w => w.body), [{label: 'Studio box'}]);
+    await nameField.waitFor({state: 'detached'});
+    assert.equal(await dialog.locator('#computer-detail-title').innerText(), 'Studio box');
+    await row('box').locator('.machine-name', {hasText: 'Studio box'}).waitFor();
+    box.label = 'Team box';
+    await page.evaluate(() => loadSettings());
+    // A rename that answers after its pop-up moved on to another computer leaves that computer's edit as it is.
+    holdRename = true;
+    await dialog.locator('[data-computer-rename=box]').click();
+    await nameField.fill('Slow box');
+    await nameField.press('Enter');
+    for (let i = 0; i < 100 && !heldRenames.length; i++) await page.waitForTimeout(20);
+    assert.equal(heldRenames.length, 1);
+    await dialog.locator('[data-detail-close]').click();
+    await row('empty').locator('.machine-name').click();
+    await dialog.locator('[data-computer-rename=empty]').click();
+    await nameField.fill('Spare draft');
+    const writesBefore = writes.length;
+    await heldRenames.shift()();
+    holdRename = false;
+    await page.waitForFunction(() => (SETTINGS_DATA.machines || []).find(m => m.id === 'box')?.label === 'Slow box');
+    await page.evaluate(() => loadSettings());
+    assert.equal(await page.locator('#set-machines dialog.computer-detail').getAttribute('data-computer'), 'empty');
+    assert.equal(await nameField.inputValue(), 'Spare draft', 'the other computer keeps its draft');
+    assert.equal(await nameField.evaluate(el => el === document.activeElement), true);
+    assert.equal(writes.length, writesBefore);
+    await dialog.locator('[data-computer-rename-cancel]').click();
+    await dialog.locator('[data-detail-close]').click();
+    box.label = 'Team box';
+    await page.evaluate(() => loadSettings());
+    await row('box').locator('.machine-name').click();
+    await dialog.locator('[data-inbox-only=box]').waitFor();
     assert.equal(await dialog.locator('[data-detail-section=settings] [data-computer-remove=box]').innerText(), 'Revoke computer');
     await dialog.locator('[data-detail-close]').click();
     assert.equal(await page.locator('#set-machines dialog.computer-detail[open]').count(), 0);
@@ -235,7 +297,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.keyboard.press('Escape');
 
     // 23. Offline: last seen on the row, chips keep their reading, actions wait for the computer.
-    box.last_seen = at(-3 * 3600000);
+    box.last_seen_at = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
     assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline · last seen 3h ago');
@@ -250,7 +312,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     // Desktop apps (a Mac's app driver), under Versions and updates: only when the computer reports `appdriver`, one row
     // per app with its state and the driver's detail; still titled on a phone. Bots sharing one ChatGPT sign-in take
     // turns (backend/views.py shared_logins): each login a line stands for says so, naming the bots this reader may see.
-    box.last_seen = at(-2000);
+    box.last_seen_at = at(-2000);
     await page.evaluate(() => loadSettings());
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-connection]').first().waitFor();
@@ -414,7 +476,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
     for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
-      body: JSON.stringify({machines: [{...box, last_seen: at(-3 * 3600000)}], services: []})});
+      body: JSON.stringify({machines: [{...box, last_seen_at: at(-3 * 3600000)}], services: []})});
     await online(); // A late answer to the timed-out read cannot replace the newer heartbeat.
     await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
     await page.keyboard.press('Escape');
@@ -460,7 +522,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
 
     // 22. A member who is neither admin nor operator sees everything and can change nothing. The server sends them no
     // accounts and no usage of the computer's own login.
-    box.last_seen = at(-2000);
+    box.last_seen_at = at(-2000);
     for (const state of Object.values(box.readiness.runtimes)) { delete state.account; delete state.weekly; }
     Object.assign(box, {may_manage: false});
     await page.evaluate(() => { S.me = {...S.me, id: 'cara', role: 'member', bot_admin: false}; return loadSettings(); });
@@ -471,7 +533,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
     assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], '
       + '[data-computer-remove], [data-inbox-only], [data-member-bots], [data-turns-at-once], [data-computer-screen], '
-      + '[data-harness-choice], [data-performance-mode]').count(), 0);
+      + '[data-harness-choice], [data-performance-mode], [data-computer-rename]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);

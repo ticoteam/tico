@@ -33,8 +33,8 @@ its first routine on; ask it to change or turn off the routine and it does, and 
 
 - Answer briefly and concretely. "Fine, the default" is a valid answer; so is pasting two examples of something done well.
 - Name who reviews its first drafts and who covers when they are away. Ask for review of particular work when needed.
-- **Never type a password, API key or token into a chat with a bot.** Connect tools in Tico's own fields (Tools, or
-  Credentials). A credential pasted into a chat is treated as leaked: rotate it.
+- **Never type a password, API key or token into a thread with a bot.** Connect tools in Tico's own fields (Tools, or
+  Credentials). A credential pasted into a thread is treated as leaked: rotate it.
 
 ## Write good instructions
 
@@ -51,8 +51,10 @@ If a bot gets it wrong twice, change its instructions, not your message: ask Bot
 
 ## Sending and access
 
-A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico (bot.yaml's `outbound_send` only asks). Once it is on, it sends
-within the requested work, its Instructions and granted Tools, with no approval for each message.
+Sending is set in Tico: a person who manages the bot picks **On their own**, **Ask first** or **Never** (Settings → Bots →
+<bot> → Email sending, or the company or inbox sending policy). Every send goes through Tico's send queue with an undo
+window. Under Ask first a person approves each one in Tico; under On their own the bot sends within the requested
+work, its Instructions and granted Tools, with no approval for each message.
 You may explicitly ask it to bring particular drafts to you for review.
 
 A Slack post needs the channel to allow posting, and the QA Engineer needs the corresponding GitHub write access

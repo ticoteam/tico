@@ -1,11 +1,11 @@
 /* ui/app/task-runs.js — A task's Runs section: where the work left off (the checkpoint), what is still running in the
-   background, and every attempt with what followed it and the subagents it started (GET /v2/tasks/{id}/run-view).
+   background, and every run with what followed it and the subagents it started (GET /v2/tasks/{id}/run-view).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const RUNS_POLL_MS = 15000;
 const RUN_STATE_WORDS = {leased: 'starting', running: 'running', expired: 'lease expired', failed: 'failed',
-  interrupted: 'stopped', completed: 'done', cancelled: 'cancelled', stopped: 'stopped', limited: 'hit a usage limit'};
+  interrupted: 'stopped', completed: 'done', canceled: 'canceled', stopped: 'stopped', limited: 'hit a usage limit'};
 const RUN_NEXT_WORDS = {resumed: 'Run again', dismissed: 'Not run again', retried: 'Run again', waiting: 'Waiting for a person',
   queued: 'Queued again'};
 
@@ -17,9 +17,9 @@ function runStateWord(a) {
   return RUN_STATE_WORDS[word] || String(word || '').replace(/_/g, ' ');
 }
 // The job's state beside its recovery decision; a saved choice still waiting for its lane is held (backend/run_view.py).
-const RUN_JOB_WORDS = {uncertain: 'Held', cancelled: 'Cancelled', queued: 'Queued', leased: 'Running', running: 'Running',
+const RUN_JOB_WORDS = {uncertain: 'Held', canceled: 'Canceled', queued: 'Queued', leased: 'Running', running: 'Running',
   input: 'Running', completed: 'Done'};
-// "Cancelled: dismissed by BotOps at 09:50Z": the job's state and the resume or dismiss decided about this try, read
+// "Canceled: dismissed by BotOps at 09:50Z": the job's state and the resume or dismiss decided about this try, read
 // from the decision record each time (job_recovery), so a later decision replaces it. The decision carries `state` only
 // while it is about the job's current try; once a later try ran, it says only what was decided ("Resumed by BotOps
 // at 09:50Z"). '' with no decision.
@@ -53,17 +53,17 @@ function runAgentsHTML(agents, model) {
 }
 function runShellHTML(s) {
   return `<li><span class="mono">${esc(s.tool)}${s.summary ? ' · ' + esc(s.summary) : ''}</span> <span class="muted">${esc(s.running
-    ? 'running · started ' + ago(s.started) : s.status || 'ended')}</span></li>`;
+    ? 'running · started ' + ago(s.started_at) : s.status || 'ended')}</span></li>`;
 }
 // A failed try offers Report this: Support opens with the run and its reason attached (ui/support.js).
 function runReportHTML(a) {
   if (!['failed', 'expired'].includes(a.state) || !window.supportOn?.() || !window.reportThisHTML) return '';
   return `<p class="truns-report">${window.reportThisHTML({kind: 'run', title: `${a.bot ? a.bot + ' run ' : 'Run '}${runStateWord(a)}${a.reason ? ': ' + a.reason : ''}`,
-    detail: a.reason || '', ref: a.run || '', group: 'run:' + (a.state || '') + ':' + String(a.reason || '').replace(/\d+/g, '#').slice(0, 80)})}</p>`;
+    detail: a.reason || '', ref: a.id || '', group: 'run:' + (a.state || '') + ':' + String(a.reason || '').replace(/\d+/g, '#').slice(0, 80)})}</p>`;
 }
 function runAttemptHTML(a, open) {
   const model = ranOn(a.ran_on);
-  const took = a.took_s != null ? durationWords(a.took_s) : a.started ? 'for ' + ago(a.started).replace(/ ago$/, '') : '';
+  const took = a.took_s != null ? durationWords(a.took_s) : a.started_at ? 'for ' + ago(a.started_at).replace(/ ago$/, '') : '';
   const decided = runDecisionWords(a);
   const head = [`Try ${a.try} of ${a.tries}`, runStateWord(a), decided, took, model].filter(Boolean).join(' · ');
   // The decision line says what `next` would for a resume or dismiss, with the note beside it.
@@ -77,22 +77,22 @@ function runAttemptHTML(a, open) {
   const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc(a.wake.reason)} · ${esc(a.wake.profile_label || a.wake.preset_label)}${a.wake.held_until
     ? ` · held until ${esc(fmt(a.wake.held_until))}` : ''}</p>` : '';
   const shells = (a.background || []).length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${a.background.map(runShellHTML).join('')}</ul></div>` : '';
-  return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.run)}">
-    <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started || a.created))}">${esc(ago(a.started || a.created))}</span></summary>
+  return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.id)}">
+    <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started_at || a.created_at))}">${esc(ago(a.started_at || a.created_at))}</span></summary>
     ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.paused, a.moved, ranOnNote(a.ran_on)].filter(Boolean).map(t =>
       `<p class="muted truns-moved">${esc(t)}</p>`).join('')}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
     ${runAgentsHTML(a.subagents || [], ranOn(a.ran_on, false))}${shells}
     ${(a.subagents || []).length || shells || nxt || a.reason || a.waiting || a.paused || a.moved || ranOnNote(a.ran_on) ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;
 }
 function taskRunsHTML(v) {
-  const attempts = v.attempts || [], cp = v.checkpoint;
-  const live = attempts.flatMap(a => (a.background || []).filter(s => s.running));
-  if (!attempts.length && !cp) return '';
+  const runs = v.runs || [], cp = v.checkpoint;
+  const live = runs.flatMap(a => (a.background || []).filter(s => s.running));
+  if (!runs.length && !cp) return '';
   return `<h3 class="rail-h">Runs</h3>
     ${cp ? `<div class="truns-cp"><div class="lbl">Where it left off</div><div class="truns-cp-text">${esc(cp.text)}</div>
       <div class="muted">${esc(actorLabel(cp.by))} · <span title="${esc(fmt(cp.at))}">${esc(ago(cp.at))}</span></div></div>` : ''}
     ${live.length ? `<div class="truns-live"><div class="lbl">Still running in the background</div><ul class="truns-list">${live.map(runShellHTML).join('')}</ul></div>` : ''}
-    ${attempts.map((a, i) => runAttemptHTML(a, i === 0)).join('')}`;
+    ${runs.map((a, i) => runAttemptHTML(a, i === 0)).join('')}`;
 }
 // Loads once per open and again every RUNS_POLL_MS while a run is live; a closed or moved dialog stops it.
 async function taskRunsLoad(d, id) {
@@ -112,5 +112,5 @@ async function taskRunsLoad(d, id) {
     });
   }
   el.hidden = !html;
-  if ((view.attempts || []).some(a => a.state === 'running' || a.state === 'leased')) d.runsTimer = setTimeout(() => taskRunsLoad(d, id), RUNS_POLL_MS);
+  if ((view.runs || []).some(a => a.state === 'running' || a.state === 'leased')) d.runsTimer = setTimeout(() => taskRunsLoad(d, id), RUNS_POLL_MS);
 }

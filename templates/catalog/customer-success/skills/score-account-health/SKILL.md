@@ -7,7 +7,7 @@ description: Give one account a green, yellow, red or waiting-on-customer status
 When to use: each weekly brief, before a renewal stage review, or when a person asks why an account is at risk.
 
 Steps:
-1. Confirm the lifecycle stage. An account still in onboarding is scored against its onboarding plan, not against adoption. An account that is paused or cancelling is scored as cancelling and its terms go to the Account Manager.
+1. Confirm the lifecycle stage. An account still in onboarding is scored against its onboarding plan, not against adoption. An account that is paused or canceling is scored as canceling and its terms go to the Account Manager.
 2. Check for a waiting state. If the account is blocked on a step the customer owns and the request has a date, mark it "waiting on customer" with that date. Do not score it red for that step before the date passes. Step 6 still applies: a hard signal sets red whatever the wait.
 3. Read each family in `knowledge/health-practice.md`: adoption, support, relationship, commercial. For each, write green, yellow, red or unknown, with one dated fact.
 4. Apply the rules in `knowledge/health-rules.md`. If that file has no rule for the case, use the starting rules in `knowledge/health-practice.md` and say so.

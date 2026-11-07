@@ -2,7 +2,8 @@
 //! from `credential-runtime` next to its granted credentials, so it reaches whichever computer runs the turn and never
 //! the bot's repository.
 //!
-//! A turn may be handed two, its runtime's and its fallback's; each process gets only its own (`start`). An
+//! A turn may use its primary, named fallback and automatic candidates. Automatic values are fetched only at the
+//! hop boundary (`activate`); each process gets only its own (`start`). An
 //! environment subscription (`env`: a Claude setup-token as CLAUDE_CODE_OAUTH_TOKEN, an Anthropic key) is set in that
 //! process's environment, and the runtime's other sign-in variables are taken out of the turn's so the CLI cannot
 //! prefer one of them (Claude Code ranks ANTHROPIC_API_KEY above the token). The computer's own key for that runtime is
@@ -89,7 +90,10 @@ struct Live {
 
 fn homes() -> MutexGuard<'static, Homes> {
     static HOMES: OnceLock<Mutex<Homes>> = OnceLock::new();
-    HOMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+    HOMES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 fn safe_id(id: &str) -> bool {
@@ -97,7 +101,11 @@ fn safe_id(id: &str) -> bool {
 }
 
 fn billing(value: &Value) -> &'static str {
-    if value.as_str() == Some("api") { "api" } else { "subscription" }
+    if value.as_str() == Some("api") {
+        "api"
+    } else {
+        "subscription"
+    }
 }
 
 /// What to mask for a sign-in file: the text whole and every string in it long enough to be a token or key (not
@@ -106,7 +114,10 @@ pub fn secrets_in(text: &str) -> Vec<String> {
     fn walk(v: &Value, out: &mut Vec<String>) {
         match v {
             Value::String(s) => {
-                let stamp = s.len() <= 40 && s.as_bytes().get(..5).is_some_and(|b| b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-');
+                let stamp = s.len() <= 40
+                    && s.as_bytes()
+                        .get(..5)
+                        .is_some_and(|b| b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-');
                 if s.trim().len() >= MIN_SECRET && !stamp {
                     out.push(s.clone());
                 }
@@ -128,22 +139,42 @@ pub fn secrets_in(text: &str) -> Vec<String> {
 /// Every value joins `values`, the turn's redaction list, for the whole turn: a turn's two processes write to the
 /// same checkout and history. A malformed item is left out and said in the runner's log; the turn then runs as it
 /// would have without it.
-pub fn apply(state_dir: &Path, items: &Value, env: &mut Env, values: &mut Vec<String>, keys: &mut BTreeSet<String>)
-             -> Vec<Delivered> {
+pub fn apply(
+    state_dir: &Path,
+    items: &Value,
+    env: &mut Env,
+    values: &mut Vec<String>,
+    keys: &mut BTreeSet<String>,
+) -> Vec<Delivered> {
     let mut out = vec![];
     for item in items.as_array().into_iter().flatten() {
         let id = text_of(&item["id"]);
         let runtime = text_of(&item["runtime"]);
         let value = text_of(&item["value"]);
-        if !safe_id(&id) || runtime.is_empty() || value.is_empty() || value.len() > MAX_VALUE
-            || out.iter().any(|d: &Delivered| d.runtime == runtime) {
-            crate::util::diagnostic(&format!("Tico runner: left a subscription out of this turn: {id} is not usable"));
+        if !safe_id(&id)
+            || runtime.is_empty()
+            || value.is_empty()
+            || value.len() > MAX_VALUE
+            || out.iter().any(|d: &Delivered| d.runtime == runtime)
+        {
+            crate::util::diagnostic(&format!(
+                "Tico runner: left a subscription out of this turn: {id} is not usable"
+            ));
             continue;
         }
         let mut delivered = Delivered {
-            id: id.clone(), runtime: runtime.clone(), kind: text_of(&item["kind"]),
-            revision: item["revision"].as_i64().unwrap_or(0), billing: billing(&item["billing"]),
-            env: None, home: None, file: None, value: value.clone(), written: value.clone(), refreshed: None, held: false,
+            id: id.clone(),
+            runtime: runtime.clone(),
+            kind: text_of(&item["kind"]),
+            revision: item["revision"].as_i64().unwrap_or(0),
+            billing: billing(&item["billing"]),
+            env: None,
+            home: None,
+            file: None,
+            value: value.clone(),
+            written: value.clone(),
+            refreshed: None,
+            held: false,
         };
         let env_name = text_of(&item["env"]);
         if !env_name.is_empty() {
@@ -160,10 +191,15 @@ pub fn apply(state_dir: &Path, items: &Value, env: &mut Env, values: &mut Vec<St
         } else {
             let name = text_of(&item["file"]);
             if !FILES.contains(&name.as_str()) {
-                crate::util::diagnostic(&format!("Tico runner: left a subscription out of this turn: {id} names no known file"));
+                crate::util::diagnostic(&format!(
+                    "Tico runner: left a subscription out of this turn: {id} names no known file"
+                ));
                 continue;
             }
-            let home = crate::isolation::bot_state(state_dir).join("subscriptions").join(&id).join(&runtime);
+            let home = crate::isolation::bot_state(state_dir)
+                .join("subscriptions")
+                .join(&id)
+                .join(&runtime);
             values.extend(secrets_in(&value));
             if let Some((_, kept)) = homes().kept.get(&home) {
                 values.extend(secrets_in(kept));
@@ -174,6 +210,72 @@ pub fn apply(state_dir: &Path, items: &Value, env: &mut Env, values: &mut Vec<St
         out.push(delivered);
     }
     out
+}
+
+/// An automatic candidate is claim metadata until this runner asks for its value at the hop boundary.
+pub fn pending(attempt: &Value, runtime: &str) -> bool {
+    attempt["subscriptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|s| s["activate"] == true && s["runtime"].as_str() == Some(runtime))
+}
+
+pub fn available(delivered: &[Delivered], attempt: &Value, runtime: &str) -> bool {
+    for_runtime(delivered, runtime).is_some() || pending(attempt, runtime)
+}
+
+/// Fetch only immediately before the automatic runtime starts. The server serializes this delivery with login
+/// changes: a removed/held/rejected login yields no value; after delivery a change stops this attempt.
+/// Older servers send no `activate` metadata, so their original up-front delivery path stays in use.
+pub async fn activate(
+    url: &str,
+    token: &str,
+    state_dir: &Path,
+    attempt: &Value,
+    runtime: &str,
+    env: &mut Env,
+) -> Result<(Vec<Delivered>, Vec<String>), String> {
+    let expected = attempt["subscriptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| s["activate"] == true && s["runtime"].as_str() == Some(runtime))
+        .ok_or("No automatic subscription candidate")?;
+    // Runtime names originate in claim metadata, but still must not become arbitrary query text.
+    if !safe_id(runtime) {
+        return Err("Invalid subscription runtime".into());
+    }
+    let client = crate::client::Client::new(url, token, 15, 1)?;
+    let response = client
+        .get(&format!(
+            "credential-runtime?subscription_runtime={runtime}"
+        ))
+        .await
+        .map_err(|_| "Could not activate automatic subscription")?;
+    // A rolled-back server can return values without clearing the pending fence. Do not start on them.
+    if response["subscription_activated"] != true {
+        return Err("Server did not activate automatic subscription".into());
+    }
+    let items: Vec<Value> = response["subscriptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| s["runtime"] == expected["runtime"] && s["id"] == expected["id"])
+        .cloned()
+        .collect();
+    let mut secrets = vec![];
+    let got = apply(
+        state_dir,
+        &json!(items),
+        env,
+        &mut secrets,
+        &mut BTreeSet::new(),
+    );
+    if got.is_empty() {
+        return Err("Automatic subscription is no longer available".into());
+    }
+    Ok((got, secrets))
 }
 
 /// Sign `runtime` in, and only it, in `env`, the environment of its process about to start: the other runtimes'
@@ -196,7 +298,9 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
             }
         }
     }
-    let Some(at) = delivered.iter().position(|d| d.runtime == runtime) else { return secrets };
+    let Some(at) = delivered.iter().position(|d| d.runtime == runtime) else {
+        return secrets;
+    };
     let d = &mut delivered[at];
     if let Some(name) = d.env.clone() {
         for other in crate::harness_tools::api_key_env(runtime) {
@@ -205,9 +309,14 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
         env.insert(name, d.value.clone());
         return secrets;
     }
-    let (Some(home), Some(file)) = (d.home.clone(), d.file.clone()) else { return secrets };
+    let (Some(home), Some(file)) = (d.home.clone(), d.file.clone()) else {
+        return secrets;
+    };
     if !d.held {
-        let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         match place(&home, &name, &d.value, d.revision) {
             Ok(written) => {
                 if written != d.value {
@@ -217,7 +326,9 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
                 d.held = true;
             }
             Err(e) => {
-                crate::util::diagnostic(&format!("Tico runner: left a subscription out of this turn: {e}"));
+                crate::util::diagnostic(&format!(
+                    "Tico runner: left a subscription out of this turn: {e}"
+                ));
                 delivered.remove(at);
                 return secrets;
             }
@@ -237,11 +348,14 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
 /// unless it brings a newer revision (someone reconnected it). Returns what the file holds now.
 fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, String> {
     let mut homes = homes();
-    crate::isolation::mkdir(home, 0o700).map_err(|e| format!("cannot make a subscription home: {e}"))?;
+    crate::isolation::mkdir(home, 0o700)
+        .map_err(|e| format!("cannot make a subscription home: {e}"))?;
     let path = home.join(name);
     let live = homes.live.get(home).map(|l| l.revision);
     let current = match live {
-        Some(at) if revision <= at => std::fs::read_to_string(&path).ok().filter(|t| !t.trim().is_empty()),
+        Some(at) if revision <= at => std::fs::read_to_string(&path)
+            .ok()
+            .filter(|t| !t.trim().is_empty()),
         _ => None,
     };
     let text = match current {
@@ -255,7 +369,10 @@ fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, 
             text
         }
     };
-    let entry = homes.live.entry(home.to_path_buf()).or_insert(Live { turns: 0, revision });
+    let entry = homes
+        .live
+        .entry(home.to_path_buf())
+        .or_insert(Live { turns: 0, revision });
     entry.turns += 1;
     entry.revision = entry.revision.max(revision);
     Ok(text)
@@ -263,21 +380,34 @@ fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, 
 
 fn write_private(path: &Path, value: &str) -> Result<(), String> {
     let staged = path.with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&staged)
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&staged)
         .map_err(|e| format!("cannot write a subscription file: {e}"))?;
-    let written = crate::isolation::chown_file(&f).map_err(|e| e.to_string())
+    let written = crate::isolation::chown_file(&f)
+        .map_err(|e| e.to_string())
         .and_then(|_| f.write_all(value.as_bytes()).map_err(|e| e.to_string()));
     drop(f);
-    written.and_then(|_| std::fs::rename(&staged, path).map_err(|e| e.to_string()))
-        .inspect_err(|_| { let _ = std::fs::remove_file(&staged); })
+    written
+        .and_then(|_| std::fs::rename(&staged, path).map_err(|e| e.to_string()))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&staged);
+        })
 }
 
 /// Remove the sign-in files from one subscription home (and what a write cut short left), keeping its sessions.
 fn clear(home: &Path) {
-    let Ok(entries) = std::fs::read_dir(home) else { return };
+    let Ok(entries) = std::fs::read_dir(home) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let staged = FILES.iter().any(|f| name.strip_prefix(f.trim_end_matches(".json")).is_some_and(|rest| rest.starts_with(".tico-")));
+        let staged = FILES.iter().any(|f| {
+            name.strip_prefix(f.trim_end_matches(".json"))
+                .is_some_and(|rest| rest.starts_with(".tico-"))
+        });
         if FILES.contains(&name.as_str()) || staged || name == LEGACY_REVISION_FILE {
             let _ = std::fs::remove_file(entry.path());
         }
@@ -289,7 +419,11 @@ fn clear(home: &Path) {
 pub fn sweep(state_dir: &Path) {
     let root = crate::isolation::bot_state(state_dir).join("subscriptions");
     for sub in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-        for home in std::fs::read_dir(sub.path()).into_iter().flatten().flatten() {
+        for home in std::fs::read_dir(sub.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             if home.file_type().is_ok_and(|t| t.is_dir()) {
                 clear(&home.path());
             }
@@ -308,12 +442,18 @@ pub fn finish(delivered: &mut [Delivered]) -> Vec<String> {
 /// secret in the refreshed file. Nothing for a home not held.
 fn release(d: &mut Delivered) -> Vec<String> {
     let mut secrets = vec![];
-    let Some(home) = d.home.clone().filter(|_| d.held) else { return secrets };
+    let Some(home) = d.home.clone().filter(|_| d.held) else {
+        return secrets;
+    };
     d.held = false;
     let mut homes = homes();
     if let Some(now) = changed(d) {
         secrets.extend(secrets_in(&now));
-        if homes.live.get(&home).is_some_and(|l| l.revision == d.revision) {
+        if homes
+            .live
+            .get(&home)
+            .is_some_and(|l| l.revision == d.revision)
+        {
             homes.kept.insert(home.clone(), (d.revision, now.clone()));
         }
         d.refreshed = Some(now);
@@ -350,14 +490,24 @@ pub async fn send_back(client: &crate::client::Client, attempt: &str, delivered:
     for d in delivered {
         let Some(value) = &d.refreshed else { continue };
         let body = json!({"attempt": attempt, "subscription": d.id, "revision": d.revision, "value": value});
-        match client.post("runner-model-subscription-refresh", &body, Some(&format!("subscription:{attempt}:{}", d.id))).await {
+        match client
+            .post(
+                "runner-model-subscription-refresh",
+                &body,
+                Some(&format!("subscription:{attempt}:{}", d.id)),
+            )
+            .await
+        {
             Ok(answer) => {
                 let Some(home) = &d.home else { continue };
                 let mut homes = homes();
                 if homes.kept.get(home).is_none_or(|(_, kept)| kept != value) {
-                    continue;   // another turn here kept a later one
+                    continue; // another turn here kept a later one
                 }
-                match (answer["stored"].as_bool() == Some(true), answer["revision"].as_i64()) {
+                match (
+                    answer["stored"].as_bool() == Some(true),
+                    answer["revision"].as_i64(),
+                ) {
                     (true, Some(next)) => {
                         if let Some(kept) = homes.kept.get_mut(home) {
                             kept.0 = next;
@@ -369,7 +519,10 @@ pub async fn send_back(client: &crate::client::Client, attempt: &str, delivered:
                     }
                 }
             }
-            Err(e) => crate::util::diagnostic(&format!("Tico runner: could not send a refreshed sign-in back: {}", e.detail)),
+            Err(e) => crate::util::diagnostic(&format!(
+                "Tico runner: could not send a refreshed sign-in back: {}",
+                e.detail
+            )),
         }
     }
 }
@@ -386,7 +539,13 @@ mod tests {
 
     /// A turn handed `items` whose `runtime` process starts.
     fn turn(state: &Path, items: &Value, runtime: &str) -> Vec<Delivered> {
-        let mut got = apply(state, items, &mut Env::new(), &mut vec![], &mut BTreeSet::new());
+        let mut got = apply(
+            state,
+            items,
+            &mut Env::new(),
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
         start(&mut got, runtime, &mut Env::new());
         got
     }
@@ -394,18 +553,28 @@ mod tests {
     #[test]
     fn a_token_replaces_every_other_sign_in_variable_of_its_runtime_only() {
         let state = dir();
-        let mut env: Env = [("ANTHROPIC_API_KEY".into(), "sk-ant-computer".into()), ("ACME_KEY".into(), "acme".into())].into();
+        let mut env: Env = [
+            ("ANTHROPIC_API_KEY".into(), "sk-ant-computer".into()),
+            ("ACME_KEY".into(), "acme".into()),
+        ]
+        .into();
         let (mut values, mut keys) = (vec![], BTreeSet::from(["ANTHROPIC_API_KEY".to_string()]));
         let items = json!([{"id": "s1", "runtime": "claude", "kind": "claude_token", "env": "CLAUDE_CODE_OAUTH_TOKEN",
                             "value": "sk-ant-oat01-synthetic", "revision": 1, "billing": "subscription"}]);
         let mut got = apply(&state, &items, &mut env, &mut values, &mut keys);
         assert_eq!(got.len(), 1);
-        assert!(!env.contains_key("ANTHROPIC_API_KEY") && !env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"), "{env:?}");
+        assert!(
+            !env.contains_key("ANTHROPIC_API_KEY") && !env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"),
+            "{env:?}"
+        );
         assert!(!keys.contains("ANTHROPIC_API_KEY"));
         assert_eq!(values, vec!["sk-ant-oat01-synthetic".to_string()]);
         // Set when Claude starts.
         assert!(start(&mut got, "claude", &mut env).is_empty());
-        assert_eq!(env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str), Some("sk-ant-oat01-synthetic"));
+        assert_eq!(
+            env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
+            Some("sk-ant-oat01-synthetic")
+        );
         assert_eq!(env["ACME_KEY"], "acme");
         assert_eq!(got[0].billing, "subscription");
         assert_eq!(got[0].binding().as_deref(), Some(":subscription:s1"));
@@ -420,10 +589,18 @@ mod tests {
     #[test]
     fn a_chatgpt_login_gets_its_own_home_and_its_file_lasts_only_while_a_turn_holds_it() {
         let state = dir();
-        let item = |rev: i64, value: &str| json!([{"id": "s3", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
-                                                    "value": value, "revision": rev, "billing": "subscription"}]);
+        let item = |rev: i64, value: &str| {
+            json!([{"id": "s3", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                                                    "value": value, "revision": rev, "billing": "subscription"}])
+        };
         let mut env: Env = [("CODEX_HOME".into(), "/computer/.codex".into())].into();
-        let mut got = apply(&state, &item(1, "{\"tokens\":1}"), &mut env, &mut vec![], &mut BTreeSet::new());
+        let mut got = apply(
+            &state,
+            &item(1, "{\"tokens\":1}"),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
         let home = got[0].home.clone().unwrap();
         assert!(home.starts_with(&state) && home.ends_with("subscriptions/s3/codex"));
         let file = home.join("auth.json");
@@ -431,7 +608,10 @@ mod tests {
         start(&mut got, "codex", &mut env);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"tokens\":1}");
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(env["CODEX_HOME"], home.display().to_string());
         assert_eq!(got[0].binding().as_deref(), Some(":subscription:s3"));
         // Codex refreshed it and writes a session; a second turn on the same home joins with the refreshed file.
@@ -444,7 +624,10 @@ mod tests {
         assert_eq!(finish(&mut got), vec!["{\"tokens\":2}".to_string()]);
         assert_eq!(got[0].refreshed.as_deref(), Some("{\"tokens\":2}"));
         assert!(file.exists());
-        assert!(finish(&mut got).is_empty(), "a second finish changes nothing");
+        assert!(
+            finish(&mut got).is_empty(),
+            "a second finish changes nothing"
+        );
         // The last turn ends: the file goes, the sessions stay.
         assert!(finish(&mut again).is_empty());
         assert_eq!(again[0].refreshed, None);
@@ -455,7 +638,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"tokens\":2}");
         // A new revision (someone reconnected it) replaces it, even under a turn still running.
         let mut moved = turn(&state, &item(2, "{\"tokens\":3}"), "codex");
-        assert_eq!(std::fs::read_to_string(moved[0].file.as_ref().unwrap()).unwrap(), "{\"tokens\":3}");
+        assert_eq!(
+            std::fs::read_to_string(moved[0].file.as_ref().unwrap()).unwrap(),
+            "{\"tokens\":3}"
+        );
         finish(&mut next);
         finish(&mut moved);
         assert!(!file.exists());
@@ -467,7 +653,14 @@ mod tests {
         assert!(!file.exists());
         // An id that could leave the subscriptions folder is refused.
         let escape = json!([{"id": "../x", "runtime": "codex", "file": "auth.json", "value": "{}", "revision": 1}]);
-        assert!(apply(&state, &escape, &mut Env::new(), &mut vec![], &mut BTreeSet::new()).is_empty());
+        assert!(apply(
+            &state,
+            &escape,
+            &mut Env::new(),
+            &mut vec![],
+            &mut BTreeSet::new()
+        )
+        .is_empty());
         std::fs::remove_dir_all(&state).unwrap();
     }
 
@@ -475,7 +668,8 @@ mod tests {
     fn each_process_of_a_turn_gets_only_its_own_runtimes_subscription() {
         let state = dir();
         let token = "sk-ant-oat01-synthetic-primary";
-        let login = r#"{"tokens":{"refresh_token":"rt_synthetic_fallback_cccccccc","account_id":"acct"}}"#;
+        let login =
+            r#"{"tokens":{"refresh_token":"rt_synthetic_fallback_cccccccc","account_id":"acct"}}"#;
         let items = json!([
             {"id": "s9", "runtime": "claude", "kind": "claude_token", "env": "CLAUDE_CODE_OAUTH_TOKEN", "value": token, "revision": 1},
             {"id": "s10", "runtime": "codex", "kind": "codex_login", "file": "auth.json", "value": login, "revision": 1},
@@ -493,8 +687,26 @@ mod tests {
         }
         start(&mut got, "claude", &mut env);
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
-        assert_eq!(env["CODEX_HOME"], "/computer/.codex", "Claude's process was pointed at the fallback's home");
-        assert!(!file.exists(), "the fallback's login was in place while only Claude ran");
+        assert_eq!(
+            env["CODEX_HOME"], "/computer/.codex",
+            "Claude's process was pointed at the fallback's home"
+        );
+        assert!(
+            !file.exists(),
+            "the fallback's login was in place while only Claude ran"
+        );
+        // No local login and no named fallback: the handed subscription wins before Gateway.
+        let config =
+            json!({"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5-5"});
+        let choices = vec![
+            json!({"runtime": "codex", "model": "gpt-6.1-sol"}),
+            json!({"runtime": "pi", "model": "tico-medium-1.0"}),
+        ];
+        let ready = |rt: &str| for_runtime(&got, rt).is_some();
+        let chosen = crate::fallback::default_choice(&config, &choices, &env, ready).unwrap();
+        assert_eq!(chosen.runtime, "codex");
+        assert!(chosen.default);
+        assert!(crate::fallback::default_choice(&config, &choices, &env, |_| false).is_none());
         // The hop: its environment is copied from the turn's; it gets the Codex home and loses Claude's token.
         let mut hop = env.clone();
         start(&mut got, "codex", &mut hop);
@@ -509,34 +721,149 @@ mod tests {
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
         start(&mut got, "codex", &mut env);
         assert!(file.exists() && !env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
-        std::fs::write(&file, r#"{"tokens":{"refresh_token":"rt_synthetic_refreshed_dddddddd","account_id":"acct"}}"#).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"tokens":{"refresh_token":"rt_synthetic_refreshed_dddddddd","account_id":"acct"}}"#,
+        )
+        .unwrap();
         let mut hop = env.clone();
         let fresh = start(&mut got, "claude", &mut hop);
-        assert!(fresh.iter().any(|s| s == "rt_synthetic_refreshed_dddddddd"), "the refresh was not masked: {fresh:?}");
+        assert!(
+            fresh.iter().any(|s| s == "rt_synthetic_refreshed_dddddddd"),
+            "the refresh was not masked: {fresh:?}"
+        );
         assert!(got[1].refreshed.is_some() && !got[1].held);
-        assert!(!file.exists(), "the Codex login stayed after its host stopped");
+        assert!(
+            !file.exists(),
+            "the Codex login stayed after its host stopped"
+        );
         assert!(!hop.contains_key("CODEX_HOME"), "{hop:?}");
         assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
-        assert!(finish(&mut got).is_empty(), "a home let go is not let go twice");
+        assert!(
+            finish(&mut got).is_empty(),
+            "a home let go is not let go twice"
+        );
         std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_candidates_fetch_only_at_the_hop_and_removed_values_never_start() {
+        let state = dir();
+        let attempt =
+            json!({"subscriptions": [{"id":"auto-login", "runtime":"codex", "activate":true}]});
+        let mut env = Env::new();
+        let injected_runtime = "runtime&other=value";
+        let injected = json!({"subscriptions": [{"id":"auto-login", "runtime":injected_runtime, "activate":true}]});
+        assert_eq!(
+            activate(
+                "http://127.0.0.1:1",
+                "run-token",
+                &state,
+                &injected,
+                injected_runtime,
+                &mut env
+            )
+            .await
+            .unwrap_err(),
+            "Invalid subscription runtime"
+        );
+        let config = json!({"runtime":"claude", "harness":"claude", "model":"primary"});
+        let choices = vec![json!({"runtime":"codex", "harness":"codex", "model":"fallback"})];
+        let choice = crate::fallback::default_choice(&config, &choices, &env, |rt| {
+            available(&[], &attempt, rt)
+        })
+        .unwrap();
+        assert_eq!(choice.runtime, "codex");
+        assert!(!state
+            .join("subscriptions/auto-login/codex/auth.json")
+            .exists());
+        let reply = json!({"subscription_activated": true, "subscriptions": [
+            {"id":"auto-login", "runtime":"codex", "kind":"codex_login", "file":"auth.json", "revision":2,
+             "value":"{\"tokens\":{\"refresh_token\":\"synthetic-long-refresh-token\"}}"},
+            {"id":"primary-login", "runtime":"claude", "env":"CLAUDE_CODE_OAUTH_TOKEN", "value":"primary-secret"}
+        ]}).to_string();
+        let (url, seen) =
+            crate::client::tests::serve(vec![(200, Box::leak(reply.clone().into_boxed_str()))])
+                .await;
+        let (mut given, secrets) = activate(&url, "run-token", &state, &attempt, "codex", &mut env)
+            .await
+            .unwrap();
+        assert_eq!(given.len(), 1);
+        assert_eq!(given[0].revision, 2);
+        assert!(secrets.iter().any(|s| s == "synthetic-long-refresh-token"));
+        assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(
+            !given[0].file.as_ref().unwrap().exists(),
+            "fetching never places the file"
+        );
+        assert!(seen.lock().unwrap()[0].contains("credential-runtime?subscription_runtime=codex"));
+        start(&mut given, "codex", &mut env);
+        assert!(given[0].file.as_ref().unwrap().exists());
+        finish(&mut given);
+        let (url, _) = crate::client::tests::serve(vec![(200, "{\"credentials\":[]}")]).await;
+        assert!(
+            activate(&url, "run-token", &state, &attempt, "codex", &mut env)
+                .await
+                .is_err()
+        );
+        let mut rolled_back: Value = serde_json::from_str(&reply).unwrap();
+        rolled_back
+            .as_object_mut()
+            .unwrap()
+            .remove("subscription_activated");
+        let (url, _) = crate::client::tests::serve(vec![(
+            200,
+            Box::leak(rolled_back.to_string().into_boxed_str()),
+        )])
+        .await;
+        assert!(
+            activate(&url, "run-token", &state, &attempt, "codex", &mut env)
+                .await
+                .is_err(),
+            "a rolled-back server must not bypass the activation fence"
+        );
+        let old_server = json!({"subscriptions":[{"id":"auto-login", "runtime":"codex"}]});
+        assert!(!pending(&old_server, "codex"));
+        assert!(
+            available(&given, &old_server, "codex"),
+            "old server up-front values stay usable"
+        );
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[tokio::test]
     async fn a_refresh_the_server_refused_is_never_the_next_turns_login_and_an_unsent_one_is() {
         let state = dir();
-        let item = |id: &str, rev: i64| json!([{"id": id, "runtime": "codex", "kind": "codex_login", "file": "auth.json",
-                                                "value": "{\"tokens\":1}", "revision": rev}]);
+        let item = |id: &str, rev: i64| {
+            json!([{"id": id, "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                                                "value": "{\"tokens\":1}", "revision": rev}])
+        };
         let refreshed = |id: &str| {
             let mut got = turn(&state, &item(id, 1), "codex");
             std::fs::write(got[0].file.as_ref().unwrap(), "{\"tokens\":2}").unwrap();
             finish(&mut got);
             got
         };
-        let kept = |id: &str| homes().kept.get(&crate::isolation::bot_state(&state).join("subscriptions").join(id).join("codex")).cloned();
+        let kept = |id: &str| {
+            homes()
+                .kept
+                .get(
+                    &crate::isolation::bot_state(&state)
+                        .join("subscriptions")
+                        .join(id)
+                        .join("codex"),
+                )
+                .cloned()
+        };
         // Refused (another account, or nothing new): dropped, so the next turn starts from what the server holds.
         let got = refreshed("s11");
         let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"stored": false}"#)]).await;
-        send_back(&crate::client::Client::new(&url, "t", 5, 0).unwrap(), "a1", &got).await;
+        send_back(
+            &crate::client::Client::new(&url, "t", 5, 0).unwrap(),
+            "a1",
+            &got,
+        )
+        .await;
         assert!(seen.lock().unwrap()[0].contains("runner-model-subscription-refresh"));
         assert_eq!(kept("s11"), None);
         let mut next = turn(&state, &item("s11", 1), "codex");
@@ -544,15 +871,26 @@ mod tests {
         finish(&mut next);
         // Kept: the copy moves to the server's new revision.
         let got = refreshed("s12");
-        let (url, _) = crate::client::tests::serve(vec![(200, r#"{"stored": true, "revision": 2}"#)]).await;
-        send_back(&crate::client::Client::new(&url, "t", 5, 0).unwrap(), "a2", &got).await;
+        let (url, _) =
+            crate::client::tests::serve(vec![(200, r#"{"stored": true, "revision": 2}"#)]).await;
+        send_back(
+            &crate::client::Client::new(&url, "t", 5, 0).unwrap(),
+            "a2",
+            &got,
+        )
+        .await;
         assert_eq!(kept("s12"), Some((2, "{\"tokens\":2}".to_string())));
         // Unanswered: it stays, the newest login this computer has.
         let got = refreshed("s13");
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", closed.local_addr().unwrap());
         drop(closed);
-        send_back(&crate::client::Client::new(&url, "t", 5, 0).unwrap(), "a3", &got).await;
+        send_back(
+            &crate::client::Client::new(&url, "t", 5, 0).unwrap(),
+            "a3",
+            &got,
+        )
+        .await;
         assert_eq!(kept("s13"), Some((1, "{\"tokens\":2}".to_string())));
         let mut next = turn(&state, &item("s13", 1), "codex");
         assert_eq!(next[0].written, "{\"tokens\":2}");
@@ -566,7 +904,13 @@ mod tests {
         let root = crate::isolation::bot_state(&state).join("subscriptions");
         for home in [root.join("s4/codex"), root.join("s5/codex")] {
             std::fs::create_dir_all(home.join("sessions")).unwrap();
-            for name in ["auth.json", "auth.tico-0123abcd", ".tico-revision", "sessions/t.jsonl", "config.toml"] {
+            for name in [
+                "auth.json",
+                "auth.tico-0123abcd",
+                ".tico-revision",
+                "sessions/t.jsonl",
+                "config.toml",
+            ] {
                 std::fs::write(home.join(name), "x").unwrap();
             }
         }
@@ -584,35 +928,65 @@ mod tests {
     #[test]
     fn each_token_in_a_chatgpt_login_is_masked_on_its_own_as_handed_kept_and_refreshed() {
         let state = dir();
-        let login = |n: u8| json!({
+        let login = |n: u8| {
+            json!({
             "OPENAI_API_KEY": format!("sk-proj-synthetic-key-{n}-aaaaaaaaaaaa"),
             "tokens": {"id_token": format!("eyJsynthetic.id-token-{n}.sig"), "access_token": format!("eyJsynthetic.access-{n}.sig"),
                        "refresh_token": format!("rt_synthetic_refresh_{n}_bbbbbbbb"), "account_id": "acct"},
             "last_refresh": "2026-10-30T12:00:00.000000Z",
-        }).to_string();
+        }).to_string()
+        };
         let item = json!([{"id": "s6", "runtime": "codex", "kind": "codex_login", "file": "auth.json", "value": login(1), "revision": 1}]);
         let mut values = vec![];
-        let mut got = apply(&state, &item, &mut Env::new(), &mut values, &mut BTreeSet::new());
+        let mut got = apply(
+            &state,
+            &item,
+            &mut Env::new(),
+            &mut values,
+            &mut BTreeSet::new(),
+        );
         values.extend(start(&mut got, "codex", &mut Env::new()));
         let r = crate::redact::Redactor::new(&values);
-        for leaked in ["sk-proj-synthetic-key-1-aaaaaaaaaaaa", "eyJsynthetic.id-token-1.sig", "eyJsynthetic.access-1.sig", "rt_synthetic_refresh_1_bbbbbbbb"] {
-            let out = r.scrub_text(&format!("echo {leaked} > notes.txt"));
+        for leaked in [
+            "sk-proj-synthetic-key-1-aaaaaaaaaaaa",
+            "eyJsynthetic.id-token-1.sig",
+            "eyJsynthetic.access-1.sig",
+            "rt_synthetic_refresh_1_bbbbbbbb",
+        ] {
+            let out = r
+                .scrub_text(&format!("echo {leaked} > notes.txt"))
+                .into_owned();
             assert!(!out.contains(leaked), "{out}");
         }
         // Not a secret: the refresh time stays readable.
-        assert!(r.scrub_text("at 2026-10-30T12:00:00.000000Z").contains("2026-10-30T12"));
+        assert!(r
+            .scrub_text("at 2026-10-30T12:00:00.000000Z")
+            .contains("2026-10-30T12"));
         // Codex refreshed it: the new tokens come back from `finish` for the turn's redactor, before anything is sent.
         std::fs::write(got[0].file.as_ref().unwrap(), login(2)).unwrap();
         let fresh = finish(&mut got);
         r.add(&fresh);
-        for leaked in ["eyJsynthetic.access-2.sig", "rt_synthetic_refresh_2_bbbbbbbb", "eyJsynthetic.id-token-2.sig"] {
+        for leaked in [
+            "eyJsynthetic.access-2.sig",
+            "rt_synthetic_refresh_2_bbbbbbbb",
+            "eyJsynthetic.id-token-2.sig",
+        ] {
             assert!(!r.scrub_text(leaked).contains(leaked), "{leaked}");
         }
         // A file kept from that refresh is masked at the next turn too, from its start, as well as what the server handed.
         let mut values = vec![];
-        let mut next = apply(&state, &item, &mut Env::new(), &mut values, &mut BTreeSet::new());
+        let mut next = apply(
+            &state,
+            &item,
+            &mut Env::new(),
+            &mut values,
+            &mut BTreeSet::new(),
+        );
         let r = crate::redact::Redactor::new(&values);
-        for leaked in ["rt_synthetic_refresh_1_bbbbbbbb", "rt_synthetic_refresh_2_bbbbbbbb"] {
+        for leaked in [
+            "rt_synthetic_refresh_1_bbbbbbbb",
+            "rt_synthetic_refresh_2_bbbbbbbb",
+        ] {
             assert!(!r.scrub_text(leaked).contains(leaked), "{leaked}");
         }
         start(&mut next, "codex", &mut Env::new());

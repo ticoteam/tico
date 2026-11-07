@@ -9,7 +9,70 @@ use tico_recorder_native::{
     workspace::{Item, Turn},
 };
 
+#[test]
+fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "Picker did not reach HTTP");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut headers = vec![];
+        while !headers.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            headers.push(byte[0]);
+        }
+        let headers = String::from_utf8(headers).unwrap();
+        assert!(
+            headers
+                .starts_with("GET /api/v2/tasks?q=%2342&limit=30&brief=true&offset=30&type=bug ")
+        );
+        let body = r##"{"tasks":[{"id":"task","number":42,"title":"Review pricing","status":"open"}],"next_offset":60}"##;
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    });
+    let reply = tauri::async_runtime::block_on(super::picker_search(
+        move || {
+            tico_recorder_native::network::Tico::new(
+                Destination {
+                    id: "synthetic".into(),
+                    name: "Acme".into(),
+                    base_url: url,
+                    actor: "human:test".into(),
+                },
+                "synthetic-token".into(),
+            )
+        },
+        |tico| tico.search_tasks("42", "bug", 30),
+    ))
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(reply["tasks"][0]["number"], 42);
+    assert_eq!(reply["next_offset"], 60);
+}
+
 fn app(store: Store, directory: &std::path::Path) -> Recorder {
+    // No-sign-in fixtures need empty credentials without depending on a desktop secret service.
+    static KEYRING: std::sync::Once = std::sync::Once::new();
+    KEYRING.call_once(|| {
+        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+    });
     let lock = AppLock::acquire(directory).unwrap();
     Recorder::new(store, Some(lock), true).unwrap()
 }
@@ -70,6 +133,105 @@ fn connect_links_carry_only_a_safe_tico_address() {
     app.link("tico-recorder://connect?server=http://evil.example");
     assert!(app.connect.is_none());
     assert_eq!(app.error, "That link is not a Tico Recorder connect link");
+}
+
+#[test]
+fn an_open_link_chooses_its_tico_and_starts_nothing() {
+    assert_eq!(
+        link_address(
+            "tico-recorder://open?server=https://tico.example.com/",
+            "open"
+        )
+        .as_deref(),
+        Some("https://tico.example.com")
+    );
+    assert_eq!(
+        link_address(
+            "tico-recorder://open?server=https://tico.example.com",
+            "connect"
+        ),
+        None
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
+    app.config.destinations = vec![
+        connection("first", "first.example.com"),
+        connection("second", "tico.example.com"),
+    ];
+    app.destination = "first".into();
+    app.link("tico-recorder://open?server=https://tico.example.com/");
+    assert_eq!(
+        app.destination, "second",
+        "the runner sign-in is that Tico's"
+    );
+    assert!(app.connect.is_none() && app.error.is_empty());
+    assert_eq!(full_view(&mut app)["status"]["recording"], Value::Null);
+    // A Tico the Recorder is not signed in to asks first, as a connect link does.
+    app.link("tico-recorder://open?server=https://new.example.com");
+    assert_eq!(app.connect.as_deref(), Some("https://new.example.com"));
+    assert_eq!(app.destination, "second");
+    app.dismiss_connect();
+    app.link("tico-recorder://open?server=http://evil.example");
+    assert!(app.connect.is_none());
+    assert_eq!(app.error, "That link is not a Tico Recorder connect link");
+}
+
+#[test]
+fn the_view_lists_the_desktop_apps_orgs_and_which_are_signed_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = app(Store::open(directory.path()).unwrap(), directory.path());
+    assert_eq!(
+        full_view(&mut app)["desktop_orgs"],
+        json!([]),
+        "the demo library reads no orgs.json"
+    );
+    let file = directory.path().join("orgs.json");
+    std::fs::write(
+        &file,
+        r#"{"version":1,"active":"o_bbbbbbbb","orgs":[
+            {"id":"o_aaaaaaaa","url":"https://tico.example.com/","name":"Acme","email":"ana@acme.example"},
+            {"id":"o_bbbbbbbb","url":"https://tidy.example.com/","name":"TIDY","email":"ana@tidy.example"}]}"#,
+    )
+    .unwrap();
+    app.desktop = tico_recorder_native::desktop::Watch::new(Some(file));
+    app.config.destinations = vec![connection("acme", "tico.example.com")];
+    assert_eq!(
+        full_view(&mut app)["desktop_orgs"],
+        json!([
+            {"name":"Acme","url":"https://tico.example.com","email":"ana@acme.example","active":false,"connected":true},
+            {"name":"TIDY","url":"https://tidy.example.com","email":"ana@tidy.example","active":true,"connected":false}
+        ])
+    );
+    // Allow on a row signs in to that org only: one already signed in, or not in the desktop app, starts nothing.
+    app.sign_in_desktop(Some("https://tico.example.com"));
+    app.sign_in_desktop(Some("https://other.example.com"));
+    assert_eq!(full_view(&mut app)["status"]["signing_in"], json!(false));
+    let orgs = tico_recorder_native::desktop::parse(
+        r#"{"version":1,"active":"o_bbbbbbbb","orgs":[{"id":"o_aaaaaaaa","url":"https://a.example.com/"},
+            {"id":"o_bbbbbbbb","url":"https://b.example.com/"}]}"#,
+    );
+    assert_eq!(
+        suggested_address(Some(&orgs), || unreachable!()),
+        "b.example.com"
+    );
+    assert_eq!(
+        suggested_address(Some(&[]), || unreachable!()),
+        "",
+        "orgs.json wins over server.txt"
+    );
+    assert_eq!(
+        suggested_address(None, || "https://old.example.com/\n".into()),
+        "old.example.com"
+    );
+    assert_eq!(signed_in_message(&["A".into()]), "Signed in to A");
+    assert_eq!(
+        signed_in_message(&["A".into(), "B".into()]),
+        "Signed in to A and B"
+    );
+    assert_eq!(
+        signed_in_message(&["A".into(), "B".into(), "C".into()]),
+        "Signed in to A, B and C"
+    );
 }
 
 #[test]
@@ -493,12 +655,7 @@ fn background_delivery_failure_is_visible_in_the_library_and_meeting_without_los
     );
     app.open(&record.id).unwrap();
     let meeting = full_view(&mut app)["meeting"]["data"].clone();
-    assert_eq!(
-        meeting["sync_error"],
-        format!(
-            "Tico sync needs attention: {error}. Audio and transcript remain saved on this Mac."
-        )
-    );
+    assert_eq!(meeting["sync_error"], error);
     assert_eq!(meeting["live"], "Private in Tico");
     assert_eq!(meeting["place"], "Shared live · ");
     let stored = app.store.get(&record.id).unwrap();
@@ -531,6 +688,7 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
             health,
             consumer,
             stream: Box::new(Synthetic),
+            live_input: None,
         }
     };
     let directory = tempfile::tempdir().unwrap();
@@ -572,6 +730,150 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
         !stored.chunks.is_empty(),
         "the buffered audio was saved on stop"
     );
+}
+
+#[test]
+fn delete_while_recording_here_stops_capture_then_deletes() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Not wanted").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
+    .unwrap();
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    // Finish → Delete on a recording that was never shared.
+    app.delete(&recording.id);
+    settle(&mut app, |app| !app.busy);
+    assert!(!app.busy, "delete did not finish");
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.get(&recording.id).is_err());
+    assert!(full_view(&mut app)["status"]["recording"].is_null());
+}
+
+fn delete_during_capture_stop(fail_stop: bool, shutdown: bool) {
+    use std::sync::mpsc;
+    use tico_recorder_native::capture::{AudioSink, CaptureStream, Source};
+
+    struct GatedStop {
+        entered: mpsc::Sender<()>,
+        release: Option<mpsc::Receiver<()>>,
+        fail: bool,
+    }
+    impl CaptureStream for GatedStop {
+        fn stop(&mut self) -> anyhow::Result<()> {
+            if let Some(release) = self.release.take() {
+                self.entered.send(())?;
+                release.recv_timeout(Duration::from_secs(2))?;
+            }
+            anyhow::ensure!(!self.fail, "Synthetic capture stop failure");
+            Ok(())
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Delete buffered audio").unwrap();
+    let (entered, stopping) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        move || {
+            let (mut sink, consumer) = AudioSink::channel();
+            let health = sink.health.clone();
+            sink.push_interleaved(&vec![0.2; 16000], 1);
+            Ok((
+                vec![Source {
+                    channel: tico_recorder_native::audio::Channel::Microphone,
+                    name: "synthetic".into(),
+                    sample_rate: 16000,
+                    started: Instant::now(),
+                    health,
+                    consumer,
+                    live_input: None,
+                    stream: Box::new(GatedStop {
+                        entered,
+                        release: Some(gate),
+                        fail: fail_stop,
+                    }),
+                }],
+                String::new(),
+            ))
+        },
+    )
+    .unwrap();
+    let mut app = app(store, directory.path());
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    settle(&mut app, |app| {
+        app.status_view()["recording"]["sources"]
+            .as_array()
+            .is_some_and(|sources| sources.len() == 1)
+    });
+    app.delete(&recording.id);
+    stopping.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(app.busy);
+    assert!(app.update_hold().is_some());
+    assert!(app.store.get(&recording.id).is_ok());
+    release.send(()).unwrap();
+    if shutdown {
+        app.shutdown();
+        assert!(app.store.get(&recording.id).is_err());
+    }
+    settle(&mut app, |app| !app.busy);
+    assert!(!app.busy, "delete did not finish");
+    assert!(app.update_hold().is_none());
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.get(&recording.id).is_err());
+    assert!(!directory.path().join("audio").join(&recording.id).exists());
+    assert!(
+        full_view(&mut app)["library"]["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != recording.id)
+    );
+}
+
+#[test]
+fn delete_waits_for_the_last_audio_write_and_removes_its_files() {
+    delete_during_capture_stop(false, false);
+}
+
+#[test]
+fn delete_still_removes_audio_after_capture_stop_fails() {
+    delete_during_capture_stop(true, false);
+}
+
+#[test]
+fn shutdown_waits_for_delete_to_remove_the_last_audio() {
+    delete_during_capture_stop(false, true);
+}
+
+#[test]
+fn delete_does_not_take_capture_when_another_job_holds_the_controls() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let recording = store.create("Busy recording").unwrap();
+    let handle = tico_recorder_native::engine::RecordingHandle::with_sources(
+        store.clone(),
+        recording.id.clone(),
+        || Ok((vec![], String::new())),
+    )
+    .unwrap();
+    let mut app = app(store, directory.path());
+    app.set_active(recording.id.clone(), handle);
+    app.open(&recording.id).unwrap();
+    app.busy = true;
+    app.delete(&recording.id);
+    assert_eq!(app.status_view()["recording"]["id"], recording.id);
+    assert_eq!(app.meeting.as_deref(), Some(recording.id.as_str()));
+    assert!(app.store.get(&recording.id).is_ok());
 }
 
 #[test]
@@ -621,6 +923,24 @@ fn send_while_recording_stops_waits_for_the_last_words_then_sends() {
         app.status_view()["recording"].is_null(),
         "Send stopped the recording"
     );
+}
+
+#[test]
+fn settings_reload_controller_observes_writes_without_a_settings_job_reply() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut app = app(store, directory.path());
+    // Exercise the normal controller refresh with the fixture's background workers disabled.
+    app.demo = false;
+    let mut config = settings::read(directory.path()).unwrap();
+    config.microphone = "Studio mic".into();
+    settings::write(directory.path(), &config).unwrap();
+    app.tick();
+    assert_eq!(app.config.microphone, "Studio mic");
+    config.microphone.clear();
+    settings::write(directory.path(), &config).unwrap();
+    app.tick();
+    assert!(app.config.microphone.is_empty());
 }
 
 #[test]
@@ -774,9 +1094,9 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
         "humans": [{"actor": "human:2", "name": "Arthur Silva"}],
         "bots": [{"bot": "librarian"}, {"bot": "head-of-engineering"}],
         "chat": [
-            {"id": "c1", "actor": "human:2", "role": "human", "text": "Hi all", "created": "2026-10-29T15:00:00.000000Z"},
-            {"id": "c2", "actor": "bot:librarian", "role": "bot", "text": "Notes are linked.", "created": "2026-10-29T15:01:00.000000Z"},
-            {"id": "c3", "actor": "human:1", "role": "human", "text": "Thanks", "created": "2026-10-29T15:00:10.000000Z"},
+            {"id": "c1", "actor": "human:2", "role": "human", "text": "Hi all", "created_at": "2026-10-29T15:00:00.000000Z"},
+            {"id": "c2", "actor": "bot:librarian", "role": "bot", "text": "Notes are linked.", "created_at": "2026-10-29T15:01:00.000000Z"},
+            {"id": "c3", "actor": "human:1", "role": "human", "text": "Thanks", "created_at": "2026-10-29T15:00:10.000000Z"},
         ],
         "router": {"turns": [
             {"bot": "head-of-engineering", "status": "claimed"},
@@ -960,6 +1280,9 @@ fn an_update_waits_while_a_live_meeting_is_connected_and_is_free_when_idle() {
         ..Default::default()
     });
     assert_eq!(app.update_hold(), Some("After the live meeting ends"));
+    // A paused live meeting is still shared: no install, no banner.
+    app.records[0].live_state = "paused".into();
+    assert_eq!(app.update_hold(), Some("After the live meeting ends"));
     app.records[0].live_state = "ended".into();
     assert_eq!(app.update_hold(), None);
 }
@@ -998,6 +1321,231 @@ fn the_open_meetings_bot_notices_show_with_the_bots_name() {
 }
 
 #[test]
+fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    seed_demo(&store).unwrap();
+    let mut app = app(store, directory.path());
+    let id = app
+        .records
+        .iter()
+        .find(|r| r.chunks > r.silent && r.deliveries.is_empty())
+        .unwrap()
+        .id
+        .clone();
+    app.config.destinations = vec![connection("first", "acme.example")];
+    app.store
+        .update_context(&id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                quote: "Paused quote".into(),
+                at_ms: 6000,
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting(&id, "first");
+    assert!(app.error.contains("may quote paused speech"));
+    assert!(!app.busy);
+    assert!(app.store.get(&id).unwrap().deliveries.is_empty());
+    // Confirmation reaches the bypass before the busy guard, without starting any network job.
+    app.busy = true;
+    app.error.clear();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.is_empty());
+    app.busy = false;
+    app.store
+        .update_context(&id, |c| {
+            c.items[0].quote = "Normalized or reworded quote".into();
+            c.items[0].at_ms = 1000;
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting(&id, "first");
+    assert!(app.error.contains("may quote paused speech"));
+    app.store
+        .update_context(&id, |c| {
+            c.live_state = "paused".into();
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.contains("Resume sharing"));
+    assert!(!app.busy);
+    app.store
+        .update_context(&id, |c| {
+            c.live_discarded = true;
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.contains("discarded"));
+    assert!(!app.busy);
+    assert!(!app.store.get(&id).unwrap().chunks.is_empty());
+    assert!(
+        full_view(&mut app)["library"]["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == id && r["status"]["label"] == "Ending in Tico")
+    );
+}
+
+#[test]
+fn individual_item_send_uses_durable_pause_discard_and_quote_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Synthetic item guards").unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                id: "item".into(),
+                title: "Follow up".into(),
+                quote: "Reworded paused quote".into(),
+                owner: "bot:fixture".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let mut app = app(store.clone(), dir.path());
+    app.open(&record.id).unwrap();
+    app.send_item("item", "bot:fixture");
+    assert!(
+        app.item_error
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("may quote paused speech")
+    );
+    assert!(app.sending.is_none());
+    // The displayed context stays stale: the durable guard must still refuse a direct command.
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |c| {
+                c.live_state = "paused".into();
+                c.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.send_item_confirmed("item", "bot:fixture", true);
+        assert!(app.item_error.as_ref().unwrap().1.contains(if discarded {
+            "discarded"
+        } else {
+            "Resume"
+        }));
+        assert!(app.sending.is_none());
+        app.context = store.context(&record.id).unwrap();
+        let view = full_view(&mut app)["meeting"]["data"]["actions"].clone();
+        assert_eq!(view["items"][0]["can_send"], false);
+        assert!(view["items"][0]["send_blocked"].as_str().is_some());
+    }
+}
+
+#[test]
+fn a_meeting_shared_live_shows_the_lines_tico_holds_with_controls_only_where_an_edit_can_reach_it()
+{
+    use tico_recorder_native::live;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Shared edit view").unwrap();
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&record.id, &context).unwrap();
+    // Three lines in Tico's order: two accepted, one still on its way.
+    {
+        let db = store.db().unwrap();
+        for (seq, speaker, start, end, text, acknowledged) in [
+            (1, "Me", 1000, 1550, "Hello there", 1),
+            (2, "S1", 1200, 1750, "hi all", 1),
+            (3, "S1", 2000, 2500, "pending words", 0),
+        ] {
+            db.execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,?,?,?,?)",
+                rusqlite::params![
+                    record.id,
+                    "synthetic",
+                    seq,
+                    format!("stream:{seq}"),
+                    json!({"seq":seq,"speaker":speaker,"start_ms":start,"end_ms":end,"text":text}).to_string(),
+                    acknowledged
+                ],
+            )
+            .unwrap();
+        }
+    }
+    live::edit_shared(&store, &record.id, 1, Some("Hi there")).unwrap();
+    live::edit_shared(&store, &record.id, 2, None).unwrap();
+    let mut app = app(store, directory.path());
+    app.open(&record.id).unwrap();
+    let blocks = full_view(&mut app)["transcript"]["data"]["blocks"].clone();
+    assert_eq!(
+        blocks,
+        json!([
+            {"speaker":"Me","me":true,"start_ms":1000,"paragraphs":["Hi there"],"partial":false,
+             "streamed":false,"seq":1,"edited":true,"removed":false,"editable":true},
+            {"speaker":"S1","me":false,"start_ms":1200,"paragraphs":["[removed]"],"partial":false,
+             "streamed":false,"seq":2,"edited":true,"removed":true,"editable":true},
+            {"speaker":"S1","me":false,"start_ms":2000,"paragraphs":["pending words"],"partial":false,
+             "streamed":false,"seq":3,"edited":false,"removed":false,"editable":false},
+        ]),
+        "{blocks}"
+    );
+}
+
+#[test]
+fn an_edit_or_removal_names_the_open_meeting_and_leaves_another_alone() {
+    use tico_recorder_native::live;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut ids = vec![];
+    for title in ["First call", "Second call"] {
+        let record = store.create(title).unwrap();
+        let mut context = store.context(&record.id).unwrap();
+        context.live_id = format!("live-{}", record.id);
+        context.live_destination = "synthetic".into();
+        context.live_state = "live".into();
+        store.save_context(&record.id, &context).unwrap();
+        store
+            .db()
+            .unwrap()
+            .execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,1,'stream:1',?,1)",
+                rusqlite::params![
+                    record.id,
+                    "synthetic",
+                    json!({"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"}).to_string()
+                ],
+            )
+            .unwrap();
+        ids.push(record.id);
+    }
+    let (first, second) = (ids[0].clone(), ids[1].clone());
+    let mut app = app(store, directory.path());
+    app.open(&first).unwrap();
+    app.edit_shared_line(&second, 1, Some("Changed elsewhere"));
+    assert_eq!(app.error, "That meeting is no longer open");
+    app.dismiss_error();
+    app.edit_shared_line(&second, 1, None);
+    assert_eq!(app.error, "That meeting is no longer open");
+    app.dismiss_error();
+    let other = live::shared_lines(&app.store, &second, "synthetic").unwrap();
+    assert_eq!(
+        (other[0].text.as_str(), other[0].edited),
+        ("Hello there", false)
+    );
+    // The open meeting is the one that changes.
+    app.edit_shared_line(&first, 1, Some("Changed here"));
+    assert!(app.error.is_empty(), "{}", app.error);
+    let open = live::shared_lines(&app.store, &first, "synthetic").unwrap();
+    assert_eq!(open[0].text, "Changed here");
+}
+
+#[test]
 fn open_in_tico_stays_on_the_shared_meetings_instance() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
@@ -1030,4 +1578,81 @@ fn open_in_tico_stays_on_the_shared_meetings_instance() {
     // Losing the connection must not send this meeting to the new default instance.
     app.config.destinations.remove(0);
     assert!(full_view(&mut app)["meeting"]["data"]["live_url"].is_null());
+}
+
+#[test]
+fn a_title_without_a_quote_requires_fresh_review_after_each_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Synthetic title review").unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                id: "title-only".into(),
+                title: "Secret launch date".into(),
+                owner: "bot:fixture".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let mut app = app(store.clone(), dir.path());
+    app.open(&record.id).unwrap();
+    for title in ["Secret launch date", "Changed secret launch date"] {
+        store
+            .update_context(&record.id, |c| {
+                c.items[0].title = title.into();
+                Ok(())
+            })
+            .unwrap();
+        app.send_item("title-only", "bot:fixture");
+        assert!(
+            app.item_error
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("Review its title and quote")
+        );
+        assert!(app.sending.is_none());
+        assert!(tico_recorder_native::live::paused_review_required(
+            &store.context(&record.id).unwrap()
+        ));
+    }
+    app.context = store.context(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["actions"]["items"][0]["paused_warning"],
+        true
+    );
+}
+
+#[test]
+fn screen_controls_honor_local_pause_and_pending_discard() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Synthetic screen controls").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    app.open(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+        true
+    );
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "synthetic-live".into();
+                context.live_state = "live".into();
+                context.locally_paused = !discarded;
+                context.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.context = store.context(&record.id).unwrap();
+        app.bump();
+        assert_eq!(
+            full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+            false
+        );
+        assert!(super::screen::require_live(&app.context).is_err());
+    }
 }

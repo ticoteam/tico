@@ -1,8 +1,8 @@
 // Strategy › Goals (ui/app/goals.js goalSheetOpen, ui/goals-kpis.js goalsRender) against the fake hub in
 // support/strategy-fake.cjs (the Acme example): no Strategy line on top; "+ Goal" in the head; tapping a goal opens it
 // on its own (title, owner, colour, metric, target, due, Remove), a sheet on a phone and a side panel on a computer;
-// a long press on a line (phone) or its "+" (pointer) adds a goal for that owner, a group's for its lead; the name still
-// opens the owner's panel. A member gets only their own goals to set and reads the rest.
+// tapping a line opens its goal, or a new one for its owner when they have none; "+" on every line (and a long press on
+// a phone) adds a goal for that owner, a group's for its lead; the name still opens the owner's panel. A member gets only their own goals to set and reads the rest.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
@@ -28,7 +28,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       assert.equal(await page.locator('#goal-strategy, .gst').count(), 0, 'no Strategy line');
       const plus = await page.locator('#goal-new').boundingBox(), h1 = await page.locator('.rd-strat-head h1').boundingBox();
       assert(Math.abs((plus.y + plus.height / 2) - (h1.y + h1.height / 2)) < 12, '+ Goal sits beside the title');
-      assert.equal(await page.locator('.gt-add').first().isVisible(), false, 'no "+" without a pointer');
+      assert.equal(await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').isVisible(), true, '"+" shows on a phone');
       assert.equal(await sideways(page), false, 'no sideways scroll');
       await shot(page, 'phone-goals');
 
@@ -64,6 +64,26 @@ const longPress = (page, selector) => page.evaluate(async sel => {
         ['/api/v2/goals/g-co/kpis/k-cust', {kind: 'improve', target: 120, deadline: '2027-03-31', baseline: 20, baseline_at: '2026-09-01'}]]);
       await page.locator('#goal-tree .gt-row[data-goal="g-co"] .gt-title', {hasText: 'Reach 120'}).waitFor();
 
+      // Tapping a line away from its name opens its goal; a line with no goal opens a new one for its owner; "+" too.
+      writes.length = 0;
+      await page.locator('#goal-tree .gt-row[data-goal="g-sales"] .gt-kpis').click({force: true});
+      await sheet.waitFor();
+      assert.equal(await sheet.locator('input[name="title"]').inputValue(), 'Book 40 demos a month', 'the line opens its goal');
+      await sheet.locator('[data-gs-close]').click();
+      const sdr = page.locator('#goal-tree .gt-row[data-owner="bot:sdr"]:not(.gt-cont)');
+      const past = await sdr.evaluate(li => li.querySelector('.gt-name').getBoundingClientRect().right - li.getBoundingClientRect().left + 24);
+      await sdr.click({position: {x: past, y: 18}});
+      await sheet.waitFor();
+      assert.equal(await sheet.locator('.gs-h').innerText(), 'New goal', 'a line with no goal adds one');
+      assert.equal(await sheet.locator('select[name="owner"]').inputValue(), 'bot:sdr');
+      assert.equal(await page.locator('#goal-panel[open]').count(), 0);
+      await sheet.locator('[data-gs-close]').click();
+      await page.locator('#goal-tree .gt-row[data-owner="bot:sdr"] [data-goal-add]').click();
+      await sheet.waitFor();
+      assert.equal(await sheet.locator('select[name="owner"]').inputValue(), 'bot:sdr', '"+" adds one for the owner');
+      await sheet.locator('[data-gs-close]').click();
+      assert.deepEqual(goalWrites(writes), []);
+
       // Long-press Ben's line: a new goal for him, with a new measure.
       writes.length = 0;
       await longPress(page, '#goal-tree .gt-row[data-owner="human:ben"]:not(.gt-cont)');
@@ -90,13 +110,13 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await page.waitForFunction(() => !document.querySelector('#goal-tree [data-goal="g-3"]'));
 
       // The name still opens the owner's panel.
-      await page.locator('#goal-tree .gt-row[data-owner="company"] .gt-name').click();
+      await page.locator('#goal-tree .gt-row[data-owner="company"] .gt-name>span').click();
       await page.locator('#goal-panel[open]').waitFor();
       assert.deepEqual(errors, []);
       await page.close();
     }
 
-    // A computer, the owner: "+" on hover, a group's for its lead; "+ Goal" for the company; a side panel.
+    // A computer, the owner: "+" on every line, a group's for its lead; "+ Goal" for the company; a side panel.
     {
       const {page, errors, writes} = await openStrategy(browser, {viewport: DESKTOP, hash: HASH});
       await page.locator('#goal-tree .gt-row[data-goal="g-co"]').waitFor();

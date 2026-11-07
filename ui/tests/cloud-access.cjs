@@ -39,7 +39,6 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
       return json(unrouted(p));
     };
     await page.route('**/*', serve);
-    await page.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     let opened = 0;
     const open = async () => {
       await page.goto(`http://tico-ui.test/?open=${++opened}#/tasks`);   // a new query: a fresh load every time

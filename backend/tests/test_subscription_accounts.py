@@ -1,5 +1,6 @@
 """The signed-in account and usage windows a computer reports per AI tool (#610): kept only in the allowed shape,
 never anything token-like, and readable only by an administrator or the computer's operator."""
+
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -15,15 +16,28 @@ def iso(delta=timedelta()):
 
 
 def beat(api, r, runtime_account=ACCOUNT, profile_account=None, five_hour=None, expected=200, own=None):
-    codex = {'signed_in': True, 'account': profile_account or {'email': 'dev@acme.example', 'plan': 'pro', 'kind': 'subscription'},
-             'weekly': {'used_percent': 38, 'resets_at': iso(timedelta(days=2)), 'reported_at': iso()}}
+    codex = {
+        'signed_in': True,
+        'account': profile_account or {'email': 'dev@acme.example', 'plan': 'pro', 'kind': 'subscription'},
+        'weekly': {'used_percent': 38, 'resets_at': iso(timedelta(days=2)), 'reported_at': iso()},
+    }
     if five_hour is not None:
         codex['five_hour'] = five_hour
-    body = {'version': 'test', 'platform': 'test', 'readiness': {
-                'schema_version': 1, 'bots': {},
-                'runtimes': {'claude': {'installed': True, 'authenticated': 'ready', 'account': runtime_account, **(own or {})}}},
-            'profiles': [{'name': 'acme', 'runtimes': {'codex': codex}},
-                         {'name': 'beta', 'runtimes': {'codex': {'signed_in': False, 'account': {'email': 'old@acme.example'}}}}]}
+    body = {
+        'version': 'test',
+        'platform': 'test',
+        'readiness': {
+            'schema_version': 1,
+            'bots': {},
+            'runtimes': {
+                'claude': {'installed': True, 'authenticated': 'ready', 'account': runtime_account, **(own or {})}
+            },
+        },
+        'profiles': [
+            {'name': 'acme', 'runtimes': {'codex': codex}},
+            {'name': 'beta', 'runtimes': {'codex': {'signed_in': False, 'account': {'email': 'old@acme.example'}}}},
+        ],
+    }
     return post(api, 'runners/heartbeat', body, token=r['token'], expected=expected)
 
 
@@ -90,11 +104,17 @@ def test_nothing_token_like_is_stored_or_shown(api):
     secrets = ['sk-ant-oat01-' + 'a' * 40, 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig', 'ghp_' + 'b' * 36]
     for secret in secrets:
         for field in ('email', 'plan', 'org'):
-            beat(api, r, runtime_account={**ACCOUNT, field: secret},
-                 profile_account={'email': 'dev@acme.example', field: secret})
+            beat(
+                api,
+                r,
+                runtime_account={**ACCOUNT, field: secret},
+                profile_account={'email': 'dev@acme.example', field: secret},
+            )
             with api.app.state.store.read() as c:
-                stored = json.dumps([list(row) for row in c.execute('SELECT readiness_json FROM runners')]
-                                    + [list(row) for row in c.execute('SELECT runtimes_json FROM computer_profiles')])
+                stored = json.dumps(
+                    [list(row) for row in c.execute('SELECT readiness FROM runners_with_state')]
+                    + [list(row) for row in c.execute('SELECT runtimes FROM computer_profiles')]
+                )
             assert secret not in stored
             shown = json.dumps(get(api, 'operations', 'cara-test')) + json.dumps(get(api, 'subscriptions', 'cara-test'))
             assert secret not in shown
@@ -110,13 +130,27 @@ def test_nothing_token_like_is_stored_or_shown(api):
 
 def test_an_older_runner_reads_as_today(api):
     r = runner(api, operator='cara')
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {
-        'schema_version': 1, 'bots': {}, 'runtimes': {'claude': {'installed': True, 'authenticated': 'ready'}}},
-        'profiles': [{'name': 'acme', 'runtimes': {'codex': {'signed_in': True}}}]}, token=r['token'])
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'readiness': {
+                'schema_version': 1,
+                'bots': {},
+                'runtimes': {'claude': {'installed': True, 'authenticated': 'ready'}},
+            },
+            'profiles': [{'name': 'acme', 'runtimes': {'codex': {'signed_in': True}}}],
+        },
+        token=r['token'],
+    )
     m = machine(api, r, 'cara-test')
     assert 'account' not in m['readiness']['runtimes']['claude']
     codex = m['profiles'][0]['runtimes']['codex']
-    assert codex['signed_in'] is True and codex['weekly'] is None and codex['five_hour'] is None and 'account' not in codex
+    assert (
+        codex['signed_in'] is True and codex['weekly'] is None and codex['five_hour'] is None and 'account' not in codex
+    )
 
 
 def test_a_window_longer_than_its_own_reads_unknown_never_a_value(api):
@@ -134,8 +168,12 @@ def test_a_window_longer_than_its_own_reads_unknown_never_a_value(api):
 
 
 def own_windows(weekly=None, five_hour=None):
-    return {'weekly': weekly or {'used_percent': 17, 'resets_at': iso(timedelta(days=3)), 'reported_at': iso(), 'status': None},
-            'five_hour': five_hour or {'used_percent': 53, 'resets_at': iso(timedelta(hours=3)), 'reported_at': iso(), 'status': 'allowed'}}
+    return {
+        'weekly': weekly
+        or {'used_percent': 17, 'resets_at': iso(timedelta(days=3)), 'reported_at': iso(), 'status': None},
+        'five_hour': five_hour
+        or {'used_percent': 53, 'resets_at': iso(timedelta(hours=3)), 'reported_at': iso(), 'status': 'allowed'},
+    }
 
 
 def test_the_own_logins_windows_go_to_whoever_sees_its_account(api):
@@ -158,13 +196,15 @@ def test_the_own_logins_windows_go_to_whoever_sees_its_account(api):
 def test_an_own_window_that_fails_its_checks_reads_unknown_and_the_heartbeat_still_counts(api):
     r = runner(api, operator='cara')
     good = own_windows()
-    bad = [{'five_hour': {**good['five_hour'], 'resets_at': iso(timedelta(hours=5, minutes=11))}},
-           {'weekly': {**good['weekly'], 'resets_at': iso(timedelta(days=8, minutes=1))}},
-           {'weekly': {**good['weekly'], 'used_percent': 150}},
-           {'five_hour': {**good['five_hour'], 'reported_at': iso(timedelta(hours=1))}},
-           {'weekly': {**good['weekly'], 'reported_at': 'yesterday'}},
-           {'five_hour': {**good['five_hour'], 'token': 'sk-ant-oat01-' + 'a' * 40}},
-           {'weekly': 'full'}]
+    bad = [
+        {'five_hour': {**good['five_hour'], 'resets_at': iso(timedelta(hours=5, minutes=11))}},
+        {'weekly': {**good['weekly'], 'resets_at': iso(timedelta(days=8, minutes=1))}},
+        {'weekly': {**good['weekly'], 'used_percent': 150}},
+        {'five_hour': {**good['five_hour'], 'reported_at': iso(timedelta(hours=1))}},
+        {'weekly': {**good['weekly'], 'reported_at': 'yesterday'}},
+        {'five_hour': {**good['five_hour'], 'token': 'sk-ant-oat01-' + 'a' * 40}},
+        {'weekly': 'full'},
+    ]
     for window in bad:
         beat(api, r, own={**good, **window})
         claude = machine(api, r, 'cara-test')['readiness']['runtimes']['claude']
@@ -173,11 +213,19 @@ def test_an_own_window_that_fails_its_checks_reads_unknown_and_the_heartbeat_sti
         other = 'weekly' if name == 'five_hour' else 'five_hour'
         assert claude[other]['used_percent'] == good[other]['used_percent'] and claude['account'] == ACCOUNT
     # A reading with no percentage stays, as unknown: never 0 or 100.
-    beat(api, r, own=own_windows(five_hour={'used_percent': None, 'resets_at': iso(timedelta(hours=5, minutes=9)), 'reported_at': iso()}))
+    beat(
+        api,
+        r,
+        own=own_windows(
+            five_hour={'used_percent': None, 'resets_at': iso(timedelta(hours=5, minutes=9)), 'reported_at': iso()}
+        ),
+    )
     claude = machine(api, r, 'cara-test')['readiness']['runtimes']['claude']
     assert claude['five_hour']['used_percent'] is None and claude['weekly']['used_percent'] == 17
     with api.app.state.store.read() as c:
-        assert 'sk-ant-oat01' not in json.dumps([list(row) for row in c.execute('SELECT readiness_json FROM runners')])
+        assert 'sk-ant-oat01' not in json.dumps(
+            [list(row) for row in c.execute('SELECT readiness FROM runners_with_state')]
+        )
 
 
 def test_a_bot_a_member_may_not_see_is_left_off_another_persons_computer(world):
@@ -189,13 +237,26 @@ def test_a_bot_a_member_may_not_see_is_left_off_another_persons_computer(world):
         assign(api, r, slug)
     with api.app.state.store.transaction() as c:
         restrict(c, 'finance', people=['ben'])
-        c.execute("UPDATE runners SET operator='cara' WHERE id=?", (r['runner_id'],))
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1, 'runtimes': {},
-         'bots': {slug: {'ready': True, 'runtime': 'fake'} for slug in ('finance', 'ops')}}}, token=r['token'])
+        c.execute("UPDATE runners SET owner_id='cara' WHERE id=?", (r['runner_id'],))
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'readiness': {
+                'schema_version': 1,
+                'runtimes': {},
+                'bots': {slug: {'ready': True, 'runtime': 'fake'} for slug in ('finance', 'ops')},
+            },
+        },
+        token=r['token'],
+    )
 
     def bots(token):
         m = machine(api, r, token)
         return m['bots'], sorted(m['readiness']['bots']), sorted(line['bot'] for line in m['bot_connections'])
+
     assert bots(tokens['dee']) == (['ops'], ['ops'], ['ops'])
     assert 'finance' not in json.dumps(machine(api, r, tokens['dee']))
     both = (['finance', 'ops'], ['finance', 'ops'], ['finance', 'ops'])

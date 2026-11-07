@@ -1,7 +1,7 @@
 # Weekly vendor and renewals page
 
 Schedule: Tuesdays at 09:00 team time (routine `weekly-vendor-page`), after setup. Budget 30 minutes. Nothing is sent,
-renewed or cancelled by this page.
+renewed or canceled by this page.
 
 Inputs: `knowledge/vendors.md`, `knowledge/renewal-practice.md`, open and waiting tasks that name a vendor, new contracts
 in `hub doc search "contract"`, and, where a mailbox is connected, renewal notices and first invoices from unknown

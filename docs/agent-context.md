@@ -6,7 +6,7 @@ Once the owner has published a [strategy](strategy.md) version, every bot's run 
 `GET /api/v2/strategy/summary` under a **Team strategy** header, about 500 characters: the summary, one line per active
 bet with its wrong-if, then "version N". It is there on every turn, not only the Strategy Bot's, so a bot reads the team's bets
 before it reads its task. Nothing is added while no version is published, and a bot never sees the owner's draft. The full
-published page (the four sections, every bet with its why, what it rules out and its health) is `hub strategy show` /
+published page (the seven sections, every bet with its why, what it rules out and its health) is `hub strategy show` /
 `hub_strategy_show`; the same short text is `hub strategy summary` / `hub_strategy_summary`. Publishing sends no note to any
 bot: the context is how they learn of it. A bot reads; only the owner writes the draft and publishes.
 
@@ -36,7 +36,8 @@ for additional results. Transcript reads accept `--offset` and `--limit` in char
 (default 20,000, maximum 50,000); follow `next_offset` until it is null.
 
 Every teammate (owner, human or bot) can list and read internal and linked team Docs ([Docs](docs.md)). Market knowledge follows the
-existing market access rules. Bots may read explicitly non-private team meetings;
-they do not inherit their owner's access to private meetings or personal notes.
+existing market access rules. Bots may read explicitly non-private Team meetings and filed meetings
+they were attached to, including Participants only, regardless of who added them.
+They do not inherit their owner's access to other private meetings or personal notes.
 Human access follows the existing owner/attendee rules. Deleted meetings are excluded.
 The read tools do not expose audio, attachments, or credentials.

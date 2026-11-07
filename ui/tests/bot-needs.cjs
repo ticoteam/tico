@@ -1,7 +1,7 @@
-// A bot's task rail is one Tasks section with four tabs, each with its count: Needs You (what this bot needs from the
+// A bot's task rail is one Tasks section with four tabs, each with its count: Needs you (what this bot needs from the
 // person: a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (Open/Doing tasks it holds, newest first), Blocked (each saying
-// what it waits on) and Done Recently (the last 14 days), and Assigned to Others, a filter tab the server counts for
+// what it waits on) and Done recently (the last 14 days), and Assigned to others, a filter tab the server counts for
 // the person looking. The org tree's number is the Needs you rows, and stays so when the list moves. The Tasks header's
 // pencil edits the sidebar and there is no board icon; a bot with one tab shows its list without a tab bar. Fixtures
 // only, no network.
@@ -14,31 +14,33 @@ const {unrouted} = require('./support/routes.cjs');
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',
   senior: 'Senior Engineer'}[name], org_parent: '', host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:lead', requester: 'human:ana', status: 'doing',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const T = {
   own: task('t-own', 'Ship the release notes'),
-  forAna: task('t-ana', 'Pick the release day', {owner: 'human:ana', requester: 'bot:lead', status: 'open'}),
-  waits: task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', note: 'Waiting on Ana for the bucket keys.', created: ago(480)}),
-  onQa: task('t-on-qa', 'Merge the export fix', {status: 'waiting', waiting_on: 'bot:qa', created: ago(300)}),
-  vendor: task('t-vendor', 'Renew the domain', {status: 'waiting', note: "Waiting for the vendor's invoice.\nThen pay it.", created: ago(200)}),
-  roadmap: task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
-  doneNow: task('t-done-now', 'Send the weekly summary', {status: 'done', done_at: ago(2 * 1440), created: ago(3 * 1440)}),
-  doneOld: task('t-done-old', 'Close the old mailbox', {status: 'done', done_at: ago(20 * 1440), created: ago(21 * 1440)}),
-  asked: task('t-asked', 'Support access fixes', {owner: 'bot:senior', requester: 'bot:lead', status: 'done',
-    ask: {id: 'q-1', body: 'Should full access refuse credential changes?', from_actor: 'bot:lead', to_actor: 'human:ana', created: ago(30)}}),
-  qa: task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead', status: 'doing'}),
+  forAna: task('t-ana', 'Pick the release day', {owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open'}),
+  waits: task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', note: 'Waiting on Ana for the bucket keys.', created_at: ago(480)}),
+  onQa: task('t-on-qa', 'Merge the export fix', {status: 'waiting', waiting_on: 'bot:qa', created_at: ago(300)}),
+  vendor: task('t-vendor', 'Renew the domain', {status: 'waiting', note: "Waiting for the vendor's invoice.\nThen pay it.", created_at: ago(200)}),
+  roadmap: task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
+  doneNow: task('t-done-now', 'Send the weekly summary', {status: 'done', done_at: ago(2 * 1440), created_at: ago(3 * 1440)}),
+  doneOld: task('t-done-old', 'Close the old mailbox', {status: 'done', done_at: ago(20 * 1440), created_at: ago(21 * 1440)}),
+  asked: task('t-asked', 'Support access fixes', {owner_id: 'bot:senior', requester_id: 'bot:lead', status: 'done',
+    ask: {id: 'q-1', body: 'Should full access refuse credential changes?', sender_id: 'bot:lead', recipient_id: 'human:ana', created_at: ago(30)}}),
+  qa: task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead', status: 'doing'}),
 };
-const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester: 'bot:lead', origin_actor: 'bot:lead', created: ago(20),
-  ask: {id: 'm-loose', from_actor: 'bot:lead', to_actor: 'human:ana', body: 'Is Friday fine for the summary?', created: ago(20)}};
+// A question to Ana outside any task is a question task now: its card is keyed by the task id.
+const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
+  body: 'Is Friday fine for the summary?', requester_id: 'bot:lead', owner_id: 'human:ana', origin_actor: 'bot:lead', created_at: ago(20),
+  ask: {id: 'm-loose', sender_id: 'bot:lead', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: ago(20), question_task: true,
+    refs: {questions: [{id: 'friday', question: 'Is Friday fine for the summary?', options: [{label: 'Yes'}, {label: 'No'}]}]}}};
 const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...T.waits, kind: 'waiting'}, LOOSE,
-  {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester: 'bot:lead', title: 'Approve the announcement', created: ago(10)},
-  {...task('t-qa-ana', 'Approve the test plan', {owner: 'human:ana', requester: 'bot:qa', status: 'open'}), kind: 'task'}];
+  {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester_id: 'bot:lead', title: 'Approve the announcement', created_at: ago(10)},
+  {...task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', status: 'open'}), kind: 'task'}];
 
-// Head of Engineering keeps Done Recently beside the new defaults (a layout saved before them).
-const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
-  {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
+// Head of Engineering keeps Done recently beside the new defaults (a layout saved before them).
+const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
+  {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
     {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]}];
 
 (async () => {
@@ -72,12 +74,12 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
         const all = Object.values(T);
         // The rail reads open and finished tasks apart, finished ones since a day; the server filters both.
         const st = q.get('status'), since = q.get('updated_since');
-        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated >= since);
-        if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner === 'bot:lead' && fits(t))});
-        if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester === 'bot:lead' && t.status !== 'done')});
+        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated_at >= since);
+        if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner_id === 'bot:lead' && fits(t))});
+        if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester_id === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
-      // The built-in tabs and Assigned to Others, which Ana may change on Head of Engineering only.
+      // The built-in tabs and Assigned to others, which Ana may change on Head of Engineering only.
       const tabs = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
       if (tabs) {
         if (route.request().method() === 'PUT') LAYOUT.splice(0, LAYOUT.length, ...route.request().postDataJSON().tabs);
@@ -89,20 +91,20 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
           filterURLs.push(url.href);
           if (releaseFilterRead) await releaseFilterRead;
           const requested = (q.get('match_ids') || '').split(',');
-          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs You', count: filterExtras.length,
+          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs you', count: filterExtras.length,
             ids: [], next: null, matched_ids: filterExtras.filter(it => requested.includes(it.id)).map(it => it.id)}], tasks: []});
         }
-        const others = Object.values(T).filter(t => t.requester === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner)
+        const others = Object.values(T).filter(t => t.requester_id === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner_id)
           && ['open', 'doing', 'waiting'].includes(t.status));
-        const owned = Object.values(T).filter(t => t.owner === 'bot:lead');
+        const owned = Object.values(T).filter(t => t.owner_id === 'bot:lead');
         const groups = [
-          {key: 'needs', name: 'Needs You', rows: (LAYOUT[0].conditions?.[0]?.field === 'status'
-            ? Object.values(T).filter(t => (t.owner === 'bot:lead' || t.requester === 'bot:lead') && LAYOUT[0].conditions[0].value.includes(t.status))
-            : Object.values(T).filter(t => (t.owner === 'bot:lead' || t.requester === 'bot:lead')
-              && ((t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
-          {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created.localeCompare(a.created))},
-          {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created.localeCompare(a.created))},
-          {key: 'c4', name: 'Assigned to Others', rows: others},
+          {key: 'needs', name: 'Needs you', rows: (LAYOUT[0].conditions?.[0]?.field === 'status'
+            ? Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead') && LAYOUT[0].conditions[0].value.includes(t.status))
+            : Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead')
+              && ((t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
+          {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created_at.localeCompare(a.created_at))},
+          {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created_at.localeCompare(a.created_at))},
+          {key: 'c4', name: 'Assigned to others', rows: others},
         ];
         return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null})), tasks: Object.values(T)});
       }
@@ -124,10 +126,10 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1'
       && document.querySelector('#cnt-needs')?.textContent.trim() === '5');
     const tabs = (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
-    assert.deepEqual(tabs, ['Needs You 5', 'Doing 2', 'Blocked 2', 'Done Recently 1', 'Assigned to Others 1'], JSON.stringify(tabs));
-    assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs You leads while it has rows');
+    assert.deepEqual(tabs, ['Needs you 5', 'Doing 2', 'Blocked 2', 'Done recently 1', 'Assigned to others 1'], JSON.stringify(tabs));
+    assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs you leads while it has rows');
 
-    // Needs You keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
+    // Needs you keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
     const rows = await rail.locator('#t-needs .trow .ttl').allInnerTexts();
     assert.deepEqual(rows.map(r => r.trim()).sort(), ['Is Friday fine for the summary?', 'Approve the announcement',
       'Support access fixes', 'Turn on the screen default', 'Pick the release day'].sort(), JSON.stringify(rows));
@@ -147,7 +149,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#need-card')?.open);
 
-    // Editing Needs You changes its task filter, while the org number stays a fixed attention count.
+    // Editing Needs you changes its task filter, while the org number stays a fixed attention count.
     await rail.locator('#bot-sidebar-edit').click();
     await tab('needs').click();
     const dialog = page.locator('#bot-filter-dialog');
@@ -194,17 +196,17 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.deepEqual((await rail.locator('#t-blocked .trow-waits').allInnerTexts()).map(s => s.trim()),
       ["Waiting for the vendor's invoice.", 'Waits on QA Engineer']);
 
-    // Done Recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
+    // Done recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
     // tab opens, 50 rows at a time (paging, at the end).
     assert.equal(await rail.locator('#t-done .trow').count(), 0, 'Done is drawn when its tab opens');
     await tab('done').click();
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
-    // Assigned to Others keeps what it asked of another bot; its task for Ana is in Needs You, not here.
+    // Assigned to others keeps what it asked of another bot; its task for Ana is in Needs you, not here.
     await tab('c4').click();
     assert.deepEqual(await titles('#t-c4'), ['Run the release check']);
 
-    // A redraw keeps the picked tab while Needs You has rows, and leaves the rail scrolled where it was.
+    // A redraw keeps the picked tab while Needs you has rows, and leaves the rail scrolled where it was.
     await tab('done').click();
     const scrolled = await page.evaluate(() => {
       const r = document.querySelector('#pane-tasks');
@@ -220,7 +222,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     // A half-typed answer on the card of the question outside any task survives a redraw of the rail, and the picked
     // tab stays.
     await tab('needs').click();
-    await rail.locator('#t-needs [data-need-card="ask:m-loose"] .ttl').click();
+    await rail.locator('#t-needs [data-need-card="task:m-loose"] .ttl').click();
     await page.locator('#need-card .dc-note textarea').fill('Friday works');
     await page.evaluate(() => botNeedsChanged('lead'));
     assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday works');
@@ -236,7 +238,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     });
     assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '5');
     await page.evaluate(() => botTaskFilterRead('lead'));
-    // The question answered elsewhere leaves Needs You: the tab's count and the tree's number move together.
+    // The question answered elsewhere leaves Needs you: the tab's count and the tree's number move together.
     needs = needs.filter(it => !['t-asked', 'm-loose', 'approval-1'].includes(it.id));
     await page.evaluate(async () => { await v2Refresh(); renderTree(); });
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '2');
@@ -280,7 +282,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.ok(!(await page.evaluate(() => { needCountObserver.disconnect(); return needCountsSeen; })).includes('242'), 'no transient double count');
     filterExtras = null;
 
-    // Done Recently pages 50 rows at a time.
+    // Done recently pages 50 rows at a time.
     await tab('done').click();
     await page.evaluate(() => { const d = BOT_DONE.get('lead'), row = d.rows[0]; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
     assert.equal(await rail.locator('#t-done .trow').count(), 50);

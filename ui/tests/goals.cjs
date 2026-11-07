@@ -17,11 +17,11 @@ const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
   bot('old', 'Old bot', 'p:ana', {status: 'archived'}),
-  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox'}),
+  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox', helper: true}),
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
-const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence: 'weekly', owner: 'bot:cmo', definition: 'Signed-up accounts that finish setup',
+const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence: 'weekly', owner_id: 'bot:cmo', definition: 'Signed-up accounts that finish setup',
   definition_version: 2, source_note: 'Product database', freshness: 'fresh', status: 'yellow', reason: name + ' is behind', spark: [44, 47, 50, 52],
   latest: {value: 52, period_end: new Date(day).toISOString(), quality: 'measured'}, target_label: '→ 65% by Dec 31',
   link: {goal_id: 'g-cmo', kind: 'improve', target: 65, baseline: 40, deadline: '2027-12-31'}, ...over});
@@ -37,14 +37,14 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const activation = kpi('k-act', 'Activation', {reason: 'Activation 52% vs 58% needed on pace'});
     const nps = kpi('k-nps', 'NPS', {freshness: 'stale', status: 'gray', reason: 'NPS is stale', target_label: 'range 40–60', link: {goal_id: 'g-cmo', kind: 'maintain', min: 40, max: 60}});
     const goals = [
-      {id: 'g-top', title: 'Grow revenue 30% this year', owner: 'company', parent_id: null, status: 'red', status_source: 'person', status_by: 'human:ana',
+      {id: 'g-top', title: 'Grow revenue 30% this year', owner_id: 'company', parent_id: null, status: 'red', status_source: 'person', status_by_id: 'human:ana',
        status_note: 'Launch slipped', rank: 0, kpis: []},
-      {id: 'g-cmo', title: 'Double organic signups', owner: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
-       checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', source_actor: 'bot:cmo', ts: new Date(day).toISOString()}},
-      {id: 'g-cmo2', title: LONG, owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
-      {id: 'g-gm', title: 'Every KPI read on time', owner: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
+      {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
+       checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', sender_id: 'bot:cmo', created_at: new Date(day).toISOString()}},
+      {id: 'g-cmo2', title: LONG, owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
+      {id: 'g-gm', title: 'Every KPI read on time', owner_id: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
     ];
-    const other = [kpi('k-cash', 'Cash runway', {owner: 'human:ana', unit: 'months', target_label: '', link: undefined, status: 'none', latest: {value: 11, period_end: new Date(day).toISOString(), quality: 'measured'}})];
+    const other = [kpi('k-cash', 'Cash runway', {owner_id: 'human:ana', unit: 'months', target_label: '', link: undefined, status: 'none', latest: {value: 11, period_end: new Date(day).toISOString(), quality: 'measured'}})];
     const needs = [{kind: 'kpi_red', goal_id: 'g-cmo', goal_title: 'Double organic signups', kpi_id: 'k-act', kpi_name: 'Activation', reason: 'Activation 52% vs 58% needed on pace',
        task: {id: 't-red', title: 'Check why Activation is off track on Double organic signups', status: 'open'}},
       {kind: 'proposal', proposal: {id: 'p1', kind: 'kpi_target', goal_id: 'g-cmo', kpi_id: 'k-act', payload: {kind: 'improve', target: 60, deadline: '2027-12-31'},
@@ -53,7 +53,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const detail = {kpi: activation, links: [{...activation.link, goal_title: 'Double organic signups', goal_owner: 'bot:cmo', target_label: activation.target_label, status: 'yellow', reason: activation.reason}],
       readings: [47, 50, 52].map((v, i) => ({id: 'r' + i, value: v, period_end: new Date(day - (2 - i) * 7 * 86400000).toISOString(), quality: 'measured', evidence: i === 2 ? 'https://analytics.example/q/12' : '', actor: 'bot:goal-manager', superseded_by: null})),
       definitions: [], checkins: [], proposals: [], may_edit: true, may_log: true};
-    const archivedKpi = kpi('k-retired', 'Retired conversion', {owner: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
+    const archivedKpi = kpi('k-retired', 'Retired conversion', {owner_id: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
     let archivedMayEdit = true;
     const requests = [], liveStreams = [];
     await page.route('**/*', async route => {
@@ -77,11 +77,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: other, proposals: []});
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
       if (p === '/api/v2/goals' && post) {
-        const goal = {id: 'g-new-' + goals.length, status: null, rank: 5, kpis: [], ...body};
+        const {owner, ...fields} = body, goal = {id: 'g-new-' + goals.length, status: null, rank: 5, kpis: [], owner_id: owner, ...fields};
         goals.push(goal); return json({goal});
       }
       if (p === '/api/v2/kpis' && !post) return json({kpis: url.searchParams.get('include_archived') === 'true' && archivedKpi.archived_at ? [archivedKpi] : []});
-      if (p === '/api/v2/kpis' && post) { other.push(kpi('k-new-' + other.length, body.name, {...body, freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: other.at(-1)}); }
+      if (p === '/api/v2/kpis' && post) { other.push(kpi('k-new-' + other.length, body.name, {...body, owner_id: body.owner, freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: other.at(-1)}); }
       if (p === '/api/v2/kpis/k-act' && !post) return json(detail);
       if (p === '/api/v2/kpis/k-retired' && !post) return json({...detail, kpi: archivedKpi, links: goals.filter(g => g.kpis.some(k => k.id === archivedKpi.id)).map(g => ({...activation.link, goal_id: g.id, goal_title: g.title})), may_edit: archivedMayEdit});
       if (p === '/api/v2/kpis/k-retired/restore' && post) { archivedKpi.archived_at = null; return json({kpi: archivedKpi}); }
@@ -91,11 +91,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (/^\/api\/v2\/kpis\/[^/]+\/readings$/.test(p) && post) return json({reading: {id: 'r-new'}});
       const link = p.match(/^\/api\/v2\/goals\/([^/]+)\/kpis$/);
       if (link && post) { goals.find(g => g.id === link[1]).kpis.push(kpi('k-link', body.name, {freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: {}}); }
-      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', source_actor: 'bot:cmo', ts: new Date(day - 7 * 86400000).toISOString()}]});
+      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', sender_id: 'bot:cmo', created_at: new Date(day - 7 * 86400000).toISOString()}]});
       if (/\/status\/auto$/.test(p) && post) return json({goal: {}});
       if (/^\/api\/v2\/proposals\/[^/]+\/decide$/.test(p) && post) { needs.splice(1); return json({proposal: {}}); }
       const edit = p.match(/^\/api\/v2\/goals\/([^/]+)$/);
-      if (edit && post) { Object.assign(goals.find(g => g.id === edit[1]), body); return json({goal: {}}); }
+      if (edit && post) { const {owner, ...fields} = body; Object.assign(goals.find(g => g.id === edit[1]), fields, owner ? {owner_id: owner} : {}); return json({goal: {}}); }
       return json(unrouted(p));
     });
     const until = async (fn, what) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
@@ -107,8 +107,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await page.locator('#goal-body button').filter({hasText: /Goal|KPI/}).count(), 0, 'no + Goal, + Company goal or + KPI');
     assert.doesNotMatch(await page.locator('#goal-body').innerText(), /\+ ?(Goal|Company goal|KPI)/);
     assert.equal(await page.locator('#strat-actions #goal-new').innerText(), '+ Goal');
-    // Two requests draw the page: the tree and Needs you.
-    assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree']);
+    // Three requests draw the page: the tree, Needs you and the KPI views.
+    assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
     const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
@@ -122,18 +122,55 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     // No Strategy Bot chat beside the tree: Ask (the person's Assistant) is the way in.
     assert.equal(await page.locator('#sbot, .gm-form, [data-gm-thread], [data-gm-on]').count(), 0, 'no Strategy Bot chat');
 
+    // The search above the tree: every word somewhere in a line (its name or its goals' words), the lines above a match
+    // kept for context, the rest taken out; a redraw keeps it, Escape clears it.
+    const search = page.getByRole('searchbox', {name: 'Search goals or people'});
+    assert.equal(await search.getAttribute('placeholder'), 'Search goals or people…');
+    const shown = () => page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : el.dataset.owner));
+    await search.fill('SEO');
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', 'bot:seo'], 'a bot with its manager chain; an unrelated bot hidden');
+    await page.evaluate(() => goalsRender(GOALS_ST));
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', 'bot:seo'], 'a redraw keeps the search');
+    await search.fill('organic  DOUBLE');
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', '+g-cmo2'], 'words of a goal title, any order: its owner and their goals');
+    await search.fill('keywords competitor');
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', '+g-cmo2'], 'a further goal matches too');
+    await search.fill('board honest');
+    assert.deepEqual(await shown(), ['human:ana', 'human:ben'], 'a person\'s own goal line');
+    await search.fill('seo nomatch');
+    assert.equal(await page.locator('#goal-tree > li').count(), 0);
+    assert.equal(await page.locator('#goal-search-none').innerText(), 'No goals or people match.');
+    await search.fill('seo');
+    if (screenshotDir) {
+      fs.mkdirSync(screenshotDir, {recursive: true});
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate(v => ticoTheme.set(v), theme);
+        await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, `goals-search-${theme}.png`)});
+      }
+      await page.evaluate(() => ticoTheme.set('dark'));
+    }
+    await search.press('Escape');
+    assert.equal(await search.inputValue(), '');
+    assert.deepEqual(await page.locator('#goal-tree > li').count(), lines.length, 'Escape clears it: the whole tree again');
+    assert.equal(await page.locator('#goal-search-none').count(), 0);
+
     assert.match(await row('human:ben').innerText(), /Keep the board honest\./, 'a profile goal shows');
     // KPIs are chips: the dot and the latest value; no fresh data, no number.
     const chips = row('bot:cmo').locator('.gt-chip');
     assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.querySelector('.gdot').className.replace('gdot ', '') + ' ' + el.innerText.trim())), ['yellow 52%', 'gray –']);
     assert.equal(await row('company').locator('.gt-goal .gdot').getAttribute('class'), 'gdot red');
-    // Needs you: a count and its lines; a proposal is confirmed there.
-    assert.match(await page.locator('#goal-needs').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
+    // Needs you: one quiet line with a count; Review opens its cards in a sheet, where a proposal is confirmed.
+    assert.match(await page.locator('#goal-needs-line').innerText(), /^2 waiting on you\s*·\s*Review$/);
+    assert.equal(await page.locator('#goal-needs').count(), 0, 'no cards on the page itself');
+    await page.locator('#goal-needs-line [data-needs-review]').click();
+    assert.match(await page.locator('#goal-needs-sheet[open]').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
     // Each line is the Strategy Bot's task, linked; the link opens the task, not the KPI.
     assert.equal(await page.locator('#goal-needs .need-row [data-need-task]').getAttribute('href'), '#/task/t-red');
     await page.locator('#goal-needs [data-decide=confirm]').click();
     await until(() => page.locator('#goal-needs .kpi-prop').count().then(n => n === 0), 'proposal gone');
     assert.deepEqual(last(), {path: '/api/v2/proposals/p1/decide', body: {decision: 'confirm'}});
+    assert.match(await page.locator('#goal-needs-line').innerText(), /^Activation is off track\s*·\s*Review$/, 'one left: the line says it');
+    await page.locator('#goal-needs-sheet [data-gn-close]').click();
 
     // A bot with no goal: tapping it opens its panel on a new goal, the owner fixed.
     const panel = page.locator('#goal-panel[open]');
@@ -288,6 +325,12 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.setViewportSize({width: 390, height: 844});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
     await page.evaluate(() => setDrawer(false));
+    await search.fill('seo');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'searching: no sideways scroll on a phone');
+    const box = await search.boundingBox();
+    assert(box.x >= 0 && box.x + box.width <= 390, 'the search fits a phone');
+    if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-search-phone.png')});
+    await search.press('Escape');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-phone-test.png')});
     // Measured in one step: a refresh may redraw the tree between separate reads.
     const {cmo, seo, ana} = await page.evaluate(() => {
@@ -307,6 +350,6 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: goals tree, helpers off it, panel adds and edits goals and KPIs, truncation, phone.');
+    console.log('PASS: goals tree, helpers off it, search, panel adds and edits goals and KPIs, truncation, phone.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

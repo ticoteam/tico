@@ -12,10 +12,12 @@ async function refresh(force) {
   const v2 = v2Refresh(), computers = overviewLoadComputers();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
-    // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
     const seatsDue = force || S.seats === undefined || ++SEATS_POLLS % 5 === 0 || Date.now() - SEATS_AT > 600e3;
-    const [st, emps, people, seats] = await Promise.allSettled([get('/status'), get('/employees'), get('/humans'),
-      seatsDue ? get('/v2/seats') : null]);
+    // A forced refresh follows a change: an in-flight read (including startup's notification preference read of
+    // /humans) may already hold the old roster. Ask again instead of joining that read.
+    const options = {fresh: !!force};
+    const [st, emps, people, seats] = await Promise.allSettled([get('/status', options), get('/employees', options), get('/humans', options),
+      seatsDue ? get('/v2/seats', options) : null]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
     cloudAccessFromStatus();
@@ -32,10 +34,9 @@ async function refresh(force) {
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
   taskBuilderNoticesRefresh();
-  if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
-  if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(S.emps.find(x => x.name === BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
+  if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(botRow(BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
   // Poll data without destroying an expanded document or a comment being typed (one inside a closed card is not being
   // written in).
   const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
@@ -45,7 +46,7 @@ async function refresh(force) {
     if (TASKS_ST && isTasksRoute(S.route) && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true});
     // The Active column beside the chat was loaded once and never again, so a task the bot closed
     // stayed listed until a reload. The poll redraws it too.
-    if (BOT && isKeeper(BOT.slug) && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
   }
 }
 
@@ -64,8 +65,14 @@ function sameData(a, b) {
 }
 // What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
 // changes only that, once a minute per tree.
-const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated, ...link}) => link)} : t;
+const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
 function liveTasksApply(events) {
+  events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
+  if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
+    if (TASK_CHAT.dialog.taskLive) taskLiveGone(TASK_CHAT.dialog, TASK_CHAT.dialog.taskLive);
+    else TASK_CHAT.dialog.querySelector('[data-modal-close]')?.click();
+    taskChatStop();
+  }
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
   // cursor resets), and the other lists below reload as for any change.
@@ -100,17 +107,16 @@ function liveTasksApply(events) {
     if (changed && list === state) { tasksTools(state); tasksRender(state); }
   }
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
-  if (BOT && isKeeper(BOT.slug)) {
+  if (BOT) {
     const me = 'bot:' + BOT.slug;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner === me || d.task?.requester === me)) liveThrottle('bot-tasks', () => {
+    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
       if (!BOT || BOT.slug !== me.slice(4)) return;
       if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-      if (BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
     });
   }
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
     const me = 'human:' + PERSON_TASKS;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner === me)) liveThrottle('person-tasks', personTasksReload);
+    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
   }
   if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
 }
@@ -131,18 +137,21 @@ function liveWire() {
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
   liveOn('needs', d => void v2NeedsChanged(d).then(moved => {
+    // A live change reaches the browser notifications too, not only the refresh (hub-v2.js); one memory serves both.
+    if (typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
     if (!moved) return;
     liveEmit('needs-list', S.v2.needs || []);
     liveSoon('needs', () => {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
       if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
-      if (BOT && isKeeper(BOT.slug) && BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
-      if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+      if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
+  // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
+  for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's

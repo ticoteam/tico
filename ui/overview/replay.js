@@ -36,7 +36,7 @@ export function replayTimeline(data, names = {}) {
     switch (it.kind) {
       case 'chat.message': case 'task.comment':
         return `${who}${it.to ? ' → ' + name(it.to) : ''}${task ? ' on ' + task : ''}: ${clip(it.text, 90)}`;
-      case 'task.created': return `${who} added ${task}${it.owner && it.owner !== it.who ? ' for ' + name(it.owner) : ''}`;
+      case 'task.created': return `${who} added ${task}${it.owner_id && it.owner_id !== it.who ? ' for ' + name(it.owner_id) : ''}`;
       case 'task.status': return `${who} moved ${task} to ${STATUS_WORDS[it.new] || it.new || ''}`;
       case 'task.owner': return `${who} handed ${task} to ${name(it.new)}`;
       case 'run.started': return `${name('bot:' + botOf(it))} started work${task ? ' on ' + task : ''}`;

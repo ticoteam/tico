@@ -34,9 +34,13 @@ def install_task_types(app, store, auth, mutate, mover):
         auth.domain(who)
         with store.read() as c:
             access = auth.bot_accesses(c, who)
-            slugs = list(dict.fromkeys(s.strip() for s in request.query_params.get("bots", "").split(",") if s.strip()))[:40]
-            visible = [slug for slug in slugs if access.get(slug, auth.FULL)["read"]]
+            slugs = list(
+                dict.fromkeys(s.strip() for s in request.query_params.get("bots", "").split(",") if s.strip())
+            )[:40]
+            ids = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in slugs]
+            visible = [bot for bot in ids if access.get(bot, auth.FULL)["read"]]
             from . import check_pools
+
             return {"candidates": check_pools.candidate_details(c, visible)}
 
     @app.post("/api/v2/task-types")
@@ -44,9 +48,20 @@ def install_task_types(app, store, auth, mutate, mover):
         def work(c):
             who = request.state.identity
             require_mover(c, who)
-            return {"type": H.type_create(c, who.actor, body.name,
-                    [step.model_dump() for step in body.steps], mover=True, bots=body.bots, numbered=body.numbered,
-                    steps_only=body.steps_only, default_visibility=body.default_visibility)}
+            return {
+                "type": H.type_create(
+                    c,
+                    who.actor,
+                    body.name,
+                    [step.model_dump() for step in body.steps],
+                    mover=True,
+                    bots=body.bots,
+                    numbered=body.numbered,
+                    steps_only=body.steps_only,
+                    default_visibility=body.default_visibility,
+                )
+            }
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/task-types/{type_id}")
@@ -55,8 +70,21 @@ def install_task_types(app, store, auth, mutate, mover):
             who = request.state.identity
             require_mover(c, who)
             steps = [step.model_dump() for step in body.steps] if body.steps is not None else None
-            return {"type": H.type_update(c, who.actor, type_id, body.name, steps, mover=True, bots=body.bots, numbered=body.numbered,
-                    steps_only=body.steps_only, default_visibility=body.default_visibility)}
+            return {
+                "type": H.type_update(
+                    c,
+                    who.actor,
+                    type_id,
+                    body.name,
+                    steps,
+                    mover=True,
+                    bots=body.bots,
+                    numbered=body.numbered,
+                    steps_only=body.steps_only,
+                    default_visibility=body.default_visibility,
+                )
+            }
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/task-types/{type_id}")
@@ -66,4 +94,5 @@ def install_task_types(app, store, auth, mutate, mover):
             who = request.state.identity
             require_mover(c, who)
             return {"type": H.type_delete(c, who.actor, type_id, mover=True)}
+
         return mutate(request, body, work)

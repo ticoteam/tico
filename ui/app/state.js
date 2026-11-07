@@ -28,14 +28,14 @@ let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
-else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', UPDATES); }   // Updates is home
+else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
 // so a second environment shows its own application, team and assistant names. The defaults keep
 // an older server working, and strings built before /api/me answers read the names lazily.
 const CONFIG_DEFAULTS = {environment_id: '', company_name: '', app_name: 'Tico', assistant_name: 'Assistant',
                          assistant_bot: 'coo', public_url: '', runner_url: location.origin, visual_origin: '',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
-const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || UPDATES,
+const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, me: null, route: location.hash || HOME,
             config: {...CONFIG_DEFAULTS},
             v2: {on: false, status: {}, needs: []},
             // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
@@ -53,9 +53,10 @@ const assistantName = () => {
 const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
 // The built-in Counsel's slug (backend/hubdb.py COUNSEL): Tico's own name, so a team's own bot named counsel stays theirs.
 const COUNSEL_BOT = 'tico-counsel';
-// The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager and Counsel are built in to every team: pause and rename
-// them, never archive or delete. None is on the org chart: their settings are Settings > Bots and Settings > System.
-const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT;
+// The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner are built
+// in to every team: pause and rename them, never archive or delete. None is on the org chart: their settings are
+// Settings > Bots and their bot page's Settings.
+const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT || slug === 'brand';
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
 const ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', COUNSEL_BOT];
@@ -67,7 +68,7 @@ const isAssistantHelper = slug => ASSISTANT_HELPERS.includes(slug);
 const strategyDefaultName = () => 'Strategy Bot';
 const strategyDefaultish = name => !name || name === 'Goal Manager' || name === 'CEO Bot';
 const strategyBotName = () => {
-  const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
+  const name = String(botRow('goal-manager')?.display_name || '').trim();
   return strategyDefaultish(name) ? strategyDefaultName() : name;
 };
 // Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
@@ -152,17 +153,29 @@ async function applyAuthenticatedConfig(config, expected = nativeVisualVersion()
 }
 // A page reload is not evidence that the previous browser session is still valid.
 void clearNativeVisualOrigin();
+// Whether a config was read yet: until then S.config holds only the defaults, which say nothing about this server.
+let CONFIG_READ = false;
+// The browser tab: the open page's subject first when it has one ("Builder 2 · Tico"), else the app's name.
+let PAGE_TITLE = '';
+function pageTitle(subject = '') {
+  PAGE_TITLE = subject;
+  document.title = (subject ? subject + ' · ' : '') + (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
+}
 function applyConfig(config) {
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};
-  document.title = (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
+  CONFIG_READ = true;
+  pageTitle(PAGE_TITLE);
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);
   document.documentElement.classList.toggle('demo', strip);
   document.documentElement.classList.toggle('strip', strip || document.documentElement.classList.contains('cloud-frozen'));
   $('#demo-banner').hidden = !strip;
   if (S.config.rehearsal && !S.config.demo) $('#demo-banner').innerHTML = '<strong>Rehearsal: nothing runs or leaves this server</strong>';
+  if (S.config.demo && S.config.demo_public) $('#demo-banner').innerHTML = '<strong>Read only demo</strong>';
   renderOnboardingNav();
   renderNewVersion();
+  renderAdministration();
+  if (typeof nativeOrgSync === 'function') nativeOrgSync();
   window.renderChangelogNotice?.();
   noticeUpdatedServer();
   void renderAppUpdate();
@@ -171,7 +184,6 @@ function applyConfig(config) {
   renderVersionMessage();
   renderFeedbackAsk();
   document.documentElement.classList.toggle('no-support', S.config.support_on === false);
-  window.redesignApply?.();
   return S.config;
 }
 // Beta: the server's one list (backend/beta.py), so the app, Help, the manual and support diagnostics agree. The pill
@@ -186,7 +198,7 @@ function betaMark(root = document) {
 }
 // ----------------------------------------------------------------- derived state
 function stateOf(slug) {
-  const e = S.emps.find(x => x.name === slug);
+  const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
   const live = S.v2?.status?.[slug];
@@ -196,11 +208,11 @@ function stateOf(slug) {
 }
 const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // What needs you from that bot, grouped the way the Needs you list groups it (companyNeedActor). The org tree's
-// number is a fixed attention count matching the default Needs You tab, independent of edits to that tab.
+// number is a fixed attention count matching the default Needs you tab, independent of edits to that tab.
 function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug)
-    || (it.kind === 'approval' && (it.requested_by || it.requester) === 'bot:' + slug));
+    && companyNeedActor(it, it) === 'bot:' + slug)
+    || (it.kind === 'approval' && (it.requested_by_id || it.requester_id) === 'bot:' + slug));
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = () => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -212,7 +224,7 @@ function needsMeCounts() {
   const counts = new Map();
   for (const it of S.v2?.needs || []) {
     const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'ask' ? it.requester : it.kind === 'approval' ? it.requested_by || it.requester : null;
+      : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
     if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;

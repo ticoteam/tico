@@ -38,14 +38,16 @@ def hosted(api):  # noqa: F811
             return owner_link.place(c, digest(token), OWNER, **kw)
 
     def press(token, client=None, **headers):
-        return (client or browser).post(owner_link.LINK_PATH, data={"token": token}, headers=headers,
-                                        follow_redirects=False)
+        return (client or browser).post(
+            owner_link.LINK_PATH, data={"token": token}, headers=headers, follow_redirects=False
+        )
 
     def me(client=None):
         return (client or browser).get("/api/v2/me")
 
     class Hosted:
         pass
+
     h = Hosted()
     h.api, h.auth, h.settings, h.browser, h.place, h.press, h.me = api, auth, settings, browser, place, press, me
     return h
@@ -108,10 +110,10 @@ def test_a_new_link_kills_the_old_unused_one_and_sign_out_ends_the_owners_sessio
     first, second, third = new_token(), new_token(), new_token()
     hosted.place(first)
     hosted.place(second)
-    hosted.place(second)                                           # a retried command keeps the link it placed
-    assert hosted.press(first).status_code == 410                 # replaced before it was used
+    hosted.place(second)  # a retried command keeps the link it placed
+    assert hosted.press(first).status_code == 410  # replaced before it was used
     assert hosted.press(second).status_code == 303 and hosted.me().status_code == 200
-    hosted.place(third)                                            # without --sign-out the session stays
+    hosted.place(third)  # without --sign-out the session stays
     assert hosted.me().status_code == 200
     hosted.place(new_token(), sign_out=True)
     assert hosted.me().status_code == 401
@@ -139,7 +141,7 @@ def test_the_first_start_places_the_installers_link_once(hosted):
     hosted.settings.owner_link_hash = digest(token)
     hosted.auth.proxy.warm()
     hosted.settings.owner_link_hash = digest(later)
-    hosted.auth.proxy.warm()                                       # a restart keeps the link it has
+    hosted.auth.proxy.warm()  # a restart keeps the link it has
     assert hosted.press(later).status_code == 410
     assert hosted.press(token).status_code == 303
 
@@ -151,7 +153,7 @@ def test_wrong_links_are_rate_limited_per_address(hosted):
         assert hosted.press(new_token()).status_code == 410
     blocked = hosted.press(token)
     assert blocked.status_code == 429 and "set-cookie" not in blocked.headers
-    hosted.auth.proxy.failures = owner_link.Failures()             # the window passed
+    hosted.auth.proxy.failures = owner_link.Failures()  # the window passed
     assert hosted.press(token).status_code == 303
 
 
@@ -189,7 +191,7 @@ def test_a_browser_without_a_session_is_sent_to_the_link_page_and_the_api_names_
     assert page.status_code == 302 and page.headers["location"] == owner_link.LINK_PATH
     landing = hosted.browser.get(owner_link.LINK_PATH)
     assert landing.status_code == 200 and "Open the sign-in link Tico sent you" in landing.text
-    assert "disabled>Sign in" in landing.text                    # no fragment, nothing to press
+    assert "disabled>Sign in" in landing.text  # no fragment, nothing to press
     refused = hosted.me()
     assert refused.status_code == 401 and refused.json()["error"]["sign_in"] == owner_link.LINK_PATH
     signed_out = hosted.browser.get(owner_link.LINK_PATH, params={"signed_out": "1"})
@@ -203,8 +205,12 @@ def test_the_apps_next_is_taken_and_the_owner_comes_back_there_but_a_query_secre
     assert landing.status_code == 200 and "Open the sign-in link Tico sent you" in landing.text
     assert '<input type="hidden" name="next" value="/?a=1#/tasks">' in landing.text
     token = new_token()
-    for query in ({"next": here, "token": token}, {"token": token}, {"next": here, "t": token},
-                  {"signed_out": "1", "token": token}):
+    for query in (
+        {"next": here, "token": token},
+        {"token": token},
+        {"next": here, "t": token},
+        {"signed_out": "1", "token": token},
+    ):
         refused = hosted.browser.get(owner_link.LINK_PATH, params=query)
         assert refused.status_code == 400 and token not in refused.text
     hosted.place(token)
@@ -212,15 +218,21 @@ def test_the_apps_next_is_taken_and_the_owner_comes_back_there_but_a_query_secre
     assert signed.status_code == 303 and signed.headers["location"] == here
 
 
-@pytest.mark.parametrize("next_", ["//evil.example/x", "https://evil.example/", "/\\evil.example",
-                                   "/ok\r\nSet-Cookie: x=1", "/auth/owner-link"])
-def test_a_next_that_leaves_the_site_or_the_path_goes_home_instead(hosted, next_):
-    page = hosted.browser.get(owner_link.LINK_PATH, params={"next": next_})
-    assert page.status_code == 200 and 'name="next"' not in page.text
-    token = new_token()
-    hosted.place(token)
-    signed = hosted.browser.post(owner_link.LINK_PATH, data={"token": token, "next": next_}, follow_redirects=False)
-    assert signed.status_code == 303 and signed.headers["location"] == "/"
+def test_a_next_that_leaves_the_site_or_the_path_goes_home_instead(hosted):
+    for next_ in [
+        "//evil.example/x",
+        "https://evil.example/",
+        "/\\evil.example",
+        "/ok\r\nSet-Cookie: x=1",
+        "/auth/owner-link",
+    ]:
+        hosted.browser.cookies.clear()
+        page = hosted.browser.get(owner_link.LINK_PATH, params={"next": next_})
+        assert page.status_code == 200 and 'name="next"' not in page.text, next_
+        token = new_token()
+        hosted.place(token)
+        signed = hosted.browser.post(owner_link.LINK_PATH, data={"token": token, "next": next_}, follow_redirects=False)
+        assert signed.status_code == 303 and signed.headers["location"] == "/", next_
 
 
 def test_sign_out_ends_the_session_and_lands_on_the_link_page(hosted):
@@ -237,21 +249,30 @@ def test_the_link_page_is_not_there_on_any_other_server(api):  # noqa: F811
     assert api.post(owner_link.LINK_PATH, data={"token": new_token()}).status_code == 404
 
 
-@pytest.mark.parametrize("change, wanted", [
-    ({"public_url": "http://acme.hosted.example"}, "needs an https address"),
-    ({"public_url": "https://127.0.0.1:8765"}, "needs an https address"),
-    ({"public_url": "https://203.0.113.7"}, "not an IP address"),
-    ({"public_url": "https://203.0.113.7:8443"}, "not an IP address"),
-    ({"public_url": "https://[2001:db8::7]"}, "not an IP address"),
-    ({"public_url": "https://[2001:db8::7]:8443"}, "not an IP address"),
-    ({"public_url": "https://[::ffff:203.0.113.7]"}, "not an IP address"),
-    ({"hosted": ""}, "set TICO_HOSTED to own or invited"),
-    ({"owner_link_hash": "abc"}, "64-character sha256"),
-    ({"owner_email": ""}, "needs TICO_OWNER_EMAIL"),
-])
+@pytest.mark.parametrize(
+    "change, wanted",
+    [
+        ({"public_url": "http://acme.hosted.example"}, "needs an https address"),
+        ({"public_url": "https://127.0.0.1:8765"}, "needs an https address"),
+        ({"public_url": "https://203.0.113.7"}, "not an IP address"),
+        ({"public_url": "https://203.0.113.7:8443"}, "not an IP address"),
+        ({"public_url": "https://[2001:db8::7]"}, "not an IP address"),
+        ({"public_url": "https://[2001:db8::7]:8443"}, "not an IP address"),
+        ({"public_url": "https://[::ffff:203.0.113.7]"}, "not an IP address"),
+        ({"hosted": ""}, "set TICO_HOSTED to own or invited"),
+        ({"owner_link_hash": "abc"}, "64-character sha256"),
+        ({"owner_email": ""}, "needs TICO_OWNER_EMAIL"),
+    ],
+)
 def test_the_server_refuses_to_start_with_the_owner_link_anywhere_but_a_hosted_https_address(tmp_path, change, wanted):
-    good = {"db_path": tmp_path / "hub.db", "auth_proxy": "owner-link", "public_url": URL, "hosted": "invited",
-            "owner_email": OWNER, "owner_link_hash": digest(new_token())}
+    good = {
+        "db_path": tmp_path / "hub.db",
+        "auth_proxy": "owner-link",
+        "public_url": URL,
+        "hosted": "invited",
+        "owner_email": OWNER,
+        "owner_link_hash": digest(new_token()),
+    }
     Settings(**good)
     with pytest.raises(RuntimeError, match=wanted):
         Settings(**{**good, **change})

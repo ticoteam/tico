@@ -1,14 +1,57 @@
 #!/usr/bin/env bash
-# Type-check the boundary modules listed in pyrightconfig.json (Phase 5: pyright basic, growing include list).
-# Pyright is pinned; it resolves imports against .venv-pyright when that exists (local), else the python3 on PATH
-# (CI installs backend/requirements-dev.txt there). Extra arguments go to pyright, e.g. a file to check alone.
-#   scripts/check_types.sh
+# Type-check every backend module with basedpyright (pinned) against .basedpyright/baseline.json, then the ratchet in
+# scripts/check_pyright_ratchet.py. The baseline and the legacy module list only shrink, and a module added since
+# the legacy list was written must be strict (migrations excepted). Takes about 30 seconds on a Mac; CI runs it in
+# the static job.
+#   scripts/check_types.sh                                 check: fails on a new error and on a non-strict new
+#                                                          module; a baseline entry that no longer fires warns
+#   scripts/check_types.sh --writebaseline                 rewrite the baseline after fixes (review the diff)
+#   PYRIGHT_BASE_REF=origin/main scripts/check_types.sh    also fail when the baseline or the legacy list grew
+#   scripts/check_types.sh path/to/file.py                 extra arguments go to basedpyright (a file to check alone)
+# Local setup, so imports resolve as they do in CI (Python 3.15, the same pins):
+#   python3.15 -m venv .venv-pyright && .venv-pyright/bin/python -m pip install -r backend/requirements-dev.txt
+# Without .venv-pyright it uses the python3 on PATH (CI installs backend/requirements-dev.txt there).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PYRIGHT="pyright@1.1.414"    # released 2026-09-09; bump only after the release is two weeks old
+BASEDPYRIGHT="basedpyright@1.40.2"    # released 2026-10-04; bump only after the release is two weeks old
 if [ -x .venv-pyright/bin/python ]; then
   PYTHON_BIN="$PWD/.venv-pyright/bin/python"
 else
   PYTHON_BIN="$(command -v python3)"
 fi
-exec uvx "$PYRIGHT" --pythonpath "$PYTHON_BIN" "$@"
+case " $* " in
+  *" --writebaseline "*)
+    # basedpyright writes the baseline; then it is put in the layout scripts/baseline_merge.py merges (the ratchet checks it).
+    status=0
+    uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" "$@" || status=$?
+    if [ -f .basedpyright/baseline.json ]; then
+      "$PYTHON_BIN" scripts/baseline_merge.py normalize .basedpyright/baseline.json
+    fi
+    exit "$status"
+    ;;
+esac
+# lock: CI's default, made explicit so a laptop run is the same. Warnings count too; the baseline holds them as well.
+# A new error fails. A baseline entry that did not fire only warns: basedpyright's inference of unannotated code is not
+# the same on every run (Nov 7: "went down by 3" failed a merge group whose only change was under scripts/), so failing
+# on it ejects good PRs at random. The ratchet below still fails when the baseline grows; --writebaseline drops gone
+# entries.
+out="$(mktemp)"
+set +e
+uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" --baselinemode=lock --warnings "$@" 2>&1 | tee "$out"
+status="${PIPESTATUS[0]}"
+set -e
+if [ "$status" -ne 0 ]; then
+  # Exit 3 with "0 errors, 0 warnings" and "went down by N" is only the baseline shrinking; anything else is real.
+  if [ "$status" -eq 3 ] && grep -q 'went down by' "$out" && grep -q '^0 errors, 0 warnings' "$out"; then
+    n="$(grep -o 'went down by [0-9]*' "$out" | head -1)"
+    echo "::warning::basedpyright: baseline entries did not fire on this run ($n); not a failure. Drop them with scripts/check_types.sh --writebaseline when they stay gone."
+  else
+    rm -f "$out"
+    exit "$status"
+  fi
+fi
+rm -f "$out"
+if [ -n "${PYRIGHT_BASE_REF:-}" ]; then
+  exec "$PYTHON_BIN" scripts/check_pyright_ratchet.py --base "$PYRIGHT_BASE_REF"
+fi
+exec "$PYTHON_BIN" scripts/check_pyright_ratchet.py

@@ -1,6 +1,6 @@
-// Offline browser regression: a bot-owned task talks in its own room. In the bot's main chat a task's start and its
-// milestone reports are one quiet row each, and a tap opens the task's thread; a "What needs you" row opens the same
-// thread, and what is typed there goes to the task (POST /v2/tasks/{id}/comments), never to the main chat.
+// Offline browser regression: a bot-owned task talks in its own room. In the Assistant's chat (ui/app/chat.js, the one
+// chat that still folds them) a task's start and its milestone reports are one quiet row each, and a tap opens the
+// task's thread; what is typed there goes to the task (POST /v2/tasks/{id}/comments), never to the main chat.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,25 +11,25 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
-const asked = {id: 't-key', title: 'Pick the API key for staging', owner: 'bot:botops', requester: 'human:ana', status: 'waiting',
-  lane: 'company', version: 3, created: at(90), updated: at(5), ask: {to_actor: 'human:ana', body: 'Which key should staging use?'}};
-const docs = {id: 't-docs', title: 'Ship the docs refresh', owner: 'bot:botops', requester: 'human:ana', status: 'doing',
-  lane: 'company', version: 2, created: at(60), updated: at(10)};
+const asked = {id: 't-key', title: 'Pick the API key for staging', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'waiting',
+  lane: 'company', version: 3, created_at: at(90), updated_at: at(5), ask: {recipient_id: 'human:ana', body: 'Which key should staging use?'}};
+const docs = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
+  lane: 'company', version: 2, created_at: at(60), updated_at: at(10)};
 const tasks = {[asked.id]: asked, [docs.id]: docs};
 const messages = [
-  {id: 'm1', conversation_id: 'c1', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Refresh the docs please', created: at(61)},
-  {id: 'm2', conversation_id: 'c1', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', in_reply_to: 'm1', body: 'On it.', created: at(60)},
-  {id: 'm3', conversation_id: 'c1', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Started task: Ship the docs refresh',
-    refs: {task: 't-docs', task_started: true}, created: at(59)},
-  {id: 'm4', conversation_id: 'c1', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Blocked: the docs build needs a staging key.',
-    refs: {task: 't-docs', task_report: 'blocked'}, ref_tasks: {'t-docs': {title: 'Ship the docs refresh'}}, created: at(10)},
+  {id: 'm1', conversation_id: 'c1', sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Refresh the docs please', created_at: at(61)},
+  {id: 'm2', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', in_reply_to: 'm1', body: 'On it.', created_at: at(60)},
+  {id: 'm3', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Started task: Ship the docs refresh',
+    refs: {task: 't-docs', task_started: true}, created_at: at(59)},
+  {id: 'm4', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Blocked: the docs build needs a staging key.',
+    refs: {task: 't-docs', task_report: 'blocked'}, ref_tasks: {'t-docs': {title: 'Ship the docs refresh'}}, created_at: at(10)},
 ];
 const comments = {
-  't-key': [{id: 'k1', conversation_id: 'r-key', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'ask', body: 'Which key should staging use?', created: at(5)}],
+  't-key': [{id: 'k1', conversation_id: 'r-key', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'ask', body: 'Which key should staging use?', created_at: at(5)}],
   // A long thread: it opens at its newest line, like the chat.
-  't-docs': [...Array.from({length: 30}, (_, i) => ({id: 'e' + i, conversation_id: 'r-docs', from_actor: 'bot:botops', kind: 'say',
-    body: `Build step ${i + 1} of the docs refresh ran.`, created: at(50 - i)})),
-    {id: 'd1', conversation_id: 'r-docs', from_actor: 'bot:botops', kind: 'say', body: 'Docs build fails without a staging key.', created: at(10)}],
+  't-docs': [...Array.from({length: 30}, (_, i) => ({id: 'e' + i, conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say',
+    body: `Build step ${i + 1} of the docs refresh ran.`, created_at: at(50 - i)})),
+    {id: 'd1', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Docs build fails without a staging key.', created_at: at(10)}],
 };
 
 async function run(viewport, shot) {
@@ -49,11 +49,11 @@ async function run(viewport, shot) {
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
-      if (p === '/api/v2/conversations/c1/snapshot' || p === '/api/v2/conversations/c1/messages') return json({messages, execution: null});
+      if (p === '/api/v2/assistant' && req.method() === 'GET') return json({available: true, state: 'active', bot: 'botops', name: 'Assistant',
+        room_id: 'c1', messages, has_more: false, next_before: null, execution: null, actions: {}, pending: []});
+      if (p === '/api/v2/conversations/c1/snapshot') return json({messages, execution: null, next_before: null});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/chat/botops') { chatSends.push(req.postDataJSON().text); return json({error: {detail: 'not here'}}, 500); }
+      if (p === '/api/v2/assistant/messages') { chatSends.push(req.postDataJSON().text); return json({error: {detail: 'not here'}}, 500); }
       if (p === '/api/v2/tasks') {
         const owned = url.searchParams.get('owner') === 'botops';
         return json({tasks: owned ? Object.values(tasks) : []});
@@ -64,7 +64,7 @@ async function run(viewport, shot) {
         if (one[2] && req.method() === 'POST') {
           const text = req.postDataJSON().text;
           taskSends.push({id, text});
-          const msg = {id: 'c' + taskSends.length, conversation_id: 'r-' + id, from_actor: 'human:ana', kind: 'say', body: text, created: new Date().toISOString()};
+          const msg = {id: 'c' + taskSends.length, conversation_id: 'r-' + id, sender_id: 'human:ana', kind: 'say', body: text, created_at: new Date().toISOString()};
           comments[id].push(msg);
           return json({comment: msg, comments: comments[id], woke: true});
         }
@@ -73,8 +73,8 @@ async function run(viewport, shot) {
       if (p.startsWith('/api/v2/tasks/') && p.endsWith('/files')) return json({files: []});
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/bot/botops');
-    await page.waitForFunction(() => V2C?.loaded && document.querySelector('#conv-thread .chat-task-row'));
+    await page.goto('https://tico-ui.test/#/assistant');
+    await page.waitForFunction(() => document.querySelector('#conv-thread .chat-task-row'));
 
     // The main chat folds the task's start and its report to one quiet row each; its report text is not a bubble.
     const thread = page.locator('#conv-thread');
@@ -87,9 +87,9 @@ async function run(viewport, shot) {
 
     // Four or more task rows in a row fold to the oldest, "...N more..." and the newest; a real message starts a new run.
     const folded = await page.evaluate(() => {
-      const row = (n, state = 'done') => ({id: 'r' + n, from_actor: 'keeper', to_actor: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
-        refs: {task: 't' + n, task_report: state}, ref_tasks: {['t' + n]: {title: `Review ${n}`}}, created: new Date(Date.now() - (60 - n) * 60000).toISOString()});
-      const say = {id: 'say', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Halfway there.', created: new Date().toISOString()};
+      const row = (n, state = 'done') => ({id: 'r' + n, sender_id: 'keeper', recipient_id: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
+        refs: {task: 't' + n, task_report: state}, ref_tasks: {['t' + n]: {title: `Review ${n}`}}, created_at: new Date(Date.now() - (60 - n) * 60000).toISOString()});
+      const say = {id: 'say', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Halfway there.', created_at: new Date().toISOString()};
       const lines = list => { const el = document.createElement('div'); el.innerHTML = v2MessagesHTML(list, null, 'botops');
         return [...el.querySelectorAll('.chat-task-row, .conv-run')].map(r => r.matches('.chat-task-more') ? r.textContent.trim()
           : r.querySelector('.ct-title')?.textContent || 'message'); };
@@ -117,22 +117,12 @@ async function run(viewport, shot) {
     await modal.locator('[data-thread-back]').click();
     await page.waitForFunction(() => !document.querySelector('#task-modal')?.open);
 
-    // A "What needs you" row (above the chat where chat and tasks do not sit side by side; beside them the rail lists
-    // the tasks) opens that task's thread, and a message sent there goes to the task.
-    const split = await page.evaluate(() => document.querySelector('#main').classList.contains('bot-split-layout'));
-    if (split) {
-      await rows.nth(1).click();
-      await modal.locator('.task-comments', {hasText: 'Docs build fails'}).waitFor();
-    } else {
-      const banner = page.locator('#bot-chat-tasks [data-bot-chat-task="t-key"]');
-      await banner.waitFor();
-      await banner.click();
-      await modal.locator('.task-comments', {hasText: 'Which key should staging use?'}).waitFor();
-      assert.equal(await modal.locator('.tthread-title').innerText(), 'Pick the API key for staging');
-    }
-    const id = split ? 't-docs' : 't-key';
+    // Reopen it and send: Return sends on a computer; the arrow sends anywhere.
+    const split = viewport.width > 760;
+    await rows.nth(1).click();
+    await modal.locator('.task-comments', {hasText: 'Docs build fails'}).waitFor();
+    const id = 't-docs';
     if (shot) { await page.waitForTimeout(600); await page.screenshot({path: shot}); }
-    // Return sends on a computer; the arrow sends anywhere.
     await modal.locator('.task-pill .p-text').fill('Use the staging key in the vault');
     if (split) await page.keyboard.press('Enter'); else await modal.locator('.task-pill .p-send').click();
     await modal.locator('.task-comments', {hasText: 'Use the staging key in the vault'}).waitFor();
@@ -150,7 +140,7 @@ async function run(viewport, shot) {
 
 (async () => {
   const shot = name => SHOTS ? path.join(SHOTS, name) : '';
-  assert.equal(await run({width: 1200, height: 800}, shot('task-thread-desktop.png')), true, 'desktop: chat and tasks side by side');
-  assert.equal(await run({width: 390, height: 844}, shot('task-thread-mobile.png')), false, 'phone: the banner path');
+  await run({width: 1200, height: 800}, shot('task-thread-desktop.png'));
+  await run({width: 390, height: 844}, shot('task-thread-mobile.png'));
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });

@@ -89,7 +89,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the team's work with `hub task list`, `hub task list --all`, `hub update list --bot
 <slug>`, `hub team show`, `hub meeting search "<account>"`, `hub calendar list`. A question for the
-owner is `hub task ask <id>`, one open question per task. A human's decision is `hub task create --owner <human>`.
+owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A human's decision is `hub task create --owner <human>`.
 When ready, the summary reaches the owner as `hub message send --fyi <owner> "<one line and the link>"`.
 
 ## Quality standards

@@ -39,7 +39,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    **Read and write** and save. GitHub asks the organization to accept the change: open the installation
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
 2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   **All repos in use** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
@@ -60,7 +60,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
 1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Workflows** to
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
-   **All ticked repos** with write (Settings → bot → Repositories), or runs
+   **All repos in use** with write (Settings → bot → Repositories), or runs
    `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
@@ -205,7 +205,7 @@ existing repository grants keep their normal behavior.
 
 ## Bot repository access
 
-Tick the team's repositories in Settings → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
+Tick the team's repositories in Settings → General → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
 
 ## Creating bot repositories
 
@@ -249,9 +249,9 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**.
-Enter one repository name, review the connected organization, exact name, and private/empty settings, then
-select **Create private empty repository**. The API also exposes this flow to the Hub CLI, for the Owner and
+An Owner can create an exact product repository without the `bot-` prefix from **Settings → General → Repositories**
+→ **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
+name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
     hub repo product-create tico-recorder
@@ -277,7 +277,8 @@ organization/name. If GitHub's response is lost, times out, or returns a server 
 retry with the same content reports the unresolved outcome without issuing another create. Check the
 connected organization directly before taking another action. Tico does not infer that an existing
 repository belongs to the unresolved operation, adopt it, or retry that external write automatically.
-The operation binding and completed receipt outlive the generic idempotency cache.
+The binding is a row of `idempotency` (`binding` = `github_product_repo`, `subject` = org/name) that the retention
+sweep never removes, so a completed create replays from it after the 48-hour window.
 
 Creating the empty repository does not publish source. Publishing a preserved source bundle is a separate,
 Owner-authorized step: restore or use the preserved checkout, verify its expected branch and history, and
@@ -324,12 +325,12 @@ agent gets `403` on both, even for the Owner. The rules are in [Permissions](per
 - **Names.** The same single-name rule as the Owner's, and a bot is also refused a `bot-` or `emp-` name, or a
   name a bot's repository already uses (`403`).
 - **After it is created**, in the same step that saves the receipt (so a retry with the same key replays it and
-  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Own repo
-  only** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
-  **All ticked repos** with read access moves to **Chosen repos**, read on every repository it reached and write on
+  does nothing twice): the repository is ticked for the team, the bot gets write to it (a bot on **Their own
+  repo** moves to **Chosen repos** with just this one; a bot on **Chosen repos** keeps its other grants; a bot on
+  **All repos in use** with read access moves to **Chosen repos**, read on every repository it reached and write on
   this one, so a repository ticked later reaches it only once chosen), and the Owner gets a notice: *Head of Engineering created private repo tico-services (acme/tico-services). Head of
-  Engineering has write access to it.* The notice also names any bot set to **All ticked repos**, which reaches
-  it too, and says when the bot moved from All ticked repos to Chosen repos. The reply's `bot_access` is `write`,
+  Engineering has write access to it.* The notice also names any bot set to **All repos in use**, which reaches
+  it too, and says when the bot moved from All repos in use to Chosen repos. The reply's `bot_access` is `write`,
   or `none` if the grant could not be made (the repository exists; an Owner or admin grants it in Settings). The
   event `github.product_repo_created` records the bot, `bot_access`, `moved_to_chosen` and whether the Owner was told.
 
@@ -424,7 +425,7 @@ app from its settings page.
 
 New GitHub Apps include the task events and read permissions automatically. For an existing
 App, enable webhook events for Pull requests, Pull request reviews,
-Pull request review comments, Check runs, Check suites and Commit statuses, plus Push for
+Pull request review comments, Check runs, Check suites, Workflow runs and Commit statuses, plus Push for
 deploy tracking. Release events are not used. The webhook remains `POST /api/v2/github/webhook` with signature verification.
 Checks need read access to Checks and commit statuses need read access to Commit statuses in
 the GitHub App. Existing installations without these events keep their last known PR states;
@@ -436,6 +437,9 @@ check **Push** and save. Keep the existing webhook URL (`https://<your-host>/api
 secret, SSL verification and repository access unchanged. In **Recent Deliveries**, confirm a genuine
 event receives HTTP 200. An installation event confirms delivery, but does not restore missed pushes;
 enabling Push does not recreate historical deliveries.
+
+A finished workflow run counts as one more check on its head, so a failed workflow wakes the owner once for that
+head even when GitHub sent no check event for it. A started one says nothing.
 
 A PR event updates every task linked to that PR. Checks record passing, failing or pending;
 PR updates record clean, conflict or unknown mergeability. Reviews record approved, changes
@@ -471,7 +475,7 @@ and status, with the checks link and commit; judged when a suite completes, or w
 pending finishes after one has; a run whose own suite is still running holds it), a review is submitted approving or requesting changes (with the reviewer and
 review link), or a release ships the merged PR. A PR merged in a repository other than the one Tico releases
 never ships, so its merge is the wake. The link disarms in the same write, so redelivered events never repeat
-it; the link's `detail_json.wake_once_fired` records what fired. Arming needs the connected App and is refused
+it; the link's `detail.wake_once_fired` records what fired. Arming needs the connected App and is refused
 on a closed or shipped PR, or one already merged outside the release repository; it is off unless armed,
 creates no task and never changes the task's status or step. While armed on an open or merged PR that the App
 has sent an event for, or in a repository it reaches, the task counts as waiting on GitHub, so a waiting task
@@ -486,6 +490,15 @@ the review arrived leaves them on. Logins are unique on the team: setting one so
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who
 cannot read a private task, and finished tasks are skipped. Unset, review requests change no roles.
 
+A PR that names one active Dev ticket as "Dev 665", "Dev #665" or "Dev ticket 665" in its branch, title or body links
+itself to that ticket when it is opened, reopened or edited, as `hub task link` would, so a forgotten link does not leave
+the ticket without a PR. A bare "#665" is never read. A PR that names two tickets, a finished or non-Dev ticket, or a
+ticket that already has an open PR links nothing.
+
+GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on active
+Dev tickets whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
+pass, and wakes the owner once per head when one now conflicts.
+
 Several PRs can belong to one task. A PR on a task is information only: GitHub events, release
 tags and deploys never change the task's status or step; a person moves the task. A merged PR
 becomes Shipped once the running release includes its merge commit; merged PRs in another
@@ -496,4 +509,4 @@ running release's recorded commit, never latest main or the newest tag. Only ver
 ancestry marks a PR Shipped; errors, missing commits and diverged histories leave it Merged. Failed checks
 retry after at least five minutes. Results are cached in memory for up to 512 immutable pairs and checked
 again after a restart; the shipped event records the verified pair. It creates no push history.
-Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.
+Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → General → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.

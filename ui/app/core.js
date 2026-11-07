@@ -4,7 +4,8 @@
 
 const API = '/api';
 const GH = 'https://github.com/ticoteam/tico';
-// The building is an optional view of the team; Updates remains the default route.
+// My dashboard (Company › Mine) is where the app opens; Company › Dashboard is the company's.
+const HOME = '#/home';
 const OVERVIEW = '#/overview';
 const WELCOME = '#/welcome';          // first run: names, the team, the bot templates, a computer
 const CHAT = '#/chat';                // retired with the Tico chat: old links land on Tasks
@@ -14,14 +15,14 @@ const MEETINGS = '#/meetings';        // imported meeting transcripts: the list,
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
 const DECIDE = '#/decide';            // retired: old links land on Needs you, or open the item's card (ui/app/router.js)
-const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; a card at a time from Go through (ui/app/decide.js)
+const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; answerable cards walked by Catch up (ui/app/decide.js)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.js)
 const LEARNED = '#/assistant/learned';   // what your chat bot has learned (ui/app/learned.js)
 const BOARD = '#/board';              // the old links still work, each opening its view
 const ISSUES = '#/issues';
 const SETTINGS = '#/settings';
-const HELP = '#/help';                // old Help links: Overview with the Support pop-up open (ui/support.js)
+const HELP = '#/help';                // old Help links: Company with the Support pop-up open (ui/support.js)
 const CREDENTIALS = '#/credentials';   // the owner's connections: what is connected and whether it works
 const SQL_PAGE = '#/sql';              // the owner's and admins' read-only query page over the hub database
 const STRATEGY = '#/strategy';       // the team's strategy, with Market as its second tab (ui/strategy-page.js)
@@ -33,6 +34,8 @@ const MESSAGING = '#/messaging';       // selected Message bot: setup, schedules
 // Bot notices still flow through /api/v2/messages?unread=1. People read mail on #/mail, not live Gmail.
 const $ = (s, r=document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// The one filter icon: every button that opens or applies filters shows it, with no word (aria-label carries it).
+const filterIcon = (size = 14) => `<svg viewBox="0 0 14 14" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path d="M2 3.5h10M4 7h6M5.8 10.5h2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 // A shaped placeholder for a list that is still loading (styles/skeleton.css): `n` rows of uneven width, so the page
 // keeps its layout and does not jump when the rows arrive. `card` drops the dividers for a list inside a card.
 const SKEL_W = [62, 44, 71, 53, 38, 66, 49, 57];

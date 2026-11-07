@@ -3,6 +3,7 @@
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
+
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +21,9 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 UI = Path(__file__).resolve().parents[2] / "ui" / "app"
 # post('/v2/x', ...), put(`/v2/bots/${slug}/model`, ...), patch('/v2/a/' + id, ...), writeRequest('DELETE', '/v2/x')
 CALL = re.compile(r"\b(post|put|patch)\(\s*(['\"`])((?:(?!\2).)*)\2((?:\s*\+\s*[^,)]+)*)", re.S)
-RAW = re.compile(r"writeRequest\(\s*'(DELETE|POST|PUT|PATCH)'\s*,\s*(['\"`])((?:(?!\2).)*)\2((?:\s*\+\s*[^,)]+)*)", re.S)
+RAW = re.compile(
+    r"writeRequest\(\s*'(DELETE|POST|PUT|PATCH)'\s*,\s*(['\"`])((?:(?!\2).)*)\2((?:\s*\+\s*[^,)]+)*)", re.S
+)
 
 
 def _template(path, tail):
@@ -59,10 +62,14 @@ def _covers(route, written):
 
 def test_every_route_a_settings_card_writes_has_a_catalogue_entry():
     writes = settings_writes()
-    assert len(writes) > 60                      # the extraction still reads the pages
-    missing = sorted((method, route) for method, route in writes
-                     if not any(e.method == method and _covers(e.route, route) for e in ENTRIES)
-                     and (method, route) not in ALIASES and (method, route) not in NOT_SETTINGS)
+    assert len(writes) > 60  # the extraction still reads the pages
+    missing = sorted(
+        (method, route)
+        for method, route in writes
+        if not any(e.method == method and _covers(e.route, route) for e in ENTRIES)
+        and (method, route) not in ALIASES
+        and (method, route) not in NOT_SETTINGS
+    )
     assert not missing, "Settings writes with no entry in backend/settings_entries.py: " + repr(missing)
     stale = sorted(k for k in (*ALIASES, *NOT_SETTINGS) if k not in writes)
     assert not stale, "ALIASES or NOT_SETTINGS list writes no Settings page makes any more: " + repr(stale)
@@ -84,14 +91,14 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
         assert e.kind != "person" or e.why, e.key
         # A Confirm card can only carry a route a person may confirm from BotOps.
         if e.kind == "confirm":
-            path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
+            path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
 
 
 def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
     for e in ENTRIES:
-        card = valid_operation(e.method, "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route), None, "botops")
+        card = valid_operation(e.method, settings_catalog.probe(e), None, "botops")
         if e.key in NO_CARD_YET:
             assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
             assert e.kind == "person" or e.when_held == "person", e.key
@@ -150,6 +157,22 @@ def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops
     finish(api, botops, ana)
 
 
+def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, botops):
+    ana = turn(api, botops, person="ana-test", text="Let Ops read our physical mail")
+    err, missing = mcp(api, "hub_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"}, ana["token"])
+    assert err and "--id" in str(missing), missing
+    err, card = mcp(
+        api, "hub_settings_set", {"key": "mail.access.bot", "id": "all", "bot": "ops", "value": "read"}, ana["token"]
+    )
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/postal/addresses/all/grants/bot/ops"
+    assert get(api, "postal/addresses/all/grants")["grants"] == []
+    finish(api, botops, ana)
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ana-test")
+    grant = get(api, "postal/addresses/all/grants")["grants"][0]
+    assert (grant["grantee_id"], grant["granted_by_id"]) == ("ops", "human:ana")
+
+
 def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
     person_only = next(e for e in ENTRIES if e.kind == "person" and not e.target)
     ana = turn(api, botops, person="ana-test", text="Change it for me")
@@ -173,8 +196,9 @@ def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_di
     assert shown["setting"]["who_may"].startswith("The bot's owners") and shown["you_may"] is True, shown
     finish(api, botops, ana)
     cara = turn(api, botops, person="cara-test", text="Make me an incoming trigger called Orders")
-    err, done = mcp(api, "hub_settings_set", {"key": "webhooks.incoming.create", "value": {"name": "Orders"}},
-                    cara["token"])
+    err, done = mcp(
+        api, "hub_settings_set", {"key": "webhooks.incoming.create", "value": {"name": "Orders"}}, cara["token"]
+    )
     assert not err and done["value"] == {"name": "Orders"}, done
     with api.app.state.store.read() as c:
         assert c.execute("SELECT created_by FROM triggers WHERE name='Orders'").fetchone()[0] == "human:cara"
@@ -192,8 +216,12 @@ def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
     # The id resolves the bot for transition controls, including the read-only permission answer.
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,updated) "
-                  "VALUES('tr-owner','routine-owner','model','{}','human:cara',1,'prepared',?,?)", (now, now))
+        owner_id = H.resolve_bot(c, "routine-owner")["id"]
+        c.execute(
+            "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,updated_at) "
+            "VALUES('tr-owner',?,'model','{}','human:cara',1,'prepared',?,?)",
+            (owner_id, now, now),
+        )
     err, shown = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
     assert not err and shown["you_may"] is True, shown
 
@@ -203,3 +231,28 @@ def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
     as_member(api, "ben@acme.example")
     err, unrelated = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
     assert not err and unrelated["you_may"] is False, unrelated
+
+
+def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, botops):
+    """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
+    the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be
+    made, so BotOps sent the admin to Settings."""
+    from backend.tests.test_usage_limits import groups
+
+    groups(api, "product")
+    ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
+    err, card = mcp(
+        api, "hub_settings_set", {"key": "pool.limit.usd", "id": "groups/eng", "value": {"daily_usd": 50}}, ben["token"]
+    )
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
+    assert "$50" in card["action"]["description"], card["action"]
+    finish(api, botops, ben)
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] is None  # nothing until the tap
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, "ben-test")
+    assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50
+    for bad in ("groups", "groups/eng/x", "eng"):
+        err, refused = mcp(
+            api, "hub_settings_set", {"key": "pool.limit.usd", "id": bad, "value": {"daily_usd": 5}}, "ben-test"
+        )
+        assert err and refused["error"] == "validation", (bad, refused)

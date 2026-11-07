@@ -37,20 +37,33 @@ function taskBoardShows(it, state) {
   return !!type && !taskBoardFolds(state, type).finished;
 }
 
-// ---- blocked: a card with open blockers says so at its top; the strip focuses the board on it and them
+// ---- blocked: one line at a card's top, "Blocked 7h: <first open blocker>", clipped to the card; the line focuses
+// the board on the card and its blockers. The hold's reason and date and every blocker are the tooltip.
 const taskOpenBlockers = t => taskBlockers(t).filter(r => !['done', 'closed', 'declined'].includes(String(r.status || '')));
+// How long a hold has held: 7m, 7h, 9d (no date fallback, unlike ageShort).
+function taskHeldFor(iso) {
+  const at = Date.parse(iso || ''); if (!at) return '';
+  const s = Math.max(0, (Date.now() - at) / 1000);
+  return s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+}
+// Reasons the server writes when a hold has no note of its own: the line says only how long.
+const TASK_PLAIN_HOLDS = new Set(['Waiting on a hold', 'Waiting on a dependency']);
 function taskBlockedStrip(it) {
-  const t = it.task;
-  // A Blocked hold that is a bot's prerequisite is the bot's wait line, not a second line above it.
-  const bot = taskBotWait(t);
-  const hold = t.blocked_since && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
-  const open = taskOpenBlockers(t); if (!open.length) return hold;
-  const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
-  const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
+  const t = it.task, held = taskBlockedHold(t), open = taskOpenBlockers(t);
+  if (!held && !open.length) return '';
+  const age = held ? taskHeldFor(held.since) : '', head = `Blocked${age ? ' ' + age : ''}`;
+  const line = what => `<span>${esc(what ? `${head}: ${what}` : head)}</span>`;
+  if (!open.length) {
+    const why = String(held.reason || '').trim();
+    return `<div class="bcard-blocked" title="${esc(taskBlockedLine(t))}">${line(TASK_PLAIN_HOLDS.has(why) ? '' : why)}</div>`;
+  }
   // A bot's prerequisite work names the bot; the reason, its age and what blocks it are the tooltip.
-  const label = bot ? `Waiting on ${clipLine(bot.name, 48)}` : `Blocked by ${name}`;
-  const tip = bot ? `${taskWaitLine(t)}\nBlocked by ${all}` : `Blocked by ${all}`;
-  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}"><span>${esc(label)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
+  const bot = taskBotWait(t);
+  const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
+  const first = open[0], name = first.title || '#' + (first.number ?? first.id);
+  const label = bot ? `<span>${esc(`Waiting on ${bot.name}`)}</span>` : line(name);
+  const tip = `${bot ? taskWaitLine(t) : held ? taskBlockedLine(t) : ''}${bot || held ? '\n' : ''}Blocked by ${all}`;
+  return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}">${label}${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
 function taskBoardFocused(items, state) {
   const focus = state.boardFocus;
@@ -345,11 +358,11 @@ function taskBoardOwnerMenu(state, button) {
   const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
   propMenu($('#task-card-pops'), button, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
     const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner === actor, actor};
+    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner_id === actor, actor};
   }), onPick: it => {
     const cur = tasksById(state).get(String(t.id));
-    if (!cur || it.actor === cur.owner) return;
-    taskBoardSave(state, cur, {version: cur.version, owner: it.value}, {owner: it.actor}, 'Not changed');
+    if (!cur || it.actor === cur.owner_id) return;
+    taskBoardSave(state, cur, {version: cur.version, owner: it.actor}, {owner_id: it.actor}, 'Not changed');
   }});
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one
@@ -361,5 +374,5 @@ function taskBoardLive(state, item) {
     if (!move.pending) state.boardMoves.delete(id);
     return item;
   }
-  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner ? {actor: move.fields.owner} : {})};
+  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner_id ? {actor: move.fields.owner_id} : {})};
 }

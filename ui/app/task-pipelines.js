@@ -38,7 +38,7 @@ function taskPipelineState(state) {
 function taskPipelineRemember(state) {
   try { localStorage.setItem('tico.tasks.type', state.type || 'general'); } catch {}
 }
-// Every task view belongs to one type; a selected type turns the board into its steps.
+// Open, Board and finished tasks belong to one type; a selected type turns the board into its steps.
 function taskPipelineMatches(task, state) {
   return pipelineTypeId(task) === (state.type || 'general');
 }
@@ -49,16 +49,18 @@ function taskPipelineDevType() {
   const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
   return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
-function taskPipelineTools(state) {
-  const host = $('#task-type');
-  if (!host) return;
+// The types the scope menu lists (task-list.js tasksScopeMenu): General, Roadmap and Engineering (or Dev tickets) by
+// their role, then the team's other types.
+function taskPipelineScopeTypes() {
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  const selected = other.find(type => type.id === state.type);
-  const segment = (id, label, disabled = false) => `<button type="button" id="task-type-${esc(id)}" data-task-type="${esc(id)}" aria-pressed="${state.type === id}"${disabled ? ' disabled title="This team has no Dev ticket type"' : ''}>${esc(label)}</button>`;
-  tasksPaint(host, segment('general', 'General') + (product ? segment(product.id, 'Roadmap') : '') + segment(dev?.id || 'dev', dev?.id === 'engineering' ? 'Engineering' : 'Dev tickets', !dev)
-    + `<button type="button" id="task-type-more" aria-haspopup="menu" aria-controls="task-filter-pop" aria-expanded="false" aria-pressed="${!!selected}" aria-label="${esc(selected ? 'Task type: ' + selected.name + '. More task types' : 'More task types')}"${other.length ? '' : ' disabled'}>${selected ? `<span>${esc(selected.name)}</span>` : ''}${TL_ICON.caret}</button>`);
+  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: 'Roadmap'}] : []),
+    ...(dev ? [{id: dev.id, label: dev.id === 'engineering' ? 'Engineering' : 'Dev tickets'}] : []),
+    ...other.map(type => ({id: type.id, label: type.name, other: true}))];
+}
+const taskPipelineLabel = id => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
+function taskPipelineTools(state) {
   $('#task-q')?.setAttribute('aria-label', `Search ${pipelineSelectedType(state)?.name || 'General'} tasks`);
 }
 function taskPipelineSelect(state, id) {
@@ -72,22 +74,6 @@ function taskPipelineSelect(state, id) {
   taskPipelineRemember(state); tasksRemember(state);
   tasksFiltersChanged(state); tasksPeekSync(state);
   tasksDoneEnsure(state);          // this type's board may have its finished steps unfolded
-}
-function taskPipelineMenu(state, anchor) {
-  const dev = taskPipelineDevType();
-  const product = pipelineProductType();
-  const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="More task types">
-    <div class="tl-menu-h" aria-hidden="true">Task type</div>
-    ${other.map(type => `<button type="button" role="menuitemradio" aria-checked="${state.type === type.id}" class="tl-mi" data-pick-type="${esc(type.id)}"><span>${esc(type.name)}</span>${state.type === type.id ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
-    pop.onclick = ev => {
-      const button = ev.target.closest('[data-pick-type]');
-      if (!button) return;
-      taskPipelineSelect(state, button.dataset.pickType);
-      $('#task-type-more')?.focus();
-    };
-  });
-  anchor.setAttribute('aria-expanded', String($('#task-filter-pop').matches(':popover-open')));
 }
 // A type's board: a column per step, in the type's order, that cards are dragged between (ui/app/task-board.js). Its
 // leading backlog steps (open, before the first step with work under way) and its trailing finished steps each fold
@@ -128,7 +114,7 @@ function taskPipelineBoard(items, state, head = '') {
   return boardColumnsHTML(columns, {head});
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
-  || String(a.task.created).localeCompare(String(b.task.created)) || String(a.task.id).localeCompare(String(b.task.id));
+  || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));
 // A task's Type and Step are rows in its properties (ui/app/task-props.js).
 async function taskPipelineCreate(form, selected = '') {
   form.dataset.taskType = selected || 'general';
@@ -156,8 +142,8 @@ async function taskPipelineCreate(form, selected = '') {
     flag.checked = type?.default_visibility === 'public' && !form.elements.private?.checked;
     flag.disabled = !!form.elements.private?.checked;
     showPublicText();
-    const manager = S.emps.find(e => e.name === type?.manager || type?.manager && e.template === type.manager);
-    const value = manager && [...form.elements.owner.options].find(o => o.value === manager.name || o.value === 'bot:' + manager.name)?.value;
+    const manager = botByRef(type?.manager) || S.emps.find(e => type?.manager && e.template === type.manager);
+    const value = manager && [...form.elements.owner.options].find(o => o.value === manager.id || o.value === 'bot:' + manager.id)?.value;
     if (value && !ownerTouched) form.elements.owner.value = value;
   };
   select.addEventListener('change', defaults); form.elements.private?.addEventListener('change', defaults); defaults(); row.after(visibility); visibility.after(publicText);
@@ -188,7 +174,7 @@ async function renderTaskTypes() {
     if (!host.isConnected) return;
     const mover = canMove();
     host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
-      <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
+      <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.map(botSlug).join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
@@ -240,7 +226,7 @@ function taskTypeEditor(type = null) {
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
       <input aria-label="Public step name" value="${esc(step?.public_name ?? '')}" placeholder="Public step (blank: not shown)" title="What a public roadmap shows for this step; blank shows none">
       <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
-      <input aria-label="Check pool" value="${esc((step?.check_pool || []).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
+      <input aria-label="Check pool" value="${esc((step?.check_pool || []).map(botSlug).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
       <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
       ${companyRule(step)}
       <small class="task-step-models muted" data-pool-models role="status">Enter bot slugs to see each configured model and provider.</small>

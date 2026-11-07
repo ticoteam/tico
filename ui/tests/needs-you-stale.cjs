@@ -8,7 +8,7 @@ const {open} = require('./tasks-page.cjs');
 const row = (id, task, title, action, version) => ({id, task, title, status: 'open', reason: 'Nothing happened on it for 9 days',
   suggest: action === 'done' ? 'Mark done' : 'Check it is still needed', action, version});
 const card = {kind: 'stale', id: 'stale:human:ana', title: 'Stale tickets: 3 suggestions', first_line: '',
-  created: new Date().toISOString(), need: 'decide',
+  created_at: new Date().toISOString(), need: 'decide',
   rows: [row('s-1', 't-1', 'Old chore one', 'done', 4), row('s-2', 't-2', 'Old chore two', null, 2),
     row('s-3', 't-3', 'Old chore three', 'done', 9)]};
 const KEY = 'stale:stale:human:ana';
@@ -17,6 +17,10 @@ const KEY = 'stale:stale:human:ana';
 // refuses one whose task moved on, and the list it hands back is what the card must draw.
 async function answered(browser, viewport) {
   const {page, errors} = await open(browser, {hash: '#/tasks', viewport});
+  await page.evaluate(() => {
+    const answer = staleDecide;
+    staleDecide = (...args) => (window.__staleAnswer = answer(...args));
+  });
   const server = {rows: [row('s-1', 't-1', 'Old chore one', 'done', 4), row('s-2', 't-2', 'Old chore two', null, 2),
     row('s-3', 't-3', 'Old chore three', 'done', 9)]};
   const sent = [];
@@ -39,7 +43,7 @@ async function answered(browser, viewport) {
   });
   const poll = () => page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });   // what the live poll does
   await poll();
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   await page.locator(`[data-need-card="${KEY}"]`).click();
   const shown = page.locator('#need-card [data-stale-card]');
   await shown.first().waitFor();
@@ -54,6 +58,9 @@ async function answered(browser, viewport) {
       all: all.length, focus: document.activeElement?.closest?.('[data-stale-row]')?.dataset.staleRow || ''};
   }, KEY);
   const settle = async (want, what) => {
+    // The row can leave on the first redraw while the answer's second refresh is still reading. Let both finish
+    // before changing the server again, so the next tap still sees the versions this scenario gives it.
+    await page.evaluate(() => window.__staleAnswer);
     let now;
     for (let i = 0; i < 250; i++) { now = await look(); if (want(now)) return now; await page.waitForTimeout(20); }
     assert.fail(`${what} (${viewport.width}px): ${JSON.stringify(now)}`);
@@ -138,11 +145,11 @@ async function answered(browser, viewport) {
       return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
-    // One line, Tico's, with its count; nothing unfolds in the list.
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
+    // One automatic line with its count; nothing unfolds in the list.
     const line = page.locator(`#task-body [data-need-card="${KEY}"]`);
     assert.equal(await line.count(), 1, 'one line for every suggestion');
-    assert.equal((await line.locator('.tl-title').textContent()).trim(), 'Tico: Stale tickets: 3 suggestions');
+    assert.equal((await line.locator('.tl-title').textContent()).trim(), 'Automatic: Stale tickets: 3 suggestions');
     assert.deepEqual(await line.locator('.tl-chips > *').allTextContents(), ['Stale check', '3']);
     assert.equal(await page.locator('#task-body details').count(), 0);
     await line.click();

@@ -13,6 +13,7 @@ import json
 import re
 import secrets
 import sqlite3
+import threading
 from email.parser import BytesParser
 from email.policy import HTTP
 from typing import Annotated
@@ -21,7 +22,7 @@ from urllib.parse import quote, urlsplit
 from fastapi import Query, Request
 from pydantic import Field, StringConstraints
 
-from . import docs_import
+from . import docs_import_run
 from . import manual
 from . import models as M
 from .names import lookup
@@ -31,31 +32,32 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs(
  id TEXT PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
  locked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
- created_by TEXT NOT NULL, created TEXT NOT NULL, updated_by TEXT NOT NULL, updated TEXT NOT NULL,
+ created_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_by_id TEXT NOT NULL, updated_at TEXT NOT NULL,
  archived INTEGER NOT NULL DEFAULT 0);
 CREATE UNIQUE INDEX IF NOT EXISTS docs_path_live ON docs(path COLLATE NOCASE) WHERE archived=0;
-CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated);
+CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated_at);
 CREATE TABLE IF NOT EXISTS doc_versions(
  doc_id TEXT NOT NULL REFERENCES docs(id), version INTEGER NOT NULL, title TEXT NOT NULL, path TEXT NOT NULL,
- body TEXT NOT NULL, actor TEXT NOT NULL, created TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+ body TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(doc_id, version));
 CREATE TABLE IF NOT EXISTS linked_docs(
  id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL,
- description TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  archived INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS linked_docs_live ON linked_docs(archived, created);
+CREATE INDEX IF NOT EXISTS linked_docs_live ON linked_docs(archived, created_at);
 """
 # Full-text index over title, path and body. It is created apart so a SQLite built without FTS5
 # still starts: search then falls back to LIKE.
-FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5("
-       "title, path, body, tokenize='porter unicode61')")
+FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(title, path, body, tokenize='porter unicode61')"
 
 KINDS = ("website", "google_drive", "google_doc", "notion", "github", "other")
 MAX_BODY = 1_000_000
 LIST_MAX = 500
 MIGRATED = "docs_migrated"
-STOP = frozenset("a an and are as at be but by do does for from how i in is it my of on or our the to us was we what "
-                 "when where which who why will with you your can should".split())
+STOP = frozenset(
+    "a an and are as at be but by do does for from how i in is it my of on or our the to us was we what "
+    "when where which who why will with you your can should".split()
+)
 
 
 # ------------------------------------------------------------------ paths, addresses, kinds
@@ -67,9 +69,15 @@ def clean_path(raw):
     """A folder path ending in .md: `sales/pricing.md`. Never absolute, never with `..`."""
     path = re.sub(r"/{2,}", "/", str(raw or "").strip().replace("\\", "/")).strip("/")
     parts = [part.strip() for part in path.split("/")]
-    if (not path or len(path) > 300 or any(part in ("", ".", "..") for part in parts)
-            or any(ord(ch) < 32 for ch in path)):
-        raise Problem("validation", "Use a path like sales/pricing.md (folders separated by /, no .. or leading /)", 422)
+    if (
+        not path
+        or len(path) > 300
+        or any(part in ("", ".", "..") for part in parts)
+        or any(ord(ch) < 32 for ch in path)
+    ):
+        raise Problem(
+            "validation", "Use a path like sales/pricing.md (folders separated by /, no .. or leading /)", 422
+        )
     if not re.search(r"\.(md|markdown)$", parts[-1], re.I):
         parts[-1] += ".md"
     return "/".join(parts)
@@ -82,11 +90,20 @@ def clean_url(raw):
         host = parts.hostname or ""
     except ValueError:
         host = ""
-    if (parts.scheme not in ("http", "https") or not host or "." not in host and host != "localhost"
-            or parts.username or parts.password or len(url) > 2000 or re.search(r"\s", url)):
+    if (
+        parts.scheme not in ("http", "https")
+        or not host
+        or "." not in host
+        and host != "localhost"
+        or parts.username
+        or parts.password
+        or len(url) > 2000
+        or re.search(r"\s", url)
+    ):
         raise Problem("validation", "Use a web address that starts with https:// and has no password in it", 422)
     normalized = parts.geturl()
     from clients.github_scope import parse_url
+
     try:
         scope = parse_url(normalized)
     except ValueError:
@@ -94,10 +111,34 @@ def clean_url(raw):
     return scope['url'] if scope else normalized
 
 
-OTHER_HOSTS = ("dropbox.com", "box.com", "sharepoint.com", "onedrive.live.com", "1drv.ms", "atlassian.net",
-               "confluence.com", "figma.com", "airtable.com", "coda.io", "slab.com", "quip.com", "gitbook.io",
-               "readme.io", "slite.com", "clickup.com", "monday.com", "asana.com", "lucid.app", "miro.com",
-               "loom.com", "guru.com", "getguru.com", "helpjuice.com", "zendesk.com", "intercom.com")
+OTHER_HOSTS = (
+    "dropbox.com",
+    "box.com",
+    "sharepoint.com",
+    "onedrive.live.com",
+    "1drv.ms",
+    "atlassian.net",
+    "confluence.com",
+    "figma.com",
+    "airtable.com",
+    "coda.io",
+    "slab.com",
+    "quip.com",
+    "gitbook.io",
+    "readme.io",
+    "slite.com",
+    "clickup.com",
+    "monday.com",
+    "asana.com",
+    "lucid.app",
+    "miro.com",
+    "loom.com",
+    "guru.com",
+    "getguru.com",
+    "helpjuice.com",
+    "zendesk.com",
+    "intercom.com",
+)
 
 
 def host_of(url):
@@ -130,9 +171,18 @@ def default_title(url):
 
 def linked_view(row, names=None):
     names = names or {}
-    return {"id": row["id"], "title": row["title"], "url": row["url"], "kind": row["kind"],
-            "host": host_of(row["url"]), "description": row["description"], "added_by": row["added_by"],
-            "added_by_name": name_of(row["added_by"], names), "created": row["created"], "updated": row["updated"]}
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "url": row["url"],
+        "kind": row["kind"],
+        "host": host_of(row["url"]),
+        "description": row["description"],
+        "added_by": row["added_by"],
+        "added_by_name": name_of(row["added_by"], names),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def name_of(actor, names):
@@ -170,13 +220,16 @@ def ensure_schema(c, settings=None):
     except sqlite3.OperationalError:
         pass
     from .flight import begin
+
     done = begin(c)
     try:
         if has_fts(c):
             live = c.execute("SELECT COUNT(*) FROM docs WHERE archived=0").fetchone()[0]
             if live != c.execute("SELECT COUNT(*) FROM docs_fts").fetchone()[0]:
                 c.execute("DELETE FROM docs_fts")
-                c.execute("INSERT INTO docs_fts(rowid,title,path,body) SELECT rowid,title,path,body FROM docs WHERE archived=0")
+                c.execute(
+                    "INSERT INTO docs_fts(rowid,title,path,body) SELECT rowid,title,path,body FROM docs WHERE archived=0"
+                )
         migrate(c, settings)
         c.commit()
     except Exception:
@@ -207,7 +260,7 @@ def migrate(c, settings=None):
     if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MIGRATED,)).fetchone():
         return 0
     found = []
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='document_sources'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='document_sources'").fetchone()
     try:
         sources = json.loads(row[0]) if row else []
     except ValueError:
@@ -216,8 +269,13 @@ def migrate(c, settings=None):
         if isinstance(source, dict) and source.get("repo"):
             folder = str(source.get("folder") or "").strip("/")
             name = re.sub(r"^https?://[^/]+/", "", source_url({"repo": source["repo"]})) or source["repo"]
-            found.append((source_url(source), name + (" / " + folder if folder not in ("", ".") else ""),
-                          "Linked from the old documentation sources"))
+            found.append(
+                (
+                    source_url(source),
+                    name + (" / " + folder if folder not in ("", ".") else ""),
+                    "Linked from the old documentation sources",
+                )
+            )
     if settings is not None:
         try:
             approved = json.loads((settings.registry_dir / "company-docs.json").read_text()).get("proposal_repos")
@@ -234,8 +292,10 @@ def migrate(c, settings=None):
         if c.execute("SELECT 1 FROM linked_docs WHERE archived=0 AND url=?", (url,)).fetchone():
             continue
         now = H.now()
-        c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created,updated) VALUES(?,?,?,?,?,?,?,?)",
-                  ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.KEEPER, now, now))
+        c.execute(
+            "INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.KEEPER, now, now),
+        )
         added += 1
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (MIGRATED, encode({"at": H.now(), "linked": added})))
     return added
@@ -247,17 +307,21 @@ def refresh_generated_wording(c):
     if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (marker,)).fetchone():
         return
     docs = Docs(None, None, None, None)
-    rows = c.execute("SELECT rowid AS rid,* FROM docs WHERE archived=0 "
-                     "AND (path GLOB '_librarian/*' OR path='FAQ.md') "
-                     "AND (updated_by='bot:librarian' OR (updated_by='keeper' AND (created_by='bot:librarian' OR id IN "
-                     "(SELECT doc_id FROM doc_versions WHERE actor='bot:librarian' "
-                     "OR note='Updated generated Tico wording'))))").fetchall()
+    rows = c.execute(
+        "SELECT rowid AS rid,* FROM docs WHERE archived=0 "
+        "AND (path GLOB '_librarian/*' OR path='FAQ.md') "
+        "AND (updated_by_id='bot:librarian' OR (updated_by_id='keeper' AND (created_by_id='bot:librarian' OR id IN "
+        "(SELECT doc_id FROM doc_versions WHERE actor='bot:librarian' "
+        "OR note='Updated generated Tico wording'))))"
+    ).fetchall()
     for row in rows:
         text = H.librarian_text(row["body"])
         if text == row["body"]:
             continue
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated=? WHERE id=?",
-                  (text, H.now(), row["id"]))
+        c.execute(
+            "UPDATE docs SET body=?,version=version+1,updated_by_id='keeper',updated_at=? WHERE id=?",
+            (text, H.now(), row["id"]),
+        )
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
         index(c, row["rid"], row["title"], row["path"], text)
@@ -272,15 +336,19 @@ def redo_generated_wording(c):
     if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (marker,)).fetchone():
         return
     docs = Docs(None, None, None, None)
-    rows = c.execute("SELECT d.rowid AS rid,d.*,p.body AS before FROM docs d "
-                     "JOIN doc_versions v ON v.doc_id=d.id AND v.version=d.version AND v.note='Updated generated Tico wording' "
-                     "JOIN doc_versions p ON p.doc_id=d.id AND p.version=d.version-1 WHERE d.archived=0").fetchall()
+    rows = c.execute(
+        "SELECT d.rowid AS rid,d.*,p.body AS before FROM docs d "
+        "JOIN doc_versions v ON v.doc_id=d.id AND v.version=d.version AND v.note='Updated generated Tico wording' "
+        "JOIN doc_versions p ON p.doc_id=d.id AND p.version=d.version-1 WHERE d.archived=0"
+    ).fetchall()
     for row in rows:
         text = H.librarian_text(row["before"])
         if text == row["body"]:
             continue
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated=? WHERE id=?",
-                  (text, H.now(), row["id"]))
+        c.execute(
+            "UPDATE docs SET body=?,version=version+1,updated_by_id='keeper',updated_at=? WHERE id=?",
+            (text, H.now(), row["id"]),
+        )
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Redid generated Tico wording")
         index(c, row["rid"], row["title"], row["path"], text)
@@ -302,14 +370,17 @@ def refresh_generated_docs(c):
         "_librarian/index.md": {"Document index": "Docs index"},
     }
     docs = Docs(None, None, None, None)
-    for row in c.execute("SELECT rowid AS rid,* FROM docs WHERE archived=0 AND "
-                         "(path GLOB '_librarian/*' OR path='FAQ.md')").fetchall():
+    for row in c.execute(
+        "SELECT rowid AS rid,* FROM docs WHERE archived=0 AND (path GLOB '_librarian/*' OR path='FAQ.md')"
+    ).fetchall():
         title = titles.get(row["path"], {}).get(row["title"], row["title"])
-        text = H.librarian_text(row["body"]) if row["updated_by"] == "bot:librarian" else row["body"]
+        text = H.librarian_text(row["body"]) if row["updated_by_id"] == "bot:librarian" else row["body"]
         if (title, text) == (row["title"], row["body"]):
             continue
-        c.execute("UPDATE docs SET title=?,body=?,version=version+1,updated_by='keeper',updated=? WHERE id=?",
-                  (title, text, H.now(), row["id"]))
+        c.execute(
+            "UPDATE docs SET title=?,body=?,version=version+1,updated_by_id='keeper',updated_at=? WHERE id=?",
+            (title, text, H.now(), row["id"]),
+        )
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
         index(c, row["rid"], title, row["path"], text)
@@ -318,16 +389,26 @@ def refresh_generated_docs(c):
         docs.remove_index_source(c, source, H.KEEPER)
     bot = H.bot(c, "librarian")
     if bot and bot["state"] in ("active", "planned"):
-        pending = c.execute("SELECT 1 FROM tasks WHERE requester=? AND owner='bot:librarian' "
-                            "AND title='Refresh the map' AND status IN ('open','doing','ready','waiting','review')",
-                            (H.KEEPER,)).fetchone()
+        pending = c.execute(
+            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id='bot:librarian' "
+            "AND title='Refresh the map' AND status IN ('open','doing','ready','waiting','review')",
+            (H.KEEPER,),
+        ).fetchone()
         if not pending:
-            H.task_create(c, H.KEEPER, "Refresh the map",
-                          "Follow playbooks/refresh-the-map.md. Reconcile every cached source against the full live "
-                          "doc and link lists, including archived sources and recorded unreadable links. Update "
-                          "Sources I could not read from existing map failures even when no fetch is due. "
-                          "Use docs/glossary.md for generated wording and preserve source facts.",
-                          "bot:librarian", allow_planned=True, next_run=True, lint=False, deduplicate=False)
+            H.task_create(
+                c,
+                H.KEEPER,
+                "Refresh the map",
+                "Follow playbooks/refresh-the-map.md. Reconcile every cached source against the full live "
+                "doc and link lists, including archived sources and recorded unreadable links. Update "
+                "Sources I could not read from existing map failures even when no fetch is due. "
+                "Use docs/glossary.md for generated wording and preserve source facts.",
+                "bot:librarian",
+                allow_planned=True,
+                next_run=True,
+                lint=False,
+                deduplicate=False,
+            )
     else:
         return  # Keep an inactive Librarian off; queue the refresh after it is enabled.
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (marker, encode({"at": H.now()})))
@@ -390,17 +471,23 @@ def link_row(c, link_id):
 def add_link(c, actor, body):
     """One new linked doc (also what the Getting started card adds). A repeat address is a 409."""
     url = clean_url(body.url)
-    dupe = c.execute("SELECT l.* FROM linked_docs l LEFT JOIN doc_sources s ON s.source_id=l.id "
-                     "WHERE l.archived=0 AND (l.url=? OR s.url=?)", (url, url)).fetchone()
+    dupe = c.execute(
+        "SELECT l.* FROM linked_docs l LEFT JOIN doc_sources s ON s.source_id=l.id "
+        "WHERE l.archived=0 AND (l.url=? OR s.url=?)",
+        (url, url),
+    ).fetchone()
     if dupe:
         raise Problem("already_linked", "That address is already linked", 409, extra={"linked": linked_view(dupe)})
     if c.execute("SELECT COUNT(*) FROM linked_docs WHERE archived=0").fetchone()[0] >= 500:
         raise Problem("limit", "At most 500 linked docs", 422)
     now, link_id = H.now(), "link-" + secrets.token_hex(6)
-    c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created,updated) VALUES(?,?,?,?,?,?,?,?)",
-              (link_id, body.title or default_title(url), url, detect_kind(url), body.description, actor, now, now))
+    c.execute(
+        "INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        (link_id, body.title or default_title(url), url, detect_kind(url), body.description, actor, now, now),
+    )
     H.event(c, actor, "docs.linked", link_id, {"url": url})
     from .doc_sources import sync_link
+
     sync_link(c, link_id)
     return linked_view(link_row(c, link_id), label_names(c, [actor]))
 
@@ -417,8 +504,12 @@ def merge_ranked(groups, limit, tokens):
         named = bool(title) and all(t in tokens for t in title)
         named = named or all(t in tokens for t in manual._words(row['path']))
         return 1 if named else 0.2
-    out = [{**row, "score": round(weight(row) * 100 / (60 + rank), 6)}
-           for group in groups for rank, row in enumerate(group, 1)]
+
+    out = [
+        {**row, "score": round(weight(row) * 100 / (60 + rank), 6)}
+        for group in groups
+        for rank, row in enumerate(group, 1)
+    ]
     return sorted(out, key=lambda row: -row["score"])[:limit]
 
 
@@ -437,14 +528,25 @@ class Docs:
 
     # -------------------------------------------------------------- views
     def doc_view(self, c, row, body=True, names=None):
-        names = names if names is not None else label_names(c, [row["created_by"], row["updated_by"]])
-        out = {"id": row["id"], "path": row["path"], "title": row["title"],
-               "updated": row["updated"], "updated_by": row["updated_by"],
-               "updated_by_name": name_of(row["updated_by"], names),
-               "locked": bool(row["locked"]), "version": row["version"]}
+        names = names if names is not None else label_names(c, [row["created_by_id"], row["updated_by_id"]])
+        out = {
+            "id": row["id"],
+            "path": row["path"],
+            "title": row["title"],
+            "updated_at": row["updated_at"],
+            "updated_by_id": row["updated_by_id"],
+            "updated_by_name": name_of(row["updated_by_id"], names),
+            "locked": bool(row["locked"]),
+            "version": row["version"],
+        }
         if body:
-            out.update(body=row["body"], created_by=row["created_by"], created=row["created"],
-                       created_by_name=name_of(row["created_by"], names), archived=bool(row["archived"]))
+            out.update(
+                body=row["body"],
+                created_by_id=row["created_by_id"],
+                created_at=row["created_at"],
+                created_by_name=name_of(row["created_by_id"], names),
+                archived=bool(row["archived"]),
+            )
         return out
 
     def get_row(self, c, ref):
@@ -468,14 +570,19 @@ class Docs:
             marks.append("path COLLATE NOCASE > ?")
             args.append(after)
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM docs WHERE " + " AND ".join(marks)
-                             + " ORDER BY path COLLATE NOCASE LIMIT ?", (*args, limit + 1)).fetchall()
+            rows = c.execute(
+                "SELECT * FROM docs WHERE " + " AND ".join(marks) + " ORDER BY path COLLATE NOCASE LIMIT ?",
+                (*args, limit + 1),
+            ).fetchall()
             page = rows[:limit]
-            names = label_names(c, [r["updated_by"] for r in page])
+            names = label_names(c, [r["updated_by_id"] for r in page])
             more = len(rows) > limit
-            return {"docs": [self.doc_view(c, r, body=False, names=names) for r in page],
-                    "next_cursor": base64.urlsafe_b64encode(page[-1]["path"].casefold().encode()).decode()
-                    if more and page else None}
+            return {
+                "docs": [self.doc_view(c, r, body=False, names=names) for r in page],
+                "next_cursor": base64.urlsafe_b64encode(page[-1]["path"].casefold().encode()).decode()
+                if more and page
+                else None,
+            }
 
     def read(self, who, doc_id):
         self.reader(who)
@@ -491,13 +598,16 @@ class Docs:
             if not taken or taken["id"] == own:
                 return path
             if not unique:
-                raise Problem("path_taken", "Another doc already has the path " + path, 409,
-                              extra={"doc_id": taken["id"]})
+                raise Problem(
+                    "path_taken", "Another doc already has the path " + path, 409, extra={"doc_id": taken["id"]}
+                )
             path, n = f"{stem}-{n}.{ext}", n + 1
 
     def snapshot(self, c, row, actor, note):
-        c.execute("INSERT INTO doc_versions(doc_id,version,title,path,body,actor,created,note) VALUES(?,?,?,?,?,?,?,?)",
-                  (row["id"], row["version"], row["title"], row["path"], row["body"], actor, row["updated"], note))
+        c.execute(
+            "INSERT INTO doc_versions(doc_id,version,title,path,body,actor,created_at,note) VALUES(?,?,?,?,?,?,?,?)",
+            (row["id"], row["version"], row["title"], row["path"], row["body"], actor, row["updated_at"], note),
+        )
 
     def insert(self, c, actor, title, body, path=None, note="", event="docs.created", detail=None):
         """One new doc at version 1: the row, its first version, its index entry and the audit event."""
@@ -505,8 +615,11 @@ class Docs:
         if actor == "bot:librarian":
             body = H.librarian_text(body)
         now, doc_id = H.now(), "doc-" + secrets.token_hex(6)
-        c.execute("INSERT INTO docs(id,path,title,body,version,created_by,created,updated_by,updated) "
-                  "VALUES(?,?,?,?,1,?,?,?,?)", (doc_id, path, title, body, actor, now, actor, now))
+        c.execute(
+            "INSERT INTO docs(id,path,title,body,version,created_by_id,created_at,updated_by_id,updated_at) "
+            "VALUES(?,?,?,?,1,?,?,?,?)",
+            (doc_id, path, title, body, actor, now, actor, now),
+        )
         row = self.get_row(c, doc_id)
         self.snapshot(c, row, actor, note or "Created")
         index(c, c.execute("SELECT rowid FROM docs WHERE id=?", (doc_id,)).fetchone()[0], title, path, body)
@@ -518,11 +631,18 @@ class Docs:
         self.reader(who)
 
         def work(c):
-            row = self.insert(c, who.actor, body.title, body.body, body.path,
-                              note=body.note or ("Imported from " + imported if imported else ""),
-                              event="docs.imported" if imported else "docs.created",
-                              detail={"file": imported} if imported else None)
+            row = self.insert(
+                c,
+                who.actor,
+                body.title,
+                body.body,
+                body.path,
+                note=body.note or ("Imported from " + imported if imported else ""),
+                event="docs.imported" if imported else "docs.created",
+                detail={"file": imported} if imported else None,
+            )
             return {"doc": self.doc_view(c, row)}
+
         return work
 
     def edit(self, request, doc_id, body):
@@ -537,11 +657,19 @@ class Docs:
             if row["locked"] and not self.admin(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             if body.version != row["version"]:
-                names = label_names(c, [row["updated_by"]])
-                raise Problem("version_conflict", "Someone changed this doc after you opened it. Reload to see their "
-                              "version, then apply your change to it.", 409,
-                              extra={"version": row["version"], "updated": row["updated"], "updated_by": row["updated_by"],
-                                     "updated_by_name": name_of(row["updated_by"], names)})
+                names = label_names(c, [row["updated_by_id"]])
+                raise Problem(
+                    "version_conflict",
+                    "Someone changed this doc after you opened it. Reload to see their "
+                    "version, then apply your change to it.",
+                    409,
+                    extra={
+                        "version": row["version"],
+                        "updated_at": row["updated_at"],
+                        "updated_by_id": row["updated_by_id"],
+                        "updated_by_name": name_of(row["updated_by_id"], names),
+                    },
+                )
             title = body.title if body.title is not None else row["title"]
             text = body.body if body.body is not None else row["body"]
             if who.actor == "bot:librarian" and body.body is not None:
@@ -554,20 +682,36 @@ class Docs:
             now = H.now()
             if locking:
                 c.execute("UPDATE docs SET locked=? WHERE id=?", (int(body.locked), row["id"]))
-                H.event(c, who.actor, "docs.locked" if body.locked else "docs.unlocked", row["id"], {"path": row["path"]})
+                H.event(
+                    c, who.actor, "docs.locked" if body.locked else "docs.unlocked", row["id"], {"path": row["path"]}
+                )
             if changed:
-                c.execute("UPDATE docs SET title=?,body=?,path=?,archived=?,version=version+1,updated_by=?,updated=? WHERE id=?",
-                          (title, text, path, archived, who.actor, now, row["id"]))
+                c.execute(
+                    "UPDATE docs SET title=?,body=?,path=?,archived=?,version=version+1,updated_by_id=?,updated_at=? WHERE id=?",
+                    (title, text, path, archived, who.actor, now, row["id"]),
+                )
                 fresh = self.get_row(c, row["id"])
-                note = body.note or ("Archived" if archived and not row["archived"] else "Unarchived" if row["archived"] and not archived else "")
+                note = body.note or (
+                    "Archived"
+                    if archived and not row["archived"]
+                    else "Unarchived"
+                    if row["archived"] and not archived
+                    else ""
+                )
                 self.snapshot(c, fresh, who.actor, note)
                 rowid = c.execute("SELECT rowid FROM docs WHERE id=?", (row["id"],)).fetchone()[0]
                 unindex(c, rowid) if archived else index(c, rowid, title, path, text)
-                H.event(c, who.actor, "docs.archived" if archived and not row["archived"] else "docs.updated", row["id"],
-                        {"path": path, "version": fresh["version"]})
+                H.event(
+                    c,
+                    who.actor,
+                    "docs.archived" if archived and not row["archived"] else "docs.updated",
+                    row["id"],
+                    {"path": path, "version": fresh["version"]},
+                )
                 if archived and not row["archived"]:
                     self.remove_index_source(c, row, who.actor)
             return {"doc": self.doc_view(c, self.get_row(c, row["id"]))}
+
         return work
 
     def remove_index_source(self, c, source, actor):
@@ -575,8 +719,9 @@ class Docs:
         row = c.execute("SELECT rowid AS rid,* FROM docs WHERE path='_librarian/index.md' AND archived=0").fetchone()
         if not row or row["id"] == source["id"]:
             return
-        reused = c.execute("SELECT 1 FROM docs WHERE path=? COLLATE NOCASE AND archived=0 AND id!=?",
-                           (source["path"], source["id"])).fetchone()
+        reused = c.execute(
+            "SELECT 1 FROM docs WHERE path=? COLLATE NOCASE AND archived=0 AND id!=?", (source["path"], source["id"])
+        ).fetchone()
         patterns = [r"\]\(doc:" + re.escape(source["id"]) + r"\)"]
         if not reused:
             patterns.append(r"(?<![\w/.-])" + re.escape(source["path"]) + r"(?![\w/.-])")
@@ -584,8 +729,10 @@ class Docs:
         text = "".join(line for line in row["body"].splitlines(keepends=True) if not refs.search(line))
         if text == row["body"]:
             return
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by=?,updated=? WHERE id=?",
-                  (text, actor, H.now(), row["id"]))
+        c.execute(
+            "UPDATE docs SET body=?,version=version+1,updated_by_id=?,updated_at=? WHERE id=?",
+            (text, actor, H.now(), row["id"]),
+        )
         fresh = self.get_row(c, row["id"])
         self.snapshot(c, fresh, actor, "Removed archived source " + source["path"])
         index(c, row["rid"], fresh["title"], fresh["path"], text)
@@ -595,13 +742,29 @@ class Docs:
         self.reader(who)
         with self.store.read() as c:
             row = self.get_row(c, doc_id)
-            found = c.execute("SELECT version,title,path,actor,created,note,length(body) AS size FROM doc_versions "
-                              "WHERE doc_id=? ORDER BY version DESC", (doc_id,)).fetchall()
+            found = c.execute(
+                "SELECT version,title,path,actor,created_at,note,length(body) AS size FROM doc_versions "
+                "WHERE doc_id=? ORDER BY version DESC",
+                (doc_id,),
+            ).fetchall()
             names = label_names(c, [v["actor"] for v in found])
-            return {"doc": doc_id, "versions": [
-                {"version": v["version"], "current": v["version"] == row["version"], "title": v["title"], "path": v["path"],
-                 "actor": v["actor"], "actor_name": name_of(v["actor"], names), "created": v["created"],
-                 "note": v["note"], "size": v["size"]} for v in found]}
+            return {
+                "doc": doc_id,
+                "versions": [
+                    {
+                        "version": v["version"],
+                        "current": v["version"] == row["version"],
+                        "title": v["title"],
+                        "path": v["path"],
+                        "actor": v["actor"],
+                        "actor_name": name_of(v["actor"], names),
+                        "created_at": v["created_at"],
+                        "note": v["note"],
+                        "size": v["size"],
+                    }
+                    for v in found
+                ],
+            }
 
     def version(self, who, doc_id, number):
         self.reader(who)
@@ -611,9 +774,18 @@ class Docs:
             if not v:
                 raise Problem("not_found", "Version not found", 404)
             names = label_names(c, [v["actor"]])
-            return {"version": {"version": v["version"], "title": v["title"], "path": v["path"], "body": v["body"],
-                                "actor": v["actor"], "actor_name": name_of(v["actor"], names),
-                                "created": v["created"], "note": v["note"]}}
+            return {
+                "version": {
+                    "version": v["version"],
+                    "title": v["title"],
+                    "path": v["path"],
+                    "body": v["body"],
+                    "actor": v["actor"],
+                    "actor_name": name_of(v["actor"], names),
+                    "created_at": v["created_at"],
+                    "note": v["note"],
+                }
+            }
 
     def restore(self, request, doc_id, body):
         who = request.state.identity
@@ -623,30 +795,43 @@ class Docs:
             row = self.get_row(c, doc_id)
             if row["locked"] and not self.admin(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
-            old = c.execute("SELECT * FROM doc_versions WHERE doc_id=? AND version=?", (doc_id, body.version)).fetchone()
+            old = c.execute(
+                "SELECT * FROM doc_versions WHERE doc_id=? AND version=?", (doc_id, body.version)
+            ).fetchone()
             if not old:
                 raise Problem("not_found", "Version not found", 404)
             path = old["path"]
-            if c.execute("SELECT 1 FROM docs WHERE archived=0 AND id!=? AND path=? COLLATE NOCASE", (doc_id, path)).fetchone():
+            if c.execute(
+                "SELECT 1 FROM docs WHERE archived=0 AND id!=? AND path=? COLLATE NOCASE", (doc_id, path)
+            ).fetchone():
                 path = row["path"]
-            if row["archived"]:                 # restoring an archived doc: its path may have been taken since
+            if row["archived"]:  # restoring an archived doc: its path may have been taken since
                 path = self.free_path(c, path, own=doc_id, unique=True)
             if (old["title"], old["body"], path, 0) == (row["title"], row["body"], row["path"], row["archived"]):
                 return {"doc": self.doc_view(c, row)}
-            c.execute("UPDATE docs SET title=?,body=?,path=?,archived=0,version=version+1,updated_by=?,updated=? WHERE id=?",
-                      (old["title"], old["body"], path, who.actor, H.now(), doc_id))
+            c.execute(
+                "UPDATE docs SET title=?,body=?,path=?,archived=0,version=version+1,updated_by_id=?,updated_at=? WHERE id=?",
+                (old["title"], old["body"], path, who.actor, H.now(), doc_id),
+            )
             fresh = self.get_row(c, doc_id)
             self.snapshot(c, fresh, who.actor, f"Restored version {body.version}")
-            index(c, c.execute("SELECT rowid FROM docs WHERE id=?", (doc_id,)).fetchone()[0], fresh["title"], path, fresh["body"])
+            index(
+                c,
+                c.execute("SELECT rowid FROM docs WHERE id=?", (doc_id,)).fetchone()[0],
+                fresh["title"],
+                path,
+                fresh["body"],
+            )
             H.event(c, who.actor, "docs.restored", doc_id, {"from": body.version, "version": fresh["version"]})
             return {"doc": self.doc_view(c, fresh)}
+
         return work
 
     # -------------------------------------------------------------- linked docs
     def links(self, who):
         self.reader(who)
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM linked_docs WHERE archived=0 ORDER BY created, id").fetchall()
+            rows = c.execute("SELECT * FROM linked_docs WHERE archived=0 ORDER BY created_at, id").fetchall()
             names = label_names(c, [r["added_by"] for r in rows])
             return {"linked": [linked_view(r, names) for r in rows]}
 
@@ -662,23 +847,39 @@ class Docs:
         def work(c):
             row = link_row(c, link_id)
             if row["added_by"] != who.actor and not self.admin(who):
-                raise Problem("forbidden", "Only who added a linked doc, an owner or a bot administrator can change it", 403)
+                raise Problem(
+                    "forbidden", "Only who added a linked doc, an owner or a bot administrator can change it", 403
+                )
             url = clean_url(body.url) if body.url is not None else row["url"]
-            if url != row["url"] and c.execute("SELECT 1 FROM linked_docs l LEFT JOIN doc_sources s ON s.source_id=l.id "
-                                               "WHERE l.archived=0 AND (l.url=? OR s.url=?) AND l.id!=?",
-                                               (url, url, link_id)).fetchone():
+            if (
+                url != row["url"]
+                and c.execute(
+                    "SELECT 1 FROM linked_docs l LEFT JOIN doc_sources s ON s.source_id=l.id "
+                    "WHERE l.archived=0 AND (l.url=? OR s.url=?) AND l.id!=?",
+                    (url, url, link_id),
+                ).fetchone()
+            ):
                 raise Problem("already_linked", "That address is already linked", 409)
             title = body.title if body.title is not None else row["title"]
             description = body.description if body.description is not None else row["description"]
             archived = int(body.archived) if body.archived is not None else row["archived"]
-            c.execute("UPDATE linked_docs SET title=?,description=?,url=?,kind=?,archived=?,updated=? WHERE id=?",
-                      (title, description, url, detect_kind(url), archived, H.now(), link_id))
-            H.event(c, who.actor, "docs.link_removed" if archived and not row["archived"] else "docs.link_updated",
-                    link_id, {"url": url})
+            c.execute(
+                "UPDATE linked_docs SET title=?,description=?,url=?,kind=?,archived=?,updated_at=? WHERE id=?",
+                (title, description, url, detect_kind(url), archived, H.now(), link_id),
+            )
+            H.event(
+                c,
+                who.actor,
+                "docs.link_removed" if archived and not row["archived"] else "docs.link_updated",
+                link_id,
+                {"url": url},
+            )
             from .doc_sources import sync_link
+
             sync_link(c, link_id)
             names = label_names(c, [row["added_by"]])
             return {"linked": linked_view(link_row(c, link_id), names)}
+
         return work
 
     # -------------------------------------------------------------- search
@@ -698,8 +899,9 @@ class Docs:
         internal, linked = self.find_internal(c, tokens, limit), self.find_linked(c, tokens)
         if external:
             contents = merge_ranked([internal, external], limit, tokens)
-            metadata = [{**row, 'score': 0.5 / (60 + i)} for i, row in
-                        enumerate(sorted(linked, key=lambda r: -r['score']), 1)]
+            metadata = [
+                {**row, 'score': 0.5 / (60 + i)} for i, row in enumerate(sorted(linked, key=lambda r: -r['score']), 1)
+            ]
             return (contents + metadata)[:limit]
         results = internal + linked
         results.sort(key=lambda r: (-r["score"], r["type"] != "internal", r["title"].casefold()))
@@ -728,9 +930,18 @@ class Docs:
                 score += 100 * sum(weights[t] for t in tokens if manual._hits(page["title_words"], t))
             elif row["path"].startswith("_librarian/"):
                 score *= 0.2
-            out.append({"type": "internal", "id": row["id"], "path": row["path"], "title": row["title"],
-                        "section": section["heading"], "anchor": section["anchor"],
-                        "excerpt": manual._excerpt(section["body"], tokens), "score": round(score, 3)})
+            out.append(
+                {
+                    "type": "internal",
+                    "id": row["id"],
+                    "path": row["path"],
+                    "title": row["title"],
+                    "section": section["heading"],
+                    "anchor": section["anchor"],
+                    "excerpt": manual._excerpt(section["body"], tokens),
+                    "score": round(score, 3),
+                }
+            )
         return sorted(out, key=lambda r: -r["score"])[:limit]
 
     @staticmethod
@@ -752,8 +963,17 @@ class Docs:
             score = sum(weights[t] * (2.0 * h[0] + h[1] + 0.5 * h[2]) for t, h in hits)
             if not score:
                 continue
-            out.append({"type": "linked", "id": r["id"], "title": r["title"], "url": r["url"], "kind": r["kind"],
-                        "description": r["description"], "score": score})
+            out.append(
+                {
+                    "type": "linked",
+                    "id": r["id"],
+                    "title": r["title"],
+                    "url": r["url"],
+                    "kind": r["kind"],
+                    "description": r["description"],
+                    "score": score,
+                }
+            )
         return out
 
     # -------------------------------------------------------------- import
@@ -781,25 +1001,42 @@ class Docs:
             raise Problem("validation", "Send a file in a `file` field", 422)
         return upload[0], upload[1], fields
 
-    def convert(self, filename, data, fields):
-        """The DocImport body and the Markdown the file becomes, before any write."""
+    def convert(self, filename, data, fields, cancel=None):
+        """The DocImport body and the Markdown the file becomes, before any write. The conversion runs in a worker
+        with its time and memory budgets; a cancelled one raises docs_import_run.Cancelled and writes nothing."""
         try:
-            text, guess = docs_import.to_markdown(filename, data)
+            text, guess = docs_import_run.to_markdown(filename, data, max_chars=MAX_BODY, cancel=cancel)
+        except docs_import_run.Busy as exc:
+            raise Problem("imports_busy", str(exc), 503, retryable=True) from exc
+        except docs_import_run.Cancelled as exc:
+            raise Problem("import_cancelled", "The import was cancelled before it was saved.", 409) from exc
         except ValueError as exc:
             raise Problem("import_failed", str(exc), 422) from exc
-        if len(text) > MAX_BODY:
-            raise Problem("import_failed", "That file is too long to import (over a million characters)", 422)
         stem = re.sub(r"\.[A-Za-z0-9]+$", "", filename.replace("\\", "/").rsplit("/", 1)[-1]).strip()
         heading = re.match(r"#\s+(.+)", text)
-        title = (fields.get("title") or "").strip() or (heading.group(1).strip() if heading else "") or guess or stem or "Imported doc"
-        return (DocImport(filename=filename[:300], sha256=hashlib.sha256(data).hexdigest(),
-                          path=(fields.get("path") or "").strip(), title=title[:300]), text)
+        title = (
+            (fields.get("title") or "").strip()
+            or (heading.group(1).strip() if heading else "")
+            or guess
+            or stem
+            or "Imported doc"
+        )
+        return (
+            DocImport(
+                filename=filename[:300],
+                sha256=hashlib.sha256(data).hexdigest(),
+                path=(fields.get("path") or "").strip(),
+                title=title[:300],
+            ),
+            text,
+        )
 
 
 def install_docs(app, store, auth, mutate):
     docs = Docs(app, store, auth, mutate)
     app.state.docs = docs
     from .doc_sources import install as install_sources
+
     install_sources(app, docs, mutate)
 
     def create_body(item, text):
@@ -810,9 +1047,13 @@ def install_docs(app, store, auth, mutate):
             raise Problem("read_only", "The Tico manual is read-only; it ships with each release", 405)
 
     @app.get("/api/v2/docs")
-    def list_docs(request: Request, path_prefix: str = Query(default="", max_length=300),
-                  limit: int = Query(default=200, ge=1, le=LIST_MAX), cursor: str = Query(default="", max_length=400),
-                  archived: bool = False):
+    def list_docs(
+        request: Request,
+        path_prefix: str = Query(default="", max_length=300),
+        limit: int = Query(default=200, ge=1, le=LIST_MAX),
+        cursor: str = Query(default="", max_length=400),
+        archived: bool = False,
+    ):
         return docs.listing(request.state.identity, path_prefix.strip().lstrip("/"), limit, cursor, archived)
 
     @app.post("/api/v2/docs")
@@ -820,10 +1061,13 @@ def install_docs(app, store, auth, mutate):
         return mutate(request, body, docs.create(request, body))
 
     @app.get("/api/v2/docs/search")
-    def search_docs(request: Request, q: str = Query(min_length=1, max_length=4000),
-                    limit: int = Query(default=20, ge=1, le=50),
-                    collection: str = Query(default="company", pattern="^(team|company|manual|all)$"),
-                    source_id: str = Query(default="", max_length=100)):
+    def search_docs(
+        request: Request,
+        q: str = Query(min_length=1, max_length=4000),
+        limit: int = Query(default=20, ge=1, le=50),
+        collection: str = Query(default="company", pattern="^(team|company|manual|all)$"),
+        source_id: str = Query(default="", max_length=100),
+    ):
         """`team` (`company` is the legacy default alias) is the team's docs; `manual` is the read-only Tico manual (backend/manual.py);
         `all` ranks team and manual sections together, each labelled with its collection."""
         who = request.state.identity
@@ -855,11 +1099,31 @@ def install_docs(app, store, auth, mutate):
             raise Problem("not_found", "No such page in the Tico manual", 404)
         return {"doc": page}
 
-    upload_doc = {"requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
-        "type": "object", "required": ["file"], "properties": {
-            "file": {"type": "string", "format": "binary", "description": ".md .markdown .txt .html .htm .docx or .pdf, at most 20 MB"},
-            "title": {"type": "string", "description": "Defaults to the first # heading, else the file name"},
-            "path": {"type": "string", "description": "Defaults to a slug of the title"}}}}}}}
+    upload_doc = {
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["file"],
+                        "properties": {
+                            "file": {
+                                "type": "string",
+                                "format": "binary",
+                                "description": ".md .markdown .txt .html .htm .docx or .pdf, at most 20 MB",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Defaults to the first # heading, else the file name",
+                            },
+                            "path": {"type": "string", "description": "Defaults to a slug of the title"},
+                        },
+                    }
+                }
+            },
+        }
+    }
 
     @app.post("/api/v2/docs/import", openapi_extra=upload_doc)
     async def import_doc(request: Request):
@@ -867,11 +1131,29 @@ def install_docs(app, store, auth, mutate):
         who = request.state.identity
         docs.reader(who)
         # Parsing up to 20 MB and the write both block: off the event loop, like the conversion.
-        filename, data, fields = await asyncio.to_thread(docs.upload, request.headers.get("content-type", ""),
-                                                         await request.body())
-        item, text = await asyncio.to_thread(docs.convert, filename, data, fields)
+        filename, data, fields = await asyncio.to_thread(
+            docs.upload, request.headers.get("content-type", ""), await request.body()
+        )
+        # A person who drops the request stops the conversion at its next check; nothing is written for it.
+        cancel = threading.Event()
+
+        async def stop_when_dropped():
+            # Starlette has no event for a dropped request, so it is asked twice a second.
+            while not await request.is_disconnected():  # noqa: ASYNC110
+                await asyncio.sleep(0.5)
+            cancel.set()
+
+        watcher = asyncio.create_task(stop_when_dropped())
+        try:
+            item, text = await asyncio.to_thread(docs.convert, filename, data, fields, cancel)
+        except asyncio.CancelledError:
+            cancel.set()
+            raise
+        finally:
+            watcher.cancel()
         return await asyncio.to_thread(
-            lambda: mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename)))
+            lambda: mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename))
+        )
 
     @app.get("/api/v2/docs/{doc_id}")
     def get_doc(request: Request, doc_id: str):
@@ -906,4 +1188,5 @@ def install_docs(app, store, auth, mutate):
     @app.patch("/api/v2/linked-docs/{link_id}")
     def edit_link(request: Request, link_id: str, body: LinkEdit):
         return mutate(request, body, docs.link_edit(request, link_id, body))
+
     return docs

@@ -3,7 +3,7 @@ use anyhow::{Result, bail};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::{
     Arc,
-    atomic::{AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
 pub const PACKET_SAMPLES: usize = 1024;
@@ -51,6 +51,10 @@ impl AudioSink {
             },
             consumer,
         )
+    }
+    #[cfg(test)]
+    pub(crate) fn queued_capacity(&self) -> usize {
+        self.producer.slots() * PACKET_SAMPLES
     }
     /// Called by the native audio thread. No heap allocation, locks, disk or network I/O.
     pub fn push_interleaved(&mut self, data: &[f32], channels: usize) {
@@ -102,6 +106,12 @@ pub trait CaptureStream: Send {
     fn stop(&mut self) -> Result<()>;
 }
 
+/// Optional processed samples for live text. The saved source always remains unprocessed.
+pub struct LiveInput {
+    pub consumer: Consumer<Packet>,
+    pub processed: Arc<AtomicBool>,
+}
+
 pub struct Source {
     pub channel: Channel,
     pub name: String,
@@ -110,6 +120,7 @@ pub struct Source {
     pub health: Arc<Health>,
     pub consumer: Consumer<Packet>,
     pub stream: Box<dyn CaptureStream>,
+    pub live_input: Option<LiveInput>,
 }
 
 impl Drop for Source {
@@ -133,6 +144,27 @@ pub fn sources() -> Result<Vec<String>> {
                 .map_err(Into::into)
         })
         .collect()
+}
+
+/// Off: on a Nov 6 Meet call, starting macOS voice processing on the built-in mic silenced the
+/// mic for Chrome (people could not hear the speaker) and for Recorder's own raw capture.
+/// Transcript-level echo removal still runs; this was only a live-text aid.
+#[cfg(target_os = "macos")]
+const VOICE_PROCESSING: bool = false;
+
+/// Hardware-reference echo cancellation while recording meeting audio, when `VOICE_PROCESSING`
+/// is on. Unsupported routes and native setup failures retain the plain microphone path.
+pub fn start_microphone_for_meeting(name: Option<&str>, meeting_audio: bool) -> Result<Source> {
+    #[cfg(target_os = "macos")]
+    if VOICE_PROCESSING
+        && meeting_audio
+        && let Ok(source) = macos::start_voice_microphone(name)
+    {
+        return Ok(source);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = meeting_audio;
+    start_microphone(name)
 }
 
 pub fn start_microphone(name: Option<&str>) -> Result<Source> {
@@ -202,6 +234,7 @@ pub fn start_microphone(name: Option<&str>) -> Result<Source> {
         health,
         consumer,
         stream: Box::new(Microphone(stream)),
+        live_input: None,
     })
 }
 
@@ -272,6 +305,7 @@ pub fn start_paced(
         health,
         consumer,
         stream: Box::new(Paced(stop)),
+        live_input: None,
     }
 }
 

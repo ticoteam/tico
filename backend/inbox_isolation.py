@@ -8,6 +8,7 @@ places no other bot there. It is a choice, not a rule: an inbox bot may share an
 Installs from before this choice existed keep what they had: the first time the setting is needed, every
 computer that holds only inbox bots is marked as kept for them.
 """
+
 import json
 
 from .store import Problem, P
@@ -16,8 +17,9 @@ KEY = "inbox-only-runners"
 
 
 def _bots_by_runner(c):
-    rows = c.execute("SELECT a.runner_id,a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-                     "WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
+    rows = c.execute(
+        "SELECT a.runner_id,a.bot FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived' ORDER BY a.bot"
+    ).fetchall()
     result = {}
     for row in rows:
         result.setdefault(row["runner_id"], []).append(row["bot"])
@@ -26,13 +28,16 @@ def _bots_by_runner(c):
 
 def _seed(c, people):
     """Computers holding only inbox bots now: what the old rule kept for them."""
-    return {runner_id for runner_id, bots in _bots_by_runner(c).items()
-            if bots and all(P.inbox_person(b, people) for b in bots)}
+    return {
+        runner_id
+        for runner_id, bots in _bots_by_runner(c).items()
+        if bots and all(P.inbox_person(b, people) for b in bots)
+    }
 
 
 def inbox_only(c, people, save=False):
     """Ids of the computers kept for inbox bots. `save` stores the seed on a write connection."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     if row:
         return set(json.loads(row[0]))
     ids = _seed(c, people)
@@ -42,8 +47,10 @@ def inbox_only(c, people, save=False):
 
 
 def _store(c, ids):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-              (KEY, json.dumps(sorted(ids))))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(sorted(ids))),
+    )
 
 
 def set_inbox_only(c, runner_id, enabled, people):
@@ -70,6 +77,10 @@ def check(c, bot, runner_id, people):
     """Refuse putting a bot that is not an inbox bot on a computer kept for inbox bots."""
     if runner_id not in inbox_only(c, people, save=True) or P.inbox_person(bot, people):
         return
-    raise Problem("inbox_isolation", f"This computer is kept for inbox bots, whose mail key can open every mailbox in "
-                  f"the team, so {bot} cannot go there. Pick another computer, or stop keeping this one for inbox bots: "
-                  f"`hub api POST runners/{runner_id}/inbox-only '{{\"enabled\": false}}'`.", 409)
+    raise Problem(
+        "inbox_isolation",
+        f"This computer is kept for inbox bots, whose mail key can open every mailbox in "
+        f"the team, so {bot} cannot go there. Pick another computer, or stop keeping this one for inbox bots: "
+        f"`hub api POST runners/{runner_id}/inbox-only '{{\"enabled\": false}}'`.",
+        409,
+    )
