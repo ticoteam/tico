@@ -755,9 +755,13 @@ class Run:
         # Diagnostic: a merged ticket a check names (blocked after its merge, or moved by hand) is shown with the rest.
         named = {title for _, title in self.violations["merged_blocked"]}
         named |= {f[2] for f in self.w.fallbacks if "merged" in f[3] or "moved to" in f[3]}
-        for t in self.final:
-            if self.shipped(t) and t["title"] not in named:
-                continue
+        shown = [t for t in self.final if not self.shipped(t) or t["title"] in named]
+        # Diagnostic: a manager's ticket about a stop (no step) is shown too, with its turns and jobs.
+        shown += [
+            dict(r, step=None, blocked_since=None)
+            for r in self.w.sql("SELECT id,title,owner_id,status FROM tasks WHERE title LIKE '%made no progress in%'")
+        ]
+        for t in shown:
             out.append(
                 f"{t['title']} @ {t['step']} ({t['status']}, {t['owner_id']})"
                 + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else "")
