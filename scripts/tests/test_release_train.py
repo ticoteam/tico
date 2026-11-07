@@ -637,13 +637,15 @@ class FakeCheckout:
     def __init__(self, since=None, plan=None):
         self.since_, self.plan_text = since, plan
         self.calls = []
+        self.previous_changed = None  # the flag the last plan was asked for
 
     def tokens_since(self, base, head):
         self.calls.append(("tokens_since", base, head))
         return self.since_
 
-    def plan(self, base, head, carried):
+    def plan(self, base, head, carried, previous_changed=False):
         self.calls.append(("plan", base, head, set(carried)))
+        self.previous_changed = previous_changed
         return self.plan_text
 
 
@@ -735,6 +737,48 @@ def test_validation_records_say_which_runs_are_incremental_and_only_full_green_o
     incremental = rt.validation_record(dict(run(C, id=3), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)))
     assert (full["incremental"], full["sha"], full["id"]) == (False, B, 2)
     assert (incremental["incremental"], incremental["sha"], incremental["id"]) == (True, C, 3)
+    assert full["previous"] == incremental["previous"] == "v0.5.200"
+
+
+def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_waited_for():
+    # main is A <- B <- C <- D (the head). A is this release's green full run before the window; B went red before it;
+    # C is an earlier release's green incremental run after B, so it supersedes B's red.
+    earlier = dict(
+        run(C, version="v0.5.200", previous="v0.5.199", id=3, at=OPENED - timedelta(minutes=30)),
+        display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=A),
+    )
+    gh = FakeGitHub(
+        [
+            earlier,
+            run(B, id=2, conclusion="failure", at=OPENED - timedelta(hours=2)),
+            run(A, id=1, at=OPENED - timedelta(hours=3)),
+        ],
+        head=D,
+    )
+    gh.order = [A, B, C, D]
+    gh.failed = {2: {"backend/tests/test_b.py"}}
+    checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", A)
+    assert checkout.calls == [("plan", A, D, set())]  # nothing carried, and no commit was read against the red run
+    assert "carries" not in picked["why"] and "the window waits" not in picked["why"]
+
+
+def test_an_anchor_of_an_earlier_release_runs_the_product_part_when_the_previous_release_moved():
+    # The newest tag is v0.5.200; the anchor validated v0.5.200 from v0.5.199, a green full run two hours ago.
+    gh = FakeGitHub([run(B, version="v0.5.200", previous="v0.5.199", id=2, at=NOW - timedelta(hours=2))])
+    checkout = FakeCheckout(plan=PLAN_TEXT)
+    picked = rt.plan_step(gh, NOW, checkout=checkout)
+    assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
+    assert checkout.previous_changed is True
+    assert "the product part runs: the previous release is v0.5.200, the anchor's was v0.5.199" in picked["why"]
+    # The same previous release (this window's own full run before it opened): the product part is not forced.
+    same = FakeCheckout(plan=PLAN_TEXT)
+    assert (
+        rt.plan_step(FakeGitHub([run(B, id=2, at=OPENED - timedelta(hours=1))]), NOW, checkout=same)["mode"]
+        == "incremental"
+    )
+    assert same.previous_changed is False
 
 
 # ---- the guard ----

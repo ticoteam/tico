@@ -274,6 +274,7 @@ def validation_record(run):
     return {
         "id": run_id,
         "sha": parsed[0] if parsed else "",
+        "previous": parsed[2] if parsed else "",
         "status": run.get("status"),
         "conclusion": run.get("conclusion"),
         "finished": parse_time(run.get("updated_at")),
@@ -773,14 +774,14 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         plan["why"] = "window open since %s; main is at %s, nothing new" % (hhmm(start), newest)
         return plan
     head_failed = None
-    records = []  # this release's validations, newest first: the anchor and the red validation are read from them
+    records = []  # every release's validations, newest first: the anchor and the red validation are read from them
     for run in gh.validation_runs():
         parsed = parse_title(run.get("display_title"))
-        if not parsed or parsed[1:] != (version, newest):
+        if not parsed:
             continue
         records.append(validation_record(run))
-        if run.get("status") != "completed":
-            continue
+        if parsed[1:] != (version, newest) or run.get("status") != "completed":
+            continue  # an earlier release's validation can anchor or supersede a red one, but ships nothing here
         sha = parsed[0]
         if run.get("conclusion") == "success":
             finished_at = parse_time(run.get("updated_at"))
@@ -805,8 +806,14 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     if busy:
         plan.update(action="wait", why="window open since %s; waiting for %s" % (hhmm(start), busy.get("html_url")))
         return plan
-    anchor = increment.anchor_of(records, now, lambda sha: gh.contains("main", sha))
-    red = increment.red_since(records, anchor)
+
+    def main_has(sha):
+        return gh.contains("main", sha)
+
+    anchor = increment.anchor_of(records, now, main_has)
+    red = increment.red_since(records, anchor, main_has)
+    # The anchor may validate an earlier release: its product part (the upgrade journey) then starts from its previous.
+    previous_changed = anchor is not None and anchor["previous"] != newest
     if red is not None:
         red = {**red, "failed": gh.failed_tokens(red["id"])}
     if red is not None and not manual:
@@ -817,7 +824,7 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
             return plan
     if anchor is None:
-        reason = "no green full validation of %s in the last 24 hours" % newest
+        reason = "no green full validation in the last 24 hours, of any release"
     elif checkout is None:
         reason = "no checkout to select the changes from"
     elif red is not None and not red["failed"]:
@@ -835,7 +842,7 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         return plan
     carried = set(red["failed"]) if red is not None else set()
     try:
-        text = checkout.plan(anchor["sha"], head, carried)
+        text = checkout.plan(anchor["sha"], head, carried, previous_changed=previous_changed)
     except Exception as exc:  # noqa: BLE001 - an incremental plan that cannot be made runs the full validation
         text = None
         note("Incremental plan failed, validating in full: %s: %s" % (type(exc).__name__, exc))
@@ -855,7 +862,7 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         mode="incremental",
         anchor=anchor["sha"],
         increment=text,
-        why="validate %s as %s from %s incrementally on %s: %d VMs%s"
+        why="validate %s as %s from %s incrementally on %s: %d VMs%s%s"
         % (
             head[:12],
             version,
@@ -863,6 +870,9 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             anchor["sha"][:12],
             jobs,
             "; carries %s" % increment.names(carried) if carried else "",
+            ("; the product part runs: the previous release is %s, the anchor's was %s" % (newest, anchor["previous"]))
+            if previous_changed
+            else "",
         ),
     )
     return plan

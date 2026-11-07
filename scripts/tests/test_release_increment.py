@@ -56,7 +56,9 @@ def selected(python=(), browser=(), **flags):
     }
 
 
-def plan_of(sel, changed=("backend/tests/test_a.py",), carried=(), smoke=("sign-in-redirect",), gone=("gone",)):
+def plan_of(
+    sel, changed=("backend/tests/test_a.py",), carried=(), smoke=("sign-in-redirect",), gone=("gone",), **options
+):
     return ri.plan_for(
         sel,
         list(changed),
@@ -64,6 +66,7 @@ def plan_of(sel, changed=("backend/tests/test_a.py",), carried=(), smoke=("sign-
         lambda path: not any(word in path for word in gone),
         list(smoke),
         TABLES,
+        **options,
     )
 
 
@@ -86,9 +89,29 @@ def test_a_stale_red_running_or_uncontained_validation_is_no_anchor():
 def test_the_red_run_since_the_anchor_is_the_newest_red_newer_than_it():
     anchor = record(2, B, hours=3)
     records = [record(4, C, conclusion="failure"), record(3, B, conclusion="cancelled", hours=2), anchor]
-    assert ri.red_since(records + [record(1, A, conclusion="failure", hours=9)], anchor)["id"] == 4
-    assert ri.red_since([anchor, record(1, A, conclusion="failure")], anchor) is None
-    assert ri.red_since(records, None)["id"] == 4
+    assert ri.red_since(records + [record(1, A, conclusion="failure", hours=9)], anchor, lambda sha: True)["id"] == 4
+    assert ri.red_since([anchor, record(1, A, conclusion="failure")], anchor, lambda sha: True) is None
+    assert ri.red_since(records, None, lambda sha: True)["id"] == 4
+
+
+def test_a_green_validation_after_a_red_one_supersedes_it_whatever_its_release_or_kind():
+    anchor = record(2, B, hours=3)
+    # Red at C, then a green incremental run of C (an earlier release's): the red is superseded, nothing is carried.
+    after_green = [record(4, C, incremental=True, hours=1), record(3, C, conclusion="failure", hours=2), anchor]
+    assert ri.red_since(after_green, anchor, lambda sha: True) is None
+    # The green run of a commit main no longer contains supersedes nothing: the red still stands.
+    assert ri.red_since(after_green, anchor, lambda sha: sha != C)["id"] == 3
+    # A red after that green one is the red that stands.
+    again = [record(5, C, conclusion="failure", hours=0.5)] + after_green
+    assert ri.red_since(again, anchor, lambda sha: True)["id"] == 5
+
+
+def test_a_candidate_whose_previous_release_moved_from_the_anchors_runs_the_product_part():
+    sel = selected(python=["backend/tests/test_a.py"])
+    assert plan_of(sel)["product"] is False
+    moved = plan_of(sel, previous_changed=True)
+    assert moved["product"] is True
+    assert [job["name"] for job in moved["jobs"] if job["part"] == "product"] == ["product"]
 
 
 # ---- the failures a red run names ----

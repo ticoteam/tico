@@ -1,10 +1,13 @@
 """Incremental release validation (docs/releasing.md#incremental-validation).
 
-A full Release validation (ci.yml's whole gate) runs when no green full validation of the same release finished in the
-last 24 hours. That green run is the anchor. A candidate after it runs only what its diff from the anchor selects
-(scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set, the image
-(product) and factory checks when their inputs changed, and what failed in the newest red validation since the anchor.
-A red validation is not run again until a commit since it selects one of its failures; until then the window waits.
+A full Release validation (ci.yml's whole gate) runs when no green full validation finished in the last 24 hours whose
+commit main still contains. That green run is the anchor, whichever release it validated: at most one full run a day.
+A candidate after it runs only what its diff from the anchor selects (scripts/pr_checks.py selection, the merge queue's
+rules, never the full suite), the browser smoke set, the factory checks when their inputs changed, the product part
+(the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, and what failed
+in the newest red validation since the anchor. The image builds run for every candidate (ci.yml's images job). A red
+validation is not run again until a commit since it selects one of its failures; until then the window waits. A green
+validation after it (full or incremental, of a commit main still contains) supersedes it.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
 diff and selection from Checkout below, so the unit tests and the replay run the same code.
@@ -67,7 +70,8 @@ def failed_tokens(jobs):
 
 def anchor_of(records, now, contained):
     """The newest green full validation that finished within the last 24 hours and whose commit main still contains, or
-    None. `records` are newest first, one release's validations (validation_record in release_train)."""
+    None. `records` are newest first, every release's validations (validation_record in release_train): the anchor may
+    have validated an earlier release."""
     for record in records:
         if record["incremental"] or record["status"] != "completed" or record["conclusion"] != "success":
             continue
@@ -78,10 +82,16 @@ def anchor_of(records, now, contained):
     return None
 
 
-def red_since(records, anchor):
-    """The newest red validation newer than the anchor (all of them when there is no anchor), or None."""
+def red_since(records, anchor, contained):
+    """The newest red validation that no later green one supersedes, or None. Reds count back to the anchor when there is
+    one, else back to the newest green validation of any release. A green validation (full or incremental, of a commit
+    main still contains) supersedes the reds older than it. Reds carry across releases: a red nothing later passed is
+    still main's failure, and dropping it at the next window would leave its failure unrun. `records` are newest first,
+    as anchor_of reads them."""
     for record in records:
         if anchor is not None and record["id"] == anchor["id"]:
+            return None
+        if record["status"] == "completed" and record["conclusion"] == "success" and contained(record["sha"]):
             return None
         if record["status"] == "completed" and record["conclusion"] in FAILED:
             return record
@@ -178,11 +188,15 @@ def job(name, part, files=(), workers="4", **extra):
     }
 
 
-def plan_for(selected, changed, carried, exists, smoke_browser, tables, has_slow=lambda path: False):
+def plan_for(
+    selected, changed, carried, exists, smoke_browser, tables, has_slow=lambda path: False, previous_changed=False
+):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
     tree (a deleted test is not run). Returns the plan; `jobs` lists the gate's VMs in the shape ci.yml's matrix takes.
-    `has_slow(path)` tells whether a test file marks slow tests: a carried file that does runs them in the contracts lane."""
+    `has_slow(path)` tells whether a test file marks slow tests: a carried file that does runs them in the contracts lane.
+    `previous_changed`: the candidate's previous release is not the anchor's, so the product part runs (its upgrade
+    journey starts from the previous release)."""
     carried = set(carried or ())
     slow = tables["slow"]
     python = set(selected["python"])
@@ -212,7 +226,7 @@ def plan_for(selected, changed, carried, exists, smoke_browser, tables, has_slow
     )
     python = [name for name in python if name not in slow]
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
-    product = bool(selected.get("caddy")) or PRODUCT in carried
+    product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
     factory = pr_checks.factory_reason(list(changed)) is not None or FACTORY in carried
     jobs = build_jobs(
@@ -359,8 +373,9 @@ class Checkout:
             return None
         return selection_tokens(selected, changed)
 
-    def plan(self, base, head, carried):
-        """The incremental plan for base..head with the carried failures, or None when it is too big to dispatch."""
+    def plan(self, base, head, carried, previous_changed=False):
+        """The incremental plan for base..head with the carried failures, or None when it is too big to dispatch.
+        `previous_changed`: the candidate's previous release is not the anchor's (plan_for runs the product part)."""
         changed, selected = self.selected(base, head)
         _, smoke_browser = pr_checks.smoke(self.root)
         tables = load_tables(self.root / "scripts" / "test-timings.json")
@@ -372,6 +387,7 @@ class Checkout:
             smoke_browser,
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
+            previous_changed=previous_changed,
         )
         return plan_json(plan)
 

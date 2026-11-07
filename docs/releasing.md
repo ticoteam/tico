@@ -109,17 +109,22 @@ workflow, so it dispatches `release.yml` on the tag (with `latest=false`).
 A window validates a head in one of two ways. A **full** validation is the whole gate (`ci.yml`, as before). An
 **incremental** one runs the same gate on less, and says so in its run title (`... from vX.Y.Z (incremental on <anchor>)`).
 
-- **Anchor.** A full validation runs when no green full validation of the same release (same version and previous
-  release) finished in the last 24 hours. That green run is the anchor. A release's first candidate is always full.
-- **Incremental candidate.** Later heads of that release run only: what `scripts/pr_checks.py` selection picks for
-  anchor..head (the merge queue's rules, never the full suite), the browser smoke set, the product and factory parts
-  when their inputs changed, and the tests that failed in the newest red run since the anchor. A failed file that marks
-  slow tests also runs in the contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
-- **Red runs.** After a red run, the window runs a later head only when a commit since that run selects one of its
-  failed tests. Otherwise it waits, and the window's log says `the window waits` and why. A red run that names no
-  failure, or whose diff cannot be read, is run again on the next commit.
+- **Anchor.** A full validation runs when no green full validation finished in the last 24 hours whose commit main still
+  contains. That green run is the anchor, whichever release it validated: at most one full validation a day.
+- **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
+  merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
+  product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
+  anchor's, and the tests that failed in the newest red run since the anchor. A failed file that marks slow tests also
+  runs in the contracts lane (`-m slow`). The plan is `scripts/release_increment.py`. The image builds run for every
+  candidate, full or incremental.
+- **Red runs.** A red run stays open, across releases, until a green validation (full or incremental, of a commit main
+  still contains) runs after it. While it is open, the window runs a later head only when a commit since that run selects
+  one of its failed tests. Otherwise it waits, and the window's log says `the window waits` and why. A red run that names
+  no failure, or whose diff cannot be read, is run again on the next commit. A red run at main's head waits for a push.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
-  contracts lane, and `alone` tests never do. Images and native builds still run for every candidate.
+  contracts lane, and `alone` tests never do. A UI script runs when its own files change or a `UI_MAP` entry selects it:
+  `ui/tests/task-code.cjs` has no entry for the UI files it covers, so a change to them does not select it. The measured
+  UI test map (#2897, `ci/ui-test-map`) closes that gap; until it lands, the next full validation is the check.
 - **Not changed.** Hotfixes, approval, promotion, the `release-train` issue, the concurrency group and the schedule.
   `release.yml` accepts an incremental run's title for the tag, because the title starts the same way.
 

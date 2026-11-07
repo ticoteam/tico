@@ -1395,8 +1395,10 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
-def run(plan_path, suite, root=ROOT):
-    """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones."""
+def run(plan_path, suite, root=None):
+    """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
+    `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value)."""
+    root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
     entries = plan["matrix"]["include"] if "matrix" in plan else plan["jobs"]
