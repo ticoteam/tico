@@ -796,10 +796,17 @@ def _roadmap_task(b):
 
 
 def _bid_task(b):
-    """A task tagged with its segment: the public bids the towns team prices before their deadline."""
+    """A task tagged with its segment: the public bids the towns team prices before their deadline. Its bot picks it up
+    on the next run (the demo runs no bots), so it is not an open task left stuck."""
     spec = CONTENT["bid"]
     b.call(
         "POST",
         "tasks",
-        {"title": spec["title"], "body": spec["body"], "owner": spec["owner"], "segment_id": spec["segment"]},
+        {
+            "title": spec["title"],
+            "body": spec["body"],
+            "owner": spec["owner"],
+            "segment_id": spec["segment"],
+            "next_run": True,
+        },
     )
