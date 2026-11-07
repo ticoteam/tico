@@ -5,12 +5,12 @@
    its `href`.
    Addresses:
      #/tools[?show=needs|api|mail|websites]          the list
-     #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.js)
+     #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.ts)
      #/tools/mailbox/<address or id>[/activity]       one mailbox  ┐
      #/tools/number/<id>                              one Tico address or phone number │ the inbox kinds' pages
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
      #/tools/settings[/<section>], #/tools/messages   mail and number settings, texts   ┘
-     #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.js)
+     #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.ts)
      #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.js)
      #/tools/<service>                                a declared tool's page, Slack's and GitHub's (same file)
    The old homes of all of it redirect here (toolsRoute): Library › Tools and › Connections, Settings › Inboxes and
@@ -161,7 +161,7 @@ function toolsAddBind(root: HTMLElement) {
 }
 
 // ----------------------------------------------------------------- routes
-// The redesign's router asks first (ui/app/redesign.js). Old addresses are replaced, so Back skips them.
+// The redesign's router asks first (ui/app/redesign.ts). Old addresses are replaced, so Back skips them.
 function toolsRoute(r: string): boolean {
   const [path = '', query = ''] = r.split('?'), q = query ? '?' + query : '';
   const go = (to: string) => { location.replace(to); return true; };

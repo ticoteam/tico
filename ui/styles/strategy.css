@@ -1,5 +1,5 @@
-/* ui/styles/strategy.css — the Strategy section (ui/strategy-page.js): its heading and tabs, shared with the Market tab
-   (ui/market-page.js), the page's cards (the line on top, Where we play, the bets, Competitors, Related news, the
+/* ui/styles/strategy.css — the Strategy section (ui/strategy-page.ts): its heading and tabs, shared with the Market tab
+   (ui/market-page.ts), the page's cards (the line on top, Where we play, the bets, Competitors, Related news, the
    sections), the bet form Setup uses, and the Versions drawer. */
 #main.strategy-layout{max-width:none}
 /* one height on every tab, with or without a button in it: a control (--ctl), the 8px under it and the rule */

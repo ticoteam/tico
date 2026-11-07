@@ -149,13 +149,19 @@ function ibSendSummary(e: IbSendPolicy): string {
     ${row('Who approves', approvers + (e.who_can_ok === 'named_people' && e.approvers?.length ? ' · ' + e.approvers.map(personDisplay).join(', ') : ''))}</dl>`;
 }
 
+// A page element the drawn markup must hold: a missing one throws a plain Error that names it.
+function sendingNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode): T {
+  const el = root.querySelector<T>(selector);
+  if (!el) throw new Error(`${selector} is not on the page`);
+  return el;
+}
 inboxesSetting('email.sending', {section: 'email', order: 40, render: async (host: HTMLElement, ctx: InboxCtx) => {
   if (!ctx.admin) return;
   const [document, org] = await Promise.all([get<IbSendDocument>(ibSendPath(''), {fresh: true}), ctx.once('org', () => get<{bots?: IbSendBot[] | null}>('/v2/org'))]);
   if (!ctx.live()) return;
   host.innerHTML = inboxesCard('inboxes-email-sending', 'Sending', ibSendForm(document, true) + '<div class="ib-field"><span class="ib-field-label">Per bot</span><div data-send-bots></div></div>');
   ibSendBind(host, ibSendPath(''), ctx);
-  await ibSendBots(host.querySelector<HTMLElement>('[data-send-bots]')!, org.bots || [], ctx, '', true);
+  await ibSendBots(sendingNeed<HTMLElement>('[data-send-bots]', host), org.bots || [], ctx, '', true);
 }});
 
 inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (host: HTMLElement, inbox: InboxResolved, ctx: InboxCtx) => {
@@ -174,7 +180,7 @@ inboxesPanel('email.sending', {kinds: ['mailbox'], order: 40, render: async (hos
   if (edit && body) edit.onclick = () => { body.hidden = !body.hidden; edit.setAttribute('aria-expanded', String(!body.hidden)); edit.textContent = body.hidden ? 'Edit' : 'Close'; };
   if (editable) ibSendBind(host, ibSendPath(address), ctx);
   const grants = (inbox.accesses || []).filter(a => a.grantee_type === 'bot' && a.level === 'read_write').map(a => ({id: a.grantee_id, display_name: a.name}));
-  await ibSendBots(host.querySelector<HTMLElement>('[data-send-bots]')!, grants, ctx, address, editable && ctx.admin);
+  await ibSendBots(sendingNeed<HTMLElement>('[data-send-bots]', host), grants, ctx, address, editable && ctx.admin);
   if (!ctx.live()) return;
   host.querySelectorAll<HTMLButtonElement>('[data-send-preview]').forEach(button => { button.addEventListener('click', async () => {
     button.disabled = true;

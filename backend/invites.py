@@ -5,7 +5,7 @@ sign in. An install that signs in some other way can't send one, and says so: th
 
 Every outcome is the owner's to see: a refusal is a Problem with a plain reason, and a sent invite is recorded in
 registry_metadata `invites` ({person id: {at, by}}) so the People page can say when. A refusal is a 422, never a 409,
-429 or 502: the browser retries some of those writes as unconfirmed (ui/app/api.js), which would ask the issuer three
+429 or 502: the browser retries some of those writes as unconfirmed (ui/app/api.ts), which would ask the issuer three
 times, spend the address's daily invites and hide the reason.
 
 One request sends at most one email (`once`). The browser repeats a write whose answer it lost with the same

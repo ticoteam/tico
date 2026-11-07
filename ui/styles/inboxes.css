@@ -31,16 +31,16 @@
   .ib-field{grid-template-columns:1fr}
 }
 
-/* Email: Google mailboxes (ui/app/inboxes-email.js) */
+/* Email: Google mailboxes (ui/app/inboxes-email.ts) */
 .mb-line{margin:-6px 0 12px;font-size:var(--t-sm);overflow-wrap:anywhere}
 .mb-dialog .task-rule-form>label:not(.mb-check){display:grid;gap:4px}
 
-/* Tico addresses and Texts in (ui/app/inboxes-texts.js) */
+/* Tico addresses and Texts in (ui/app/inboxes-texts.ts) */
 #inbox-recent .inbound-filters,#inbox-messages .inbound-filters{margin-bottom:8px}
 #inbox-messages .inbound-filters label{min-width:0}
 .wh-dialog .task-rule-form>label{display:grid;gap:4px}
 
-/* Letters in (ui/app/inboxes-letters.js) */
+/* Letters in (ui/app/inboxes-letters.ts) */
 .pm-steps{list-style:none;margin:0 0 8px;padding:0;display:flex;flex-wrap:wrap;gap:6px 18px;font-size:var(--t-sm);color:var(--muted)}
 .pm-steps li{display:flex;align-items:center;gap:6px}
 .pm-steps li::before{content:'';width:10px;height:10px;border-radius:50%;border:2px solid var(--line)}

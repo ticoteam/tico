@@ -37,7 +37,7 @@ It includes third-party software, kept under its own license:
       @sentry/browser (MIT), from the versions pinned in package.json. The build is
       off until configured.
 
-  ui/tool-icons.js
+  ui/tool-icons.ts
       Service logo paths from Simple Icons (https://simpleicons.org), CC0 1.0 Universal. The marks
       belong to their owners and are used only to say which service a bot uses, or which agent
       Connect an agent (ui/connect-agent.ts) means.

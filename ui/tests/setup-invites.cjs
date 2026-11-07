@@ -37,7 +37,7 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module && fs.existsSync(uiFile(module[1]))) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config});
       if (p === '/api/v2/config') return json(config);

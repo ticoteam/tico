@@ -23,6 +23,7 @@ const WH_ROUTES = {incoming: WH_INCOMING_ROUTE, outgoing: WH_HOOKS_ROUTE};
 let WH_OPEN_GATEWAY = false;
 // The open part and item, and the one set of secrets on screen: {id, url?, signing?, relay?} for an incoming webhook,
 // {id, secret} for an endpoint. The wake address's signing secret stays until the person dismisses it.
+/** @type {{tab: string, trigger: string, hook: string, shown: any, hookShown: any, wakeSecret: string}} */
 const WH = {tab: 'incoming', trigger: '', hook: '', shown: null, hookShown: null, wakeSecret: ''};
 let WH_RUN = 0, WH_HOOKS = null;
 /** @type {any} bridged: .ts files read it through webhookTriggers() (settings-webhooks-state.ts); typed when this file converts */ let WH_TRIGGERS = null;          // the incoming webhooks (GET /v2/triggers), loaded when a part opens

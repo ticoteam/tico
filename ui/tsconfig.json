@@ -7,6 +7,7 @@
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "strict": false,
     "strictNullChecks": true,
     "strictBindCallApply": true,
@@ -19,5 +20,5 @@
     "types": []
   },
   "include": ["./**/*.js", "./**/*.ts", "./types/**/*.d.ts"],
-  "exclude": ["./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.js"]
+  "exclude": ["./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.ts"]
 }

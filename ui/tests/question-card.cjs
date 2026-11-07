@@ -1,4 +1,4 @@
-// The one question card (ui/app/question-card.js), in the Needs you card and in the task page's Needs you box: the real asker,
+// The one question card (ui/app/question-card.ts), in the Needs you card and in the task page's Needs you box: the real asker,
 // "asked N days ago" and what it holds up; the question and its why line; four picks as checkboxes, the recommended
 // ones ticked and labelled; "Yes to all" and "Send ticked (n)", each with its "what happens" line; the fallback small
 // at the foot; ids, paths and error text only under Details. Ticking 1, 2 and 4 sends those three, and the bot hears
