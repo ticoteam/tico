@@ -868,9 +868,29 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
-        return meeting_sources(c).attempt_readable(actor, aid) and readable(c, actor, attempt_tasks(c, aid, memo))
+        return (
+            meeting_sources(c).attempt_readable(actor, aid)
+            and readable(c, actor, attempt_tasks(c, aid, memo))
+            and attempt_pages_readable(c, actor, aid)
+        )
     except Problem:
         return False
+
+
+def attempt_pages_readable(c, actor, aid):
+    """A run's job message and inputs keep their own file refusal and that of the messages they reply to (the same
+    rule as ReadIndex.attempt_pages)."""
+    rows = c.execute(
+        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=? "
+        "UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+        (aid, aid),
+    ).fetchall()
+    for row in rows:
+        message = dict(row)
+        refs = H._json(message.get("refs"), {}) or {}
+        if not (page_message_readable(c, actor, refs) and reply_pages_readable(c, actor, message)):
+            return False
+    return True
 
 
 def require_attempt(c, who, aid):
