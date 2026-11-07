@@ -6952,6 +6952,11 @@ SCHEMAS['Task']['properties'].update(
 SCHEMAS['TaskType']['properties'].update(
     {
         'default_visibility': {'enum': ['public', 'private']},
+        'has_requirements': {
+            'type': 'boolean',
+            'description': "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A "
+            "pipeline without one keeps the plain board layout and shows no rail (backend/pipeline_engine.py)",
+        },
         'can_edit_rules': {
             'type': 'boolean',
             'description': "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, "

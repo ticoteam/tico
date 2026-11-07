@@ -4,7 +4,7 @@ from fastapi import Request
 
 from . import hubdb as H
 from . import models as M
-from . import pipeline_rights
+from . import pipeline_engine, pipeline_rights
 from .store import Problem
 
 
@@ -19,9 +19,11 @@ def install_task_types(app, store, auth, mutate, mover):
         auth.domain(who)
         with store.read() as c:
             listed = H.type_list(c)
-            # Each pipeline says whether this caller may change its rules: the check a move's override uses.
+            # Each pipeline says whether this caller may change its rules: the check a move's override uses. It also says
+            # whether it has any requirement, so the board keeps its plain layout for a pipeline without one.
             for typ in listed:
                 typ["can_edit_rules"] = pipeline_rights.may_edit_rules(c, who.actor, typ["id"])
+                typ["has_requirements"] = pipeline_engine.has_requirements(c, typ["id"])
             return {"types": listed}
 
     @app.get("/api/v2/task-types/{type_id}")
