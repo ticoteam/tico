@@ -10,8 +10,64 @@
 
    Logos come from ui/tool-icons.js (Simple Icons, CC0, and Lobe Icons, MIT; see NOTICE), drawn in
    the theme's ink next to the name only to say which product it is. An agent without one is its
-   first letters. Uses the page's helpers: get, post, esc, ago, toast, copyText, setDrawer. */
+   first letters. Uses the page's helpers: get, post, esc, ago, toast, copyText, setDrawer, errorMessage.
+   Classic script: its globals are shared with the other files under ui/, loaded in the order index.html lists them.
+   TypeScript: npm run build:ui compiles it to build/ui/connect-agent.js, which the page runs in this file's place. */
 'use strict';
+
+// One agent on the picker (AGENTS below). Its steps are HTML, 2-4 short lines; its blocks are the snippets to paste,
+// each [label, text], with the URL and the token filled in.
+type CaBlock = [label: string, text: string];
+interface CaAgent {
+  id: string;
+  name: string;
+  // A key in ui/tool-icons.js; '' for an agent without a logo there (its first letters are drawn).
+  logo: string;
+  beta?: boolean;
+  // Matches the label of an existing token that belongs to this agent (agentOf).
+  alias: RegExp | null;
+  // Signs in with OAuth: no token is made here, and the agent is listed under Connected once it has called.
+  oauth?: boolean;
+  // The Other tile: the person names the agent, and the name labels the token.
+  other?: boolean;
+  steps: string[];
+  blocks: (url: string, token: string) => CaBlock[];
+}
+
+// GET /api/v2/agent-skill (backend/account_routes.py): the MCP address, and whether an identity proxy must let it through.
+interface CaSkill {
+  mcp_url: string;
+  access_bypass: boolean;
+}
+
+// A personal token as GET /api/v2/me/tokens lists it (backend/personal_tokens.py).
+interface CaToken {
+  id: string;
+  label: string;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+}
+
+// What POST /api/v2/me/tokens answers: the only answer that carries the token itself.
+interface CaIssued {
+  id: string;
+  token: string;
+  expires_at: string;
+}
+
+// The logo helpers of ui/tool-icons.js (window.toolIcons).
+interface CaIcons {
+  has(key: string): boolean;
+  markup(tool: {logo_key?: string; name?: string}): string;
+  initials(name: string): string;
+}
+
+// The page opens this dialog through window (welcome.js, team-add.js); it is set at the end of this file.
+interface Window {
+  connectAgent?: (preselect?: string) => void;
+}
+
 (function () {
   const POLL_MS = 3000, POLL_FOR_MS = 5 * 60 * 1000;
 
@@ -20,8 +76,8 @@
   // the Beta list as external agents (backend/beta.py). docs/connect-an-agent.md says
   // where each path comes from. Muse, Claude and Dots show letters: Meta and Anthropic allow their
   // marks only with approval, and Dots has none of its own.
-  const header = token => `Authorization: Bearer ${token}`;
-  const AGENTS = [
+  const header = (token: string): string => `Authorization: Bearer ${token}`;
+  const AGENTS: CaAgent[] = [
     {id: 'grok', name: 'Grok', logo: 'grok', beta: true, alias: /^grok\b|^grok-bot/i,
       steps: ['In one of your <b>Grok Bots</b>, ask it to add a custom MCP server with the block below.',
         'Or on grok.com, <b>Connectors › New Connector › Custom</b>: paste the URL, and the token if it asks.',
@@ -62,6 +118,7 @@
         'An agent that only takes a local JSON config: paste the one below. <code>mcp-remote</code> adds the header.',
         'Ask it “who needs me”.'],
       blocks: (url, token) => [['Header', header(token)],
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal ${TICO_AUTH} is the config's own placeholder, not a template
         ['JSON config', JSON.stringify({mcpServers: {tico: {command: 'npx', args: ['-y', 'mcp-remote', url, '--header', 'Authorization:${TICO_AUTH}'],
           env: {TICO_AUTH: 'Bearer ' + token}}}}, null, 2)]]},
   ];
@@ -123,34 +180,33 @@
 @media (max-width:760px){.ca-head{padding:var(--s4) var(--s4) var(--s2)}.ca-body{padding:var(--s2) var(--s4) var(--s4)}
   .ca-tile{padding:12px 4px 10px;font-size:12.5px}.ca-actions .primary{width:100%;padding:11px 14px}}`;
 
-  const today = () => new Date().toLocaleDateString('en-CA');     // 2026-09-30, the person's own day
-  const byId = id => AGENTS.find(agent => agent.id === id);
+  const today = (): string => new Date().toLocaleDateString('en-CA');     // 2026-09-30, the person's own day
+  const byId = (id: string | undefined) => AGENTS.find(agent => agent.id === id);
   // Which agent an existing token belongs to, from its label ("Grok · 2026-09-30", "grok-bot").
-  const agentOf = label => AGENTS.find(agent => agent.alias && agent.alias.test(String(label || '').trim()));
+  const agentOf = (label: string | undefined) => AGENTS.find(agent => agent.alias && agent.alias.test(String(label || '').trim()));
 
   const PLUS = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></svg>';
-  function logo(agent, label, small) {
-    const icons = window.toolIcons;
-    const key = agent && agent.logo;
-    const inner = key && icons && icons.has(key) ? icons.markup({logo_key: key, name: agent.name})
+  function logo(agent: CaAgent | undefined, label: string, small?: boolean): string {
+    const icons: CaIcons | undefined = window.toolIcons;
+    const inner = agent && agent.logo && icons && icons.has(agent.logo) ? icons.markup({logo_key: agent.logo, name: agent.name})
       : agent && agent.other ? PLUS
       : `<span class="ca-initials">${esc(icons ? icons.initials(agent ? agent.name : label) : '?')}</span>`;
     return `<span class="ca-logo${small ? ' sm' : ''}" aria-hidden="true">${inner}</span>`;
   }
 
-  function flash(button, text) {
+  function flash(button: HTMLElement, text: string): void {
     const was = button.textContent;
     button.textContent = text; button.dataset.copied = '';
     setTimeout(() => { button.textContent = was; delete button.dataset.copied; }, 2000);
   }
 
-  function copyButton(button, value) {
+  function copyButton(button: HTMLElement, value: () => string): void {
     button.onclick = () => void copyText(value()).then(() => flash(button, 'Copied'))
       .catch(() => toast('Could not copy; select the text and copy it', true));
   }
 
   // `preselect` is an agent's id (`claude`, `codex`): the dialog opens on that agent's steps, not the picker.
-  window.connectAgent = function connectAgent(preselect = '') {
+  window.connectAgent = function connectAgent(preselect = ''): void {
     if (!document.getElementById('connect-agent-style')) {
       const style = document.createElement('style');
       style.id = 'connect-agent-style'; style.textContent = CSS;
@@ -164,57 +220,60 @@
         <p class="ca-intro">Connect Grok, Dots, Muse or any external agent to Tico. It can then read and act on your tasks, goals and docs as you.</p></div>
         <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
       <div class="ca-body" data-ca-body></div>`;
-    const body = dialog.querySelector('[data-ca-body]');
-    let skill = null, issued = null, timer = 0, pollUntil = 0, closed = false, waitingText = '';
+    // The template above always holds the body.
+    const body = dialog.querySelector<HTMLElement>('[data-ca-body]')!;
+    let skill: CaSkill | null = null, issued: CaIssued | null = null, timer = 0, pollUntil = 0, closed = false, waitingText = '';
 
     const stopPolling = () => { clearTimeout(timer); timer = 0; };
 
-    async function loadSkill() {
-      if (!skill) skill = await get('/v2/agent-skill');
+    async function loadSkill(): Promise<CaSkill> {
+      if (!skill) skill = await get<CaSkill>('/v2/agent-skill');
       return skill;
     }
 
-    async function showPicker() {
+    async function showPicker(): Promise<void> {
       stopPolling(); issued = null;
       body.innerHTML = `<ul class="ca-tiles" aria-label="External agents">${AGENTS.map(agent =>
         `<li><button class="ca-tile" type="button" data-agent="${agent.id}">${logo(agent, agent.name)}<span>${esc(agent.name)}${agent.beta ? betaPill('external_agents') : ''}</span></button></li>`).join('')}</ul>
         <section class="ca-section" data-conns hidden></section>`;
-      body.querySelectorAll('[data-agent]').forEach(button => { button.onclick = () => void showAgent(byId(button.dataset.agent)); });
+      // Each tile's id is one of AGENTS, which the tiles were just rendered from.
+      body.querySelectorAll<HTMLButtonElement>('[data-agent]').forEach(button => { button.onclick = () => void showAgent(byId(button.dataset.agent)!); });
       await renderConnections();
     }
 
-    async function renderConnections() {
-      const host = body.querySelector('[data-conns]');
+    async function renderConnections(): Promise<void> {
+      const host = body.querySelector<HTMLElement>('[data-conns]');
       if (!host) return;
-      let rows;
-      try { rows = (await get('/v2/me/tokens')).tokens || []; }
+      let rows: CaToken[];
+      try { rows = (await get<{tokens?: CaToken[]}>('/v2/me/tokens')).tokens || []; }
       catch { return; }                                  // not a person who may hold tokens: no list
       if (closed || !host.isConnected) return;
       const now = Date.now();
-      const live = rows.filter(row => !row.revoked_at && !(row.expires_at && new Date(row.expires_at) < now));
+      const live = rows.filter(row => !row.revoked_at && !(row.expires_at && new Date(row.expires_at).getTime() < now));
       host.hidden = !live.length;
       host.innerHTML = `<h3 class="ca-label">External agents</h3><ul class="ca-conns">${live.map(row =>
         `<li class="ca-conn" data-conn="${esc(row.id)}">${logo(agentOf(row.label), row.label, true)}
           <span class="ca-conn-name">${esc(row.label)}</span>
           <span class="ca-conn-used">${row.last_used_at ? 'Used ' + esc(ago(row.last_used_at)) : 'Never used'}</span>
           <button class="ghost" type="button" data-revoke="${esc(row.id)}">Revoke</button></li>`).join('')}</ul>`;
-      host.querySelectorAll('[data-revoke]').forEach(button => {
-        const row = live.find(r => r.id === button.dataset.revoke);
+      host.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach(button => {
+        // Each revoke button was rendered from a row of live, so its row is there.
+        const row = live.find(r => r.id === button.dataset.revoke)!;
         button.onclick = async () => {
           if (!confirm(`Revoke ${row.label}? The external agent loses access at once.`)) return;
           button.disabled = true;
           try { await post(`/v2/me/tokens/${encodeURIComponent(row.id)}/revoke`, {}); toast(`${row.label} revoked`); }
-          catch (error) { toast(error.message, true); }
+          catch (error) { toast(errorMessage(error, ''), true); }
           await renderConnections();
         };
       });
     }
 
-    async function showAgent(agent) {
+    async function showAgent(agent: CaAgent): Promise<void> {
       stopPolling(); issued = null;
-      let url, bypass;
+      let url: string, bypass: boolean;
       try { ({mcp_url: url, access_bypass: bypass} = await loadSkill()); }
-      catch (error) { toast(error.message, true); return; }
+      catch (error) { toast(errorMessage(error, ''), true); return; }
       if (closed) return;
       body.innerHTML = `<div class="ca-agent">${logo(agent, agent.name)}<h3>${esc(agent.name)}</h3>
           <button class="ghost ca-back" type="button" data-back>All external agents</button></div>
@@ -226,55 +285,67 @@
           <div class="ca-actions"><button class="primary" type="button" data-create>Create token</button></div></div>`}
         <ol class="ca-steps">${agent.steps.map(step => `<li><span>${step}</span></li>`).join('')}</ol>
         <div data-after></div>`;
-      body.querySelector('[data-back]').onclick = () => void showPicker();
-      copyButton(body.querySelector('[data-copy-url]'), () => url);
+      // The buttons in the template above, which always renders them (the create button only when not OAuth).
+      body.querySelector<HTMLButtonElement>('[data-back]')!.onclick = () => void showPicker();
+      copyButton(body.querySelector<HTMLButtonElement>('[data-copy-url]')!, () => url);
       // An agent that signs in with OAuth (backend/mcp_oauth.py) gets its token from the person's Allow; it is
       // listed under Connected once it has called.
-      if (!agent.oauth) body.querySelector('[data-create]').onclick = event => void createToken(agent, url, event.currentTarget);
+      if (!agent.oauth) {
+        // Rendered above for every agent that is not OAuth.
+        const create = body.querySelector<HTMLButtonElement>('[data-create]')!;
+        create.onclick = () => void createToken(agent, url, create);
+      }
     }
 
-    async function createToken(agent, url, button) {
-      const other = body.querySelector('[data-other]');
-      const name = agent.other ? (other.value.trim().replace(/[·]/g, '') || 'Agent') : agent.name;
+    async function createToken(agent: CaAgent, url: string, button: HTMLButtonElement): Promise<void> {
+      // The Other tile's name input: showAgent renders it for agent.other.
+      const other = body.querySelector<HTMLInputElement>('[data-other]');
+      const name = agent.other ? (other!.value.trim().replace(/[·]/g, '') || 'Agent') : agent.name;
       button.disabled = true;
-      try { issued = await post('/v2/me/tokens', {label: `${name} · ${today()}`, expires_in_days: 90}); }
-      catch (error) { toast(error.message, true); button.disabled = false; return; }
+      let made: CaIssued;
+      try { made = await post('/v2/me/tokens', {label: `${name} · ${today()}`, expires_in_days: 90}); }
+      catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; return; }
+      issued = made;
       if (closed) return;
-      const section = body.querySelector('[data-token-section]');
+      // showAgent renders the token section for every agent that is not OAuth, which is the only kind that gets this button.
+      const section = body.querySelector<HTMLElement>('[data-token-section]')!;
       section.innerHTML = `<h4 class="ca-label">Token</h4>
         <div class="ca-row"><code data-token>${esc(issued.token)}</code><button class="ghost" type="button" data-copy-token>Copy</button></div>
         <p class="ca-note">Shown once. Expires ${esc(new Date(issued.expires_at).toLocaleDateString())}.</p>
         <p class="ca-status" data-status data-state="waiting" role="status"></p>`;
       const token = issued.token;
-      copyButton(section.querySelector('[data-copy-token]'), () => token);
+      // The copy button in the section just rendered above.
+      copyButton(section.querySelector<HTMLButtonElement>('[data-copy-token]')!, () => token);
       const blocks = agent.blocks(url, token);
-      body.querySelector('[data-after]').outerHTML = `${blocks.map(([label, text], i) =>
+      // The placeholder showAgent rendered for the snippets.
+      body.querySelector<HTMLElement>('[data-after]')!.outerHTML = `${blocks.map(([label, text], i) =>
         `<div class="ca-block"><div class="ca-block-head"><span>${esc(label)}</span>
           <button class="ghost ca-copy" type="button" data-copy-block="${i}">Copy</button></div><pre data-snippet>${esc(text)}</pre></div>`).join('')}`;
-      body.querySelectorAll('[data-copy-block]').forEach(button => copyButton(button, () => blocks[Number(button.dataset.copyBlock)][1]));
+      // Each copy button's index is one of blocks', which the buttons were just rendered from.
+      body.querySelectorAll<HTMLButtonElement>('[data-copy-block]').forEach(button => { copyButton(button, () => blocks[Number(button.dataset.copyBlock)]![1]); });
       waitingText = `Waiting for ${name}’s first call`;
       startPolling();
     }
 
     // Connected once the token's first call lands. Every 3s for 5 minutes, then Check again; the
     // browser asks with its own session, so waiting never marks the token used.
-    function setStatus(state, text, retry) {
-      const el = body.querySelector('[data-status]');
+    function setStatus(state: 'waiting' | 'connected' | 'idle', text: string, retry?: boolean): void {
+      const el = body.querySelector<HTMLElement>('[data-status]');
       if (!el) return;
       el.dataset.state = state;
       el.innerHTML = `<span class="ca-dot"></span><span data-status-text>${esc(text)}</span>${retry ? '<button class="ghost" type="button" data-retry>Check again</button>' : ''}`;
-      const again = el.querySelector('[data-retry]');
+      const again = el.querySelector<HTMLButtonElement>('[data-retry]');
       if (again) again.onclick = () => startPolling();
     }
 
-    function startPolling() {
+    function startPolling(): void {
       stopPolling();
       pollUntil = Date.now() + POLL_FOR_MS;
       setStatus('waiting', waitingText);
       timer = setTimeout(poll, POLL_MS);
     }
 
-    async function poll() {
+    async function poll(): Promise<void> {
       timer = 0;
       if (closed || !issued) return;
       // A background tab used to keep hitting /v2/me/tokens every few seconds for five minutes
@@ -284,8 +355,8 @@
         return;
       }
       const id = issued.id;
-      let row;
-      try { row = ((await get('/v2/me/tokens')).tokens || []).find(r => r.id === id); }
+      let row: CaToken | null | undefined;
+      try { row = ((await get<{tokens?: CaToken[]}>('/v2/me/tokens')).tokens || []).find(r => r.id === id); }
       catch { row = null; }
       if (closed || !issued || issued.id !== id) return;
       if (row && row.last_used_at) { setStatus('connected', 'Connected'); return; }
@@ -296,14 +367,15 @@
 
     // Only a scheduled poll is pulled forward: no timer means a request is in flight or polling has ended
     // (connected, or given up), and starting one then would run a second chain or ask unprompted.
-    const onVis = () => {
+    const onVis = (): void => {
       if (document.hidden || closed || !issued || !timer) return;
       clearTimeout(timer);
       timer = setTimeout(poll, 0);
     };
     document.addEventListener('visibilitychange', onVis);
 
-    dialog.querySelector('[data-close]').onclick = () => dialog.close();
+    // The close button in the header above.
+    dialog.querySelector<HTMLButtonElement>('[data-close]')!.onclick = () => dialog.close();
     dialog.onclose = () => {
       closed = true; stopPolling(); issued = null;
       document.removeEventListener('visibilitychange', onVis);

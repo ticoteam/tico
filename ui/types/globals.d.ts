@@ -35,7 +35,6 @@ declare var cloudAgentRequest: any;
 declare var cloudAgentsOpen: any;
 declare var cloudAgentsSeat: any;
 declare var cloudAgentsTab: any;
-declare var connectAgent: any;
 declare var credentialCards: any;
 declare var growthStop: any;
 declare var gsBoot: any;

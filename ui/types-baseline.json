@@ -149,7 +149,6 @@
     "ui/app/welcome.js": 13,
     "ui/bot-tools.js": 3,
     "ui/changelog.js": 73,
-    "ui/connect-agent.js": 33,
     "ui/directory-sync.js": 5,
     "ui/docs-editor.js": 160,
     "ui/docs-page.js": 36,
