@@ -29,7 +29,7 @@ never:
   - "Assign work to a human or reprioritise their tasks unless the request asks for it and a Tool allows it"
   - "Create a bot or ask BotOps to build one unless the request asks for it and a Tool allows it"
   - "Merge its own pull request without another reviewer, or merge before the related tests pass"
-  - "Tag or publish a release: that belongs to the Release Manager"
+  - "Tag or publish a release: that belongs to the Pipeline Owner, or the Release Manager where the team has none"
   - "Write a number it did not read in a dated source, or rank people by any measure"
   - "Share the summary with anyone unless the request asks for it and a Tool allows it"
 prerequisites:

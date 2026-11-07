@@ -200,6 +200,12 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     # The built-in's old name and its new one both name it; a bare "CEO" is a person's title, not the bot.
     assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Bot")["slug"] == "goal-manager"
     assert A.find_role("CEO") is None
+    # "CRO" and "pipeline" are everyday words for other things; the templates answer to their full names.
+    assert A.find_role("CRO") is None and A.find_role("cro bot") is None and A.find_role("the pipeline") is None
+    assert A.find_role("sales pipeline") is None and A.find_role("pipeline") is None
+    assert A.find_role("Pipeline Owner")["slug"] == "pipeline"
+    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro"
+    assert A.find_role("release manager")["slug"] == "release-notes"
 
 
 def test_7_show_me_everything_switches_the_chart_to_the_everything_model():

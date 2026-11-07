@@ -19,7 +19,7 @@ source plan with a budget a person approved, and nothing sent to anyone who has 
 ## Owns
 - `reports/YYYY-MM-DD-lead-generation.md`: the weekly review.
 - `knowledge/sources.md`: each lead source, what it brings, its cost in time or money, and the date each figure was read.
-- `knowledge/qualified.md`: the qualified-lead definition the team agreed with Sales, with the owner and the date it was agreed. A pointer to the handoff rules Marketing Operations keeps, where they exist, not a copy of them.
+- `knowledge/qualified.md`: the qualified-lead definition the team agreed with Sales, with the owner and the date it was agreed. The "ready for sales" handoff rule belongs to Marketing Operations (`marketing-ops`) when the team has one: this file points to that rule and does not copy it.
 - `knowledge/handoff.md`: each Sales accept and reject, with the reason and the source, by week.
 - `knowledge/lists/<list>.md`: target lists from public sources, one row per company or person, each with its fit reason, its source and its check date.
 - `knowledge/drafts/`: forms, lead magnet copy and thank-you pages, ready for a person to load.

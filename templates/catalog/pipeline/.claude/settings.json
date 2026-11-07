@@ -13,7 +13,9 @@
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)",
       "Bash(gh release list *)",
-      "Bash(gh release view *)"
+      "Bash(gh release view *)",
+      "Bash(gh issue list *)",
+      "Bash(python3 software/rollout.py *)"
     ],
     "deny": [
       "Bash(gh run rerun *)",
@@ -31,8 +33,13 @@
       "Bash(gh pr edit *)",
       "Bash(gh pr ready *)",
       "Bash(gh pr comment *)",
+      "Bash(gh pr review *)",
       "Bash(gh repo delete *)",
       "Bash(git push --force*)",
+      "Bash(git push*--tags*)",
+      "Bash(git push*--follow-tags*)",
+      "Bash(git push* refs/tags/*)",
+      "Bash(git tag *)",
       "Bash(gh release create *)",
       "Bash(gh release edit *)",
       "Bash(gh release delete *)"

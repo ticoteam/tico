@@ -5,11 +5,12 @@ measure anything. The numbers come from the runs and the merges; this file says 
 
 ## The path from merge to users
 
-- **Merge wait.** From a pull request becoming ready to merge (its last required check passing, or its entry into the merge
-  queue where the team has one) to its merge commit on the default branch. Where the queue's own timestamps cannot be read
-  with the commands this bot may run, measure from the last gating check's completion on the head commit to the merge commit,
+- **Merge wait.** From a pull request's last required check passing (or its entry into the merge queue, where that time can
+  be read) to its `mergedAt` on the default branch. The queue's entry time is not exposed to this bot, so the figure is labelled
+  "last required check to merge" and is an upper bound on the queue wait. Where the queue's own timestamps cannot be read
+  with the commands this bot may run, measure from the last gating check's completion on the head commit to its `mergedAt`,
   and say so in the report.
-- **Merge to production.** From a merge commit on the default branch to the first deploy run that reached users for a
+- **Merge to production.** From a merge's `mergedAt` on the default branch to the first deploy run that reached users for a
   release containing that commit. A commit is in production when a successful deploy run for a release that includes it
   has concluded.
 - **Merges stalled.** Hours the merge queue stood still because a gating check was red on the default branch. Measured from

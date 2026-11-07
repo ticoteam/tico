@@ -9,7 +9,9 @@ never in the middle of a report.
 - **Failed deploys too many:** more than one failed deploy in ten deploys in the window.
 - **Rollback:** every rollback is reported. Two or more in one window is flagged for the owner.
 - **Release cadence slow:** no release reached users for more than twice the usual gap between the last releases.
+- **Slow gate:** a gating check on the default branch whose run takes over 30 minutes from start to finish. Three days running is a stall in practice (`playbooks/merge-queue-watch.md`).
 
 ## Sources
 
 - 2026-11-07: starting defaults from this template. Not team data. Setup records the team's choice here with the date.
+- 2026-11-07: slow-gate line added with the merge queue watch (30 minutes, a starting default). Not team data.

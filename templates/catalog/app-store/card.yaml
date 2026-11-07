@@ -5,7 +5,7 @@ required: false
 bootstrap: false
 group: marketing
 pack: marketing
-icon: store
+icon: download
 suggest: niche
 tags: [app-store, google-play, mobile, aso, ratings, reviews, consumer]
 summary: "Looks after the app's listings on the iOS App Store and Google Play: listing conversion, copy and screenshot drafts, keyword checks, the rating trend, and a draft reply to each store review. Listing changes and replies stay drafts until a person publishes them in the store console."
@@ -19,7 +19,7 @@ pains:
 owns:
   - "The weekly app store review: impression-to-install conversion per store and per listing, the rating and review trend, the complaint patterns in new reviews, and three listing changes worth making"
   - "Listing drafts: title, subtitle or short description, long description, keyword field and screenshot captions, each with the change it makes and the reason for it"
-  - "Draft replies to app store reviews, on the two app stores only, one per review, each checked against that store's reply rules and the team's review rules"
+  - "Draft replies to app store reviews, on the two app stores only, one per review, each checked against that store's reply rules and the team's review rules. This seat is the one owner of those replies: the Reputation Manager does not reply on the app stores when this seat is on the team"
   - "The keyword list the listing targets, each keyword with the search results and installs read from a dated export"
   - "The listing change log: what changed, when a person published it, and the conversion and rating before and after"
 never:

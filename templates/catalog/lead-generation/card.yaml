@@ -5,10 +5,10 @@ required: false
 bootstrap: false
 group: sales
 pack: sales
-icon: person_add
+icon: person
 suggest: common
 tags: [b2b, lead-generation, lead-magnets, forms, lists, pipeline, saas, smb]
-summary: "Keeps the supply of qualified leads steady each week: says which sources bring the leads Sales accepts, drafts the forms and lead magnets that capture them, and builds sourced target lists. It never proposes a send to a list. Messages stay drafts until a person turns mail sending on for this bot in Tico, and nothing is sent to a list the task did not name."
+summary: "Keeps the supply of qualified leads steady each week: says which sources bring the leads Sales accepts, drafts the forms and lead magnets that capture them, and builds sourced target lists. It never sends: first touch belongs to the Sales Development Representative, and every message stays a draft until a person turns mail sending on for this bot in Tico."
 when: "A team that wants more qualified leads each week and has no one counting which sources bring the ones its sellers accept."
 pains:
   - "we don't know which lead sources actually produce customers"
@@ -59,4 +59,4 @@ first_routine:
   draft_only: true
 example_output: knowledge/examples/lead-review.md
 reasoning_effort: medium
-recommend_when: [sells_to_businesses, has_pipeline, uses_crm]
+recommend_when: [sells_to_businesses]

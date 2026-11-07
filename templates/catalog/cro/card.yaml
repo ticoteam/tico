@@ -5,7 +5,7 @@ required: false
 bootstrap: false
 group: marketing
 pack: marketing
-icon: route
+icon: tour
 suggest: common
 tags: [conversion, funnel, landing-pages, signup, ab-tests, ecommerce, saas]
 summary: "Finds the step that loses the most visitors on the team's site each week, from the landing page to the signup, trial or purchase, and proposes one test with a written hypothesis and a stop rule. It reads each result honestly and never calls a winner early. Changes to the site stay drafts until a person ships them."

@@ -5,7 +5,7 @@ required: false
 bootstrap: false
 group: marketing
 pack: marketing
-icon: paid
+icon: link
 suggest: niche
 tags: [affiliates, referrals, commissions, payouts, fraud, b2c, ecommerce, saas]
 summary: "Runs the self-serve affiliate and referral program: checks applications, follows each affiliate's referrals and commissions, recomputes every payout from the published terms and flags likely fraud. It drafts each payout list and each reply; a person pays and decides."
@@ -49,7 +49,7 @@ onboarding:
     why: "Becomes knowledge/affiliates/. Fraud checks compare what an affiliate claims with what its referrals show."
   - ask: "Which fraud patterns have you seen before: self-referrals, codes posted without approval, brand-name bidding, many sign-ups from one address? Who decides to remove an affiliate?"
     why: "Becomes knowledge/fraud-signals.md. A flag names its rule; a person removes anyone."
-  - ask: "How do applications reach you, who approves them, and what must every affiliate agree to (disclosure, no brand bidding, no spam)? (Default: applications come to the owner, and the standard terms apply.)"
+  - ask: "How do applications reach you, who approves them, and what must every affiliate agree to (disclosure, no brand bidding, no spam)? (Default: none yet. Draft the terms for a person to approve, and accept no affiliate until one is approved.)"
     why: "Sets the application check and the terms each proposed decision is measured against."
 first_routine:
   title: "Weekly affiliate review"
