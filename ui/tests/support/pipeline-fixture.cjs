@@ -15,9 +15,9 @@ const steps = [
 const type = {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, can_edit_rules: true, has_requirements: true,
   steps: steps.map(s => ({...s, type_id: 'dev-tickets', limit_minutes: s.id === 'build' ? 1440 : null}))};
 
-// Build's limit is a day: D17 has sat in Build for three days (late); the other cards arrived a couple of hours ago. Relative
-// to now, so the late check does not depend on the date the test runs.
-const LATE_SINCE = new Date(Date.now() - 3 * 864e5).toISOString(), RECENT_SINCE = new Date(Date.now() - 2 * 36e5).toISOString();
+// Build's limit is a day: D17 has sat in Build for five hours (late by the server's clock); the other cards arrived a couple of
+// hours ago. Relative to now, so the late check does not depend on the date the test runs.
+const LATE_SINCE = new Date(Date.now() - 5 * 36e5).toISOString(), RECENT_SINCE = new Date(Date.now() - 2 * 36e5).toISOString();
 
 function task(id, title, stepId, requirements) {
   const step = steps.find(s => s.id === stepId);

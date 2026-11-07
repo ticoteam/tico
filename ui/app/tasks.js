@@ -371,7 +371,7 @@ function taskRelChip(t) {
   const words = `${n} related task${n === 1 ? '' : 's'}`;
   return `<span class="bcard-rel tnum" role="img" aria-label="${esc(words)}" title="${esc(words)}"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4L6.6 8M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>${n}</span>`;
 }
-// A ticket says how long it has been at its step only once it is past the stage's limit (pipelineStepLate). Time spent
+// A ticket says how long it has been at its step only once it is past the stage's limit (pipelineLateClock). Time spent
 // waiting is not counted: the server restarts the clock when it comes back (backend/step_age.py).
 // Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
 function taskBuilderActors(t) {
@@ -396,10 +396,10 @@ function taskBuilderNoticesRefresh() {
   }
 }
 function taskStepAge(t) {
-  const since = Date.parse(t?.step_since || ''); if (!since) return '';
-  if (!pipelineStepLate(t)) return '';          // the time in a step shows only past the stage's limit (pipeline-rail.ts)
-  const age = ageShort(t.step_since);
-  const words = `At ${t.step?.name || 'this step'} for ${age === 'now' ? 'under a minute' : age}: past its limit`;
+  const late = pipelineLateClock(t);            // the server's clock; no time shows unless it is past the stage's limit (pipeline-rail.ts)
+  if (!late) return '';
+  const age = late.hours < 1 ? '<1h' : `${Math.floor(late.hours)}h`;
+  const words = `At ${t.step?.name || 'this step'} for ${age}: past its limit`;
   return `<span class="bcard-step-age tnum" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
 }
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
