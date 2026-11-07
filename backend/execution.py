@@ -2912,7 +2912,7 @@ def end_task_work(c, actor, task_id, status):
         for row in c.execute(
             "SELECT j.id,j.bot_id,j.attempt_id,j.message_id,m.conversation_id FROM jobs j "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=?",
+            f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at, j.id",
             (task_id,),
         ).fetchall()
     ]
