@@ -5,7 +5,7 @@
 'use strict';
 
 const AU_STEP_WORDS = {filter: 'Filter', decide: 'Decide', llm: 'LLM', find: 'Find', bot_turn: 'Bot turn', paths: 'Paths', action: 'Action'};
-const AU_STEP_ICONS = {filter: 'filter_alt', decide: 'account_tree', llm: 'auto_awesome', find: 'manage_search', bot_turn: 'smart_toy',
+const AU_STEP_ICONS = {filter: 'filter_list', decide: 'account_tree', llm: 'auto_awesome', find: 'manage_search', bot_turn: 'smart_toy',
   paths: 'alt_route', action: 'arrow_forward'};
 const AU_ACTIONS = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
   create_task: 'Create task', label: 'Label', forward: 'Forward', wake_bot: 'Wake a bot', note: 'Note', post_update: 'Post update',
