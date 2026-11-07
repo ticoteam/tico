@@ -302,3 +302,23 @@ def test_a_change_to_a_ticket_nothing_records_is_not_read_when_a_members_only_pi
     with api.app.state.store.read() as c:
         visible = list_sql(c, "human:cara", "1")
         assert task_reads._could_read(c, visible, "no-such-ticket", ghost) is False
+
+
+def test_an_empty_members_only_pipeline_leaves_a_non_members_list_etag_as_it_was(api):
+    first = api.get("/api/v2/tasks?limit=5", headers=headers("cara-test"))
+    assert first.status_code == 200 and first.headers["etag"]
+    make_pipeline(api, "Legal" + uuid.uuid4().hex[:8], private=True)  # empty, and hidden from her
+    again = api.get("/api/v2/tasks?limit=5", headers={**headers("cara-test"), "If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+
+
+def test_an_edit_to_a_ticket_a_non_member_cannot_read_leaves_her_labels_etag_as_it_was(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, _ = make_pipeline(api, "Legal" + tag, private=True)
+    hidden_ticket = ticket(api, typ, "Ben's " + tag, owner="human:ben")
+    first = api.get("/api/v2/tasks/labels", headers=headers("cara-test"))
+    assert first.status_code == 200 and first.headers["etag"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET title=? WHERE id=?", ("Renamed " + tag, hidden_ticket))
+    again = api.get("/api/v2/tasks/labels", headers={**headers("cara-test"), "If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
