@@ -403,7 +403,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (width === 375) await page.waitForFunction(() => !history.state?.taskPeek && !PEEK_BACK);
     }
     await page.setViewportSize({width: 1200, height: 900});
-    // A phone width clamps the sidebar; rails.js widens it again in the frame after the resize, which moves the board.
+    // A phone width clamps the sidebar; rails.ts widens it again in the frame after the resize, which moves the board.
     // Measure cards for the drag only once the sidebar has the width this window gives it.
     await page.waitForFunction(() => innerWidth === 1200 && !matchMedia(PHONE).matches &&
       getComputedStyle(document.documentElement).getPropertyValue('--rail-left').trim() ===

@@ -67,7 +67,7 @@ html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility
 :root{--r-ctl:6px;--r-pop:10px}
 *{box-sizing:border-box}
 html,body{height:100%}
-/* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
+/* The rails' widths; dragging an edge changes them (ui/app/rails.ts, ui/styles/rails.css). */
 :root{--rail-left:236px;--rail-right:320px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
