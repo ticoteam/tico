@@ -148,8 +148,8 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def pytest_collection_modifyitems(items):
-    """Marks each slow test in the junit report (`<property name="slow">`), so the timings job sums the seconds of the
-    slow tests alone per file (scripts/pr_checks.py durations writes them to slow-durations.json)."""
+    """Marks each slow test in the junit report (`<property name="slow">`). The timings job sums each file's slow seconds
+    over its testcase seconds (scripts/pr_checks.py durations writes that share to slow-shares.json)."""
     for item in items:
         if item.get_closest_marker("slow"):
             item.user_properties.append(("slow", "1"))
