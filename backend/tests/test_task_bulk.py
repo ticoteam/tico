@@ -275,3 +275,26 @@ def test_repeated_bulk_calls_count_every_source_even_when_each_call_counts_once(
         with api.app.state.store.read() as c:
             assert H.resolve_bot(c, "scout")["state"] == ("quarantined" if i == H.QUARANTINE_AT else "active")
             assert c.execute("SELECT count(*) FROM quarantine_holds WHERE released_at IS NULL").fetchone()[0] == 0
+
+
+def test_a_non_member_bulk_change_touches_no_ticket_of_a_members_only_pipeline(api):
+    # Legal is members-only (owned by Ana): Ben may not open its tickets, so a bulk close by filter or by id leaves them;
+    # a ticket Ben owns in it is still his to close.
+    legal = pipeline(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE task_types SET pipeline_visibility='members', pipeline_owner_id='human:ana' WHERE id=?",
+            (legal["id"],),
+        )
+    hidden = [task(api, f"Legal memo {i}", owner="cmo", type=legal["id"]) for i in range(2)]
+    own = task(api, "Ben's own legal note", owner="ben", type=legal["id"])
+
+    by_filter = bulk(api, {"owner": "cmo"}, "close", token="ben-test")
+    assert by_filter["changed"] == 0 and by_filter["matched"] == 0
+    by_ids = bulk(api, {"ids": [t["id"] for t in hidden]}, "close", token="ben-test")
+    assert by_ids["changed"] == 0 and by_ids["matched"] == 0
+    for t in hidden:
+        assert get(api, "tasks/" + t["id"], "ana-test")["task"]["status"] == "open"
+    mine = bulk(api, {"owner": "ben"}, "close", token="ben-test")
+    assert mine["changed"] == 1
+    assert get(api, "tasks/" + own["id"], "ana-test")["task"]["status"] == "closed"
