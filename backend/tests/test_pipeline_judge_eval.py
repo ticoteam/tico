@@ -150,3 +150,12 @@ def test_the_default_judges_all_go_through_the_gateway_key_only():
     engines = {name: adapter.build_engine(name, {"TICO_GATEWAY_KEY": "k"}) for name in adapter.MODELS}
     assert all(callable(engine) for engine in engines.values())
     assert adapter.build_engine("jev", {"ANTHROPIC_API_KEY": "direct"}) is None
+
+
+def test_the_screenshot_cases_are_unsure_because_the_judge_is_shown_no_image_text():
+    """Fix L2-7: the server reads no text from an image, so every screenshot case is unsure and the judge sees none of it."""
+    shots = [c for c in run.load() if (c.get("attachment") or {}).get("kind") == "image"]
+    assert len(shots) == 5
+    for case in shots:
+        assert case["expected"] == "unsure", case["id"]
+        assert adapter.state_for(case)["attachment"]["text"] is None, case["id"]

@@ -24,7 +24,7 @@ Run `python -m evals.pipeline_judge.run --models haiku-5.5,jev,sonnet` (real cal
 wrong screen, lead with no email, draft, placeholder page, self-review).
 
 - A model may be a pipeline's judge only with **0 false "met"** (a met verdict where the label says not met or unsure).
-- Accuracy 90% or better, and the unsure rate no higher than the labeled unsure share (about 18%) plus 10 points. Unsure is
+- Accuracy 90% or better, and the unsure rate no higher than the labeled unsure share (10 of 34, about 29%, since every screenshot is unsure: the judge is shown no image text) plus 10 points. Unsure is
   cheap (it goes to a person); a wrong met is not.
 - p95 latency under the judge tick's budget (30 s), and cost per decision under 1 cent at the default model.
 - The default (Haiku 5.5) must pass. A model that fails stays selectable only as "needs a person for every call".
