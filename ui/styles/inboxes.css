@@ -56,7 +56,7 @@
 .pm-pick{max-width:480px;margin:0 0 6px}
 .pm-grant-form select,.pm-pick select{width:100%;min-width:0}
 
-/* Sending (ui/app/inboxes-sending.js) */
+/* Sending (ui/app/inboxes-sending.ts) */
 .email-send-preview{min-width:0;max-width:100%;overflow-wrap:anywhere}
 .email-send-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:50vh;overflow:auto}
 .email-send-preview code{font-size:var(--t-sm);overflow-wrap:anywhere}

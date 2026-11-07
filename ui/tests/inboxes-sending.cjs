@@ -1,4 +1,4 @@
-// Email sending (ui/app/inboxes-sending.js) over a fake API: the company policy's writes, a mailbox's Limits card (each
+// Email sending (ui/app/inboxes-sending.ts) over a fake API: the company policy's writes, a mailbox's Limits card (each
 // bot's sends, what and a day; the caps in one summary; Edit opens the form), inheritance, cancel and phone layout.
 const {chromium} = require('playwright');
 const fs = require('node:fs');
@@ -34,7 +34,7 @@ const root = path.resolve(__dirname, '..');
         const ctx = {admin:true,once:(k,f)=>f(),live:()=>true,refresh:()=>refreshes++};
       `});
       await page.addScriptTag({path: uiFile('app/email-preview.ts')});
-      await page.addScriptTag({path: path.join(root, 'app/inboxes-sending.js')});
+      await page.addScriptTag({path: uiFile('app/inboxes-sending.ts')});
       await page.evaluate(() => specs['email.sending'].render(document.querySelector('#settings'), ctx));
       const form = page.locator('#settings [data-send-form]');
       await form.locator('[name=mode]').selectOption('on_their_own');
