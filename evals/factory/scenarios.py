@@ -64,8 +64,9 @@ def noise_under(share):
 
 
 def one_review_per_round(run):
-    """Linear reviews: a review step that sends changes to fixes, which then go on to another step, gets one check per
-    ticket; only a step whose fixes come back to it (QA) can have several."""
+    """Linear reviews: a review step that sends changes to fixes, which then go on to another step, gets one review per
+    ticket; only a step whose fixes come back to it (QA) can have several. A check filed again with no verdict is not a
+    review, so only checks that gave a verdict count."""
     board = run.w.board
     once = {
         s.name
@@ -74,23 +75,50 @@ def one_review_per_round(run):
     }
     extra = []
     for t in run.final:
-        kinds = Counter(run.w.check_step(c) for c in run.w.checks(t["id"]) if not c["title"].startswith("Plan:"))
+        kinds = Counter(
+            run.w.check_step(c)
+            for c in run.w.checks(t["id"])
+            if not c["title"].startswith("Plan:") and c.get("verdict")
+        )
         extra += [f"{t['title']} {k} x{n}" for k, n in kinds.items() if k in once and n > 1]
     return not extra, ", ".join(extra[:6])
 
 
+def _hours(run, start, stop):
+    return (run.w.H.parse_ts(stop) - run.w.H.parse_ts(start)).total_seconds() / 3600
+
+
 def max_at_check(slack=0.5):
-    """No check keeps a ticket waiting longer than its timeout (plus `slack` hours for the sweep to act): from the
-    ticket reaching the step to its verdict, its skipped round or its merge wake."""
+    """No check and no wait for a reviewer keeps a ticket past its step's timeout (plus `slack` hours for the sweep to
+    act). A check is timed from its own filing to its verdict or its refile, so a refiled check's time is not added to
+    the next one's. A wait is timed from when it began to its filing (or to the end, while it waits); its reason says
+    which pool bots were passed over."""
 
     def check(run):
+        end = run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         long = []
         for t in run.final:
-            spans = run.w.check_waits(t["id"], until=run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-            for name, span in spans:
-                step = run.w.board.step(name)
-                if step and step.check and span > step.check.timeout_hours + slack:
-                    long.append(f"{t['title']} {name} {span:.1f}h")
+            for ch in run.w.checks(t["id"]):
+                name = None if ch["title"].startswith("Plan:") else run.w.check_step(ch)
+                step = run.w.board.step(name) if name else None
+                if not step or not step.check:
+                    continue
+                stop = ch["updated_at"] if ch["status"] in ("done", "closed") else end
+                span = _hours(run, ch["created_at"], stop)
+                if span > step.check.timeout_hours + slack:
+                    long.append(f"{t['title']} {name} check {span:.1f}h")
+            for w in run.w.sql(
+                "SELECT w.created_at, w.updated_at, w.state, w.reason, s.name FROM check_waits w "
+                "JOIN task_steps s ON s.id=w.step_id WHERE w.ticket_id=?",
+                (t["id"],),
+            ):
+                step = run.w.board.step(w["name"])
+                if not step or not step.check:
+                    continue
+                stop = end if w["state"] == "waiting" else w["updated_at"]
+                span = _hours(run, w["created_at"], stop)
+                if span > step.check.timeout_hours + slack:
+                    long.append(f"{t['title']} {w['name']} wait {span:.1f}h ({w['reason']})")
         return not long, ", ".join(long[:6])
 
     return check

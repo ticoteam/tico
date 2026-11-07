@@ -530,7 +530,7 @@ def test_a_review_2_check_unanswered_past_its_hour_goes_to_another_reviewer_but_
     assert again["owner_id"] == "bot:rev-c", "rev-a did Review 1 and rev-b left this check unanswered"
 
 
-def test_a_review_2_check_unanswered_with_no_other_free_reviewer_waits_at_review_2(api):
+def test_a_review_2_check_unanswered_goes_to_review_1s_bot_when_no_other_bot_is_left(api):
     team(api)
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a"])
@@ -545,11 +545,56 @@ def test_a_review_2_check_unanswered_with_no_other_free_reviewer_waits_at_review
     assert second["owner_id"] == "bot:rev-b"
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, _past_the_hour()) == [], "the ticket is not passed on by the timeout"
-    assert checks(api, task) == [], "rev-a did Review 1 and rev-b left this check unanswered: no one is free"
+    [again] = checks(api, task)
+    assert again["title"] == "Review 2: PR #412"
+    assert again["owner_id"] == "bot:rev-a", "rev-b left its check unanswered and rev-a is the only bot left"
+    with api.app.state.store.read() as c:
+        assert _step(c, task) == "Review 2"
+
+
+def test_a_review_2_check_waits_while_the_only_other_bot_is_busy(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    set_pool(api, task, "Review 2", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [first] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
+    busy(api, "rev-b")
+    busy(api, "rev-b")
+    task = get(api, "tasks/" + task["id"])["task"]
+    assert move(api, task, "Review 2").status_code == 200
+    assert checks(api, task) == [], "rev-a did Review 1 and rev-b is at its limit: the check waits"
     [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
     assert wait["label"] == "Waiting for a reviewer" and wait["title"] == "Review 2: PR #412"
     with api.app.state.store.read() as c:
+        reason = c.execute("SELECT reason FROM check_waits WHERE ticket_id=?", (task["id"],)).fetchone()[0]
         assert _step(c, task) == "Review 2"
+    assert "rev-a: an earlier reviewer of this ticket" in reason
+    assert "rev-b: at its limit, 2 of 2 open checks" in reason
+
+
+def test_a_check_is_filed_again_when_every_pool_bot_has_timed_out_once(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [first] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        V.timeouts(c, _past_the_hour())
+    [second] = checks(api, task)
+    assert second["owner_id"] != first["owner_id"]
+    with api.app.state.store.transaction() as c:
+        V.timeouts(c, _past_the_hour())
+    [third] = checks(api, task)
+    assert third["title"] == "Review 1: PR #412"
+    assert third["owner_id"] == first["owner_id"], (
+        "both bots timed out once: the one that timed out earlier is taken again"
+    )
+    with api.app.state.store.read() as c:
+        assert H.task(c, second["id"])["status"] == "closed"
+        assert _step(c, task) == "Review 1"
 
 
 def test_a_refiled_review_1_check_that_approves_moves_the_ticket_on(api):

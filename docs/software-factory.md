@@ -116,10 +116,12 @@ ticket stays at its step with a Waiting tag.
 - **Review 2 always runs**, for every change.
 - **On a board without QA steps, an unanswered check is filed again, never passed on.** When a check passes its hour with
   no verdict, Tico closes it, records who did not answer, and files the same check for the same head to another free pool
-  bot, preferring another model family than the Builder. Bots that reviewed the ticket earlier and the one that did not
-  answer are passed over. With no free bot the check waits at its step as "Waiting for a reviewer", and the retry files
-  it once one frees up. On a board with QA steps, an unanswered review keeps its old timeout: the round is skipped and the
-  ticket moves on.
+  bot, preferring another model family than the Builder. The bot that did not answer is passed over for that refile and
+  taken again only when no other bot is free. The bots that reviewed an earlier round of the ticket are passed over too,
+  unless no other bot is left in the pool. A bot that timed out earlier on the ticket is taken again when no other bot is
+  free, since it may only have been busy. With every bot busy, rate-limited or offline the check waits at its step as
+  "Waiting for a reviewer", and the retry files it once one frees up. On a board with QA steps, an unanswered review keeps
+  its old timeout: the round is skipped and the ticket moves on.
 - **A board that already has QA steps** (In QA, QA Fixes, Post Release QA) keeps them. On it, Review 2's changes go to
   Review 2 Fixes and the Builder moves the ticket to In QA, a QA pass makes the merge next, and a change nobody will see
   skips In QA and QA Fixes with the `skip-qa` tag.

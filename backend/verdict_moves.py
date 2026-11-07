@@ -910,7 +910,8 @@ def _refile(c, ticket, step, hours, at):
         return
     pool_step, slugs, limit = found
     row = H.task(c, ticket["id"])
-    check_pools._dispatch(c, row, pool_step, slugs, limit, check_pools._prs(c, row, pool_step), None)
+    refiled = ", ".join(H.actor_id(ch["owner_id"]) for ch in stale)
+    check_pools._dispatch(c, row, pool_step, slugs, limit, check_pools._prs(c, row, pool_step), None, refiled=refiled)
 
 
 def timeouts(c, at=None):

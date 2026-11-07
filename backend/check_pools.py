@@ -440,20 +440,21 @@ def _earlier_reviewers(c, ticket, step):
             if not for_pr(child or {}, step["pr"]) or not judged or not _head(step["pr"]).startswith(judged):
                 continue
         found = step_flow.child_check(c, child, ticket) if child else None
-        if found and found["id"] in before and H.is_bot(child["owner_id"]):
+        # Only a check that gave a verdict is a review: one left unanswered and filed again did not review.
+        if found and found["id"] in before and H.is_bot(child["owner_id"]) and (child or {}).get("verdict"):
             out.add(H.actor_id(child["owner_id"]))
     return out
 
 
 def _refiled_bots(c, ticket, step):
-    """The bots that left a check at this step unanswered on this ticket: each was closed and filed again (`_refile`),
-    so none is given that check again."""
+    """The bots whose check at this step was closed unanswered on this ticket, the latest first (`_refile` records each):
+    `[0]` is the bot the newest refile passed over."""
     rows = c.execute(
         "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_refiled' "
-        "AND new LIKE ?",
+        "AND new LIKE ? ORDER BY created_at DESC, rowid DESC",
         (ticket["id"], f"{step['id']}:%"),
     ).fetchall()
-    return {r[0] for r in rows if r[0]}
+    return list(dict.fromkeys(r[0] for r in rows if r[0]))
 
 
 def _company_rank(c, slug, builder):
@@ -467,19 +468,45 @@ def _company_rank(c, slug, builder):
 def ranked(c, ticket, step, slugs, limit, exclude=()):
     """(free members best first, why none is) for this ticket's check at `step`. A check ranks a bot of another model
     company than the builder's (`builder_makers`) ahead of a bot of a company Tico can't name, and that ahead of a bot of
-    the builder's company, which is still free when no other is, unless the step's `other_company` is `require`: then such a bot is never free for the ticket, nor is any
-    bot while Tico cannot name the builder's company or the bot's. Then eligibility from `assess`, fewest open checks,
-    the longest idle (no turn yet counts as longest), then by id."""
+    the builder's company, which is still free when no other is, unless the step's `other_company` is `require`: then
+    such a bot is never free for the ticket, nor is any bot while Tico cannot name the builder's company or the bot's.
+    Then eligibility from `assess`, fewest open checks, the longest idle (no turn yet counts as longest), then by id."""
+    free, why, _ = _screen(c, ticket, step, slugs, limit, exclude)
+    return free, why
+
+
+_NAMED_WHY = {
+    "builder": "Tico can't name the model company the builder ran on",
+    "company": "it runs on the model company the builder ran on",
+    "unknown": "it runs on a model company Tico can't name",
+}
+
+
+# A bot passed over for one of these is not free for this ticket at all; the others are passed over for now only.
+PERMANENT = ("private", "builder", "company", "unknown")
+
+
+def _screen(c, ticket, step, slugs, limit, exclude=()):
+    """`ranked`, and each pool bot's state for this check: (free members best first, why none is free, {slug: state}).
+
+    Free bots come in tiers, so a ticket waits at a step only while every bot is busy, rate-limited or offline, never
+    because every bot was excluded: a bot that has not timed out on this ticket first (tier 0); an earlier reviewer of
+    the ticket only when no other bot is left in the pool (tier 1); a bot that timed out earlier on this ticket, which
+    may only have been busy (tier 2); and last the bot whose check was just refiled (tier 3). The states name what
+    passed each bot over, so a refile or a wait says which bots it skipped and why.
+    """
     from . import step_flow
     from .check_independence import assess
 
-    excluded = set(exclude) | _earlier_reviewers(c, ticket, step) | _refiled_bots(c, ticket, step)
+    earlier = _earlier_reviewers(c, ticket, step)
+    timed = _refiled_bots(c, ticket, step)
+    latest = timed[0] if timed else None
     kind = step_flow.check_kind(step)
     required = bool(kind) and step_flow.other_company(step) == "require"
     builder = builder_makers(c, ticket, whole=required) if kind else set()
-    free, why = [], set()
+    ready, blocked = {}, {}
     for slug in slugs:
-        if slug in excluded or "bot:" + slug == ticket["owner_id"]:
+        if "bot:" + slug == ticket["owner_id"] or slug in exclude:
             continue
         if step.get("detached"):
             if (
@@ -487,22 +514,22 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
                 or not H.task_private(c, ticket)
                 and H.private_tasks_default(c, "bot:" + slug)
             ):
-                why.add("private")
+                blocked[slug] = ("private", "cannot see this private task")
                 continue
             recent = c.execute(
                 "SELECT count(*) FROM history_events WHERE kind='pr_review_filed' AND new=? AND created_at>?",
                 (slug, H.shift(H.now(), hours=-1)),
             ).fetchone()[0]
             if recent >= PR_REVIEWS_PER_HOUR:
-                why.add("rate")
+                blocked[slug] = ("rate", "at the hourly review limit")
                 continue
         decision = assess(c, ticket, slug)
         if not online(c, slug):
-            why.add("offline")
+            blocked[slug] = ("offline", "offline")
             continue
         held = open_checks(c, slug)
         if held >= limit:
-            why.add("busy")
+            blocked[slug] = ("busy", f"at its limit, {held} of {limit} open checks")
             continue
         idle = (c.execute("SELECT last_turn_at FROM bots WHERE id=?", (slug,)).fetchone() or [None])[0] or ""
         # Require needs both companies named and apart: a company Tico cannot name, or a run with a segment it cannot
@@ -511,22 +538,56 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
             known = makers(c, slug, whole=True) if builder else set()
             same = bool(known & builder)
             if not builder or same or not known:
-                why.add("builder" if not builder else "company" if same else "unknown")
+                key = "builder" if not builder else "company" if same else "unknown"
+                blocked[slug] = (key, _NAMED_WHY[key])
                 continue
         # Model company only orders the free bots, so it ranks first; eligibility, workload and idle time break ties.
         rank = _company_rank(c, slug, builder) if builder and not required else 0
-        free.append((rank, 0 if decision["eligible"] else 1, held, idle, slug))
+        ready[slug] = (rank, 0 if decision["eligible"] else 1, held, idle)
+    # An earlier reviewer is the only bot for the check when no other bot is left: one that is not timed out on this
+    # ticket and is not blocked for good.
+    others_left = any(
+        s not in earlier and s not in timed and blocked.get(s, ("",))[0] not in PERMANENT
+        for s in set(ready) | set(blocked)
+    )
+    why, state, free = set(), {}, []
+    for slug in slugs:
+        if slug not in ready and slug not in blocked:
+            continue
+        text = []
+        if slug in earlier:
+            text.append("an earlier reviewer of this ticket")
+        elif slug in timed:
+            text.append("timed out on this check" if slug == latest else "timed out earlier on this ticket")
+        if slug in blocked:
+            key, msg = blocked[slug]
+            why.add(key)
+            text.append(msg)
+        else:
+            tier, msg = None, ""
+            if slug in earlier:
+                if not others_left:
+                    tier, msg = 1, "free, as the only bot left in the pool"
+            elif slug in timed:
+                tier, msg = (3, "free as a last resort") if slug == latest else (2, "free again")
+            else:
+                tier, msg = 0, "free"
+            if tier is not None:
+                free.append((tier, *ready[slug], slug))
+                text.append(msg)
+        state[slug] = ", ".join(text)
     free.sort()
     if free:
-        return [slug for _, _, _, _, slug in free], ""
+        best = free[0][0]
+        return [row[-1] for row in free if row[0] == best], "", state
     base = (
         "the task or reviewer is private, so the review cannot be shared"
         if "private" in why
         else "the hourly review limit is reached"
         if "rate" in why
-        else "every reviewer in the pool is at its limit of open checks"
+        else "every reviewer that can take it is at its limit of open checks"
         if "busy" in why
-        else "no reviewer in the pool is online"
+        else "no reviewer that can take it is online"
         if "offline" in why
         else ""
     )
@@ -552,7 +613,12 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
         reason = "no reviewer in the pool is eligible for this check"
     else:
         reason = "the step's pool has no reviewers"
-    return [], reason
+    return [], f"{reason} ({_pool_text(state)})" if state else reason, state
+
+
+def _pool_text(state):
+    """The pool's state for a check, as the events that record a refile or a wait name it."""
+    return "; ".join(f"{slug}: {text}" for slug, text in state.items()) or "the step's pool has no reviewers"
 
 
 # ----------------------------------------------------------------------------------------------- filing
@@ -750,14 +816,26 @@ def entered(c, actor, ticket, snapshots=None):
     return _dispatch(c, ticket, step, slugs, limit, prs, snapshots)
 
 
-def _dispatch(c, ticket, step, slugs, limit, prs, snapshots):
-    """One pool dispatch for board checks and PR checks outside boards."""
+def _dispatch(c, ticket, step, slugs, limit, prs, snapshots, refiled=None):
+    """One pool dispatch for board checks and PR checks outside boards. `refiled` names the bots whose check at this step
+    was closed unanswered: the pool and each bot's state are recorded then, whether the check is filed or waits."""
     if not prs:
         return None  # nothing to judge at a head: a board-only move files no check
     heads = _heads(prs, snapshots)
     title = _title(step, prs)
     if has_open_check(c, ticket, step, heads, prs[0] if step.get("detached") else None):
         return None
+    free, reason, state = _screen(c, ticket, step, slugs, limit)
+    if refiled:
+        H._task_event(
+            c,
+            ticket["id"],
+            H.KEEPER,
+            "check_pool",
+            refiled,
+            step["id"],
+            f"{title}: refiled from {refiled}; {_pool_text(state)}",
+        )
     for r in waiting(c, ticket["id"]):
         if r["step_id"] == step["id"]:
             if step.get("detached") and not wait_for_pr(c, r, prs[0]):
@@ -767,7 +845,6 @@ def _dispatch(c, ticket, step, slugs, limit, prs, snapshots):
             c.execute(
                 "UPDATE check_waits SET state='dropped',reason='a new head',updated_at=? WHERE id=?", (H.now(), r["id"])
             )
-    free, reason = ranked(c, ticket, step, slugs, limit)
     for slug in free:
         child = _file(c, ticket, step, slug, title, heads, snapshots, _why(c, slug))
         if child:
@@ -1070,6 +1147,7 @@ def _take(c, wait, only=None, snapshots=None):
         c.execute("UPDATE check_waits SET state='waiting' WHERE id=?", (wait["id"],))
     if reason and reason != wait["reason"]:
         c.execute("UPDATE check_waits SET reason=?,updated_at=? WHERE id=?", (reason, H.now(), wait["id"]))
+        H._task_event(c, ticket["id"], H.KEEPER, "check_pool", None, wait["id"], f"{wait['title']}: waiting, {reason}")
     return None
 
 
