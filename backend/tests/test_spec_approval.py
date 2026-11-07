@@ -245,3 +245,35 @@ def test_the_persons_own_assistant_approves_on_their_words_and_nothing_else_does
             finally:
                 H.DELEGATION.reset(lent)
                 H.VIA.reset(via)
+
+
+def test_an_approve_answer_writes_no_wake_older_than_the_move(api):
+    """The approve closes the question, then moves the card. The card's owner hears the answer on the card, and that wake
+    is written after the move: a wake older than the card's step change is stale when the bot reads it (a wasted turn)."""
+    _dev_tickets(api)
+    item = _item(api, "Exports wake", step="Spec")
+    builder = turn(api, "cpo", "ana-test")[1]
+    assert publish_spec(api, item, attempt=builder).status_code == 200
+    assert ask_approval(api, item, attempt=builder).status_code == 200
+    question, _ = approval_question(api, item)
+    assert answer(api, approval_question(api, item), ["Approve"]).status_code == 200
+    with api.app.state.store.read() as c:
+        owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (item["id"],)).fetchone()[0]
+        closed = c.execute("SELECT done_at FROM tasks WHERE id=?", (question,)).fetchone()[0]
+        moved = c.execute(
+            "SELECT max(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.subject_id=? AND e.kind='step' "
+            "AND e.new=(SELECT s.id FROM task_steps s JOIN tasks t ON t.type_id=s.type_id WHERE t.id=? AND s.name='Approved')",
+            (item["id"], item["id"]),
+        ).fetchone()[0]
+        # Only what the answer itself wrote: from the question's close up to the card's move (older notices are not this).
+        rows = c.execute(
+            "SELECT body, refs FROM messages WHERE recipient_id=? AND created_at>=? AND created_at<?",
+            (owner, closed, moved),
+        ).fetchall()
+    early = []
+    for body, refs in rows:
+        meta = json.loads(refs or "{}")
+        if meta.get("task") in (item["id"], question) and not meta.get("quiet"):
+            early.append(body)
+    assert moved is not None and closed is not None
+    assert early == [], early

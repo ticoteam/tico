@@ -7387,6 +7387,7 @@ def task_update(
     *,
     strict=True,
     heard=(),
+    before_wake=None,
 ):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
@@ -8112,6 +8113,10 @@ def task_update(
 
         if step_flow.check_step(conn, after):
             check_pools.safely(conn, verdict_moves.after_verdict, after)
+    # A caller's writes that belong before the wakes below (question_tasks.answer: an Approve moves the card the question
+    # blocked). The close is written and the wakes go out after them, so no wake is older than what it reports.
+    if before_wake is not None:
+        before_wake()
     subtask_told = None if closing_step else _subtask_wake(conn, actor, after, row["status"], note, quiet, heard=heard)
     if subtask_told == after["requester_id"]:
         notify_requester = False
