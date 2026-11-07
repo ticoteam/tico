@@ -37403,10 +37403,12 @@
         "operationId": "getStrategy",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyView"
+                }
               }
             }
           },
@@ -75725,6 +75727,32 @@
           "revision"
         ],
         "title": "StrategyPublish"
+      },
+      "StrategyView": {
+        "type": "object",
+        "properties": {
+          "segment_changes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many segments' text the draft changes against the latest published version (0 with no draft, and 0 for everyone but the owner); a segment's text is GET /api/v2/segments/{id}'s"
+          },
+          "may_edit": {
+            "type": "boolean",
+            "description": "The owner on their own click; the draft is then in `draft`"
+          },
+          "bets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "bets",
+          "may_edit",
+          "segment_changes"
+        ],
+        "additionalProperties": true
       },
       "SubscriptionIdentity": {
         "type": "object",
