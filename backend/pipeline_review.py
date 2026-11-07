@@ -612,7 +612,8 @@ def _queue_fields(
         item["reviewer_id"] = (claim_row["claimed_by"] if claim_row else None) or requirements[
             item["requirement_id"]
         ].get("reviewer_id")
-        item["can_mark_met"] = bool(rights[item["pipeline_id"]])
+        # An approval is never overridden (mark_met refuses protected_approval), so the action is not offered for one.
+        item["can_mark_met"] = bool(rights[item["pipeline_id"]]) and item["kind"] != "approval"
         at_stage = tasks[item["task_id"]].get("step_id") == item["stage_id"]
         item["can_not_validate"] = at_stage and _route_ok(item)
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names) if at_stage else None
