@@ -242,7 +242,9 @@ const pastEdge = page => page.evaluate(() => [...document.querySelectorAll('#mai
       assert.deepEqual(await texts(page, '.seg-chip.cur'), ['All segments'], tag + ': All is current');
       assert.equal(await page.locator('.mkt-top a', {hasText: 'Whole market'}).getAttribute('href'), '#/strategy/market?view=whole', tag + ': the whole market link');
       assert.equal(await page.locator('.mkt-items .seg-tag').first().innerText(), 'All', tag + ': a whole-market item is tagged All');
-      assert.equal(await page.locator('.mkt-items .seg-tag', {hasText: 'Release checks'}).count(), 1, tag + ': a segment item is tagged with it');
+      // The fake tags every change after the first with Release checks; each tag is the segment's own dot and name.
+      const tags = await texts(page, '.mkt-items .seg-tag');
+      assert.ok(tags.length > 1 && tags.slice(1).every(t => t === 'Release checks'), tag + ': the segment items are tagged with it: ' + tags.join(' | '));
       await snap(page, 'market-compare-desktop');
       // A chip opens that segment's market; All segments goes back to the table.
       await page.locator('.seg-chip', {hasText: 'Deploy pipelines'}).click();
