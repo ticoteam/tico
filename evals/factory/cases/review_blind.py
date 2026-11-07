@@ -3,6 +3,8 @@ after a review reads the check, its ticket and the ticket's comments as its own 
 earlier review's subtask, a message that names one, or the text only those messages carry. A person reads those
 findings on the same tickets meanwhile, so the reads are judged against findings that are there, not an empty ticket."""
 
+import json
+
 from ..scenarios import Scenario, standard, tickets
 
 PERSON = "ana-test"  # the person's token: she reads the findings that a later check must not
@@ -153,8 +155,8 @@ def person_reads_findings(run):
         reads = ", ".join(
             f"{_label(path, t)} {status}{'*' if found else ''}" for path, status, found in run.paths.get(t, [])
         )
-        detail.append(f"{run.w.title(t)}: {reads}; the findings are {_kinds(run, t)}")
-    return not missing, "; ".join(detail)[:600]
+        detail.append(f"{run.w.title(t)}: {reads}; the findings: {_where(run, t)}")
+    return not missing, "; ".join(detail)[:1400]
 
 
 def _label(path, ticket):
@@ -168,16 +170,32 @@ def _label(path, ticket):
     return "earlier review comments"
 
 
-def _kinds(run, ticket):
-    """The kinds of the messages that carry the findings on a ticket (a comment is say, ask or answer; a forwarded
-    review result is a notice), with how many of each."""
+def _where(run, ticket):
+    """Where the findings on a ticket are: each message's kind, whether it sits in the ticket's conversation or
+    another, who sent it and who it is for, its refs' keys, and what the person's own read of that message answers."""
+    w = run.w
     mids = [m for r in run.later if r["ticket"] == ticket for m in r["mids"]]
     if not mids:
         return "only in texts"
-    rows = run.w.sql(
-        f"SELECT kind, COUNT(*) AS n FROM messages WHERE id IN ({','.join('?' * len(mids))}) GROUP BY kind", tuple(mids)
+    task = (w.sql("SELECT owner_id, requester_id, conversation_id FROM tasks WHERE id=?", (ticket,)) or [{}])[0]
+    rows = w.sql(
+        "SELECT id, kind, conversation_id, sender_id, recipient_id, refs FROM messages "
+        f"WHERE id IN ({','.join('?' * len(mids))})",
+        tuple(mids),
     )
-    return ", ".join(f"{r['kind']} x{r['n']}" for r in rows) or "missing"
+    parts = []
+    for r in rows:
+        try:
+            keys = sorted(json.loads(r["refs"] or "{}"))
+        except ValueError:
+            keys = ["unparsed"]
+        where = "ticket conversation" if r["conversation_id"] == task.get("conversation_id") else "other conversation"
+        status, _ = w.request("get", f"messages/{r['id']}", token=PERSON)
+        parts.append(
+            f"{r['kind']} in {where}, from {r['sender_id']} to {r['recipient_id']}, refs {keys}, "
+            f"person GET message {status}"
+        )
+    return f"task owner {task.get('owner_id')}, requester {task.get('requester_id')}; " + " | ".join(parts)
 
 
 SCENARIOS = [
