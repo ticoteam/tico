@@ -162,7 +162,7 @@ function pipelineReviewRender(): void {
         ${item.claim ? `<p class="pipe-review-claim" role="status">${esc(item.claim.label)}</p>` : ''}
         <button type="button" class="pipe-review-approve" data-review-approve ${state.busy || item.claim ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>
         ${item.can_mark_met ? '<button type="button" class="pipe-review-met" data-review-send="met">Mark met</button>' : ''}
-        ${item.stage_name === 'Validate' && myActor().startsWith('human:') ? '<button type="button" class="pipe-review-met" data-review-not-validated>Not validated</button>' : ''}
+        ${item.can_not_validate ? '<button type="button" class="pipe-review-met" data-review-not-validated>Not validated</button>' : ''}
         <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_id)} to ${esc(item.moves_to)}` : ''}</p>
         ${notice}
       </aside>
@@ -259,16 +259,16 @@ async function pipelineReviewUndo(): Promise<void> {
   pipelineReviewRender();
 }
 
-/** Validate's "Not validated": asks for one line of reason, then the item leaves the queue and a follow-up is filed. */
+/** Validate's "Not validated": the note says why; the item leaves the queue and a follow-up is filed. */
 async function pipelineReviewNotValidated(): Promise<void> {
   const state = pipelineReviewState;
   const item = state?.items[state.index];
+  const note = pipelineReviewNoteValue();
   if (!state || !item || state.busy) return;
-  const reason = (window.prompt('Why did it not validate? One line.') ?? '').trim();
-  if (!reason) return;
+  if (!note) { state.message = 'Write a note first.'; pipelineReviewRender(); return; }
   state.busy = true; state.message = ''; state.notice = '';
   try {
-    const res = await pipelineNotValidated(item.task_id, item.requirement_id, reason);
+    const res = await pipelineNotValidated(item.task_id, item.requirement_id, note);
     void pipelineMineSync(state.pipelineId, true);
     if (!pipelineReviewState) return;
     state.items = state.items.filter(other => other !== item);

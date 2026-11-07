@@ -70,6 +70,8 @@ interface PipelineReviewItem {
   reviewer_id?: string | null;
   /** Whether the viewer may mark it met by hand. */
   can_mark_met?: boolean;
+  /** Whether the viewer may send it Not validated (the server's follow-up rule, D66). */
+  can_not_validate?: boolean;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
   claim: { by: string; label: string } | null;
@@ -181,6 +183,7 @@ interface ServerQueueItem {
   /** The claimant, else the configured reviewer. */
   reviewer_id: string | null;
   can_mark_met: boolean;
+  can_not_validate: boolean;
 }
 
 interface ServerRun {
@@ -242,6 +245,7 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     bot_note: row.bot_note ?? '',
     reviewer_id: row.reviewer_id ?? null,
     can_mark_met: !!row.can_mark_met,
+    can_not_validate: !!row.can_not_validate,
     attachments: a
       ? [{ id: a.id, label: a.name || 'Attachment', kind: a.format, ...(a.href ? { url: a.href } : {}) }]
       : [],
