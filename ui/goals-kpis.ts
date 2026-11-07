@@ -873,7 +873,7 @@ function goalsRender(state) {
   const {byParent} = goalTreeShape();
   const seen = new Set([GOAL_COMPANY]);
   const rows = (actor, depth, standing) => { seen.add(actor); return goalTreeRows(actor, depth, owned[actor] || [], loose[actor] || [], standing); };
-  const walk = (parent, depth, path) => (byParent[parent] || []).slice().sort(goalTreeOrder(parent)).map(n => {
+  const walk = (parent, depth, path): string[] => (byParent[parent] || []).slice().sort(goalTreeOrder(parent)).map(n => {
     const key = n.kind === 'group' ? 'g:' + n.id : n.kind === 'person' ? 'p:' + n.id : 'b:' + n.id;
     if (path.has(key)) return '';
     const below = walk(key, depth + 1, new Set([...path, key]));
