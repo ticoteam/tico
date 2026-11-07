@@ -6,7 +6,97 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
+// A person in a DM or a members list: the actor id, and the name the server sent for them when it did.
+interface ThreadMember {
+  actor: string;
+  name?: string | null | undefined;
+}
+// Someone in a thread's members list: an actor id, or a member object.
+type ThreadPeople = (ThreadMember | string)[];
+// The viewer's own marks on a thread row (the server's `me`).
+interface ThreadMe {
+  unread?: number | undefined;
+  activity?: boolean | undefined;
+  last_read_seq?: number | undefined;
+  member?: boolean | undefined;
+  following?: boolean | undefined;
+  pinned?: boolean | undefined;
+  notify?: string | undefined;
+  [key: string]: unknown;
+}
+// A thread as the rail, the Threads page and a live event hold it: the server's thread view with the fields a list row reads.
+interface ThreadRow {
+  id: string;
+  title?: string | null | undefined;
+  audience: string;
+  parent_id?: string | null | undefined;
+  archived_at?: string | null | undefined;
+  home?: { actor?: string | undefined } | null | undefined;
+  dm_with?: ThreadMember[] | null | undefined;
+  dm_with_count?: number | string | null | undefined;
+  members?: ThreadPeople | { members?: ThreadPeople } | null | undefined;
+  me?: ThreadMe | null | undefined;
+  new_at?: { thread_id?: string | undefined; message_id?: string | undefined } | null | undefined;
+  last_seq?: number | undefined;
+  last_unread_seq?: number | undefined;
+  activity_seq?: number | undefined;
+  last_message_at?: string | null | undefined;
+  pinned_for_everyone?: boolean | undefined;
+  [key: string]: unknown;
+}
+// The rail's reply: Pinned and the rest, the next page's cursor, the Catch up count and the unread of each DM.
+interface ThreadRailReply {
+  threads?: ThreadRow[];
+  pinned?: ThreadRow[];
+  next_cursor?: string | null;
+  catch_up?: number | string;
+  catch_up_ids?: string[];
+  dms?: Record<string, number>;
+}
+// The plain list's reply, from a server without the rail.
+interface ThreadListReply {
+  threads?: ThreadRow[];
+  dms?: ThreadRow[];
+  person_dms?: Record<string, number>;
+  bot_dms?: Record<string, number>;
+}
+// What a read of the rail (or the plain list) brings: the lists and the counts the sidebar draws.
+interface ThreadsLoaded {
+  rail: boolean;
+  pinned: ThreadRow[];
+  threads: ThreadRow[];
+  next: string | null;
+  catchUp: number;
+  cu: Set<string> | null;
+  dms: Record<string, number>;
+}
+// A root that is not on the rail, learned once for live counts: its 1:1 DM's teammate, and whether it is muted.
+interface ThreadRoot {
+  dm: string | null | undefined;
+  muted: boolean;
+  following: boolean;
+}
+// The threads topic's events (GET /api/v2/events) and the needs ones read here: one kind, with the fields that kind sends.
+interface ThreadsEvent {
+  kind?: string | undefined;
+  thread_id?: string | undefined;
+  root_id?: string | undefined;
+  message_id?: string | undefined;
+  actor?: string | undefined;
+  unread?: boolean | undefined;
+  unread_count?: number | undefined;
+  read?: boolean | undefined;
+  pinned?: boolean | undefined;
+  pinned_for_everyone?: boolean | undefined;
+  counters?: { last_seq?: number | undefined; last_unread_seq?: number | undefined } | undefined;
+  thread?: ThreadRow | undefined;
+}
+// The needs topic's event: the Needs you version, and what the stream carried over a reconnect.
+interface NeedsEvent {
+  version?: string | null | undefined;
+  connect?: boolean | undefined;
+  carried?: string[] | undefined;
+}
 // `on`: null until the server answered once; false when it has no threads (an older server).
 // `rail`: whether the server has GET /v2/threads/rail (pins, Catch up); false keeps the plain list (GET /v2/threads).
 // `pinned`, `threads`: the rail's two lists, each by title. `catchUp`: the Catch up count from a server without
@@ -14,7 +104,27 @@ const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
 // `dms`: {actor: unread} for the viewer's 1:1 DMs, bots and people, which the Team list shows on that teammate.
 // `roots`: {root id: {dm: the other actor or null, muted}} for roots not on the rail, learned once, for live counts.
 // `counted`: the message ids an `activity` already counted (an edit sends one more).
-const THREADS = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, dms: {}, roots: {}, counted: new Set(),
+interface ThreadsState {
+  on: boolean | null;
+  rail: boolean | null;
+  pinned: ThreadRow[];
+  threads: ThreadRow[];
+  next: string | null;
+  catchUp: number;
+  cu: Set<string> | null;
+  dms: Record<string, number>;
+  roots: Record<string, ThreadRoot>;
+  counted: Set<string>;
+  loading: Promise<void> | null;
+  again: boolean;
+  wired: boolean;
+  needsSeen: string | null;
+  readAt: number;
+  gen: number;
+}
+
+const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
+const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, dms: {}, roots: {}, counted: new Set(),
                  loading: null, again: false, wired: false, needsSeen: null, readAt: 0, gen: 0};
 // A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).
 const THREADS_CONNECT_FRESH_MS = 300e3;
@@ -22,24 +132,24 @@ const THREADS_CONNECT_FRESH_MS = 300e3;
 const threadsCatchUp = () => THREADS.cu ? THREADS.cu.size : THREADS.catchUp;
 const THREADS_PAGE = 100;
 
-const threadHref = t => THREAD_ROUTE + encodeURIComponent(typeof t === 'string' ? t : t?.id || '');
+const threadHref = (t: string | ThreadRow | null | undefined) => THREAD_ROUTE + encodeURIComponent(typeof t === 'string' ? t : t?.id || '');
 // Other pages link a thread by this (a top-level const is not a window property; the dashboard's cards look for it there).
 window.threadHref = threadHref;
-const threadIsDm = t => t?.audience === 'personal' || t?.audience === 'participants';
+const threadIsDm = (t: ThreadRow | null | undefined): t is ThreadRow => t?.audience === 'personal' || t?.audience === 'participants';
 // A DM with one bot and no one else: its bot's page holds it, so lists leave it to the Team list's count.
-const threadIsBotDm = t => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
-const threadIsGroupDm = t => threadIsDm(t) && !t?.parent_id && (Number(t.dm_with_count) || threadOthers(t).length) >= 2;
-const threadPrivate = t => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
+const threadIsBotDm = (t: ThreadRow) => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
+const threadIsGroupDm = (t: ThreadRow | null | undefined) => threadIsDm(t) && !t?.parent_id && (Number(t.dm_with_count) || threadOthers(t).length) >= 2;
+const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
 // What the rail lists (and what may be pinned): a root that is a public, team or members thread, or a group DM.
-const threadOnRail = t => !!t && !t.parent_id && !t.archived_at && (['company', 'team', 'members'].includes(t.audience) || threadIsGroupDm(t));
+const threadOnRail = (t: ThreadRow | null | undefined) => !!t && !t.parent_id && !t.archived_at && (['company', 'team', 'members'].includes(t.audience) || threadIsGroupDm(t));
 // The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
-const threadOthers = t => (t?.dm_with || (Array.isArray(t?.members) ? t.members : t?.members?.members) || [])
+const threadOthers = (t: ThreadRow | null | undefined): (string | undefined)[] => (t?.dm_with || (Array.isArray(t?.members) ? t.members : t?.members?.members) || [])
   .map(m => typeof m === 'string' ? m : m?.actor).filter(a => a && a !== myActor());
-const actorGroup = a => String(a || '').startsWith('group:') ? String(a).slice(6) : '';
-const groupName = id => (S.orgGroups || []).find(g => g.id === id)?.name || titleCase(id);
+const actorGroup = (a: string | null | undefined) => String(a || '').startsWith('group:') ? String(a).slice(6) : '';
+const groupName = (id: string) => (S.orgGroups || []).find(g => g.id === id)?.name || titleCase(id);
 // A teammate's name for any actor: bot, person or group.
-const actorName = a => actorGroup(a) ? groupName(actorGroup(a)) : actorLabel(a);
-function actorAvatar(a, size = 22) {
+const actorName = (a: string | null | undefined) => actorGroup(a) ? groupName(actorGroup(a)) : actorLabel(a);
+function actorAvatar(a: string | null | undefined, size = 22) {
   const slug = actorSlug(a);
   if (slug) return avatar(slug, size);
   const pid = actorPerson(a);
@@ -49,11 +159,11 @@ function actorAvatar(a, size = 22) {
 // A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from before threads read as
 // "BotOps"); a group chat by the name it was given, else by its people; any other thread by its title.
 // `messages`: what is loaded of it, which names a DM the server sends with no title and no people (a notice thread).
-function threadTitle(t, messages) {
+function threadTitle(t: ThreadRow | null | undefined, messages?: { sender_id?: string | null | undefined }[] | null): string {
   if (!t) return '';
   const others = threadOthers(t), total = Number(t.dm_with_count) || others.length;
   // The server's name, for someone in this DM the viewer's people list leaves out.
-  const name = a => t.dm_with?.find(m => m.actor === a)?.name || actorName(a);
+  const name = (a: string | undefined) => t.dm_with?.find(m => m.actor === a)?.name || actorName(a);
   const people = others.length ? others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '') : '';
   const own = String(t.title || '').trim();
   if (threadIsDm(t) && !t.parent_id && people && !(total >= 2 && own && !/^(chat with|private\b)/i.test(own))) return people;
@@ -67,48 +177,48 @@ function threadTitle(t, messages) {
   return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
-const threadRowHref = t => !t?.new_at?.thread_id ? threadHref(t)
+const threadRowHref = (t: ThreadRow | null | undefined) => !t?.new_at?.thread_id ? threadHref(t)
   : threadHref(t.new_at.thread_id) + (t.new_at.message_id ? '?m=' + encodeURIComponent(t.new_at.message_id) : '');
 window.threadRowHref = threadRowHref;
 // The mark before a title: the owner's avatar for a Home, the other member's for a DM, else public or private.
-function threadMarkHTML(t, size = 18) {
+function threadMarkHTML(t: ThreadRow | null | undefined, size = 18) {
   if (t?.audience === 'home' && t.home?.actor) return actorAvatar(t.home.actor, size);
   const others = threadOthers(t);
   if (threadIsDm(t) && others.length) return actorAvatar(others[0], size);
   return `<span class="nav-icon th-mark" aria-hidden="true">${threadPrivate(t) ? 'lock' : 'forum'}</span>`;
 }
-const threadUnread = t => Number(t?.me?.unread) || 0;
-const threadActivity = t => !threadUnread(t) && !!t?.me?.activity;
-const threadsCountText = n => n > 99 ? '99+' : String(n);
+const threadUnread = (t: ThreadRow | null | undefined) => Number(t?.me?.unread) || 0;
+const threadActivity = (t: ThreadRow | null | undefined) => !threadUnread(t) && !!t?.me?.activity;
+const threadsCountText = (n: number) => n > 99 ? '99+' : String(n);
 // The server's order (contract §10.1): by title, case-insensitively, unnamed last, then id.
-const threadsByTitle = (a, b) => (!a.title - !b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
+const threadsByTitle = (a: ThreadRow, b: ThreadRow) => (!a.title - !b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
   || String(a.id).localeCompare(String(b.id));
 
 // ----------------------------------------------------------------- loading
 // The rail when the server has it; else the plain list, its threads and group DMs by title, with no pins or Catch up.
-async function threadsRead() {
+async function threadsRead(): Promise<ThreadsLoaded | null> {
   const limit = Math.min(200, Math.max(THREADS_PAGE, THREADS.threads.length));
   if (THREADS.rail !== false) {
     try {
-      const r = await get('/v2/threads/rail?limit=' + limit, {fresh: true});
+      const r = await get<ThreadRailReply>('/v2/threads/rail?limit=' + limit, {fresh: true});
       if (Array.isArray(r?.threads)) {
         return {rail: true, pinned: r.pinned || [], threads: r.threads, next: r.next_cursor || null,
                 catchUp: Number(r.catch_up) || 0, cu: Array.isArray(r.catch_up_ids) ? new Set(r.catch_up_ids) : null, dms: r.dms || {}};
       }
-    } catch (e) { if (e?.status !== 404) throw e; }
+    } catch (e) { if (errorStatus(e) !== 404) throw e; }
   }
-  const r = await get('/v2/threads?limit=50', {fresh: true});
+  const r = await get<ThreadListReply>('/v2/threads?limit=50', {fresh: true});
   if (!Array.isArray(r?.threads)) return null;
-  const dms = {...(r.person_dms || {}), ...(r.bot_dms || {})};
+  const dms: Record<string, number> = {...(r.person_dms || {}), ...(r.bot_dms || {})};
   // An older server sends no person_dms: each 1:1 DM with a person in the list speaks for itself.
   for (const t of r.dms || []) {
     const [other] = threadOthers(t);
-    if (!t.parent_id && Number(t.dm_with_count) === 1 && String(other || '').startsWith('human:') && !(other in dms)) dms[other] = threadUnread(t);
+    if (!t.parent_id && Number(t.dm_with_count) === 1 && typeof other === 'string' && other.startsWith('human:') && !(other in dms)) dms[other] = threadUnread(t);
   }
   const threads = [...r.threads, ...(r.dms || [])].filter(threadOnRail).sort(threadsByTitle);
   return {rail: false, pinned: [], threads, next: null, catchUp: 0, cu: null, dms};
 }
-async function threadsLoad() {
+async function threadsLoad(): Promise<void> {
   // A change while a read is out reads once more after it: that read may have left before the change.
   if (THREADS.loading) { THREADS.again = true; return THREADS.loading; }
   // The Needs you version known before the read: the rail it answers is at least that new (the `needs` handler below).
@@ -127,7 +237,7 @@ async function threadsLoad() {
       liveTopicAdd('threads');
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
-      if (e?.status === 404 && THREADS.on !== true) THREADS.on = false;
+      if (errorStatus(e) === 404 && THREADS.on !== true) THREADS.on = false;
     } finally {
       THREADS.loading = null;
       // Every way out draws the sidebar again, the early return for a server without threads included.
@@ -139,9 +249,9 @@ async function threadsLoad() {
   if (THREADS.again) { THREADS.again = false; return threadsLoad(); }
 }
 // The rest of the Threads list, a page at a time (the rail's More).
-async function threadsMore() {
+async function threadsMore(): Promise<void> {
   if (!THREADS.next || !THREADS.rail) return;
-  const r = await get('/v2/threads/rail?limit=' + THREADS_PAGE + '&cursor=' + encodeURIComponent(THREADS.next), {fresh: true});
+  const r = await get<ThreadRailReply>('/v2/threads/rail?limit=' + THREADS_PAGE + '&cursor=' + encodeURIComponent(THREADS.next), {fresh: true});
   // A later page may hold pins too (past the first page's share): they go on Pinned.
   const have = new Set([...THREADS.pinned, ...THREADS.threads].map(t => t.id));
   THREADS.pinned = [...THREADS.pinned, ...(r?.pinned || []).filter(t => !have.has(t.id))];
@@ -150,7 +260,7 @@ async function threadsMore() {
   threadsSideRender();
 }
 // Once the first read is in (the Threads page waits for it to choose a thread).
-async function threadsReady() {
+async function threadsReady(): Promise<void> {
   if (THREADS.on === null) await (THREADS.loading || threadsLoad());
 }
 
@@ -172,16 +282,19 @@ function threadsSideRender() {
   if (typeof railRender === 'function') railRender();
 }
 // The unread in the viewer's 1:1 DM with this teammate (THREADS.dms), for the Team list.
-const threadsDmUnread = actor => Number(THREADS.dms?.[actor]) || 0;
+const threadsDmUnread = (actor: string) => Number(THREADS.dms?.[actor]) || 0;
 
 // ----------------------------------------------------------------- live rows
-const threadsEach = fn => { for (const key of ['pinned', 'threads']) THREADS[key] = THREADS[key].map(t => fn(t) || t); };
+// Maps each row list (pinned, then the rest) through `fn`: it returns the row's new value, or null/undefined to keep it.
+const threadsEach = (fn: (t: ThreadRow) => ThreadRow | null | undefined) => {
+  for (const key of ['pinned', 'threads'] as const) THREADS[key] = THREADS[key].map(t => fn(t) || t);
+};
 // One thread's row, updated in place from a thread view the server sent: archived leaves the rail, a pin moves it to
 // Pinned (or back), a new one the viewer is in joins its list by title.
 // `recheck` (a members event): whether the viewer is still in it decides, not whether it is listed.
-function threadsPut(view, {recheck = false} = {}) {
+function threadsPut(view: ThreadRow, {recheck = false} = {}) {
   if (!view?.id || view.parent_id) return;
-  let row = null;
+  let row: ThreadRow | null = null;
   threadsEach(t => {
     if (t.id !== view.id) return;
     // A view is that thread's own numbers; what the row sums up from its sub-threads stays until the list is read again.
@@ -189,7 +302,7 @@ function threadsPut(view, {recheck = false} = {}) {
            me: {...t.me, ...view.me, unread: t.me?.unread ?? view.me?.unread, activity: t.me?.activity ?? view.me?.activity}};
     return row;
   });
-  const me = (row || view).me || {};
+  const me: ThreadMe = (row || view).me || {};
   const listed = !!row, wanted = threadOnRail(view) && ((listed && !recheck) || me.member || me.following || me.pinned);
   if (!wanted) {
     if (listed) { THREADS.pinned = THREADS.pinned.filter(t => t.id !== view.id); THREADS.threads = THREADS.threads.filter(t => t.id !== view.id); }
@@ -202,30 +315,31 @@ function threadsPut(view, {recheck = false} = {}) {
   threadsSideRender();
 }
 // Read up to `seq` here: the row's count clears at once, the server's answer follows on the stream.
-function threadsMarkedRead(id, seq) {
+function threadsMarkedRead(id: string, seq: number) {
   threadsEach(t => {
     if (t.id !== id || !t.me) return;
-    const me = {...t.me, last_read_seq: Math.max(Number(t.me.last_read_seq) || 0, seq)};
+    const readTo = Math.max(Number(t.me.last_read_seq) || 0, seq);
+    const me: ThreadMe = {...t.me, last_read_seq: readTo};
     // Something newer in a sub-thread keeps the row's marks: the list read after this says what is left.
     const below = Number(t.activity_seq) > (Number(t.last_seq) || 0);
-    if (!below && me.last_read_seq >= (Number(t.last_unread_seq) || 0)) me.unread = 0;
-    if (!below && me.last_read_seq >= (Number(t.last_seq) || 0)) me.activity = false;
+    if (!below && readTo >= (Number(t.last_unread_seq) || 0)) me.unread = 0;
+    if (!below && readTo >= (Number(t.last_seq) || 0)) me.activity = false;
     return {...t, me};
   });
   threadsSideRender();
 }
 // Read through, the whole subtree (Mark read, Catch up, the viewer's own `read` event): the row is quiet, Catch up
 // lets the root go, and a 1:1 DM's count on its teammate clears.
-function threadsAllRead(id) {
+function threadsAllRead(id: string) {
   threadsEach(t => t.id === id ? {...t, me: {...t.me, unread: 0, activity: false}} : null);
   THREADS.cu?.delete(id);
   const dm = THREADS.roots[id]?.dm;
   if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
   threadsSideRender();
 }
-const threadsRow = id => [...THREADS.pinned, ...THREADS.threads].find(t => t.id === id) || null;
+const threadsRow = (id: string | undefined): ThreadRow | null => [...THREADS.pinned, ...THREADS.threads].find(t => t.id === id) || null;
 // What a root not on the rail is, read alone once (GET /v2/threads/{id}): a 1:1 DM counts on its teammate.
-function threadsRootLearn(view) {
+function threadsRootLearn(view: ThreadRow | null | undefined): ThreadRoot | null {
   if (!view?.id || view.parent_id) return null;
   const others = threadOthers(view);
   const dm = threadIsDm(view) && !threadIsGroupDm(view) && others.length === 1 ? others[0] : null;
@@ -233,14 +347,15 @@ function threadsRootLearn(view) {
   const theirHome = view.audience === 'home' && view.home?.actor !== myActor();
   return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted' || theirHome, following: !!(view.me?.following || view.me?.member)});
 }
-async function threadsRoot(id) {
-  if (THREADS.roots[id]) return THREADS.roots[id];
-  const t = await get(thvPath(id), {fresh: true}).catch(() => null);
+async function threadsRoot(id: string): Promise<ThreadRoot> {
+  const known = THREADS.roots[id];
+  if (known) return known;
+  const t = await get<ThreadRow>(thvPath(id), {fresh: true}).catch(() => null);
   return threadsRootLearn(t) || (THREADS.roots[id] = {dm: null, muted: false, following: false});
 }
 // A message anywhere under a root (`activity`). Unread for this viewer and not in the open thread: its row counts one
 // more and Catch up takes the root; the open thread reads it itself. Otherwise someone else's is activity on its row.
-async function threadsActivity(d) {
+async function threadsActivity(d: ThreadsEvent) {
   const root = d.root_id || d.thread_id, here = S.route === threadHref(root);
   if (!root || here) { threadsSideRender(); return; }
   const fresh = d.unread === true && !(d.message_id && THREADS.counted.has(d.message_id));
@@ -252,7 +367,7 @@ async function threadsActivity(d) {
     const theirs = d.unread === true || (d.actor && d.actor !== myActor());
     threadsEach(t => {
       if (t.id !== root) return;
-      const me = {...t.me, activity: theirs || !!t.me?.activity, unread: threadUnread(t) + more};
+      const me: ThreadMe = {...t.me, activity: theirs || !!t.me?.activity, unread: threadUnread(t) + more};
       const counters = d.thread_id === root && d.counters ? {last_seq: d.counters.last_seq, last_unread_seq: d.counters.last_unread_seq} : {};
       return {...t, ...counters, activity_seq: Math.max(Number(t.activity_seq) || 0, Number(d.counters?.last_seq) || 0), me};
     });
@@ -271,11 +386,11 @@ async function threadsActivity(d) {
 }
 // A pin moved (the viewer's own, or a manager's for everyone; `pinned` is this viewer's state): the row moves at once,
 // and a thread not on the rail yet is read alone.
-async function threadsPinned(d) {
+async function threadsPinned(d: ThreadsEvent) {
   const t = threadsRow(d.thread_id);
   if (t) { threadsPut({...t, pinned_for_everyone: d.pinned_for_everyone ?? t.pinned_for_everyone, me: {...t.me, pinned: !!d.pinned}}); return; }
   if (!d.pinned) return;
-  const view = await get(thvPath(d.thread_id), {fresh: true}).catch(() => null);
+  const view = await get<ThreadRow>(thvPath(d.thread_id), {fresh: true}).catch(() => null);
   if (view?.id) threadsPut({...view, me: {...view.me, pinned: true}});
 }
 // The whole rail is read only on the first load, a `reset`, a `needs` change and the safety poll; every other change is
@@ -288,7 +403,7 @@ function threadsSync() {
   else threadsSideRender();
   if (THREADS.wired) return;
   THREADS.wired = true;
-  liveOn('threads', d => {
+  liveOn('threads', (d: ThreadsEvent) => {
     THREADS.gen++;
     if (d.kind === 'activity') void threadsActivity(d);
     // The viewer's own read (it comes only to them): the root's row and its Catch up place clear; a card for it in an
@@ -317,7 +432,7 @@ function threadsSync() {
   // `threads` over (it replays the thread changes it missed) naming the Needs you version the rail was last read at,
   // within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other connect reads it: a
   // change no event names (a thread the viewer can no longer see) is caught by one at least that often.
-  liveOn('needs', d => {
+  liveOn('needs', (d: NeedsEvent) => {
     const fresh = Date.now() - THREADS.readAt < THREADS_CONNECT_FRESH_MS;
     if (!THREADS.on || fresh && d?.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
     if (!d?.connect) THREADS.gen++;
