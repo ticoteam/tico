@@ -13,9 +13,21 @@
 'use strict';
 
 // ----------------------------------------------------------------- balance sheet
+// The sections of the balance sheet, and each total's key.
+type FinBsSection = 'assets' | 'liabilities' | 'equity';
+type FinBsTotal = 'asset' | 'liability' | 'equity';
+// GET /v2/finance/balance-sheet, plus the fields the page reads that the generated type leaves out.
+type FinBsApi = import('../types/api').FinanceBalanceSheet;
+type FinBsRow = FinBsApi['assets'][number];
+type FinBsSource = FinBsRow['sources'][number];
+// A line as the page draws it: its depth, its balance with the lines under it (of those shown), and how many lines are under it.
+type FinBsTreeRow = FinBsRow & {depth: number; sum: number; kids: number};
+type FinBsData = FinBsApi & {imported?: {month: string; basis: string}[]; snapshot?: {month: string; restatements?: number} | null};
+// FIN.bs: the open balance sheet, and the compare day's when one is picked.
+interface FinBsState { data: FinBsData | null; prev: FinBsData | null; load: number }
 const FIN_BS = {asOf: '', compare: '', sel: ''};
-const FIN_BS_SECTIONS = [['assets', 'Assets', 'asset'], ['liabilities', 'Liabilities', 'liability'], ['equity', 'Equity', 'equity']];
-function finBalancePage() {
+const FIN_BS_SECTIONS: [FinBsSection, string, FinBsTotal][] = [['assets', 'Assets', 'asset'], ['liabilities', 'Liabilities', 'liability'], ['equity', 'Equity', 'equity']];
+function finBalancePage(): void {
   const b = FIN_BS;
   if (!b.asOf) b.asOf = finToday();
   FIN.bs = {data: null, prev: null, load: 0};
@@ -23,52 +35,57 @@ function finBalancePage() {
       <label class="fin-inline"><span class="muted">Compare</span><input type="date" data-fin-cmp value="${b.compare}"></label>
       <span id="fin-balanced" class="fin-marks"></span><span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button>${finAddMenuHtml()}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bs">${skelRows(8, {dot: false})}</div>`, '', 'Selected line');
-  const body = $('#fin-body');
-  body.querySelector('[data-fin-asof]').onchange = ev => { b.asOf = ev.target.value || finToday(); void finBsLoad(); };
-  body.querySelector('[data-fin-cmp]').onchange = ev => { b.compare = ev.target.value; void finBsLoad(); };
-  body.onclick = ev => {
+  const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
+  const asOf = finNeed(body.querySelector<HTMLInputElement>('[data-fin-asof]'), 'the as-of date');
+  const cmp = finNeed(body.querySelector<HTMLInputElement>('[data-fin-cmp]'), 'the compare date');
+  asOf.onchange = () => { b.asOf = asOf.value || finToday(); void finBsLoad(); };
+  cmp.onchange = () => { b.compare = cmp.value; void finBsLoad(); };
+  body.onclick = (ev: Event) => {
     if (finAddClick(ev)) return;
-    if (ev.target.closest('[data-fin-export]')) { finCsv(finTableRows($('#fin-bs table')), `balance-sheet-${b.asOf}.csv`); return; }
-    const tr = ev.target.closest('tr[data-fin-line]');
-    if (tr) { b.sel = tr.dataset.finLine; finBsDraw(); finBsRail(); }
+    const at = eventElement(ev);
+    if (at?.closest('[data-fin-export]')) { finCsv(finTableRows($('#fin-bs table')), `balance-sheet-${b.asOf}.csv`); return; }
+    const tr = at?.closest<HTMLElement>('tr[data-fin-line]');
+    if (tr) { b.sel = tr.dataset.finLine ?? ''; finBsDraw(); finBsRail(); }
   };
   void finBsLoad();
 }
-async function finBsLoad() {
-  const state = FIN.bs, b = FIN_BS, load = ++state.load;
-  const [cur, prev] = await Promise.allSettled([get(`/v2/finance/balance-sheet?as_of=${b.asOf}${finAs()}`, {fresh: true}),
-    b.compare ? get(`/v2/finance/balance-sheet?as_of=${b.compare}${finAs()}`, {fresh: true}) : Promise.resolve(null)]);
+async function finBsLoad(): Promise<void> {
+  const state: FinBsState = FIN.bs, b = FIN_BS, load = ++state.load;
+  const [cur, prev] = await Promise.allSettled([get<FinBsApi>(`/v2/finance/balance-sheet?as_of=${b.asOf}${finAs()}`, {fresh: true}),
+    b.compare ? get<FinBsApi>(`/v2/finance/balance-sheet?as_of=${b.compare}${finAs()}`, {fresh: true}) : Promise.resolve(null)]);
   if (FIN?.bs !== state || state.load !== load || !$('#fin-bs')) return;
   if (cur.status === 'rejected') { $('#fin-bs').innerHTML = finFail(cur.reason); finRail(''); return; }
   state.data = cur.value; state.prev = prev.status === 'fulfilled' ? prev.value : null;
   finBsDraw(); finBsRail();
 }
 // A line's key: its account, or its code for the route's own rows (net income to date).
-const finBsKey = r => r.account_id || 'code:' + r.code;
+const finBsKey = (r: FinBsRow): string => r.account_id || 'code:' + r.code;
 // A section's lines in chart order, each with its depth and its balance with the lines under it (of those shown).
-function finBsTree(rows) {
-  const ids = new Set(rows.map(r => r.account_id).filter(Boolean)), kids = new Map();
-  for (const r of rows) if (r.parent_id && ids.has(r.parent_id)) (kids.get(r.parent_id) || kids.set(r.parent_id, []).get(r.parent_id)).push(r);
-  const byCode = (a, b) => String(a.code).localeCompare(String(b.code));
-  const out = [];
-  const walk = (r, depth) => {
+function finBsTree(rows: FinBsRow[]): FinBsTreeRow[] {
+  const ids = new Set(rows.map(r => r.account_id).filter(Boolean)), kids = new Map<string | null, FinBsRow[]>();
+  for (const r of rows) if (r.parent_id && ids.has(r.parent_id)) (kids.get(r.parent_id) || finNeed(kids.set(r.parent_id, []).get(r.parent_id), 'the group')).push(r);
+  const byCode = (a: FinBsRow, b: FinBsRow) => String(a.code).localeCompare(String(b.code));
+  const out: FinBsTreeRow[] = [];
+  const walk = (r: FinBsRow, depth: number): void => {
     const at = out.length; out.push({...r, depth, sum: r.balance || 0, kids: 0});
-    for (const k of (kids.get(r.account_id) || []).sort(byCode)) { const before = out.length; walk(k, depth + 1); out[at].sum += out[before].sum; out[at].kids++; }
+    const self = finNeed(out[at], 'the line');   // the line just pushed; walking its children only adds below it
+    for (const k of (kids.get(r.account_id) || []).sort(byCode)) { const before = out.length; walk(k, depth + 1); self.sum += finNeed(out[before], 'the line').sum; self.kids++; }
   };
   for (const r of rows.filter(r => !r.parent_id || !ids.has(r.parent_id)).sort(byCode)) walk(r, 0);
   return out;
 }
-function finBsDraw() {
-  const state = FIN.bs, box = $('#fin-bs'); if (!box || !state.data) return;
-  const d = state.data, prev = state.prev, b = FIN_BS, totals = d.totals || {};
+function finBsDraw(): void {
+  const state: FinBsState = FIN.bs, box: HTMLElement | null = $('#fin-bs');
+  if (!box || !state.data) return;
+  const d = state.data, prev = state.prev, b = FIN_BS, totals: Partial<FinBsApi['totals']> = d.totals || {};
   const balanced = !d.scoped && totals.asset != null && totals.asset === (totals.liability || 0) + (totals.equity || 0);
   $('#fin-balanced').innerHTML = balanced ? '<span class="pill ok">Balanced</span>' : '';
   if (d.snapshot) { const m = document.createElement('span'); finMarksDraw(m, d); $('#fin-balanced').append(...m.childNodes); }
   const imp = (d.imported || []).map(m => `${m.month} · ${m.basis === 'cash' ? 'Cash' : 'Accrual'}`).join(', ');
-  const prevOf = (key, sec) => { if (!prev) return null; const t = finBsTree(prev[sec] || []).find(r => finBsKey(r) === key); return t ? t.sum : null; };
-  const source = s => `<span class="fin-src">${esc([finProvider(s.provider), s.name].filter(Boolean).join(' · '))}${s.last4 ? ' ••' + esc(s.last4) : ''}</span>`;
+  const prevOf = (key: string, sec: FinBsSection): number | null => { if (!prev) return null; const t = finBsTree(prev[sec] || []).find(r => finBsKey(r) === key); return t ? t.sum : null; };
+  const source = (s: FinBsSource) => `<span class="fin-src">${esc([finProvider(s.provider), s.name].filter(Boolean).join(' · '))}${s.last4 ? ' ••' + esc(s.last4) : ''}</span>`;
   const cols = prev ? 5 : 3;
-  const out = [];
+  const out: string[] = [];
   for (const [sec, label, key] of FIN_BS_SECTIONS) {
     const tree = finBsTree(d[sec] || []);
     out.push(`<tr class="fin-sec"><td>${label}</td><td colspan="${cols - 1}"></td></tr>`);
@@ -83,15 +100,17 @@ function finBsDraw() {
   }
   if (totals.liability != null || totals.equity != null) {
     const le = (totals.liability || 0) + (totals.equity || 0), lp = prev ? (prev.totals?.liability || 0) + (prev.totals?.equity || 0) : null;
-    out.push(`<tr class="fin-tot"><td>Liabilities + equity</td><td class="fin-n">${finNum(le)}</td>${prev ? `<td class="fin-n">${finNum(lp)}</td><td class="fin-n ${finDiff(le - lp).cls}">${finDiff(le - lp).text}</td>` : ''}<td></td></tr>`);
+    const lpDiff = prev ? finDiff(le - finNeed(lp, 'the compare total')) : null;
+    out.push(`<tr class="fin-tot"><td>Liabilities + equity</td><td class="fin-n">${finNum(le)}</td>${prev ? `<td class="fin-n">${finNum(lp)}</td><td class="fin-n ${lpDiff?.cls || ''}">${lpDiff?.text || ''}</td>` : ''}<td></td></tr>`);
   }
   box.innerHTML = `<table class="fin-bs"><thead><tr><th></th><th class="fin-n">${esc(finDayLabel(d.as_of || b.asOf))}${imp ? `<span class="fin-tag" title="${esc(imp)}">Imported</span>` : ''}</th>${prev
     ? `<th class="fin-n">${esc(finDayLabel(prev.as_of || b.compare))}</th><th class="fin-n">Change</th>` : ''}<th>From</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
-  box.querySelector('tbody').onkeydown = ev => { const tr = ev.target.closest('tr[data-fin-line]'); if (tr && ev.key === 'Enter') tr.click(); };
+  finNeed(box.querySelector('tbody'), 'the balance sheet rows').onkeydown = (ev: KeyboardEvent) => { const tr = eventElement(ev)?.closest<HTMLElement>('tr[data-fin-line]'); if (tr && ev.key === 'Enter') tr.click(); };
 }
-function finBsRail() {
-  const state = FIN.bs, b = FIN_BS; if (!state?.data) return;
-  let row = null, label = '';
+function finBsRail(): void {
+  const state: FinBsState = FIN.bs, b = FIN_BS;
+  if (!state?.data) return;
+  let row: FinBsTreeRow | null = null, label = '';
   for (const [sec, name] of FIN_BS_SECTIONS) { const r = finBsTree(state.data[sec] || []).find(x => finBsKey(x) === b.sel); if (r) { row = r; label = name; break; } }
   const tail = finBsTail();
   if (!row) { finRail(tail); return; }
@@ -104,14 +123,16 @@ function finBsRail() {
 }
 // What a line's entries come from (backend/finance/core/ledger.py SOURCES; pnl: net income, from the P&L). A line fed by a
 // money account shows that account, not its bank or card rows again.
-const FIN_ENTRY_SRC = {manual: 'Journal', import: 'Import', bank: 'Bank', card: 'Cards', bill: 'Bills', invoice: 'Invoices',
+const FIN_ENTRY_SRC: Record<string, string> = {manual: 'Journal', import: 'Import', bank: 'Bank', card: 'Cards', bill: 'Bills', invoice: 'Invoices',
   payment: 'Payments', usage: 'Gateway', sync: 'Books sync', pnl: 'P&L'};
-const finBsFrom = r => (r.entry_sources || []).filter(s => !((r.sources || []).length && (s === 'bank' || s === 'card')));
-const finBsSrc = s => s === 'pnl' ? `<a class="fin-src" href="${finHref('/pnl')}">P&amp;L</a>` : `<span class="fin-src">${esc(FIN_ENTRY_SRC[s] || s)}</span>`;
-const finProvider = p => ({mercury: 'Mercury', stripe: 'Stripe', quickbooks: 'QuickBooks', xero: 'Xero'}[p] || p || '');
+const finBsFrom = (r: FinBsRow): string[] => (r.entry_sources || []).filter(s => !((r.sources || []).length && (s === 'bank' || s === 'card')));
+const finBsSrc = (s: string): string => s === 'pnl' ? `<a class="fin-src" href="${finHref('/pnl')}">P&amp;L</a>` : `<span class="fin-src">${esc(FIN_ENTRY_SRC[s] || s)}</span>`;
+// The provider's name: the labels are a fixed table, anything else is shown as it came.
+const FIN_PROVIDERS: Record<string, string> = {mercury: 'Mercury', stripe: 'Stripe', quickbooks: 'QuickBooks', xero: 'Xero'};
+const finProvider = (p: string): string => FIN_PROVIDERS[p] || p || '';
 // Under any line: payments still on their way out of each money account, and how far the books are closed.
-function finBsTail() {
-  const d = FIN.bs.data, seen = new Set(), due = [];
+function finBsTail(): string {
+  const d = finNeed(FIN.bs.data, 'the balance sheet'), seen = new Set<string>(), due: FinBsSource[] = [];
   for (const [sec] of FIN_BS_SECTIONS) for (const r of d[sec] || []) for (const s of r.sources || []) {
     if (seen.has(s.money_account_id) || !s.due_out?.count) continue;
     seen.add(s.money_account_id); due.push(s);
@@ -122,26 +143,41 @@ function finBsTail() {
 }
 
 // ----------------------------------------------------------------- cards
-const FIN_CARD_RANK = {active: 0, frozen: 1, canceled: 2};
-const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], canceled: ['idle', 'Canceled']};
-function finCardsPage() {
-  const caps = finCaps();
+// A card as the cards read sends it: the generated type, with the budget's card limits and the page's saved vendors and freezer.
+type FinCardApi = import('../types/api').FinanceCards['cards'][number];
+type FinCard = Omit<FinCardApi, 'budget'> & {
+  budget?: {id?: string; name: string; card_limits?: unknown} | null; frozen_by?: string | null;
+  saved_on?: {vendor: string; label?: string; saved_by?: string}[];
+};
+interface FinCardsRead { cards?: FinCard[]; next?: string | null }
+// FIN.cards: the open card list, its paging cursor and the selected card.
+interface FinCardsState { rows: FinCard[]; next: string | null; sel: string; load: number }
+// Form controls of the card form and the rail's limit form, and the picker of vendors.
+interface FinCardControls { holder: HTMLSelectElement; budget: HTMLSelectElement; amount: HTMLInputElement; nickname: HTMLInputElement; user: HTMLSelectElement }
+interface FinLimitControls { amount: HTMLInputElement }
+interface FinVendorControls { vendor: HTMLInputElement }
+const FIN_CARD_RANK: Record<string, number> = {active: 0, frozen: 1, canceled: 2};
+const FIN_CARD_STATUS: Record<string, [string, string]> = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], canceled: ['idle', 'Canceled']};
+function finCardsPage(): void {
+  const caps = finNeed(finCaps(), 'the finance caps');
   FIN.cards = {rows: [], next: null, sel: '', load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><span class="spacer"></span>${caps.may('finance.cards') ? '<button type="button" class="primary" data-fin-card-add>+ Card</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-cards">${skelRows(5, {dot: false})}</div>`, '', 'Selected card');
-  $('#fin-body').onclick = ev => {
-    if (ev.target.closest('[data-fin-card-add]')) { finCardAdd(); return; }
-    if (ev.target.closest('[data-fin-more]')) { void finCardsLoad(true); return; }
-    const tr = ev.target.closest('tr[data-fin-card]');
+  const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
+  body.onclick = (ev: Event) => {
+    const at = eventElement(ev);
+    if (at?.closest('[data-fin-card-add]')) { finCardAdd(); return; }
+    if (at?.closest('[data-fin-more]')) { void finCardsLoad(true); return; }
+    const tr = at?.closest<HTMLElement>('tr[data-fin-card]');
     if (tr) { FIN.cards.sel = tr.dataset.finCard; finCardsDraw(); finCardRail(); }
   };
   void finCardsLoad(false);
 }
-async function finCardsLoad(more) {
-  const state = FIN.cards, load = ++state.load;
+async function finCardsLoad(more: boolean): Promise<void> {
+  const state: FinCardsState = FIN.cards, load = ++state.load;
   const qs = more && state.next ? `?cursor=${encodeURIComponent(state.next)}` : '';
-  let d;
-  try { d = await get('/v2/finance/cards' + qs + finAs(qs ? '&' : '?'), {fresh: true}); }
+  let d: FinCardsRead;
+  try { d = await get<FinCardsRead>('/v2/finance/cards' + qs + finAs(qs ? '&' : '?'), {fresh: true}); }
   catch (e) { if (FIN?.cards === state && $('#fin-cards')) $('#fin-cards').innerHTML = finFail(e); return; }
   if (FIN?.cards !== state || state.load !== load || !$('#fin-cards')) return;
   // Live cards first, then frozen, then canceled; by name within each.
@@ -151,16 +187,16 @@ async function finCardsLoad(more) {
   if (!state.rows.some(c => c.id === state.sel)) state.sel = state.rows[0]?.id || '';
   finCardsDraw(); finCardRail();
 }
-const finCardName = c => `${c.nickname || 'Card'}${c.last4 ? ' · ' + c.last4 : ''}`;
+const finCardName = (c: FinCard): string => `${c.nickname || 'Card'}${c.last4 ? ' · ' + c.last4 : ''}`;
 // A frozen card says who froze it: its budget ran out (it unfreezes itself when there is room again) or a person did.
-const finCardPill = c => {
+const finCardPill = (c: FinCard): [string, string] => {
   const [cls, label] = FIN_CARD_STATUS[c.status] || ['idle', c.status];
   return [cls, c.status === 'frozen' && c.frozen_by ? `${label} · ${c.frozen_by === 'budget' ? 'Budget' : 'Person'}` : label];
 };
 // Where a person sees their own card's number: the provider's app (spec §8.3). Tico never reads, keeps or logs one.
-const FIN_CARD_APP = {mercury: 'https://app.mercury.com/cards'};
-function finCardsDraw() {
-  const state = FIN.cards, box = $('#fin-cards'); if (!box) return;
+const FIN_CARD_APP: Record<string, string> = {mercury: 'https://app.mercury.com/cards'};
+function finCardsDraw(): void {
+  const state: FinCardsState = FIN.cards, box: HTMLElement | null = $('#fin-cards'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No cards yet.'); return; }
   box.innerHTML = `<table class="fin-t fin-card-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
     const [cls, label] = finCardPill(c);
@@ -169,10 +205,10 @@ function finCardsDraw() {
       <td><span class="pill ${cls}">${esc(label)}</span>${c.sync_status && c.sync_status !== 'ok' ? ` <span class="muted fin-small">${esc(c.sync_status)}</span>` : ''}</td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
 }
-function finCardRail() {
-  const state = FIN.cards, c = state.rows.find(x => x.id === state.sel);
+function finCardRail(): void {
+  const state: FinCardsState = FIN.cards, c = state.rows.find(x => x.id === state.sel);
   if (!c) { finRail(''); return; }
-  const may = finCaps().may('finance.cards') && c.status !== 'canceled';
+  const may = finNeed(finCaps(), 'the finance caps').may('finance.cards') && c.status !== 'canceled';
   const [cls, label] = finCardPill(c);
   // A budget's freeze lifts when the budget has room again; only a person's freeze is undone by hand.
   const toggle = c.status === 'frozen' ? (c.frozen_by === 'budget' ? '' : 'Unfreeze') : 'Freeze';
@@ -190,43 +226,44 @@ function finCardRail() {
         <button type="submit" class="primary">Save</button></form></span>` : ''}</div>` : ''}
     ${may ? `<form class="fin-form fin-rail-form" data-fin-limit><label>Limit<input name="amount" inputmode="decimal" autocomplete="off" value="${c.limit == null ? '' : c.limit / 100}"></label>
       <div class="fin-foot">${toggle ? `<button type="button" class="ghost" data-fin-freeze>${toggle}</button>` : ''}<button type="submit" class="primary">Save limit</button></div></form>` : ''}`);
-  const rail = $('#fin-rail');
+  const rail = finNeed<HTMLElement>($('#fin-rail'), 'the rail');
   finCardSavedWire(c, rail);
-  rail.querySelector('[data-fin-freeze]')?.addEventListener('click', async ev => {
-    const btn = ev.currentTarget; btn.disabled = true;
+  const freeze = rail.querySelector<HTMLButtonElement>('[data-fin-freeze]');
+  if (freeze) freeze.addEventListener('click', async () => {
+    freeze.disabled = true;
     try {
       const r = await finAct(c.status === 'frozen' ? 'card_unfreeze' : 'card_freeze', {card_id: c.id});   // a refusal's reason shows as sent
       if (r.status === 'committed') toast(c.status === 'frozen' ? 'Unfrozen' : 'Frozen');
       void finCardsLoad(false);
-    } catch (e) { toast(e.message, true); btn.disabled = false; }
+    } catch (e) { toast(errorMessage(e, 'Not done'), true); freeze.disabled = false; }
   });
-  const form = rail.querySelector('[data-fin-limit]');
+  const form = rail.querySelector<FinFormOf<FinLimitControls>>('[data-fin-limit]');
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
     const cents = finParseCents(form.elements.amount.value);
     if (cents == null) { toast('A dollar amount, like 500', true); return; }
-    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    const btn = finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the Save limit button'); btn.disabled = true;
     try {
       const r = await finAct('card_update_limit', {card_id: c.id, amount: cents});
       if (r.status === 'committed') toast('Saved');
       void finCardsLoad(false);
-    } catch (e) { toast(e.message, true); btn.disabled = false; }
+    } catch (e) { toast(errorMessage(e, 'Not done'), true); btn.disabled = false; }
   };
 }
 // "Saved on": the vendor accounts a person saved this bot card on (card_save, card_unsave). The picker offers known
 // vendors (GET /finance/contacts?kind=vendor) and takes a typed name too; a refusal shows the server's words.
-function finCardSavedWire(c, rail) {
-  rail.querySelectorAll('[data-fin-unsave]').forEach(b => b.addEventListener('click', async () => {
+function finCardSavedWire(c: FinCard, rail: HTMLElement): void {
+  rail.querySelectorAll<HTMLButtonElement>('[data-fin-unsave]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true;
     try { const r = await finAct('card_unsave', {card_id: c.id, vendor: b.dataset.finUnsave}); if (r.status === 'committed') toast('Removed'); void finCardsLoad(false); }
-    catch (e) { toast(e.message, true); b.disabled = false; }
+    catch (e) { toast(errorMessage(e, 'Not done'), true); b.disabled = false; }
   }));
-  const btn = rail.querySelector('[data-fin-save]'), form = rail.querySelector('#fin-save');
+  const btn = rail.querySelector<HTMLButtonElement>('[data-fin-save]'), form = rail.querySelector<FinFormOf<FinVendorControls>>('#fin-save');
   if (!btn || !form) return;
-  const list = form.querySelector('datalist'), input = form.elements.vendor;
-  let vendors = [], timer = 0;
-  const fill = async q => {
-    try { vendors = (await get('/v2/finance/contacts?kind=vendor&limit=20' + (q ? '&q=' + encodeURIComponent(q) : ''), {fresh: true}))?.contacts || []; } catch { vendors = []; }
+  const list = finNeed(form.querySelector<HTMLDataListElement>('datalist'), 'the vendor list'), input = form.elements.vendor;
+  let vendors: FinContact[] = [], timer = 0;
+  const fill = async (q: string): Promise<void> => {
+    try { vendors = (await get<import('../types/api').FinanceContacts>('/v2/finance/contacts?kind=vendor&limit=20' + (q ? '&q=' + encodeURIComponent(q) : ''), {fresh: true}))?.contacts || []; } catch { vendors = []; }
     list.innerHTML = vendors.map(v => `<option value="${esc(v.name)}"></option>`).join('');
   };
   btn.onclick = () => { finPop(btn, form); if (!form.hidden) void fill(''); };
@@ -235,20 +272,20 @@ function finCardSavedWire(c, rail) {
     ev.preventDefault();
     const name = input.value.trim(); if (!name) return;
     const known = vendors.find(v => v.name.toLowerCase() === name.toLowerCase());
-    const sub = form.querySelector('[type=submit]'); sub.disabled = true;
+    const sub = finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the Save button'); sub.disabled = true;
     try { const r = await finAct('card_save', {card_id: c.id, vendor: known ? known.id : name}); if (r.status === 'committed') toast('Saved'); void finCardsLoad(false); }
-    catch (e) { toast(e.message, true); sub.disabled = false; }
+    catch (e) { toast(errorMessage(e, 'Not done'), true); sub.disabled = false; }
   };
 }
-async function finCardAdd() {
-  const [b, u] = await Promise.allSettled([get('/v2/finance/budgets', {fresh: true}), get('/v2/finance/mercury-users', {fresh: true})]);
+async function finCardAdd(): Promise<void> {
+  const [b, u] = await Promise.allSettled([get<FinBudRead>('/v2/finance/budgets', {fresh: true}), get<import('../types/api').FinanceMercuryUsers>('/v2/finance/mercury-users', {fresh: true})]);
   const budgets = b.status === 'fulfilled' ? b.value?.budgets || [] : [], users = u.status === 'fulfilled' ? u.value?.users || [] : [];
-  const people = (FIN.acc?.teammates || []);
+  const people: FinAccess['teammates'] = FIN.acc?.teammates || [];
   finDialog('Card', `<label>Holder<select name="holder" required>${people.map(t => `<option value="${esc(t.teammate)}">${esc(finWho(t.teammate))}</option>`).join('')}</select></label>
     <label>Budget<select name="budget" required>${budgets.filter(b => b.active && !b.catch_all).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}</select></label>
     <label>Limit / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>
     <label>Name<input name="nickname" maxlength="50" autocomplete="off"></label>
-    <label>Mercury user<select name="user" required>${users.map(x => `<option value="${esc(x.id)}">${esc(x.name)}${x.email ? ' · ' + esc(x.email) : ''}</option>`).join('')}</select></label>`, 'Create', async form => {
+    <label>Mercury user<select name="user" required>${users.map(x => `<option value="${esc(x.id)}">${esc(x.name)}${x.email ? ' · ' + esc(x.email) : ''}</option>`).join('')}</select></label>`, 'Create', async (form: FinFormOf<FinCardControls>) => {
     // backend/finance/cards.py card_create: a budget the card's monthly limit comes out of, and the Mercury user it is
     // issued to (Mercury issues cards to its own users).
     const cents = finParseCents(form.elements.amount.value);
@@ -256,7 +293,7 @@ async function finCardAdd() {
     if (!form.elements.budget.value) throw new Error('Pick a budget');
     const user = form.elements.user.value;
     if (!user) throw new Error('No Mercury users yet');
-    const payload = {holder: form.elements.holder.value, budget_id: form.elements.budget.value, amount: cents, provider_user_id: user};
+    const payload: {holder: string; budget_id: string; amount: number; provider_user_id: string; nickname?: string} = {holder: form.elements.holder.value, budget_id: form.elements.budget.value, amount: cents, provider_user_id: user};
     if (form.elements.nickname.value.trim()) payload.nickname = form.elements.nickname.value.trim();
     const r = await finAct('card_create', payload);
     if (r.status === 'committed') toast('Card created');
@@ -265,11 +302,42 @@ async function finCardAdd() {
 }
 
 // ----------------------------------------------------------------- transactions
-const FIN_TX = {q: '', source: 'all', status: '', account: '', org: null};
+// A tag set on a line: the teammate, team and project it is posted to (and a budget the server sets).
+type FinTags = {teammate?: string; team?: string; project?: string; budget?: string};
+type FinTagMap = Record<string, string | undefined>;
+type FinTagKey = 'teammate' | 'team' | 'project';
+type FinTxVendor = string | {id: string; name: string};
+// A line of a bank row or an entry, as the transactions read sends it (or as the rail builds it for an entry).
+interface FinTxLine { line_id: string; account_id?: string | undefined; account?: string | undefined; amount?: number | undefined; vendor?: FinTxVendor | undefined; vendor_name?: string | undefined; tags?: FinTags | undefined }
+// A row of the Transactions list: a bank feed row, an entry, or a transfer (from the transfers read, kind 'transfer').
+interface FinTxRow {
+  kind: string; id: string; date?: string; created_at?: string; amount: number; currency?: string;
+  description?: string; counterparty?: string; memo?: string; account?: string; account_id?: string; entry_id?: string | null;
+  source?: string; status?: string; pending?: boolean; reconciled?: boolean; reversed?: boolean; provider_kind?: string; provider_status?: string;
+  lines?: FinTxLine[]; split?: FinShare[]; tags?: FinTags; vendor?: FinTxVendor; vendor_name?: string;
+  money_account?: {name?: string; last4?: string | null} | null; from?: FinAcctRef; to?: FinAcctRef; created_by?: string; last_error?: string | null;
+}
+interface FinAcctRef { id: string; name: string; last4: string | null }
+interface FinTxRead { rows?: FinTxRow[]; next?: string | null }
+interface FinXferRead { transfers?: FinTxRow[]; next_cursor?: string | null }
+// The row's picks in its form: what its lines have now (`was`) and what the form holds (`now`), with For for a new row.
+interface FinTxCatPicks { account: string; teammate: string; team: string; project: string }
+interface FinTxCatAsk { who: string; p: object; sig: string }
+interface FinTxCatState { key: string; was: FinTxCatPicks; now: FinTxCatPicks & {for: string}; typed: boolean; ask: FinTxCatAsk | null }
+// FIN.tx: the open Transactions page.
+interface FinTxState {
+  rows: FinTxRow[]; next: string | null; sel: string; load: number; lines: FinPnlRow[];
+  chart: FinChartAccount[] | false | null | undefined; cat: FinTxCatState | null; busy: boolean;
+}
+interface FinTxFilter { q: string; source: string; status: string; account: string; org: FinFilter | null }
+interface FinTxControls { teammate: HTMLSelectElement; team: HTMLSelectElement; project: HTMLInputElement }
+const FIN_TX: FinTxFilter = {q: '', source: 'all', status: '', account: '', org: null};
 const FIN_TX_STATUS = [['', 'Any status'], ['new', 'New'], ['matched', 'Matched'], ['posted', 'Posted'], ['pending', 'Pending'], ['ignored', 'Ignored'], ['failed', 'Failed']];
 // A bank row the bank ended (stored as ignored): shown by Mercury's reason, not as a person's ignore.
-const FIN_TX_GONE = {failed: 'failed', blocked: 'failed', cancelled: 'canceled', reversed: 'returned'};
-function finTxPage() {
+const FIN_TX_GONE: Record<string, string> = {failed: 'failed', blocked: 'failed', cancelled: 'canceled', reversed: 'returned'};
+// The pill for a row's status.
+const FIN_TX_PILL: Record<string, string> = {posted: 'ok', matched: 'ok', pending: 'waiting', new: 'waiting', ignored: 'idle', reversed: 'idle'};
+function finTxPage(): void {
   const t = FIN_TX;
   if (FIN.q.has('q') || FIN.q.has('account_id')) {
     t.q = FIN.q.get('q') || ''; t.account = FIN.q.get('account_id') || ''; t.source = 'all'; t.status = '';
@@ -281,70 +349,74 @@ function finTxPage() {
   FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: [], chart: undefined, cat: null, busy: false};
   const orgChip = t.org ? `<span class="fin-chip">${esc([...finPicked(t.org).map(finPickName), ...(t.org.who !== 'both' ? [t.org.who === 'bots' ? 'Bots' : 'People'] : [])].join(', '))}<button type="button" data-fin-org-clear aria-label="Clear filter">✕</button></span>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><span class="sr-only">Search</span><input type="search" data-fin-q value="${esc(t.q)}" placeholder="Search" aria-label="Search"></label>
-      ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries'], ...(finCaps().balance ? [['transfer', 'Transfers']] : [])], t.source)}
+      ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries'], ...(finNeed(finCaps(), 'the finance caps').balance ? [['transfer', 'Transfers']] : [])], t.source)}
       <select data-fin-status aria-label="Status">${FIN_TX_STATUS.map(([v, l]) => `<option value="${v}"${v === t.status ? ' selected' : ''}>${l}</option>`).join('')}</select>
       <select data-fin-account aria-label="Line"><option value="">All lines</option>${t.account ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}</select>${orgChip}
-      <span class="spacer"></span>${finCaps().may('finance.pay') ? '<button type="button" class="primary" data-fin-xfer-add>+ Transfer</button>' : ''}</div>`
+      <span class="spacer"></span>${finNeed(finCaps(), 'the finance caps').may('finance.pay') ? '<button type="button" class="primary" data-fin-xfer-add>+ Transfer</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-tx">${skelRows(8, {dot: false})}</div>`, '', 'Selected transaction');
-  const body = $('#fin-body');
+  const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
   let timer = 0;
-  body.querySelector('[data-fin-q]').oninput = ev => { clearTimeout(timer); timer = setTimeout(() => { t.q = ev.target.value.trim(); void finTxLoad(false); }, 300); };
-  body.querySelector('[data-fin-status]').onchange = ev => { t.status = ev.target.value; void finTxLoad(false); };
-  body.querySelector('[data-fin-account]').onchange = ev => { t.account = ev.target.value; void finTxLoad(false); };
-  body.onclick = ev => {
-    const seg = ev.target.closest('[data-fin-seg] button');
-    if (seg) { if (seg.dataset.v !== t.source) { t.source = seg.dataset.v; finSegSet(seg); void finTxLoad(false); } return; }
-    if (ev.target.closest('[data-fin-xfer-add]')) { void finXferAdd(); return; }
-    if (ev.target.closest('[data-fin-more]')) { void finTxLoad(true); return; }
-    const clear = ev.target.closest('[data-fin-org-clear]');
+  const search = finNeed(body.querySelector<HTMLInputElement>('[data-fin-q]'), 'the search box');
+  const statusSel = finNeed(body.querySelector<HTMLSelectElement>('[data-fin-status]'), 'the status filter');
+  const accountSel = finNeed(body.querySelector<HTMLSelectElement>('[data-fin-account]'), 'the line filter');
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { t.q = search.value.trim(); void finTxLoad(false); }, 300); };
+  statusSel.onchange = () => { t.status = statusSel.value; void finTxLoad(false); };
+  accountSel.onchange = () => { t.account = accountSel.value; void finTxLoad(false); };
+  body.onclick = (ev: Event) => {
+    const at = eventElement(ev);
+    const seg = at?.closest<HTMLButtonElement>('[data-fin-seg] button');
+    if (seg) { if (seg.dataset.v !== t.source) { t.source = seg.dataset.v ?? ''; finSegSet(seg); void finTxLoad(false); } return; }
+    if (at?.closest('[data-fin-xfer-add]')) { void finXferAdd(); return; }
+    if (at?.closest('[data-fin-more]')) { void finTxLoad(true); return; }
+    const clear = at?.closest('[data-fin-org-clear]');
     if (clear) {
-      t.org = null; clear.closest('.fin-chip').remove();
+      t.org = null; finNeed(clear.closest('.fin-chip'), 'the filter chip').remove();
       for (const k of ['teams', 'teammates', 'who', 'unattributed']) FIN.q.delete(k);
       const rest = FIN.q.toString();
       history.replaceState(history.state, '', `${FIN_ROUTE}/transactions${rest ? '?' + rest : ''}`);
       S.route = LAST_ROUTE = location.hash;
       void finTxLoad(false); return;
     }
-    if (ev.target.closest('select[data-fin-tx-line]')) return;
-    const tr = ev.target.closest('tr[data-fin-tx]');
+    if (at?.closest('select[data-fin-tx-line]')) return;
+    const tr = at?.closest<HTMLElement>('tr[data-fin-tx]');
     if (tr) { FIN.tx.sel = tr.dataset.finTx; finTxDraw(); finTxRail(); }
   };
-  body.addEventListener('change', ev => { const sel = ev.target.closest('select[data-fin-tx-line]'); if (sel) void finTxLineSave(sel); });
+  body.addEventListener('change', ev => { const sel = eventElement(ev)?.closest<HTMLSelectElement>('select[data-fin-tx-line]'); if (sel) void finTxLineSave(sel); });
   void finTxLines();
-  if (finCaps().may('finance.book')) void finTxChart();
+  if (finNeed(finCaps(), 'the finance caps').may('finance.book')) void finTxChart();
   void finTxLoad(false);
 }
 // The lines to filter by: the P&L's and balance sheet's lines the viewer sees (from the last P&L read, else one now).
-async function finTxLines() {
-  const state = FIN.tx;
-  let rows = FIN_PNL.last?.rows;
+async function finTxLines(): Promise<void> {
+  const state: FinTxState = FIN.tx;
+  let rows: FinPnlRow[] | undefined = FIN_PNL.last?.rows;
   if (!rows) {
     try {
-      const caps = finCaps(), [a, z] = finPnlRange('month');
-      rows = (await get(`/v2/finance/pnl?start=${a}&end=${z}&period=month&basis=cash&view=${caps.company ? 'company' : 'expenses'}${finAs()}`, {fresh: true}))?.rows || [];
+      const caps = finNeed(finCaps(), 'the finance caps'), [a, z] = finPnlRange('month');
+      rows = (await get<FinPnlData>(`/v2/finance/pnl?start=${a}&end=${z}&period=month&basis=cash&view=${caps.company ? 'company' : 'expenses'}${finAs()}`, {fresh: true}))?.rows || [];
     } catch { rows = []; }
   }
   if (FIN?.tx !== state) return;
   state.lines = rows.filter(r => !r.private).sort((a, b) => String(a.code).localeCompare(String(b.code)));
-  const sel = $('#fin-body [data-fin-account]'); if (!sel) return;
+  const sel: HTMLSelectElement | null = $('#fin-body [data-fin-account]'); if (!sel) return;
   const t = FIN_TX, known = state.lines.some(r => r.account_id === t.account);
   sel.innerHTML = `<option value="">All lines</option>${t.account && !known ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}${state.lines.map(r =>
     `<option value="${esc(r.account_id)}"${r.account_id === t.account ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
 }
-async function finTxLoad(more) {
-  if (FIN_TX.source === 'transfer' && !finCaps().balance) FIN_TX.source = 'all';
+async function finTxLoad(more: boolean): Promise<void> {
+  if (FIN_TX.source === 'transfer' && !finNeed(finCaps(), 'the finance caps').balance) FIN_TX.source = 'all';
   // Transfers are their own list: the bank filters don't apply to them.
-  $('#fin-body').querySelectorAll('[data-fin-status], [data-fin-account]').forEach(el => { el.hidden = FIN_TX.source === 'transfer'; });
+  finNeed<HTMLElement>($('#fin-body'), 'the Finance body').querySelectorAll<HTMLElement>('[data-fin-status], [data-fin-account]').forEach(el => { el.hidden = FIN_TX.source === 'transfer'; });
   if (FIN_TX.source === 'transfer') return finXferLoad(more);
-  const state = FIN.tx, t = FIN_TX, load = ++state.load;
+  const state: FinTxState = FIN.tx, t = FIN_TX, load = ++state.load;
   const qs = new URLSearchParams({source: t.source, limit: '50'});
   if (t.q) qs.set('q', t.q.slice(0, 100));
   if (t.status) qs.set('status', t.status);
   if (t.account) qs.set('account_id', t.account);
   for (const [k, v] of finFilterQs(t.org)) qs.append(k, v);
   if (more && state.next) qs.set('cursor', state.next);
-  let d;
-  try { d = await get('/v2/finance/transactions?' + qs + finAs(), {fresh: true}); }
+  let d: FinTxRead;
+  try { d = await get<FinTxRead>('/v2/finance/transactions?' + qs + finAs(), {fresh: true}); }
   catch (e) { if (FIN?.tx === state && state.load === load && $('#fin-tx')) $('#fin-tx').innerHTML = finFail(e); return; }
   if (FIN?.tx !== state || state.load !== load || !$('#fin-tx')) return;
   state.rows = more ? [...state.rows, ...(d.rows || [])] : d.rows || [];
@@ -352,50 +424,53 @@ async function finTxLoad(more) {
   if (!state.rows.some(r => finTxKey(r) === state.sel)) state.sel = state.rows[0] ? finTxKey(state.rows[0]) : '';
   finTxDraw(); finTxRail();
 }
-const finTxKey = r => `${r.kind}:${r.id}`;
+const finTxKey = (r: FinTxRow): string => `${r.kind}:${r.id}`;
 // A row's teammate and vendor: an entry's own tags, a feed row's first line's.
 // The vendor shown is its name (a bill's or invoice's vendor key is the contact's id).
-const finTxTags = r => { const l = r.kind === 'entry' ? r : r.lines?.[0]; return {tags: (r.kind === 'entry' ? r.tags : l?.tags) || {}, vendor: l ? l.vendor_name ?? l.vendor : ''}; };
-function finTxDraw() {
+const finTxTags = (r: FinTxRow): {tags: FinTags; vendor: FinTxVendor | ''} => {
+  const l: FinTxRow | FinTxLine | undefined = r.kind === 'entry' ? r : r.lines?.[0];
+  return {tags: (r.kind === 'entry' ? r.tags : l?.tags) || {}, vendor: l ? l.vendor_name ?? l.vendor ?? '' : ''};
+};
+function finTxDraw(): void {
   if (FIN_TX.source === 'transfer') { finXferDraw(); return; }
-  const state = FIN.tx, box = $('#fin-tx'); if (!box) return;
+  const state: FinTxState = FIN.tx, box: HTMLElement | null = $('#fin-tx'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No transactions.'); return; }
   box.innerHTML = `<table class="fin-t fin-tx-t"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Line</th><th class="fin-n">Amount</th><th>Teammate</th><th>Vendor</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
     const {tags, vendor} = finTxTags(r), key = finTxKey(r);
     const account = r.kind === 'feed' ? `${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}` : '';
-    const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status === 'ignored' && FIN_TX_GONE[r.provider_status] || r.status) : r.reversed ? 'reversed' : 'posted';
+    const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status === 'ignored' && FIN_TX_GONE[r.provider_status ?? ''] || r.status) : r.reversed ? 'reversed' : 'posted';
     return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.date))}</td>
       <td><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut">${account ? esc(account) : '<span class="muted">—</span>'}</td><td>${finTxLineCell(r)}</td>
       <td class="fin-n">${finCents(r.amount)}</td><td>${r.split?.length ? finShareChips(r.split) : tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td class="fin-cut">${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>
-      <td><span class="pill ${{posted: 'ok', matched: 'ok', pending: 'waiting', new: 'waiting', ignored: 'idle', reversed: 'idle'}[status] || 'idle'}">${esc(status)}</span></td></tr>`;
+      <td><span class="pill ${FIN_TX_PILL[status ?? ''] || 'idle'}">${esc(status)}</span></td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
 }
 // A row's line: a picker for a bank or card row its viewer may categorize (one line, or several on the same line), else
 // the line's name, or Split when its lines go to several.
-function finTxLineCell(r) {
-  const lines = r.kind === 'feed' ? r.lines || [] : [], chart = FIN.tx.chart;
+function finTxLineCell(r: FinTxRow): string {
+  const txState: FinTxState = FIN.tx, lines = r.kind === 'feed' ? r.lines || [] : [], chart = txState.chart;
   const ids = [...new Set(lines.map(l => l.account_id || ''))];
   if (r.kind !== 'feed') return r.account ? esc(r.account) : '<span class="muted">—</span>';
   if (ids.length > 1) return 'Split';
   const cur = ids[0] || '', name = lines[0]?.account || '';
   // A row split across tags (even on one line) is categorized in the panel, so each part keeps its own tags.
   if (lines.length > 1 || !finTxCatOn(r) || !Array.isArray(chart)) return name ? esc(name) : '<span class="muted">—</span>';
-  const opt = (v, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
-  return `<select class="fin-cell-sel" data-fin-tx-line="${esc(finTxKey(r))}" aria-label="Line"${FIN.tx.busy ? ' disabled' : ''}>${cur ? '' : opt('', '—')}${cur && !chart.some(a => a.id === cur) ? opt(cur, name || cur) : ''}${chart.map(a => opt(a.id, a.name)).join('')}</select>`;
+  const opt = (v: string, l: string) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<select class="fin-cell-sel" data-fin-tx-line="${esc(finTxKey(r))}" aria-label="Line"${txState.busy ? ' disabled' : ''}>${cur ? '' : opt('', '—')}${cur && !chart.some(a => a.id === cur) ? opt(cur, name || cur) : ''}${chart.map(a => opt(a.id, a.name)).join('')}</select>`;
 }
 // A line picked in the row: the row moves to it, keeping its tags; a line the viewer may only post to with a teammate
 // or team tag gets theirs (the chart lists the viewer first) when the row has neither. When the rules ask for approval,
 // the rail's form shows the ask.
-async function finTxLineSave(sel) {
-  const state = FIN.tx, key = sel.dataset.finTxLine, r = state.rows.find(x => finTxKey(x) === key);
+async function finTxLineSave(sel: HTMLSelectElement): Promise<void> {
+  const state: FinTxState = FIN.tx, key = sel.dataset.finTxLine ?? '', r = state.rows.find(x => finTxKey(x) === key);
   if (!r || !sel.value || state.busy) { finTxDraw(); return; }
   const line = (state.chart || []).find(a => a.id === sel.value), lines = r.lines || [];
-  const tags = lines.length ? {...(lines[0].tags || {})} : {};
+  const tags: FinTagMap = lines.length ? {...(finNeed(lines[0], 'the first line').tags || {})} : {};
   delete tags.budget;   // set by the new line's budgets
   if (line?.company_wide === false && !tags.teammate && !tags.team) {
     const first = finTxForOpts(line)[0];
     if (!first) { toast('Not a line you can post to', true); finTxDraw(); return; }
-    const [k, v] = first[0].split(/:(.*)/); tags[k] = v;
+    const [k, v] = first[0].split(/:(.*)/); tags[finNeed(k, 'the tag')] = v;
   }
   const payload = {feed_id: r.id, account_id: sel.value, tags};
   state.busy = true; sel.disabled = true;
@@ -413,7 +488,7 @@ async function finTxLineSave(sel) {
     finTxRailHold();
     void finTxLoad(false);
   } catch (e) {
-    state.busy = false; toast(e.message, true);
+    state.busy = false; toast(errorMessage(e, 'Not done'), true);
     if (FIN?.tx !== state) return;
     finTxDraw();
     // A rail drawn while this was out has its Save off.
@@ -421,24 +496,24 @@ async function finTxLineSave(sel) {
   }
 }
 // The reload after a save redraws the rail from the fresh read: no picks until then, they would be dropped.
-const finTxRailHold = () => { const form = $('#fin-rail form'); if (form) form.inert = true; };
-function finTxRail() {
+const finTxRailHold = (): void => { const form: HTMLFormElement | null = $('#fin-rail form'); if (form) form.inert = true; };
+function finTxRail(): void {
   if (FIN_TX.source === 'transfer') { finXferRail(); return; }
-  const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
+  const state: FinTxState = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
   if (!r) { finRail(''); return; }
-  const lines = r.kind === 'feed' ? (r.lines || []) : r.entry_id && r.id ? [{line_id: r.id, account: r.account, amount: r.amount, vendor: r.vendor, tags: r.tags || {}}] : [];
-  const may = finCaps().may('finance.book') && lines.length > 0;
+  const lines: FinTxLine[] = r.kind === 'feed' ? (r.lines || []) : r.entry_id && r.id ? [{line_id: r.id, account: r.account, amount: r.amount, vendor: r.vendor, tags: r.tags || {}}] : [];
+  const may = finNeed(finCaps(), 'the finance caps').may('finance.book') && lines.length > 0;
   const cat = finTxCatOn(r);
-  const acc = FIN.acc || {};
+  const acc: Partial<FinAccess> = FIN.acc || {};
   // What each field shows: the lines' common value, or Mixed when a split transaction's lines differ.
   const FIN_MIXED = '*';
-  const shown = Object.fromEntries(['teammate', 'team', 'project'].map(k => {
+  const shown: Partial<Record<FinTagKey, string>> = Object.fromEntries((['teammate', 'team', 'project'] as const).map((k): [FinTagKey, string] => {
     const vals = new Set(lines.map(l => l.tags?.[k] || ''));
     return [k, vals.size > 1 ? FIN_MIXED : [...vals][0] || ''];
   }));
-  const mixed = k => shown[k] === FIN_MIXED ? `<option value="${FIN_MIXED}" selected>Mixed</option>` : '';
+  const mixed = (k: FinTagKey) => shown[k] === FIN_MIXED ? `<option value="${FIN_MIXED}" selected>Mixed</option>` : '';
   const title = r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '';
-  const opt = (v, l, cur) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(l)}</option>`;
+  const opt = (v: string, l: string, cur?: string) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(l)}</option>`;
   finRail(`<div class="fin-rail-title"><h2>${esc(title)}</h2><span class="fin-big">${finUsd(r.amount)}</span></div>
     ${finKv('Date', esc(finDayLabel(r.date)))}
     ${r.kind === 'feed' ? finKv('Account', esc(`${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}`)) + (r.description && r.description !== title ? finKv('Description', esc(r.description)) : '') : finKv('Source', esc(r.source || ''))}
@@ -453,58 +528,62 @@ function finTxRail() {
   if (cat) finTxCatDraw(r);
   void finTxExpected(r);
   void finShareRailLoad(finTxKey(r), lines);
-  const form = $('#fin-rail [data-fin-tag]');
-  form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
-  if (form) form.onchange = () => { if (!state.busy) form.querySelector('[type=submit]').disabled = false; };
-  if (form) form.onsubmit = async ev => {
-    ev.preventDefault();
-    // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
-    // On a mixed field only Mixed (a Project not typed in) means unchanged: — or an emptied Project clears every line.
-    const val = k => k === 'project' && shown.project === FIN_MIXED && !form.elements.project.dataset.finTyped ? FIN_MIXED : form.elements[k].value.trim();
-    const changed = ['teammate', 'team', 'project'].map(k => [k, val(k)])
-      .filter(([k, v]) => v !== FIN_MIXED && (shown[k] === FIN_MIXED || v !== shown[k]));
-    if (!changed.length) return;
-    const pick = l => {
-      const next = {...(l.tags || {})};
-      for (const [k, v] of changed) { if (v) next[k] = v; else delete next[k]; }
-      return next;
+  const form: FinFormOf<FinTxControls> | null = $('#fin-rail [data-fin-tag]');
+  if (form) {
+    form.elements.project.addEventListener('input', () => { form.elements.project.dataset.finTyped = '1'; });
+    form.onchange = () => { if (!state.busy) finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the Save button').disabled = false; };
+    form.onsubmit = async ev => {
+      ev.preventDefault();
+      // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
+      // On a mixed field only Mixed (a Project not typed in) means unchanged: — or an emptied Project clears every line.
+      const val = (k: FinTagKey): string => k === 'project' && shown.project === FIN_MIXED && !form.elements.project.dataset.finTyped ? FIN_MIXED : form.elements[k].value.trim();
+      const changed = (['teammate', 'team', 'project'] as const).map((k): [FinTagKey, string] => [k, val(k)])
+        .filter(([k, v]) => v !== FIN_MIXED && (shown[k] === FIN_MIXED || v !== shown[k]));
+      if (!changed.length) return;
+      const pick = (l: FinTxLine): FinTagMap => {
+        const next: FinTagMap = {...(l.tags || {})};
+        for (const [k, v] of changed) { if (v) next[k] = v; else delete next[k]; }
+        return next;
+      };
+      if (state.busy) return;   // one categorize or match at a time on the tab (finTxCatDraw)
+      const btn = finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the Save button'); btn.disabled = true; state.busy = true;
+      try {
+        const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
+        if (res.status === 'committed') toast('Saved');
+        state.busy = false;
+        finTxRailHold();
+        void finTxLoad(false);
+      } catch (e) { toast(errorMessage(e, 'Not done'), true); btn.disabled = false; }
+      finally { state.busy = false; }
     };
-    if (state.busy) return;   // one categorize or match at a time on the tab (finTxCatDraw)
-    const btn = form.querySelector('[type=submit]'); btn.disabled = true; state.busy = true;
-    try {
-      const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
-      if (res.status === 'committed') toast('Saved');
-      state.busy = false;
-      finTxRailHold();
-      void finTxLoad(false);
-    } catch (e) { toast(e.message, true); btn.disabled = false; }
-    finally { state.busy = false; }
-  };
+  }
 }
 // A new bank row whose automatic match to payments marked paid was unclear: the waiting payments it may be the bank
 // side of (GET /finance/feed/{id}/expected), checked off to one contact and the row's exact amount, then feed_match.
 // Only for those who may match (finance.ap or finance.ar); nothing shows when there are none.
-async function finTxExpected(r) {
-  const caps = finCaps(), state = FIN.tx, key = finTxKey(r);
-  if (r.kind !== 'feed' || r.pending || r.status !== 'new' || !(caps.may('finance.ap') || caps.may('finance.ar'))) return;
-  let d;
-  try { d = await get(`/v2/finance/feed/${encodeURIComponent(r.id)}/expected${finAs('?')}`, {fresh: true}); } catch { return; }
-  const box = $('#fin-tx-match');
+async function finTxExpected(r: FinTxRow): Promise<void> {
+  const caps = finCaps(), state: FinTxState = FIN.tx, key = finTxKey(r);
+  // Looked up only where the old code read it, so a missing caps still means nothing to show (and no error) elsewhere.
+  const may = (right: string): boolean => finNeed(caps, 'the finance caps').may(right);
+  if (r.kind !== 'feed' || r.pending || r.status !== 'new' || !(may('finance.ap') || may('finance.ar'))) return;
+  let d: import('../types/api').FinanceFeedExpected | undefined;
+  try { d = await get<import('../types/api').FinanceFeedExpected>(`/v2/finance/feed/${encodeURIComponent(r.id)}/expected${finAs('?')}`, {fresh: true}); } catch { return; }
+  const box: HTMLElement | null = $('#fin-tx-match');
   if (FIN?.tx !== state || state.sel !== key || !box || !d?.expected?.length) return;
   const rows = d.expected;
   box.innerHTML = `<h3 class="fin-h">Match</h3>${rows.map(x => `<label class="fin-match"><input type="checkbox" value="${esc(x.settlement_id)}">
       <span>${esc(x.contact_name || '—')}</span><span class="muted">${esc(x.number || '')}</span><span class="fin-n">${finUsd(x.amount)}</span><span class="muted">${esc(finDayLabel(x.marked_on))}</span></label>`).join('')}
     <div class="fin-acts" data-fin-match-acts><button type="button" class="primary" data-fin-match disabled>Match</button></div>`;
-  const picked = () => rows.filter(x => box.querySelector(`input[value="${CSS.escape(x.settlement_id)}"]`)?.checked);
+  const picked = () => rows.filter(x => box.querySelector<HTMLInputElement>(`input[value="${CSS.escape(x.settlement_id)}"]`)?.checked);
   const sync = () => {
-    const p = picked(), btn = box.querySelector('[data-fin-match]');
+    const p = picked(), btn = box.querySelector<HTMLButtonElement>('[data-fin-match]');
     if (btn) btn.disabled = !p.length || p.reduce((t, x) => t + x.amount, 0) !== d.amount || new Set(p.map(x => x.contact_id)).size !== 1;
   };
   box.addEventListener('change', sync);
   box.onclick = async ev => {
-    const btn = ev.target.closest('[data-fin-match], [data-fin-ask-yes], [data-fin-ask-no]');
+    const btn = eventElement(ev)?.closest<HTMLButtonElement>('[data-fin-match], [data-fin-ask-yes], [data-fin-ask-no]');
     if (!btn) return;
-    const acts = box.querySelector('[data-fin-match-acts]'), payload = {feed_id: r.id, settlement_ids: picked().map(x => x.settlement_id)};
+    const acts = finNeed(box.querySelector<HTMLElement>('[data-fin-match-acts]'), 'the match actions'), payload = {feed_id: r.id, settlement_ids: picked().map(x => x.settlement_id)};
     if (btn.matches('[data-fin-ask-no]')) { acts.innerHTML = '<button type="button" class="primary" data-fin-match>Match</button>'; sync(); return; }
     if (state.busy) return;   // one categorize or match at a time on the tab
     btn.disabled = true; state.busy = true;
@@ -518,7 +597,7 @@ async function finTxExpected(r) {
       if (res.status === 'committed') toast('Matched');
       state.busy = false;
       void finTxLoad(false);
-    } catch (e) { toast(e.message, true); btn.disabled = false; }
+    } catch (e) { toast(errorMessage(e, 'Not done'), true); btn.disabled = false; }
     finally {
       state.busy = false;
       // Categorize, edited while this ran, drew its Save off (finTxCatDraw): draw it again with Save back on.
@@ -531,68 +610,74 @@ async function finTxExpected(r) {
 // Those who keep the books set a bank or card row's line and tags in one form; a row still pending at the bank, or
 // cleared by a done reconciliation, keeps its line (banking.py categorize_feed). Owners always may (finCaps().may).
 // Splits come from posting rules, not from here.
-const finTxCatOn = r => r.kind === 'feed' && !r.pending && !r.reconciled && !finTxTransfer(r) && !!finCaps()?.may('finance.book');
+const finTxCatOn = (r: FinTxRow): boolean => r.kind === 'feed' && !r.pending && !r.reconciled && !finTxTransfer(r) && !!finCaps()?.may('finance.book');
 // One side of a transfer between our own accounts (backend/finance/core/feeds.py TRANSFER_KINDS), which categorize
 // refuses: a transfer-kind row posted with no P&L line, or one whose entry another row on the page shares.
-const finTxTransfer = r => !!r.entry_id && ((['internalTransfer', 'treasuryTransfer'].includes(r.provider_kind) && !(r.lines || []).length)
-  || (FIN?.tx?.rows || []).some(x => x !== r && x.kind === 'feed' && x.entry_id === r.entry_id));
+const finTxTransfer = (r: FinTxRow): boolean => !!r.entry_id && ((['internalTransfer', 'treasuryTransfer'].includes(r.provider_kind ?? '') && !(r.lines || []).length)
+  || (FIN?.tx?.rows || []).some((x: FinTxRow) => x !== r && x.kind === 'feed' && x.entry_id === r.entry_id));
 const FIN_TX_MIXED = '*';   // a field the row's lines differ on
 
 // The lines the viewer may post to (GET /finance/chart), each with whether it takes amounts from them with no team or
 // teammate tag and, when it does not, whom they may put it on. With no answer (still loading, or the read failed)
 // the form stays hidden.
-async function finTxChart() {
-  const state = FIN.tx;
+async function finTxChart(): Promise<void> {
+  const state: FinTxState = FIN.tx;
   if (state.chart !== undefined) return;
   state.chart = null;
-  let rows = null;
-  try { rows = (await get('/v2/finance/chart?for=journal' + finAs(), {fresh: true}))?.accounts; } catch { rows = null; }
+  let rows: FinChartAccount[] | null | undefined = null;
+  try { rows = (await get<import('../types/api').FinanceChart>('/v2/finance/chart?for=journal' + finAs(), {fresh: true}))?.accounts; } catch { rows = null; }
   if (FIN?.tx !== state) return;
   state.chart = Array.isArray(rows) ? rows : false;
   if (state.rows.length && FIN_TX.source !== 'transfer') finTxDraw();
   finTxCatRedraw();
 }
-function finTxCatRedraw() {
-  const r = FIN?.tx?.rows.find(x => finTxKey(x) === FIN.tx.sel);
+function finTxCatRedraw(): void {
+  const state: FinTxState | undefined = FIN?.tx;
+  const r = state?.rows.find(x => finTxKey(x) === state.sel);
   if (r && finTxCatOn(r)) finTxCatDraw(r);
 }
 // Whom an amount on a line that is not company-wide for the viewer may be for: the chart's list (the viewer first,
 // then teams, then teammates; the rule a write checks). [value, label].
-const finTxForOpts = line => (line?.attributable || [])
-  .map(t => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
+const finTxForOpts = (line: FinChartAccount | undefined): [string, string][] => (line?.attributable || [])
+  .map((t): [string, string] => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
 // The selected row's picks, kept while the rail redraws: what its lines have now (`was`) and the form's values.
-function finTxCatState(r) {
-  const state = FIN.tx, key = finTxKey(r);
+function finTxCatState(r: FinTxRow): FinTxCatState {
+  const state: FinTxState = FIN.tx, key = finTxKey(r);
   if (state.cat?.key === key) return state.cat;
   const lines = r.lines || [];
-  const common = pick => { const v = new Set(lines.map(pick)); return v.size > 1 ? FIN_TX_MIXED : [...v][0] || ''; };
-  const was = {account: common(l => l.account_id || ''), teammate: common(l => l.tags?.teammate || ''),
+  const common = (pick: (l: FinTxLine) => string): string => { const v = new Set(lines.map(pick)); return v.size > 1 ? FIN_TX_MIXED : [...v][0] || ''; };
+  const was: FinTxCatPicks = {account: common(l => l.account_id || ''), teammate: common(l => l.tags?.teammate || ''),
     team: common(l => l.tags?.team || ''), project: common(l => l.tags?.project || '')};
   return state.cat = {key, was, now: {...was, for: ''}, typed: false, ask: null};
 }
+// The form's fields that a change may set, and the ones the form can change at all.
+const FIN_CAT_CHANGE = ['account', 'for', 'teammate', 'team'] as const;
+type FinCatChange = (typeof FIN_CAT_CHANGE)[number];
+const isCatChange = (s: string): s is FinCatChange => FIN_CAT_CHANGE.some(k => k === s);
 // One form, one Save, one categorize. A new row: its line, and For when that line is not company-wide for the viewer.
 // A posted row: its line, teammate, team and project. A new line reposts the row ({feed_id, account_id, tags});
 // the same line only re-tags its lines ({lines, mode: replace}), so a rule's split stays as it is.
-function finTxCatDraw(r) {
-  const form = $('#fin-rail [data-fin-cat]'); if (!form) return;
+function finTxCatDraw(r: FinTxRow): void {
+  const form: HTMLFormElement | null = $('#fin-rail [data-fin-cat]'); if (!form) return;
   void finTxChart();
-  const state = FIN.tx;
-  form.hidden = !Array.isArray(state.chart);
-  if (form.hidden) { form.innerHTML = ''; return; }
-  const c = finTxCatState(r), chart = state.chart, lines = r.lines || [], posted = lines.length > 0;
-  const acc = FIN.acc || {}, M = FIN_TX_MIXED, now = c.now, was = c.was;
-  const lineOf = id => chart.find(a => a.id === id);
+  const state: FinTxState = FIN.tx;
+  const chart = state.chart;
+  form.hidden = !Array.isArray(chart);
+  if (!Array.isArray(chart)) { form.innerHTML = ''; return; }
+  const c = finTxCatState(r), lines = r.lines || [], posted = lines.length > 0;
+  const acc: Partial<FinAccess> = FIN.acc || {}, M = FIN_TX_MIXED, now = c.now, was = c.was;
+  const lineOf = (id: string) => chart.find(a => a.id === id);
   const scoped = () => lineOf(now.account)?.company_wide === false;
-  const opt = (v, l, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
-  const mixed = k => was[k] === M ? opt(M, 'Mixed', now[k]) : '';
+  const opt = (v: string, l: string, cur?: string) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+  const mixed = (k: 'account' | FinTagKey) => was[k] === M ? opt(M, 'Mixed', now[k]) : '';
   // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays. On a
   // mixed field only Mixed (a Project not typed in) means unchanged: — or an emptied Project clears every line.
-  const changed = () => ['teammate', 'team', 'project'].map(k => [k, k === 'project' ? (was.project === M && !c.typed ? M : now.project.trim()) : now[k]])
+  const changed = (): [FinTagKey, string][] => (['teammate', 'team', 'project'] as const).map((k): [FinTagKey, string] => [k, k === 'project' ? (was.project === M && !c.typed ? M : now.project.trim()) : now[k]])
     .filter(([k, v]) => v !== M && (was[k] === M || v !== was[k]));
-  const pick = l => { const next = {...(l.tags || {})}; for (const [k, v] of changed()) { if (v) next[k] = v; else delete next[k]; } return next; };
+  const pick = (l: FinTxLine): FinTagMap => { const next: FinTagMap = {...(l.tags || {})}; for (const [k, v] of changed()) { if (v) next[k] = v; else delete next[k]; } return next; };
   const moved = () => now.account !== was.account && now.account !== M;
-  const forTag = () => { const [k, v] = now.for.split(/:(.*)/); return scoped() && now.for ? {[k]: v} : {}; };
-  const moveTags = () => { const t = pick(lines[0]); delete t.budget; return t; };   // budget: set by the new line's budgets
+  const forTag = (): FinTagMap => { const [k, v] = now.for.split(/:(.*)/); return scoped() && now.for ? {[finNeed(k, 'the For key')]: v} : {}; };
+  const moveTags = (): FinTagMap => { const t = pick(finNeed(lines[0], 'the first line')); delete t.budget; return t; };   // budget: set by the new line's budgets
   const ready = () => !posted ? !!now.account && (!scoped() || !!now.for)
     : moved() ? !!now.account && (!scoped() || !!(moveTags().teammate || moveTags().team)) : changed().length > 0;
   const payload = () => !posted ? {feed_id: r.id, account_id: now.account, tags: forTag()}
@@ -601,21 +686,21 @@ function finTxCatDraw(r) {
   const footHtml = () => `<div class="fin-foot">${c.ask != null
     ? `<span class="fin-ask">${esc(finAskText(c.ask.who))}</span><button type="button" class="ghost" data-fin-cat-no>Cancel</button><button type="button" class="primary" data-fin-cat-yes${state.busy ? ' disabled' : ''}>Send</button>`
     : `<button type="submit" class="primary" data-fin-cat-save${ready() && !state.busy ? '' : ' disabled'}>Save</button>`}</div>`;
-  const foot = () => { const f = form.querySelector('.fin-foot'); if (f) f.outerHTML = footHtml(); };
-  const draw = focus => {
+  const foot = (): void => { const f = form.querySelector<HTMLElement>('.fin-foot'); if (f) f.outerHTML = footHtml(); };
+  const draw = (focus: string): void => {
     const forOpts = !posted && scoped() ? finTxForOpts(lineOf(now.account)) : [];
-    if (forOpts.length && !forOpts.some(([v]) => v === now.for)) now.for = forOpts[0][0];
+    if (forOpts.length && !forOpts.some(([v]) => v === now.for)) now.for = finNeed(forOpts[0], 'the For choices')[0];
     const name = lines.find(l => l.account_id === now.account)?.account || now.account;
     form.innerHTML = `<label>Line<select name="account">${mixed('account')}${opt('', '—', now.account)}${now.account && now.account !== M && !lineOf(now.account) ? opt(now.account, name, now.account) : ''}${chart.map(a => opt(a.id, a.name, now.account)).join('')}</select></label>
       ${forOpts.length ? `<label>For<select name="for">${forOpts.map(([v, l]) => opt(v, l, now.for)).join('')}</select></label>` : ''}
       ${posted ? `<label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', now.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), now.teammate)).join('')}</select></label>
       <label>Team<select name="team">${mixed('team')}${opt('', '—', now.team)}${(acc.teams || []).map(t => opt(t.id, t.name, now.team)).join('')}</select></label>
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${now.project === M ? '' : esc(now.project)}"${now.project === M ? ' placeholder="Mixed"' : ''}></label>` : ''}${footHtml()}`;
-    if (focus) form.querySelector(focus)?.focus();
+    if (focus) form.querySelector<HTMLElement>(focus)?.focus();
   };
   // One categorize or match at a time on the tab (state.busy keeps every Save and Send off until it answers). An approval
   // prompt holds the payload its dry run was for, and Send sends that payload; changing the form drops the prompt.
-  const send = async asked => {
+  const send = async (asked: FinTxCatAsk | null): Promise<void> => {
     if (state.busy) return;
     const p = asked ? asked.p : payload(), sent = JSON.stringify(p);
     state.busy = true; foot();
@@ -630,7 +715,7 @@ function finTxCatDraw(r) {
       }
       if (res.status === 'committed') toast('Saved');
       saved = true;
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toast(errorMessage(e, 'Not done'), true); }
     finally {
       state.busy = false;
       // After a save the reload redraws the rail, so the saved row's picks are rebuilt from its fresh read (another
@@ -642,22 +727,24 @@ function finTxCatDraw(r) {
       } else finTxCatRedraw();
     }
   };
-  form.onchange = ev => {
-    const el = ev.target;
-    if (!['account', 'for', 'teammate', 'team'].includes(el.name)) return;
+  form.onchange = (ev: Event) => {
+    const el = eventElement(ev)?.closest<HTMLSelectElement>('select');
+    if (!el || !isCatChange(el.name)) return;
     now[el.name] = el.value; c.ask = null;
     if (el.name !== 'account') { foot(); return; }
     // A posted row moved to a line that needs a teammate or team gets the viewer when it has neither.
     if (posted && scoped() && !now.teammate && !now.team) now.teammate = finCaps()?.who || '';
     draw('select[name="account"]');
   };
-  form.oninput = ev => {
-    if (ev.target.name !== 'project') return;
-    now.project = ev.target.value; c.typed = true; c.ask = null; foot();
+  form.oninput = (ev: Event) => {
+    const el = eventElement(ev)?.closest<HTMLInputElement>('input[name="project"]');
+    if (!el) return;
+    now.project = el.value; c.typed = true; c.ask = null; foot();
   };
-  form.onclick = ev => {
-    if (ev.target.closest('[data-fin-cat-no]')) { c.ask = null; foot(); }
-    else if (ev.target.closest('[data-fin-cat-yes]') && c.ask) void send(c.ask);
+  form.onclick = (ev: Event) => {
+    const at = eventElement(ev);
+    if (at?.closest('[data-fin-cat-no]')) { c.ask = null; foot(); }
+    else if (at?.closest('[data-fin-cat-yes]') && c.ask) void send(c.ask);
   };
   form.onsubmit = ev => { ev.preventDefault(); if (ready() && c.ask == null) void send(null); };
   draw('');
@@ -667,56 +754,58 @@ function finTxCatDraw(r) {
 // Moves between the company's own bank accounts (payment_create method "internal", backend/finance/transfers.py), and
 // payment_cancel while one is still queued. GET /api/v2/finance/transfers?cursor= ->
 // {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next_cursor}.
-const FIN_XFER_STATUS = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
+const FIN_XFER_STATUS: Record<string, [string, string]> = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
   failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], canceled: ['idle', 'Canceled']};
-const finAcctName = a => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
-async function finXferLoad(more) {
-  const state = FIN.tx, load = ++state.load;
+const finAcctName = (a: FinAcctRef | undefined): string => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
+async function finXferLoad(more: boolean): Promise<void> {
+  const state: FinTxState = FIN.tx, load = ++state.load;
   const qs = new URLSearchParams({limit: '50'});
   if (more && state.next) qs.set('cursor', state.next);
-  let d;
-  try { d = await get('/v2/finance/transfers?' + qs + finAs(), {fresh: true}); }
+  let d: FinXferRead;
+  try { d = await get<FinXferRead>('/v2/finance/transfers?' + qs + finAs(), {fresh: true}); }
   catch (e) { if (FIN?.tx === state && state.load === load && $('#fin-tx')) { $('#fin-tx').innerHTML = finFail(e); finRail(''); } return; }
   if (FIN?.tx !== state || state.load !== load || !$('#fin-tx')) return;
-  const rows = (d.transfers || []).map(x => ({...x, kind: 'transfer'}));
+  const rows: FinTxRow[] = (d.transfers || []).map(x => ({...x, kind: 'transfer'}));
   state.rows = more ? [...state.rows, ...rows] : rows;
   state.next = d.next_cursor || null;
   if (!state.rows.some(r => finTxKey(r) === state.sel)) state.sel = state.rows[0] ? finTxKey(state.rows[0]) : '';
   finXferDraw(); finXferRail();
 }
-function finXferDraw() {
-  const state = FIN.tx, box = $('#fin-tx'); if (!box) return;
+function finXferDraw(): void {
+  const state: FinTxState = FIN.tx, box: HTMLElement | null = $('#fin-tx'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No transfers.'); return; }
   box.innerHTML = `<table class="fin-t"><thead><tr><th>Date</th><th>From</th><th>To</th><th class="fin-n">Amount</th><th>Memo</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
-    const key = finTxKey(r), [cls, label] = FIN_XFER_STATUS[r.status] || ['idle', r.status];
+    const key = finTxKey(r), [cls, label] = FIN_XFER_STATUS[r.status ?? ''] || ['idle', r.status ?? ''];
     return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.created_at))}</td>
       <td><button type="button" class="fin-link">${esc(finAcctName(r.from))}</button></td><td>${esc(finAcctName(r.to))}</td><td class="fin-n">${finCents(r.amount)}</td>
       <td>${r.memo ? esc(r.memo) : '<span class="muted">—</span>'}</td><td><span class="pill ${cls}">${esc(label)}</span></td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
 }
-function finXferRail() {
-  const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
+function finXferRail(): void {
+  const state: FinTxState = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
   if (!r) { finRail(''); return; }
-  const [cls, label] = FIN_XFER_STATUS[r.status] || ['idle', r.status];
+  const [cls, label] = FIN_XFER_STATUS[r.status ?? ''] || ['idle', r.status ?? ''];
   finRail(`<div class="fin-rail-title"><h2>Transfer</h2><span class="pill ${cls}">${esc(label)}</span></div>
     ${finKv('Amount', finUsd(r.amount))}${finKv('From', esc(finAcctName(r.from)))}${finKv('To', esc(finAcctName(r.to)))}
     ${finKv('Date', esc(finDayLabel(r.created_at)))}${r.created_by ? finKv('By', esc(finWho(r.created_by))) : ''}${r.memo ? finKv('Memo', esc(r.memo)) : ''}
     ${r.last_error ? finKv('Error', esc(r.last_error), 'fin-bad') : ''}
-    ${r.status === 'queued' && finCaps().may('finance.pay') ? '<div class="fin-foot"><button type="button" class="ghost" data-fin-xfer-cancel>Cancel transfer</button></div>' : ''}`);
-  $('#fin-rail [data-fin-xfer-cancel]')?.addEventListener('click', async ev => {
-    const btn = ev.currentTarget; btn.disabled = true;
+    ${r.status === 'queued' && finNeed(finCaps(), 'the finance caps').may('finance.pay') ? '<div class="fin-foot"><button type="button" class="ghost" data-fin-xfer-cancel>Cancel transfer</button></div>' : ''}`);
+  const cancel: HTMLButtonElement | null = $('#fin-rail [data-fin-xfer-cancel]');
+  if (cancel) cancel.addEventListener('click', async () => {
+    cancel.disabled = true;
     try { const res = await finAct('payment_cancel', {transfer_id: r.id}); if (res.status === 'committed') toast('Canceled'); void finTxLoad(false); }
-    catch (e) { toast(e.message, true); btn.disabled = false; }
+    catch (e) { toast(errorMessage(e, 'Not done'), true); cancel.disabled = false; }
   });
 }
-async function finXferAdd() {
-  let accounts = [];
-  try { accounts = await finPayFrom(); } catch (e) { toast(e.message, true); return; }
+interface FinXferControls { from: HTMLSelectElement; to: HTMLSelectElement; amount: HTMLInputElement; memo: HTMLInputElement }
+async function finXferAdd(): Promise<void> {
+  let accounts: FinPick[] = [];
+  try { accounts = await finPayFrom(); } catch (e) { toast(errorMessage(e, 'Not done'), true); return; }
   if (accounts.length < 2) { toast('Needs two bank accounts', true); return; }
-  finDecideDialog('Transfer', `<label>From<select name="from" required>${finOpts(accounts, accounts[0].id)}</select></label>
-    <label>To<select name="to" required>${finOpts(accounts, accounts[1].id)}</select></label>
+  finDecideDialog('Transfer', `<label>From<select name="from" required>${finOpts(accounts, finNeed(accounts[0], 'the first bank account').id)}</select></label>
+    <label>To<select name="to" required>${finOpts(accounts, finNeed(accounts[1], 'the second bank account').id)}</select></label>
     <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>
-    <label>Memo<input name="memo" maxlength="140" autocomplete="off"></label>`, 'Transfer', form => {
+    <label>Memo<input name="memo" maxlength="140" autocomplete="off"></label>`, 'Transfer', (form: FinFormOf<FinXferControls>) => {
     const el = form.elements, amount = finParseCents(el.amount.value);
     if (!amount) throw new Error('A dollar amount, like 500');
     if (el.from.value === el.to.value) throw new Error('Pick two different accounts');
