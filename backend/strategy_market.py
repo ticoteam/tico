@@ -25,7 +25,7 @@ evidence row: the owner's say-so on this page. Only the owner and the Librarian 
 
 import re
 from datetime import date, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import Request
 from pydantic import Field
@@ -238,9 +238,10 @@ def _move_draft_text(c, actor, old, new):
     if not row:
         return
     raw = MK.loads(row[1], {})
-    texts = raw.get("segments") if isinstance(raw.get("segments"), dict) else {}
-    if old not in texts:
+    segments = raw.get("segments") if isinstance(raw, dict) else None
+    if not isinstance(segments, dict) or old not in segments:
         return
+    texts: dict[str, Any] = dict(segments)
     moved = texts.pop(old)
     texts[new] = {**moved, **(texts.get(new) or {})}
     raw["segments"] = texts

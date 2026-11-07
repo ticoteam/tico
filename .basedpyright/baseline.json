@@ -4038,30 +4038,6 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 38,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 24,
-                    "endColumn": 27,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 19,
-                    "endColumn": 22,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
                     "startColumn": 30,
                     "endColumn": 38,
                     "lineCount": 1

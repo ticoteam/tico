@@ -412,6 +412,7 @@ def _market(c, actor, market, company, skipped):
                 entity_id=_segment_id(c, segment["key"]),
                 force=True,
             )
+            assert seg is not None  # the entity _new_segment has just inserted
             urls = [u for u in map(_safe_url, segment["evidence"]) if u]
             if segment["usd"] is not None and urls:
                 MS.create_size(
