@@ -1,0 +1,750 @@
+{
+ "note": "Labeled cases for the pipeline judge matrix. Attachments are text surrogates (caption/OCR text and metadata); no customer data.",
+ "cases": [
+  {
+   "id": "dev-tests-green",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "receipt",
+    "name": "ci-run-91",
+    "text": "acme/app PR 91 head 9f2c1ab: 42 passed, 0 failed, 0 skipped. Suites: api, ui, migrations.",
+    "work_version": 3
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "dev-tests-failed",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "receipt",
+    "name": "ci-run-91",
+    "text": "acme/app PR 91 head 9f2c1ab: 40 passed, 2 failed (ui/settings_toggle, api/prefs). Suites: api, ui, migrations.",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": null
+  },
+  {
+   "id": "dev-tests-old",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "receipt",
+    "name": "ci-run-88",
+    "text": "acme/app PR 91 head 41de0aa: 42 passed, 0 failed, 0 skipped.",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "old_version"
+  },
+  {
+   "id": "dev-tests-skipped",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "receipt",
+    "name": "ci-run-91",
+    "text": "acme/app PR 91 head 9f2c1ab: 0 passed, 0 failed, 38 skipped (marked slow).",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": "skipped_only"
+  },
+  {
+   "id": "dev-tests-missing",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": null,
+   "expected": "not_met",
+   "trap": "missing_file"
+  },
+  {
+   "id": "dev-tests-other-pr",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "receipt",
+    "name": "ci-run-77",
+    "text": "acme/billing PR 88 head 0ab33c1: 61 passed, 0 failed.",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": "wrong_thing"
+  },
+  {
+   "id": "dev-tests-truncated",
+   "domain": "dev",
+   "requirement": {
+    "name": "Tests pass",
+    "rubric": "The attachment is a test run for this ticket's current work (same repo and PR, work_version equal to the work's) that shows every suite ran and none failed. Skipped-only runs, failures, other repos and older work versions do not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "log",
+    "name": "ci-run-91.log",
+    "text": "acme/app PR 91 head 9f2c1ab: Running 40 tests ... 31 passed ... [log truncated at 64 KB, no summary line]",
+    "work_version": 3
+   },
+   "expected": "unsure",
+   "trap": null
+  },
+  {
+   "id": "dev-shot-match",
+   "domain": "dev",
+   "requirement": {
+    "name": "Screenshots match spec",
+    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "image",
+    "name": "settings-dark-toggle.png",
+    "text": "Screenshot caption and text read from the image: Settings page. Appearance section. 'Dark mode' toggle shown off in light theme and on in dark theme (two panels).",
+    "work_version": 3
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "dev-shot-wrong-screen",
+   "domain": "dev",
+   "requirement": {
+    "name": "Screenshots match spec",
+    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "image",
+    "name": "billing.png",
+    "text": "Screenshot text read from the image: Billing page. Plan: Team. Invoices table. No Dark mode control visible.",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": "wrong_screen"
+  },
+  {
+   "id": "dev-shot-old",
+   "domain": "dev",
+   "requirement": {
+    "name": "Screenshots match spec",
+    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "image",
+    "name": "settings-dark-toggle.png",
+    "text": "Settings page. Appearance section. 'Dark mode' toggle shown off in light theme and on in dark theme (two panels).",
+    "work_version": 1
+   },
+   "expected": "not_met",
+   "trap": "old_version"
+  },
+  {
+   "id": "dev-shot-missing",
+   "domain": "dev",
+   "requirement": {
+    "name": "Screenshots match spec",
+    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": null,
+   "expected": "not_met",
+   "trap": "missing_file"
+  },
+  {
+   "id": "dev-shot-blank",
+   "domain": "dev",
+   "requirement": {
+    "name": "Screenshots match spec",
+    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "image",
+    "name": "shot.png",
+    "text": "Image is almost entirely white. No text could be read from it. 1280x800.",
+    "work_version": 3
+   },
+   "expected": "unsure",
+   "trap": null
+  },
+  {
+   "id": "dev-shot-one-theme",
+   "domain": "dev",
+   "requirement": {
+    "name": "Screenshots match spec",
+    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "image",
+    "name": "settings-light.png",
+    "text": "Settings page. Appearance section. 'Dark mode' toggle shown off, light theme only. No second panel.",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": "partial"
+  },
+  {
+   "id": "dev-review-done",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review done",
+    "rubric": "The attachment is a review of this change by someone other than its author, covering the whole diff, with no blocking comment left open and an approval. A self-review, a review that asks for changes or one that skips part of the change does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "review",
+    "name": "review-by-ben",
+    "text": "Reviewer human:ben (author is human:ana). Read all 6 changed files incl. the migration. Two nits fixed in a follow-up commit. No open comments. Approved.",
+    "work_version": 3
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "dev-review-self",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review done",
+    "rubric": "The attachment is a review of this change by someone other than its author, covering the whole diff, with no blocking comment left open and an approval. A self-review, a review that asks for changes or one that skips part of the change does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "review",
+    "name": "review-by-ana",
+    "text": "Reviewer human:ana (author is human:ana). Re-read my own diff, looks fine. Approved.",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": "self_review"
+  },
+  {
+   "id": "dev-review-blocking",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review done",
+    "rubric": "The attachment is a review of this change by someone other than its author, covering the whole diff, with no blocking comment left open and an approval. A self-review, a review that asks for changes or one that skips part of the change does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "review",
+    "name": "review-by-ben",
+    "text": "Reviewer human:ben. Requested changes: the search endpoint builds SQL by string concatenation. Blocking until fixed. 1 open comment.",
+    "work_version": 3
+   },
+   "expected": "not_met",
+   "trap": "blocking"
+  },
+  {
+   "id": "dev-review-partial",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review done",
+    "rubric": "The attachment is a review of this change by someone other than its author, covering the whole diff, with no blocking comment left open and an approval. A self-review, a review that asks for changes or one that skips part of the change does not count."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "human:ana"
+   },
+   "attachment": {
+    "kind": "review",
+    "name": "review-by-ben",
+    "text": "Reviewer human:ben. Looks ok I guess. Didn't get to the migration part, someone should check it.",
+    "work_version": 3
+   },
+   "expected": "unsure",
+   "trap": null
+  },
+  {
+   "id": "mkt-lead-ok",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Lead has company and contact",
+    "rubric": "The lead record names a company and at least one person at it with a reachable contact: a personal or role-specific email address, or a phone number. A missing company, or a person with no email and no phone, does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "record",
+    "name": "lead-acme-lighting",
+    "text": "Company: Acme Lighting (acmelighting.example). Contact: Dana Ruiz, Head of Ops, dana.ruiz@acmelighting.example, +1 415 555 0102. Source: webinar.",
+    "work_version": 4
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "mkt-lead-no-email",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Lead has company and contact",
+    "rubric": "The lead record names a company and at least one person at it with a reachable contact: a personal or role-specific email address, or a phone number. A missing company, or a person with no email and no phone, does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "record",
+    "name": "lead-brightco",
+    "text": "Company: BrightCo. Contact: Sam Lee, Owner. Email: (empty). Phone: (empty). Source: ads form, fields not captured.",
+    "work_version": 4
+   },
+   "expected": "not_met",
+   "trap": "no_email"
+  },
+  {
+   "id": "mkt-lead-no-company",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Lead has company and contact",
+    "rubric": "The lead record names a company and at least one person at it with a reachable contact: a personal or role-specific email address, or a phone number. A missing company, or a person with no email and no phone, does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "record",
+    "name": "lead-jo",
+    "text": "Company: (empty). Contact: Jo Park, jo.park@gmail.example. Source: ads form.",
+    "work_version": 4
+   },
+   "expected": "not_met",
+   "trap": "no_company"
+  },
+  {
+   "id": "mkt-lead-phone-only",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Lead has company and contact",
+    "rubric": "The lead record names a company and at least one person at it with a reachable contact: a personal or role-specific email address, or a phone number. A missing company, or a person with no email and no phone, does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "record",
+    "name": "lead-northwind",
+    "text": "Company: Northwind Events. Contact: Ali Khan, Director, phone +1 206 555 0143, no email on file.",
+    "work_version": 4
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "mkt-lead-missing",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Lead has company and contact",
+    "rubric": "The lead record names a company and at least one person at it with a reachable contact: a personal or role-specific email address, or a phone number. A missing company, or a person with no email and no phone, does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": null,
+   "expected": "not_met",
+   "trap": "missing_file"
+  },
+  {
+   "id": "mkt-lead-generic-email",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Lead has company and contact",
+    "rubric": "The lead record names a company and at least one person at it with a reachable contact: a personal or role-specific email address, or a phone number. A missing company, or a person with no email and no phone, does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "record",
+    "name": "lead-oakline",
+    "text": "Company: Oakline Holiday Displays. Contact: (no name). Email: info@oakline.example. No phone.",
+    "work_version": 4
+   },
+   "expected": "unsure",
+   "trap": null
+  },
+  {
+   "id": "mkt-brief-approved",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Campaign brief approved",
+    "rubric": "The attachment is the campaign brief with an explicit approval by a named person and date, for the brief's current version. A draft, a general comment, or an approval of an older version does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "doc",
+    "name": "holiday-brief-v4",
+    "text": "Holiday Projectors campaign brief, version 4. Audience, offer, budget $12k, timeline. Approved by Priya Shah on 2026-11-03 (version 4).",
+    "work_version": 4
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "mkt-brief-draft",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Campaign brief approved",
+    "rubric": "The attachment is the campaign brief with an explicit approval by a named person and date, for the brief's current version. A draft, a general comment, or an approval of an older version does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "doc",
+    "name": "holiday-brief-v4",
+    "text": "Holiday Projectors campaign brief, version 4. Status: DRAFT. Awaiting approval from Priya Shah.",
+    "work_version": 4
+   },
+   "expected": "not_met",
+   "trap": "draft"
+  },
+  {
+   "id": "mkt-brief-old",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Campaign brief approved",
+    "rubric": "The attachment is the campaign brief with an explicit approval by a named person and date, for the brief's current version. A draft, a general comment, or an approval of an older version does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "doc",
+    "name": "holiday-brief-v2",
+    "text": "Holiday Projectors campaign brief, version 2. Approved by Priya Shah on 2026-10-20 (version 2). Budget $8k.",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "old_version"
+  },
+  {
+   "id": "mkt-brief-comment",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Campaign brief approved",
+    "rubric": "The attachment is the campaign brief with an explicit approval by a named person and date, for the brief's current version. A draft, a general comment, or an approval of an older version does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "doc",
+    "name": "holiday-brief-v4",
+    "text": "Holiday Projectors brief v4. Comment from Priya Shah: looks good overall, a few notes on budget to settle first. No approval recorded.",
+    "work_version": 4
+   },
+   "expected": "unsure",
+   "trap": null
+  },
+  {
+   "id": "mkt-brief-missing",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Campaign brief approved",
+    "rubric": "The attachment is the campaign brief with an explicit approval by a named person and date, for the brief's current version. A draft, a general comment, or an approval of an older version does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": null,
+   "expected": "not_met",
+   "trap": "missing_file"
+  },
+  {
+   "id": "mkt-page-live",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Landing page live",
+    "rubric": "The check shows the landing page for this campaign answers with HTTP 200 and real content with the campaign's headline and a call to action, from a check made at the current work_version. A placeholder, an error, another campaign's page, or no answer does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "check",
+    "name": "page-check",
+    "text": "GET https://holiday.example/projectors -> 200. Title: 'Light up the street'. Hero text, 3 product cards, button 'Get a quote'.",
+    "work_version": 4
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "mkt-page-placeholder",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Landing page live",
+    "rubric": "The check shows the landing page for this campaign answers with HTTP 200 and real content with the campaign's headline and a call to action, from a check made at the current work_version. A placeholder, an error, another campaign's page, or no answer does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "check",
+    "name": "page-check",
+    "text": "GET https://holiday.example/projectors -> 200. Body: 'Coming soon. Lorem ipsum dolor sit amet.' No button.",
+    "work_version": 4
+   },
+   "expected": "not_met",
+   "trap": "placeholder"
+  },
+  {
+   "id": "mkt-page-404",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Landing page live",
+    "rubric": "The check shows the landing page for this campaign answers with HTTP 200 and real content with the campaign's headline and a call to action, from a check made at the current work_version. A placeholder, an error, another campaign's page, or no answer does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "check",
+    "name": "page-check",
+    "text": "GET https://holiday.example/projectors -> 404 Not Found.",
+    "work_version": 4
+   },
+   "expected": "not_met",
+   "trap": "error_page"
+  },
+  {
+   "id": "mkt-page-wrong-campaign",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Landing page live",
+    "rubric": "The check shows the landing page for this campaign answers with HTTP 200 and real content with the campaign's headline and a call to action, from a check made at the current work_version. A placeholder, an error, another campaign's page, or no answer does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "check",
+    "name": "page-check",
+    "text": "GET https://holiday.example/spring -> 200. Title: 'Spring Garden Sale'. Button 'Shop now'.",
+    "work_version": 4
+   },
+   "expected": "not_met",
+   "trap": "wrong_thing"
+  },
+  {
+   "id": "mkt-page-timeout",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Landing page live",
+    "rubric": "The check shows the landing page for this campaign answers with HTTP 200 and real content with the campaign's headline and a call to action, from a check made at the current work_version. A placeholder, an error, another campaign's page, or no answer does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "check",
+    "name": "page-check",
+    "text": "GET https://holiday.example/projectors -> no response after 10 s (timeout). Not retried.",
+    "work_version": 4
+   },
+   "expected": "unsure",
+   "trap": null
+  },
+  {
+   "id": "mkt-page-old-check",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Landing page live",
+    "rubric": "The check shows the landing page for this campaign answers with HTTP 200 and real content with the campaign's headline and a call to action, from a check made at the current work_version. A placeholder, an error, another campaign's page, or no answer does not count."
+   },
+   "work": {
+    "title": "Holiday projectors campaign",
+    "spec": "Holiday Projectors campaign for home owners. Brief v4, headline 'Light up the street'.",
+    "work_version": 4
+   },
+   "attachment": {
+    "kind": "check",
+    "name": "page-check",
+    "text": "GET https://holiday.example/projectors -> 200. Title: 'Light up the street'. Button 'Get a quote'.",
+    "work_version": 1
+   },
+   "expected": "not_met",
+   "trap": "old_version"
+  }
+ ]
+}
