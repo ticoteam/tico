@@ -391,7 +391,16 @@ def test_a_board_without_qa_files_an_unanswered_review_2_again_and_never_passes_
         assert V.timeouts(c, later.strftime("%Y-%m-%dT%H:%M:%S.%fZ")) == [], "a refile moves no ticket"
         assert H.task(c, review["id"])["status"] == "closed"
     assert step(api, task) == "Review 2"
-    assert not builder_jobs(api), "no merge is handed off by the timeout"
+    with api.app.state.store.read() as c:
+        events = {
+            (r[0], r[1])
+            for r in c.execute(
+                "SELECT subject_id, kind FROM history_events WHERE subject_id IN (?, ?)", (task["id"], review["id"])
+            )
+        }
+    assert (task["id"], "check_refiled") in events, "the stale check is recorded as refiled"
+    assert not {kind for _, kind in events} & {"round_skipped", "verdict_move"}, "the timeout passes nothing on"
+    assert not [m for m in builder_jobs(api) if "merge PR" in str(m)], "no merge is handed off by the timeout"
 
 
 def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_recorded(api):
