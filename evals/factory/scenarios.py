@@ -4,7 +4,7 @@ fixes it when it is a known gap today, so a failing check reads as "not built ye
 from collections import Counter
 
 from .board import design_board
-from .sim import Scenario, at, tickets
+from .sim import Allowance, Scenario, at, tickets
 from .world import START
 
 from backend.step_age import LATE_HOURS as STUCK_HOURS  # imported after world, which sets the test environment
@@ -240,9 +240,10 @@ def lead_only_scheduled(run):
 
     roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
     turns = run.t.bot("engineering-lead").turns
-    other = [r for r in turns if r["action"] is None and r["news"] != "update" and r["news"] not in roundups]
     # The lead's routine news is held for its one digest a day (profiles.SPEC LEAD): a digest run is its schedule's
     # run, so it counts as scheduled, but never twice on one day.
+    scheduled = {*roundups, "profile_lead_digest"}
+    other = [r for r in turns if r["action"] is None and r["news"] != "update" and r["news"] not in scheduled]
     digests = [r for r in turns if r["news"] == "profile_lead_digest"]
     doubled = len(digests) - len({r["at"].date() for r in digests})
     kinds = Counter(r["news"] for r in other)
@@ -506,6 +507,15 @@ SCENARIOS = [
         "A ticket keeps an old open blocker; it merges and must still ship.",
         setup=lambda run, w, team: tickets(run, w, 3),
         during=stale_blocker,
+        stuck=(
+            Allowance(
+                "a lead's leftover task with no step: the sim's Head of Engineering wakes on people, escalations and one "
+                "digest a day (SPEC LEAD), and works only the steps it holds, so this task may wait a day",
+                24,
+                "Restore an old check",
+                owner="engineering-lead",
+            ),
+        ),
         checks=standard(),
     ),
     Scenario(
