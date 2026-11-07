@@ -1023,7 +1023,7 @@ With `updater` in `COMPOSE_PROFILES` and `TICO_UPDATER_URL=http://updater:8080` 
   server generates into the `tico-control` volume on first start, which only the server and updater mount;
 - `POST /update {"version": "vX.Y.Z" | "latest"}` downloads and verifies that release's compose bundle and replaces the files in it (never `.env`), pulls that image, recreates the server, waits up to 3 minutes for
   `/healthz`, rolls back the image and the bundle if it does not come back, and otherwise writes `TICO_TAG` into `.env`;
-- `GET /status` returns `{"state": "idle|pulling|restarting|healthy|rolled_back|failed", "from", "to", "message"}`;
+- `GET /status` returns `{"state": "idle|pulling|snapshotting|restarting|uncertain|healthy|rolled_back|failed", "from", "to", "message"}`;
 - both calls need `Authorization: Bearer <token>`. The server gets `TICO_UPDATER_URL` and `TICO_UPDATER_TOKEN`, and
   the running version as `TICO_VERSION` (also the image label `org.opencontainers.image.version`).
 
