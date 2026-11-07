@@ -730,8 +730,11 @@ class Run:
     def explain(self):
         """Where each unfinished ticket stands: its step, its checks and the owners' jobs."""
         out = []
+        # Diagnostic: a merged ticket a check names (blocked after its merge, or moved by hand) is shown with the rest.
+        named = {title for _, title in self.violations["merged_blocked"]}
+        named |= {f[2] for f in self.w.fallbacks if "merged" in f[3] or "moved to" in f[3]}
         for t in self.final:
-            if self.shipped(t):
+            if self.shipped(t) and t["title"] not in named:
                 continue
             out.append(
                 f"{t['title']} @ {t['step']} ({t['status']}, {t['owner_id']})"
