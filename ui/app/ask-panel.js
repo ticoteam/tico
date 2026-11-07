@@ -62,7 +62,7 @@ function askSync() {
   askSet(sees.querySelector('[data-ask-sees-name]'), 'textContent', page.title);
   askSet(sees, 'title', 'Sees ' + page.title);
 }
-// The Liquid Dot (app/liquid-dot.js) is Ask's mark. One live dot per screen: the row's (or the phone tab's) while the
+// The Liquid Dot (app/liquid-dot.ts) is Ask's mark. One live dot per screen: the row's (or the phone tab's) while the
 // panel is closed, the panel's own beside its name while it is open (Tico's turns carry none); the rest hold still.
 // With reduced motion the dot is still and the closed row says the state in a word (shown while it has one, ask.css);
 // the open panel says it in the thread already ("Thinking…", the reply itself).
