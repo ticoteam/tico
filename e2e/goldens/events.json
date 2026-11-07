@@ -893,8 +893,8 @@
         "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<id12>",
-        "job_id": "<id21>",
-        "message_id": "<id21>",
+        "job_id": "<id15>",
+        "message_id": "<id15>",
         "run_id": null,
         "seq": 86,
         "state": "canceled"
@@ -908,8 +908,8 @@
         "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<id12>",
-        "job_id": "<id15>",
-        "message_id": "<id15>",
+        "job_id": "<id17>",
+        "message_id": "<id17>",
         "run_id": null,
         "seq": 88,
         "state": "canceled"
@@ -936,8 +936,8 @@
         "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<id12>",
-        "job_id": "<id17>",
-        "message_id": "<id17>",
+        "job_id": "<id21>",
+        "message_id": "<id21>",
         "run_id": null,
         "seq": 90,
         "state": "canceled"
