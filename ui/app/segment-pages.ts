@@ -19,9 +19,11 @@ type SegStrategy = {draft: boolean; revision: number | null; version: number | n
 type SegBet = {id: string; statement: string; status: string};
 // GET /api/v2/segments/{id}: the segment, its leads, its strategy and its live bets.
 type SegDetail = SegItem & {leads: SegFace[]; strategy: SegStrategy; bets: SegBet[]};
-// A segment's row in the compare table (GET /api/v2/market/segments/compare).
-type SegCompare = SegItem & {money: number | null; yearly_spend: number | null; growth: number | null;
-  our_share: number | null; briefing_week: string | null};
+// A segment's row in the compare table (GET /api/v2/market/segments/compare). The rows carry no faces: the compare view
+// joins them from the segments list (GET /api/v2/segments), by id.
+type SegCompareRow = {id: string; name: string; color: string; money: number | null; yearly_spend: number | null;
+  growth: number | null; our_share: number | null; briefing_week: string | null};
+type SegCompare = SegCompareRow & {faces: SegFace[]; teammates: number};
 // An item of the newest briefings, tagged with its segment ('' is the whole market) and its week.
 type SegChanged = {text: string; kind?: string; segment_id: string; week: string};
 // GET /api/v2/market/segments/{id}/page: the segment's five answers, briefing, sizes, players and history.
@@ -415,7 +417,7 @@ async function segResearch(el: HTMLElement, id: string): Promise<void> {
 
 // ---------------------------------------------------------------- the Market tab
 // The chips that move between the compare view and one segment's market.
-function segChipsHtml(active: string, segs: SegCompare[]): string {
+function segChipsHtml(active: string, segs: SegCompareRow[]): string {
   return `<nav class="seg-chips" aria-label="Segments">
     <a class="seg-chip${active === 'all' ? ' cur' : ''}" href="${MARKET_ROUTE}"${active === 'all' ? ' aria-current="page"' : ''}>All segments</a>
     ${segs.map(s => `<a class="seg-chip${active === s.id ? ' cur' : ''}" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}"${active === s.id ? ' aria-current="page"' : ''}>${segDot(s.color)}${esc(s.name)}</a>`).join('')}
@@ -432,7 +434,7 @@ function segCompareHtml(segs: SegCompare[]): string {
       <tbody>${rows}</tbody></table></div></section>`;
 }
 // What changed across all the segments: each item tagged with its segment (All for the whole market).
-function segChangedHtml(changed: SegChanged[], segs: SegCompare[]): string {
+function segChangedHtml(changed: SegChanged[], segs: SegCompareRow[]): string {
   if (!changed.length) return '';
   const by = new Map(segs.map(s => [s.id, s]));
   const items = changed.map(c => {
@@ -445,8 +447,15 @@ function segChangedHtml(changed: SegChanged[], segs: SegCompare[]): string {
 
 // The Market tab's compare view: the segments side by side, what changed across them, and the chips to each segment's market.
 async function mountMarketCompare(shell: HTMLElement): Promise<SegMount> {
-  const data = await get('/v2/market/segments/compare', {fresh: true});
-  const segs: SegCompare[] = data?.segments || [], changed: SegChanged[] = data?.changed || [];
+  const [data, list] = await Promise.all([
+    get('/v2/market/segments/compare', {fresh: true}),
+    get('/v2/segments', {fresh: true}).catch(() => null),
+  ]);
+  // The faces and teammates come from the segments list by id; a segment missing there shows no faces.
+  const people = new Map<string, SegItem>((list?.segments || []).map((x: SegItem) => [x.id, x]));
+  const segs: SegCompare[] = (data?.segments || []).map((r: SegCompareRow) => ({
+    ...r, faces: people.get(r.id)?.faces || [], teammates: people.get(r.id)?.teammates || 0}));
+  const changed: SegChanged[] = data?.changed || [];
   shell.innerHTML = `<div class="mkt-pg seg-mkt">${segTopHtml()}${segChipsHtml('all', segs)}${segCompareHtml(segs)}${segChangedHtml(changed, segs)}</div>`;
   return {shell, open: () => { shell.scrollTop = 0; }, stop: () => {}};
 }
@@ -454,7 +463,7 @@ async function mountMarketCompare(shell: HTMLElement): Promise<SegMount> {
 // One segment's market in the Market tab: the chips, then the segment's five questions.
 async function mountSegmentMarketView(shell: HTMLElement, id: string): Promise<SegMount> {
   const data = await get('/v2/market/segments/compare', {fresh: true}).catch(() => null);
-  const segs: SegCompare[] = data?.segments || [];
+  const segs: SegCompareRow[] = data?.segments || [];
   shell.innerHTML = `<div class="mkt-pg seg-mkt">${segTopHtml()}${segChipsHtml(id, segs)}<div id="seg-mkt-body"></div></div>`;
   const body = shell.querySelector<HTMLElement>('#seg-mkt-body');
   const load = ++MARKET_SEG_LOAD;
