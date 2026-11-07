@@ -238,6 +238,8 @@ def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[s
     in that order. A stage the list keeps (same name) keeps its id, and its cards stay where they are with their status.
     Only cards on a removed stage move: an open one to the first stage, a done or closed one to Closed, its status kept.
     Each move is a step event. Writes nothing when the stages already match. Never done to a type that holds a role."""
+    from . import pipeline_engine
+
     want = [dict(s) for s in stages]
 
     def shape(steps: list[Row]) -> list[tuple[str, str]]:
@@ -261,12 +263,18 @@ def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[s
     kept = {str(s["name"]).lower() for s in want}
     moved = 0
     for step in [s for s in current if str(s["name"]).lower() not in kept]:
-        for card in _rows(conn, "SELECT id, status FROM tasks WHERE step_id = ?", (step["id"],)):
+        for card in _rows(
+            conn, "SELECT id, status, type_id, step_id, created_at FROM tasks WHERE step_id = ?", (step["id"],)
+        ):
             dest = by_name[str(want[0]["name"]).lower()] if card["status"] in OPEN_STATUSES else by_name["closed"]
-            conn.execute("UPDATE tasks SET step_id = ?, updated_at = ? WHERE id = ?", (dest["id"], H.now(), card["id"]))
+            ts = H.now()
+            conn.execute("UPDATE tasks SET step_id = ?, updated_at = ? WHERE id = ?", (dest["id"], ts, card["id"]))
             H._task_event(  # pyright: ignore[reportPrivateUsage]
                 conn, card["id"], actor, "step", step["id"], dest["id"], "Moved by pipeline setup (replace)"
             )
+            # The status stays as it was (so no task_update), but the stage visit follows the card: a visit left open on
+            # a stage this replace removes would keep its Late clock and review items on a stage that is gone.
+            pipeline_engine.on_step_change(conn, actor, card, row["id"], dest["id"], ts)
             moved += 1
     if moved:
         made.append(f"moved {moved} cards off removed stages of {row['name']}")

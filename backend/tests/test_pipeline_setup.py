@@ -257,9 +257,25 @@ def test_replace_keeps_cards_on_kept_stages_and_moves_only_cards_on_removed_stag
         "id"
     ]
     dropped = H.task_create(c, ANA, "Old list", "", ANA, type=_type(c, "Marketing"), step="Dropped", lint=False)["id"]
+    from backend import pipeline_engine
+
+    assert pipeline_engine.ensure_visit(c, working) is not None  # its Late clock runs on Working
     c.commit()
     before = {t: rows(c, "SELECT step_id, status FROM tasks WHERE id=?", t)[0] for t in (won, working, dropped)}
     S.apply_factory_setup(c, ANA, "tico_default", replace=True)
+    # The visit follows the card: it is open at Targets now, and no open visit sits on a stage the replace removed.
+    targets = rows(c, "SELECT step_id FROM tasks WHERE id=?", working)[0]["step_id"]
+    assert rows(c, "SELECT pipeline_stage_id AS s FROM stage_visits WHERE task_id=? AND left_at IS NULL", working) == [
+        {"s": targets}
+    ]
+    assert (
+        rows(
+            c,
+            "SELECT v.id FROM stage_visits v LEFT JOIN task_steps s ON s.id = v.pipeline_stage_id "
+            "WHERE v.left_at IS NULL AND s.id IS NULL",
+        )
+        == []
+    )
 
     def now(task):
         return rows(c, "SELECT k.status, s.name FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", task)[0]
