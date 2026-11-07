@@ -63,7 +63,8 @@ RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$
 # past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
 WORKERS = 4
 JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
-SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
+# Measured boot, checkout and warm install; "slow" is an estimate (boot, install, the cached relay build).
+SETUP_SECONDS = {"python": 45, "browser": 70, "slow": 90}
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
@@ -757,6 +758,110 @@ SMOKE_SCRIPT = "sign-in-redirect"
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
 UI_RUNNER = "scripts/ui-tests.cjs"
+# Slow tests (marked `slow`: absent from the default run, and run by the release gate) that a merge queue group runs
+# on one serial VM. A slow test is a candidate only when it directly imports or reads a changed file (slow_candidates:
+# depth one of the map, never through a conftest or a fixture). Collection keeps the candidates that hold a slow test,
+# the exempt list drops the ones a group cannot run, and the budget (slow_fit: each file at its slow share of its
+# measured time) keeps the nearest that fit; the rest are deferred to release validation. SLOW_EXEMPT
+# (scripts/pr_slow_exempt.json) names each exempt file with its reason: Docker, a binary or the network the queue
+# lacks, a skip that would hide a gap, or a job that already runs the file for the same change. check_slow_exempt
+# keeps that list honest on every push.
+SLOW_EXEMPT = "scripts/pr_slow_exempt.json"
+
+
+def slow_exempt(root=ROOT):
+    """Slow test files a merge queue group does not run, each with the reason it cannot."""
+    exempt = json.loads((root / SLOW_EXEMPT).read_text())
+    if not isinstance(exempt, dict) or not all(
+        isinstance(name, str) and isinstance(reason, str) and reason.strip() for name, reason in exempt.items()
+    ):
+        raise RuntimeError(f"{SLOW_EXEMPT} maps each test file to a non-empty reason")
+    return exempt
+
+
+def slow_marked(tree):
+    """Whether a parsed test module marks a test slow: a pytestmark (module or class), or a slow mark on a function, a
+    class or a parametrized case. A static reading for the exempt list; collection decides what the queue runs."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(getattr(target, "id", None) == "pytestmark" for target in node.targets):
+            if "mark.slow" in ast.unparse(node.value):
+                return True
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if any("mark.slow" in ast.unparse(decorator) for decorator in node.decorator_list):
+                return True
+    return False
+
+
+def check_slow_exempt(root=ROOT):
+    """Problems with the exempt list: an entry that is not a test file in this checkout, or one with no slow test left
+    (its exemption is stale and comes out with the change that removed the mark)."""
+    problems = []
+    for name in slow_exempt(root):
+        path = root / name
+        if not is_test(name) or not path.is_file():
+            problems.append(f"{name}: not a test file in this checkout")
+        elif not slow_marked(ast.parse(path.read_bytes())):
+            problems.append(f"{name}: no test in it is marked slow, so its exemption is stale")
+    return problems
+
+
+def collect_counts(files, marker, root=ROOT):
+    """Test counts per file as pytest collects them under `-m marker`, over these files (None: the whole suite)."""
+    if files is not None and not files:
+        return Counter()
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", "-m", marker, *(files or [])],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode not in (0, 5):  # 5: none of these files holds a test under the marker
+        raise RuntimeError(f"Collection with -m {marker!r} failed:\n" + result.stdout[-4000:] + result.stderr[-4000:])
+    return Counter(
+        line.split("::", 1)[0] for line in result.stdout.splitlines() if "::" in line and not line.startswith(" ")
+    )
+
+
+def collect_slow(files=None, root=ROOT):
+    """Slow test counts per file as pytest collects them: `-m slow` over these files (None: the whole suite)."""
+    return collect_counts(files, "slow", root)
+
+
+def collect_tests(files, root=ROOT):
+    """All test counts per file, slow and default together, as pytest collects them: the denominator of a file's slow
+    share (slow_seconds)."""
+    return collect_counts(files, "slow or not slow", root)
+
+
+def slow_seconds(counts, totals, timings):
+    """Estimated seconds of each file's slow tests on one serial VM: the file's measured time times its slow share, the
+    slow tests over all its tests (`counts` slow, `totals` all, both collected). The timings are per file (the release
+    run's measured time for the whole file, default and slow tests together) and keep no per-test seconds, so the share
+    assumes the file's tests take equal time: a heavy slow test in a file of light ones is underestimated, and a light
+    slow test in a heavy file is overestimated. A file with no total counts as all slow. A file with no timing takes the
+    seconds per slow test that weights() observes in the timed files."""
+    adjusted = {
+        name: timings[name] * counts[name] / max(totals.get(name, counts[name]), counts[name], 1)
+        for name in counts
+        if name in timings and isinstance(timings[name], (int, float)) and math.isfinite(timings[name])
+    }
+    return weights(counts, adjusted)
+
+
+def slow_fit(nearest, counts, timings, totals):
+    """The nearest slow files that fit one serial VM within the job's budget, and the rest, deferred to release
+    validation: (kept, deferred, seconds). A file's seconds are its slow share of its measured time (slow_seconds)."""
+    seconds = slow_seconds({name: counts[name] for name in nearest}, totals, timings)
+    budget = JOB_SECONDS - SETUP_SECONDS["slow"]
+    kept, deferred, total = [], [], 0.0
+    for name in nearest:
+        if total + seconds[name] <= budget:
+            kept.append(name)
+            total += seconds[name]
+        else:
+            deferred.append(name)
+    return kept, deferred, total
 
 
 def unread(name):
@@ -781,15 +886,55 @@ def full_suite(name):
     )
 
 
+def slow_candidates(graph, changed, added=None):
+    """The test files a merge queue group may run slow tests of, nearest the change first.
+
+    Only a test that directly runs or reads a changed file is a candidate (depth one of the map, not the closure), and
+    a change never reaches a test through a conftest, a fixture or a file that depends on everything: those reach every
+    test below them. Nearness, in tiers: a changed test file itself; a test named for the module it runs (test_x.py runs
+    x.py); another test that runs the changed file; a test that reads it. Within a tier, a test that reaches more of the
+    change comes first. `added` names the new files (None: any may be new), as in DependencyMap.readers.
+    """
+    tracked = [name for name in changed if name in graph.tracked]
+    added = set(tracked) if added is None else set(added)
+    tier, reach = {}, Counter()
+    for name in tracked:
+        if is_test(name):
+            tier[name] = 0
+            reach[name] += 1
+    for name in tracked:
+        stem = Path(name).stem
+        runners = graph.run_by.get(name, set())
+        for user in runners | graph.readers(name, added):
+            if not is_test(user) or user not in graph.tracked or user.startswith("ui/"):
+                continue
+            if Path(user).name in (f"test_{stem}.py", f"{stem}_test.py"):
+                level = 1
+            else:
+                level = 2 if user in runners else 3
+            tier[user] = min(tier.get(user, 4), level)
+            reach[user] += 1
+    return sorted(tier, key=lambda test: (tier[test], -reach[test], test))
+
+
 def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
     """None means the full default suite; an empty list means explicitly unaffected.
 
     A pull request or a merge queue group (base to head) runs the default tests that use a changed file
     (DependencyMap) and, of the browser scripts that do, the core ones the full suite runs; a UI change runs its
     mapped scripts or all of them. A docs page, CHANGELOG.md or a GitHub file runs the tests that read it
-    (read_only); a CI input adds a short browser smoke (CI_INPUTS). `added` names the new files (None: any may be
-    new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
-    full = {"python": None, "browser": None, "caddy": True, "contracts": True, "reason": "full default suite"}
+    (read_only); a CI input adds a short browser smoke (CI_INPUTS). `slow` is the slow candidates that directly use a
+    change, nearest first (slow_candidates); prepare confirms and budgets them. A fallback runs the changed test files
+    as slow candidates and no others. `added` names the new files (None: any may be new) and `core` the core browser
+    scripts (None: read from scripts/ui-tests.cjs)."""
+    full = {
+        "python": None,
+        "browser": None,
+        "caddy": True,
+        "contracts": True,
+        "slow": [],  # a fallback steers every test; only the changed test files are slow candidates (see the return)
+        "reason": "full default suite",
+    }
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
         p.startswith(("runner/", "runner_support/", "runner-rs/", "relay-rs/"))
@@ -798,7 +943,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     )
     full["rust"] = rust
     if event not in ("pull_request", "merge_group"):
-        return {**full, "conformance": runner, "reason": "main runs the full default suite"}
+        return {**full, "slow": [], "conformance": runner, "reason": "main runs the full default suite"}
     if not changed:
         return {**full, "conformance": runner, "reason": "empty diff: full default suite", "uncertain": ["empty diff"]}
     changed = [n for n in changed if not unread(n)]
@@ -822,6 +967,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             "conformance": runner,
             "reason": "unmapped, shared, deleted or uncertain change: full default suite",
             "uncertain": uncertain,
+            "slow": [n for n in changed if is_test(n) and (root / n).is_file()],
         }
     if not changed:
         return {
@@ -831,6 +977,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             "rust": [],
             "caddy": False,
             "contracts": False,
+            "slow": [],
             "reason": "documentation that no test or script reads",
         }
     data = [n for n in changed if read_only(n) and not graph.code(n)]
@@ -859,6 +1006,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         "rust": rust,
         "caddy": caddy,
         "contracts": contracts,
+        # The slow tests that directly use a change, nearest first. prepare() keeps the ones with a slow test.
+        "slow": slow_candidates(graph, changed, added),
         "reason": "measured dependency map",
     }
 
@@ -920,16 +1069,16 @@ def weights(counts, timings, fallback=1.0):
     return {n: known.get(n, counts[n] * seconds_per_test) for n in counts}
 
 
-def job_count(seconds, kind):
-    """VMs needed for `seconds` of one-worker test time to finish near JOB_SECONDS each."""
-    per_job = WORKERS * max(JOB_SECONDS - SETUP_SECONDS[kind], 30)
+def job_count(seconds, kind, workers=WORKERS):
+    """VMs needed for `seconds` of one-worker test time to finish near JOB_SECONDS each, at `workers` per VM."""
+    per_job = workers * max(JOB_SECONDS - SETUP_SECONDS[kind], 30)
     return max(1, min(MAX_JOBS, math.ceil(seconds / per_job)))
 
 
-def groups(counts, timings, total=None, kind="python", fallback=1.0):
+def groups(counts, timings, total=None, kind="python", fallback=1.0, workers=WORKERS):
     seconds = weights(counts, timings, fallback)
     if total is None:
-        total = job_count(sum(seconds.values()), kind)
+        total = job_count(sum(seconds.values()), kind, workers)
     out, loads = [[] for _ in range(total)], [0.0] * total
     for name in sorted(counts, key=lambda n: (-seconds[n], n)):
         i = min(range(total), key=lambda i: (loads[i], i))
@@ -1007,6 +1156,20 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
     if picked["contracts"]:
         jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
+    slow_loads, slow_reached, slow_deferred = [], [], []
+    if picked.get("slow"):
+        # Nearest first (slow_candidates). Collection keeps the files that hold a slow test, the exempt list drops the
+        # ones a group cannot run, and one serial VM takes the nearest that fit; the rest wait for release validation.
+        reached = collect_slow(picked["slow"])
+        exempt = slow_exempt()
+        slow_reached = sorted(name for name in reached if name in exempt)
+        nearest = [name for name in picked["slow"] if name in reached and name not in exempt]
+        kept, slow_deferred, seconds = slow_fit(nearest, reached, timings, collect_tests(nearest))
+        picked["slow"] = sorted(kept)
+        if kept:
+            jobs.append({"suite": "slow-1", "files": sorted(kept)})
+            slow_loads = [seconds]
+        slow_deferred = sorted(slow_deferred)
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -1014,10 +1177,23 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     plan = {
         **picked,
         "changed": changed,
+        "slow_exempt": slow_reached,
+        "slow_deferred": slow_deferred,
         "matrix": {"include": jobs},
-        "estimated_seconds": loads,
+        "estimated_seconds": loads + slow_loads,
         "timed_files": len(set(counts) & timings.keys()),
     }
+    if slow_deferred and os.environ.get("GITHUB_STEP_SUMMARY"):
+        # The job summary names what the queue does not run, so a skipped slow test is never a surprise.
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+            stream.write(
+                f"### Slow tests deferred to release validation ({len(slow_deferred)})\n\n"
+                f"One slow VM runs {len(picked['slow'])} file(s), about {sum(slow_loads):.0f} s of slow tests "
+                f"(each file's measured time times its slow share), "
+                f"nearest first within {JOB_SECONDS - SETUP_SECONDS['slow']:.0f} s. Not run here:\n\n"
+            )
+            stream.writelines(f"- `{name}`\n" for name in slow_deferred)
+            stream.write("\n")
     Path(output).write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps(plan, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
@@ -1042,7 +1218,14 @@ def run(plan_path, suite):
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
     if suite == "selection":
-        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
+        if (
+            plan["python"] != []
+            or plan["browser"] != []
+            or plan["caddy"]
+            or plan["conformance"]
+            or plan["contracts"]
+            or plan.get("slow")
+        ):
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
@@ -1053,7 +1236,9 @@ def run(plan_path, suite):
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
         env = {**os.environ, "TICO_UI_TIMINGS": str(ROOT / "ci-results" / f"{suite}.json")}
     else:
-        if not files or any(not (ROOT / f).is_file() for f in files):
+        serial = suite.startswith("slow-")
+        # A node id names its file before the "::"; a file may carry one.
+        if not files or any(not (ROOT / f.split("::", 1)[0]).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
         command = [
             sys.executable,
@@ -1061,13 +1246,14 @@ def run(plan_path, suite):
             "pytest",
             "-q",
             "-n",
-            str(WORKERS),
+            # One process for slow tests: the wall-clock budget tests among them must not share a CPU with a sibling.
+            "0" if serial else str(WORKERS),
             *PYTEST_FLAGS,
             "-o",
             "junit_family=xunit1",
             f"--junitxml=ci-results/{suite}.xml",
         ]
-        if suite in ("conformance", "contracts"):
+        if suite in ("conformance", "contracts") or serial:
             command += ["-m", "slow"]
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)
@@ -1077,6 +1263,9 @@ def run(plan_path, suite):
         cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
+        skipped = [t.get("name", "") for t in cases if t.find("skipped") is not None]
+        if suite.startswith("slow-") and skipped:
+            print(f"::warning::{len(skipped)} slow test(s) skipped in {suite}: {', '.join(skipped[:10])}")
     return result.returncode or rust
 
 
@@ -1178,6 +1367,10 @@ def main():
     execute = sub.add_parser("run")
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
+    slow = sub.add_parser("slow", help="print the slow test files that directly use a change, nearest first")
+    slow.add_argument("--base", default="origin/main")
+    slow.add_argument("--head", default="HEAD")
+    sub.add_parser("slow-check", help="check the exempt list: real test files, each with a reason and a slow test")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     args = parser.parse_args()
@@ -1185,6 +1378,18 @@ def main():
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
         return run(args.plan, args.suite)
+    elif args.action == "slow":
+        picked = selection(
+            changed_files(args.base, args.head),
+            base=args.base,
+            added=changed_files(args.base, args.head, only="A"),
+        )
+        print(json.dumps({"reason": picked["reason"], "candidates": picked["slow"], "exempt": slow_exempt()}, indent=2))
+    elif args.action == "slow-check":
+        problems = check_slow_exempt()
+        for problem in problems:
+            print(f"::error::{SLOW_EXEMPT}: {problem}")
+        return 1 if problems else 0
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:

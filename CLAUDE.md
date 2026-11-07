@@ -21,7 +21,7 @@ workflow runs only the cheap checks (lint, generated types, the OpenAPI document
 pull request, on free GitHub-hosted runners; `checks` is the one required check. The merge queue runs the tests, once per
 queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
-it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
+it, the Rust and desktop checks when they changed, the slow tests that directly import or read a changed file on one VM of about five minutes, less `scripts/pr_slow_exempt.json` (the rest wait for Release validation, which runs every slow test on main), and the macOS recorder tests when `recorder/` changed. A docs page,
 CHANGELOG.md or GitHub file runs the tests that read it; dependency, conftest, pytest.ini and deleted or unparsable files
 fall back to the full default Python and core browser suites. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and

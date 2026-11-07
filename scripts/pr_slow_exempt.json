@@ -1,0 +1,23 @@
+{
+  "backend/tests/test_caddy_assets.py": "Skips unless TICO_TEST_CADDY names the pinned official Caddy binary.",
+  "backend/tests/test_caddy_container.py": "Docker: runs the Caddy container. The caddy job runs it with -m slow whenever the map reaches it (CADDY_ROOTS).",
+  "backend/tests/test_caddy_supervisor.py": "Downloads the pinned Caddy release with wget or curl and runs it.",
+  "backend/tests/test_databases.py": "Docker: its PostgreSQL check runs in a throwaway container and skips without Docker.",
+  "backend/tests/test_e2e_cli.py": "Contract test: the contracts job runs it whenever the map reaches it (CONTRACT_TESTS).",
+  "backend/tests/test_e2e_mcp.py": "Contract test: the contracts job runs it whenever the map reaches it (CONTRACT_TESTS).",
+  "backend/tests/test_hermes_e2e.py": "Its connector installs a launchd or systemd timer on the host, so it skips on a check machine.",
+  "backend/tests/test_litestream.py": "Skips unless the checksum-pinned Litestream binary is installed.",
+  "backend/tests/test_mongodb.py": "Docker: its MongoDB check runs in a throwaway container and skips without Docker.",
+  "backend/tests/test_native_recorder.py": "Skips unless TICO_NATIVE_CLI names a built native CLI.",
+  "backend/tests/test_server_compose.py": "Skips unless TICO_TEST_CADDY names the pinned official Caddy binary.",
+  "backend/tests/test_threads_e2e_runner.py": "Skips unless a release tico-runner is built first or TICO_RUNNER_BIN names one; the queue builds neither.",
+  "e2e/tests/test_contract.py": "Contract test: the contracts job runs it whenever the map reaches it (CONTRACT_TESTS).",
+  "runner_support/tests/test_conformance.py": "About 490 s in one file, longer than a queue shard. The conformance job runs it for runner changes, and Release validation keeps it.",
+  "runner_support/tests/test_git_credentials.py": "Its Mac login-shell case skips without bash and zsh.",
+  "runner_support/tests/test_isolation_docker.py": "Docker isolation: needs a Docker daemon and the runner image built from the candidate. Release validation runs it alone (scripts/release_checks.py ISOLATION_FILE).",
+  "runner_support/tests/test_old_runner_skew.py": "Skips unless OLD_RUNNER_BINARY names a build of origin/main's runner, which no queue group builds.",
+  "scripts/tests/test_image_pins.py": "Asks PyPI over the network for each pinned wheel.",
+  "scripts/tests/test_release_checks.py": "Needs the runner image built from the candidate (Docker).",
+  "setup/tests/test_install_sh.py": "Runs the installer in real distro containers over the network; skips without Docker.",
+  "setup/tests/test_tunnel.py": "Runs the pinned cloudflared image with Docker; skips when that image is not on the machine."
+}

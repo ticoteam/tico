@@ -133,7 +133,9 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
 
 def test_contract_inputs_run_even_without_a_static_dependency_and_deletions_run_too(tmp_path):
     # A new tool, response field or command reference can change the contract without a Python import edge.
-    graph = SimpleNamespace(files=[], unparsed=set(), affected=lambda *args: set())
+    graph = SimpleNamespace(
+        files=[], unparsed=set(), tracked=set(), run_by={}, affected=lambda *args: set(), readers=lambda *args: set()
+    )
     for name in (
         "backend/routes/tasks.py",
         "clients/hubtools.py",
@@ -822,6 +824,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "pr-desktop",
             "pr-conformance",
             "pr-recorder",
+            "pr-slow-relay",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
             "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
             "'scripts/ci_install.sh', 'scripts/playwright-system-packages.json') }}",
@@ -959,3 +962,257 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
+
+
+def test_exempt_entries_are_real_slow_test_files_each_with_a_reason():
+    assert checks.check_slow_exempt(ROOT) == []
+    exempt = checks.slow_exempt(ROOT)
+    assert exempt and all(reason.strip() for reason in exempt.values())
+
+
+def test_the_exempt_check_names_missing_and_stale_entries_and_empty_reasons(tmp_path):
+    source(tmp_path, "scripts/pr_slow_exempt.json", json.dumps({"tests/test_plain.py": "x", "tests/test_gone.py": "y"}))
+    source(tmp_path, "tests/test_plain.py", "def test_a():\n    pass\n")
+    assert checks.check_slow_exempt(tmp_path) == [
+        "tests/test_plain.py: no test in it is marked slow, so its exemption is stale",
+        "tests/test_gone.py: not a test file in this checkout",
+    ]
+    source(tmp_path, "scripts/pr_slow_exempt.json", json.dumps({"tests/test_plain.py": " "}))
+    with pytest.raises(RuntimeError, match="non-empty reason"):
+        checks.slow_exempt(tmp_path)
+
+
+def test_slow_marks_are_read_on_modules_classes_functions_and_parametrized_cases():
+    import ast
+
+    def marked(text):
+        return checks.slow_marked(ast.parse(text))
+
+    assert marked("import pytest\npytestmark = pytest.mark.slow\n")
+    assert marked("import pytest\nclass TestA:\n    pytestmark = [pytest.mark.slow]\n")
+    assert marked("import pytest\n@pytest.mark.slow\ndef test_a():\n    pass\n")
+    assert marked(
+        "import pytest\n@pytest.mark.parametrize('x', [pytest.param(1, marks=pytest.mark.slow)])\n"
+        "def test_a(x):\n    pass\n"
+    )
+    assert not marked("import pytest\n@pytest.mark.skipif(True, reason='x')\ndef test_a():\n    pass\n")
+
+
+def test_slow_collection_counts_each_files_tests_and_reads_no_match_as_none(monkeypatch):
+    out = "backend/tests/test_a.py::test_one\nbackend/tests/test_a.py::test_two[1]\nbackend/tests/test_b.py::test_c\n\n"
+    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=out, stderr=""))
+    assert checks.collect_slow(["x"]) == Counter({"backend/tests/test_a.py": 2, "backend/tests/test_b.py": 1})
+    assert checks.collect_slow([]) == Counter()
+    assert checks.collect_tests([]) == Counter()
+    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=5, stdout="", stderr=""))
+    assert checks.collect_slow(["x"]) == Counter()
+
+
+def test_a_slow_candidate_is_a_test_that_directly_uses_the_change_and_the_closure_is_not_slow_selected(mapped):
+    plan = checks.selection(["backend/scheduler.py"])
+    assert plan["slow"][0] == "backend/tests/test_scheduler.py"  # the test named for the module it runs comes first
+    assert "backend/tests/test_scheduler.py" in plan["slow"]
+    # Default tests follow the closure; slow candidates stop at one import, so there are fewer of them.
+    assert set(plan["slow"]) < set(plan["python"])
+    assert "relay" not in plan
+
+
+def test_slow_candidates_stop_at_one_import_and_never_pass_through_a_conftest_or_a_fixture(tmp_path):
+    source(tmp_path, "pkg/__init__.py", "")
+    source(tmp_path, "pkg/mod.py", "VALUE = 1\n")
+    source(tmp_path, "pkg/helper.py", "from pkg import mod\n")
+    source(
+        tmp_path,
+        "tests/test_direct.py",
+        "import pytest\nfrom pkg import mod\n\n@pytest.mark.slow\ndef test_a():\n    pass\n",
+    )
+    source(tmp_path, "tests/test_chain.py", "from pkg import helper\n\ndef test_b():\n    pass\n")
+    source(
+        tmp_path,
+        "tests/conftest.py",
+        "import pytest\nfrom pkg import mod\n\n@pytest.fixture\ndef shared():\n    return mod.VALUE\n",
+    )
+    source(tmp_path, "tests/test_fixture.py", "def test_c(shared):\n    pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert checks.slow_candidates(graph, ["pkg/mod.py"]) == ["tests/test_direct.py"]
+    assert checks.slow_candidates(graph, ["pkg/helper.py"]) == ["tests/test_chain.py"]
+    assert checks.slow_candidates(graph, ["tests/conftest.py"]) == []
+
+
+def test_slow_candidates_rank_changed_tests_then_the_test_named_for_the_module_then_runners_then_readers(tmp_path):
+    source(tmp_path, "pkg/__init__.py", "")
+    source(tmp_path, "pkg/store.py", "X = 1\n")
+    source(tmp_path, "data/rules.json", "{}\n")
+    source(tmp_path, "tests/test_store.py", "from pkg import store\n")
+    source(tmp_path, "tests/test_other.py", "from pkg import store\n")
+    source(tmp_path, "tests/test_reads.py", "import json\nopen('data/rules.json')\n")
+    source(tmp_path, "tests/test_changed.py", "def test_a():\n    pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    changed = ["pkg/store.py", "data/rules.json", "tests/test_changed.py"]
+    assert checks.slow_candidates(graph, changed) == [
+        "tests/test_changed.py",
+        "tests/test_store.py",
+        "tests/test_other.py",
+        "tests/test_reads.py",
+    ]
+
+
+def test_one_serial_vm_keeps_the_nearest_slow_files_that_fit_its_budget_and_defers_the_rest():
+    budget = checks.JOB_SECONDS - checks.SETUP_SECONDS["slow"]
+    names = ["a.py", "b.py", "c.py", "d.py"]
+    counts = Counter(dict.fromkeys(names, 1))
+    timings = {"a.py": 110.0, "b.py": 150.0, "c.py": 90.0, "d.py": 5.0}
+    kept, deferred, seconds = checks.slow_fit(names, counts, timings, counts)  # every test slow: the whole file's time
+    assert kept == ["a.py", "c.py", "d.py"] and deferred == ["b.py"]
+    assert seconds == 205.0 and seconds <= budget
+
+
+def test_a_slow_file_is_budgeted_at_its_slow_share_of_its_measured_time():
+    # The measured time is the whole file's, default and slow tests together: one slow test in fifty is one fiftieth.
+    counts = Counter({"big.py": 1, "half.py": 2, "new.py": 3})
+    totals = Counter({"big.py": 50, "half.py": 4})
+    timings = {"big.py": 287.5, "half.py": 200.0}
+    seconds = checks.slow_seconds(counts, totals, timings)
+    assert seconds["big.py"] == 5.75 and seconds["half.py"] == 100.0
+    # A file with no timing takes the seconds per slow test that the timed files show (105.75 over 3 tests).
+    assert round(seconds["new.py"], 2) == 105.75
+    # Without the share, big.py alone (287.5 s) would not fit the budget; its slow share keeps it.
+    kept, deferred, total = checks.slow_fit(["big.py", "half.py"], counts, timings, totals)
+    assert kept == ["big.py", "half.py"] and deferred == [] and round(total, 2) == 105.75
+    assert checks.slow_fit(["big.py"], counts, {"big.py": 287.5}, Counter({"big.py": 1}))[1] == ["big.py"]
+
+
+def test_slow_selection_is_empty_on_main_and_docs_and_uncertain_changes_keep_only_their_changed_tests(mapped):
+    assert checks.selection(["backend/scheduler.py"], "push")["slow"] == []
+    assert checks.selection(["docs/images/none.png"])["slow"] == []
+    assert checks.selection(["pytest.ini"])["slow"] == []
+    assert checks.selection([])["slow"] == []
+    assert checks.selection(["pytest.ini", "backend/tests/test_scheduler.py"])["slow"] == [
+        "backend/tests/test_scheduler.py"
+    ]
+
+
+def test_the_plan_confirms_slow_files_by_collection_drops_exempt_ones_and_shards_one_process_per_vm(
+    tmp_path, monkeypatch
+):
+    scheduler = "backend/tests/test_scheduler.py"
+    exempt_file = "backend/tests/test_e2e_cli.py"
+    plain = "backend/tests/test_plain.py"
+    collected = []
+    picked = {
+        "python": [],
+        "browser": [],
+        "caddy": True,
+        "conformance": False,
+        "rust": [],
+        "contracts": False,
+        "slow": [scheduler, exempt_file, plain],
+        "reason": "measured dependency map",
+    }
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "slow_exempt", lambda root=ROOT: {exempt_file: "contracts job"})
+    monkeypatch.setattr(
+        checks,
+        "collect_slow",
+        lambda files=None, root=ROOT: collected.append(files) or Counter({scheduler: 2, exempt_file: 1}),
+    )
+    monkeypatch.setattr(checks, "collect_tests", lambda files, root=ROOT: Counter({scheduler: 2}))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    target = tmp_path / "plan.json"
+    plan = checks.prepare("merge_group", "base", target)
+    assert collected == [[scheduler, exempt_file, plain]]
+    assert plan["slow"] == [scheduler] and plan["slow_exempt"] == [exempt_file] and plan["slow_deferred"] == []
+    assert {"suite": "slow-1", "files": [scheduler]} in plan["matrix"]["include"]
+    assert all("relay" not in job for job in plan["matrix"]["include"])
+    picked.update(slow=[])
+    assert checks.prepare("merge_group", "base", target)["matrix"]["include"] == [{"suite": "selection", "files": []}]
+
+
+def test_the_queue_runs_at_most_one_slow_vm_and_names_the_slow_files_it_defers_in_the_job_summary(
+    tmp_path, monkeypatch
+):
+    nearest, second = "backend/tests/test_nearest.py", "backend/tests/test_second.py"
+    picked = {
+        "python": [],
+        "browser": [],
+        "caddy": True,
+        "conformance": False,
+        "rust": [],
+        "contracts": False,
+        "slow": [nearest, second],
+        "reason": "measured dependency map",
+    }
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "slow_exempt", lambda root=ROOT: {})
+    monkeypatch.setattr(checks, "collect_slow", lambda files=None, root=ROOT: Counter({nearest: 1, second: 1}))
+    monkeypatch.setattr(checks, "collect_tests", lambda files, root=ROOT: Counter({nearest: 1, second: 1}))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    durations = tmp_path / "durations.json"
+    durations.write_text(json.dumps({nearest: 200.0, second: 60.0}))  # 200 s fits the budget; 60 s more does not
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", str(durations))
+    slow_jobs = [job for job in plan["matrix"]["include"] if job["suite"].startswith("slow-")]
+    assert slow_jobs == [{"suite": "slow-1", "files": [nearest]}]
+    assert plan["slow"] == [nearest] and plan["slow_deferred"] == [second]
+    text = summary.read_text()
+    assert "Slow tests deferred to release validation (1)" in text and f"- `{second}`" in text
+
+
+def test_a_slow_shard_runs_its_files_in_one_process_and_names_the_tests_it_skipped(tmp_path, monkeypatch, capsys):
+    scheduler = "backend/tests/test_scheduler.py"
+    target = tmp_path / "plan.json"
+    target.write_text(
+        json.dumps({"slow": [scheduler], "matrix": {"include": [{"suite": "slow-1", "files": [scheduler]}]}})
+    )
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    with pytest.raises(RuntimeError, match="existing file list"):
+        checks.run(target, "slow-1")
+    source(tmp_path, scheduler, "")
+    calls = []
+    monkeypatch.setattr(
+        checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=0)
+    )
+    (tmp_path / "ci-results").mkdir()
+    (tmp_path / "ci-results/slow-1.xml").write_text(
+        "<testsuite><testcase name='test_a'/><testcase name='test_b'><skipped/></testcase></testsuite>"
+    )
+    assert checks.run(target, "slow-1") == 0
+    assert calls == [
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-n",
+            "0",
+            *checks.PYTEST_FLAGS,
+            "-o",
+            "junit_family=xunit1",
+            "--junitxml=ci-results/slow-1.xml",
+            "-m",
+            "slow",
+            scheduler,
+        ]
+    ]
+    assert "::warning::1 slow test(s) skipped in slow-1: test_b" in capsys.readouterr().out
+
+
+def test_the_slow_shards_build_the_relay_before_their_tests_and_upload_their_results():
+    steps = workflow_jobs()["jobs"]["tests"]["steps"]
+    build = next(s for s in steps if "cargo build --locked" in s.get("run", ""))
+    assert build["if"] == "startsWith(matrix.suite, 'slow-')"
+    assert build["working-directory"] == "relay-rs"
+    assert "TICO_SCREEN_RELAY_BIN=$PWD/target/debug/tico-screen-relay" in build["run"]
+    assert "GITHUB_ENV" in build["run"]
+    names = [s.get("name", s.get("uses")) for s in steps]
+    assert names.index(build["name"]) < names.index("Run selected tests")
+    upload = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+    assert "startsWith(matrix.suite, 'slow-')" in upload["if"]
+
+
+def test_the_static_checks_check_the_exempt_list_on_every_push():
+    steps = workflow_jobs()["jobs"]["static"]["steps"]
+    assert any(step.get("run") == "python3 scripts/pr_checks.py slow-check" for step in steps)
