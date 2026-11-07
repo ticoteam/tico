@@ -94,7 +94,7 @@ interface SsWizard {
 }
 
 /** The bet form's named controls (strategyBetFormHtml, ui/strategy-page.ts): TypeScript does not type a form's named fields. */
-interface SsBetFormFields extends HTMLFormControlsCollection {
+interface SsBetFormFields extends StratWrongControls {
   statement: HTMLInputElement;
   why: HTMLTextAreaElement;
   rules_out: HTMLTextAreaElement;
