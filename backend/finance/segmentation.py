@@ -10,8 +10,8 @@ Unallocated.
 
 import json
 import sqlite3
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, cast
 
 from .. import hubdb as H
 from .. import segments as SEG
@@ -27,13 +27,16 @@ def _props(text: object) -> dict[str, Any]:
         value = json.loads(str(text or "{}"))
     except ValueError:
         return {}
-    return value if isinstance(value, dict) else {}
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 def _rank(props: Mapping[str, Any]) -> int | None:
     """A segment's rank, or None when it has none (such a segment sorts last)."""
+    value = props.get("rank")
+    if value is None:
+        return None
     try:
-        return int(props.get("rank"))
+        return int(value)
     except (TypeError, ValueError):
         return None
 
@@ -46,7 +49,7 @@ def ours(c: sqlite3.Connection) -> list[dict[str, Any]]:
         return []
     marks = ",".join("?" * len(ids))
     rows = c.execute(f"SELECT id, name, summary, properties FROM market_entities WHERE id IN ({marks})", ids).fetchall()
-    out = []
+    out: list[dict[str, Any]] = []
     for r in rows:
         props = _props(r[3])
         out.append(
@@ -84,7 +87,7 @@ def member_ref(c: sqlite3.Connection, actor: str) -> str:
     if kind == "human":
         return "person:" + ident
     if kind == "bot":
-        found = H.resolve_bot(c, ident)
+        found = cast(Callable[..., dict[str, Any] | None], H.resolve_bot)(c, ident)
         return "bot:" + (found["id"] if found else ident)
     return ""
 
