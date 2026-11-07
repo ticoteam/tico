@@ -12,6 +12,8 @@ const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
 // queue, which is yours alone.
 const taskGroupsFor = (view, state) => TASK_GROUPS.filter(([k]) => k !== 'need' || (view === 'foryou' && (!state || tasksNeedsQueue(state, view))));
 const tasksEmptyFilters = () => Object.fromEntries(TASK_FILTER_FIELDS.map(([k]) => [k, []]));
+// The fields the filter menu offers: Segment only where the company has segments, or a task list is filtered to one.
+const tasksFilterFields = state => TASK_FILTER_FIELDS.filter(([k]) => k !== 'segment' || !segNone() || !!state.filters.segment?.length);
 const isTasksRoute = r => [TASKS, BOARD, ISSUES].includes(String(r || '').split('?')[0]);
 const PHONE = '(max-width:760px)';
 // Small inline icons (the icon font is a fixed subset; these never need it).
@@ -858,7 +860,7 @@ function tasksFieldMenu(state, anchor) {
   const groupable = state.view === 'list' || state.view === 'foryou', by = tasksGroupBy(state);
   const group = !groupable ? '' : `<div class="tl-menu-h" aria-hidden="true">Group</div><div class="tl-gpicks" role="group" aria-label="Group by">
     ${taskGroupsFor(state.view, state).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi tl-gpick" data-pick-group="${k}">${esc(label)}</button>`).join('')}</div>`;
-  const fields = tasksNeedsQueue(state) ? [] : TASK_FILTER_FIELDS;
+  const fields = tasksNeedsQueue(state) ? [] : tasksFilterFields(state);
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Filter">${group}
     ${fields.length ? `<div class="tl-menu-h" aria-hidden="true">Filter</div>` : ''}
     ${fields.map(([k, name]) => `<button type="button" role="menuitem" class="tl-mi" data-pick-field="${k}">${esc(name)}</button>`).join('')}</div>`, pop => {

@@ -463,7 +463,8 @@ function pageGoals() {
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><input type="search" id="goal-search" class="goal-search" aria-label="Search goals or people" autocomplete="off" placeholder="Search goals or people…"><div id="goal-body"><p class="muted">Loading…</p></div>
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   goalsHeadActions(state);
-  void segTagsLoad();   // the Segment menu's choices
+  // The Segment filter names its segment, and the choices are there, once the list is read (a direct visit has none yet).
+  void segTagsLoad().then(() => { if (GOALS_ST === state) goalsHeadActions(state); });
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
   const search = $('#goal-search');
   search.oninput = () => { state.q = search.value; goalsRender(state); };
@@ -478,7 +479,7 @@ function goalsHeadActions(state) {
   const may = Boolean(mePerson() || S.me?.role === 'owner');
   actions.innerHTML = segFilterButton(state.segment) + (may ? '<button class="primary" type="button" id="goal-new">+ Goal</button>' : '');
   const filter = actions.querySelector('[data-seg-filter]');
-  filter.onclick = () => segFilterOpen(filter, state.segment, id => goalsSegmentPick(state, id));
+  if (filter) filter.onclick = () => segFilterOpen(filter, state.segment, id => goalsSegmentPick(state, id));
   const add = actions.querySelector('#goal-new');
   if (add) add.onclick = () => { if (state.loaded) goalSheetOpen(state); };
 }

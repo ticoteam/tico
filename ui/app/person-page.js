@@ -12,14 +12,16 @@ const PERSON_TAB_LABELS = {assistant: 'Assistant', profile: 'Profile', slack: 'S
 function personCanEdit(p) {
   return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
 }
-// The teammate's Segments card: its tags, and the owner's Segments menu. Hidden until there is something to show.
+// The teammate's Segments row, in the About card: its tags, and the owner's Edit (ui/app/segment-tags.ts). Nothing
+// until there is something to show.
 function personSegmentsPaint(p) {
-  const card = $('#person-segments');
+  const card = /** @type {HTMLElement | null} */ ($('#person-about'));
   if (!card || card.dataset.for !== p.id) return;
-  const row = segTagRowHtml('person:' + p.id);
-  card.hidden = !row;
-  card.innerHTML = row ? `<header><h2>Segments</h2></header>${row}` : '';
-  if (row) segTagRowWire(card, 'person:' + p.id, p.name || p.id);
+  const ref = 'person:' + p.id, row = segTagRowHtml(ref);
+  card.querySelector('[data-person-seg]')?.remove();
+  if (!row) return;
+  card.insertAdjacentHTML('beforeend', `<div class="seg-tags-field" data-person-seg><span class="muted">Segments</span>${row}</div>`);
+  segTagRowWire(card, ref, p.name || p.id);
 }
 function fieldEditor(label, value, {placeholder, rows, save}) {
   const current = String(value || '');
@@ -84,7 +86,7 @@ function pagePerson(id, tab) {
         ${p.phone ? `<dt>Phone</dt><dd><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></dd>` : ''}
         ${p.bot ? `<dt>Notes go to</dt><dd>${empChip(p.bot)}</dd>` : ''}
       </dl></section>
-    ${p.title || p.team || p.about || edit ? `<section class="card" id="person-about"><header><h2>About</h2>
+    ${p.title || p.team || p.about || edit || segTagsOf('person:' + id).length ? `<section class="card" id="person-about" data-for="${esc(id)}"><header><h2>About</h2>
         ${edit ? '<button class="linkish person-edit-btn" type="button" id="person-edit">Edit</button>' : ''}</header>
       <div id="person-id">${p.title || p.team ? `<div class="meta">${esc([...new Set([p.title, p.team ? teamLabel(p.team) : ''].filter(Boolean))].join(' · '))}</div>` : ''}
         ${p.about ? `<div class="role">${esc(about.lead)}${about.rest ? `<span id="goal-rest" hidden> ${esc(about.rest)}</span> <button class="linkish" type="button" id="goal-more" aria-expanded="false">more</button>` : ''}</div>`
@@ -93,7 +95,6 @@ function pagePerson(id, tab) {
     <section class="card tasks" id="person-tasks-card"><header><h2>Tasks</h2>
         <button class="ghost" type="button" id="person-task-add" aria-haspopup="dialog">+ Add task</button></header>
       <div id="person-tasks">Loading…</div></section>
-    <section class="card" id="person-segments" data-for="${esc(id)}" hidden></section>
     ${fieldEditor('Goals', p.goals, {placeholder: 'What they are trying to get done.', save: edit})}
     ${fieldEditor('Notes', p.notes, {placeholder: 'Working notes about this human. Visible to humans who can open this profile.', rows: 8, save: edit})}
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>

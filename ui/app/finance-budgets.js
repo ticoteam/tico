@@ -21,6 +21,8 @@ function finBudgetsPage(mine = false) {
   const caps = finCaps(), B = FIN_BUD;
   if (!B.month) B.month = finToday().slice(0, 7);
   if (mine) B.q = '';
+  // The Segment filter is the address's (`?segment=<id>`), so a link to it lands filtered.
+  if (!mine) B.seg = segQuery();
   FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
   const bud = FIN.bud;
   // The Segment filter names its segment once the list is read (a direct visit has none yet).
@@ -186,6 +188,8 @@ function finBudRail() {
   const s = b.state || {}, pct = finBudPct(b), month = FIN_MON[Number(B.month.slice(5, 7)) - 1], line = state.lines[b.account_id]?.name;
   const per = {month: 'month', quarter: 'quarter', year: 'year', once: 'once'}[b.period] || b.period;
   const hist = state.hist?.rows?.[b.id];
+  // The segment the budget's spend reports under: its own, or its parent's when it has none (shown muted).
+  const effSeg = b.effective_segment_id || '', inherited = !b.segment_id && !!effSeg;
   finRail(`<div class="fin-rail-title"><h2>${esc(b.name)}</h2><span class="fin-big">${s.amount == null ? '' : finUsd(s.amount)}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${finBudMeterCls(b, pct)}" aria-hidden="true"><i style="width:${Math.min(100, pct)}%"></i></div><div class="muted fin-small">${finUsd(s.actual)} of ${finUsd(s.amount)} · ${month}</div>`}
     ${line ? finKv('Line', esc(line)) : b.catch_all ? finKv('Line', 'Everything else') : ''}${b.team ? finKv('Team', esc(finTeamName(b.team))) : ''}
@@ -195,7 +199,8 @@ function finBudRail() {
     ${finBudAsOf(b) ? finKv('Platform data', esc(finBudAsOf(b).replace(/^Platform data as of /, ''))) : ''}
     ${finKv('Warn at', esc(b.warn_pct + '%'))}${finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit || '') + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : '')))}
     ${b.owner ? finKv('Owner', esc(finWho(b.owner))) : ''}
-    ${finKv('Segment', (b.segment_id ? segTagChips([b.segment_id]) : '<span class="muted">None</span>') + (finBudEditable(b) ? ' <button type="button" class="ghost small" data-fin-bud-seg>Edit</button>' : ''))}
+    ${segTagRows().length || effSeg ? finKv('Segment', (effSeg ? `<span class="${inherited ? 'fin-inherit' : ''}">${segTagChips([effSeg])}</span>` : '<span class="muted">None</span>')
+      + (finBudMay() && !b.catch_all && !FIN.bud?.mine ? ' <button type="button" class="ghost small" data-fin-bud-seg>Edit</button>' : '')) : ''}
     <h3 class="fin-h">Amount by month</h3><div data-fin-bud-hist>${!state.hist ? '<p class="muted fin-note">…</p>' : hist?.length
       ? hist.map(([label, v]) => finKv(label, v == null ? '<span class="muted">—</span>' : finUsd(v))).join('') : finNote('No amounts yet.')}</div>`);
   if (!state.hist) void finBudHistory();
@@ -247,16 +252,16 @@ function finBudEdit(td) {
 function finBudSegPick(id) {
   if ((FIN_BUD.seg || '') === id) return;
   FIN_BUD.seg = id;
+  segQuerySet(id);
   const old = $('#fin-body [data-seg-filter]'); if (old) old.outerHTML = segFilterButton(id);
   finBudReset(); void finBudLoad();
 }
 const finBudSegParam = () => FIN_BUD.seg ? '&segment=' + encodeURIComponent(FIN_BUD.seg) : '';
-// A budget's Segment, from the rail: a version from this month on (budget_update); None clears it.
+// A budget's Segment, from the rail (budget_update; None clears it). A segment is not versioned by month.
 function finBudSegmentEdit(b) {
-  const month = FIN_BUD.month;
   finDecideDialog('Segment', segSelectHtml(b.segment_id || '', {name: 'segment_id'}), 'Save', form => {
     const seg = form.elements.segment_id.value;
-    return ['budget_update', {budget_id: b.id, segment_id: seg, effective_from: month + '-01'}];
+    return ['budget_update', {budget_id: b.id, segment_id: seg}];
   }, 'Saved');
 }
 

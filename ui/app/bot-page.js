@@ -424,7 +424,6 @@ async function pageBot(slug, tab) {
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
     <div id="bot-review-host">${botReviewHTML(slug)}</div>
-    <section class="card" id="bot-segments" hidden></section>
     ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
       <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
