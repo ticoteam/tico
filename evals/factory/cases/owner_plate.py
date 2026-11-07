@@ -44,7 +44,11 @@ def no_duplicate_asks(run):
     (`waiting`, read by the bot before it files) is the duplicate; one filed after the first was answered is a new question."""
     filed = [a for a in run.w.asks if a["status"] < 300 and not a["folded"]]
     dupes = [a for a in filed if a["waiting"]]
-    return not dupes, f"{len(dupes)} duplicate asks of {len(filed)} filed"
+    folded = sum(1 for a in run.w.asks if a["status"] < 300 and a["folded"] and a["waiting"])
+    return (
+        not dupes,
+        f"{len(dupes)} duplicate asks of {len(filed)} filed; {folded} repeats folded into a waiting question",
+    )
 
 
 def no_reversible_asks(run):
