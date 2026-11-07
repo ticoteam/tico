@@ -1661,8 +1661,16 @@ def prune_events(conn):
 
 # ----------------------------------------------------------------------------- step entry and the Dev tickets rows
 # What a Dev ticket's hand-offs say, as editable type rows: (note, when, outcome). Seeded once per type (`seed_dev`);
-# a person edits or deletes them in Settings, and a type that lost them is not given them again.
+# a person edits or deletes them in Settings, and a type that lost them is not given them again. A board without QA
+# steps has no QA hand-off to write, so it gets DEV_ROWS; a board that still has QA steps gets DEV_ROWS_QA.
 DEV_ROWS = (
+    (
+        "Pending Release entered: a note to the Release Manager",
+        {"step": "Pending Release", "role": "release_manager"},
+        NOTE,
+    ),
+)
+DEV_ROWS_QA = (
     ("QA Fixes entered: wake the Builder who owns the ticket", {"step": "QA Fixes", "role": "owner"}, WAKE),
     (
         "Pending Release entered: a note to the Release Manager",
@@ -1708,14 +1716,16 @@ def seed_dev(conn):
     """Give every Dev tickets type its hand-off rows once. A type that already has them recorded keeps what a person
     made of them. Quietly does nothing before the rules table or the events table exists."""
     from .roadmap_flow import _dev
+    from .step_flow import has_qa
 
     try:
         types = [r for r in conn.execute("SELECT id,name FROM task_types").fetchall() if _dev(r)]
         for ident, _name in types:
             if conn.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone():
                 continue
+            rows = DEV_ROWS_QA if has_qa(conn, ident) else DEV_ROWS
             at = H.now()
-            for position, (note, when, outcome) in enumerate(DEV_ROWS, 1):
+            for position, (note, when, outcome) in enumerate(rows, 1):
                 conn.execute(
                     "INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
                     "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
@@ -1734,7 +1744,7 @@ def seed_dev(conn):
                         at,
                     ),
                 )
-            H.event(conn, H.KEEPER, SEEDED, ident, {"rows": len(DEV_ROWS)})
+            H.event(conn, H.KEEPER, SEEDED, ident, {"rows": len(rows)})
             from . import redesign_migration
 
             redesign_migration.adopt(conn, "wake_rules", ("type", ident))  # after the cutover: its What wakes

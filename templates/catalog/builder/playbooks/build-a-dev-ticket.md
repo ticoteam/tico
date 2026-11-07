@@ -7,7 +7,7 @@ Inputs: the ticket and its conversation (`hub task show <id>`), its acceptance t
 `knowledge/standards.md` and `knowledge/patterns.md`.
 
 Outcome: one pull request linked to the ticket, one head commit whose checks you ran and recorded, and the ticket moved to
-Review 1. Every change gets Review 1; a change nobody will see skips In QA after its review, not the review.
+Review 1. Every change gets Review 1; a change nobody will see skips In QA after its review (on a board with In QA), not the review.
 
 Done when the change does what the ticket says, a test fails on the old code and passes on yours, the pull request
 description says what changed, why and how it was tested, the ticket links the pull request, and the note on the ticket
