@@ -28,7 +28,9 @@ type SegCompare = SegCompareRow & {faces: SegFace[]; teammates: number};
 type SegChanged = {text: string; kind?: string; segment_id: string; week: string};
 // GET /api/v2/market/segments/{id}/page: the segment's five answers, briefing, sizes, players and history.
 type SegPage = {segment: {id: string; name: string; who: string; color: string; rank: number | null};
-  answers: Record<string, string>; briefing: any; sizes: any; players: any[]; what_changed: any[]};
+  answers: Record<string, string>; briefing: any; sizes: any; players: any[]; what_changed: any[];
+  // The company's share of the segment's spend, in percent (track D). Absent until the page carries it.
+  our_share?: number | null};
 // What a Market view hands the router back: its shell and the calls the router makes on it.
 type SegMount = {shell: HTMLElement; open: (at?: any) => void; stop: () => void};
 
@@ -223,7 +225,7 @@ function segPageDraw(seg: SegDetail, load: number): void {
   if (!body) return;
   body.innerHTML = `${segHeadHtml(seg)}<div id="seg-strategy-box">${segStrategyHtml(seg)}</div>${segBetsHtml(seg)}<section class="seg-market mkt-host seg-mkt-host" id="seg-market" aria-label="Market"></section>`;
   segBindStrategy(seg, load);
-  void segMarketFill($('#seg-market'), seg.id, load);
+  void segMarketFill($('#seg-market'), seg.id, () => load === SEG_PAGE_LOAD);
 }
 
 function segHeadHtml(seg: SegDetail): string {
@@ -336,8 +338,8 @@ function segBindStrategy(seg: SegDetail, load: number): void {
 // The segment's market: the five questions of the Market page, scoped to the segment. Shared by the segment page and the
 // Market tab's segment view. The owner sizes it: Edit sizes shows the estimates, and each can be accepted or its
 // parameters changed (the same routes the map's size panel uses).
-async function segMarketFill(el: HTMLElement | null, id: string, load: number | (() => boolean)): Promise<void> {
-  const live = () => (typeof load === 'function' ? load() : true) && !!el?.isConnected;
+async function segMarketFill(el: HTMLElement | null, id: string, current: () => boolean): Promise<void> {
+  const live = () => current() && !!el?.isConnected;
   if (!el) return;
   el.innerHTML = `<div class="mkt-pg seg-mkt">${skelRows(3, {card: true, dot: false})}</div>`;
   let page: SegPage;
@@ -352,42 +354,46 @@ function segMarketDraw(el: HTMLElement, id: string, page: SegPage): void {
   const sizes = page.sizes || {}, chosen = sizes.chosen || null, estimates: any[] = sizes.estimates || [];
   const briefing = page.briefing || null, answers = page.answers || {}, players = page.players || [];
   const spend: number | null = chosen?.spend_usd ?? sizes.rolled_usd?.spend_usd ?? null;
+  // The players' revenue feeds the players table. The share is the page's own (our_share); until the page carries it,
+  // it is worked out from that revenue.
   const revenue = rdqRevenue({segments: [{id: seg.id, parent: null, players}]});
   const ours = revenue.get(marketSelfId()) || 0;
+  const share = typeof page.our_share === 'number' ? page.our_share : spend && ours ? 100 * ours / spend : null;
   const owner = mktOwner();
   const tiles: string[] = [];
-  if (spend != null) tiles.push(rdqTile('Yearly spend', mktMoney(spend), `${Number.isFinite(chosen?.growth_pct) ? rdqGrowth(chosen.growth_pct) + ' a year ' : ''}${chosen ? '' : 'Rolled up from its parts'}`));
-  if (spend && ours) tiles.push(rdqTile(`${esc(companyName())} share`, rdqPct(100 * ours / spend), `${mktMoney(ours)} of ${mktMoney(spend)}`));
-  const sections: string[] = [];
-  if (briefing) sections.push(rdqSection('changed', 'What changed?', answers.changed || '',
-    `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>`, rdqChangedHtml(briefing)));
-  if (spend != null || estimates.length) {
-    const money = chosen ? `<div class="mkt-card seg-money"><b>${mktMoney(spend)}</b>${chosen.low_usd != null ? ` <small>${mktRange(chosen)}</small>` : ''}</div>` : '';
-    const edit = owner && estimates.length ? '<button class="linkish" type="button" data-seg-sizes aria-expanded="false" aria-controls="seg-sizes">Edit sizes</button>' : '';
-    const ests = estimates.length ? `<ul class="mkt-ests" id="seg-sizes" hidden>${estimates.map(e => mktEstimateHtml(e, {size: chosen})).join('')}</ul>` : '';
-    sections.push(rdqSection('money', 'Where is the money going?', answers.money || '', edit, `${money}${ests}`));
-  }
-  if (players.length) sections.push(rdqSection('players', 'Who are we up against?', answers.players || '', '',
-    rdqPlayersHtml({segments: [{id: seg.id, name: seg.name, players}], total: {spend_usd: spend}}, null, briefing, revenue)));
-  const research = '<button class="ghost" type="button" data-seg-research>Ask Librarian to research</button>';
-  el.innerHTML = `<div class="mkt-pg seg-mkt"><header class="mkt-top"><h2>Market</h2><span class="mkt-name">${esc(seg.name)}</span>
-      <span class="spacer"></span>${research}</header>
-    ${tiles.length ? `<div class="mkt-tiles">${tiles.join('')}</div>` : ''}${sections.join('') || '<p class="market-none">Nothing here yet.</p>'}</div>`;
-  el.onclick = ev => {
+  // The money is this tile (its range beside it), so the question below carries only the sizes.
+  if (spend != null) tiles.push(rdqTile('Yearly spend', `${mktMoney(spend)}${chosen?.low_usd != null ? ` <small>${mktRange(chosen)}</small>` : ''}`,
+    Number.isFinite(chosen?.growth_pct) ? `${rdqGrowth(chosen.growth_pct)} a year` : ''));
+  if (spend && share != null) tiles.push(rdqTile(`${esc(companyName())} share`, rdqPct(share), `${mktMoney(spend * share / 100)} of ${mktMoney(spend)}`));
+  const ests = estimates.length ? `<ul class="mkt-ests" id="seg-sizes" hidden>${estimates.map(e => mktEstimateHtml(e, {size: chosen})).join('')}</ul>` : '';
+  const edit = owner && estimates.length ? '<button class="linkish" type="button" data-seg-sizes aria-expanded="false" aria-controls="seg-sizes">Edit sizes</button>' : '';
+  const questions = rdqQuestionsHtml({
+    answers, keep: ['money', 'reach', 'saying'],
+    changed: briefing ? rdqChangedHtml(briefing) : '',
+    changedMore: briefing ? `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>` : '',
+    money: ests, moneyMore: edit,
+    players: players.length ? rdqPlayersHtml({segments: [{id: seg.id, name: seg.name, players}], total: {spend_usd: spend}}, null, briefing, revenue) : '',
+    // A segment has no buyer chain or listening of its own, so its reach and what buyers say show their answers only.
+    reach: '', saying: '',
+  });
+  el.innerHTML = rdqPageHtml({cls: 'seg-mkt', tiles,
+    top: `<header class="mkt-top"><h2>Market</h2><span class="mkt-name">${esc(seg.name)}</span>
+      <span class="spacer"></span><button class="ghost" type="button" data-seg-research>Ask Librarian to research</button></header>`,
+    questions});
+  rdqPageBind(el, briefing, ev => {
     const target = ev.target as Element;
-    if (target.closest('[data-rdb-read]')) { briefingOpen(briefing); return; }
-    if (target.closest('[data-seg-research]')) { void segResearch(el, id); return; }
-    if (target.closest('[data-seg-sizes]')) {
-      const list = el.querySelector<HTMLElement>('#seg-sizes'), btn = target.closest('[data-seg-sizes]') as HTMLElement;
+    if (target.closest('[data-seg-research]')) { void segResearch(el, id); return true; }
+    const toggle = target.closest<HTMLElement>('[data-seg-sizes]');
+    if (toggle) {
+      const list = el.querySelector<HTMLElement>('#seg-sizes');
       if (list) list.hidden = !list.hidden;
-      btn.setAttribute('aria-expanded', String(!!list && !list.hidden));
-      return;
+      toggle.setAttribute('aria-expanded', String(!!list && !list.hidden));
+      return true;
     }
     const accept = target.closest<HTMLElement>('[data-mkt-accept]');
-    if (accept) { void segSizeWrite(el, id, post(`/v2/market/sizes/${encodeURIComponent(accept.dataset.mktAccept || '')}/accept`, {}), page); return; }
-    const player = target.closest<HTMLElement>('[data-player]');
-    if (player && !target.closest('a')) void rdqPlayerOpen(player.dataset.player || '');
-  };
+    if (accept) { void segSizeWrite(el, id, post(`/v2/market/sizes/${encodeURIComponent(accept.dataset.mktAccept || '')}/accept`, {}), page); return true; }
+    return false;
+  });
   el.onsubmit = ev => {
     const param = (ev.target as Element).closest<HTMLFormElement>('[data-mkt-param]');
     if (!param) return;
@@ -445,12 +451,27 @@ function segChangedHtml(changed: SegChanged[], segs: SegCompareRow[]): string {
   return rdqSection('changed', 'What changed across all', '', '', `<ul class="mkt-card mkt-items">${items}</ul>`);
 }
 
-// The Market tab's compare view: the segments side by side, what changed across them, and the chips to each segment's market.
+// Whether the company has no market yet, by the Market page's own test (no active entity, and no page the seed did not
+// write). The compare view and a segment's market then show the setup, as the whole market does. A failed read is not blank.
+async function segMarketBlank(): Promise<boolean> {
+  const [count, library] = await Promise.all([
+    get('/v2/market/entities?status=active&limit=1').catch(() => null),
+    get('/company-docs?collection=market').catch(() => null),
+  ]);
+  if (!count || !library) return false;
+  return marketBlank(count.total ?? (count.entities || []).length, library.documents).blank;
+}
+
+// The Market tab's compare view: the segments side by side, what changed across them, and the chips to each segment's
+// market. With no market yet it shows the setup; with no segments, the whole market.
 async function mountMarketCompare(shell: HTMLElement): Promise<SegMount> {
-  const [data, list] = await Promise.all([
+  const [data, list, blank] = await Promise.all([
     get('/v2/market/segments/compare', {fresh: true}),
     get('/v2/segments', {fresh: true}).catch(() => null),
+    segMarketBlank(),
   ]);
+  if (blank) return await mountBlank(shell);
+  if (!(data?.segments || []).length) return await mountMarketPage(shell);
   // The faces and teammates come from the segments list by id; a segment missing there shows no faces.
   const people = new Map<string, SegItem>((list?.segments || []).map((x: SegItem) => [x.id, x]));
   const segs: SegCompare[] = (data?.segments || []).map((r: SegCompareRow) => ({
@@ -462,7 +483,8 @@ async function mountMarketCompare(shell: HTMLElement): Promise<SegMount> {
 
 // One segment's market in the Market tab: the chips, then the segment's five questions.
 async function mountSegmentMarketView(shell: HTMLElement, id: string): Promise<SegMount> {
-  const data = await get('/v2/market/segments/compare', {fresh: true}).catch(() => null);
+  const [data, blank] = await Promise.all([get('/v2/market/segments/compare', {fresh: true}).catch(() => null), segMarketBlank()]);
+  if (blank) return await mountBlank(shell);
   const segs: SegCompareRow[] = data?.segments || [];
   shell.innerHTML = `<div class="mkt-pg seg-mkt">${segTopHtml()}${segChipsHtml(id, segs)}<div id="seg-mkt-body"></div></div>`;
   const body = shell.querySelector<HTMLElement>('#seg-mkt-body');

@@ -53,8 +53,9 @@ function rdqRevenue(data) {
 }
 
 const rdqTile = (label, big, small) => `<div class="mkt-tile-k"><div class="mkt-lab">${label}</div><div class="mkt-big">${big}</div><div class="mkt-small">${small}</div></div>`;
+// The whole market's tiles (rdqPageHtml lays them out): yearly spend, the fastest-growing segment, our share.
 function rdqTilesHtml(data, revenue) {
-  if (!mktSized(data)) return '';
+  if (!mktSized(data)) return [];
   const total = Number(data.total?.spend_usd) || 0, out = [];
   const tops = mktTree(data).drawn.map(g => g.seg).filter(s => s.size?.spend_usd != null && Number.isFinite(s.size.growth_pct));
   const weight = tops.reduce((a, s) => a + s.size.spend_usd, 0);
@@ -64,7 +65,7 @@ function rdqTilesHtml(data, revenue) {
   if (fast) out.push(rdqTile('Fastest growing', esc(fast.name), `${rdqGrowth(fast.size.growth_pct)} · ${mktMoney(fast.size.spend_usd)}`));
   const ours = revenue.get(marketSelfId());
   if (ours && total) out.push(rdqTile(`${esc(companyName())} share`, rdqPct(100 * ours / total), `${mktMoney(ours)} of ${mktMoney(total)}`));
-  return out.length ? `<div class="mkt-tiles">${out.join('')}</div>` : '';
+  return out;
 }
 
 function rdqSection(key, title, answer, more, body) {
@@ -148,6 +149,34 @@ function rdqSayingHtml(stats, heard) {
     ${settingsIsAdmin() ? `<div class="mkt-card rdm-set" id="rdm-set" hidden><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></div>` : ''}`;
 }
 
+// The one-page Market: its header, its tiles and its questions. The whole market and a segment's market both draw it,
+// each with its own data (rdqQuestionsHtml); the blank state is the caller's.
+function rdqPageHtml({cls = '', top, tiles = [], questions}) {
+  const nothing = !tiles.length && !questions;
+  return `<div class="mkt-pg${cls ? ' ' + cls : ''}">${top}${tiles.length ? `<div class="mkt-tiles">${tiles.join('')}</div>` : ''}${questions || (nothing ? '<p class="market-none">Nothing here yet.</p>' : '')}</div>`;
+}
+
+// The five questions, in order. A question draws when it has a body (HTML its caller built from its data). With `keep`
+// naming it, a question with no body shows its one-line answer alone; one with neither is left out.
+function rdqQuestionsHtml(q) {
+  const answers = q.answers || {}, keep = q.keep || [];
+  const part = (key, title, body, more) => (body || (keep.includes(key) && answers[key]) ? rdqSection(key, title, answers[key], more || '', body || '') : '');
+  return part('changed', 'What changed?', q.changed, q.changedMore) + part('money', 'Where is the money going?', q.money, q.moneyMore)
+    + part('players', 'Who are we up against?', q.players, q.playersMore) + part('reach', 'How does it reach buyers?', q.reach, q.reachMore)
+    + part('saying', 'What are buyers saying?', q.saying, q.sayingMore);
+}
+
+// The clicks a drawn page takes: a briefing's Read, and a player's note (from its name or its row). `more` takes the
+// clicks its own page owns first, and returns true for each it took.
+function rdqPageBind(shell, briefing, more) {
+  shell.onclick = ev => {
+    if (more && more(ev)) return;
+    if (ev.target.closest('[data-rdb-read]')) { briefingOpen(briefing); return; }
+    const player = ev.target.closest('[data-player]') || ev.target.closest('.mkt-pl tbody tr')?.querySelector('[data-player]');
+    if (player && !ev.target.closest('a')) void rdqPlayerOpen(player.dataset.player);
+  };
+}
+
 async function mountMarketPage(shell) {
   const day = new Date(), since = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() - (RDM_DAYS - 1)));
   const soft = path => get(path).catch(() => null);   // a part that does not load leaves its question out
@@ -167,28 +196,26 @@ async function mountMarketPage(shell) {
   const heard = !!stats && ((stats.recent || []).length > 0 || (stats.daily || []).some(d => Object.values(d.sources || {}).some(Boolean)));
   const saying = heard || (!!stats && settingsIsAdmin());
   const tracked = companies?.total ?? (companies?.entities || []).length;
-  const sections = [
-    briefing && rdqSection('changed', 'What changed?', answers.changed,
-      `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>`, rdqChangedHtml(briefing)),
-    (sized || sizing) && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-money"></div>'),
-    players && rdqSection('players', 'Who are we up against?', answers.players, tracked ? `${tracked} tracked` : '', players),
-    reach && rdqSection('reach', 'How does it reach buyers?', answers.reach, '', reach),
-    saying && rdqSection('saying', 'What are buyers saying?', answers.saying,
-      settingsIsAdmin() ? '<button class="linkish" type="button" data-rdm-settings aria-expanded="false" aria-controls="rdm-set">Settings</button>' : '', rdqSayingHtml(stats, heard)),
-  ].filter(Boolean);
-  const tiles = rdqTilesHtml(offering, revenue);
-  shell.innerHTML = `<div class="mkt-pg"><header class="mkt-top"><h2>Market</h2>${name ? `<span class="mkt-name">${esc(name)}</span>` : ''}
-      <span class="spacer"></span><a class="ghost" href="${MARKET_ROUTE}">All segments</a><a class="ghost" href="${MARKET_MAP}">Open map</a></header>
-    ${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
+  shell.innerHTML = rdqPageHtml({
+    top: `<header class="mkt-top"><h2>Market</h2>${name ? `<span class="mkt-name">${esc(name)}</span>` : ''}
+      <span class="spacer"></span><a class="ghost" href="${MARKET_ROUTE}">All segments</a><a class="ghost" href="${MARKET_MAP}">Open map</a></header>`,
+    tiles: rdqTilesHtml(offering, revenue),
+    questions: rdqQuestionsHtml({
+      answers,
+      changed: briefing ? rdqChangedHtml(briefing) : '',
+      changedMore: briefing ? `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>` : '',
+      money: sized || sizing ? '<div id="mkt-money"></div>' : '',
+      players, playersMore: tracked ? `${tracked} tracked` : '',
+      reach,
+      saying: saying ? rdqSayingHtml(stats, heard) : '',
+      sayingMore: settingsIsAdmin() ? '<button class="linkish" type="button" data-rdm-settings aria-expanded="false" aria-controls="rdm-set">Settings</button>' : '',
+    }),
+  });
   const money = sized ? mktSpend(shell.querySelector('#mkt-money'), {offering, buyer}) : null;
   if (sizing) mktSizeForm(/** @type {HTMLElement} */ (shell.querySelector('#mkt-money')), offering.definition?.description);
   const chainEl = shell.querySelector('.mkt-chain');
   if (chainEl) mktChainBind(chainEl, chain.edges);
-  shell.onclick = ev => {
-    if (ev.target.closest('[data-rdb-read]')) { briefingOpen(briefing); return; }
-    const player = ev.target.closest('[data-player]') || ev.target.closest('.mkt-pl tbody tr')?.querySelector('[data-player]');
-    if (player && !ev.target.closest('a')) void rdqPlayerOpen(player.dataset.player);
-  };
+  rdqPageBind(shell, briefing);
   return {
     shell,
     // An old view's address lands on its question (and Buyers on the buyer side of the money).
