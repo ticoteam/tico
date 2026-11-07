@@ -279,14 +279,24 @@ class Run:
         (running, parked, since when) and the server's newest attempt for it (id, state, lease, stop, and the start
         place's wait reason). A bot the sim names busy in the claim body is refused by the claim, whatever readiness says."""
         from backend.claim_holds import CHECK
+        from backend.execution import (
+            CAPACITY_CONTINUE,
+            RUNNER_SQL,
+            SOURCE_CONTINUE,
+            capability_set,
+            continuation_thread,
+        )
 
         lines = []
         execution = w.app.state.execution
         with w.store.read() as c:
+            runner = c.execute(RUNNER_SQL, (w.runner["runner_id"],)).fetchone()
+            caps = capability_set(runner["capabilities"]) if runner else frozenset()
             for slug in slugs:
                 bot = team.bot(slug)
                 row = c.execute(
-                    "SELECT a.id,a.state,a.lease_until,a.stop_requested_at,p.wait_reason,p.start_until "
+                    "SELECT a.id,a.state,a.lease_until,a.stop_requested_at,p.wait_reason,p.start_until,a.started_at,"
+                    "a.thread_id,json_extract(a.result,'$.lease_continue'),json_extract(a.result,'$.quota_continue') "
                     "FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
                     "WHERE a.bot_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT 1",
                     (slug,),
@@ -297,11 +307,14 @@ class Run:
                     "ORDER BY created_at,id LIMIT 1",
                     (slug,),
                 ).fetchone()
+                thread = continuation_thread(c, queued[0]) if queued else None
                 lines.append(
-                    f"{slug} turn: sim running {bot.running}, parked {bot.parked}; server newest attempt "
-                    f"{tuple(row) if row else None}; claim check backoff {execution.check_backoff.get(slug)} "
-                    f"waiting {execution.check_waiting(slug)} health {health[0] if health else None}; "
-                    f"oldest queued job {tuple(queued) if queued else None}"
+                    f"{slug} turn: sim running {bot.running}, parked {bot.parked}, available {bot.available}; "
+                    f"server newest attempt {tuple(row) if row else None}; claim check backoff "
+                    f"{execution.check_backoff.get(slug)} waiting {execution.check_waiting(slug)} "
+                    f"health {health[0] if health else None}; oldest queued job {tuple(queued) if queued else None} "
+                    f"continues thread {thread} (runner continues capacity {CAPACITY_CONTINUE in caps}, "
+                    f"source {SOURCE_CONTINUE in caps})"
                 )
         return lines
 
