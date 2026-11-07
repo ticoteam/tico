@@ -1481,17 +1481,21 @@ def test_a_json_outside_the_owned_folders_keeps_the_generic_path(tmp_path, mappe
     assert checks.selection(changed, root=tmp_path, core=[], added=[]) == plan
 
 
+TOP_BASELINES = re.compile(r"(?<![\w./-])baselines/")
+
+
 def test_owned_folders_list_existing_tests_of_their_scripts_and_only_the_owners_read_them():
     for test, module in OWNED_TESTS.items():
         assert (ROOT / test).is_file(), f"{test} is listed for baselines/ but does not exist"
         assert module in (ROOT / test).read_text(encoding="utf-8"), f"{test} does not test {module}"
     # The non-test Python files that name the baselines/ folder: the two owning scripts, and pr_checks.py (this table).
+    # Only the top-level folder: ui/baselines/ is the UI's own per-file counts (scripts/ui_baseline.py), not owned here.
     tracked = subprocess.run(
         ["git", "-C", str(ROOT), "ls-files", "*.py"], capture_output=True, text=True, check=True
     ).stdout.split()
     readers = {
         name
         for name in tracked
-        if "tests/" not in name and "baselines/" in (ROOT / name).read_text(encoding="utf-8", errors="replace")
+        if "tests/" not in name and TOP_BASELINES.search((ROOT / name).read_text(encoding="utf-8", errors="replace"))
     }
     assert readers == {"scripts/lint_baseline.py", "scripts/pyright_baseline.py", "scripts/pr_checks.py"}
