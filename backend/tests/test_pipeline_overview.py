@@ -319,3 +319,25 @@ def test_factory_done_counts_real_moves_into_the_output_stage_without_requiremen
     assert overview(api)["factories"][0]["done"] == 2
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM stage_visits").fetchone()[0] == 0
+
+
+def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(api):
+    # Engineering was made first, but Product feeds it: the factory's output is Engineering's done stage.
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261107210000_factory_output_stage.py"
+    spec = importlib.util.spec_from_file_location("migration_factory_output_stage", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    growth = make_factory(api, "Gro")
+    eng, e_steps = make_type(api, "Eng", factory=growth)
+    prod, p_steps = make_type(api, "Prod", factory=growth)
+    link(api, prod, p_steps["Doing"], eng)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE factories SET output_stage_id=NULL WHERE id=?", (growth,))
+        migration.up(c)
+        stored = c.execute("SELECT output_stage_id FROM factories WHERE id=?", (growth,)).fetchone()[0]
+    assert stored == e_steps["Done"]
