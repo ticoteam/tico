@@ -104,12 +104,14 @@ def _probability(value: object) -> float | None:
 
 
 def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str, Any]:
-    """What the judge is told: the requirement and its rubric, the work as it is now, and what the evidence is (a
-    description, never the file's contents)."""
+    """What the judge is told: the requirement and its rubric, the work as it is now (the ticket's work_revision, which
+    the attachment row does not carry), and the evidence: the version it was made for, and what it is (a description,
+    never the file's contents)."""
     return {
         "requirement": {"name": requirement.get("name") or "", "rubric": requirement.get("rubric") or ""},
-        "work": {"work_version": int(attachment.get("work_version") or 0)},
+        "work": {"work_version": int(attachment.get("task_work_version") or 0)},
         "attachment": {
+            "work_version": int(attachment.get("work_version") or 0),
             "source": attachment.get("source") or "",
             "digest": attachment.get("digest") or "",
             "url": attachment.get("url") or "",
@@ -288,7 +290,7 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     person was routed to (route_next_to: a bot does not judge what a person now answers)."""
     rows = c.execute(
         """SELECT a.id AS id, a.task_id, a.stage_requirement_id, a.digest, a.work_version, a.source, a.url, a.file_version,
-                  r.name, r.rubric, r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by,
+                  t.work_revision AS task_work_version, r.name, r.rubric, r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by,
                   r.reviewer_id
            FROM requirement_attachments a
            JOIN stage_requirements r ON r.id = a.stage_requirement_id AND r.retired_at IS NULL

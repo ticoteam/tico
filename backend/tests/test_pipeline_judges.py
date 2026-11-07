@@ -11,6 +11,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import judge as backend_judge
+from backend import pipeline_engine as E
 from backend import pipeline_judges as P
 from backend import pipeline_requirements as R
 from backend import requirement_attachments as A
@@ -378,3 +379,51 @@ def test_the_model_is_asked_with_no_read_snapshot_open(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "read", counted)
     monkeypatch.setattr(P, "ENGINE", ask)
     assert P.tick(store) == 1
+
+
+def test_the_judge_is_told_the_tickets_current_work_version_and_the_attachments_own(tmp_path, monkeypatch):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    stage = step_id(c, dev["id"], "Review")
+    req = R.add(
+        c,
+        ANA,
+        stage,
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "The link opens the page",
+        },
+    )
+    task = H.task_create(c, ANA, "Ship", "", ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task["id"],
+        req["id"],
+        {"source": "link", "url": "https://x.example"},
+    )
+    E.work_changed(c, task["id"])  # the work goes on after the attachment was made
+    attached_at = c.execute("SELECT work_version FROM requirement_attachments WHERE task_id=?", (task["id"],)).fetchone()[0]
+    current = c.execute("SELECT work_revision FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
+    c.close()
+    assert attached_at < current
+
+    store = Store(_settings(path))
+    seen = []
+
+    def ask(model, state, questions, label):
+        seen.append(state)
+        return {"p": 0.95, "reason": "The page opens", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", ask)
+    assert P.tick(store) == 1
+    assert seen[0]["work"]["work_version"] == current
+    assert seen[0]["attachment"]["work_version"] == attached_at
