@@ -3,7 +3,7 @@
 'use strict';
 
 // A time the helpers below take: an ISO string, epoch milliseconds or a Date; nothing when it is missing. Other objects
-// are accepted too (a caller's `{}` fallback) and read as no time.
+// are accepted too (a caller's `{}` fallback) and read as an invalid time (ago shows NaN for them, as before).
 type WhenInput = string | number | Date | object | null | undefined;
 // The instant a time input stands for, as the Date constructor reads a string, a number or a Date (NaN for the rest).
 const instantOf = (value: WhenInput): number => typeof value === 'string' || typeof value === 'number' || value instanceof Date ? new Date(value).getTime() : NaN;
@@ -83,13 +83,13 @@ function cronWords(expr: string | null | undefined): string | null | undefined {
 // ("anthropic/") and a date stamp are dropped. A name it does not know stays as it came.
 const HARNESS_WORDS: Record<string, string> = {claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', antigravity: 'Antigravity', grok: 'Grok Build',
   cursor: 'Cursor', musecode: 'Muse Code', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', dots: 'Dots', muse: 'Muse', pi: 'pi'};
-// A harness id is a string; the callers' chains of fallbacks are typed unknown, so the id is read as text.
+// A harness id is read as text: a caller's fallback chain can pass any value.
 const harnessWords = (id: unknown): string => HARNESS_WORDS[String(id || '').toLowerCase()] || String(id || '');
 function modelWords(id: string | null | undefined): string {
   const raw = String(id || '').trim().replace(/^[a-z][\w.-]*\//i, '');
   if (!raw) return '';
   const parts = raw.split(/[-_\s]+/).filter(p => !/^\d{6,}$/.test(p));
-  // No part is the empty string here, so `?? ''` is only for the type: an absent first part matches none of the tests below.
+  // `?? ''` is for the type: with no parts left (every part a date stamp), the head matches none of the tests below, as undefined did.
   const head = parts[0] ?? '';
   const cap = (w: string): string => w.charAt(0).toUpperCase() + w.slice(1);
   const version = (list: string[]): string => list.filter(p => /^\d+(\.\d+)?$/.test(p)).join('.');
