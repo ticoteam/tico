@@ -191,7 +191,9 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.doesNotMatch(await page.locator('#strat-body').innerText(), /Every home in Austin|Rules out|Wrong if|Watching/);
       assert.equal(await summary.getAttribute('placeholder'), 'Your strategy in one sentence');
       assert.equal(await page.locator('#strat-bets-h').innerText(), 'BETS');
-      assert.deepEqual(await page.locator('.strat-memo .strat-card-head .strat-k').allInnerTexts(), ['WHERE WE PLAY', 'BETS', 'COMPETITORS', 'RELATED NEWS']);
+      // The memo's cards in order: Segments (its list is drawn once the read is back), then Bets, Competitors, Related news.
+      await page.locator('#strat-segs', {hasText: 'None yet.'}).waitFor();
+      assert.deepEqual(await page.locator('.strat-memo .strat-card-head .strat-k').allInnerTexts(), ['SEGMENTS', 'BETS', 'COMPETITORS', 'RELATED NEWS']);
       const first = page.locator('li[data-bet="b-price"]');
       assert.equal(await first.locator('[data-bet-st]').inputValue(), bets()[0].statement);
       assert.deepEqual(await first.locator('.strat-goals .gdot').evaluateAll(dots => dots.map(d => [...d.classList].find(c => c !== 'gdot'))), ['green', 'yellow']);
