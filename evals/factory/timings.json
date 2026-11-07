@@ -24,6 +24,7 @@
  "merged_stale_blocker": 28.8,
  "mid_fallback_quota": 9.4,
  "off_script": 36.0,
+ "pipeline_manager": 10.0,
  "qa_mixed": 52.4,
  "qa_waiver_head": 42.2,
  "quota_outage": 53.6,
