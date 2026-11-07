@@ -18,9 +18,8 @@ first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHAN
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs its selected tests and factory sim on the RunsOn
-VMs below, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
-checks only. The merge queue runs the tests again, once per queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs its selected tests and factory sim on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+checks only. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
 CHANGELOG.md or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
@@ -29,8 +28,7 @@ the static job), never the full default suite or every browser script; release v
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched with `scripts/remote.py` before marking a PR
 ready. A newer push cancels a pull request's superseded run. A failed test or factory-sim leg cancels its whole run, so a failing pull request or
-queue group stops at once; `checks` still runs and reports it. Hosted PR runs cannot read
-RunsOn's cache, so they start cold. Python and browser groups are sized from the latest successful Release validation
+queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 5 minutes
 (`TICO_CI_JOB_SECONDS`, 300), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
 downloads on warm queue runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check
