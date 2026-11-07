@@ -12,7 +12,8 @@ Meta's error 190) sets the import to "reconnect"; any other failure (unreachable
 what went wrong, and the next pass tries again. Either way the spend already imported stays.
 
 A run reads the accounts the login sees, upserts them (a new one is not assigned to a bot until a finance admin picks
-one), then each account's spend from `history_from` on the first run (or after `history_from` moves earlier) and the
+one) except those another enabled import already reads (one import per ad account: an agency's manager login and the
+account's own can both list it; the run's note names each), then each account's spend from `history_from` on the first run (or after `history_from` moves earlier) and the
 last 30 days after that. A complete fetch replaces the window's rows per account, so a day the platform restates
 overwrites. Rate limits back off and retry a few times. The worker sweeps every 15 minutes, runs what is due (4 hours
 since the last run, or asked for), then gives bots their budget warnings (ad_warnings.py). A rehearsal copy calls no
@@ -37,6 +38,7 @@ from typing import Any, cast
 from . import ad_warnings
 from .core import ledger as L
 from .core.org import SYSTEM
+from .context import load
 from .gateway_sync import Bell
 from .mercury import Opener
 from .store import ads as SA
@@ -632,23 +634,18 @@ def due(imp: SA.AdImport, now: str) -> bool:
 
 
 def ensure_vendor(c: Any, platform: str, at: str) -> str:
-    """The platform's vendor contact ("Google Ads", "Meta"), made if no contact goes by the name. "" in mirrored books
-    (their contacts come from the accounting provider) or with no book."""
+    """The platform's vendor contact (store/ads.platform_contact): in native books "Google Ads" or "Meta", made if no
+    contact goes by the name; in mirrored books (QuickBooks, Xero) the provider's own vendor found by name or alias
+    ("Google", "Facebook", "Meta Platforms", ...), never made, since Tico never writes contacts there. "" when a
+    mirrored book has none, or with no book: budgets then report the platform's spend beside the books', never in it."""
     book = SL.book(c)
-    if book is None or book.mode == "mirror":
+    if book is None:
         return ""
+    found = SA.platform_contact(c, book.id, platform, mirror=book.mode == "mirror")
+    if found or book.mode == "mirror":
+        return found
     name = VENDOR[platform]
     nk = L.name_key(name)
-    owner = SAP.alias_of(c, book.id, nk)
-    if owner:
-        return owner
-    row = c.execute(
-        "SELECT id FROM fin_contacts WHERE book_id=? AND kind IN ('vendor','both') AND lower(name)=? "
-        "ORDER BY created_at LIMIT 1",
-        (book.id, nk),
-    ).fetchone()
-    if row is not None:
-        return str(row[0])
     cid = SAP.insert(
         c,
         "fin_contacts",
@@ -701,15 +698,25 @@ def run(store: Any, vault: object, import_id: str, *, now: str | None = None, ht
         current = SA.import_for(c, imp.tool_id)
         if current is None or current.id != imp.id:
             return Outcome("failed", error="the import was removed")
-        for acct in fetched.accounts:
+        # One import per ad account: one another enabled import already reads (an agency's manager login and the
+        # account's own both list it) is left to that one, so its spend is stored and counted once.
+        taken = SA.claimed(c, imp.tool_id, imp.platform, [a.external_id for a in fetched.accounts])
+        mine = [a for a in fetched.accounts if a.external_id not in taken]
+        for acct in mine:
             aid = SA.upsert_account(c, imp.tool_id, imp.platform, acct.external_id, acct.name, acct.currency, at)
             stored += SA.replace_spend(c, aid, start, end, fetched.spend.get(acct.external_id, []), at)
-        SA.deactivate_missing(c, imp.tool_id, [a.external_id for a in fetched.accounts], at)
+        SA.deactivate_missing(c, imp.tool_id, [a.external_id for a in mine], at)
         ensure_vendor(c, imp.platform, at)
+        if mine and SL.book(c) is not None:
+            # The days just replaced move the platform's shares on the charges whose windows they fall in (attribution).
+            from .attribution import refresh_platform  # lazy: attribution imports the posting path
+
+            refresh_platform(load(c, at), SYSTEM, imp.platform, start, end)
         # A history_from moved earlier while this ran wants a full read again: keep last_import_at empty then.
         full_again = current.history_from < imp.history_from
-        SA.finish(c, imp.id, "ok", "", at, imported=not full_again)
-    return Outcome("ok", accounts=len(fetched.accounts), rows=stored)
+        note = "; ".join(t.text for t in sorted(taken.values(), key=lambda t: t.external_id))
+        SA.finish(c, imp.id, "ok", note, at, imported=not full_again)
+    return Outcome("ok", accounts=len(mine), rows=stored)
 
 
 def pass_once(store: Any, vault: object, *, now: str | None = None, http_: Http | None = None) -> dict[str, Outcome]:

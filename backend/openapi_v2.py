@@ -4891,6 +4891,24 @@ STABLE.extend(
             "FinanceRules",
         ),
         (
+            "/api/v2/finance/attribution-rules",
+            "get",
+            "Finance",
+            "listFinanceAttributionRules",
+            "The attribution rules in the book (vendor, P&L account or money account matches, their shares, enabled and "
+            "apply_from); needs the finance.attribution right or admin",
+            "FinanceAttributionRules",
+        ),
+        (
+            "/api/v2/finance/lines/{line_id}/attribution",
+            "get",
+            "Finance",
+            "getFinanceLineAttribution",
+            "One posted P&L line's attribution: the shares in force (source: person, bot, rule or tags), their amounts, and "
+            "the line's history newest first, as far as the caller sees the line",
+            "FinanceLineAttribution",
+        ),
+        (
             "/api/v2/finance/bills",
             "get",
             "Finance",
@@ -5186,9 +5204,29 @@ STABLE.extend(
 )
 SCHEMAS.update(
     {
+        "FinanceBudgetState": obj(
+            {
+                "spent_from": {
+                    "type": "string",
+                    "enum": ["books", "platform", "mixed"],
+                    "description": "Where an ad budget's actual comes from: the books, the ad platform's daily spend "
+                    "or both (by month)",
+                },
+                "as_of": {
+                    "type": ["string", "null"],
+                    "description": "The ad platforms' last import, when their spend counts",
+                },
+                "reported": {
+                    "type": ["integer", "null"],
+                    "description": "Cents: an ad budget's platform spend shown beside actual and never in it (its vendor "
+                    "is not the platform's own contact, so nothing is swapped); null otherwise",
+                },
+            }
+        ),
+        "FinanceBudgetRow": obj({"id": "s", "name": "s", "platform": "s", "state": ref("FinanceBudgetState")}),
         "FinanceBudgets": obj(
             {
-                "budgets": items({"type": "object", "additionalProperties": True}),
+                "budgets": items(ref("FinanceBudgetRow")),
                 "more": "b",
                 "on": "s",
                 "view_version": "i",
@@ -5324,7 +5362,8 @@ SCHEMAS.update(
                             "lines": items({"type": "object", "additionalProperties": True}),
                             "account_id": "s",
                             "account": "s",
-                            "vendor": "s",
+                            # a bank or card row: {id, name} (its vendor); an entry's line: the vendor's id
+                            "vendor": {"anyOf": [{"type": "string"}, obj({"id": "s", "name": "s"})]},
                             "vendor_name": "s",
                             "memo": "s",
                             "source": "s",
@@ -5413,6 +5452,7 @@ SCHEMAS.update(
                             "default_team": "n",
                             "grants": items({"type": "object", "additionalProperties": True}),
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                            "attribute": {"type": ["boolean", "null"]},
                             "may_grant": "b",
                             "budgets": "i",
                         }
@@ -5656,6 +5696,52 @@ SCHEMAS.update(
                 )
             }
         ),
+        "FinanceLineAttribution": obj(
+            {
+                "line_id": "s",
+                "source": "s",
+                "rule_id": "n",
+                "rule_name": "n",
+                "set_by": "n",
+                "set_at": "n",
+                "can_change": "b",
+                "tags": "o",
+                "amount": "i",
+                "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i", "amount": "i"})),
+                "history": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "source": "s",
+                            "rule_id": "n",
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                            "set_by": "s",
+                            "set_at": "s",
+                            "superseded_at": "n",
+                        }
+                    )
+                ),
+            }
+        ),
+        "FinanceAttributionRules": obj(
+            {
+                "rules": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "match": obj({"kind": "s", "id": "s", "label": "s"}),
+                            "splits": items(obj({"teammate": "s", "team": "s", "share_bps": "i"})),
+                            "enabled": "b",
+                            "apply_from": "n",
+                            "created_by": "s",
+                            "updated_at": "s",
+                        }
+                    )
+                ),
+                "can_change": "b",
+            }
+        ),
         "FinanceMercuryUsers": obj(
             {"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n", "updated_at": "s"}))}
         ),
@@ -5721,7 +5807,13 @@ SCHEMAS.update(
                 "books_lines": items(obj({"id": "s", "code": "s", "name": "s"})),
                 "elsewhere": {
                     "type": ["object", "null"],
-                    "properties": {"tool_id": {"type": "string"}, "tool_name": {"type": "string"}},
+                    "description": "One of this tool's ad accounts another enabled import already reads (one import "
+                    "per ad account), so this one can't be switched on; null when none",
+                    "properties": {
+                        "tool_id": {"type": "string"},
+                        "tool_name": {"type": "string"},
+                        "account": {"type": "string", "description": "The ad account, as its platform shows it"},
+                    },
                 },
                 "month": "s",
                 "month_label": "s",

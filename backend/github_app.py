@@ -36,6 +36,7 @@ from .auth import validate_identity
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
+from . import brand_icons
 
 log = logging.getLogger("tico.github_app")
 
@@ -1174,6 +1175,7 @@ def manifest(settings, name, administration):
             "pull_request_review_comment",
             "check_run",
             "check_suite",
+            "workflow_run",
             "status",
             "push",
             "release",
@@ -1416,7 +1418,7 @@ def install_github_app(app, settings, store):
         action = f"https://github.com/organizations/{org}/settings/apps/new?state={nonce}"
         if html:
             page = (
-                "<!doctype html><meta charset=utf-8><title>Connecting GitHub</title>"
+                "<!doctype html><meta charset=utf-8>" + brand_icons.HEAD + "<title>Connecting GitHub</title>"
                 f"<form id=f method=post action='{action}'><input type=hidden name=manifest value='"
                 + json.dumps(body).replace("&", "&amp;").replace("'", "&#39;")
                 + "'></form>"

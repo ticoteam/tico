@@ -28,7 +28,8 @@ body. The page lists them grouped by folder.
   a scan with no text is refused). The title is the first `#` heading, else the file name. Conversion stops after 30
   seconds or when it needs more than 1 GiB of memory. The file is refused, and nothing is saved. A server converts two
   files at once. An import that starts while two are converting is refused at once: "Imports are busy right now. Try again
-  in a minute." A file that converts to over 1,000,000 characters is refused.
+  in a minute." A file that converts to over 1,000,000 characters is refused. If you close the page while a file
+  converts, the server tries to stop the conversion. A file that finishes converting before the server stops it is still saved.
 - **Every change is a version.** **History** lists them (who, when, the note; "by Ops" for a bot), shows any old
   version, and **Restore** saves it as a new version. Nothing is rewritten or lost.
 - **Editing together.** Saving sends the version you opened. If someone (or a bot) saved first you get "Ben saved
@@ -138,8 +139,8 @@ Writes are recorded in the activity log with the actor (`docs.created_at`, `docs
 `docs.locked`, `docs.imported`, `docs.linked`, ...). `GET /api/v2/context/search?source=docs`
 covers internal, indexed external and linked docs too.
 
-The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.js`,
-`ui/docs-editor.js`, `ui/docs-search.js`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cjs`.
+The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.ts`,
+`ui/docs-editor.ts`, `ui/docs-search.js`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cjs`.
 
 Archive removes a doc from the active list and search. **Undo** brings it back immediately.
 Choose **Archived** on Docs to browse archived docs, open one and choose **Restore**. Restore keeps its history;

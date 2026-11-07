@@ -8,13 +8,14 @@
 'use strict';
 
 const AUTOMATIONS = '#/automations';
+/** @param {string} r @returns {boolean} */
 function isAutomationsRoute(r) { return r === AUTOMATIONS || r.startsWith(AUTOMATIONS + '/') || r.startsWith(AUTOMATIONS + '?'); }
 const AU_BOT = 'botops';                             // builds automations for the Assistant; not offered as a step's bot
 const auPhone = () => matchMedia('(max-width:760px)').matches;
 const auClone = x => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = id => '/v2/automations/' + encodeURIComponent(id);
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
-let AU = null;
+/** @type {any} bridged: .ts files read it through automationsState() (ui/app/automations-state.ts); typed when this file converts */ let AU = null;
 // Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
 function automationsStop() {
   if (!AU) return;

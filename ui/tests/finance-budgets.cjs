@@ -56,7 +56,7 @@ function pnl(url) {
     imported: [], snapshot: null, filter: {teams: [], teammates: [], who: 'both', unattributed: false}};
 }
 // A budget row as GET /v2/finance/budgets sends it (backend/finance/reads.py _budget_row, _state_row), with the ad
-// platform fields (platform, pace_end, spent_from, as_of) unless `plain`.
+// platform fields (platform, pace_end, spent_from, as_of, reported) unless `plain`.
 const budget = (id, name, amount, actual, extra = {}, ads = {}) => ({id, name, period: 'month', account_id: 'a-6400', catch_all: false, team: null, teammate: null,
   vendor: null, parent_id: null, owner: 'human:ana', warn_pct: 80, at_limit: 'warn', rollover: 'none', active: true, card_limits: false, ...extra,
   state: {amount, actual, held: 0, remaining: amount == null ? null : amount - actual, pct: amount ? String(actual / amount * 100) : null, crossed_warn: false,
@@ -69,11 +69,13 @@ const BUDGETS = [
   budget('b-rental-g', 'Rental Google Ad Owner', 300000, 52000, {team: 'rental', teammate: 'bot:rental-google', vendor: 'Google Ads', parent_id: 'b-rental'}, ad('google_ads', 260000)),
   budget('b-rental-m', 'Rental Social Ad Owner', 300000, 76000, {team: 'rental', teammate: 'bot:rental-social', vendor: 'Meta Ads', parent_id: 'b-rental'}, ad('meta_ads', 380000)),
   budget('b-consumer', 'Consumer Marketing Manager', 300000, 250000, {team: 'consumer', parent_id: 'b-mkt'}),
-  budget('b-consumer-g', 'Consumer Google Ad Owner', 300000, 250000, {team: 'consumer', teammate: 'bot:consumer-google', vendor: 'Google Ads', parent_id: 'b-consumer'}, ad('google_ads', 290000)),
+  // Paid through an agency: Spent is the books', Google's own figure shows beside it (reported).
+  budget('b-consumer-g', 'Consumer Google Ad Owner', 300000, 250000, {team: 'consumer', teammate: 'bot:consumer-google', vendor: 'Acme Agency', parent_id: 'b-consumer'},
+    {platform: 'google_ads', state: {pace_end: 290000, spent_from: 'books', as_of: null, reported: 295000}}),
   budget('b-video', 'Video production', null, 0, {account_id: null, catch_all: true})];
 // Ned's own budget: all GET /v2/finance/budgets gives a teammate who sees nothing else (handlers.reads_budget).
 const NED = budget('b-ned', 'Trade shows', 200000, 45000, {teammate: 'human:ned', account_id: 'a-6400'});
-const plainRow = b => { const {platform, ...rest} = b; const {pace_end, spent_from, as_of, ...state} = b.state; return {...rest, state}; };
+const plainRow = b => { const {platform, ...rest} = b; const {pace_end, spent_from, as_of, reported, ...state} = b.state; return {...rest, state}; };
 
 // Tools: one Mercury tool with a Read key and a Read and write key, one Google Ads tool; no Stripe, Brex or Meta Ads.
 const TOOL_INDEX = {rows: [{id: 'api:mercury', kind: 'api', name: 'Mercury', service: 'mercury', href: '#/tools/api/mercury', status: {tone: 'ok', text: 'Working'}, who: [], who_total: 0},
@@ -170,7 +172,7 @@ async function shot(page, name) {
       const tag = 'budgets';
       const {page, errors, writes, reads, hub} = await open(browser);
       await row(page, 'b-rental-g').waitFor();
-      assert.deepEqual((await tabs(page)).slice(0, 3), ['P&L', 'Budgets', 'Balance sheet'], tag + ': Budgets right after P&L');
+      assert.deepEqual((await tabs(page)).slice(0, 2), ['P&L', 'Budgets'], tag + ': Budgets right after P&L');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Consumer Marketing Manager', 'Consumer Google Ad Owner',
         'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ad Owner', 'Video production'], tag + ': a tree, children under their parent');
       const depth = async id => (await row(page, id).getAttribute('style')).match(/--d:(\d+)/)[1];
@@ -188,6 +190,11 @@ async function shot(page, name) {
       assert.equal(await row(page, 'b-rental').locator('.pill.waiting').innerText(), '$6,400', tag + ': a team row\'s pace, amber past its amount');
       assert.equal((await cell(page, 'b-mkt', 5).innerText()).trim(), '$8,800', tag + ': a line row\'s pace');
       assert.match(await cell(page, 'b-rental-g', 3).getAttribute('title'), /^Platform data as of /, tag + ': Spent says when the platform data is from');
+      assert.equal(await row(page, 'b-rental-g').locator('[data-fin-bud-reported]').count(), 0, tag + ': a swapped budget reports nothing beside Spent');
+      const reported = row(page, 'b-consumer-g').locator('[data-fin-bud-reported]');
+      assert.equal((await reported.innerText()).trim(), 'Platform $2,950', tag + ': the platform\'s figure under Spent');
+      assert.equal(await reported.getAttribute('title'), 'Reported by Google Ads, not in Spent', tag + ': and that it is not in Spent');
+      assert.equal(await cell(page, 'b-consumer-g', 3).getAttribute('title'), null, tag + ': Spent is the books\', no platform time');
       // Used: green, amber at warn, red at the amount.
       assert.equal(await row(page, 'b-consumer-g').locator('.fin-bar-m.warn').count(), 1, tag + ': used past warn at is amber');
       assert.equal(await row(page, 'b-rental-g').locator('.fin-bar-m:not(.warn):not(.bad)').count(), 1, tag + ': used under warn at is green');
@@ -268,6 +275,7 @@ async function shot(page, name) {
       assert.equal((await cell(page, 'b-rental', 1).innerText()).trim(), 'team', tag + ': a team row still says team');
       assert.equal((await cell(page, 'b-rental-g', 5).innerText()).trim(), '', tag + ': no pace');
       assert.equal(await cell(page, 'b-rental-g', 3).getAttribute('title'), null, tag + ': no platform time');
+      assert.equal(await page.locator('[data-fin-bud-reported]').count(), 0, tag + ': no platform figure beside Spent');
       assert.equal(await page.locator('td[data-fin-bud-amt]').count() > 0, true, tag + ': amounts still edit');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();

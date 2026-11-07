@@ -4,7 +4,9 @@
 
 let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE = null;
 // The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
+/** @param {string | undefined} h @returns {string} */
 const routePage = h => { const p = String(h || '').split('?')[0]; return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
+/** @param {string} [hash] */
 function route(hash = location.hash) {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
@@ -127,7 +129,7 @@ function route(hash = location.hash) {
     location.replace(whOldAddress(S.route)); return;
   }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
-  // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.js toolsRoute redirects them first.
+  // Settings > Inboxes and the tabs it replaced are Tools pages now: ui/app/tools.ts toolsRoute redirects them first.
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
   // Settings > System (it was Rules, before that Routines): Tico's own jobs are Automations' System jobs now.

@@ -26,6 +26,7 @@ from ..records import reads as RR
 from . import budgeting, delivery, posting, shared
 from .context import Ctx
 from .core import ap as AP
+from .core import attribution as CA
 from .core import budgets as B
 from .core import dates
 from .core import feeds as F
@@ -40,6 +41,7 @@ from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import actions as SX
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
@@ -1351,14 +1353,50 @@ def status_of(kind: str, doc: Any, paid: int) -> str:
     return _status(kind, doc, paid)
 
 
+def _posted_splits(ctx: Ctx, doc: Any, idx: int, account_id: str) -> tuple[CA.Split, ...]:
+    """The attribution in force on the posted line a document line became (the entry's line at the same index), when
+    it is on the same account; none otherwise."""
+    entry_id = str(doc["entry_id"] or "")
+    if not entry_id:
+        return ()
+    rows = SL.entry_lines(ctx.c, entry_id)
+    if idx >= len(rows):
+        return ()
+    row, line = rows[idx]
+    if line.account_id != account_id:
+        return ()
+    return ATT.in_force_splits(ctx.c, str(row["id"]))
+
+
+def _cash_to(
+    ctx: Ctx,
+    account_id: str,
+    tags: Mapping[str, str],
+    contact: str,
+    amount: int,
+    day: str,
+    splits: Sequence[CA.Split],
+) -> None:
+    """Move `amount` of the cash view onto a line's parts: each part takes its share (CA.spread)."""
+    for part_tags, part_amount in CA.spread(tags, amount, splits, ctx.org.team_of):
+        SAP.cash_roll(ctx.c, ctx.book.id, day, account_id, part_tags, contact, part_amount)
+
+
 def _cash(ctx: Ctx, kind: str, doc: Any, before: int, after: int, day: str) -> None:
     lines = doc_lines_of(ctx, kind, str(doc["id"]))
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
-    for x, share in zip(lines, AP.shares([x.amount for x in lines], before, after), strict=True):
+    for idx, (x, share) in enumerate(zip(lines, AP.shares([x.amount for x in lines], before, after), strict=True)):
         account = ctx.accounts.get(x.account_id)
         if share and account is not None and account.type in L.PNL_TYPES:
-            SAP.cash_roll(
-                ctx.c, ctx.book.id, day, x.account_id, posting.with_team(ctx, x.tags), contact, SIGN[kind] * share
+            splits = _posted_splits(ctx, doc, idx, x.account_id)
+            _cash_to(
+                ctx,
+                x.account_id,
+                posting.with_team(ctx, x.tags),
+                contact,
+                SIGN[kind] * share,
+                day,
+                splits,
             )
 
 
@@ -1414,18 +1452,43 @@ def retagged(ctx: Ctx, row: Any, old: Mapping[str, str], new: Mapping[str, str])
     rollups; for one it leaves out (a bill's or invoice's, or accrual-only), the line's correction moves to the new
     tags too, and for a document's own entry so do the document line's tags and what its settlements recognized (on
     the day each did, or the first open day when that month is closed), so cash attribution follows the tags."""
+    if dict(old) == dict(new):
+        return
+    splits = ATT.in_force_splits(ctx.c, str(row["id"]))
+    _moved(ctx, row, old, new, splits, splits, retag_doc=True)
+
+
+def reattributed(ctx: Ctx, row: Any, old_splits: Sequence[CA.Split], new_splits: Sequence[CA.Split]) -> None:
+    """A posted line's attribution changed (its tags did not): the cash view moves from its old parts to its new ones,
+    the correction and each settlement's share alike (see retagged)."""
+    if tuple(old_splits) == tuple(new_splits):
+        return
+    tags = dict(SL.line_tags(ctx.c, [str(row["id"])]).get(str(row["id"]), {}))
+    _moved(ctx, row, tags, tags, old_splits, new_splits, retag_doc=False)
+
+
+def _moved(
+    ctx: Ctx,
+    row: Any,
+    old: Mapping[str, str],
+    new: Mapping[str, str],
+    old_splits: Sequence[CA.Split],
+    new_splits: Sequence[CA.Split],
+    *,
+    retag_doc: bool,
+) -> None:
     from .banking import open_day
 
     entry = SL.entry_row(ctx.c, str(row["entry_id"]))
     account = ctx.accounts.get(str(row["account_id"]))
-    if entry is None or account is None or account.type not in L.PNL_TYPES or dict(old) == dict(new):
+    if entry is None or account is None or account.type not in L.PNL_TYPES:
         return
     source, source_id = str(entry["source"]), str(entry["source_id"])
     if str(entry["basis"] or "both") == "both" and source not in L.DOC_SOURCES:
         return
     amount, day, contact = int(row["amount"]), str(row["entry_date"]), str(row["contact_id"] or "")
-    SAP.cash_roll(ctx.c, ctx.book.id, day, account.id, old, contact, amount)
-    SAP.cash_roll(ctx.c, ctx.book.id, day, account.id, new, contact, -amount)
+    _cash_to(ctx, account.id, old, contact, amount, day, old_splits)
+    _cash_to(ctx, account.id, new, contact, -amount, day, new_splits)
     if source not in L.DOC_SOURCES or ":" in source_id:
         return
     doc = SAP.get(ctx.c, SAP.DOCS[source][0], source_id)
@@ -1435,7 +1498,8 @@ def retagged(ctx: Ctx, row: Any, old: Mapping[str, str], new: Mapping[str, str])
     idx = int(row["line_no"])
     if idx >= len(docs) or str(docs[idx]["account_id"] or "") != account.id:
         return
-    SAP.set_line_tags(ctx.c, source, str(docs[idx]["id"]), new)
+    if retag_doc and dict(old) != dict(new):
+        SAP.set_line_tags(ctx.c, source, str(docs[idx]["id"]), new)
     amounts = [int(r["amount"]) for r in docs]
     before = 0
     for st in SAP.settlements_to(ctx.c, source, source_id):
@@ -1444,8 +1508,8 @@ def retagged(ctx: Ctx, row: Any, old: Mapping[str, str], new: Mapping[str, str])
         before = after
         if share:
             on = open_day(ctx, str(st["settled_on"]))
-            SAP.cash_roll(ctx.c, ctx.book.id, on, account.id, old, contact, -SIGN[source] * share)
-            SAP.cash_roll(ctx.c, ctx.book.id, on, account.id, new, contact, SIGN[source] * share)
+            _cash_to(ctx, account.id, old, contact, -SIGN[source] * share, on, old_splits)
+            _cash_to(ctx, account.id, new, contact, SIGN[source] * share, on, new_splits)
 
 
 def entry_reversed(ctx: Ctx, entry_id: str, by: str = SYSTEM) -> None:
@@ -2361,7 +2425,9 @@ ATTACH_RIGHT = {"entry": R.BOOK, "feed": R.BOOK, "unmatched": R.BOOK, "bill": R.
 
 def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """File receipts and documents (Library file ids) on an entry, a feed row, a bill or an invoice the asker sees, or
-    as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts."""
+    as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts. That each
+    file exists and the asker may read it is checked where the asker's identity is, before the action runs
+    (finance_routes.readable_files, for every request through the API and the hub tools)."""
     from .banking import seen
 
     V.only(p, ("subject_kind", "subject_id", "file_ids"))
@@ -2553,6 +2619,7 @@ __all__ = [
     "ASK",
     "bill_payment",
     "retagged",
+    "reattributed",
     "expected_for",
     "bill_budget",
     "MANY",

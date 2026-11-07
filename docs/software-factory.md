@@ -94,7 +94,8 @@ The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at 
 per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
 runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
 a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve. A branch behind
-main does not: the merge queue tests it on current main. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
+main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Post Release QA); a review before the
+merge still needs one. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
 read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.
 
 In Settings → Tasks, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.

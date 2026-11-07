@@ -16,7 +16,7 @@ function settingsChoiceFromValue(value) {
   const parts = String(value || '').split('::');
   return {harness: parts[0] || '', model: parts[1] || '', effort: parts[2] || ''};
 }
-// "Claude Opus 5 · high · 1M" (modelChoiceWords and modelContextWords, ui/app/format.js); the tool that runs it only when it is not the model's own.
+// "Claude Opus 5 · high · 1M" (modelChoiceWords and modelContextWords, ui/app/format.ts); the tool that runs it only when it is not the model's own.
 const settingsChoiceLabel = (harness, model, effort) => {
   if (!model) return 'not set';
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
@@ -50,7 +50,7 @@ function settingsTierLine(id) {
   return settingsModel(id)?.description?.replace(/ underneath$/, '') || '';
 }
 // In the model list a Tico model says what runs underneath it: "Medium 1.0 (Claude Sonnet 5.5 underneath)".
-// The same list says the window the model takes: "grok 4.6 · 500K" (modelContextWords, ui/app/format.js).
+// The same list says the window the model takes: "grok 4.6 · 500K" (modelContextWords, ui/app/format.ts).
 const settingsModelPickName = id => {
   const row = settingsModel(id), context = modelContextWords(row?.context_tokens);
   const name = /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);

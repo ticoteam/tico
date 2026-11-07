@@ -1,4 +1,4 @@
-/* ui/app/tools-api.js — One API tool's page under Tools (ui/app/tools.js routes it): #/tools/api/<id> and its Activity
+/* ui/app/tools-api.js — One API tool's page under Tools (ui/app/tools.ts routes it): #/tools/api/<id> and its Activity
    tab, #/tools/api/<id>/activity. An API tool holds one key a level (Read, Read and write); who may use it is a level a
    person or bot, which the hub turns into grants on the right key (PUT /api/v2/api-tools/<id>/access/<subject>). Its
    calls go through Tico's proxy and are logged (delivery 'proxy'), or the key sits on the bots' computers ('computer',
@@ -287,7 +287,7 @@ function taFinanceCard(f) {
       <td class="tnum">${esc(tafMoney(a.month_to_date, a.currency))}</td></tr>`).join('');
   return `<section class="card" id="tool-finance"><header><h2>Finance</h2>${status}</header>
     <div class="taf-row"><span class="taf-k">Ad spend</span>${seg}<span class="muted">every ${imp.every_hours} h · from</span><input type="date" data-taf-from value="${esc(imp.history_from)}" aria-label="From"></div>
-    ${other ? `<p class="muted taf-note">Imports from ${esc(other.tool_name)}</p>` : ''}
+    ${other ? `<p class="muted taf-note">${other.account ? `Account ${esc(other.account)} imports` : 'Imports'} from ${esc(other.tool_name)}</p>` : ''}
     <div class="taf-row"><span class="taf-k">Books as</span><select data-taf-line aria-label="Books line">${tafOptions(f.books_lines.map(l => [l.id, l.name]), imp.account_id, 'Choose a line')}</select><span class="muted">· ${esc(f.platform_label)}</span></div>
     <div class="taf-row"><span class="taf-k">Last import</span><span class="muted" data-taf-last>${esc(imp.last_import_at ? ago(imp.last_import_at) : 'Never')}</span>${on ? '<button type="button" class="ghost small" data-taf-run>Import now</button>' : ''}</div>
     ${imp.last_error ? `<p class="muted taf-note" data-taf-error>${esc(imp.last_error)}</p>` : ''}

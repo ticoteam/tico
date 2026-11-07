@@ -8,7 +8,9 @@
 // A bot is named everywhere by its id (S.emps rows' `id`, the `bot:<id>` actor, routes and API paths); its slug is a
 // label people type and read, and it can change. `botRow(id)` is the roster row for an id (a leading `bot:` is
 // dropped); `botByRef(text)` also takes a slug, for what a person typed or an old link; `botSlug(id)` is the label.
+/** @param {unknown} id @returns {Employee | undefined} */
 const botRow = id => { const key = String(id || '').replace(/^bot:/, ''); return key ? (S.emps || []).find(e => e.id === key) : undefined; };
+/** @param {unknown} ref @returns {Employee | undefined} */
 const botByRef = ref => { const key = String(ref || '').replace(/^bot:/, ''); return key ? botRow(key) || (S.emps || []).find(e => e.slug === key) : undefined; };
 const botSlug = id => botRow(id)?.slug || String(id || '').replace(/^bot:/, '');
 let BOT_NAMES = {emps: null, len: -1, key: '', map: new Map()};

@@ -158,7 +158,7 @@ function livePaintDetail(state, detail) {
   const host = $('.live-detail');
   if (state.paintedId) liveCaptureDraft(state, state.paintedId);
   const draft = state.drafts[detail.id] || {};
-  // The transcript and the chat are rebuilt with the card; each keeps its reader's place (ui/app/stick-scroll.js).
+  // The transcript and the chat are rebuilt with the card; each keeps its reader's place (ui/app/stick-scroll.ts).
   const logs = LIVE_LOGS.map(sel => {
     const el = state.paintedId === detail.id && host.querySelector(sel);
     if (!el) return null;

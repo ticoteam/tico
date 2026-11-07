@@ -38,6 +38,9 @@ from .store import access as SA
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import attribution as SATT
+from .attribution import visible as attribution_visible
+from .core import attribution as CATT
 from .store import ads as SAD
 from .store import ap as SAP
 from .store import catalog as SC
@@ -1358,6 +1361,7 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
         "pace_end": None if cut else st.pace_end,
         "spent_from": st.spent_from,
         "as_of": st.as_of,
+        "reported": None if cut else st.reported,
     }
 
 
@@ -1398,7 +1402,8 @@ def budgets(
     """Every budget the viewer sees (their view's, and always their own: handlers.reads_budget), with where it stands today, or in the period holding the day `on` (past or
     future): the amount of the version in effect then, and that period's spend and holds. Spend is read live
     (budgeting's module docstring): in each month a healthy import covers, an ad budget's platform's daily spend
-    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
+    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`
+    (or, for an ad budget that does not swap, the platform's figure beside its books in `reported`)."""
     s = _open(c, viewer, at)
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
@@ -2736,7 +2741,10 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         except FinanceError:
             break
         for row in cast(list[Row], page.get("rows") or []):
-            payee = str(row.get("counterparty") or "").strip().lower()
+            # A charge groups by its vendor (alias -> contact, else the merchant key), never by its raw text, and reads
+            # under the vendor's name (backend/finance/vendors.py).
+            vendor = cast(Row, row.get("vendor") or {})
+            payee = str(vendor.get("id") or "")
             amount = int(cast(int, row.get("amount") or 0))
             if (
                 row.get("kind") != "feed"
@@ -2752,7 +2760,7 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     payee=payee,
                     amount=-amount,
                     day=date.fromisoformat(str(row["date"])[:10]),
-                    shown=str(row.get("counterparty") or "").strip(),
+                    shown=str(vendor.get("name") or row.get("counterparty") or "").strip(),
                     card=str(row.get("card_id") or ""),
                 )
             )
@@ -3010,3 +3018,88 @@ def descendant_ids(accounts: Mapping[str, Account], account_id: str) -> set[str]
 def pnl_section_of(accounts: Mapping[str, Account], account_id: str) -> str:
     """Where a P&L account sits: revenue, cost of revenue, operating expenses, or other income and expense."""
     return pnl_section(accounts, accounts[account_id])
+
+
+# ------------------------------------------------------------------------------------------------ attribution
+def _split_rows(splits: Sequence[CATT.Split], shares: Sequence[int]) -> list[Row]:
+    return [
+        {"teammate": s.teammate, "team": s.team, "share_bps": s.share_bps, "amount": amount}
+        for s, amount in zip(splits, shares, strict=False)
+    ]
+
+
+def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str | None = None) -> Row:
+    """One posted P&L line's attribution: the shares in force (and their source), their amounts, and the line's history
+    newest first. A line the viewer does not see reads as not found."""
+    s = _open(c, viewer, at)
+    found = SL.lines(c, [line_id])
+    if line_id not in found or str(found[line_id][0]["book_id"]) != s.ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such line in your view")
+    line = found[line_id][1]
+    if not attribution_visible(s.ctx, viewer, line):
+        raise FinanceError(NOT_FOUND, "no such line in your view")
+    rows = SATT.history(c, line_id)
+    now = rows[0] if rows else None
+    splits = SATT.parse_splits(str(now["splits"])) if now is not None else ()
+    shares = CATT.shares_of(splits, line.amount)
+    source = str(now["source"]) if now is not None and splits else "tags"
+    rule_id = str(now["rule_id"]) if now is not None and splits and now["rule_id"] else None
+    rule = SATT.rule(c, rule_id) if rule_id else None
+    return {
+        "line_id": line_id,
+        "source": source,
+        "rule_id": rule_id,
+        "rule_name": str(rule["name"]) if rule is not None else None,
+        "set_by": str(now["set_by"]) if now is not None else None,
+        "set_at": str(now["created_at"]) if now is not None else None,
+        "can_change": R.has(s.ctx.org, viewer, R.ATTRIBUTION, s.ctx.rights(viewer)),
+        "tags": dict(line.tags),
+        "amount": line.amount,
+        "splits": _split_rows(splits, shares),
+        "history": [
+            {
+                "id": str(r["id"]),
+                "source": str(r["source"]),
+                "rule_id": str(r["rule_id"]) if r["rule_id"] else None,
+                "splits": [
+                    {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
+                    for x in SATT.parse_splits(str(r["splits"]))
+                ],
+                "set_by": str(r["set_by"]),
+                "set_at": str(r["created_at"]),
+                "superseded_at": str(r["superseded_at"]) if r["superseded_at"] else None,
+            }
+            for r in rows[: SATT.HISTORY_MAX]
+        ],
+    }
+
+
+def attribution_rules(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
+    """The book's attribution rules, first created first. Needs the finance.attribution right (or admin)."""
+    s = _open(c, viewer, at)
+    if not R.has(s.ctx.org, viewer, R.ATTRIBUTION, s.ctx.rights(viewer)):
+        raise denied("you need the attribution right to see the rules")
+    rows = SATT.rules(c, s.ctx.book.id)
+    labels = SATT.rule_label_targets(c, s.ctx.book.id, rows)
+    return {
+        "can_change": True,  # only holders of the right (or admin, or the owner) read the rules, and they all may change them
+        "rules": [
+            {
+                "id": str(r["id"]),
+                "name": str(r["name"]),
+                "match": {
+                    "kind": str(r["match_kind"]),
+                    "id": str(r["match_id"]),
+                    "label": labels.get(str(r["match_id"]), str(r["match_id"])),
+                },
+                "splits": [
+                    {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps} for x in SATT.rule_splits(r)
+                ],
+                "enabled": bool(int(r["enabled"])),
+                "apply_from": str(r["apply_from"]) if r["apply_from"] else None,
+                "created_by": str(r["created_by"]),
+                "updated_at": str(r["updated_at"] or r["created_at"]),
+            }
+            for r in rows
+        ],
+    }

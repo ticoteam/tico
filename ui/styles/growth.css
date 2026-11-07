@@ -144,6 +144,8 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grc-chip-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @container (max-width:560px){
   .grc-ch .grc-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  /* the hidden header's cells stack as blocks: as table cells they lay out at their min-content width (the 12 px label) and run past the phone's edge */
+  .grc-ch .grc-table thead :is(tr,th){display:block;padding:0}
   .grc-ch .grc-table,.grc-ch tbody{display:block}
   .grc-ch tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:4px 10px;padding:8px 0;border-top:1px solid var(--line)}
   .grc-ch tbody tr:first-child{border-top:0;padding-top:0}

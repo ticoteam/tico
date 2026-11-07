@@ -11,8 +11,6 @@ the gap is a test of its own (`test_gap_the_bot_can_list_accounts`)."""
 
 from pathlib import Path
 
-import pytest
-
 from backend import bot_settings as BS
 from backend import bookkeeper as BK
 from backend.finance import actions as FA
@@ -291,26 +289,45 @@ def test_receipts_are_found_by_the_hourly_check(api):
     assert quiet["task"] is None and quiet["items"] == 0, quiet
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GAP: attach takes any Library file id without checking that the file exists or "
-    "that the asker may read it: file_ids ['fil_missing'] commits and inserts a fin_attachments row "
-    "(backend/finance/documents.py attach; backend/finance/store/ap.py attach). bill_create's attachments "
-    "have the same gap (documents.py _attach_files).",
-)
-def test_gap_attach_refuses_a_file_not_in_the_library(api):
+def _library_file(api, fid, bot):
+    """A Library file of `bot` (bot-wide scope, no versions): enough for the file check, which reads the row."""
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        if c.execute("SELECT 1 FROM bots WHERE id=?", (bot,)).fetchone() is None:
+            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (bot, bot, bot.title()))
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
+            "VALUES(?,?,'bot',?,'receipt.pdf','file','',?,?)",
+            (fid, bot, fid, now, now),
+        )
+
+
+def test_attach_files_only_a_library_file_the_bot_may_read(api):
+    """attach checks each file before filing it: a missing id, another bot's own file and a deleted file are refused
+    (nothing is attached); the Bookkeeper's own file is filed."""
     token = hire(api)
     mercury(api)
     err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = feed["results"][0]
-    err, refused = ask(
-        api,
-        token,
-        "attach",
-        {"subject_kind": "feed", "subject_id": fee["id"], "file_ids": ["fil_missing"]},
-        f"attach:{fee['id']}",
-    )
-    assert err or refused["status"] in ("failed", "denied"), refused
+    _library_file(api, "file-mine", "bookkeeper")
+    _library_file(api, "file-theirs", "writer")
+    _library_file(api, "file-gone", "bookkeeper")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET state='deleted' WHERE id='file-gone'")
+
+    def attach(fid):
+        body = {"subject_kind": "feed", "subject_id": fee["id"], "file_ids": [fid]}
+        return ask(api, token, "attach", body, f"attach:{fee['id']}:{fid}")
+
+    for fid in ("fil_missing", "file-theirs", "file-gone"):
+        err, refused = attach(fid)
+        assert err and fid in str(refused), (fid, refused)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_attachments").fetchone()[0] == 0
+    err, filed = attach("file-mine")
+    assert not err and filed["status"] == "committed", filed
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT file_id FROM fin_attachments")] == ["file-mine"]
 
 
 def test_the_bot_reads_a_file_with_hub_file_read(api):

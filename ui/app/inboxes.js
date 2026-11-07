@@ -1,4 +1,4 @@
-/* ui/app/inboxes.js — The inbox kinds' pages under Tools (ui/app/tools.js routes them): one mailbox, Tico address or
+/* ui/app/inboxes.js — The inbox kinds' pages under Tools (ui/app/tools.ts routes them): one mailbox, Tico address or
    phone number, mailing address and letters out, their settings page and Messages. They were Settings › Inboxes; its
    list is the Tools list now (GET /api/v2/tool-index), so this file keeps only the pages and the registry they join.
    Addresses: #/tools/mailbox/<address or id>[/activity], #/tools/number/<id>, #/tools/address/<id>,

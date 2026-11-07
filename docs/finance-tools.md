@@ -1,6 +1,6 @@
 # Finance tools
 
-Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
+Six hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
 inputs. Every call runs as its caller, a person or a bot, with that caller's own Finance rights and view: a bot
 without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay private for
 everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else reads or writes the books.
@@ -15,7 +15,6 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
 | `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
-| `hub_finance_card_fill` | `hub finance card-fill` | `card_id`, `merchant`, `amount` | not available yet |
 
 The Finance transactions list (its feed read) leaves out an `ignored` row that the bank has ended: its `provider_status`
 is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the list shows `cancelled` as "canceled" and
@@ -23,6 +22,20 @@ is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the 
 reconciliation cleared it keeps its booked status: it stays in the list, does not appear under `failed`, and its
 `provider_status` holds the bank's word. A row a person ignored stays in the list as `ignored` until the bank ends it; then
 it leaves the list like any other row the bank ended.
+
+## Vendors
+
+A bank or card row's vendor is one identity per merchant. Its key strips what the bank adds to a name: a processor
+prefix (`SQ *`, `TST*`, `PAYPAL *`), a reference or store number and case, so `GOOGLE *ADS8812` and `GOOGLE ADS` are one
+vendor. The Transactions read (and `hub_finance_search` on `feed`) gives each bank or card row `vendor: {id, name}`: `id` is
+the contact the key resolves to, else the key, and `name` is the contact's name. Watch's duplicate charge and price
+increase checks group by that vendor and name the finding by it.
+
+`vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
+them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.
+Spend by vendor, budgets and attribution rules then count the names as `into`. A name already on another contact is
+refused, and the error says which. `vendor_unmerge {into, keys}` takes back a merge: pass the `keys` it returned. A mirrored
+book (QuickBooks, Xero) gets only the aliases; its contacts are left alone.
 
 ## Acting
 
@@ -125,7 +138,8 @@ under any of those keys. Both are gated: a bot's `card_save` or `card_unsave` wa
 
 ## Card fill
 
-`hub_finance_card_fill` is listed so agents can find it. It returns "Card fill is not available yet" and never takes
-or returns card details.
+Card fill is not offered: `hub_finance_card_fill` is in no tool list (`hubtools.UNLISTED`) and has no `hub finance`
+command. A call by its name still runs and returns "Card fill is not available yet"; it never takes or returns card
+details.
 
 See also [Bookkeeper](bookkeeper.md).

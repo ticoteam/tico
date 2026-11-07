@@ -3,7 +3,7 @@
    to the month's end and where it warns. A double-click on an amount changes it from the month shown (budget_update,
    dry run first, as on the P&L); "+ Budget" adds one under a line, for a teammate or a vendor (budget_create). A row
    opens the rail: amount by month, warn at, at limit, owner. Shown to the owner and whoever holds finance.budgets
-   (finTabShown). Platform, pace_end, spent_from and as_of come from ad platform imports; a read without them draws
+   (finTabShown). Platform, pace_end, spent_from, as_of and reported come from ad platform imports; a read without them draws
    those cells blank.
    Reads: GET /api/v2/finance/budgets?at=&limit=500, /finance/pnl (the lines' names), /finance/reports/budget_vs_actual (a
    budget's amount by month). Writes: budget_create and budget_update through POST /api/v2/finance/actions.
@@ -129,6 +129,12 @@ function finBudAsOf(b) {
   const d = new Date(s.as_of), time = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
   return 'Platform data as of ' + (finIso(d) === finToday() ? time : `${finDayLabel(finIso(d))}, ${time}`);
 }
+// An ad budget not on the platform's own vendor keeps its books in Spent; the platform's figure shows under it.
+function finBudReported(b) {
+  const s = b.state || {};
+  if (s.reported == null || s.actual == null) return '';
+  return `<div class="muted fin-small" data-fin-bud-reported title="${esc(`Reported by ${finBudPlatform(b) || 'the platform'}, not in Spent`)}">Platform ${finUsd(s.reported)}</div>`;
+}
 const finBudMay = () => finCaps()?.may('finance.budgets');
 // An amount changes from the month shown, this month or a later one, on a monthly budget (as on a line's page).
 const finBudEditable = b => !!b && !FIN.bud?.mine && b.period === 'month' && !b.catch_all && FIN_BUD.month >= finToday().slice(0, 7) && finBudMay();
@@ -158,7 +164,7 @@ function finBudDraw() {
     const asOf = finBudAsOf(b);
     return `<tr data-fin-bud="${esc(b.id)}" style="--d:${r.depth}"${B.sel === b.id ? ' class="fin-on"' : ''}><td>${esc(b.name)}</td><td>${platform}</td>
       <td class="fin-n${edit ? ' fin-edit' : ''}"${edit ? ` data-fin-bud-amt="${esc(b.id)}" tabindex="0" aria-label="${esc(b.name)} budget, ${esc(FIN_MONTH[m - 1])}"` : ''}>${finBudAmount(b)}</td>
-      <td class="fin-n"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '<span class="muted">—</span>' : finUsd(s.actual)}</td>
+      <td class="fin-n"${asOf ? ` title="${esc(asOf)}"` : ''}>${s.actual == null ? '<span class="muted">—</span>' : finUsd(s.actual)}${finBudReported(b)}</td>
       <td>${pct == null ? '' : `<span class="fin-bar-m${finBudMeterCls(b, pct)}" role="img" aria-label="${pct}% used"><i style="width:${Math.min(100, pct)}%"></i></span>`}</td>
       <td class="fin-n">${pace}</td><td class="fin-n">${kids || s.amount == null ? '' : esc(b.warn_pct + '%')}</td></tr>`;
   }).join('');
