@@ -71562,64 +71562,6 @@
         "type": "object",
         "title": "ReviewSettings"
       },
-      "ReviewTarget": {
-        "properties": {
-          "comment": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Comment"
-          },
-          "file": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "File"
-          },
-          "version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Version"
-          },
-          "task": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "ReviewTarget"
-      },
       "ReviewedMeeting": {
         "type": "object",
         "properties": {
@@ -76162,7 +76104,7 @@
       "TaskAnswer": {
         "properties": {
           "target": {
-            "$ref": "#/components/schemas/ReviewTarget"
+            "$ref": "#/components/schemas/backend__models__ReviewTarget"
           },
           "answers": {
             "additionalProperties": {
@@ -82948,6 +82890,64 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Settings"
+      },
+      "backend__models__ReviewTarget": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReviewTarget"
       },
       "backend__models__ToolUpdate": {
         "properties": {
