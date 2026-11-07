@@ -11,7 +11,6 @@ itself), one process per scenario: each has its own server, database and clock. 
 of the same packing, for a CI matrix."""
 
 import argparse
-import inspect
 import json
 import os
 import sys
@@ -52,10 +51,10 @@ def _audit(event, args):
 
 def record_call_path():
     """Start recording what this process runs and reads inside the repository; the returned function stops it and
-    returns {"code", "data", "folders"}, sorted and relative to the repository: the Python functions that ran at least
-    once (a module or class body runs on import, so it does not count), the non-Python files it opened for reading and
-    the folders it listed. call_path.json is the union of these over every scenario (--save-call-path). Recording does
-    not change a run. Before Python 3.12 there is no sys.monitoring, and nothing is recorded."""
+    returns {"code", "data", "folders"}, sorted and relative to the repository: the Python files that ran at least once
+    (module bodies included: a constant a module sets on import changes a run), the non-Python files it opened for
+    reading and the folders it listed. call_path.json is the union of these over every scenario (--save-call-path).
+    Recording does not change a run. Before Python 3.12 there is no sys.monitoring, and nothing is recorded."""
     global _recording, _audit_installed
     recorded = {"code": set(), "data": set(), "folders": set()}
     if not hasattr(sys, "monitoring"):
@@ -68,8 +67,8 @@ def record_call_path():
     root = str(REPO) + os.sep
 
     def started(code, _offset):
-        # A function's code is optimized; module and class bodies are not, so they are not counted.
-        if code.co_flags & inspect.CO_OPTIMIZED and code.co_filename.startswith(root):
+        # Any code object of a file in the repository: a function, a class body or a module body (run on import).
+        if code.co_filename.startswith(root) and "site-packages" not in code.co_filename:
             recorded["code"].add(code.co_filename[len(root) :])
         return monitoring.DISABLE  # once per code object is enough
 
