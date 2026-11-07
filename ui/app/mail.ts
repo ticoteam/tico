@@ -200,15 +200,17 @@ async function pageMail(): Promise<void> {
         </div>
       </div>
     </div>`;
+    const tabBar = $('.mail-tabs') as HTMLElement;
+    const searchBox = $('#mail-q') as HTMLInputElement;
     ($('#mail-box-list') as HTMLElement).onclick = ev => {
       const button = eventElement(ev)!.closest<HTMLElement>('[data-mailbox]'); if (!button) return;
       mailGo({mailbox: button.dataset.mailbox, thread: '', tbox: '', view: 'inbox'});
     };
-    ($('.mail-tabs') as HTMLElement).onclick = ev => {
+    tabBar.onclick = ev => {
       const button = eventElement(ev)!.closest<HTMLElement>('[data-mail-view]'); if (!button) return;
       mailGo({view: button.dataset.mailView});
     };
-    ($('.mail-tabs') as HTMLElement).onkeydown = ev => {
+    tabBar.onkeydown = ev => {
       if (!['ArrowLeft', 'ArrowRight'].includes(ev.key)) return;
       const tabs = [...document.querySelectorAll<HTMLElement>('.mail-tab:not([hidden])')];
       const index = tabs.indexOf(document.activeElement as HTMLElement);
@@ -217,12 +219,12 @@ async function pageMail(): Promise<void> {
       const next = tabs[(index + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]!;
       next.focus(); next.click();
     };
-    ($('#mail-q') as HTMLElement).oninput = () => {
+    searchBox.oninput = () => {
       clearTimeout(MAIL_SEARCH);
       MAIL_SEARCH = setTimeout(() => mailGo({q: ($('#mail-q') as HTMLInputElement).value.trim(), thread: ''}), 280);
     };
-    ($('#mail-q') as HTMLElement).onkeydown = ev => {
-      if (ev.key === 'Enter') { ev.preventDefault(); clearTimeout(MAIL_SEARCH); mailGo({q: ($('#mail-q') as HTMLInputElement).value.trim(), thread: ''}); }
+    searchBox.onkeydown = ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); clearTimeout(MAIL_SEARCH); mailGo({q: searchBox.value.trim(), thread: ''}); }
     };
     ($('#mail-chips') as HTMLElement).onclick = ev => {
       const b = eventElement(ev)!.closest<HTMLElement>('[data-mail-chip]'); if (!b) return;
@@ -269,9 +271,10 @@ async function pageMail(): Promise<void> {
     button.tabIndex = active ? 0 : -1;
   });
   ($('#mail-inbox-view') as HTMLElement).hidden = st.view === 'agent';
-  ($('#mail-agent-view') as HTMLElement).hidden = st.view !== 'agent';
+  const agentView = $('#mail-agent-view') as HTMLElement;
+  agentView.hidden = st.view !== 'agent';
   if (st.view === 'agent') {
-    const target = $('#mail-agent-view')!;
+    const target = agentView;
     target.innerHTML = '<div class="empty">Loading instructions…</div>';
     try {
       const response = await get<MailPageAgent>(`/v2/mail/agent?mailbox=${encodeURIComponent(filterBox)}`);
