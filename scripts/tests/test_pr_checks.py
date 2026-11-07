@@ -1005,19 +1005,73 @@ def test_slow_collection_counts_each_files_tests_and_reads_no_match_as_none(monk
     assert checks.collect_slow(["x"]) == Counter()
 
 
-def test_a_change_selects_the_slow_test_files_its_map_reaches_as_it_selects_default_tests(mapped):
+def test_a_slow_candidate_is_a_test_that_directly_uses_the_change_and_the_closure_is_not_slow_selected(mapped):
     plan = checks.selection(["backend/scheduler.py"])
-    assert plan["slow"] == plan["python"]  # one closure; collection then keeps the files that hold a slow test
+    assert plan["slow"][0] == "backend/tests/test_scheduler.py"  # the test named for the module it runs comes first
     assert "backend/tests/test_scheduler.py" in plan["slow"]
-    assert "backend/tests/test_api.py" in checks.selection(["backend/store.py"])["slow"]
+    # Default tests follow the closure; slow candidates stop at one import, so there are fewer of them.
+    assert set(plan["slow"]) < set(plan["python"])
     assert "relay" not in plan
 
 
-def test_slow_selection_is_empty_on_main_and_docs_and_everything_when_uncertain(mapped):
+def test_slow_candidates_stop_at_one_import_and_never_pass_through_a_conftest_or_a_fixture(tmp_path):
+    source(tmp_path, "pkg/__init__.py", "")
+    source(tmp_path, "pkg/mod.py", "VALUE = 1\n")
+    source(tmp_path, "pkg/helper.py", "from pkg import mod\n")
+    source(
+        tmp_path,
+        "tests/test_direct.py",
+        "import pytest\nfrom pkg import mod\n\n@pytest.mark.slow\ndef test_a():\n    pass\n",
+    )
+    source(tmp_path, "tests/test_chain.py", "from pkg import helper\n\ndef test_b():\n    pass\n")
+    source(
+        tmp_path,
+        "tests/conftest.py",
+        "import pytest\nfrom pkg import mod\n\n@pytest.fixture\ndef shared():\n    return mod.VALUE\n",
+    )
+    source(tmp_path, "tests/test_fixture.py", "def test_c(shared):\n    pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert checks.slow_candidates(graph, ["pkg/mod.py"]) == ["tests/test_direct.py"]
+    assert checks.slow_candidates(graph, ["pkg/helper.py"]) == ["tests/test_chain.py"]
+    assert checks.slow_candidates(graph, ["tests/conftest.py"]) == []
+
+
+def test_slow_candidates_rank_changed_tests_then_the_test_named_for_the_module_then_runners_then_readers(tmp_path):
+    source(tmp_path, "pkg/__init__.py", "")
+    source(tmp_path, "pkg/store.py", "X = 1\n")
+    source(tmp_path, "data/rules.json", "{}\n")
+    source(tmp_path, "tests/test_store.py", "from pkg import store\n")
+    source(tmp_path, "tests/test_other.py", "from pkg import store\n")
+    source(tmp_path, "tests/test_reads.py", "import json\nopen('data/rules.json')\n")
+    source(tmp_path, "tests/test_changed.py", "def test_a():\n    pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    changed = ["pkg/store.py", "data/rules.json", "tests/test_changed.py"]
+    assert checks.slow_candidates(graph, changed) == [
+        "tests/test_changed.py",
+        "tests/test_store.py",
+        "tests/test_other.py",
+        "tests/test_reads.py",
+    ]
+
+
+def test_one_serial_vm_keeps_the_nearest_slow_files_that_fit_its_budget_and_defers_the_rest():
+    budget = checks.JOB_SECONDS - checks.SETUP_SECONDS["slow"]
+    names = ["a.py", "b.py", "c.py", "d.py"]
+    counts = Counter(dict.fromkeys(names, 1))
+    timings = {"a.py": 110.0, "b.py": 150.0, "c.py": 90.0, "d.py": 5.0}
+    kept, deferred, seconds = checks.slow_fit(names, counts, timings)
+    assert kept == ["a.py", "c.py", "d.py"] and deferred == ["b.py"]
+    assert seconds == 205.0 and seconds <= budget
+
+
+def test_slow_selection_is_empty_on_main_and_docs_and_uncertain_changes_keep_only_their_changed_tests(mapped):
     assert checks.selection(["backend/scheduler.py"], "push")["slow"] == []
     assert checks.selection(["docs/images/none.png"])["slow"] == []
-    assert checks.selection(["pytest.ini"])["slow"] is None
-    assert checks.selection([])["slow"] is None
+    assert checks.selection(["pytest.ini"])["slow"] == []
+    assert checks.selection([])["slow"] == []
+    assert checks.selection(["pytest.ini", "backend/tests/test_scheduler.py"])["slow"] == [
+        "backend/tests/test_scheduler.py"
+    ]
 
 
 def test_the_plan_confirms_slow_files_by_collection_drops_exempt_ones_and_shards_one_process_per_vm(
@@ -1049,14 +1103,42 @@ def test_the_plan_confirms_slow_files_by_collection_drops_exempt_ones_and_shards
     target = tmp_path / "plan.json"
     plan = checks.prepare("merge_group", "base", target)
     assert collected == [[scheduler, exempt_file, plain]]
-    assert plan["slow"] == [scheduler] and plan["slow_exempt"] == [exempt_file]
+    assert plan["slow"] == [scheduler] and plan["slow_exempt"] == [exempt_file] and plan["slow_deferred"] == []
     assert {"suite": "slow-1", "files": [scheduler]} in plan["matrix"]["include"]
     assert all("relay" not in job for job in plan["matrix"]["include"])
-    picked.update(slow=None)  # a full run collects the whole suite
-    assert checks.prepare("merge_group", "base", target)["slow"] == [scheduler]
-    assert collected[-1] is None
     picked.update(slow=[])
     assert checks.prepare("merge_group", "base", target)["matrix"]["include"] == [{"suite": "selection", "files": []}]
+
+
+def test_the_queue_runs_at_most_one_slow_vm_and_names_the_slow_files_it_defers_in_the_job_summary(
+    tmp_path, monkeypatch
+):
+    nearest, second = "backend/tests/test_nearest.py", "backend/tests/test_second.py"
+    picked = {
+        "python": [],
+        "browser": [],
+        "caddy": True,
+        "conformance": False,
+        "rust": [],
+        "contracts": False,
+        "slow": [nearest, second],
+        "reason": "measured dependency map",
+    }
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "slow_exempt", lambda root=ROOT: {})
+    monkeypatch.setattr(checks, "collect_slow", lambda files=None, root=ROOT: Counter({nearest: 1, second: 1}))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    durations = tmp_path / "durations.json"
+    durations.write_text(json.dumps({nearest: 200.0, second: 60.0}))  # 200 s fits the budget; 60 s more does not
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", str(durations))
+    slow_jobs = [job for job in plan["matrix"]["include"] if job["suite"].startswith("slow-")]
+    assert slow_jobs == [{"suite": "slow-1", "files": [nearest]}]
+    assert plan["slow"] == [nearest] and plan["slow_deferred"] == [second]
+    text = summary.read_text()
+    assert "Slow tests deferred to release validation (1)" in text and f"- `{second}`" in text
 
 
 def test_a_slow_shard_runs_its_files_in_one_process_and_names_the_tests_it_skipped(tmp_path, monkeypatch, capsys):

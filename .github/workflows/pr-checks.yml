@@ -1,9 +1,9 @@
 # Two tiers. Each push to a pull request runs only the cheap checks (plan, static) on free GitHub-hosted
 # Ubuntu runners, so a push costs no RunsOn minutes. Hosted runners cannot read RunsOn's cache, so those jobs start cold.
 # A merge queue group (the merge_group event, once per queue group) runs everything else on RunsOn Spot VMs in Tico's
-# own AWS account: the tests the group's merged change selects, the slow tests the dependency map reaches from its
-# paths (less scripts/pr_slow_exempt.json; Release validation runs every slow test only on main), the Rust and desktop
-# checks, the macOS recorder tests and the Linux Caddy image. The group selects from its own base and head. Static
+# own AWS account: the tests the group's merged change selects, the slow tests that directly import or read a changed
+# file (one serial VM within about five minutes, less scripts/pr_slow_exempt.json; the rest wait for Release validation,
+# which runs every slow test on main), the Rust and desktop checks, the macOS recorder tests and the Linux Caddy image. The group selects from its own base and head. Static
 # checks run in the group too: its merge commit is the one that lands on main, and a migration timestamp can collide
 # with a change queued ahead of it. A slow test that a change breaks fails its group, so the change is ejected from
 # the queue instead of landing.
