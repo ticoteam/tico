@@ -597,6 +597,17 @@ def _preview_theme(css, theme):
     )
 
 
+# The tab icon and the home-screen icon: the team's own logo when one is set, else Tico's mark. Both are this origin's root
+# paths, which the reader host answers (backend/company_page/reader_app.py), so a logo set after the release was made
+# still shows. The theme colours are the page's own two backgrounds (template/page.css).
+ICONS = (
+    '<link rel="icon" href="/favicon.ico" type="image/png" sizes="32x32">'
+    '<link rel="apple-touch-icon" href="/apple-touch-icon.png">'
+    '<meta name="theme-color" content="#0f1217" media="(prefers-color-scheme: dark)">'
+    '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">'
+)
+
+
 def _document(view, body, title, description, canonical="", preview=False, scheme=""):
     company = _map(view.get("company"))
     accent = accent_of(company.get("accent"))
@@ -622,7 +633,7 @@ def _document(view, body, title, description, canonical="", preview=False, schem
         f'<meta http-equiv="Content-Security-Policy" content="{_e(policy)}">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="referrer" content="strict-origin-when-cross-origin">'
-        f'{robots}<title>{_e(title)}</title><meta name="description" content="{_e(description)}">{extra}'
+        f'{ICONS}{robots}<title>{_e(title)}</title><meta name="description" content="{_e(description)}">{extra}'
         f'<style>{theme}</style><style>{css}</style></head><body>{body}<script>{script}</script></body></html>'
     )
 

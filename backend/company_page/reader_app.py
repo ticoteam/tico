@@ -31,8 +31,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .. import brand_icons
 from .. import hubdb as H
 from .. import oidc as O
+from .. import team_icon
 from ..store import Problem
 from ..visuals import hostname, origin_of
 from . import readers as R
@@ -68,6 +70,8 @@ ROUTES = (
     ("GET", "/data.json"),
     ("GET", "/feed.xml"),
     ("GET", "/assets/{path:path}"),
+    ("GET", "/favicon.ico"),
+    ("GET", "/apple-touch-icon.png"),
     ("GET", "/sign-in"),
     ("GET", CALLBACK_PATH),
     ("POST", "/sign-out"),
@@ -287,8 +291,9 @@ async def _form(request):
     return {name: values[0] for name, values in fields.items()}
 
 
-def build(store, settings, judge=lambda: None):
-    """The app for the reader host. `judge` gives the screening model at request time (app.state.judge)."""
+def build(store, settings, judge=lambda: None, blobs=lambda: None):
+    """The app for the reader host. `judge` gives the screening model at request time (app.state.judge), and `blobs` the
+    file store (app.state.blobs) for the team's logo."""
     session_cookie, login_cookie = cookie_names(settings.reader_origin)
     secure = settings.reader_origin.startswith("https://")
     oidc = ReaderOidc(settings, store) if sign_in_configured(settings) else None
@@ -413,10 +418,41 @@ def build(store, settings, judge=lambda: None):
         url = release._logo_url(c, page["logo_file_id"]) if page else ""
         return release._logo_bytes(c, settings, {"company": {"logo_url": url}}) if url == "assets/" + rel else None
 
+    def answering():
+        """Closed answers nothing here, icons included: a 200 would tell a visitor this host is a company page."""
+        with store.read() as c:
+            return R.transparency_of(c) != "closed"
+
+    def team_logo():
+        """The team icon's bytes (backend/team_icon.py) when one is set and can be read now, else None."""
+        storage = blobs()
+        if storage is None:
+            return None
+        try:
+            with store.read() as c:
+                digest = team_icon.current_digest(c)
+            return storage.get(digest) if digest else None
+        except (Problem, sqlite3.Error, OSError):
+            log.warning("The team icon couldn't be read; the reader host shows Tico's mark", exc_info=True)
+            return None
+
+    def root_icon(request: Request):
+        """/favicon.ico and /apple-touch-icon.png: the team's logo when one is set, else Tico's mark. Read at each
+        request, so a logo set after the release was made still shows."""
+        rel, media_type = brand_icons.ROOT[request.url.path]
+        if not answering():
+            return not_found()
+        data = team_logo() or brand_icons.read(settings, rel)
+        return brand_icons.reply(data, media_type) if data is not None else not_found()
+
     def asset(request: Request):
         """The current release's assets, for a signed-in page as much as the public one. A release is empty unless the
         company is Open, so a private page's fonts come from the template, the same files for everyone."""
         rel = request.path_params["path"]
+        brand = brand_icons.FILES.get("/assets/" + rel)
+        if brand:  # Tico's own icons, for an open or private page (no SVG otherwise: see ASSET_TYPES)
+            data = brand_icons.read(settings, brand[0]) if answering() else None
+            return brand_icons.reply(data, brand[1]) if data is not None else not_found()
         media_type = ASSET_TYPES.get(rel.rsplit(".", 1)[-1].lower()) if "." in rel else None
         if not media_type:
             return not_found()
@@ -567,6 +603,8 @@ def build(store, settings, judge=lambda: None):
             Route("/data.json", data, methods=["GET"]),
             Route("/feed.xml", feed, methods=["GET"]),
             Route("/assets/{path:path}", asset, methods=["GET"]),
+            Route("/favicon.ico", root_icon, methods=["GET"]),
+            Route("/apple-touch-icon.png", root_icon, methods=["GET"]),
             Route("/sign-in", sign_in, methods=["GET"]),
             Route(CALLBACK_PATH, callback, methods=["GET"]),
             Route("/sign-out", sign_out, methods=["POST"]),
@@ -633,5 +671,10 @@ def install(app, store, auth, settings):
     R._state.update(store=store, settings=settings, oidc=None, not_before=0.0)
     if not settings.reader_origin:
         return
-    reader_app = build(store, settings, judge=lambda: getattr(app.state, "judge", None))
+    reader_app = build(
+        store,
+        settings,
+        judge=lambda: getattr(app.state, "judge", None),
+        blobs=lambda: getattr(app.state, "blobs", None),
+    )
     app.add_middleware(ReaderGate, reader_app=reader_app, origin=settings.reader_origin)

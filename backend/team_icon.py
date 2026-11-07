@@ -54,6 +54,12 @@ def png(data):
         raise Problem("icon_type", "Use a valid PNG, JPEG or WebP image", 422) from exc
 
 
+def current_digest(c):
+    """The digest of the team icon now set, or None when none is."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    return json.loads(row[0])["digest"] if row else None
+
+
 def install_team_icon(app, store):
     storage = app.state.blobs
 

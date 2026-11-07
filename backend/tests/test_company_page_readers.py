@@ -3,10 +3,12 @@ modules that make a page's content are stubbed at the package, so what is under 
 
 import hashlib
 import importlib
+import io
 import json
 import os
 import re
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -14,6 +16,7 @@ import pytest
 import httpx
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import backend.company_page as package
 import backend.tests.test_api as test_api
@@ -25,6 +28,7 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the a
 from backend.tests.test_oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"
+UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
 NOT_FOUND = "Not found"
 
 
@@ -1231,3 +1235,46 @@ def test_the_real_modules_together_give_a_reader_a_page_and_take_it_back(site, m
     assert "October" not in client.get("/").text
     site.transparency("closed")
     assert plain_404(client.get("/"))
+
+
+# ------------------------------------------------------------------------------------------------------- icons
+def team_png(colour):
+    out = io.BytesIO()
+    Image.new("RGB", (16, 16), colour).save(out, "PNG")
+    return out.getvalue()
+
+
+def test_the_reader_icons_are_tico_until_the_team_sets_a_logo_and_then_it(site):
+    client = site.client()
+    site.transparency("open")
+    for path, rel in (("/favicon.ico", "favicon-32.png"), ("/apple-touch-icon.png", "apple-touch-icon.png")):
+        answer = client.get(path)
+        assert answer.status_code == 200 and answer.content == (UI / rel).read_bytes(), path
+        assert answer.headers["cache-control"] == "public, max-age=86400"
+        assert client.head(path).status_code == 200
+    assert site.api.post("/api/v2/team/icon", content=team_png("blue"), headers=headers()).status_code == 200
+    logo = site.api.get("/api/v2/team/icon").content
+    assert client.get("/favicon.ico").content == logo
+    assert client.get("/apple-touch-icon.png").content == logo
+
+
+def test_the_reader_host_serves_only_the_brand_files_from_assets(site):
+    client = site.client()
+    site.transparency("private")
+    svg = client.get("/assets/tico/tico-mark.svg")
+    assert svg.status_code == 200 and svg.headers["content-type"] == "image/svg+xml"
+    assert svg.content == (UI / "tico" / "tico-mark.svg").read_bytes()
+    assert client.get("/assets/favicon-32.png").content == (UI / "favicon-32.png").read_bytes()
+    assert plain_404(client.get("/assets/observability-vendors.js"))
+
+
+def test_closed_answers_no_icon_on_the_reader_host(site):
+    client = site.client()
+    site.transparency("closed")
+    for path in (
+        "/favicon.ico",
+        "/apple-touch-icon.png",
+        "/assets/favicon-32.png",
+        "/assets/tico/tico-mark.svg",
+    ):
+        assert plain_404(client.get(path)), path
