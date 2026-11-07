@@ -482,3 +482,45 @@ def test_active_time_before_a_wait_counts_after_it_and_a_new_visit_starts_from_z
         visit(c, task["id"], type_id, "Building", t0 + timedelta(minutes=70))
         assert PM.late_tickets(c, rows, t0 + timedelta(minutes=129)) == {}
         assert task["id"] in PM.late_tickets(c, rows, t0 + timedelta(minutes=130))
+
+
+def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api):
+    """Fix V-12: visibility is one query over the late ids, so 100 late tickets cost no more queries than 4; the answer is
+    capped at LATE_CAP with `more` set; `ids` limits it to the cards asked for."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+
+    def add(count, start):
+        with store.transaction() as c:
+            for n in range(start, start + count):
+                row = H.task_create(c, ANA, f"Late {n}", "", ANA, type=type_id, step="Building", lint=False)
+                visit(c, row["id"], type_id, "Building", base - timedelta(hours=2))
+
+    def selects(wanted=None):
+        with store.read() as c:
+            statements: list[str] = []
+            c.set_trace_callback(statements.append)
+            try:
+                listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, wanted)
+            finally:
+                c.set_trace_callback(None)
+        return sum(1 for s in statements if s.lstrip().upper().startswith("SELECT")), listing, more
+
+    add(4, 0)
+    few, listing, more = selects()
+    assert len(listing) == 4 and more is False
+    add(96, 4)
+    many, listing, more = selects()
+    assert len(listing) == 100 and more is False
+    assert many == few and many < 15
+
+    add(401, 100)
+    _, listing, more = selects()
+    assert len(listing) == PM.LATE_CAP == 500 and more is True
+
+    picked = [sorted(listing)[0], sorted(listing)[1], "not-late"]
+    _, listing, more = selects(set(picked))
+    assert sorted(listing) == sorted(picked[:2]) and more is False

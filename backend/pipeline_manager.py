@@ -248,6 +248,44 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
     return out
 
 
+LATE_CAP = 500
+
+
+def late_listing(
+    c: "sqlite3.Connection",
+    actor: str,
+    visible_sql: str,
+    pipeline_id: str,
+    at: Any,
+    wanted: set[str] | None = None,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    """The Late tickets of a pipeline that `actor` may see, as the endpoint returns them, and whether the list was cut at
+    LATE_CAP. Visibility is one query over the late ids (pipeline_rights.list_sql), so the query count does not grow with
+    the number of late tickets. `wanted` limits the answer to those ids."""
+    found = over_limit(c, pipeline_id, at)
+    if wanted is not None:
+        found = [item for item in found if item["task_id"] in wanted]
+    if not found:
+        return {}, False
+    marks = ",".join("?" * len(found))
+    readable = pipeline_rights.list_sql(c, actor, visible_sql)
+    seen = {
+        str(r["id"])
+        for r in H._rows(
+            c.execute(
+                f"SELECT id FROM tasks WHERE id IN ({marks}) AND {readable}",
+                [item["task_id"] for item in found],
+            )
+        )
+    }
+    visible = [item for item in found if item["task_id"] in seen]
+    more = len(visible) > LATE_CAP
+    return {
+        item["task_id"]: {"since": item["since"], "hours": item["hours"], "limit_hours": item["limit_hours"]}
+        for item in visible[:LATE_CAP]
+    }, more
+
+
 def _paused_minutes(spans: list[tuple[datetime, datetime]], start: datetime, now: datetime) -> float:
     """The minutes of [start, now] that the spans cover, each counted once however they overlap."""
     clipped = sorted((max(a, start), min(b, now)) for a, b in spans if min(b, now) > max(a, start))
@@ -666,21 +704,23 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
         return out
 
     @app.get("/api/v2/pipelines/{pipeline_id}/late")
-    def pipeline_late(request: Request, pipeline_id: str) -> dict[str, Any]:
-        """The Late list the pipeline's cards read for their "Nh in step" time: every live ticket of the pipeline past its
-        Warn after (late_tickets), with no cap and no manager. Tickets the reader may not see are left out."""
+    def pipeline_late(request: Request, pipeline_id: str, ids: str | None = None) -> dict[str, Any]:
+        """The Late list the pipeline's cards read for their "Nh in step" time: the live tickets of the pipeline past
+        their Warn after (late_tickets), only the ones the reader may see. `ids` (a comma list, the cards on screen) asks
+        for those; without it the list is capped at LATE_CAP and `more` says whether it was cut."""
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots read the pipeline's Late list", 403)
+        wanted: set[str] | None = None
+        if ids is not None:
+            wanted = {part.strip() for part in ids.split(",") if part.strip()}
+            if len(wanted) > LATE_CAP:
+                raise Problem("too_many_ids", f"Ask for at most {LATE_CAP} tickets at a time", 400)
         with store.read() as c:
             seen = pipeline_rights.may_see(c, who.task_actor or who.actor, pipeline_id)
             if not seen:
                 raise Problem("not_found", "No such pipeline", 404)
-            late = over_limit(c, pipeline_id, datetime.now(timezone.utc))
-            late = [item for item in late if _readable(c, who.actor, item["task_id"])]
-        return {
-            "late": {
-                item["task_id"]: {"since": item["since"], "hours": item["hours"], "limit_hours": item["limit_hours"]}
-                for item in late
-            }
-        }
+            late, more = late_listing(
+                c, who.task_actor or who.actor, auth.task_sql(c, who), pipeline_id, datetime.now(timezone.utc), wanted
+            )
+        return {"late": late, "more": more}
