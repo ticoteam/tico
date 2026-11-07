@@ -366,9 +366,11 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 ## Tests on a PR
 
 Run tests on your computer while you work, and run the test files your change touches with `scripts/remote.py` before
-you mark the PR ready for review. A push to a pull request runs only the cheap checks on free GitHub-hosted runners:
+you mark the PR ready for review. A push to a pull request runs the cheap checks on free GitHub-hosted runners:
 lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
-the recorder changed. The required check `checks` aggregates them. The merge queue runs the tests: once per queue group,
+the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on
+RunsOn with the queue's labels; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
+only. The merge queue runs the tests again: once per queue group,
 it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
 files, folders it lists or globs). The Caddy image job runs only when a change reaches the image inputs or
@@ -382,7 +384,7 @@ while there are at most 25; a test that reaches a changed file only through a co
 the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
 changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
 crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
-(every job is skipped); marking it ready for review runs the lint checks. A skipped run is not a pass, so the
+(every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
 (`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
@@ -426,16 +428,20 @@ slow tests and every browser script, and release candidate validation covers tha
 
 ## Merge queue
 
-Main takes changes only through its merge queue. Mark the pull request ready for review, then enqueue it with
-`gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+Main takes changes only through its merge queue. Mark the pull request ready for review, wait for its `checks` to pass,
+then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
-  gate. Lint only; a draft runs nothing.
+  gate. A draft runs nothing.
+- **A ready pull request from this repository** (RunsOn Spot, the queue's labels): the selected Python and browser tests and
+  the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
+  pull request runs none of them.
 - **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
   browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
   recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
-- **The factory simulation** (RunsOn Spot, one 4-vCPU VM per group): seed 1 of every scenario, only when the change
+- **The factory simulation** (RunsOn Spot, one 4-vCPU VM per group): seed 1 of every scenario, in a queue group or on a ready
+  pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
   check fails the group. Release validation runs seeds 1-3 as before.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
@@ -447,8 +453,9 @@ once per group.
 GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue; do not use them.
 
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
-failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. The red run is the first
-place a test failure shows, because a push to a pull request runs only lint.
+failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
+the pull request's own run first, because a ready pull request runs its selected tests. After a queue failure, fix it and get
+green PR checks before enqueuing again.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required

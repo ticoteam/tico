@@ -27,8 +27,8 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request. GitHub Actions lints the pull request again (the PR checks workflow), and the merge queue runs the selected
-tests on the merged result before a change lands, so a failure shows there too. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
+the merge queue runs them again on the merged result before a change lands. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
@@ -147,9 +147,10 @@ company already owns, so their commits need no sign-off, and their pull requests
 ## How we work
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
-- Draft PRs run no CI. Mark the PR ready for review to start the lint checks; each later push runs only those.
-- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, enqueue it with
+- Draft PRs run no CI. Mark the PR ready for review to start its checks (lint and the selected tests); each later push runs them again.
+- Once the PR is reviewed, its `checks` pass, and the tests you touched pass with `scripts/remote.py`, enqueue it with
   `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- After a queue failure, fix it and get green PR checks before you enqueue again.
 - Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
 - If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
   both skip the queue.

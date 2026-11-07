@@ -40,10 +40,10 @@ const botScreenLinkHTML = slug => {
   const s = botScreenState(slug), id = s.state === 'ready' ? s.id : '';
   return id ? `<a class="bot-learn bot-screen" id="bot-screen" href="${screenHref(id)}" aria-label="Screen" title="Screen"><span class="nav-icon" aria-hidden="true">computer</span><span class="bl-label">Screen</span></a>` : '';
 };
-// A task's owner bot's screen, beside the owner in the task's head.
+// A task's owner bot's screen, in the task's header: a monitor icon, as quiet as the header's other icon buttons.
 const taskScreenLinkHTML = owner => {
   const id = botScreenComputer(actorSlug(owner));
-  return id ? `<a class="ghost tmodal-act" href="${screenHref(id)}">Screen</a>` : '';
+  return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
 };
 
 // ----------------------------------------------------------------- the Screen row in a bot's More
