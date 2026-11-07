@@ -80,6 +80,7 @@ async function segTagsWrite(ref: string, segments: string[]): Promise<void> {
 // One pick in the menu, applied to the tags a teammate has now. All stands alone; a segment drops All; a ticked
 // segment unticks; `Clear` (the empty pick) gives none. The result keeps the list's order.
 function segTagNext(current: readonly string[], pick: string): string[] {
+  if (pick === '') return [];
   if (pick === 'all') return current.includes('all') ? [] : ['all'];
   const rest = current.filter(id => id !== 'all' && id !== pick);
   const next = current.includes(pick) ? rest : [...rest, pick];
