@@ -58,6 +58,28 @@ function threadsShell() {
   shell.querySelector('.tr-pane').addEventListener('click', ev => { if (ev.target.closest('[data-tr-new]')) threadNewOpen(); });
   return shell;
 }
+// The pane with no thread open: a picture of how a thread works, one heading and one sentence, then New thread (the
+// pane's click handler in threadsShell answers its data-tr-new). The picture's colours are classes in thread-rail.css.
+const TR_EMPTY_HTML = `<div class="tr-empty"><div class="empty-state">
+  <svg class="tr-diagram" viewBox="0 0 360 176" aria-hidden="true">
+    <rect class="td-card" x="112" y="10" width="240" height="156" rx="14"/>
+    <text class="td-title" x="130" y="35"># Launch plan</text>
+    <path class="td-line" d="M112 46H352"/>
+    <path class="td-line" d="M58 44H112M58 88H112M58 132H112"/>
+    <circle class="td-face" cx="40" cy="44" r="18"/><circle class="td-ink" cx="40" cy="39" r="6"/><path class="td-ink" d="M28 58a12 10 0 0 1 24 0z"/>
+    <rect class="td-face" x="22" y="70" width="36" height="36" rx="10"/><rect class="td-ink" x="31" y="84" width="5" height="6" rx="2.5"/><rect class="td-ink" x="44" y="84" width="5" height="6" rx="2.5"/><path class="td-stroke" d="M35 97h10"/>
+    <rect class="td-face" x="22" y="114" width="36" height="36" rx="10"/><rect class="td-ink" x="31" y="128" width="5" height="6" rx="2.5"/><rect class="td-ink" x="44" y="128" width="5" height="6" rx="2.5"/><path class="td-stroke" d="M35 141h10"/>
+    <circle class="td-face" cx="134" cy="73" r="8"/><circle class="td-ink" cx="134" cy="70.5" r="2.6"/><path class="td-ink" d="M129 79.5a5 4.5 0 0 1 10 0z"/>
+    <rect class="td-bar" x="152" y="69" width="118" height="8" rx="4"/>
+    <rect class="td-face" x="127" y="97" width="14" height="14" rx="4"/><circle class="td-ink" cx="132" cy="103.5" r="1.3"/><circle class="td-ink" cx="138" cy="103.5" r="1.3"/>
+    <rect class="td-bar" x="152" y="100" width="150" height="8" rx="4"/>
+    <rect class="td-face" x="127" y="128" width="14" height="14" rx="4"/><circle class="td-ink" cx="132" cy="134.5" r="1.3"/><circle class="td-ink" cx="138" cy="134.5" r="1.3"/>
+    <rect class="td-bar" x="152" y="131" width="124" height="8" rx="4"/>
+  </svg>
+  <h2>Talk with your team here</h2>
+  <p>Share conversations with your bots and anything else the team should see.</p>
+  <button type="button" class="primary" data-tr-new>New thread</button>
+</div></div>`;
 // #/threads: the rail; on a desktop the thread last opened (else the first pinned) beside it. `?view=inbox` (Inbox's
 // old address) opens Catch up; `?view=dms` and `?with=` were the old list's filters.
 async function pageThreads() {
@@ -77,7 +99,7 @@ async function pageThreads() {
   const id = (last && (listed.some(t => t.id === last) || THREADS.next) ? last : '') || THREADS.pinned[0]?.id || '';
   if (id) { location.replace(threadHref(id)); return; }
   threadUnmount(THREAD_PAGE?.view); THREAD_PAGE = null;
-  pane.innerHTML = '<div class="tr-empty"><button type="button" class="primary" data-tr-new>New thread</button></div>';
+  pane.innerHTML = TR_EMPTY_HTML;
 }
 // #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
 function pageThread(id) {

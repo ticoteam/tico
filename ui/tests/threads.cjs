@@ -2,7 +2,8 @@
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
 // Catch up, New thread, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
 // answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
-// New DM, a server without the rail, and a teammate who may see a bot but not read it getting no Home.
+// New DM, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
+// but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -1196,6 +1197,31 @@ let browser = null;
     assert.equal(await page.locator('#tree [data-org="b:ops"] .tree-dm').textContent(), '2');
     assert.equal(await page.locator('#tree [data-org="p:bea"] .tree-dm').textContent(), '1');
     await page.locator('.tr-empty [data-tr-new]').waitFor();    // nothing pinned, nothing opened before: New thread
+    // The picture of a thread, its heading and its one sentence, then New thread, which still opens the dialog.
+    const empty = page.locator('.tr-empty');
+    assert.equal(await empty.locator('h2').innerText(), 'Talk with your team here');
+    assert.equal(await empty.locator('p').innerText(), 'Share conversations with your bots and anything else the team should see.');
+    const picture = await empty.locator('.tr-diagram').boundingBox();
+    assert.ok(picture && picture.width > 300 && picture.width <= 360, 'the picture is drawn, at most 360px wide: ' + JSON.stringify(picture));
+    await themed(page, 'empty');
+    await empty.locator('[data-tr-new]').click();
+    await page.locator('#thread-new[open]').waitFor();
+    assert.ok(await sideways(page) <= 1300, 'no sideways scroll');
+    await page.locator('#thread-new .nt-x').click();
+    await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    railOff = false;
+  }
+  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there.
+  {
+    railOff = true;
+    const {page, seen} = await open(browser, 'ana', {phone: true});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
+    assert.equal(await page.locator('#thread-pane').isVisible(), false);
+    assert.equal(await page.locator('.tr-empty').count(), 0);
+    assert.ok(await sideways(page) <= 390, 'no sideways scroll on the rail');
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;
