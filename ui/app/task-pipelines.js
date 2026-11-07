@@ -106,12 +106,15 @@ function taskPipelineBoard(items, state, head = '') {
   if (finished.length && folds.finished) columns.push(strip('finished', finished, finished[0].id, 'Finished'));
   else finished.forEach((step, i) => columns.push({...stepColumn(step), foldable: i ? '' : 'finished'}));
   const STEP_KIND = {open: 'starting', doing: 'doing', waiting: 'waiting', review: 'review', ready: 'review', done: 'done', closed: 'closed', declined: 'needs'};
+  const me = myActor();
   for (const column of columns) {
     column.items.sort(taskByStepRank);
+    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items, me), type.id, column.name)});
     const step = type.steps.find(step => step.id === column.id);
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
-  return boardColumnsHTML(columns, {head});
+  const play = pipelineForYouHTML(pipelineForYouCount(items, me), type.id);
+  return boardColumnsHTML(columns, {head: head + (play ? `<div class="pipe-play-row">${play}</div>` : '')});
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
   || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));
