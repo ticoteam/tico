@@ -70,7 +70,7 @@ def repo(tmp_path: Path) -> Path:
 def picked(repo: Path, head_files: dict[str, str]) -> shots.Selection:
     base = git(repo, 'rev-parse', 'HEAD')
     head = commit(repo, head_files, 'head')
-    return shots.select_pages(repo, base, head)
+    return shots.select_pages(base, head, repo)
 
 
 def all_page_names(repo: Path) -> set[str]:
@@ -299,7 +299,7 @@ def test_changed_pixels_counts_past_the_tolerance_and_flags_a_size_change(tmp_pa
     for name, data in files.items():
         (tmp_path / name).write_bytes(data)
     pairs = [(key, tmp_path / 'before.png', tmp_path / f'{key}.png') for key in ('same', 'nudged', 'changed', 'wide')]
-    percent = shots.changed_pixels(pairs, ROOT, tmp_path)
+    percent = shots.changed_pixels(pairs, tmp_path)
     assert percent == {'same': 0.0, 'nudged': 0.0, 'changed': 25.0, 'wide': 100.0}
 
 

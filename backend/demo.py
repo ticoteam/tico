@@ -27,6 +27,7 @@ import signal
 import socket
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Request
@@ -352,6 +353,19 @@ def build(directory, now=None, url="", public=False):
     return settings
 
 
+def demo_now():
+    """The time the demo's data is built at. TICO_DEMO_NOW (an ISO 8601 time) fixes it, so two builds of one ref seed the
+    same data and the screenshots can be compared; unset, it is the real time (None)."""
+    text = os.environ.get("TICO_DEMO_NOW", "").strip()
+    if not text:
+        return None
+    try:
+        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise SystemExit(f"tico demo: TICO_DEMO_NOW is not an ISO 8601 time: {text!r}") from error
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="tico demo", description=__doc__.split("\n")[0])
     parser.add_argument("--host", default=None, help="address to listen on (default 127.0.0.1)")
@@ -382,7 +396,7 @@ def main(argv=None):
     try:
         print("Building the Acme demo ...", flush=True)
         with network_blocked():
-            settings = build(directory, url=args.url, public=args.public_demo)
+            settings = build(directory, now=demo_now(), url=args.url, public=args.public_demo)
             if args.port != DEFAULT_PORT and not args.public_demo and not args.url:
                 settings.public_url = settings.runner_url = f"http://127.0.0.1:{args.port}"
             browser_url = args.url.rstrip("/") if args.url else f"http://localhost:{args.port}"

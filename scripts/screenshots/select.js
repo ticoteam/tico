@@ -44,6 +44,9 @@ const UNSHOWN = [
   'ui/styles/pages.css', 'ui/styles/skills.css', 'ui/styles/mail.css', 'ui/styles/messaging.css',
   'ui/styles/replay.css', 'ui/styles/roadmaps.css', 'ui/styles/tags.css', 'ui/styles/first-run.css',
   'ui/styles/lenses.css', 'ui/styles/credentials.css', 'ui/styles/cloud-agents.css', 'ui/styles/team-add.css',
+  // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
+  'ui/app/inboxes*.js', 'ui/app/tools*.js', 'ui/app/redesign-library.js', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
+  'ui/styles/tools.css', 'ui/styles/redesign-library.css',
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.

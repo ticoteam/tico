@@ -4,7 +4,7 @@
     python3 scripts/release_shots.py --base v0.5.204 --head origin/main --version v0.5.205 --out DIR [--upload]
 
 The base and the head are each checked out as a git worktree, and each runs the demo (python -m backend.demo) on its
-own port, one after the other. The head's harness, scripts/screenshots/index.js, shoots the pages the diff's ui/ files
+own port, one after the other. This checkout's harness, scripts/screenshots/index.js, shoots the pages the diff's ui/ files
 draw (its PAGES table says which), at desktop 1440 px and phone 390 px, light, and dark too when a dark-theme file
 changed. Pairs are compared in Chromium (scripts/screenshots/compare.js). A pair under 0.1% changed pixels is unchanged
 and is listed on one line; a page the head adds has no before.
@@ -18,7 +18,7 @@ failed), 2 the run could not finish.
 """
 
 import argparse
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 import contextlib
 from dataclasses import asdict, dataclass
 import json
@@ -45,6 +45,8 @@ WIDTHS = ('desktop-1440', 'phone')
 WIDTH_LABELS = {'desktop-1440': 'Desktop, 1440 px', 'phone': 'Phone, 390 px'}
 THEMES = ('light', 'dark')
 UNCHANGED_BELOW_PCT = 0.1
+# The demo's clock and the browser's: one fixed instant, so two runs of one ref draw the same pictures.
+DEMO_NOW = '2026-11-06T18:00:00Z'
 UPLOAD_ATTEMPTS = 5
 DEMO_START_SECONDS = 240
 PAGE_NAME = re.compile(r"\{name: '([^']+)'")
@@ -59,7 +61,7 @@ BOT_IDENTITY = {
 
 @dataclass(frozen=True)
 class Selection:
-    """The pages the diff's ui/ files draw, from the head's PAGES table (scripts/screenshots/select.js)."""
+    """The pages the diff's ui/ files draw, from this checkout's PAGES table (scripts/screenshots/select.js)."""
 
     pages: list[str]
     every: bool
@@ -138,9 +140,17 @@ def git(args: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) ->
     return result.stdout
 
 
+def demo_now() -> str:
+    return os.environ.get('TICO_DEMO_NOW', DEMO_NOW)
+
+
 def node_env() -> dict[str, str]:
     """Playwright's own Chromium unless TICO_BROWSER_CHANNEL says otherwise, as CI runs it."""
-    return {**os.environ, 'TICO_BROWSER_CHANNEL': os.environ.get('TICO_BROWSER_CHANNEL', '')}
+    return {
+        **os.environ,
+        'TICO_BROWSER_CHANNEL': os.environ.get('TICO_BROWSER_CHANNEL', ''),
+        'TICO_DEMO_NOW': demo_now(),
+    }
 
 
 def resolve(ref: str) -> str:
@@ -148,7 +158,7 @@ def resolve(ref: str) -> str:
 
 
 @contextlib.contextmanager
-def worktree(sha: str, where: Path) -> Iterator[Path]:
+def worktree(sha: str, where: Path) -> Generator[Path]:
     """sha checked out detached at where. The checkout's node_modules is linked in: the demo compiles the UI with it."""
     git(['worktree', 'add', '--detach', str(where), sha], ROOT)
     try:
@@ -164,11 +174,12 @@ def worktree(sha: str, where: Path) -> Iterator[Path]:
             git(['worktree', 'remove', '--force', str(where)], ROOT)
 
 
-def select_pages(head_tree: Path, base_sha: str, head_sha: str) -> Selection:
-    """The head's harness names the pages the diff's ui/ files draw."""
+def select_pages(base_sha: str, head_sha: str, repo: Path = ROOT) -> Selection:
+    """The harness in repo (this checkout's, by default) names the pages the diff's ui/ files draw. The trees only run
+    their demos, so their own harness is not needed."""
     result = subprocess.run(
-        ['node', str(HARNESS), '--pages-for-diff', f'{base_sha}..{head_sha}'],
-        cwd=head_tree,
+        ['node', str(repo / HARNESS), '--pages-for-diff', f'{base_sha}..{head_sha}'],
+        cwd=repo,
         env=node_env(),
         capture_output=True,
         text=True,
@@ -217,13 +228,14 @@ def wait_for_demo(port: int, child: subprocess.Popen[bytes], log: Path) -> None:
 
 
 @contextlib.contextmanager
-def demo_server(tree: Path, python: str, data: Path, log: Path) -> Iterator[str]:
+def demo_server(tree: Path, python: str, data: Path, log: Path) -> Generator[str]:
     """python -m backend.demo in tree, on a free port, for the length of the block. Its output goes to log."""
     port = free_port()
     with log.open('w') as sink:
         child = subprocess.Popen(
             [python, '-W', 'ignore', '-m', 'backend.demo', '--port', str(port), '--data-dir', str(data)],
             cwd=tree,
+            env={**os.environ, 'TICO_DEMO_NOW': demo_now()},
             stdout=sink,
             stderr=subprocess.STDOUT,
         )
@@ -241,7 +253,6 @@ def demo_server(tree: Path, python: str, data: Path, log: Path) -> Iterator[str]
 
 def capture(
     tree: Path,
-    head_tree: Path,
     side: str,
     pages: Sequence[str],
     themes: Sequence[str],
@@ -249,7 +260,7 @@ def capture(
     python: str,
     work: Path,
 ) -> tuple[Path, list[str]]:
-    """Shoot pages against the demo running in tree, with the head's harness. Returns the folder and its problems."""
+    """Shoot pages against the demo running in tree, with this checkout's harness. Returns the folder and its problems."""
     shots = work / side
     shots.mkdir()
     report = work / f'{side}-report.json'
@@ -260,7 +271,7 @@ def capture(
             status = subprocess.run(
                 [
                     'node',
-                    str(head_tree / HARNESS),
+                    str(ROOT / HARNESS),
                     '--url',
                     url,
                     '--out',
@@ -274,7 +285,7 @@ def capture(
                     '--report',
                     str(report),
                 ],
-                cwd=head_tree,
+                cwd=ROOT,
                 env=node_env(),
                 stdout=sink,
                 stderr=subprocess.STDOUT,
@@ -286,7 +297,7 @@ def capture(
     return shots, problems
 
 
-def changed_pixels(pairs: Sequence[tuple[str, Path, Path]], head_tree: Path, work: Path) -> dict[str, float]:
+def changed_pixels(pairs: Sequence[tuple[str, Path, Path]], work: Path) -> dict[str, float]:
     """Changed pixels, in percent, for each (key, before, after): one browser for all the pairs."""
     if not pairs:
         return {}
@@ -298,8 +309,8 @@ def changed_pixels(pairs: Sequence[tuple[str, Path, Path]], head_tree: Path, wor
     )
     with compare_log.open('w') as sink:
         status = subprocess.run(
-            ['node', str(head_tree / COMPARE), str(pairs_file), str(results_file)],
-            cwd=head_tree,
+            ['node', str(ROOT / COMPARE), str(pairs_file), str(results_file)],
+            cwd=ROOT,
             env=node_env(),
             stdout=sink,
             stderr=subprocess.STDOUT,
@@ -346,8 +357,8 @@ def shoot(
     before_dir: Path | None = None
     before_problems: list[str] = []
     if old:
-        before_dir, before_problems = capture(base_tree, head_tree, 'before', old, themes, widths, python, work)
-    after_dir, after_problems = capture(head_tree, head_tree, 'after', pages, themes, widths, python, work)
+        before_dir, before_problems = capture(base_tree, 'before', old, themes, widths, python, work)
+    after_dir, after_problems = capture(head_tree, 'after', pages, themes, widths, python, work)
 
     planned: list[tuple[str, str, str, str, str | None, str]] = []
     pairs: list[tuple[str, Path, Path]] = []
@@ -364,7 +375,7 @@ def shoot(
                     pairs.append((label, out / before_name, out / after_name))
                 planned.append((label, page, width, theme, before_name, after_name))
 
-    percent = changed_pixels(pairs, head_tree, work)
+    percent = changed_pixels(pairs, work)
     shots = [
         Shot(page, width, theme, before_name, after_name, percent.get(label) if before_name else None)
         for label, page, width, theme, before_name, after_name in planned
@@ -499,6 +510,12 @@ def upload_evidence(files: Sequence[Path], version: str, repo_dir: Path = ROOT, 
     raise RuntimeError(f'the {EVIDENCE_BRANCH} push was refused {UPLOAD_ATTEMPTS} times: {refused}')
 
 
+def every_page_selection() -> Selection:
+    """Every page in both themes, whatever changed: the same-ref check, which must come out unchanged everywhere."""
+    pages = [match.group(1) for match in PAGE_NAME.finditer((ROOT / HARNESS).read_text())]
+    return Selection(pages=pages, every=True, dark=True, reason='every page: the same-ref check', unshown=[])
+
+
 def run(
     base: str,
     head: str,
@@ -508,6 +525,7 @@ def run(
     python: str,
     upload: bool,
     repo: str,
+    every_page: bool = False,
 ) -> int:
     if not VERSION_NAME.fullmatch(version):
         raise RuntimeError(f'the version {version!r} is not a folder name')
@@ -520,7 +538,7 @@ def run(
     with tempfile.TemporaryDirectory(prefix='release-shots-') as tmp:
         work = Path(tmp)
         with worktree(base_sha, work / 'base') as base_tree, worktree(head_sha, work / 'head') as head_tree:
-            selection = select_pages(head_tree, base_sha, head_sha)
+            selection = every_page_selection() if every_page else select_pages(base_sha, head_sha)
             shots, problems = shoot(base_sha, base_tree, head_tree, selection, widths, python, work, out)
             manifest = Manifest(
                 version=version,
@@ -571,6 +589,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         '--upload', action='store_true', help='push the changed pictures to the release-evidence branch'
     )
     parser.add_argument(
+        '--every-page',
+        action='store_true',
+        help='shoot every page in both themes, whatever changed (the same-ref check: base and head equal)',
+    )
+    parser.add_argument(
         '--repo',
         default=os.environ.get('GITHUB_REPOSITORY', DEFAULT_REPO),
         help='the repository the evidence URLs point at',
@@ -586,6 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             str(args.python),
             bool(args.upload),
             str(args.repo),
+            every_page=bool(args.every_page),
         )
     except (RuntimeError, OSError) as error:
         print(f'release shots: {error}', file=sys.stderr)

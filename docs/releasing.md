@@ -558,7 +558,9 @@ demo for the base tag and the candidate, and shoots each page that a changed `ui
 `scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
 shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
 changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
-looks like" links them. The release train does not call the workflow yet.
+looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
+(`TICO_DEMO_NOW` sets the demo's "now"), so a ref compared with itself shoots no changed pair. The release train does
+not call the workflow yet.
 
 ### Behaviour replay
 

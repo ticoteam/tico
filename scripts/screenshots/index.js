@@ -30,6 +30,9 @@ const WIDTHS = {
 const THEMES = {light: 'light', dark: 'dark'};
 const DEFAULT_WIDTHS = 'desktop,phone';
 const DEFAULT_THEMES = 'light,dark';
+// The demo's clock and the browser's: one fixed instant, so the seeded data and every "1d ago" come out the same on
+// every run. TICO_DEMO_NOW overrides it; the demo reads the same variable (backend/demo.py demo_now).
+const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
@@ -53,7 +56,7 @@ const SETTINGS_UI = ['ui/app/settings.js', 'ui/styles/settings.css'];
 // open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.js): a change
 // to one of them shoots this page, and a change to a file no page claims is listed, never silently dropped.
 const PAGES = [
-  {name: 'updates', route: '#/updates', ready: 'Write your update', ui: ['ui/app/updates.js', 'ui/styles/updates.css']},
+  {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.js', 'ui/styles/updates.css']},
   {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
     await page.click('#task-scope');
     await page.click('#task-filter-pop [data-task-type="general"]');
@@ -64,16 +67,15 @@ const PAGES = [
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.js', 'ui/app/goals-kpi-views.js', 'ui/goals-kpis.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js',
       'ui/app/org-fan.js', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
-  {name: 'bot-chat', route: '#/bot/support', ready: 'Threads with Support Agent', ui: BOT_CHAT_UI},
+  {name: 'bot-chat', route: '#/bot/support', ready: 'Have a draft ready for 90 percent of new tickets', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = await (await fetch('/api/meetings')).json();
     return list.find(m => m.title === 'Weekly ops sync').id;
-  })), ready: 'Meeting context', ui: MEETINGS_UI, steps: async page => {
-    await page.getByText('Transcript · Zoom').click();
-    await page.getByText('Ana').first().waitFor();
+  })), ready: 'Calibration works first time for 84 percent of owners', ui: MEETINGS_UI, steps: async page => {
+    await page.getByText('Let\'s start with the port').first().waitFor();
   }},
-  {name: 'usage', route: '#/usage', ready: 'Support Agent', ui: ['ui/app/usage.js', 'ui/styles/usage.css'], steps: async page => {
+  {name: 'usage', route: '#/usage', ready: 'API-equivalent', ui: ['ui/app/usage.js', 'ui/styles/usage.css'], steps: async page => {
     await page.locator('.use-line').first().click();
     await page.locator('.use-col').first().waitFor();
   }},
@@ -83,7 +85,7 @@ const PAGES = [
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
     ui: [...SETTINGS_UI, 'ui/app/settings-devices.js', 'ui/app/computer-detail.js', 'ui/app/cloud-machines.js',
       'ui/app/subscriptions.js', 'ui/runner-updates.js']},
-  {name: 'support', route: '#/updates', ready: 'Write your update', ui: ['ui/support.js', 'ui/styles/support.css', 'ui/app/updates.js', 'ui/styles/updates.css'],
+  {name: 'support', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/support.js', 'ui/styles/support.css', 'ui/app/updates.js', 'ui/styles/updates.css'],
     steps: async page => {
       await page.evaluate(() => window.supportOpen());
       await page.locator('#support-pop[open] [data-compose] [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
@@ -132,9 +134,6 @@ const PAGES = [
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
     (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post',
     ui: ['ui/app/recruit.js', 'ui/app/team-build.js', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
-  {name: 'settings-inboxes', route: '#/settings', tab: 'inboxes', ready: 'Customer care',
-    ui: [...SETTINGS_UI, 'ui/app/inboxes*.js', 'ui/app/tools*.js', 'ui/app/redesign-library.js', 'ui/bot-tools.js',
-      'ui/styles/inboxes.css', 'ui/styles/inbound.css', 'ui/styles/tools.css', 'ui/styles/redesign-library.css']},
 ];
 
 function argument(name, fallback = '') {
@@ -200,7 +199,7 @@ async function bootDemo() {
   const port = await freePort();
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'tico-shots-'));
   const child = spawn(process.env.TICO_PYTHON || 'python3', ['-W', 'ignore', '-m', 'backend.demo', '--port', String(port), '--data-dir', data],
-    {cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit']});
+    {cwd: ROOT, env: {...process.env, TICO_DEMO_NOW: DEMO_NOW}, stdio: ['ignore', 'inherit', 'inherit']});
   const url = `http://127.0.0.1:${port}`;
   for (let tries = 0; tries < 120; tries++) {
     if (child.exitCode !== null) throw new Error('the demo exited with ' + child.exitCode);
@@ -251,7 +250,14 @@ async function capture() {
         // ui/theme.js is dark unless this browser saved a choice, so colorScheme alone shot dark for both themes: save the
         // theme before the page's scripts read it. colorScheme stays for the CSS that follows the system.
         await context.addInitScript(saved => { try { localStorage.setItem('tico.theme', saved); } catch { /* no storage */ } }, theme);
+        // The ask peek ("Got a quick question for you") shows a few seconds after load: it is not part of any page.
+        await context.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
+          const style = document.createElement('style');
+          style.textContent = '#ask-peek { display: none !important; }';
+          document.head.append(style);
+        }));
         const page = await context.newPage();
+        await page.clock.setFixedTime(new Date(DEMO_NOW));
         let where = 'load';
         page.on('console', message => { if (message.type() === 'error') problems.push(`${where}: console error: ${message.text()}`); });
         page.on('pageerror', error => problems.push(`${where}: page error: ${error.message}`));
@@ -284,7 +290,9 @@ async function capture() {
           if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
           await page.waitForTimeout(600);
           await verify(page, problems, label);
-          await page.screenshot({path: path.join(out, label + '.png')});
+          // A focused cell or field draws its focus ring, and animations are finished: neither is part of the page's content.
+          await page.evaluate(() => document.activeElement?.blur());
+          await page.screenshot({path: path.join(out, label + '.png'), animations: 'disabled', caret: 'hide'});
           written.push(label + '.png');
           if (spec.name === 'tour') await page.keyboard.press('Escape');
         }
