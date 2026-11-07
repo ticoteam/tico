@@ -2,26 +2,6 @@
 # `python3 scripts/lint_baseline.py --write` from ruff-baseline-counts.json; do not add entries by hand.
 # Owner of every rule listed here: engineering. Fix findings, then re-run --write to lower their counts.
 # A count may only go down: `--check` fails on a finding past its count, and on a count that fell without --write.
-#
-# Findings per rule at generation:
-#   ASYNC109     1   owner: engineering
-#   B007        24   owner: engineering
-#   B008         1   owner: engineering
-#   B018         8   owner: engineering
-#   B023        78   owner: engineering
-#   B904       131   owner: engineering
-#   B905        29   owner: engineering
-#   BLE001     357   owner: engineering
-#   DTZ005       2   owner: engineering
-#   DTZ007       2   owner: engineering
-#   DTZ011       5   owner: engineering
-#   F401        32   owner: engineering
-#   F402         1   owner: engineering
-#   F541        13   owner: engineering
-#   F811         2   owner: engineering
-#   F841        19   owner: engineering
-#   PLW1510     74   owner: engineering
-#   S110        45   owner: engineering
 
 [lint.per-file-ignores]
 "backend/agents.py" = ["BLE001"]
