@@ -465,9 +465,16 @@ fn parts(
     // What changed in Finance for whoever this turn is for (backend/finance/brief.py for_turn): short lines the reader may
     // see, standing so a resumed thread is sent them again only when they change.
     if let Some(items) = attempt["finance"]["lines"].as_array() {
-        let text: Vec<String> = items.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+        let text: Vec<String> = items
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
         if !text.is_empty() {
-            put(&mut lines, Part::Standing, format!("{FINANCE_HEADER}\n{}", text.join("\n")));
+            put(
+                &mut lines,
+                Part::Standing,
+                format!("{FINANCE_HEADER}\n{}", text.join("\n")),
+            );
         }
     }
     let context = task_context(&attempt["task_context"]);
@@ -931,12 +938,17 @@ mod tests {
             "message": {"id": "m8", "from_actor": "human:ben", "body": "Where is Meta?", "refs": {}}, "history": []})
         };
         let given = prompt(
-            &turn(json!({"lines": ["Budget: Meta Ads · $3,000. Spent $760 (25%). Pace $3,800, over budget."]})),
+            &turn(
+                json!({"lines": ["Budget: Meta Ads · $3,000. Spent $760 (25%). Pace $3,800, over budget."]}),
+            ),
             &names,
             None,
             false,
         );
-        assert!(given.contains(FINANCE_HEADER) && given.contains("Budget: Meta Ads"), "{given}");
+        assert!(
+            given.contains(FINANCE_HEADER) && given.contains("Budget: Meta Ads"),
+            "{given}"
+        );
         assert!(!prompt(&turn(Value::Null), &names, None, false).contains(FINANCE_HEADER));
         assert!(!prompt(&turn(json!({"lines": []})), &names, None, false).contains(FINANCE_HEADER));
     }
