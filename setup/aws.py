@@ -5,6 +5,7 @@ Everything gets two tags, MANAGED_TAG and NAME_TAG, and destroy only touches wha
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 import time
@@ -177,6 +178,21 @@ def _filters(name: str) -> list[dict]:
         {"Name": f"tag:{MANAGED_TAG[0]}", "Values": [MANAGED_TAG[1]]},
         {"Name": f"tag:{NAME_TAG}", "Values": [name]},
     ]
+
+
+USER_DATA_LIMIT = 16384     # EC2's cap on user data, before base64
+
+
+def fit_user_data(script: str) -> str | bytes:
+    """The boot script as EC2 user data. Over EC2's 16 KB cap (the inline compose file and visual bundle alone pass it)
+    it goes gzipped: cloud-init unpacks gzip user data before running it, and boto3 base64-encodes bytes as-is."""
+    raw = script.encode()
+    if len(raw) <= USER_DATA_LIMIT:
+        return script
+    packed = gzip.compress(raw, mtime=0)
+    if len(packed) > USER_DATA_LIMIT:
+        raise SystemExit(f"The server's boot script is {len(packed)} bytes even gzipped; EC2 allows {USER_DATA_LIMIT}.")
+    return packed
 
 
 class Deployer:
@@ -421,7 +437,7 @@ class Deployer:
             InstanceType=self.p.instance_type,
             MinCount=1,
             MaxCount=1,
-            UserData=user_data,
+            UserData=fit_user_data(user_data),
             IamInstanceProfile={"Name": profile},
             SecurityGroupIds=[sg],
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
