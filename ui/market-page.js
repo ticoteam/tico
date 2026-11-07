@@ -11,13 +11,18 @@ const isMarketRoute = r => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?'
 const MARKET_SECTIONS = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach', listening: 'saying'};
 let MARKET_PAGE = 0;
 
-// Where an address goes: {kind: 'page', section, dimension} or {kind: 'map', note}.
+// Where an address goes: {kind: 'compare'} (the segments side by side, the Market tab's first view), {kind: 'segment',
+// segment} (one segment's market), {kind: 'page', section, dimension} (the whole market's five questions, at
+// ?view=whole) or {kind: 'map', note} (the graph).
 function marketAt(route) {
   const [path, query] = route.slice(MARKET_ROUTE.length).split('?');
-  const note = new URLSearchParams(query || '').get('note');
+  const params = new URLSearchParams(query || '');
+  const note = params.get('note');
   const key = path.replace(/^\//, '');
   if (note) return {kind: 'map', note};
-  if (!key) return {kind: 'page', section: ''};
+  if (!key && params.get('segment')) return {kind: 'segment', segment: params.get('segment')};
+  if (!key && params.get('view') === 'whole') return {kind: 'page', section: ''};
+  if (!key) return {kind: 'compare'};
   if (MARKET_SECTIONS[key]) return {kind: 'page', section: MARKET_SECTIONS[key], dimension: key === 'buyers' ? 'buyer' : ''};
   if (key === 'map' || key === 'players') return {kind: 'map', note: MARKET_BRIEF};
   return {kind: 'map', note: decodeURIComponent(key)};
@@ -98,16 +103,21 @@ window.marketReload = function marketReload() {
 window.pageMarket = async function pageMarket() {
   const page = ++MARKET_PAGE, at = marketAt(S.route);
   $('#main').classList.add('market-layout');
-  if (!MARKET_VIEW || MARKET_VIEW.kind !== at.kind || !document.body.contains(MARKET_VIEW.shell)) {
+  // A view is kept while the address stays on it; a section within the whole market only scrolls, and a segment
+  // is another view.
+  const sig = at.kind + (at.segment || '');
+  if (!MARKET_VIEW || MARKET_VIEW.sig !== sig || !document.body.contains(MARKET_VIEW.shell)) {
     if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + `<div id="market-shell" class="${at.kind === 'map' ? 'market-shell' : 'mkt-host mkt-page'}"><p class="market-loading">Opening the market…</p></div>`;
     if (at.kind === 'map') $('#strat-actions').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
     const shell = $('#market-shell');
     try {
-      const mounted = await (at.kind === 'map' ? mountMarket(shell) : mountMarketPage(shell));
+      const mount = at.kind === 'map' ? mountMarket : at.kind === 'compare' ? mountMarketCompare
+        : at.kind === 'segment' ? (el) => mountSegmentMarketView(el, at.segment || '') : mountMarketPage;
+      const mounted = await mount(shell);
       if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another address was asked for meanwhile
-      MARKET_VIEW = {...mounted, kind: at.kind};
+      MARKET_VIEW = {...mounted, kind: at.kind, sig};
     } catch (error) {
       shell.innerHTML = `<p class="market-loading">${esc(error.message || 'The market did not load.')}</p>`;
       return;

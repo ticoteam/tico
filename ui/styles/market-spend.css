@@ -3,9 +3,10 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 
 /* Eight segment hues, lifted on the dark ramp and deepened on the light one. A box takes its hue as a tint of the surface. */
-.mkt-host{--mkt-c1:#7fb3f0;--mkt-c2:#a99bf0;--mkt-c3:#6cc48f;--mkt-c4:#e2b25a;--mkt-c5:#e68fb0;--mkt-c6:#ec9a6c;--mkt-c7:#b7c960;--mkt-c8:#8fa0b8;--mkt-tint:22%;--mkt-hover:brightness(1.12)}
-:root[data-theme="light"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}
-@media (prefers-color-scheme:light){:root[data-theme="system"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}}
+/* The palette is on the root as well: the Strategy page's segment dots use it (ui/styles/segment-pages.css). */
+:root,.mkt-host{--mkt-c1:#7fb3f0;--mkt-c2:#a99bf0;--mkt-c3:#6cc48f;--mkt-c4:#e2b25a;--mkt-c5:#e68fb0;--mkt-c6:#ec9a6c;--mkt-c7:#b7c960;--mkt-c8:#8fa0b8;--mkt-tint:22%;--mkt-hover:brightness(1.12)}
+:root[data-theme="light"],:root[data-theme="light"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}
+@media (prefers-color-scheme:light){:root[data-theme="system"],:root[data-theme="system"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}}
 
 .mkt-host{flex:1;min-height:0;overflow:auto;padding:18px 28px 40px;background:var(--bg);color:var(--ink)}
 .mkt-pg{max-width:1120px}

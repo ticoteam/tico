@@ -247,7 +247,7 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   parameter of an estimate files a new accepted `owner` estimate. Each segment carries `rolled_usd`: its own size, else the
   sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`. It also carries
   `self` (`company/self` has a current `operates_in` edge to it: one of the company's segments, [Segments](strategy.md#segments)), which the
-  Strategy page's Where we play sets ([Strategy](strategy.md#the-page)).
+  Strategy page's Segments list sets ([Strategy](strategy.md#the-page)).
 - **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
   and evidence.
 - **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that

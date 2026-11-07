@@ -159,6 +159,24 @@ function mktSizeForm(host, description) {
   };
 }
 
+// One estimate of a segment's size: its method, figure, parameters (editable by the owner) and evidence. The map's
+// panel and the segment page's Edit sizes both draw it (ui/app/segment-pages.ts).
+function mktEstimateHtml(e, s) {
+  const params = Object.entries(mktObject(e.params)), owner = mktOwner();
+  const accepted = e.status === 'accepted' || (s.size?.id === e.id && s.size.accepted);
+  const evidence = (Array.isArray(e.evidence) ? e.evidence : []).filter(x => x && (x.source_url || x.quote));
+  return `<li class="mkt-est" data-size="${esc(e.id)}"><div class="mkt-est-h"><b>${esc(MKT_METHODS[e.method] || e.method)}</b>
+      ${e.spend_usd == null ? `<span>${esc(e.error || '')}</span>` : `<span>${mktMoney(e.spend_usd)} <small>${mktRange(e)}</small></span>`}
+      ${accepted ? '<span class="pill active">Accepted</span>' : '<span class="pill">Proposed</span>'}
+      ${owner && !accepted ? `<button class="ghost mkt-mini" type="button" data-mkt-accept="${esc(e.id)}">Accept</button>` : ''}</div>
+    ${e.arithmetic ? `<p class="mkt-arith">${esc(e.arithmetic)}</p>` : ''}${e.formula ? `<p class="mkt-arith"><code>${esc(e.formula)}</code></p>` : ''}
+    ${params.length ? `<ul class="mkt-params">${params.map(([name, p]) => { p = typeof p === 'object' && p ? p : {value: p};
+      return `<li>${owner ? `<form data-mkt-param data-size="${esc(e.id)}" data-name="${esc(name)}"><label><code>${esc(name)}</code>
+          <input name="value" type="number" step="any" value="${esc(p.value)}" aria-label="${esc(name)}"></label><button class="ghost mkt-mini" type="submit">Save</button></form>`
+        : `<code>${esc(name)}</code> ${esc(p.value)}`}${p.judgement ? ' <span class="pill">Judgement</span>' : ''}${p.source ? ` <span class="mkt-src">${mktLink(p.source)}</span>` : ''}</li>`; }).join('')}</ul>` : ''}
+    ${evidence.length ? `<ul class="mkt-list mkt-ev">${evidence.map(x => `<li>${x.source_url ? mktLink(x.source_url) : ''}${x.source_kind ? ` <span class="pill">${esc(x.source_kind)}</span>` : ''}${x.quote ? `<br><q>${esc(x.quote)}</q>` : ''}</li>`).join('')}</ul>` : ''}</li>`;
+}
+
 // `first` holds the page's first reads of both dimensions; the switch shows the ones that are sized.
 function mktSpend(host, first) {
   const dims = [['offering', 'Offering'], ['buyer', 'Buyer']].filter(([key]) => mktSized(first[key]));
@@ -319,22 +337,6 @@ function mktSpend(host, first) {
     if (!dlg.open) dlg.showModal();
   }
 
-  function estimateHtml(e, s) {
-    const params = Object.entries(mktObject(e.params)), owner = mktOwner();
-    const accepted = e.status === 'accepted' || (s.size?.id === e.id && s.size.accepted);
-    const evidence = (Array.isArray(e.evidence) ? e.evidence : []).filter(x => x && (x.source_url || x.quote));
-    return `<li class="mkt-est" data-size="${esc(e.id)}"><div class="mkt-est-h"><b>${esc(MKT_METHODS[e.method] || e.method)}</b>
-        ${e.spend_usd == null ? `<span>${esc(e.error || '')}</span>` : `<span>${mktMoney(e.spend_usd)} <small>${mktRange(e)}</small></span>`}
-        ${accepted ? '<span class="pill active">Accepted</span>' : '<span class="pill">Proposed</span>'}
-        ${owner && !accepted ? `<button class="ghost mkt-mini" type="button" data-mkt-accept="${esc(e.id)}">Accept</button>` : ''}</div>
-      ${e.arithmetic ? `<p class="mkt-arith">${esc(e.arithmetic)}</p>` : ''}${e.formula ? `<p class="mkt-arith"><code>${esc(e.formula)}</code></p>` : ''}
-      ${params.length ? `<ul class="mkt-params">${params.map(([name, p]) => { p = typeof p === 'object' && p ? p : {value: p};
-        return `<li>${owner ? `<form data-mkt-param data-size="${esc(e.id)}" data-name="${esc(name)}"><label><code>${esc(name)}</code>
-            <input name="value" type="number" step="any" value="${esc(p.value)}" aria-label="${esc(name)}"></label><button class="ghost mkt-mini" type="submit">Save</button></form>`
-          : `<code>${esc(name)}</code> ${esc(p.value)}`}${p.judgement ? ' <span class="pill">Judgement</span>' : ''}${p.source ? ` <span class="mkt-src">${mktLink(p.source)}</span>` : ''}</li>`; }).join('')}</ul>` : ''}
-      ${evidence.length ? `<ul class="mkt-list mkt-ev">${evidence.map(x => `<li>${x.source_url ? mktLink(x.source_url) : ''}${x.source_kind ? ` <span class="pill">${esc(x.source_kind)}</span>` : ''}${x.quote ? `<br><q>${esc(x.quote)}</q>` : ''}</li>`).join('')}</ul>` : ''}</li>`;
-  }
-
   function figureHtml(f) {
     const n = f.metric === 'revenue' || f.metric === 'arr' ? mktMoney(f.value) : Number(f.value).toLocaleString('en-US');
     const what = f.value === null || f.value === undefined ? esc(f.text || '') : `${esc(MKT_METRICS[f.metric] || f.metric)} ${n}`;
@@ -356,7 +358,7 @@ function mktSpend(host, first) {
       ${z?.error ? `<p>${esc(z.error)}</p>` : ''}
       ${z && z.spend_usd != null ? kv([['Spend', mktMoney(z.spend_usd)], ['Range', mktRange(z)], Number.isFinite(z.growth_pct) ? ['Growth', mktTrim(z.growth_pct, 1) + '%'] : null, ctx.data.year && ['Year', esc(ctx.data.year)]])
         + `<div class="mkt-bar solo" aria-hidden="true"><div class="span" style="left:${pc(z.low_usd)};width:calc(${pc(z.high_usd)} - ${pc(z.low_usd)})"></div><div class="mid" style="left:${pc(z.spend_usd)}"></div></div>` : ''}
-      ${block('Estimates', estimates.length ? `<ul class="mkt-ests">${estimates.map(e => estimateHtml(e, s)).join('')}</ul>` : '')}
+      ${block('Estimates', estimates.length ? `<ul class="mkt-ests">${estimates.map(e => mktEstimateHtml(e, s)).join('')}</ul>` : '')}
       ${block('Overlaps', over ? `<p>${esc(over)}</p>` : '')}${block('Spread', spread ? `<p>${esc(spread)}</p>` : '')}
       ${block('Players', (s.players || []).length ? `<ul class="mkt-list">${s.players.map(p => `<li><b>${esc(p.name)}</b>${(p.figures || []).length ? '<br>' + p.figures.map(figureHtml).join('<br>') : ''}</li>`).join('')}</ul>` : '')}
       ${owner ? `<div class="mkt-acts"><button class="ghost" type="button" data-mkt-research>Research this segment</button>

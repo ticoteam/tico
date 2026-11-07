@@ -47,6 +47,7 @@ function route(hash = location.hash) {
   document.body.classList.remove('task-peek-open');
   if (!isMarketRoute(S.route)) window.marketStop?.();
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
+  if (!isSegmentRoute(S.route)) window.segmentPagesStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
   if (!isAutomationsRoute(S.route)) automationsStop();
   taskChatStop(); $('#task-modal')?.close();
@@ -158,6 +159,7 @@ function route(hash = location.hash) {
   else if (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/')) { location.replace(MARKET_ROUTE + S.route.slice('#/market'.length)); return; }
   else if (isMarketRoute(S.route)) pageMarket();
   else if (isLensesRoute(S.route)) pageLenses();
+  else if (isSegmentRoute(S.route)) pageSegment();   // a segment's page (ui/app/segment-pages.ts)
   else if (isStrategyRoute(S.route)) pageStrategy();
   else if ((S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) && new URLSearchParams(S.route.split('?')[1] || '').get('collection') === 'market') {
     const id = S.route.startsWith(DOCS + '/') ? S.route.slice(DOCS.length + 1).split('?')[0] : '';

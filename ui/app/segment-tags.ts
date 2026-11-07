@@ -11,7 +11,7 @@ interface SegFace { ref: string; name: string; kind: string; }
 interface SegRow { id: string; name: string; who: string; color: string; rank: number; faces: SegFace[]; teammates: number; }
 // One tagged teammate as GET /api/v2/segments/members lists it: `bot:<id>` or `person:<id>`, and the ids or `all`.
 interface SegMember { member: string; segments: string[]; }
-interface SegTags { list: SegRow[] | null; tags: Map<string, string[]>; loading: Promise<boolean> | null; }
+interface SegTags { list: SegRow[] | null; tags: Map<string, string[]>; loading: Promise<boolean> | null; error: string; }
 // The one open menu or filter list, closed by a press outside it or Escape.
 interface SegPop { el: HTMLElement; close: () => void; }
 // A Segment filter's options: only these segment ids (a segment lead's own, from the P&L probe) or every segment with
@@ -21,7 +21,7 @@ interface SegFilterOpts { ids?: readonly string[]; unallocated?: boolean; }
 // The eight colours a segment takes (backend/segments.py color_of). Each maps to an --au-* token (ui/styles/tokens.css).
 const SEG_COLOURS = ['blue', 'green', 'amber', 'red', 'purple', 'teal', 'pink', 'gray'] as const;
 const SEG_TICK = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-let SEG_TAGS: SegTags = {list: null, tags: new Map(), loading: null};
+let SEG_TAGS: SegTags = {list: null, tags: new Map(), loading: null, error: ''};
 let SEG_POP: SegPop | null = null;
 // A route change takes an open menu or filter list away: the router keeps its own listeners, so this one hears the hash.
 window.addEventListener('hashchange', () => segPopClose());
@@ -43,14 +43,17 @@ function segTagsLoad(): Promise<boolean> {
   ]).then(([list, members]) => {
     SEG_TAGS.list = list.segments || [];
     SEG_TAGS.tags = new Map((members.members || []).map(row => [row.member, row.segments || []]));
+    SEG_TAGS.error = '';
     return true;
-  }, () => false).finally(() => { SEG_TAGS.loading = null; });
+  }, (e: unknown) => { SEG_TAGS.error = (e as {message?: string} | null)?.message || ''; return false; }).finally(() => { SEG_TAGS.loading = null; });
   SEG_TAGS.loading = load;
   return load;
 }
 
 // The segments the company plays in, in list order, as the last read had them.
 const segTagRows = (): SegRow[] => SEG_TAGS.list || [];
+// The server's text from the last failed list read ('' once it reads), so a page can show why it did not load.
+const segTagsError = (): string => SEG_TAGS.error;
 const segTagById = (id: string): SegRow | undefined => segTagRows().find(row => row.id === id);
 // A segment's name; `all` reads as All segments, and an id the list no longer holds reads as the id.
 // The P&L's column for lines that count toward no segment is Unallocated.

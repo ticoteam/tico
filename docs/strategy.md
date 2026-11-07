@@ -5,9 +5,13 @@ market and the numbers, and makes the org chart and the goals follow from them. 
 summary every bot reads on every run, three to five **bets**, where the team plays in its market, its competitors,
 related news, and its sections. The owner writes and
 publishes it; the [Strategy Bot](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
-**Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
+**Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there). It opens on **All segments**: a
+compare table of the company's segments (their money, yearly spend, growth, our share and faces), a chip row with one chip per
+segment, and **What changed across all**, each item tagged with its segment. A chip opens that segment's market
+(`#/strategy/market?segment=<id>`), the same five questions as its segment page. **Whole market** opens the one-page market
+at `#/strategy/market?view=whole`, and the graph is at `#/strategy/market/map`.
 
-**The Market page.** The Market tab is one page that reads top to bottom. Under the market's name are three tiles:
+**The whole market.** `?view=whole` is one page that reads top to bottom. Under the market's name are three tiles:
 yearly spend (with its growth, and **Sure** or **Estimated**), the fastest-growing segment, and our share of the
 spend. Then five questions, each with a one-line answer the Librarian writes with the briefing
 ([Market briefing](market-briefing.md)), and each left out when there is nothing to show:
@@ -42,7 +46,7 @@ This page is the shape, lenses, who may do what, setup, publishing, the fit chec
 
 ## The page
 
-The page is cards, in this order: the summary on top; **Where we play** beside the **Bets**; **Competitors** beside
+The page is cards, in this order: the summary on top; the **Segments** list; the **Bets**; **Competitors** beside
 **Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
 removes a thing.
 
@@ -73,15 +77,14 @@ removes a thing.
     trips when it changes), or a sentence. A sentence-only wrong-if shows as **not yet measurable**;
   - `cites`: the market entities or pages the bet rests on (optional);
   - `status`: `proposed`, `active` or `retired`. A retired bet keeps its goals.
-- **Where we play.** The market's segments by spend ([Librarian](librarian.md#market-spend)), a sized segment inside
-  its sized parent, unsized ones as plain tiles. The segments the company plays in are marked. A click on a segment
-  toggles its mark, and several may be marked. × on a marked segment takes it out of the company (its teammates' tags go,
-  and it stays in the market); × on any other segment retires it from the market, its sub-segments moving up to its
-  parent. **Add a segment** adds one to the market by name (defining the market first, as "<company> market", when there
-  is none). The mark is the market graph's own row: `company/self` has a current `operates_in` edge to each segment the
-  company plays in, as the company file's import writes them. Only the owner marks a segment or takes one out. A segment
-  is the company's again only when the owner marks it. [Segments](#segments) says what a segment is once it is the
-  company's.
+- **Segments.** The segments the company plays in, in list order ([Segments](#segments)): a colour dot, the name, one line of
+  who, and the faces of the teammates dedicated to each (up to five, then a count). The owner adds one by name and an
+  optional line of who (**+ Segment**), edits its name and who in place, moves it with ⋯ **Move up** and **Move down**
+  (`POST /api/v2/segments/order` with the whole order), and removes it with × after a confirm (its teammates' tags go; the
+  market keeps it). **Ask Assistant to suggest** hands the Assistant a prompt to run the "Set up segments" job. Each row
+  opens its [segment page](#segments). A segment is the company's when `company/self` has a current `operates_in` edge to
+  it, as the company file's import writes them; the list is those segments. Only the owner changes the list; a member
+  reads it.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
   company the graph has by that name or domain, or makes it, and adds the edge.
@@ -99,7 +102,7 @@ removes a thing.
      competitors miss, and why this team. This is where "how we win" lives, and it is the heart of the page.
   6. **How we sell** (`how`): where the next hundred customers come from, the motion the company sells with
      (self-serve, sales-led, partner, marketplace, local, community or e-commerce) and the playbooks behind it. Who
-     buys is Where we play. Bots read it with `hub strategy show`; it is not put into every run. A bot proposes a
+     buys is the Segments list, and each segment's own text is on its page. Bots read it with `hub strategy show`; it is not put into every run. A bot proposes a
      change the way it proposes any strategy change, and the owner confirms it.
   7. **What we won't do** (`not`): required before publishing. A strategy with no trade-offs is a description.
 
@@ -146,7 +149,7 @@ next before this release is one of its own now; that mark folded into the flag.
 joins the company's, and a removed one comes back with its id and its history. The owner also renames it, sets its one
 line and its colour (blue, green, amber, red, purple, teal, pink or gray; a new one gets the first colour no other
 segment has) and orders the list (`POST /api/v2/segments/order` names every segment once). A bot cannot change a
-segment. Removing one (`POST /api/v2/segments/remove` with `{id}`, or × on the Where we play card) takes it out of the
+segment. Removing one (`POST /api/v2/segments/remove` with `{id}`, or × on its row in the Segments list) takes it out of the
 company's segments. The market keeps it, with its sizes and its place in the tree, and its teammates' tags go: a tag
 names one of the company's segments, so it has no teammate until the owner makes it the company's again, and it comes
 back with none. Merging it into another segment moves its bets and the rows keyed by segment (goals, tasks, budgets,
@@ -172,6 +175,14 @@ diff names it `sections.segments.<id>.<field>`. `GET /api/v2/segments/{id}` give
 its `text` (the segment's where it changed one; `from` says which), the company's text beside it (`company`) and whether
 the segment changed it (`changed`). A bot can propose strategy text for a segment in a
 `strategy_draft` proposal, which the owner confirms.
+
+**The segment page** (`#/strategy/segment/<id>`, the id encoded). Its header has the dot, the name, who, the faces and links to
+Goals, Growth, Budget and P&L, each filtered to the segment (`?segment=<id>`). Its strategy shows each field: **This
+segment** with **Edit** and **Use company's** where the segment changed it, or **From company** (in grey) with **Change for
+this segment**. Only the owner edits; a save is read at the draft's revision, and a save refused for a changed draft reads
+the page again and says so. Its bets follow, each opening on the Strategy page. Its market is the segment's five questions,
+with **Ask Librarian to research** and, for the owner, **Edit sizes** (the segment's own size estimates, with the same
+accept and parameter writes as the market map).
 
 **Bets.** A bet can name one segment, one of the company's, or none ([the API](#hub-and-the-api)). The segment's detail
 lists its live bets.

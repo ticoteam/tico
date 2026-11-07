@@ -1,10 +1,11 @@
 // Strategy › Market, one page (ui/app/redesign-market.js) against the fake hub in support/strategy-fake.cjs (the Acme
-// example): the header and its three tiles, then the five questions in order, each with the briefing's answer line
-// when it has one and none when it does not. What changed? lists the items by kind with the bets they touch, and Read
-// opens the whole briefing; Who are we up against? marks our row and opens a player's note; What are buyers saying?
-// draws posts per day by source over two weeks, the spike lighting its posts, with the destinations under Settings.
-// An old view's address scrolls to its question. No briefing and no listening leave those questions out; an empty
-// market keeps its empty state. A phone first, then a computer.
+// example). The Market tab opens on All segments (segments.cjs); this file's page is the whole market at
+// #/strategy/market?view=whole: the header and its three tiles, then the five questions in order, each with the
+// briefing's answer line when it has one and none when it does not. What changed? lists the items by kind with the
+// bets they touch, and Read opens the whole briefing; Who are we up against? marks our row and opens a player's note;
+// What are buyers saying? draws posts per day by source over two weeks, the spike lighting its posts, with the
+// destinations under Settings. An old view's address scrolls to its question. No briefing and no listening leave those
+// questions out; an empty market keeps its empty state. A phone first, then a computer.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
@@ -67,7 +68,7 @@ async function onePage(page, tag) {
     // A phone.
     {
       const tag = 'phone';
-      const {page, errors} = await openStrategy(browser, {hash: '#/strategy/market'});
+      const {page, errors} = await openStrategy(browser, {hash: '#/strategy/market?view=whole'});
       await onePage(page, tag);
       assert.equal(await page.locator('.mkt-two').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 1, tag + ': one column');
       assert.equal(await page.locator('.mkt-tbl').evaluate(el => getComputedStyle(el).overflowX), 'auto', tag + ': the table scrolls in its own box');
@@ -98,7 +99,7 @@ async function onePage(page, tag) {
       assert.equal(await page.locator('.rdm-row').first().locator('.rdm-d').innerText(), 'leads', tag + ': where a post went');
       await page.evaluate(() => { location.hash = '#/strategy/market/briefing'; });
       await page.waitForFunction(() => Math.abs(document.querySelector('#mkt-q-changed').getBoundingClientRect().top - document.querySelector('#market-shell').getBoundingClientRect().top) <= 30);
-      await page.evaluate(() => { location.hash = '#/strategy/market'; });
+      await page.evaluate(() => { location.hash = '#/strategy/market?view=whole'; });
       await page.waitForFunction(() => document.querySelector('#market-shell').scrollTop === 0);
       await shot(page, 'desktop-market');
       assert.deepEqual(errors, [], tag + ': no page errors');
@@ -106,7 +107,7 @@ async function onePage(page, tag) {
     }
     // No briefing, and the stats not shared: those two questions are left out and the rest stand.
     {
-      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market', briefing: false, listening: 403});
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market?view=whole', briefing: false, listening: 403});
       await page.locator('.mkt-pg #mkt-q-money').waitFor();
       assert.deepEqual(await texts(page, '.mkt-q h3'), QUESTIONS.slice(1, 4));
       assert.equal(await page.locator('.mkt-ans').count(), 0, 'no briefing, no answer lines');
@@ -116,7 +117,7 @@ async function onePage(page, tag) {
     }
     // An empty market keeps its empty state.
     {
-      const {page, errors} = await openStrategy(browser, {hash: '#/strategy/market', market: false});
+      const {page, errors} = await openStrategy(browser, {hash: '#/strategy/market?view=whole', market: false});
       await page.locator('.market-shell-blank').waitFor();
       assert.equal(await page.locator('.mkt-pg').count(), 0);
       assert.deepEqual(errors, [], 'empty: no page errors');
@@ -125,7 +126,7 @@ async function onePage(page, tag) {
     // Review screenshots, when TICO_UI_SHOTS names a folder: the whole page at 1280 and 400 wide, light and dark, the
     // window as tall as the page so nothing is cut off.
     for (const [name, width] of process.env.TICO_UI_SHOTS ? [['desktop', 1280], ['phone', 400]] : []) {
-      const {page} = await openStrategy(browser, {viewport: {width, height: 900}, hash: '#/strategy/market'});
+      const {page} = await openStrategy(browser, {viewport: {width, height: 900}, hash: '#/strategy/market?view=whole'});
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       for (const theme of ['light', 'dark']) {
         await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
