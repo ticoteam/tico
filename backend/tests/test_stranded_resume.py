@@ -121,6 +121,20 @@ def test_a_task_quiet_less_than_the_quiet_time_after_its_last_run_is_not_resumed
         assert SR.run(c, H.shift(H.now(), minutes=SR.QUIET_MINUTES + 1))["resumed"] == 1
 
 
+def test_a_busy_owner_takes_its_resume_behind_its_other_work(api):
+    # A run queued for the bot on other work does not hold its resume back: the wake waits in line behind that work.
+    online(api, "ops")
+    tid = new_task(api, "Draft the notes")
+    other = new_task(api, "Other work")
+    with api.app.state.store.transaction() as c:
+        strand(c, tid)
+        row = H.task(c, other)
+        assert H._wake(c, row, row["owner_id"], "Please do the other work.", {"wake": "other"}), "a run is queued"
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] >= 1
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        assert resumes(c, tid) == ["1"]
+
+
 def test_a_reviewer_bots_task_left_in_doing_is_resumed(api):
     # The Post Release QA bot is a reviewer: it pulls no work of its own, so a check it left in doing sat there.
     with api.app.state.store.transaction() as c:
