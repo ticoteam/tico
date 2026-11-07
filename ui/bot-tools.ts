@@ -116,7 +116,7 @@ declare var botTools: BtApi;
     return items.map(String).filter(Boolean);
   };
 
-  // What a person reads: "pull_requests" is "pull requests"; a model is written one way everywhere (ui/app/format.js).
+  // What a person reads: "pull_requests" is "pull requests"; a model is written one way everywhere (ui/app/format.ts).
   const canWord = (v: unknown): string => String(v).replace(/[_-]+/g, ' ');
   const shownIdentity = (tool: BtTool): string => (tool.id === 'model' && typeof modelWords === 'function' ? modelWords(tool.identity) : tool.identity || '');
   // A repository's Access row already says own or granted; the status line keeps only the rest ("Checked out on its computer").
