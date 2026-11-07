@@ -2,6 +2,7 @@
 attachment is judged once, the model is called outside any write transaction, and a person is asked when the rule says
 so."""
 
+import hashlib
 import json
 import threading
 from contextlib import contextmanager
@@ -603,15 +604,98 @@ def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
 def test_a_text_blob_within_the_cap_is_not_cut():
     from backend import file_library as files
 
+    body = b"Shipped the page."
+
     class SmallStore:
         def open_range(self, digest, start=0, end=None):
-            yield b"Shipped the page."
+            yield body
 
+    digest = hashlib.sha256(body).hexdigest()
     text, cut = P._text_of(
-        SimpleNamespace(blobs=SmallStore()), {"mime": "text/plain", "blob_digest": "a" * 64, "blob_size": 17}
+        SimpleNamespace(blobs=SmallStore()),
+        {"mime": "text/plain", "blob_digest": digest, "blob_size": len(body)},
     )
     assert (text, cut) == ("Shipped the page.", False)
-    assert files.READ_MAX > 17
+    assert files.READ_MAX > len(body)
+
+
+def _blob_job(digest: str, size: int) -> dict:
+    return {"mime": "text/plain", "blob_digest": digest, "blob_size": size}
+
+
+def test_a_short_read_of_a_small_blob_is_unreadable_and_the_judge_says_unsure():
+    """Codex 2: a 1,000 byte blob that comes back as 18 bytes is not the evidence. The judge is not shown it as complete, so
+    even a met from the model is unsure."""
+    body = b"x" * 1000
+    digest = hashlib.sha256(body).hexdigest()
+
+    class ShortStore:
+        def open_range(self, digest, start=0, end=None):
+            yield body[:18]
+
+    text, cut = P._text_of(SimpleNamespace(blobs=ShortStore()), _blob_job(digest, len(body)))
+    assert (text, cut) == (None, False)
+
+    def met(model, state, questions, label):
+        return {"p": 0.95, "reason": "looks right", "provider": "stub", "model": model}
+
+    result = P.judge_once(
+        None,
+        {"id": "r1", "name": "Spec", "rubric": "The spec is attached", "pipeline_id": None},
+        {"id": "a1", "digest": digest, "text": text, "truncated": cut},
+        model="haiku-5.5",
+        engine=met,
+    )
+    assert result["verdict"] == "unsure"
+
+
+def test_a_small_blob_whose_bytes_do_not_match_its_digest_is_unreadable():
+    body = b"Shipped the page."
+
+    class AlteredStore:
+        def open_range(self, digest, start=0, end=None):
+            yield body.replace(b"S", b"T")
+
+    text, _ = P._text_of(
+        SimpleNamespace(blobs=AlteredStore()),
+        _blob_job(hashlib.sha256(body).hexdigest(), len(body)),
+    )
+    assert text is None
+
+
+def test_a_large_blob_that_comes_back_short_is_unreadable_not_truncated_text():
+    from backend import file_library as files
+
+    class ShortLargeStore:
+        def open_range(self, digest, start=0, end=None):
+            yield b"w" * 100
+
+    text, cut = P._text_of(SimpleNamespace(blobs=ShortLargeStore()), _blob_job("a" * 64, files.READ_MAX * 2))
+    assert (text, cut) == (None, False)
+
+
+def test_a_good_small_blob_is_judged_on_its_text():
+    body = b"The page says the measures held: 42 percent."
+    digest = hashlib.sha256(body).hexdigest()
+
+    class GoodStore:
+        def open_range(self, digest, start=0, end=None):
+            yield body
+
+    text, cut = P._text_of(SimpleNamespace(blobs=GoodStore()), _blob_job(digest, len(body)))
+    assert text == body.decode() and cut is False
+
+    def met(model, state, questions, label):
+        return {"p": 0.95, "reason": "held", "provider": "stub", "model": model}
+
+    result = P.judge_once(
+        None,
+        {"id": "r1", "name": "Validated", "rubric": "Measures held", "pipeline_id": None},
+        {"id": "a1", "digest": digest, "text": text, "truncated": cut},
+        model="haiku-5.5",
+        engine=met,
+    )
+    assert result["verdict"] == "met"
 
 
 def test_evidence_the_judge_cannot_read_in_full_is_unsure_whatever_the_model_says(tmp_path):
