@@ -184,6 +184,45 @@ const composerInside = async (page, panel) => {
       await context.close();
     }
 
+    // F13: the Late list is read only while Tasks shows the pipeline. A hidden tab reads nothing and reads once when it is
+    // shown again; leaving Tasks stops the reads for good.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 1440, height: 940});
+      await page.clock.install();
+      const state = await install(page);
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('[data-task-key="tD17"] [data-step-age]', {timeout: t(8000)});
+      await until(() => state.lateReads >= 1);
+      await page.evaluate(() => Object.defineProperty(document, 'hidden', {configurable: true, get: () => true}));
+      const hiddenFrom = state.lateReads;
+      await page.clock.fastForward(10 * 60000);
+      await new Promise(r => setTimeout(r, 300));
+      assert.equal(state.lateReads, hiddenFrom, 'a hidden tab reads no Late list');
+      await page.evaluate(() => Object.defineProperty(document, 'hidden', {configurable: true, get: () => false}));
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await until(() => state.lateReads === hiddenFrom + 1);
+      await page.evaluate(() => { location.hash = '#/overview'; });
+      await new Promise(r => setTimeout(r, 500));
+      const left = state.lateReads;
+      await page.clock.fastForward(10 * 60000);
+      await new Promise(r => setTimeout(r, 300));
+      assert.equal(state.lateReads, left, 'the Late list is not read after Tasks is left');
+      assert.deepEqual(errors, [], 'late polling: no page errors');
+      await context.close();
+    }
+
+    // F14: a card's late time is the server's clock. The step began five hours ago, but the server says the ticket is two
+    // hours in step, so the card says 2h.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 1440, height: 940});
+      await install(page, {late: [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 2, limit_hours: 1, since: new Date().toISOString()}]});
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('[data-task-key="tD17"] [data-step-age]', {timeout: t(8000)});
+      assert.equal((await page.locator('[data-task-key="tD17"] [data-step-age]').innerText()).trim(), '2h in step', 'the server clock shows');
+      assert.deepEqual(errors, [], 'late clock: no page errors');
+      await context.close();
+    }
+
     // E-extra: the phone's one-stage view is for a pipeline with requirements; a pipeline without them keeps the board.
     for (const [has, label] of [[false, 'no requirements'], [true, 'with requirements']]) {
       const {context, page, errors} = await newPage(browser, {width: 390, height: 844}, {hasTouch: true});

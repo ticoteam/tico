@@ -39,13 +39,16 @@ interface PipelineRail {
 
 let pipelineRail: PipelineRail | null = null;
 let pipelineRailHidden = false;
-/** Task ids past their stage's "Warn after", from the server's Late list: the cards that show "Nh in step". */
-const pipelineLateIds = new Set<string>();
-/** The pipeline on screen whose Late list is held, when it was last read, and the pending live reload. */
+/** Tickets past their stage's "Warn after", from the server's Late list: the cards that show "Nh in step" from its clock. */
+const pipelineLateClocks = new Map<string, PipelineLateClock>();
+/** The pipeline on screen whose Late list is held, when it was last read, and the pending live reload and poll. */
 let pipelineLateFor = '';
 let pipelineLateAt = 0;
 let pipelineLateTimer = 0;
 let pipelineLatePoll = 0;
+/** Ends the current follow (its timers, its listeners, its list). A read that was in flight when it ended is ignored. */
+let pipelineLateStop: () => void = () => undefined;
+let pipelineLateGen = 0;
 /** A live reload waits at least this long after the last read; the poll keeps the times moving with no event. */
 const PIPELINE_LATE_MS = 30000;
 const PIPELINE_LATE_POLL_MS = 300000;  // safety poll; live events do the rest
@@ -55,9 +58,10 @@ let pipelineStageOrder: string[] = [];
 const pipelinePhone = (): boolean => window.matchMedia(PIPELINE_PHONE_QUERY).matches;
 
 /** A card's time in its stage shows only when the server's Late list (late_tickets) says it is past the stage's Warn
-    after. The server pauses the clock on holds and waiting tickets; the client does not repeat that rule. */
-function pipelineStepLate(task: { id: string | number }): boolean {
-  return pipelineLateIds.has(String(task.id));
+    after: this is that clock, or null. The server pauses the clock on holds and waiting tickets; the client does not
+    repeat that rule, and does no arithmetic on the step's start. */
+function pipelineLateClock(task: { id: string | number }): PipelineLateClock | null {
+  return pipelineLateClocks.get(String(task.id)) ?? null;
 }
 
 /** Whether this person may change the pipeline's rules (and so move a ticket past its requirements, or mark one met):
@@ -227,31 +231,55 @@ function pipelineRailChatEnsure(): void {
 
 // ---------------------------------------------------------------- loading and keeping it
 
-/** Reads the Late list of the pipeline on screen, rail open or not, and repaints the cards when it changed. */
+/** Whether two Late lists show the same cards with the same hours (the card shows whole hours). */
+function pipelineLateSame(a: Map<string, PipelineLateClock>, b: Map<string, PipelineLateClock>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, clock] of a) {
+    const other = b.get(id);
+    if (!other || Math.floor(other.hours) !== Math.floor(clock.hours)) return false;
+  }
+  return true;
+}
+
+/** Reads the Late list of the pipeline on screen, rail open or not, and repaints the cards when it changed. A hidden tab
+    reads nothing; it reads once when it is shown again. */
 async function pipelineLateLoad(): Promise<void> {
-  const pipelineId = pipelineLateFor;
-  if (!pipelineId) return;
+  const pipelineId = pipelineLateFor, gen = pipelineLateGen;
+  if (!pipelineId || document.hidden) return;
   pipelineLateAt = Date.now();
-  let ids: string[];
-  try { ids = await pipelineLateTicketIds(pipelineId); } catch { return; }
-  if (pipelineLateFor !== pipelineId) return;
-  const next = new Set(ids);
-  const changed = next.size !== pipelineLateIds.size || [...next].some(id => !pipelineLateIds.has(id));
-  pipelineLateIds.clear();
-  next.forEach(id => pipelineLateIds.add(id));
+  let next: Map<string, PipelineLateClock>;
+  try { next = await pipelineLateTickets(pipelineId); } catch { return; }
+  if (gen !== pipelineLateGen) return;
+  const changed = !pipelineLateSame(next, pipelineLateClocks);
+  pipelineLateClocks.clear();
+  next.forEach((clock, id) => pipelineLateClocks.set(id, clock));
   if (changed && TASKS_ST) tasksRender(TASKS_ST);
 }
 
-/** Follows the pipeline on screen: its Late list is read when it shows and again every 5 minutes, so a card's
-    time moves on with no event. Another pipeline (or none) drops the old list. */
-function pipelineLateFollow(pipelineId: string): void {
+/** Follows the pipeline on screen: its Late list is read when it shows and again every 5 minutes, so a card's time moves
+    on with no event. Another pipeline (or none) drops the old list. The follow belongs to the Tasks page: the page's
+    signal ends it (timers, listeners, the list), and a tab that is shown again reads the list once. */
+function pipelineLateFollow(pipelineId: string, signal?: AbortSignal): void {
   if (pipelineId === pipelineLateFor) return;
+  pipelineLateStop();
   pipelineLateFor = pipelineId;
-  pipelineLateIds.clear();
-  window.clearTimeout(pipelineLateTimer); pipelineLateTimer = 0;
-  window.clearInterval(pipelineLatePoll); pipelineLatePoll = 0;
+  pipelineLateClocks.clear();
   if (!pipelineId) return;
+  const onShown = (): void => { if (!document.hidden) void pipelineLateLoad(); };
+  const stop = (): void => {
+    window.clearInterval(pipelineLatePoll); pipelineLatePoll = 0;
+    window.clearTimeout(pipelineLateTimer); pipelineLateTimer = 0;
+    document.removeEventListener('visibilitychange', onShown);
+    signal?.removeEventListener('abort', stop);
+    pipelineLateGen++;
+    pipelineLateFor = '';
+    pipelineLateClocks.clear();
+    pipelineLateStop = () => undefined;
+  };
+  pipelineLateStop = stop;
   pipelineLatePoll = window.setInterval(() => { void pipelineLateLoad(); }, PIPELINE_LATE_POLL_MS);
+  document.addEventListener('visibilitychange', onShown);
+  signal?.addEventListener('abort', stop, {once: true});
   void pipelineLateLoad();
 }
 
@@ -344,7 +372,7 @@ function pipelineRailSync(state: PipelineTasksState): void {
   const ref = type?.manager ? String(type.manager).replace(/^bot:/, '') : '';
   const manager = ref ? 'bot:' + (botByRef(ref)?.id ?? ref) : '';
   const page = document.querySelector('.tasks-page');
-  pipelineLateFollow(type?.id ?? '');
+  pipelineLateFollow(type?.id ?? '', state.layoutAbort?.signal);
   if (type) void pipelineMineSync(type.id);
   if (!type || !manager || !page) { pipelineRailLeave(); return; }
   if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== manager || !pipelineRail.host.isConnected) {
