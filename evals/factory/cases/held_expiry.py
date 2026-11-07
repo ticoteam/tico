@@ -7,7 +7,7 @@ sim does not run) and runs past the 24 h: the hold must be decided and its autho
 from evals.factory.scenarios import Scenario, standard, tickets
 
 HOLD = "sim-held-write"
-AUTHOR = "builder-claude"
+AUTHOR = "bot:builder-claude"  # actor ids: bot:<slug>; _tell_bot skips non-bot authors
 GAP = "#2882"
 HOURS = 26  # past the 24 h hold and one hourly sweep
 
@@ -45,9 +45,7 @@ def held_expired(run):
     if row["state"] == "held":
         return False, f"still held after {HOURS} h: nobody reviewed it and it was never decided"
     hours = (run.w.H.parse_ts(row["decided_at"]) - run.w.H.parse_ts(row["created_at"])).total_seconds() / 3600
-    told = run.w.sql(
-        "SELECT count(*) n FROM messages WHERE recipient_id=? AND body LIKE '%was not sent%'", ("bot:" + AUTHOR,)
-    )[0]["n"]
+    told = run.w.sql("SELECT count(*) n FROM notes WHERE to_actor=? AND body LIKE '%was not sent%'", (AUTHOR,))[0]["n"]
     ok = row["state"] != "held" and hours <= 25 and told > 0
     return ok, f"state {row['state']} {hours:.1f} h after it was held; its author told: {bool(told)}"
 

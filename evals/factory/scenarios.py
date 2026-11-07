@@ -239,13 +239,14 @@ def lead_only_scheduled(run):
     from backend import rules
 
     roundups = {r["id"] for found in rules.PROFILE_RULES.values() for r in found if r["event"] == "task_roundup"}
-    other = [
-        r
-        for r in run.t.bot("engineering-lead").turns
-        if r["action"] is None and r["news"] != "update" and r["news"] not in roundups
-    ]
+    turns = run.t.bot("engineering-lead").turns
+    other = [r for r in turns if r["action"] is None and r["news"] != "update" and r["news"] not in roundups]
+    # The lead's routine news is held for its one digest a day (profiles.SPEC LEAD): a digest run is its schedule's
+    # run, so it counts as scheduled, but never twice on one day.
+    digests = [r for r in turns if r["news"] == "profile_lead_digest"]
+    doubled = len(digests) - len({r["at"].date() for r in digests})
     kinds = Counter(r["news"] for r in other)
-    return not other, f"{len(other)} turns on routine notices: " + ", ".join(
+    return not other and doubled == 0, f"{len(other)} turns on routine notices, {doubled} extra digests: " + ", ".join(
         f"{k} {n}" for k, n in kinds.most_common(4)
     )
 
