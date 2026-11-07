@@ -8,6 +8,7 @@ of it; its rows and its manager's log stay. Routes: GET /api/v2/factories (the l
 POST /api/v2/factories, PATCH /api/v2/factories/{id} and POST /api/v2/factories/{id}/retire.
 """
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
@@ -117,13 +118,44 @@ def _view(conn: "sqlite3.Connection", factory_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-def listed(conn: "sqlite3.Connection") -> list[dict[str, Any]]:
-    """The live factories in their order, for the pipeline editor's Factory choice and the map."""
-    rows = conn.execute(
-        "SELECT id, name, goal, owner_id, manager_id, position FROM factories WHERE retired_at IS NULL "
-        "ORDER BY coalesce(position, 1000000), created_at, id"
-    ).fetchall()
-    return [dict(r) for r in rows]
+FACTORY_LIMIT = 200
+FACTORY_BYTES = 262_144  # a page stops before its JSON passes this, however long the goals are (AGENTS.md)
+ORDER = "coalesce(position, 1000000), created_at, id"
+
+
+def _cursor(after: str) -> tuple[str, str, str]:
+    sort, _, rest = after.partition("|")
+    at, _, ident = rest.partition("|")
+    if not (sort.lstrip("-").isdigit() and at and ident):
+        raise Problem("validation", "That factories cursor is not one the list gave", 422)
+    return sort, at, ident
+
+
+def page(conn: "sqlite3.Connection", limit: int = FACTORY_LIMIT, after: str | None = None) -> dict[str, Any]:
+    """One page of the live factories in their order, for the pipeline editor's Factory choice and the map. `after` is the
+    last factory's cursor from the page before; `next` is the cursor for the page after this one, or None at the end."""
+    sql = (
+        "SELECT id, name, goal, owner_id, manager_id, position, created_at, coalesce(position, 1000000) AS sort "
+        "FROM factories WHERE retired_at IS NULL"
+    )
+    args: list[Any] = []
+    if after:
+        sort, at, ident = _cursor(after)
+        sql += " AND (coalesce(position, 1000000), created_at, id) > (?, ?, ?)"
+        args += [int(sort), at, ident]
+    limit = max(1, min(int(limit or FACTORY_LIMIT), FACTORY_LIMIT))
+    found = [dict(r) for r in conn.execute(f"{sql} ORDER BY {ORDER} LIMIT ?", (*args, limit + 1)).fetchall()]
+    shown: list[dict[str, Any]] = []
+    used = 256
+    for row in found[:limit]:
+        size = len(json.dumps(row, default=str).encode()) + 1
+        if shown and used + size > FACTORY_BYTES:
+            break  # the first factory of a page always fits
+        used += size
+        shown.append(row)
+    last = shown[-1] if len(shown) < len(found) else None
+    factories = [{k: v for k, v in row.items() if k not in ("created_at", "sort")} for row in shown]
+    return {"factories": factories, "next": f"{last['sort']}|{last['created_at']}|{last['id']}" if last else None}
 
 
 def create(conn: "sqlite3.Connection", actor: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -200,11 +232,11 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
     guard: Any = auth
 
     @app.get("/api/v2/factories")
-    def factory_list(request: Request) -> dict[str, Any]:
-        """The live factories, in order."""
+    def factory_list(request: Request, limit: int = FACTORY_LIMIT, after: str | None = None) -> dict[str, Any]:
+        """The live factories, in order, a page at a time: `next` is the cursor for the page after, or null at the end."""
         guard.domain(request.state.identity)
         with db.read() as c:
-            return {"factories": listed(c)}
+            return page(c, limit, after)
 
     @app.post("/api/v2/factories")
     def factory_create(request: Request, body: FactoryBody) -> dict[str, Any]:

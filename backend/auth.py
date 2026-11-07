@@ -1296,6 +1296,12 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
+        from . import pipeline_rights
+
+        # A members-only pipeline's tickets are its owner's, manager's and members' whatever the ticket's own privacy says
+        # (pipeline_rights.may_see). A person's Assistant reads them as the person it acts for.
+        if row.get("type_id") and not pipeline_rights.may_see(c, who.task_actor or who.actor, row["type_id"]):
+            raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not (
             H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
         ):

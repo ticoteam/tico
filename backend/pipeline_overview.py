@@ -70,13 +70,6 @@ def _own_cards(actor: str) -> str:
     return f"(coalesce(private,1)=0 OR owner_id={who} OR requester_id={who})"
 
 
-def _may_see(actor: str, row: Row, members: set[str]) -> bool:
-    """A members-only pipeline shows to its owner, its manager and its members; any other shows to everyone."""
-    if str(row.get("pipeline_visibility") or "company") != "members":
-        return True
-    return bool(actor) and (actor == row.get("pipeline_owner_id") or actor == row.get("manager") or actor in members)
-
-
 def _order(names: dict[str, str], edges: list[tuple[str, str]], ties: dict[str, int]) -> list[str]:
     """Ids in flow order: a thing after the things that feed it, ties by `ties` then name. When only a loop is left,
     its earliest member goes next, so the chain still reads left to right."""
@@ -132,10 +125,8 @@ def _pipelines(c: "sqlite3.Connection", actor: str) -> list[Row]:
         "pipeline_visibility" if "pipeline_visibility" in have else "'company' AS pipeline_visibility",
     ]
     rows = _rows(c, f"SELECT {', '.join(pick)} FROM task_types WHERE id<>'general' ORDER BY created_at, id")
-    mine: set[str] = set()
-    if _columns(c, "pipeline_members"):
-        mine = {str(r[0]) for r in c.execute("SELECT pipeline_id FROM pipeline_members WHERE actor_id=?", (actor,))}
-    return [r for r in rows if _may_see(actor, r, {actor} if str(r["id"]) in mine else set())]
+    shown = pipeline_rights.visible_pipeline_ids(c, actor, [r["id"] for r in rows])
+    return [r for r in rows if str(r["id"]) in shown]
 
 
 def _counts(c: "sqlite3.Connection", ids: list[str], seen: str, now: str, since: str) -> dict[str, Row]:

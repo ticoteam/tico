@@ -8,7 +8,9 @@ ticket's makes its decision stale (the engine reads that, not this module). Chec
 engine (Track A), not attached by a person or a bot, so the API takes only files, blobs and links.
 
 The privacy rule: the requirement's reviewer must be able to read the ticket, or the attach is refused. With no reviewer
-(`nobody`), the person or bot attaching must be able to read it.
+(`nobody`), the person or bot attaching must be able to read it. The file, blob or page attached must be readable by the
+caller and by the reviewer too, so evidence from a private ticket never reaches a reviewer who cannot open that ticket.
+Attaching is a change to the ticket: it takes the rights a change takes (`_may_edit_ticket`), not just read.
 """
 
 import hashlib
@@ -21,11 +23,13 @@ from pydantic import Field
 from . import hubdb
 from . import pipeline_requirements as R
 from . import pipeline_rights
+from . import task_privacy as privacy
 from .models import Contract
 from .store import Problem
 
 # hubdb is untyped: its functions are Any here (as in stranded_resume.py), not partially unknown.
 H: Any = hubdb
+PRIVACY: Any = privacy
 
 if TYPE_CHECKING:
     import sqlite3
@@ -82,19 +86,52 @@ def _digest_text(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _source(conn: "sqlite3.Connection", body: dict[str, Any]) -> dict[str, Any]:
-    """What the body names, as the row's columns, after checking the source exists, is ready, and is current. Refuses
-    a file whose version is no longer the newest, since that evidence is out of date."""
+def _may_edit_ticket(conn: "sqlite3.Connection", actor: str, task: dict[str, Any]) -> bool:
+    """Who may change a ticket, as a change to it is made (hubdb.task_update): its owner, requester or their managers and
+    delegates, a bot that works the ticket's type, or a person who may move any ticket. A bot that only reads the type
+    attaches nothing: attached evidence can void an approval."""
+    return bool(H._task_party(conn, actor, task) or H.type_bot_works(conn, actor, task) or H.can_move(conn, actor))
+
+
+def _reader(conn: "sqlite3.Connection", auth: "Auth", who: Any, actor: str) -> Any:
+    """The identity a reader of this actor's name reads a source as, or None when no identity can be made for it (a person
+    no longer on the roster). The caller's own identity is `who`."""
+    if actor == str(who.actor):
+        return who
+    guard: Any = auth
+    try:
+        return guard.identity_for_actor(conn, actor)
+    except Problem:
+        return None
+
+
+def _file_readable(conn: "sqlite3.Connection", auth: "Auth", reader: Any, row: dict[str, Any]) -> bool:
+    """Whether `reader` may read this company file, its page audience and its task's privacy included (files.file_visible)."""
+    if reader is None:
+        return False
+    from . import files as files_module
+
+    untyped: Any = files_module  # files.py is untyped: its functions are Any here, as hubdb's are
+    return bool(untyped.file_visible(conn, auth, reader, row, {}))
+
+
+def _source(conn: "sqlite3.Connection", auth: "Auth", who: Any, reviewer: str, body: dict[str, Any]) -> dict[str, Any]:
+    """What the body names, as the row's columns, after checking the source exists, is ready, is current, and can be read
+    by the caller and by the reviewer. A source the caller cannot read is not found to them (as everywhere else); one the
+    reviewer cannot read is refused. A file whose version is no longer the newest is out of date."""
     source = body["source"]
+    actor = str(who.actor)
     if source == "file":
         if not body.get("file_id"):
             raise Problem("validation", "A file attachment names a file", 422)
-        found = conn.execute(
-            "SELECT id, current_version, state, archived, mime, title, bot_id FROM bot_files WHERE id=?",
-            (body["file_id"],),
-        ).fetchone()
+        found = conn.execute("SELECT * FROM bot_files WHERE id=?", (body["file_id"],)).fetchone()
         if found is None or found["archived"] or found["state"] != "ready":
             raise Problem("not_found", "No such file", 404)
+        row = dict(found)
+        if not _file_readable(conn, auth, who, row):
+            raise Problem("not_found", "No such file", 404)
+        if reviewer != actor and not _file_readable(conn, auth, _reader(conn, auth, who, reviewer), row):
+            raise Problem("forbidden", "The reviewer cannot read this file, so cannot see the evidence", 403)
         newest = int(found["current_version"])
         version = int(body.get("file_version") or newest)
         if version < newest:
@@ -122,8 +159,10 @@ def _source(conn: "sqlite3.Connection", body: dict[str, Any]) -> dict[str, Any]:
         found = conn.execute(
             "SELECT id, digest, content_type, name FROM blobs WHERE id=?", (body["blob_id"],)
         ).fetchone()
-        if found is None:
+        if found is None or not PRIVACY.blob_readable(conn, actor, found["id"]):
             raise Problem("not_found", "No such file", 404)
+        if reviewer != actor and not PRIVACY.blob_readable(conn, reviewer, found["id"]):
+            raise Problem("forbidden", "The reviewer cannot read this file, so cannot see the evidence", 403)
         return {
             "blob_id": found["id"],
             "file_id": None,
@@ -162,6 +201,12 @@ def attach(
     guard.task(conn, who, task_id)  # 404 unless the caller can read the ticket
     H._writer(conn, actor, task_id=task_id)
     task: dict[str, Any] = H.task(conn, task_id) or {}
+    if not _may_edit_ticket(conn, actor, task):
+        raise Problem(
+            "forbidden",
+            "Only the ticket's owner, requester, their managers, a bot that works its type or a task mover can attach evidence",
+            403,
+        )
     req = R.requirement(conn, requirement_id)
     if req is None or req["retired_at"]:
         raise Problem("not_found", "No such requirement", 404)
@@ -173,7 +218,7 @@ def attach(
     if not _may_read(conn, reviewer, task):
         raise Problem("forbidden", "The reviewer cannot read this ticket, so cannot see the attachment", 403)
     needs = req["needs"]
-    what = _source(conn, body)
+    what = _source(conn, auth, who, reviewer, body)
     formats: list[str] = needs.get("formats") or []
     if formats and what["format"] not in formats:
         raise Problem("validation", f"This requirement takes {', '.join(formats)}, not {what['format']}", 422)
