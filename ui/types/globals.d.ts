@@ -74,7 +74,7 @@ declare var ticoAppName: any;
 declare var ticoAppUpdate: any;
 declare var ticoAssistantName: any;
 declare var ticoBootSnap: any;
-declare var ticoBootTiming: any;
+declare var ticoBootTiming: BootTimingReport | undefined;
 declare var ticoIsCloud: any;
 declare var ticoPageHidden: any;
 declare var ticoSearch: any;

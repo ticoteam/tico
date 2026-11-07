@@ -9,7 +9,6 @@
     "ui/app/automations.js": 7,
     "ui/app/avatars.js": 11,
     "ui/app/boot-snap.js": 19,
-    "ui/app/boot-timing.js": 3,
     "ui/app/boot.js": 3,
     "ui/app/bot-branches.js": 10,
     "ui/app/bot-budget.js": 1,

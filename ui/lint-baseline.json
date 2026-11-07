@@ -11,7 +11,6 @@
     "ui/app/automations.js": 15,
     "ui/app/avatars.js": 1,
     "ui/app/boot-snap.js": 4,
-    "ui/app/boot-timing.js": 1,
     "ui/app/bot-conversation.js": 1,
     "ui/app/bot-learnings.js": 2,
     "ui/app/bot-page.js": 4,
