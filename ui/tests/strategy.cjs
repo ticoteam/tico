@@ -54,8 +54,14 @@ const B = 1e9;
 const seg = (id, name, parent, usd, over = {}) => ({id: 'segment/' + id, name, parent: parent ? 'segment/' + parent : null, depth: parent ? 2 : 1,
   summary: '', size: null, rolled_usd: usd ? {spend_usd: usd, low_usd: usd * 0.7, high_usd: usd * 1.3} : null, estimates: [], players: [],
   self: false, next: false, ...over});
-const market = () => ({definition: {root: 'segment/cleaning'}, segments: [seg('homes', 'Home cleaning', null, 4 * B, {self: true}),
-  seg('offices', 'Office cleaning', null, 3 * B), seg('medical', 'Medical offices', 'offices', 1 * B), seg('moveout', 'Move-out cleans', null, 0)],
+// A size with its one source: an estimate that carries spend and cites a link (the spend API's shape, market_spend.py).
+const est = (usd, url) => ({id: 'e-' + url, method: 'top_down', status: 'accepted', spend_usd: usd, low_usd: usd * 0.8, high_usd: usd * 1.2,
+  evidence: [{id: 'ev-' + url, source_url: url, source_kind: 'report', quote: null}]});
+const market = () => ({definition: {root: 'segment/cleaning'}, segments: [
+  seg('homes', 'Home cleaning', null, 4 * B, {self: true, estimates: [est(4 * B, 'https://homes.example/cleaning-market')]}),
+  seg('offices', 'Office cleaning', null, 3 * B, {estimates: [est(3 * B, 'https://www.offices.example/market-size')]}),
+  seg('medical', 'Medical offices', 'offices', 1 * B, {estimates: [est(1 * B, 'https://medical.example/size')]}),
+  seg('moveout', 'Move-out cleans', null, 0)],
   rivals: [{id: 'company/cleanco', name: 'CleanCo', url: 'https://cleanco.example'}, {id: 'company/sparkle', name: 'Sparkle', url: ''}],
   recent: [{item_id: 'li-1', source: 'reddit', url: 'https://reddit.example/r/austin/1', author: 'kim', published_at: '2026-10-20T08:00:00Z',
     text: 'Anyone know a cleaner in Austin that does weekly?', destinations: ['sales'], at: '2026-10-20T09:00:00Z'}],
@@ -67,7 +73,7 @@ const v1 = {id: 'v-1', n: 1, status: 'published', guide: 'default',
   vision: 'Every home in Austin cleaned by Acme.', sections, bets: bets().filter(b => b.id !== 'b-weekly'), note: 'First version', revision: 7,
   updated_at: '2026-10-24T09:00:00Z', updated_by: 'human:ana', published_at: '2026-10-24T09:00:00Z', published_by: 'human:ana'};
 
-async function open(browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = [], more = []} = {}) {
+async function open(browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = [], more = [], marketOf = market} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});  // dates read "24 Oct"
   const errors = [], sent = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -83,7 +89,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     {id: 'g-cmo', title: 'Sign 5 property managers', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'red', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: null},
     ...more];
   const groups = [{id: 'ops', name: 'Operations', parent: '', bet_id: null}];
-  const mk = market();
+  const mk = marketOf();
   const strategy = () => ({...(role === 'owner' ? {draft: st.draft} : {}), current: st.current, bets: role === 'owner' ? st.bets : st.current?.bets || [],
     label: 'Bets', label_one: 'Bet', may_edit: role === 'owner',
     website: 'https://acme.example', goals_by_bet: {'b-price': [{id: 'g-top', title: 'Margin per job ≥ 30%', owner_id: 'company', status: 'green'},
@@ -364,6 +370,38 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // Where we play, check (a): a segment with a source shows its figure, marked as an estimate, and its source link out;
+    // a segment with no source shows no figure at all, its name only, and the total is not shown.
+    {
+      const {page, errors} = await open(browser);
+      const where = page.locator('#strat-where');
+      await where.locator('.strat-map').waitFor();
+      const homes = where.locator('[data-seg="segment/homes"]');
+      assert.match(await homes.locator('.strat-est').innerText(), /^~\$4B$/, 'the figure is marked as an estimate on the tile');
+      assert.equal(await homes.locator('.strat-src a').getAttribute('href'), 'https://homes.example/cleaning-market');
+      assert.equal(await homes.locator('.strat-src a').innerText(), 'homes.example', 'the source is named by its host');
+      assert.match(await homes.getAttribute('title'), /about \$4B a year, an estimate, from homes\.example/);
+      // The offices band's figure is its rolled total, so its sources are its own and its part's (medical's) links.
+      assert.equal(await where.locator('.strat-tm[data-seg="segment/offices"] .strat-src a').first().getAttribute('href'), 'https://www.offices.example/market-size');
+      assert.equal(await where.locator('.strat-cap').innerText(), 'About $7B a year', 'the total shows when every segment has a source');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      const ghost = () => { const m = market(); m.segments.push(seg('ghost', 'Unsourced segment', null, 2 * B)); return m; };
+      const {page, errors} = await open(browser, {marketOf: ghost});
+      const where = page.locator('#strat-where');
+      await where.locator('.strat-map').waitFor();
+      const bare = where.locator('[data-seg="segment/ghost"]');
+      assert.equal(await bare.count(), 1, 'the unsourced segment is still listed');
+      assert.equal(await bare.locator('.strat-est, .strat-src').count(), 0, 'no dollar figure and no source line for it');
+      assert.doesNotMatch(await where.innerText(), /\$2B/, 'its size is not on the map anywhere');
+      assert.equal(await where.locator('.strat-map [data-seg="segment/ghost"]').count(), 0, 'it is not drawn on the map');
+      assert.equal(await where.locator('.strat-cap').count(), 0, 'the total is not shown while a segment has no source');
+      assert.equal(await where.locator('[data-seg="segment/homes"] .strat-est').innerText(), '~$4B', 'sourced segments still show');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
     // Where we play: a click makes a segment Us, then Next, then neither (several Us at once); × removes one, its parts move up;
     // one is added by name. Competitors: × removes one, one is added by its site. Related news: hot first, links out.
     {
@@ -373,7 +411,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       const tile = id => where.locator(`[data-seg="segment/${id}"]`);
       assert.equal(await where.locator('.strat-hint').innerText(), 'Click to target');
       assert.equal(await tile('homes').getAttribute('aria-pressed'), 'true');
-      assert.match(await tile('homes').innerText(), /^Us\s*Home cleaning\s*\$4B/);
+      assert.match(await tile('homes').innerText(), /^Us\s*Home cleaning\s*~\$4B/);
       assert.equal(await where.locator('.strat-tm-plain [data-seg="segment/moveout"]').count(), 1, 'an unsized segment is a plain tile');
       assert.equal(await where.locator('.strat-cap').innerText(), 'About $7B a year');
       await tile('offices').click();
