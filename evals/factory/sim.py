@@ -79,6 +79,8 @@ class Run:
             Counter()
         )  # task id -> hours it has waited with its owner free and nothing on it since its last event
         self.acted = {}  # task id -> when a turn last did something on it (a turn that did nothing is no event)
+        self.resume_trace = {}  # task id -> [(when, resume_why answer)] at each change of the answer (diagnostic only)
+        self.resume_last = {}  # task id -> the last answer put in resume_trace
         self.seen_turns = Counter()  # bot slug -> turns stuck_tick has read
         self.tick_at = None  # when the last tick was observed
         self.plate_peak = 0  # the most open items on the owner's plate at any tick (the questions and tasks she owns)
@@ -495,6 +497,7 @@ class Run:
         for b in team.builders:
             self.peak_doing[b.slug] = max(self.peak_doing[b.slug], w.slots(b.slug))
         self.stuck_tick(w, team)
+        self.trace_resume(w)
         plate = w.sql(
             "SELECT count(*) n FROM tasks WHERE owner_id IN ('human:ana','ana') AND status IN ('open','doing','review')"
         )
@@ -565,6 +568,19 @@ class Run:
             if tid not in live:
                 del self.idle[tid]
         self.tick_at = now
+
+    def trace_resume(self, w):
+        """Diagnostic only: each tick, the resume's answer (resume_why) for every bot task in progress, kept whenever the
+        answer changes, so a late pickup shows what held the task through the hours before it."""
+        import re
+
+        now = w.now()
+        for r in w.sql("SELECT tasks.id FROM tasks WHERE tasks.status='doing' AND tasks.owner_id LIKE 'bot:%'"):
+            why = self.resume_why(w, r["id"])
+            key = re.sub(r"[\d.]+", "#", why)  # minutes and amounts move every tick; the answer is what changes
+            if self.resume_last.get(r["id"]) != key:
+                self.resume_last[r["id"]] = key
+                self.resume_trace.setdefault(r["id"], []).append((now, why))
 
     def resume_why(self, w, tid):
         """Diagnostic only: the first condition of the stranded resume (backend/stranded_resume.py) that holds this task

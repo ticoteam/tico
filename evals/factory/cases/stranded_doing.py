@@ -34,6 +34,19 @@ def later_event(run, task_id, when):
     return min(after) if after else None
 
 
+def trace_of(run, task_id, start, end):
+    """The resume's answers on a task from `start` to `end` (sim.trace_resume): the one in force at `start`, then each
+    change before `end`, as clock time."""
+    held, changes = None, []
+    for when, why in run.resume_trace.get(task_id, []):
+        if when <= start:
+            held = why
+        elif when <= end:
+            changes.append(f"{when:%H:%M} {why}")
+    head = [f"{start:%H:%M} {held}"] if held else []
+    return " | ".join(line[:150] for line in (head + changes)[:6])
+
+
 def stranded_resumed(run):
     """Every ticket a builder's turn left in progress gets an event within the late hours of that turn."""
     stranded, late = 0, []
@@ -42,9 +55,10 @@ def stranded_resumed(run):
             stranded += 1
             first = later_event(run, task_id, when)
             if first is None or (first - when).total_seconds() / 3600 > STUCK_HOURS:
+                end = first or run.w.now()
                 late.append(
                     f"{run.w.title(task_id)} ({bot.slug}, {(first - when).total_seconds() / 3600 if first else 'never'} h)"
-                    f" [now: {run.resume_why(run.w, task_id)}]"
+                    f" [trace: {trace_of(run, task_id, when, end)}]"
                 )
     return (
         not late,
