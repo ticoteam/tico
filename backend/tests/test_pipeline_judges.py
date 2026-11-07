@@ -568,3 +568,39 @@ def test_the_judge_state_carries_the_pipeline_goal(tmp_path):
         {"name": "Shows the page live", "rubric": "The link opens", "goal": "Launch the lights"}, ATTACHMENT
     )
     assert "Launch the lights" in json.dumps(state)
+
+
+def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
+    """Fix L2-3: the judge's read is a range read of READ_MAX + 1 bytes, never the whole upload, and the cut is flagged."""
+    from backend import file_library as files
+
+    asked = []
+
+    class RangeStore:
+        """A blob store that honours the range it is asked for, and records it."""
+
+        def open_range(self, digest, start=0, end=None):
+            asked.append((start, end))
+            body = b"w" * (files.READ_MAX * 2)
+            yield body[start : None if end is None else end + 1]
+
+    text, cut = P._text_of(
+        SimpleNamespace(blobs=RangeStore()),
+        {"mime": "text/plain", "blob_digest": "a" * 64, "blob_size": files.READ_MAX * 2},
+    )
+    assert asked == [(0, files.READ_MAX)]
+    assert len(text) == files.READ_MAX and cut is True
+
+
+def test_a_text_blob_within_the_cap_is_not_cut():
+    from backend import file_library as files
+
+    class SmallStore:
+        def open_range(self, digest, start=0, end=None):
+            yield b"Shipped the page."
+
+    text, cut = P._text_of(
+        SimpleNamespace(blobs=SmallStore()), {"mime": "text/plain", "blob_digest": "a" * 64, "blob_size": 17}
+    )
+    assert (text, cut) == ("Shipped the page.", False)
+    assert files.READ_MAX > 17

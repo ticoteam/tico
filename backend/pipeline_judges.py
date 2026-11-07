@@ -343,7 +343,7 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                   r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by, r.reviewer_id,
                   (SELECT goal FROM task_types WHERE id = r.pipeline_id) AS goal,
                   (SELECT pipeline_owner_id FROM task_types WHERE id = r.pipeline_id) AS pipeline_owner_id,
-                  COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest
+                  COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest, b.size AS blob_size
            FROM requirement_attachments a
            JOIN stage_requirements r ON r.id = a.stage_requirement_id AND r.retired_at IS NULL
            JOIN tasks t ON t.id = a.task_id
@@ -364,6 +364,22 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def read_prefix(blobs: Any, digest: str) -> bytes:
+    """The first READ_MAX + 1 bytes of a blob, by a range read: a large upload is never loaded whole. The extra byte says
+    the bytes go on (text_of_bytes sets truncated from it)."""
+    return b"".join(blobs.open_range(digest, 0, files.READ_MAX))
+
+
+def text_of_bytes(mime: str, data: bytes, size: int) -> tuple[str | None, bool]:
+    """The text the judge is sent for evidence of this type, from its bytes: the words of the first READ_MAX bytes, and
+    whether the bytes were cut (the extra byte in `data`, or a stored `size` past the cap). (None, False) for a type Tico
+    reads no text from. The server's read and the eval adapter both use this, so they see the same text."""
+    if not _reads_text(mime):
+        return None, False
+    cut = size > files.READ_MAX or len(data) > files.READ_MAX
+    return files.extract(mime, data[: files.READ_MAX], full=True), cut
+
+
 def _text_of(c: sqlite3.Connection, job: dict[str, Any]) -> tuple[str | None, bool]:
     """The text Tico holds for a waiting attachment, read up to file_library.READ_MAX bytes: a Tico page, a company file or
     an uploaded blob of a text type. (None, False) when Tico holds none (an image, a video, a PDF or a link), or the bytes
@@ -374,11 +390,11 @@ def _text_of(c: sqlite3.Connection, job: dict[str, Any]) -> tuple[str | None, bo
     if blobs is None or not digest or not _reads_text(mime):
         return None, False
     try:
-        data = blobs.get(digest)
+        data = read_prefix(blobs, digest)
     except Exception as exc:  # noqa: BLE001 - an unreadable file is judged as unreadable; one bad blob never stops the pass
         LOG.warning("An attachment's bytes could not be read for the judge: %s", type(exc).__name__)
         return None, False
-    return files.extract(mime, data, full=True), len(data) > files.READ_MAX
+    return text_of_bytes(mime, data, int(job.get("blob_size") or 0))
 
 
 def _open_visit(c: sqlite3.Connection, task_id: str) -> str | None:
