@@ -22,8 +22,10 @@ STACK_FRAMES = 12
 
 STORES = weakref.WeakSet()  # every Store made in this process
 OPENED = weakref.WeakSet()  # pooled connections opened while the current test runs
-# What the check costs, for the terminal summary: the work around each test and around each connection opened.
-COST = {"tests": 0, "seconds": 0.0, "joined": 0.0}
+# What the check costs in this process: the work around each test and around each connection opened, and the joins.
+COST = {"seconds": 0.0, "joined": 0.0}
+# Every test's share, summed in the process that reports (the xdist controller, or the only process): for the summary.
+SUMMED = {"tests": 0, "seconds": 0.0, "joined": 0.0}
 
 _store_init = _store.Store.__init__
 _store_connect = _store.Store.connect
@@ -72,12 +74,22 @@ def _join(threads, budget):
         thread.join(remaining)
 
 
+def add_report(report):
+    """Adds one teardown report's share of the check (its user properties, set below) to SUMMED."""
+    properties = dict(report.user_properties)
+    if "pooled-connection-seconds" not in properties:
+        return
+    SUMMED["tests"] += 1
+    SUMMED["seconds"] += properties["pooled-connection-seconds"]
+    SUMMED["joined"] += properties.get("pooled-connection-joined", 0.0)
+
+
 @pytest.fixture(autouse=True)
 def pooled_connections_closed(request):
+    seconds, joined = COST["seconds"], COST["joined"]
     started = time.perf_counter()
     before = set(threading.enumerate())
     OPENED.clear()
-    COST["tests"] += 1
     COST["seconds"] += time.perf_counter() - started
     yield
     started = time.perf_counter()
@@ -107,5 +119,8 @@ def pooled_connections_closed(request):
             except sqlite3.Error:
                 pass
     COST["seconds"] += time.perf_counter() - started
+    # The teardown report carries this test's share to the process that prints the summary (conftest.py).
+    request.node.user_properties.append(("pooled-connection-seconds", round(COST["seconds"] - seconds, 4)))
+    request.node.user_properties.append(("pooled-connection-joined", round(COST["joined"] - joined, 4)))
     if report is not None:
         pytest.fail(report, pytrace=False)

@@ -175,8 +175,14 @@ def store_pools_close():
     connection_guard.close_stores()
 
 
+def pytest_runtest_logreport(report):
+    """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
+    if report.when == "teardown":
+        connection_guard.add_report(report)
+
+
 def pytest_terminal_summary(terminalreporter):
-    cost = connection_guard.COST
+    cost = connection_guard.SUMMED
     terminalreporter.write_line(
         f"pooled connection check: {cost['tests']} tests, {cost['seconds']:.1f} s of its own work "
         f"({cost['joined']:.1f} s joining threads)"
