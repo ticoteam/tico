@@ -455,13 +455,12 @@ function segChipsHtml(active: string, segs: SegCompareRow[]): string {
   </nav>`;
 }
 function segCompareHtml(segs: SegCompare[]): string {
-  if (!segs.length) return '<p class="market-none">No segments yet.</p>';
   const rows = segs.map(s => `<tr><td><a class="seg-name" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s.color)}${esc(s.name)}</a></td>
-      <td class="mkt-num">${s.money != null ? mktMoney(s.money) : ''}</td><td class="mkt-num">${s.yearly_spend != null ? mktMoney(s.yearly_spend) : ''}</td>
-      <td class="mkt-num seg-opt">${s.growth != null ? rdqGrowth(s.growth) : ''}</td><td class="mkt-num seg-opt">${s.our_share != null ? rdqPct(s.our_share) : ''}</td>
-      <td class="seg-opt">${segFacesHtml(s.faces, s.teammates)}</td></tr>`).join('');
-  return `<section class="mkt-q" aria-labelledby="seg-cmp-h"><div class="mkt-qh"><h3 id="seg-cmp-h">Segments</h3></div>
-    <div class="mkt-card mkt-tbl"><table class="mkt-pl seg-cmp"><thead><tr><th>Segment</th><th>Money</th><th>Yearly spend</th><th class="seg-opt">Growth</th><th class="seg-opt">Our share</th><th class="seg-opt">Faces</th></tr></thead>
+      <td class="mkt-num" data-col="money">${s.money != null ? mktMoney(s.money) : ''}</td><td class="mkt-num" data-col="yearly">${s.yearly_spend != null ? mktMoney(s.yearly_spend) : ''}</td>
+      <td class="mkt-num seg-opt" data-col="growth">${s.growth != null ? rdqGrowth(s.growth) : ''}</td><td class="mkt-num seg-opt" data-col="share">${s.our_share != null ? rdqPct(s.our_share) : ''}</td>
+      <td class="seg-opt" data-col="team">${segFacesHtml(s.faces, s.teammates)}</td></tr>`).join('');
+  return `<section class="mkt-q seg-cmp-sec" aria-label="Segments">
+    <div class="mkt-card mkt-tbl"><table class="mkt-pl seg-cmp"><thead><tr><th data-col="segment">Segment</th><th data-col="money">Money</th><th data-col="yearly">Yearly spend</th><th class="seg-opt" data-col="growth">Growth</th><th class="seg-opt" data-col="share">Our share</th><th class="seg-opt" data-col="team">Team</th></tr></thead>
       <tbody>${rows}</tbody></table></div></section>`;
 }
 // What changed across all the segments: each item tagged with its segment (All for the whole market).
@@ -470,10 +469,10 @@ function segChangedHtml(changed: SegChanged[], segs: SegCompareRow[]): string {
   const by = new Map(segs.map(s => [s.id, s]));
   const items = changed.map(c => {
     const s = by.get(c.segment_id);
-    const tag = s ? `<a class="seg-tag" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s.color)}${esc(s.name)}</a>` : '<span class="seg-tag">All</span>';
+    const tag = s ? `<a class="seg-tag" data-seg-tag="${esc(s.id)}" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s.color)}${esc(s.name)}</a>` : '<span class="seg-tag" data-seg-tag="all">All</span>';
     return `<li>${tag}<span class="mkt-it">${esc(c.text)}</span></li>`;
   }).join('');
-  return rdqSection('changed', 'What changed across all', '', '', `<ul class="mkt-card mkt-items">${items}</ul>`);
+  return rdqSection('changed', 'What changed across all', '', '', `<ul class="mkt-card mkt-items seg-changed">${items}</ul>`);
 }
 
 // Whether the company has no market yet, by the Market page's own test (no active entity, and no page the seed did not

@@ -14,7 +14,8 @@
 .seg-dot[data-seg-color="pink"]{background:var(--mkt-c5)}
 .seg-dot[data-seg-color="gray"]{background:var(--idle)}
 
-/* The list: one row a segment, its dot, name and who, its faces, and the row's actions on hover (always, on touch). */
+/* The list: one row a segment, its dot, name and who, its faces at the row's right edge, and its actions on hover (always,
+   on touch). The actions keep their slot when hidden, so the faces do not move when they show. */
 .strat-segs .strat-card-head{flex-wrap:wrap;row-gap:6px}
 .seg-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr);gap:2px}
 .seg-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 6px;border-radius:8px;position:relative}
@@ -22,12 +23,12 @@
 .seg-main{flex:1;min-width:0;display:flex;flex-direction:column;color:var(--ink);text-decoration:none}
 .seg-main b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .seg-who{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.seg-faces{display:inline-flex;align-items:center;flex:none}
+.seg-faces{display:inline-flex;align-items:center;flex:none;margin-left:auto}
 .seg-face{display:inline-flex;margin-left:-6px}
 .seg-face:first-child{margin-left:0}
 .seg-face>*{box-shadow:0 0 0 2px var(--surface)}
 .seg-more{margin-left:6px;color:var(--muted);font-size:12px}
-.seg-acts{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
+.seg-acts{display:flex;align-items:center;gap:2px;flex:none;opacity:0;transition:opacity .12s}
 .seg-row:hover .seg-acts,.seg-row:focus-within .seg-acts,.seg-editing .seg-acts{opacity:1}
 @media (hover:none){.seg-acts{opacity:1}}
 .seg-act{width:30px;height:30px;display:inline-grid;place-items:center;border:0;background:none;color:var(--muted);border-radius:6px;cursor:pointer;font:inherit;font-size:16px;line-height:1}
@@ -59,6 +60,7 @@
 .seg-field:first-of-type{border-top:0;padding-top:0}
 .seg-field-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
 .seg-field-h h3{margin:0}
+span.seg-field-acts{display:flex;gap:6px;margin-left:auto}
 .seg-from{font-size:12px;color:var(--muted)}
 .seg-from.own{color:var(--ink)}
 .seg-company{color:var(--muted)}
@@ -77,12 +79,14 @@
 .seg-chip.cur{background:var(--surface2);border-color:var(--ink);font-weight:600}
 .seg-cmp td,.seg-cmp th{white-space:nowrap}
 .seg-name{display:inline-flex;align-items:center;gap:8px;color:var(--ink);text-decoration:none;font-weight:600}
-.seg-tag{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap;margin-right:8px}
-.seg-money{margin-bottom:8px}
+.seg-tag{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-width:0;overflow-wrap:anywhere}
+/* What changed across the segments: the tag in a 9rem column, the text beside it. */
+.mkt-items.seg-changed li{display:grid;grid-template-columns:9rem minmax(0,1fr);align-items:baseline;gap:4px 10px}
 
 @media (max-width:760px){
   .seg-opt{display:none}
   .seg-acts{opacity:1}
+  .mkt-items.seg-changed li{grid-template-columns:minmax(0,1fr)}
   .seg-page{padding:14px 16px 40px}
   .seg-title h2{font-size:20px}
 }
