@@ -235,42 +235,6 @@
    "default": false
   },
   {
-   "slug": "brand",
-   "template": "brand",
-   "name": "Brand Manager",
-   "department": "marketing",
-   "lead": false,
-   "core": false,
-   "summary": "Keeps the brand rules written down, reviews copy and assets against them, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself.",
-   "when": "A team whose website, emails, decks and posts no longer sound or look like one team, or that is naming a new product.",
-   "tags": [
-    "brand",
-    "voice",
-    "naming",
-    "design",
-    "consistency",
-    "b2c",
-    "retail"
-   ],
-   "pains": [
-    "every team describes our team differently",
-    "our logo and colours are used wrong",
-    "new copy never sounds like us",
-    "we have no brand guidelines anyone follows"
-   ],
-   "recommend_when": [
-    "publishes_content",
-    "sells_to_consumers",
-    "sells_to_businesses"
-   ],
-   "first_routine": "Monthly brand consistency audit · The 1st of each month at 10:00 team time",
-   "tools": [
-    "docs",
-    "web"
-   ],
-   "default": false
-  },
-  {
    "slug": "builder",
    "template": "builder",
    "name": "Builder",

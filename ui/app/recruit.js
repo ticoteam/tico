@@ -291,7 +291,7 @@ function recruitCount(id, n) {
 }
 const recruitSeatCount = id => RECRUIT.counts[id];
 function recruitAvatar(c, size = 34) {
-  const color = RECRUIT_DEPT[c.department_id] || `hsl(${avHue(c.template)} 38% 45%)`;
+  const color = RECRUIT_DEPT[c.department_id] || `hsl(${avHue(c.template)} 38% 33%)`;
   const icon = TEMPLATE_ICON.test(c.icon || '') ? c.icon : '';
   return `<span class="rc-av" style="--rc-c:${color};--rc-s:${size}px" aria-hidden="true">${icon
     ? `<span class="av-glyph" style="font-size:${Math.round(size * 0.58)}px">${esc(icon)}</span>` : esc(avInitials(c.name))}</span>`;

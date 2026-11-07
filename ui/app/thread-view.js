@@ -430,12 +430,14 @@ function thvMsgActsHTML(view, m) {
 function thvMsgHTML(view, m, cont = false) {
   const relay = rowSource(m).kind === 'assistant_for';
   const bot = thvBot(m.sender_id);
+  // In a bot's own Home or DM every bot line is that bot, so the BOT tag would only repeat the page.
+  const ownBot = bot && !!view.opts?.goals && m.sender_id === `bot:${view.opts.goals}`;
   // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.js).
   const fb = !m.deleted && m.id && bot ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', cont && 'th-cont', view.focus === m.id && 'th-focus', view.flash === m.id && 'th-flash', m.refs?.follow_up && 'th-followup',
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
-  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${bot || relay ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
+  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${(bot && !ownBot) || relay ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
@@ -918,26 +920,12 @@ function thvComposerButtons(view) {
   const says = C.stopping ? 'Stopping…' : 'Stop';
   stop.title = says; stop.setAttribute('aria-label', says);
 }
-// ----------------------------------------------------------------- Follow and who it reaches
-// A DM always reaches its members, so its composer offers neither. Elsewhere Follow shows until the viewer follows
-// (`me.follows`: a member who only joined a chat does not), kept per kind: a task's thread or a chat.
+// ----------------------------------------------------------------- who it reaches
 const thvDm = view => !!view.opts.dm || threadIsDm(view.thread);
 function thvFootSync(view) {
-  const C = view.composer, foot = C?.el.querySelector('.p-foot'), me = view.thread?.me;
+  const C = view.composer, foot = C?.el.querySelector('.p-foot');
   if (!foot) return;
-  const offer = !!view.id && !thvDm(view) && !!me && !(me.follows ?? me.following) && me.can_post !== false;
-  composeFollowPaint(foot, view.thread?.audience === 'task' ? 'task' : 'chat', offer);
   C.reach?.update();
-}
-// Follow ticked: once the message is in, follow the thread (posting alone never does).
-async function thvFollowAfterSend(view) {
-  try {
-    const r = await put(thvPath(view.id) + '/follow', {notify: 'live'});
-    if (view.gone || !view.thread) return;
-    view.thread = {...view.thread, me: {...view.thread.me, following: true, follows: true, notify: r?.notify || 'live'}};
-    threadsPut(view.thread);
-    thvFootSync(view);
-  } catch (e) { toast(`Not followed: ${e.message}`, true); }
 }
 // ----------------------------------------------------------------- the ways to send (a bot's Home or DM)
 // Steer now, Queue, Defer with its durations, then Set as goal (deliveryMenuHTML, pill.js). Steer, Queue and Defer are
@@ -1179,17 +1167,16 @@ async function thvComposerSend(view) {
   // In a bot's Home or DM every message names the kept way (thread posts take delivery, backend/thread_api.py); in
   // goal mode with a file attached it goes as a message, that way too.
   const way = C.ways ? deliveryBody(thvSendMode(view)) : null;
-  const follow = composeFollowWanted(C.el.querySelector('.p-foot'));
   const files = C.files.splice(0), lib = C.lib.splice(0);
   const replyTo = view.messages.find(x => x.id === view.replyTo) || null;
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));
   thvReplyStart(view, null);
-  await thvSend(view, {text, files, lib, way, replyTo, follow});
+  await thvSend(view, {text, files, lib, way, replyTo});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway. A reply goes to this thread too, naming what it answers.
-async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = null, follow = false}) {
+async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = null}) {
   const p = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: true});
@@ -1218,7 +1205,6 @@ async function thvSend(view, {text, files = [], lib = [], way = null, replyTo = 
       if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: {...(replyTo && !m.in_reply_to ? {in_reply_to: replyTo.id} : {}), ...m}});
       else void thvRefresh(view);
       for (const w of r?.warnings || []) if (w.rule === 'mention_outside') toast(`${actorName(w.actor)} is not in this thread`, true);
-      if (follow && view.id) void thvFollowAfterSend(view);
       // Without the live stream, the bots' status is read once now; with it, `bot_status` events keep it.
       if (Array.isArray(view.botStatus) && !liveConnected()) void thvStatusRead(view);
     }

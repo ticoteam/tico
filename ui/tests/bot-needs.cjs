@@ -1,7 +1,7 @@
-// A bot's task rail is one Tasks section with four tabs, each with its count: Needs You (what this bot needs from the
+// A bot's task rail is one Tasks section with four tabs, each with its count: Needs you (what this bot needs from the
 // person: a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (Open/Doing tasks it holds, newest first), Blocked (each saying
-// what it waits on) and Done Recently (the last 14 days), and Assigned to Others, a filter tab the server counts for
+// what it waits on) and Done recently (the last 14 days), and Assigned to others, a filter tab the server counts for
 // the person looking. The org tree's number is the Needs you rows, and stays so when the list moves. The Tasks header's
 // pencil edits the sidebar and there is no board icon; a bot with one tab shows its list without a tab bar. Fixtures
 // only, no network.
@@ -38,9 +38,9 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
   {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester_id: 'bot:lead', title: 'Approve the announcement', created_at: ago(10)},
   {...task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', status: 'open'}), kind: 'task'}];
 
-// Head of Engineering keeps Done Recently beside the new defaults (a layout saved before them).
-const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
-  {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
+// Head of Engineering keeps Done recently beside the new defaults (a layout saved before them).
+const LAYOUT = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
+  {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
     {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]}];
 
 (async () => {
@@ -79,7 +79,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester_id === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
-      // The built-in tabs and Assigned to Others, which Ana may change on Head of Engineering only.
+      // The built-in tabs and Assigned to others, which Ana may change on Head of Engineering only.
       const tabs = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
       if (tabs) {
         if (route.request().method() === 'PUT') LAYOUT.splice(0, LAYOUT.length, ...route.request().postDataJSON().tabs);
@@ -91,20 +91,20 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
           filterURLs.push(url.href);
           if (releaseFilterRead) await releaseFilterRead;
           const requested = (q.get('match_ids') || '').split(',');
-          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs You', count: filterExtras.length,
+          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs you', count: filterExtras.length,
             ids: [], next: null, matched_ids: filterExtras.filter(it => requested.includes(it.id)).map(it => it.id)}], tasks: []});
         }
         const others = Object.values(T).filter(t => t.requester_id === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner_id)
           && ['open', 'doing', 'waiting'].includes(t.status));
         const owned = Object.values(T).filter(t => t.owner_id === 'bot:lead');
         const groups = [
-          {key: 'needs', name: 'Needs You', rows: (LAYOUT[0].conditions?.[0]?.field === 'status'
+          {key: 'needs', name: 'Needs you', rows: (LAYOUT[0].conditions?.[0]?.field === 'status'
             ? Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead') && LAYOUT[0].conditions[0].value.includes(t.status))
             : Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead')
               && ((t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
           {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created_at.localeCompare(a.created_at))},
           {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created_at.localeCompare(a.created_at))},
-          {key: 'c4', name: 'Assigned to Others', rows: others},
+          {key: 'c4', name: 'Assigned to others', rows: others},
         ];
         return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null})), tasks: Object.values(T)});
       }
@@ -126,10 +126,10 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1'
       && document.querySelector('#cnt-needs')?.textContent.trim() === '5');
     const tabs = (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
-    assert.deepEqual(tabs, ['Needs You 5', 'Doing 2', 'Blocked 2', 'Done Recently 1', 'Assigned to Others 1'], JSON.stringify(tabs));
-    assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs You leads while it has rows');
+    assert.deepEqual(tabs, ['Needs you 5', 'Doing 2', 'Blocked 2', 'Done recently 1', 'Assigned to others 1'], JSON.stringify(tabs));
+    assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs you leads while it has rows');
 
-    // Needs You keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
+    // Needs you keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
     const rows = await rail.locator('#t-needs .trow .ttl').allInnerTexts();
     assert.deepEqual(rows.map(r => r.trim()).sort(), ['Is Friday fine for the summary?', 'Approve the announcement',
       'Support access fixes', 'Turn on the screen default', 'Pick the release day'].sort(), JSON.stringify(rows));
@@ -149,7 +149,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#need-card')?.open);
 
-    // Editing Needs You changes its task filter, while the org number stays a fixed attention count.
+    // Editing Needs you changes its task filter, while the org number stays a fixed attention count.
     await rail.locator('#bot-sidebar-edit').click();
     await tab('needs').click();
     const dialog = page.locator('#bot-filter-dialog');
@@ -196,17 +196,17 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.deepEqual((await rail.locator('#t-blocked .trow-waits').allInnerTexts()).map(s => s.trim()),
       ["Waiting for the vendor's invoice.", 'Waits on QA Engineer']);
 
-    // Done Recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
+    // Done recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
     // tab opens, 50 rows at a time (paging, at the end).
     assert.equal(await rail.locator('#t-done .trow').count(), 0, 'Done is drawn when its tab opens');
     await tab('done').click();
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
-    // Assigned to Others keeps what it asked of another bot; its task for Ana is in Needs You, not here.
+    // Assigned to others keeps what it asked of another bot; its task for Ana is in Needs you, not here.
     await tab('c4').click();
     assert.deepEqual(await titles('#t-c4'), ['Run the release check']);
 
-    // A redraw keeps the picked tab while Needs You has rows, and leaves the rail scrolled where it was.
+    // A redraw keeps the picked tab while Needs you has rows, and leaves the rail scrolled where it was.
     await tab('done').click();
     const scrolled = await page.evaluate(() => {
       const r = document.querySelector('#pane-tasks');
@@ -238,7 +238,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     });
     assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '5');
     await page.evaluate(() => botTaskFilterRead('lead'));
-    // The question answered elsewhere leaves Needs You: the tab's count and the tree's number move together.
+    // The question answered elsewhere leaves Needs you: the tab's count and the tree's number move together.
     needs = needs.filter(it => !['t-asked', 'm-loose', 'approval-1'].includes(it.id));
     await page.evaluate(async () => { await v2Refresh(); renderTree(); });
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '2');
@@ -282,7 +282,7 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.ok(!(await page.evaluate(() => { needCountObserver.disconnect(); return needCountsSeen; })).includes('242'), 'no transient double count');
     filterExtras = null;
 
-    // Done Recently pages 50 rows at a time.
+    // Done recently pages 50 rows at a time.
     await tab('done').click();
     await page.evaluate(() => { const d = BOT_DONE.get('lead'), row = d.rows[0]; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
     assert.equal(await rail.locator('#t-done .trow').count(), 50);

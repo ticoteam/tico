@@ -38,6 +38,7 @@ def run(store, onboarding, telemetry):
             onboarding.ensure_goal_manager(c)
             onboarding.ensure_task_manager(c)
             onboarding.ensure_counsel(c)
+            onboarding.ensure_brand_owner(c)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("librarian", exc)
     # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.

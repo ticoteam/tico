@@ -554,7 +554,7 @@ def step_stall_checks(ctx):
 
 
 def step_approval_expiry(ctx):
-    # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
+    # Every hour: approvals, asks and held messages nobody will act on leave Needs you (backend/approval_expiry.py).
     from . import approval_expiry
 
     with ctx.store.transaction() as c:
@@ -564,6 +564,7 @@ def step_approval_expiry(ctx):
         "approvals expired": ended.get("stale") or [],
         "approvals closed with their task": ended.get("ended") or [],
         "asked cards expired": ended.get("cards") or [],
+        "held messages kept unsent": ended.get("held") or [],
     }
     return SR.words_of(acted, none="Nothing expired"), not any(acted.values())
 

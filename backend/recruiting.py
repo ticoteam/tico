@@ -394,7 +394,7 @@ def _fit(card, t):
         # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
         # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
         # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
-        # "Brand Designer" may be Marketing's Brand Manager).
+        # "Brand Designer" may be Marketing's Brand Owner).
         return 0
     if t["heads"] and card.get("lead"):
         # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,

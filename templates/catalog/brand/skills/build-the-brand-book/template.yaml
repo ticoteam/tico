@@ -1,0 +1,120 @@
+artifact: Brand book
+headline_bar: "[Company] is the [category] for [best-fit buyer] that [promise], against [the perception we beat]. We sound [trait], [trait] and [trait], never [the line we won't cross]."
+# Every section maps to a part of Tico's Brand card (Strategy › Brand) via `card:` so the finished book becomes a
+# brand draft the owner publishes. Decision rows record `by`: founder | accepted | default (see skill.md); rules and
+# facts don't. Every factual clause carries a source in brackets. `audit.py check` runs the mechanical bars.
+sections:
+  - id: foundation
+    title: Why we exist
+    block: fields
+    card: story
+    holds: Purpose (who is better off, and how), vision (what is different in ten years), mission (what we do every day).
+    bar: Each is one sentence a customer could repeat, none contradicts a product or channel the company has, and none could be pasted into a rival's About page.
+  - id: values
+    title: What we value
+    block: table
+    card: story.values
+    holds: Up to five values (zero is allowed). Columns - value (founder's words), what we do, what we never do, the story that shows it (what was given up, roughly when, told by the founder), by.
+    bar: Every value comes from a story the founder told unprompted; none is a price or a tactic. Anything else is tagged aspiration and listed as open.
+  - id: audience
+    title: Who it's for
+    block: table
+    card: audience
+    holds: One row per buyer type (primary first, resellers as their own row) - the best customer as one person, the jobs they hire us for, where they meet the brand. Then the people we don't write for, and why. Then the revenue lines - each product, plan and subscription with price, buyer, top complaint.
+    bar: Every buyer type and every revenue line has a row. Each person is described by traits you can see from outside. At least one anti-audience with the reason.
+  - id: customer_words
+    title: How customers say it
+    block: table
+    card: audience.words
+    holds: Verbatim quotes. Columns - quote, who said it (our buyer, a rival's buyer, a partner), source, what it is evidence of. Negative words included.
+    bar: At least five verbatim quotes with sources (audit.py counts rows), and at least one verbatim negative quote about the category or us. Theme labels and paraphrases don't count.
+  - id: positioning
+    title: Positioning and promise
+    block: fields
+    card: positioning
+    holds: Category, alternatives, the perception to beat, what only we have, the promise, what breaks it (checked against each revenue line's data), the rival swap per buyer type (which rival, result), reasons to believe.
+    bar: The promise fails the swap with the primary buyer's strongest rival. The best-selling line's data was checked against what breaks it, any gap has an option chosen (if "narrow", the promise's words changed), and nothing in the promise is on the never list. The promise holds for every buyer type served, or names which it doesn't cover. Every property or result in it cites an allowed claim ID. Reasons to believe are our evidence about the same buyer, never category evidence.
+  - id: claims
+    title: Claims
+    block: table
+    card: claims
+    holds: Allowed claims with IDs A1, A2... (claim, proof, source, owner, review by) and never-claims (claim, reason, Catch - the phrases that would give it away), including implied claims and testimonials. Columns - Type, Claim, Proof, Source, Owner, Review by / reason, Catch.
+    bar: Every allowed claim has confirmed proof and a review date (derived or unconfirmed numbers are open, not allowed). Superlatives have a source or are in never. audit.py finds no Catch phrase anywhere else in the book.
+  - id: messages
+    title: What we always say
+    block: table
+    card: messages
+    holds: One message set per buyer type. Columns - buyer, pillar (why this kind / why us / why now), message, what it means for them, proof (an allowed claim), where it leads.
+    bar: Each buyer type has three labelled pillars, and each "why us" fails that buyer's rival swap. Each proof is an allowed claim ID that proves that exact message for that buyer. Every revenue line is in a message or marked not marketed. A missing "why now" is stated, not faked.
+  - id: personality
+    title: Personality
+    block: meters
+    card: personality
+    holds: Five sliders 1-10, each labelled with both poles ("Formal ←→ Casual") and the founder's reason.
+    bar: Every score has a reason in the founder's words. No unexplained 5. Scores agree with the voice traits.
+  - id: voice
+    title: Voice
+    block: table
+    card: voice
+    holds: Three or four traits. Columns - we are, but not, sounds like (lines from the voice-test pick and the founder's "most us" lines), not like (real current copy or rejected lines), by. Then the rhythm - sentence length and patterns.
+    bar: Every trait is in the founder's words or was picked by them from options with no recommendation. Each has a "but not" and two example lines, one from the company's own story or customers. The founder's "most us" lines are there unchanged. A rival's copywriter would not accept the whole table as theirs (or the founder kept it as their call).
+  - id: tone
+    title: Tone by moment
+    block: table
+    card: tone
+    holds: Moment, dial (up, down), example line. First hello, selling, good news, bad news or apology, an error, support, social, partner or investor, and one per extra buyer type.
+    bar: At least eight moments including bad news and an error. Every example line passes the claims, names and writing rules.
+  - id: words
+    title: Words we use and avoid
+    block: table
+    card: words
+    holds: Use (word, instead of) and avoid (word, why, warn or block). Category words settled.
+    bar: Customer words lead the use list. Every avoided word has a reason, and no word customers use to praise us is avoided. The category words the team argued about are settled. The negative customer words are acted on.
+  - id: naming
+    title: Names
+    block: table
+    card: naming
+    holds: Name, right form, rule, wrong forms seen (with where).
+    bar: Every name in current material is listed. Every wrong form was actually seen, with its source. Legal name noted if different.
+  - id: mechanics
+    title: Writing rules
+    block: table
+    card: mechanics
+    holds: Rule, example, how it's checked (person or regex). Case, numbers, dates, times, units, money, emoji, exclamation marks, punctuation, reading level, dated facts, inclusive and accessible writing (holidays, alt text, link text).
+    bar: Each rule is testable and says how. Inclusive and accessible writing is covered.
+  - id: boilerplate
+    title: Ready-to-use lines
+    block: fields
+    card: boilerplate
+    holds: Tagline, 25-word description, 100-word About, sign-off for good news and for complaints, main call to action.
+    bar: audit.py confirms the word counts. Every fact is sourced and allowed. The tagline was picked by the founder from options that differ in approach, with no recommendation, and fails the rival swap. The About leads with what only we have and covers every marketed revenue line, not as a catalogue. All pass the writing rules and unslop.
+  - id: surfaces
+    title: Where we speak
+    block: table
+    card: surfaces
+    holds: One row per surface the company uses (marketplace listings, app and errors, support, email, SMS and push, sales and partner material, social) - the constraints, the pattern, an example, what never to do.
+    bar: Every surface in use has a row. Marketplace titles keep the search terms buyers type and no never-claim. Error messages say what happened and what to do. There is a support reply for each of the top two complaints with the real fix, ending in a step the customer can take today (or needs-teammate with an owner); sympathy alone fails.
+  - id: visual
+    title: Look
+    block: table
+    card: visual
+    holds: The founder's three taste answers (lead colour and proportions, type feel, photo direction). Colours (role, hex), contrast for pairs in use and for marks that carry meaning, type (family, role, sizes), logo (files, versions, smallest size, clear space, misuse), distinctive assets and their rules, imagery and motion.
+    bar: Hex codes come from files or the founder. The three taste questions were answered by the founder, not left to a designer brief. Every pair in use and every meaningful mark has a ratio from audit.py, with pass or fail. At least three logo misuse rules. Distinctive assets named. Open items have owners.
+  - id: examples
+    title: On and off brand
+    block: table
+    card: examples
+    holds: Surface, text, verdict (on or off), why, sources, by. At least six on-brand (one per extra buyer type, one for a non-hero revenue line) and two off-brand.
+    bar: The founder marked every on-brand piece "us" in its final wording. The founder's "most us" lines and at least two customer lines appear; no story in more than two pieces. Each off-brand piece names the rule it breaks. Sources sit in their own column, never in the text.
+  - id: rule_pack
+    title: Rules for bots
+    block: list
+    card: summary
+    holds: At most 12 rules a bot loads before writing - the promise and what we never promise, traits with "but not", where the voice changes, top writing rules, sign-offs, sources stay out of copy. No word or name lists (Tico checks those).
+    bar: Twelve rules or fewer, every one testable, none contradicting the book, none a list audit.py flags.
+  - id: governance
+    title: Keeping it true
+    block: fields
+    card: governance
+    holds: Owner by name, approvers, review date, what Tico checks automatically, needs-teammate items (section, question, owner).
+    bar: An owner by name, a review date, every needs-teammate item with an owner and its exact question, and no decision row still tagged default.
