@@ -137,6 +137,7 @@ def test_a_vendor_rule_beats_a_class_rule_and_a_person_override_beats_both(books
                 "name": "Metro Ads",
                 "match": {"kind": "vendor", "id": ids["metro"]},
                 "splits": [{"team": "web", "share_bps": 10_000}],
+                "apply_from": "2026-10-01",
             },
         )
         assert r.status == "committed", r.reason

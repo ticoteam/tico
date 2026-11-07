@@ -2744,11 +2744,12 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         for row in cast(list[Row], page.get("rows") or []):
             # A charge groups by its vendor (alias -> contact, else the merchant key), never by its raw text, and reads
             # under the vendor's name (backend/finance/vendors.py).
+            if row.get("kind") != "feed":
+                continue
             vendor = cast(Row, row.get("vendor") or {})
             payee = str(vendor.get("id") or "")
             amount = int(cast(int, row.get("amount") or 0))
             if (
-                row.get("kind") != "feed"
                 or row.get("pending")
                 or row.get("status") == "ignored"
                 or amount >= 0
