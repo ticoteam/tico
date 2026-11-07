@@ -1385,12 +1385,12 @@ def reply_chain_rows(c, messages):
 
 def reply_pages_readable(c, actor, message, lookup=None):
     """A reply inherits the file refusal of each message it replies to, at any depth: every message on its in_reply_to
-    chain is read with page_message_readable, as its own refs are. A chain of REPLY_CHAIN_LIMIT or more messages is
+    chain is read with page_message_readable, as its own refs are. A reply with REPLY_CHAIN_LIMIT ancestors or more is
     refused, as ReadIndex.sources refuses it; a cycle ends at the message seen. `lookup` reads a message by id."""
     lookup = lookup or (lambda mid: H.message(c, mid, include_deleted=True))
     seen, mid = set(), dict(message).get("in_reply_to")
     while mid and mid not in seen:
-        if len(seen) >= REPLY_CHAIN_LIMIT:
+        if len(seen) + 1 >= REPLY_CHAIN_LIMIT:
             return False
         seen.add(mid)
         parent = lookup(mid)

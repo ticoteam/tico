@@ -9,7 +9,7 @@ import pytest
 
 from backend import read_deps
 from backend.store import H
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures and helpers)
+from backend.tests.test_api import api, headers  # noqa: F401  (fixtures and helpers)
 from backend.tests.test_page_audience import edit
 from backend.tests.test_pages import page
 from backend.tests.test_sql import query, world  # noqa: F401  (fixture)
@@ -47,7 +47,7 @@ def visible_route(api, room, ids, token):
 
 
 def visible_timeline(api, room, ids, token):
-    r = api.get(f'/api/v2/threads/{room}/timeline', headers=headers(token))
+    r = api.get(f'/api/v2/threads/{room}/timeline?limit=200', headers=headers(token))
     assert r.status_code == 200, r.text
     shown = set()
     for m in r.json()['messages']:
@@ -103,3 +103,18 @@ def test_reply_inherits_its_parents_file_refusal_at_any_depth(api, world, settle
     assert visible_everywhere(api, room, plain, 'ana-test') == set(plain)
     # The task rule for a reply is unchanged: a reply to a refused task is hidden from a reader it is refused to.
     assert visible_everywhere(api, room, task_refused, 'cara-test') == set()
+
+
+@pytest.mark.parametrize('settled', [False, True])
+@pytest.mark.parametrize('ancestors', [99, 100])
+def test_a_reply_with_too_many_ancestors_is_hidden_on_every_path(api, world, settled, ancestors):
+    """A reply with 100 ancestors is refused as ReadIndex.sources refuses it, and one with 99 is read: the four paths
+    agree on both sides of the limit, with no file refused at all."""
+    room = world['coo_task']['conversation_id']
+    ids = chain(api, room, [None] * (ancestors + 1))
+    if settled:
+        with api.app.state.store.read() as c:
+            read_deps.sweep(c)
+    expected = set(ids) if ancestors < 100 else set(ids[:-1])
+    assert visible_everywhere(api, room, ids, 'cara-test') == expected
+    assert visible_everywhere(api, room, ids, 'ana-test') == expected

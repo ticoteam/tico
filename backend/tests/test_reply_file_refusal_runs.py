@@ -178,3 +178,32 @@ def test_two_long_reply_chains_on_one_run_each_keep_their_file_refusal(api, sett
         # Index 4 of a 60-long chain is 55 replies above its leaf.
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"target": fid}), refused[4]))
     assert run_visible(api, aid, settled) is False
+
+
+@pytest.mark.parametrize("settled", [False, True])
+@pytest.mark.parametrize("ancestors", [99, 100])
+def test_a_run_event_and_attachment_past_the_reply_limit_follow_the_message(api, settled, ancestors):
+    """A run whose job is a reply with `ancestors` ancestors, and its event and attachment: all of them agree on both
+    sides of the limit, which ReadIndex.sources sets at 100 ancestors."""
+    r, work, attempt, cid = running_turn(api)
+    aid = attempt["id"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        ids = chain(c, "deep", cid, ancestors + 1)
+        c.execute("UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (ids[-1], aid))
+        c.execute(
+            "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
+            "VALUES('b-deep','human:ben','f',1,'c.txt','text/plain',?)",
+            (H.now(),),
+        )
+        c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,'b-deep')", (ids[-1],))
+    expected = ancestors < 100
+    assert run_visible(api, aid, settled) is expected
+    who = Identity(READER, "human", email="cara@acme.example")
+    with store.read() as c:
+        if settled:
+            read_deps.sweep(c)
+        index = ReadIndex(c, who)
+        assert index.event(ids[-1], READER, H.now(), encode({})) is expected
+        assert index.blob("b-deep") is expected
+        assert task_privacy.message_readable(c, READER, H.message(c, ids[-1], include_deleted=True)) is expected
