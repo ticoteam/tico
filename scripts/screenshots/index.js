@@ -36,11 +36,11 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
-  'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.js', 'ui/app/hub-v2.js',
+  'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.js',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
 ];
 const BOT_CHAT_UI = [
-  'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.js', 'ui/app/chat*.ts', 'ui/app/feedback.ts',
+  'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts',
   'ui/app/slash-commands.ts', 'ui/app/visual-*.ts', 'ui/app/question-card.ts', 'ui/styles/bot-*.css',
   'ui/styles/chat*.css', 'ui/styles/feedback.css', 'ui/styles/visual-*.css',
 ];
@@ -81,10 +81,10 @@ const PAGES = [
     await page.locator('.use-col').first().waitFor();
   }},
   {name: 'settings-health', route: '#/settings/health', ready: 'Setup check',
-    ui: [...SETTINGS_UI, 'ui/app/settings-storage.js', 'ui/app/settings-release.js', 'ui/app/settings-repositories.ts',
+    ui: [...SETTINGS_UI, 'ui/app/settings-storage.ts', 'ui/app/settings-release.ts', 'ui/app/settings-repositories.ts',
       'ui/app/settings-hosted.ts', 'ui/health.ts', 'ui/runner-updates.ts']},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
-    ui: [...SETTINGS_UI, 'ui/app/settings-devices.ts', 'ui/app/computer-detail.ts', 'ui/app/cloud-machines.js',
+    ui: [...SETTINGS_UI, 'ui/app/settings-devices.ts', 'ui/app/computer-detail.ts', 'ui/app/cloud-machines.ts',
       'ui/app/subscriptions.ts', 'ui/runner-updates.ts']},
   {name: 'support', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/support.ts', 'ui/styles/support.css', 'ui/app/updates.ts', 'ui/styles/updates.css'],
     steps: async page => {
