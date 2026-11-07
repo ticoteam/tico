@@ -47,7 +47,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
       // The page opens on this config now. Only trust for visual frames waits for the desktop app's answer: until
       // it, a visual is a file chip or an Open card (visual-cards.js), and an accepted answer applies the config
-      // again and redraws the open threads with it (state.js applyAuthenticatedConfig, nativeVisualRepaint).
+      // again and redraws the open threads with it (state.ts applyAuthenticatedConfig, nativeVisualRepaint).
       applyConfig(me.config);
       bootSnapWho(me);
       void applyAuthenticatedConfig(me.config, configVersion).then(done => { if (done) bootMark('native-ack'); });

@@ -1,4 +1,4 @@
-// Types for the globals the classic scripts under ui/ share (ui/app/core.ts, api.ts, state.js, ...). A declaration here is
+// Types for the globals the classic scripts under ui/ share (ui/app/core.ts, api.ts, state.ts, ...). A declaration here is
 // read by the JSDoc on the JavaScript that defines the global, and by the TypeScript files that use it. No file here
 // is a module, so every name below is global, as the scripts' own names are.
 // A field the server sends but the page does not read is left out. A field read on the page is optional when the
@@ -67,7 +67,7 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
   config?: Partial<AppConfig>;
 }
 
-// ---------------------------------------------------------------- the server's config (S.config, state.js)
+// ---------------------------------------------------------------- the server's config (S.config, state.ts)
 
 /** An available new version, as the config carries it (`update`), or null when none is known. */
 interface ConfigUpdate {
@@ -77,7 +77,7 @@ interface ConfigUpdate {
   [key: string]: unknown;
 }
 
-/** The environment's names and switches: state.js's CONFIG_DEFAULTS, with whatever the server sends over them. */
+/** The environment's names and switches: state.ts's CONFIG_DEFAULTS, with whatever the server sends over them. */
 interface AppConfig {
   environment_id: string;
   company_name: string;
@@ -284,7 +284,7 @@ interface LastRead {
   [page: string]: unknown;
 }
 
-// ---------------------------------------------------------------- S, the page's shared state (ui/app/state.js)
+// ---------------------------------------------------------------- S, the page's shared state (ui/app/state.ts)
 
 interface AppState {
   emps: Employee[];

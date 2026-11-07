@@ -19,7 +19,7 @@ const SHARED = [
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
   'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css',
-  'ui/app/router.js', 'ui/app/core.ts', 'ui/app/state.js', 'ui/app/format.js', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
+  'ui/app/router.js', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.js', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
   'ui/app/session.js', 'ui/app/notices.js', 'ui/app/sidebar.js', 'ui/app/drawer.js', 'ui/app/viewport.js',
   'ui/app/refresh.js', 'ui/app/boot.js', 'ui/app/boot-snap.js', 'ui/app/boot-timing.js', 'ui/app/nav-events.js',
   'ui/app/markdown.js', 'ui/app/tooltip.js', 'ui/app/avatars.js', 'ui/app/liquid-dot.js', 'ui/app/heartbeat.js',

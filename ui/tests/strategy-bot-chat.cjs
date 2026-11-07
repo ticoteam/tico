@@ -1,4 +1,4 @@
-// The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.js myChatBot): the
+// The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.ts myChatBot): the
 // page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
 // Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.

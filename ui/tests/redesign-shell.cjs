@@ -184,7 +184,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       await page.locator('#goal-body').waitFor();
       assert.equal(await page.locator('#goal-manager-panel').count(), 0, tag + ': Goals has no rail of its own');
       assert.equal(await page.locator('#goal-tree .gt-sep').count(), 0, tag + ': helpers are off Goals too');
-      // The roster fixture stores the old default name, which state.js shows as the Strategy Bot: it must not appear.
+      // The roster fixture stores the old default name, which state.ts shows as the Strategy Bot: it must not appear.
       assert.ok(!(await page.locator('body').innerText()).includes('CEO Bot'), tag + ': no "CEO Bot" anywhere');
       await page.locator('#mobile-more').click();
       await shot(page, 'phone-sidebar');
@@ -229,7 +229,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
         if (hash === '#/strategy/market/listening') await shot(page, 'desktop-listening');
       }
       await page.evaluate(() => { location.hash = '#/tasks'; });
-      // The roster fixture stores the old default name, which state.js shows as the Strategy Bot: it must not appear.
+      // The roster fixture stores the old default name, which state.ts shows as the Strategy Bot: it must not appear.
       assert.ok(!(await page.locator('body').innerText()).includes('CEO Bot'), tag + ': no "CEO Bot" anywhere');
       await page.evaluate(() => { location.hash = '#/settings'; });
       await page.locator('#settings-tabs').waitFor();
