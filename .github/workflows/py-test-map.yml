@@ -1,0 +1,183 @@
+name: Python test map
+
+# Measures which Python tests run each function, and publishes the map to the ci/py-test-map branch as its only file,
+# py-test-map.json. Nightly, and on demand from main. The map is data: this workflow writes it and nobody edits it by hand.
+# Nothing is committed to main and no pull request is opened: the PR checks fetch that one file (pr-checks.yml, plan job).
+# Each default-suite test file runs alone under coverage (scripts/py_test_map.py), on RunsOn like the queue's Python jobs.
+#
+# The push trigger is temporary: it measures the branch that adds this workflow, before the workflow is on main, where a
+# dispatch can find it. It runs only when this file changes. Remove it in the change that merges.
+
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [chris/rel-py-test-map]
+    paths: ['.github/workflows/py-test-map.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: py-test-map
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: measure shard ${{ matrix.shard }} of 32
+    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh python
+      - name: Install coverage (pinned; not a dev dependency)
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 coverage==7.17.0
+      - name: Measure this shard, one test file at a time
+        timeout-minutes: 45
+        env:
+          SHARD: ${{ matrix.shard }}
+          TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
+        run: |
+          set -euo pipefail
+          PATH="$RUNNER_TEMP/venv/bin:$PATH" "$RUNNER_TEMP/venv/bin/python" scripts/py_test_map.py measure --shard "$SHARD" --of 32 \
+            --out "$RUNNER_TEMP/partial" --data "$RUNNER_TEMP/measure-data"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: partial-${{ matrix.shard }}
+          path: ${{ runner.temp }}/partial
+          retention-days: 7
+          if-no-files-found: error
+
+  overhead:
+    name: coverage overhead on this machine
+    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh python
+      - name: Install coverage (pinned; not a dev dependency)
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 coverage==7.17.0
+      - name: Plain runs against covered runs, ten spread test files
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/venv/bin/python" scripts/py_test_map.py overhead --sample 10 --out "$RUNNER_TEMP/overhead/overhead.json"
+          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(f\"coverage {d['coverage']} {d['core']}: {d['ratio']}x (plain {d['plain_seconds']} s, covered {d['covered_seconds']} s, {d['files']} files)\")" "$RUNNER_TEMP/overhead/overhead.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: overhead
+          path: ${{ runner.temp }}/overhead
+          retention-days: 14
+          if-no-files-found: error
+
+  build:
+    name: build the map from the measured run
+    needs: measure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MAIN_SHA: ${{ github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: partial-*
+          path: ${{ runner.temp }}/partials
+          merge-multiple: true
+      - name: Build the map (fails if a shard is missing or a test file was not measured)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/map"
+          python3 scripts/py_test_map.py build --partials "$RUNNER_TEMP/partials" \
+            --out "$RUNNER_TEMP/map/py-test-map.json" --sha "$MAIN_SHA" --run "$RUN_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Check the map's schema
+        run: python3 scripts/py_test_map.py check --map "$RUNNER_TEMP/map/py-test-map.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: py-test-map
+          path: ${{ runner.temp }}/map
+          retention-days: 30
+
+  publish:
+    name: publish the map to ci/py-test-map
+    needs: build
+    # Nightly and dispatched runs from main publish. A push to the temporary trigger branch publishes too, so the PR can
+    # read a measured map before the workflow is on main.
+    if: github.event_name == 'push' || (github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      MAIN_SHA: ${{ github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: py-test-map
+          path: ${{ runner.temp }}/map
+      - name: Check the map's schema before it leaves this run
+        run: python3 scripts/py_test_map.py check --map "$RUNNER_TEMP/map/py-test-map.json"
+      - name: Publish the map as the only file on ci/py-test-map (force-pushed)
+        run: |
+          set -euo pipefail
+          blob=$(git hash-object -w "$RUNNER_TEMP/map/py-test-map.json")
+          tree=$(printf '100644 blob %s\tpy-test-map.json\n' "$blob" | git mktree)
+          message=$(printf 'Python test map from %s\n\nMeasured by %s\n' "$MAIN_SHA" "$RUN_URL")
+          commit=$(GIT_AUTHOR_NAME='github-actions[bot]' GIT_AUTHOR_EMAIL="$BOT_EMAIL" \
+            GIT_COMMITTER_NAME='github-actions[bot]' GIT_COMMITTER_EMAIL="$BOT_EMAIL" \
+            git commit-tree "$tree" -m "$message")
+          git push --force origin "$commit:refs/heads/ci/py-test-map"
+          echo "Published $commit to ci/py-test-map (measured $MAIN_SHA)" >> "$GITHUB_STEP_SUMMARY"
