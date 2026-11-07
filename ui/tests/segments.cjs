@@ -166,7 +166,8 @@ const lastWrite = (writes, path) => writes.filter(w => w.path === path).at(-1);
       await page.locator('[data-seg-field-form="sell"] textarea').fill('A seat at $25 a month.');
       await page.locator('[data-seg-field-form="sell"] button[type="submit"]').click();
       await page.locator('.toast', {hasText: 'Changed elsewhere, reloaded'}).waitFor();
-      assert.equal(lastWrite(writes, '/api/v2/segments/strategy').body.revision, 8, tag + ': saved at the revision it had');
+      // The save went out at the revision the page held: the "Use company's" write moved the draft from 8 to 9.
+      assert.equal(lastWrite(writes, '/api/v2/segments/strategy').body.revision, 9, tag + ': saved at the revision it had');
       assert.equal(await page.locator('[data-seg-field-form="sell"]').count(), 0, tag + ': the form closes on the reload');
       // The bets: each opens on the Strategy page.
       assert.equal(await page.locator('.seg-bet-list a').getAttribute('href'), '#/strategy?bet=b-bundle', tag + ': a bet opens on Strategy');
