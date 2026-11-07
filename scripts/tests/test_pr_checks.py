@@ -1329,19 +1329,17 @@ def test_a_changed_browser_script_runs_itself_when_the_map_does_not_list_it(tmp_
     assert "--all" not in plan["browser"]
 
 
-def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui_folder(tmp_path):
-    # #2893 changed ui/app/ files. backend/tests/test_icon_font.py runs scripts/build-icon-font.py, which reads each
-    # ui/app/*.js: the test is reached through that module, not through a direct read of the file.
-    smoke_tree(tmp_path)
+def icon_font_tree(root):
+    """#2893's shape: scripts/build-icon-font.py globs ui/app/*.js and backend/tests/test_icon_font.py runs it."""
     source(
-        tmp_path,
+        root,
         "scripts/build-icon-font.py",
         "from pathlib import Path\n"
         'ROOT = Path(__file__).resolve().parent.parent\nUI = ROOT / "ui"\n'
         'def used_icons():\n    return [p.read_text() for p in UI.glob("app/*.js")]\n',
     )
     source(
-        tmp_path,
+        root,
         "backend/tests/test_icon_font.py",
         "import importlib.util\nfrom pathlib import Path\n"
         'ROOT = Path(__file__).resolve().parents[2]\n'
@@ -1349,6 +1347,13 @@ def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui
         "build = importlib.util.module_from_spec(_spec)\n_spec.loader.exec_module(build)\n"
         "def test_every_icon_in_use_is_in_the_font_manifest():\n    assert build.used_icons() is not None\n",
     )
+
+
+def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui_folder(tmp_path):
+    # #2893 changed ui/app/ files. backend/tests/test_icon_font.py runs scripts/build-icon-font.py, which reads each
+    # ui/app/*.js: the test is reached through that module, not through a direct read of the file.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
     source(tmp_path, "ui/app/new.js", "export const icon = 'filter_list';\n")
     source(tmp_path, "ui/styles/new.css", ".x { color: red; }\n")
     plan = checks.selection(["ui/app/new.js"], root=tmp_path, core=[])
@@ -1369,3 +1374,17 @@ def test_a_template_edit_runs_the_hub_command_test_in_the_contract_job_that_2866
     assert "backend/tests/test_e2e_cli.py" in checks.CONTRACT_TESTS
     plan = checks.selection(["templates/catalog/librarian/AGENT.md"])
     assert plan["contracts"] is True
+
+
+def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder_listing(tmp_path, monkeypatch):
+    # A UI_MAP file runs its mapped scripts, and the module that globs ui/app/*.js reaches test_icon_font for it too,
+    # as it does for a file the map does not list. The map lists this file, so no rule-4 "not in UI_MAP" note applies.
+    smoke_tree(tmp_path)
+    icon_font_tree(tmp_path)
+    source(tmp_path, "ui/app/mapped.js", "export const icon = 'home';\n")
+    source(tmp_path, "ui/tests/mapped-one.cjs", "// the browser script the map links to\n")
+    monkeypatch.setattr(checks, "UI_MAP", {"ui/app/mapped.js": ["mapped-one"]})
+    plan = checks.selection(["ui/app/mapped.js"], root=tmp_path, core=[])
+    assert "backend/tests/test_icon_font.py" in plan["python"]
+    assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
+    assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
