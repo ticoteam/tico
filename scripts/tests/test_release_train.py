@@ -1333,7 +1333,10 @@ def test_failed_hotfix_validation_stops_before_tagging(installs, tmp_path, monke
 
 
 def window_outputs(path):
-    return dict(line.split("=", 1) for line in path.read_text().splitlines())
+    lines = path.read_text().splitlines()
+    keys = [line.split("=", 1)[0] for line in lines]
+    assert len(keys) == len(set(keys)), "a key written twice, GitHub keeps only the last: %s" % lines
+    return dict(line.split("=", 1) for line in lines)
 
 
 def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(installs, tmp_path, monkeypatch):
@@ -1341,6 +1344,44 @@ def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(install
     gh = publishes(FakeGitHub([run(C)]))
     assert rt.cmd_window(gh, ENV, False, NOW) == 0
     # The base is the release stable runs: what the approver reads the changes since, and the pictures compare with.
+    assert window_outputs(tmp_path / "out") == {
+        "reported": "true",
+        "shipped": "true",
+        "version": "v0.5.201",
+        "sha": C,
+        "base": "v0.5.199",
+    }
+
+
+def test_the_shipped_candidate_is_in_the_outputs_even_if_the_window_dies_after_it(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+
+    def dies(*args, **kwargs):
+        raise RuntimeError("the runner went away")
+
+    monkeypatch.setattr(rt, "report", dies)
+    with pytest.raises(RuntimeError, match="runner went away"):
+        rt.cmd_window(gh, ENV, False, NOW)
+    # The canary runs the candidate, so its shots still run; reported is missing, so the job's fallback reports the death.
+    assert installs["updated"] == [("canary", "0.5.201")]
+    assert window_outputs(tmp_path / "out") == {
+        "shipped": "true",
+        "version": "v0.5.201",
+        "sha": C,
+        "base": "v0.5.199",
+    }
+
+
+def test_a_later_step_that_fails_keeps_the_shipped_candidate_in_the_outputs(installs, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    gh = publishes(FakeGitHub([run(C)]))
+
+    def refused(gh, version):
+        raise rt.Fail("the latest marking was refused")
+
+    monkeypatch.setattr(rt, "mark_latest", refused)
+    assert rt.cmd_window(gh, ENV, False, NOW) == 1
     assert window_outputs(tmp_path / "out") == {
         "reported": "true",
         "shipped": "true",
@@ -1402,6 +1443,19 @@ def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_chang
     monkeypatch.setattr(gh, "edit", lambda number, text, state: edits.append(number))
     assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
     assert edits == []
+
+
+def test_reopening_an_approval_keeps_the_pictures_already_on_it(tmp_path):
+    gh = FakeGitHub()
+    issue = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    shots = tmp_path / "release-shots.md"
+    shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    # A republish or a retry of the same version reopens the same record: its pictures stay, and nothing goes pending.
+    again = rt.open_approval(gh, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    assert again is issue and issue["state"] == "open"
+    assert "| before | after |" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
+    assert issue["body"].count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in issue["body"]
 
 
 def test_missing_pictures_put_the_failure_and_the_run_that_tried_on_the_issue(tmp_path, monkeypatch):

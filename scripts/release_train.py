@@ -966,9 +966,20 @@ def open_approval(gh, version, sha, notes, validated=""):
     body = approval_body(version, sha, notes, validated)
     found = find_approval(gh, version, state="all")
     if found:
-        gh.edit(found["number"], body, "open")
+        # A republish or a retry keeps the pictures already on the record; only a new record starts with them pending.
+        gh.edit(found["number"], kept_shots(body, found.get("body")), "open")
         return found
     return gh.create_issue(approval_title(version), body, [APPROVAL_LABEL])
+
+
+def kept_shots(body, old):
+    """`body` with the pictures section that `old` (an approval record's body) has, in place of its pending line; `body`
+    as it is when `old` has no section."""
+    kept = SHOTS_SECTION.search(old or "")
+    if not kept:
+        return body
+    section = kept.group(0)
+    return SHOTS_SECTION.sub(lambda _found: section, body, count=1)
 
 
 def retire_approvals(gh, version, text, *, inclusive):
@@ -1218,8 +1229,10 @@ def cmd_window(gh, env, opening, now=None):
                 except Exception as exc:
                     drop_approval(gh, approval, str(exc))
                     raise
-                # The canary runs it and its approval record is open: its release shots may run (train.yml).
+                # The canary runs it and its approval record is open: its release shots may run (train.yml). Written now,
+                # not at the end of the step, so a crash after this point still leaves the shots their candidate.
                 shipment = {"version": plan["version"], "sha": plan["sha"], "base": base}
+                output(shipped="true", **shipment)
                 retire_approvals(
                     gh,
                     plan["version"],
@@ -1241,8 +1254,13 @@ def cmd_window(gh, env, opening, now=None):
             list(LOG),
             close_title=record or ("Release %s republished" % plan["version"] if plan.get("republish") else None),
         )
-    # train.yml's shots job runs for a shipped candidate, from these (the release stable runs is its base).
-    output(reported="true", shipped=str(shipment is not None).lower(), **(shipment or {}))
+    # shipped, version, sha and base were written when the candidate shipped (train.yml's shots job reads them), so each
+    # key is written once: GitHub keeps the last value of a key. Only the completion and a window that shipped nothing
+    # are left to write here.
+    values = {"reported": "true"}
+    if shipment is None:
+        values["shipped"] = "false"
+    output(**values)
     return 1 if failures else 0
 
 
