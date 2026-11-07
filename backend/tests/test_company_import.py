@@ -151,6 +151,15 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     assert {s["title"]: s["org_parent"] for s in people["seats"]} == {
         s["title"]: s["org_parent"] for s in seats.values()
     }
+    # Each seat keeps the template the file placed it with: Recruit offers that one alone, whatever its title says.
+    templates = {b["title"]: b["template"] for b in draft["bots"] if b["id"] in TWELVE}
+    for bot_id in ("controller", "ops-manager"):
+        found = api.post(f"/api/v2/seats/{by_title[titles[bot_id]]['id']}/recruit", json={}, headers=signed_in())
+        assert found.status_code == 200, found.text
+        assert [(c["template"], c["match"]) for c in found.json()["candidates"]] == [
+            (templates[titles[bot_id]], "strong")
+        ]
+        assert found.json()["agents"] == []
 
 
 def test_a_seat_with_no_template_yet_is_a_recruiting_seat_like_any_other_role(environment, monkeypatch):

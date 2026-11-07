@@ -645,6 +645,46 @@
    "default": false
   },
   {
+   "slug": "cro-owner",
+   "template": "cro-owner",
+   "name": "Conversion Rate Optimization Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the conversion rates on the pages that turn visitors into sign-ups, leads and buyers. Each week it maps the funnel with a count on every rate, ranks the leaks, and writes experiment briefs whose sample size and stop rules are worked out before launch. Page changes are drafted for the page's owner to apply.",
+   "when": "A team that sends traffic to landing, sign-up, pricing or checkout pages and cannot say which step loses the most people, or whether a page change really helped.",
+   "tags": [
+    "conversion",
+    "cro",
+    "landing-pages",
+    "pricing",
+    "checkout",
+    "signup",
+    "experiments",
+    "funnel",
+    "saas",
+    "ecommerce"
+   ],
+   "pains": [
+    "we get visitors but very few sign-ups",
+    "nobody knows which step of the funnel loses the most people",
+    "we ended a test early because the numbers looked good",
+    "page changes go live on opinion, not on a result",
+    "pricing page visitors leave without starting a trial or a purchase"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly conversion check · Mondays at 08:30 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "customer-success",
    "template": "customer-success",
    "name": "Customer Success Manager",
@@ -1307,6 +1347,46 @@
    "default": false
   },
   {
+   "slug": "inbound-sales-owner",
+   "template": "inbound-sales-owner",
+   "name": "Inbound Sales Owner",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Owns inbound conversion: answers every inbound lead inside the speed-to-lead target, sorts it on your own criteria, and works it to a booked call or a close. Replies are prepared for review and sent only when a task asks and a granted Tool allows it.",
+   "when": "A team that gets demo requests, contact forms, trial sign-ups for help or inbound email, and loses some of them to slow replies or to no clear sorting.",
+   "tags": [
+    "b2b",
+    "inbound",
+    "lead-response",
+    "qualification",
+    "demos",
+    "pipeline",
+    "saas",
+    "services"
+   ],
+   "pains": [
+    "inbound leads wait a day or more for a first reply",
+    "we cannot tell which inbound leads are worth a call",
+    "a demo request goes quiet after the first email",
+    "nobody can say why we lose the inbound deals we lose"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm",
+    "uses_email"
+   ],
+   "first_routine": "Inbound sweep · Weekdays at 09:00, 11:00, 13:00, 15:00 and 17:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "meetings",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "incident-scribe",
    "template": "incident-scribe",
    "name": "Site Reliability Engineer",
@@ -1547,6 +1627,44 @@
    "tools": [
     "crm",
     "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "lead-generation-owner",
+   "template": "lead-generation-owner",
+   "name": "Lead Generation Owner",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the number of qualified leads each week and where they come from. Each week it counts them by source, writes the rule that makes a lead qualified, and hands each one to Inbound or Outbound Sales with its reasons attached. It does not work deals.",
+   "when": "A team that wants more qualified leads every week and cannot say which sources produce them, or whether a lead handed to sales was ready for it.",
+   "tags": [
+    "lead-generation",
+    "qualified-leads",
+    "lead-sources",
+    "lead-scoring",
+    "hand-off",
+    "pipeline",
+    "b2b",
+    "saas",
+    "lists"
+   ],
+   "pains": [
+    "we do not know how many qualified leads we got last week",
+    "leads reach sales without the reason they were passed on",
+    "nobody can say which source produces the leads that close",
+    "the lead lists we buy go stale and nobody checks them",
+    "sales says the leads are bad and marketing says sales is slow"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly lead report · Mondays at 09:00 team time",
+   "tools": [
+    "crm",
     "web"
    ],
    "default": false
@@ -1960,6 +2078,45 @@
     "mail"
    ],
    "default": true
+  },
+  {
+   "slug": "outbound-sales-owner",
+   "template": "outbound-sales-owner",
+   "name": "Outbound Sales Owner",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the meetings booked from outbound each week: builds target account lists from your ideal customer profile, writes sequences with clear stop rules, reads every reply the same day, and reports sends, replies and meetings by sequence. Messages stay drafts until a task asks for a send and a granted Tool allows it.",
+   "when": "A team that wants a steady flow of first meetings from people who have not asked to hear from it, and nobody reading the sequence results each week.",
+   "tags": [
+    "b2b",
+    "outbound",
+    "prospecting",
+    "sequences",
+    "meetings-booked",
+    "cold-email",
+    "saas",
+    "services"
+   ],
+   "pains": [
+    "our outbound gets no replies and nobody knows why",
+    "we send the same sequence to every account",
+    "replies sit unread while the sequence keeps sending",
+    "we cannot say which sequence brought a meeting"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_email",
+    "uses_crm"
+   ],
+   "first_routine": "Weekday outbound run · Weekdays at 08:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "web"
+   ],
+   "default": false
   },
   {
    "slug": "paid-media",
@@ -3212,6 +3369,47 @@
    "default": true
   },
   {
+   "slug": "search-ads-owner",
+   "template": "search-ads-owner",
+   "name": "Search Ad Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns what paid search spend buys across every customer segment: reviews each campaign's cost per result against its target every week, cleans out the search terms that spend without converting, and sets bidding only where the conversion volume supports it. Every change is prepared for review and goes into an ad account only when a task asks for it and a granted Tool allows it.",
+   "when": "A team that spends on search ads every month for one or more customer segments, where nobody reads the search terms or the cost per result each week.",
+   "tags": [
+    "paid-search",
+    "google-ads",
+    "microsoft-ads",
+    "app-store-ads",
+    "keywords",
+    "negatives",
+    "bidding",
+    "performance",
+    "b2c",
+    "b2b"
+   ],
+   "pains": [
+    "our search ads spend on searches that never buy",
+    "the bidding target is set on a few conversions and the campaign never settles",
+    "Google and Microsoft report different conversions and nobody knows which one is right",
+    "the ad sends people to a page that does not match what they searched for",
+    "each segment wants its own keywords and they bid against each other"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly search ads review · Mondays at 09:30 team time",
+   "tools": [
+    "crm",
+    "google-ads",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "security-compliance",
    "template": "security-compliance",
    "name": "Security and Compliance Analyst",
@@ -3284,6 +3482,86 @@
    "default": false
   },
   {
+   "slug": "segment-marketing-owner",
+   "template": "segment-marketing-owner",
+   "name": "Marketing Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns one customer segment's new customers and what each one costs. Each week it reads that segment's number and its growth tests, keeps its message and claims checked, and asks the channel Owners for channel work through tasks.",
+   "when": "A team that sells to two or more customer groups through paid or owned channels, where marketing numbers are reported by channel and nobody answers for what each group costs to win.",
+   "tags": [
+    "marketing",
+    "acquisition",
+    "segments",
+    "cost-per-customer",
+    "messaging",
+    "offers",
+    "growth",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "we know the total cost per customer, not what each customer group costs to win",
+    "channel reports and segment goals never meet in one number",
+    "one group's message is copied from another and nobody checks its claims",
+    "channel owners get vague requests with no outcome, no date and no spend limit",
+    "growth tests start without a measure, a baseline or a cost ceiling"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly segment growth review · Tuesdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "segment-product-owner",
+   "template": "segment-product-owner",
+   "name": "Product Owner",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Owns one customer segment's activation and retention. Each week it ranks that segment's problems from tickets, feedback, calls and usage, and writes one-page product briefs for the Product Team Manager to approve.",
+   "when": "A team with two or more customer segments where the product works for one group and the others drop off before they get value, and nobody answers for each group's problems.",
+   "tags": [
+    "product",
+    "activation",
+    "retention",
+    "segments",
+    "customer-problems",
+    "discovery",
+    "saas",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "we know activation is low, but not for which customers",
+    "one loud customer's request fills the roadmap",
+    "support, sales and calls each hold part of the problem and nobody adds them up",
+    "retention falls and nobody can say which customers left or why",
+    "briefs go from idea to build without the evidence written down"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_tickets",
+    "uses_meetings"
+   ],
+   "first_routine": "Weekly segment product review · Mondays at 08:00 team time",
+   "tools": [
+    "crm",
+    "github",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
    "slug": "seo-visibility",
    "template": "seo-visibility",
    "name": "SEO Specialist",
@@ -3316,6 +3594,46 @@
    "tools": [
     "docs",
     "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "social-ads-owner",
+   "template": "social-ads-owner",
+   "name": "Social Ad Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns what paid social spend buys across every customer segment: reviews each campaign's cost per result against its target every week, catches creative fatigue before results fall, and prepares each budget, creative and audience change for review. Changes go into an ad account only when a task asks for them and a granted Tool allows it.",
+   "when": "A team that spends on paid social every month for one or more customer segments, where nobody reads creative fatigue and cost per result each week.",
+   "tags": [
+    "paid-social",
+    "meta-ads",
+    "tiktok-ads",
+    "linkedin-ads",
+    "youtube-ads",
+    "creative",
+    "audiences",
+    "b2c",
+    "b2b",
+    "performance"
+   ],
+   "pains": [
+    "our social ads cost more every month for the same results",
+    "the same ads have run for months and nobody has changed them",
+    "we can't tell which audience or creative is working",
+    "each segment wants its own campaign and they compete for one budget",
+    "social ad reports show clicks and views, not what the ads bought"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly paid social review · Mondays at 09:00 team time",
+   "tools": [
+    "crm",
+    "meta-ads",
     "web"
    ],
    "default": false

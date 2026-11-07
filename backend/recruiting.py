@@ -793,14 +793,19 @@ def candidates(auth, onboarding, c, who, seat_id):
     `match` is "strong" for the template that is the job (the one a draft is written from, `_ranked_fits`) and any that
     fits as well, "good" when its tags, name or summary fit the title or job description inside the job's department,
     else "". A coding job ("Rust engineer") also gets the supported cloud agents as `agents`, placed after the first
-    `agents_at` templates: no template writes features, so they lead unless a template is the job. Deterministic and
-    local: the same seat gives the same list, and nothing leaves this server."""
+    `agents_at` templates: no template writes features, so they lead unless a template is the job. A seat setup placed
+    with its template (lifecycle `template`: the company file's core chart) is that template's job: it is the one
+    candidate, strong, with no agents. Deterministic and local: the same seat gives the same list, and nothing leaves
+    this server."""
     row = lifecycle.seat(c, seat_id)
     # Listing candidates changes nothing: BotOps lists them with the rights of the person it acts for, and the pick is
     # their own tap on a card (botops_act.CONFIRM).
     _may_hire(auth, c, replace(who, confirmed=True) if who.via == "botops" else who, row)
     value, cards = _recruitable(onboarding)
     departments = {d["id"]: d["name"] for d in value["departments"]}
+    pinned = next((card for card in cards if card["template"] == row["template"]), None) if row["template"] else None
+    if pinned:
+        cards = [pinned]
     t = _title(row["title"])
     fits = _ranked_fits(cards, row["title"])
     best = fits[0][1] if fits else None
@@ -823,7 +828,7 @@ def candidates(auth, onboarding, c, who, seat_id):
         shared = _fit(card, t)
         score += 2 * named + 3 * shared
         here = not department or card["department"] == department
-        match = "strong" if card["template"] in strong else "good" if (score > 0 and here) or shared else ""
+        match = "strong" if pinned or card["template"] in strong else "good" if (score > 0 and here) or shared else ""
         # Then, the department's own first; a head's template not for a job of a kind ("Head of Engineering" is no
         # applicant for "Rust engineer") and first for a head's title; a template named for the title's work ("QA
         # Engineer" for "QA Analyst"); the same kind of job ("Engineer"); the better fit; a template whose name is all
@@ -877,7 +882,7 @@ def candidates(auth, onboarding, c, who, seat_id):
     # that are the job, and first when none is ("Rust engineer": no template writes Rust, Claude Code and Codex do).
     agents_at = sum(1 for item in out if item["match"] == "strong")
     agents = []
-    if department == "engineering" and t["kind"] in CODING_KINDS:
+    if not pinned and department == "engineering" and t["kind"] in CODING_KINDS:
         from .team_build import _cloud_agents
 
         agents = [

@@ -1,0 +1,34 @@
+name: cro-owner                     # the slug: it matches the repository bot-cro-owner and the label owner:cro-owner
+display_name: "Conversion Rate Optimization Owner"
+labels: [owner:cro-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: high
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-conversion-check
+    title: Weekly conversion check
+    cron: "30 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-conversion-check.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools:
+  - service: public-web
+    identity: "Unauthenticated public sources"
+    can: [read]
+    note: "the team's conversion pages as a visitor sees them, and competitors' pages; no forms, no accounts, no checkouts"
+# Optional, uncomment when connected. Read only: a test is never started or stopped from here.
+#   - service: web-analytics
+#     identity: "the team's analytics account"
+#     can: [read]
+#     env: ANALYTICS_API_KEY
+#     note: "funnel counts by day and segment; read only, never a write"

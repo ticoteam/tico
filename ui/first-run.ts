@@ -259,6 +259,7 @@ function frBotBannerHTML(e) {
       ${can ? '<button class="primary" type="button" id="bot-start-setup">Start onboarding</button>'
         : `<span class="muted">${planned ? 'Getting ready.' : 'It learns in chat with its manager before it takes any work.'}</span>`}
       ${e.can_complete_onboarding ? '<button type="button" id="bot-finish-setup">Mark onboarding complete</button>' : ''}
+      ${can ? '<p class="muted bot-onboard-tip">Tip: open the mic and talk. Say everything; it sorts it out.</p>' : ''}
       <button class="ghost" type="button" data-setup-help="bot">Want help onboarding it?</button>
       ${ready ? `<p class="muted bot-ready" id="bot-ready">It says it is ready: ${esc(ready)}</p>` : ''}
     </section>`;
