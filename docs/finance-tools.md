@@ -88,8 +88,9 @@ that have a segment once, and skips the budget step when no budget names a segme
 customer's, bumps the view version (`view_version`), so anything cached by it is read again.
 
 **P&L by segment** is `GET /api/v2/finance/reports/pnl_by?by=segment` (with `start`, `end`, `basis`). Its `columns` are
-the company's segments in rank, then name order (an unranked segment last), each with `key`, `label`, `color`, `who` and
-`rank` (null when unranked), then `unallocated` and `total`. Its `rows` are `income`, `expense` and `contribution`
+the company's segments in the Market page's order (ranked ones first, then by name, unranked last), each with `key`,
+`label`, `color`, `who` and `rank`, its 0-based place in that order (never null for a segment), then `unallocated` and
+`total`, whose `rank` is null. Its `rows` are `income`, `expense` and `contribution`
 (revenue minus that column's own costs); each row's `values` is keyed by column key. Total equals the P&L's income,
 expense and net for the same window. Budgets and projections are not split by segment in this read.
 `GET /api/v2/finance/pnl?segment=<id|unallocated>` keeps the lines that count toward one segment; its budgets are cut to
