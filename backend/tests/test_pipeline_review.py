@@ -15,6 +15,7 @@ from backend import access
 from backend import hubdb as H
 from backend import pipeline_links as L
 from backend import pipeline_overview
+from backend import pipeline_engine as E
 from backend import pipeline_review as R
 from backend import requirement_attachments as A
 from backend.app import create_app
@@ -1511,3 +1512,47 @@ def test_a_stale_requirement_of_a_stage_the_ticket_left_takes_attachments_in_pla
     assert w.step_of() == w.shipped
     late = w.requirement("Late check", "attachment", "person", created_at="9999-12-31T00:00:00Z")
     refused("conflict", _attach_link, w, late, "https://example.test/late")
+
+
+def _engine_state(w, requirement):
+    """The engine's standing of one requirement on the ticket, as the scheduler and the card read it."""
+    found = E.standings(w.c, [H.task(w.c, w.task)])[w.task]
+    return next(s.state for s in found if s.requirement["id"] == requirement)
+
+
+def _queued(w, requirement):
+    return any(i["requirement_id"] == requirement for i in R.queue_for(w.c, ANA))
+
+
+def test_a_mark_met_survives_its_attachment_being_removed_and_the_queue_agrees_with_the_engine(world):
+    w = world
+    R.mark_met(w.c, ANA, w.task, w.mockup, "Checked by hand")
+    w.c.execute("UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=?", (H.now(), ANA, w.task))
+    assert _engine_state(w, w.mockup) == "met"
+    assert (
+        R.requirement_state(
+            w.c,
+            H.task(w.c, w.task),
+            dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone()),
+        )
+        == "met"
+    )
+    assert not _queued(w, w.mockup)  # no stale row offered
+
+
+def test_an_approval_of_evidence_since_replaced_by_the_same_digest_is_not_met_in_the_queue_either(world):
+    w = world
+    w.approve(w.mockup)  # bound to the attachment attached now
+    w.c.execute("UPDATE requirement_attachments SET removed_at=?, removed_by=? WHERE task_id=?", (H.now(), ANA, w.task))
+    w.attach(digest="d1", attachment_id="a-same-evidence-again")  # the same digest, a different attachment
+    assert _engine_state(w, w.mockup) == "waiting"
+    mockup = dict(w.c.execute("SELECT * FROM stage_requirements WHERE id=?", (w.mockup,)).fetchone())
+    assert R.requirement_state(w.c, H.task(w.c, w.task), mockup) == "waiting"
+    assert _queued(w, w.mockup)
+
+
+def test_a_legacy_bot_then_person_field_row_is_not_listed_as_waiting_on_a_judge(world):
+    w = world
+    field = w.requirement("Owner set", "field", "bot_then_person", reviewer=ANA)
+    assert not _queued(w, field)
+    refused("not_person_reviewed", R.approve, w.c, ANA, w.task, field, work_version=0, requirement_version=1)

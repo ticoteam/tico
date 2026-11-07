@@ -47,6 +47,17 @@ UNDO_SECONDS = 10
 NOTE_BYTES = 500
 ACTIVE = ("open", "doing", "waiting", "review", "ready")
 PERSON_REVIEWED = ("person", "bot_then_person")
+
+
+def _review_of(requirement: dict[str, Any]) -> str:
+    """The review that applies to a requirement. A field or run is a rule (D60): only a person's review of one waits on its
+    source, and a bot or bot-then-person review of one (rows from before the API refused it) reads as nobody's, as
+    pipeline_engine._standing reads it."""
+    if requirement["kind"] in ("field", "run") and requirement["reviewed_by"] != "person":
+        return "nobody"
+    return str(requirement["reviewed_by"])
+
+
 MET_VERDICTS = ("met", "override")
 Row = dict[str, Any]
 CURRENT: Any = object()  # approve(): no version named, so the current one is taken (a caller inside the engine)
@@ -229,6 +240,8 @@ def _met_in(requirement: Row, attachment: Row | None, decisions: list[Row], revi
             return None
         if decision["verdict"] == "override" and requirement["kind"] == "approval":
             return None
+        if not pipeline_engine.verdict_binds_attachment(decision, attachment):
+            return None  # the attachment it judged is no longer the one attached (the engine's rule, shared)
         if _fresh_required(requirement) and decision["work_version"] != revision:
             return None
         digest = decision["attachment_digest"]
@@ -306,13 +319,13 @@ def _why_in(actor: str, requirement: Row, routed: str | None, asked: bool) -> st
 def _waits_in(requirement: Row, state: str, decisions: list[Row], revision: int, attachment: Row | None) -> bool:
     """Whether the requirement now waits for a person's decision: not met, something to decide on, not held off by a
     send-back, and for bot_then_person the bot passed it up or a send-back routed it to a person."""
-    if requirement.get("retired_at") or requirement["reviewed_by"] not in PERSON_REVIEWED:
+    if requirement.get("retired_at") or _review_of(requirement) not in PERSON_REVIEWED:
         return False
     if state in ("met", "missing"):
         return False
     if _sent_back_in(decisions, revision, attachment):
         return False
-    if requirement["reviewed_by"] == "bot_then_person":
+    if _review_of(requirement) == "bot_then_person":
         return _routed_in(decisions) is not None or _bot_passed_in(decisions, revision)
     return True
 
@@ -716,7 +729,8 @@ def queue_for(
     people = ",".join("?" * len(PERSON_REVIEWED))
     open_status = ",".join("?" * len(ACTIVE))
     where = (
-        f"r.retired_at IS NULL AND r.reviewed_by IN ({people}) AND t.status IN ({open_status}) "
+        f"r.retired_at IS NULL AND r.reviewed_by IN ({people}) AND NOT (r.kind IN ('field', 'run') AND r.reviewed_by<>'person') "
+        f"AND t.status IN ({open_status}) "
         "AND (r.reviewer_id=? OR r.backup_reviewer_id=? OR EXISTS (SELECT 1 FROM stage_decisions d "
         "WHERE d.task_id=t.id AND d.stage_requirement_id=r.id AND d.route_next_to=?))"
     )
@@ -783,7 +797,7 @@ def _guard_item(c: "sqlite3.Connection", actor: str, task_id: str, requirement_i
     _person(actor)
     task = _task(c, task_id)
     requirement = _requirement(c, requirement_id)
-    if requirement.get("retired_at") or requirement["reviewed_by"] not in PERSON_REVIEWED:
+    if requirement.get("retired_at") or _review_of(requirement) not in PERSON_REVIEWED:
         raise Declined("not_person_reviewed", "A person does not review this requirement", 409)
     if task.get("status") not in ACTIVE or not pipeline_engine.counts_on_card(c, task_id, requirement):
         raise Declined("moved", "The ticket is no longer at this stage", 409)
