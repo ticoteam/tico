@@ -34,6 +34,18 @@ def feed(
         SA.replace_spend(c, account_id, ORIGIN, END, [SA.SpendRow(day, campaign, name, cents, "USD", clicks, conv)], AT)
 
 
+def feed_both(store: Store, account_id: str) -> None:
+    """One import for account a: campaign cx (Fall sale) spent 600 on Oct 6 and cy (Spring sale) 400 on Oct 5."""
+    with store.transaction() as c:
+        SA.upsert_campaign(c, account_id, "cx", "Fall sale", ORIGIN, END, AT)
+        SA.upsert_campaign(c, account_id, "cy", "Spring sale", ORIGIN, END, AT)
+        rows = [
+            SA.SpendRow("2026-10-06", "cx", "Fall sale", 60_000, "USD"),
+            SA.SpendRow("2026-10-05", "cy", "Spring sale", 40_000, "USD"),
+        ]
+        SA.replace_spend(c, account_id, ORIGIN, END, rows, AT)
+
+
 def campaign_id(store: Store, account_id: str) -> str:
     with store.read() as c:
         return SA.campaigns(c, account_id)[0].id
@@ -300,8 +312,7 @@ def _company_budget(store: Store, g: dict[str, str]) -> str:
 
 def test_a_campaign_owner_is_charged_its_own_spend_and_nothing_is_counted_twice(books: Store):
     g = google(books)
-    feed(books, g["a"], "cx", "Fall sale", "2026-10-06", 60_000)  # owned by B below
-    feed(books, g["a"], "cy", "Spring sale", "2026-10-05", 40_000)  # inherited: A
+    feed_both(books, g["a"])  # cx owned by B below; cy inherited: A
     x = campaign_by_external(books, g["a"], "cx")
     with books.transaction() as c:
         assert act(c, OWNER, "campaign_owner_set", {"campaign_id": x, "teammate": B}).status == "committed"
@@ -322,8 +333,7 @@ def test_a_campaign_owner_is_charged_its_own_spend_and_nothing_is_counted_twice(
 
 def test_with_no_campaign_owners_the_account_bot_carries_the_whole_month(books: Store):
     g = google(books)
-    feed(books, g["a"], "cx", "Fall sale", "2026-10-06", 60_000)
-    feed(books, g["a"], "cy", "Spring sale", "2026-10-05", 40_000)
+    feed_both(books, g["a"])
     with books.transaction() as c:
         spend(c, "6300", 100_000, day="2026-10-12", vendor=g["vendor"])
     company = _company_budget(books, g)
