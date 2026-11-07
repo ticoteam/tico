@@ -719,8 +719,14 @@ class DependencyMap:
         users |= {
             p for p, patterns in self.globs.items() if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)
         }
+        users |= self.listed_by(name, added)
+        return users
+
+    def listed_by(self, name, added):
+        """The files whose listing of a folder holds a changed file: `ui/*.js` lists ui/app/x.js too only when recursive
+        (`rglob`, `**`), and a listing that uses only names sees it only when it is new."""
         folder = str(Path(name).parent)
-        users |= {
+        return {
             p
             for p, listings in self.listings.items()
             if any(
@@ -730,7 +736,6 @@ class DependencyMap:
                 for d, g, recursive, names_only in listings
             )
         }
-        return users
 
     def fixture_users(self, name, read):
         """Tests that use a non-autouse conftest fixture whose body runs `name` (or reads it, when `read`)."""
@@ -946,8 +951,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        reads, adds the smoke set; the tests below it are not reached through it.
     3. A Python file the map cannot parse, or does not know, runs the checks that name its path, else the smoke set.
     4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
-       it directly, and the smoke set's browser scripts. A UI_MAP file runs its scripts; a missing one runs the smoke set's
-       browser scripts instead.
+       it directly or run a module that lists its folder (a test that globs ui/*.js is reached through the module it
+       runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
+       a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
@@ -1061,6 +1067,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
         browser |= {Path(p).stem for p in linked if is_browser(p)}
         python |= {p for p in linked if is_test(p)}
+        # A module that lists the folder (scripts/build-icon-font.py globs ui/*.js) reaches the tests that run it.
+        python |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
+        if is_browser(name):  # a changed browser script runs itself: it is the check that changed
+            browser.add(Path(name).stem)
         smoke_browser = True
         uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
         notes.append("rule 4: ui outside UI_MAP")
