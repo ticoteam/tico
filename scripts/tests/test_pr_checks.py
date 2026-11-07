@@ -1214,6 +1214,26 @@ def test_a_ui_file_outside_the_map_runs_its_readers_its_linked_scripts_and_the_s
     assert "--all" not in plan["browser"]
 
 
+def test_index_html_script_urls_map_to_the_files_the_server_serves():
+    # The page names scripts by URL (backend/ui_bundle.py): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
+    diff = (
+        '+<script src="/tico/ui/app/b.ts"></script>\n'
+        '+<script src="/vendor/marked.min.js"></script>\n'
+        '+<script src="https://cdn.example/x.js"></script>\n'
+        "+++ ui/index.html\n"
+    )
+    assert checks.script_srcs("ui/index.html", diff) == ["ui/app/b.ts", "ui/vendor/marked.min.js"]
+
+
+def test_plan_refuses_to_run_outside_ci(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("TICO_PLAN_LOCAL", raising=False)
+    monkeypatch.setattr(checks, "prepare", lambda *a: pytest.fail("plan collected tests outside CI"))
+    monkeypatch.setattr(sys, "argv", ["pr_checks.py", "plan", "--event", "pull_request"])
+    assert checks.main() == 2
+    assert "runs in CI only" in capsys.readouterr().err
+
+
 def test_an_index_html_script_rename_counts_as_a_change_to_the_file_it_loads(tmp_path):
     diff = '+<script src="app/b.js"></script>\n-<script src="app/a.js"></script>\n+++ ui/index.html\n'
     assert checks.script_srcs("ui/index.html", diff) == ["ui/app/b.js"]

@@ -6,8 +6,10 @@ inserts a row and stamps the old one superseded (superseded_by points at the new
 is a clear: it removes an override, so a matching rule applies again, else the line counts as its tags. No row at all
 means the same. Undo restores the row a change superseded, as a new row of its own.
 
-Precedence for a line: an in-force person or bot row with splits > a matching rule > the line's tags. A rule's effect
-is a row too (source 'rule', rule_id), written when it applies, so a rule's removal can find and undo it.
+Precedence for a line: an in-force person or bot row with splits > a matching rule > a platform share (source
+'platform': an ad platform's charge split by the platform's own spend per bot, finance/platform_share.py) > the line's
+tags. A rule's effect is a row too (source 'rule', rule_id), written when it applies, so a rule's removal can find and
+undo it. A platform share is a row too (source 'platform'), written when its splits change.
 
 Vendor, account and money-account matches are judged here (match_rule), on the facts of the line: its vendor keys
 (store/ap.vendor_keys), its P&L account, and the entry's money account (the entry's first line on a non-P&L account,
@@ -27,7 +29,7 @@ from ..core.attribution import Split
 # Tico's own modules are untyped: Finance reaches them through this file, typed at each call.
 _H: Any = _hubdb
 
-SOURCES = ("rule", "person", "bot")
+SOURCES = ("rule", "person", "bot", "platform")
 MATCH_KINDS = ("vendor", "account", "money_account", "class", "location", "project")
 # The order a line's matching rules are judged in: the first kind with an enabled rule that fits the line wins. A
 # vendor is the most specific fact, a reporting dimension (class, location, project) the least.

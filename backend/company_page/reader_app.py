@@ -152,7 +152,7 @@ class ReaderOidc(O.Oidc):
         self.redirect_uri = origin + CALLBACK_PATH
         self.secret = hmac.new(self.secret, b"company-page-reader-login", hashlib.sha256).digest()
 
-    def _email(self, claims):
+    def _email(self, claims, joined=()):
         return self._verified_email(claims)
 
     def person(self, *args, **kwargs):
