@@ -40,6 +40,7 @@ EVERY = timedelta(minutes=30)
 INTAKE_PERIOD = timedelta(days=7)
 WAKE = "factory_manager"
 CHECK_PREFIX = "Factory check: "
+NOTE_PREFIX = "Factory note: "
 
 
 def _managed(c: "sqlite3.Connection") -> list[dict[str, Any]]:
@@ -48,7 +49,7 @@ def _managed(c: "sqlite3.Connection") -> list[dict[str, Any]]:
         return []
     return H._rows(
         c.execute(
-            "SELECT id, name, manager_id, created_at FROM factories "
+            "SELECT id, name, owner_id, manager_id, created_at FROM factories "
             "WHERE retired_at IS NULL AND manager_id IS NOT NULL AND manager_id<>'' ORDER BY position, name"
         )
     )
@@ -105,6 +106,53 @@ def _no_intake(c: "sqlite3.Connection", factory_id: str, at: datetime) -> list[d
             (since, factory_id, since),
         )
     )
+
+
+def _daily_note(
+    c: "sqlite3.Connection", factory: dict[str, Any], run_id: str, bottleneck: dict[str, Any] | None, at: datetime
+) -> bool:
+    """Post the factory's note for the UTC day before, once per UTC day: plain code, no model call. It is a task owned by
+    the factory's owner (a person sees it in their task list; no bot is woken for it), titled "Factory note: <name>
+    <day>". Returns whether a note was posted this pass."""
+    fid = factory["id"]
+    if not factory["owner_id"]:
+        return False
+    today = datetime(at.year, at.month, at.day, tzinfo=timezone.utc)
+    if c.execute(
+        "SELECT 1 FROM factory_manager_actions WHERE factory_id=? AND action='post_note' AND created_at>=? LIMIT 1",
+        (fid, PM.stamp_of(today)),
+    ).fetchone():
+        return False
+    day = today - timedelta(days=1)
+    counts = c.execute(
+        "SELECT SUM(woke) AS woke, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed, COUNT(*) AS runs "
+        "FROM factory_manager_runs WHERE factory_id=? AND started_at>=? AND started_at<?",
+        (fid, PM.stamp_of(day), PM.stamp_of(today)),
+    ).fetchone()
+    title = f"{NOTE_PREFIX}{factory['name']} {day:%Y-%m-%d}"
+    lines = [
+        f"{factory['name']} on {day:%Y-%m-%d} (UTC):",
+        f"- Factory Manager passes: {counts['runs'] or 0}, failed: {counts['failed'] or 0}, wakes: {counts['woke'] or 0}.",
+        f"- Bottleneck at the last pass: {bottleneck['name'] if bottleneck else 'none'}.",
+    ]
+    H.task_create(
+        c,
+        H.KEEPER,
+        title,
+        "\n".join(lines),
+        factory["owner_id"],
+        deduplicate=False,
+        lint=False,
+        private=False,
+        trigger="schedule",
+        trigger_source=WAKE,
+    )
+    c.execute(
+        "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
+        "created_at) VALUES (?,?,?,'post_note',?,?,?)",
+        (PM.new_id("fma"), fid, run_id, factory["owner_id"], title, PM.stamp_of(at)),
+    )
+    return True
 
 
 def _open_check(c: "sqlite3.Connection", factory: dict[str, Any], owner: str, body: str) -> None:
@@ -183,6 +231,7 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
             run_id,
         ),
     )
+    _daily_note(c, factory, run_id, bottleneck, at)
     return {"items": len(items), "woke": woke}
 
 

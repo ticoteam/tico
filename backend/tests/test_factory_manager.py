@@ -37,6 +37,11 @@ def runs(c):
     ]
 
 
+def bot_wakes(woken):
+    """The wakes sent to a bot (a person's task note wakes the person, not a model)."""
+    return [w for w in woken if str(w[2]).startswith("bot:")]
+
+
 def botops(c):
     return c.execute(
         "SELECT COUNT(*) FROM tasks WHERE owner_id='bot:botops' AND title='Pipeline manager stopped: Launch'"
@@ -57,7 +62,7 @@ def test_a_pass_with_nothing_to_judge_wakes_nobody_and_makes_no_model_call(api, 
         [run] = runs(c)
         assert (run["status"], run["woke"], run["model_called"], run["judgment_count"]) == ("ok", 0, 0, 0)
         assert checks(c) == 0
-    assert woken == []
+    assert bot_wakes(woken) == []
 
 
 def test_the_same_bottleneck_on_two_passes_wakes_the_manager_once(api):
@@ -148,3 +153,28 @@ def test_factories_without_a_manager_are_skipped(api):
     FM.tick(store, now())
     with store.read() as c:
         assert runs(c) == []
+
+
+def test_the_factory_gets_one_note_per_utc_day_from_plain_code(api, monkeypatch):
+    store = api.app.state.store
+    woken = []
+    monkeypatch.setattr(H, "_wake", lambda *a, **k: woken.append(a))
+    day1 = datetime(2026, 11, 7, 0, 5, tzinfo=timezone.utc)
+    with store.transaction() as c:
+        factory(c, manager="ops")
+    for minutes in (0, 30, 60 * 12, 60 * 23 + 30):  # four passes on the first UTC day
+        FM.tick(store, day1 + timedelta(minutes=minutes))
+    with store.read() as c:
+        notes = c.execute("SELECT title FROM tasks WHERE title LIKE ?", (FM.NOTE_PREFIX + FACTORY + "%",)).fetchall()
+        assert [n[0] for n in notes] == [FM.NOTE_PREFIX + FACTORY + " 2026-11-06"]
+        assert c.execute("SELECT COUNT(*) FROM factory_manager_actions WHERE action='post_note'").fetchone()[0] == 1
+        assert [r["model_called"] for r in runs(c)] == [0, 0, 0, 0]
+    FM.tick(store, day1 + timedelta(days=1, minutes=10))  # the next UTC day
+    FM.tick(store, day1 + timedelta(days=1, minutes=40))
+    with store.read() as c:
+        assert (
+            c.execute("SELECT COUNT(*) FROM tasks WHERE title LIKE ?", (FM.NOTE_PREFIX + FACTORY + "%",)).fetchone()[0]
+            == 2
+        )
+        assert c.execute("SELECT COUNT(*) FROM factory_manager_actions WHERE action='post_note'").fetchone()[0] == 2
+    assert bot_wakes(woken) == []
