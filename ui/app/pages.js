@@ -395,12 +395,17 @@ async function taskPagesLoad(d) {
 }
 
 // ----------------------------------------------------------------- Library › Files
+// A table across the page on a computer (name, kind, made by, team, updated) and two lines a row on a phone. The search
+// and the filter button share the top row; the filters sit in a popover (the Tasks popover's classes) and show as chips
+// under the row. Every filter rides in the address, so a view can be shared.
 const LF_KINDS = [['', 'All kinds'], ['page', 'Pages'], ['document', 'Documents'], ['image', 'Images'], ['data', 'Data'],
   ['media', 'Video and audio'], ['other', 'Other']];
 const LF_ICON = {page: 'article', document: 'description', image: 'palette', data: 'analytics', media: 'play_arrow', other: 'inventory_2'};
 const LF_DATES = [['', 'Any time'], ['7', 'Past week'], ['30', 'Past month'], ['365', 'Past year']];
 const LF_FILTERS = ['q', 'kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];
-let LF = null;                // {filter, rows, cursor, loading, seq, groups}
+const LF_COUNTED = ['kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];   // the filter button's count and the chips (not the search)
+let LF = null;                // {root, pop, filter, rows, cursor, seq, groups}
+const lfTeamName = id => id ? (LF?.groups || []).find(g => g.id === id)?.name || teamLabel(id) : '';
 function lfQuery(filter = LF.filter) {
   const q = new URLSearchParams();
   for (const k of LF_FILTERS) if (filter[k]) q.set(k, filter[k] === true ? '1' : filter[k]);
@@ -423,66 +428,133 @@ async function pageLibraryFiles() {
   const same = LF && document.body.contains(LF.root);
   if (!same) {
     $('#main').innerHTML = `<div class="lf" id="lf-root">
-      <header class="lf-head"><h1>Files</h1><span class="spacer"></span></header>
-      <div class="lf-filters"><input class="lf-q" type="search" placeholder="Search" aria-label="Search files" autocomplete="off">
-        <div class="lf-frow"><select class="lf-kind" aria-label="Kind">${LF_KINDS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
-          <select class="lf-bot" aria-label="Bot"><option value="">All bots</option></select>
-          <select class="lf-team" aria-label="Team"><option value="">All teams</option></select>
-          <select class="lf-days" aria-label="Updated">${LF_DATES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
-          <button class="lf-toggle" type="button" data-lf-toggle="pinned" aria-pressed="false">Pinned</button>
-          <button class="lf-toggle" type="button" data-lf-toggle="archived" aria-pressed="false">Archived</button>
-          <span class="lf-task" hidden></span></div></div>
-      <div class="lf-list" aria-live="polite">${skelRows(6)}</div></div>`;
-    LF = {root: $('#lf-root'), filter, rows: [], cursor: null, seq: 0, groups: []};
+      <header class="lf-head"><h1>Files</h1>
+        <div class="lf-search">${TL_ICON.search}<input class="lf-q" type="search" placeholder="Search" aria-label="Search files" autocomplete="off" spellcheck="false"></div>
+        <button type="button" class="lf-fbtn" popovertarget="lf-filter-pop" aria-haspopup="true" aria-expanded="false" aria-label="Filters" title="Filters">${filterIcon(16)}<span class="lf-fbn tnum" hidden></span></button>
+        <div class="tl-pop lf-pop" id="lf-filter-pop" popover></div></header>
+      <div class="lf-bar" hidden></div>
+      <div class="lf-table"><div class="lf-cols" aria-hidden="true"><span class="lf-h"></span><span class="lf-h">Name</span><span class="lf-h lf-kind">Kind</span><span class="lf-h lf-by">Made by</span><span class="lf-h lf-team">Team</span><span class="lf-h lf-when">Updated</span></div>
+        <div class="lf-list" aria-live="polite">${skelRows(6)}</div></div></div>`;
+    LF = {root: $('#lf-root'), pop: $('#lf-filter-pop'), filter, rows: [], cursor: null, seq: 0, groups: []};
     lfWire();
     get('/v2/groups').then(g => { if (!LF) return; LF.groups = Array.isArray(g) ? g : g?.groups || []; lfControls(); }).catch(() => {});
   } else LF.filter = filter;
   lfControls();
   await lfLoad();
 }
+// The count, the chips and the popover's ticks follow the filters; the search box keeps what is being typed.
 function lfControls() {
-  const root = LF.root, f = LF.filter;
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, botDisplayName(e.id)])
-    .sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
-  const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
-  const bot = root.querySelector('.lf-bot'), team = root.querySelector('.lf-team');
-  bot.innerHTML = opt('', 'All bots') + bots.map(([v, l]) => opt(v, l)).join('');
-  team.innerHTML = opt('', 'All teams') + LF.groups.map(g => opt(g.id, g.name)).join('');
-  team.hidden = !LF.groups.length;
-  root.querySelector('.lf-q').value = f.q;
-  root.querySelector('.lf-kind').value = f.kind;
-  bot.value = f.bot; team.value = f.team;
-  root.querySelector('.lf-days').value = f.days;
-  for (const b of root.querySelectorAll('[data-lf-toggle]')) b.setAttribute('aria-pressed', String(!!f[b.dataset.lfToggle]));
-  const task = root.querySelector('.lf-task');
-  task.hidden = !f.task;
-  task.innerHTML = f.task ? `Task <button type="button" class="link" data-lf-clear="task" aria-label="Show every task">✕</button>` : '';
-  tasksBarEdge(root.querySelector('.lf-frow'));
+  const root = LF.root, f = LF.filter, q = root.querySelector('.lf-q'), btn = root.querySelector('.lf-fbtn'), badge = btn.querySelector('.lf-fbn');
+  if (document.activeElement !== q) q.value = f.q;
+  const n = LF_COUNTED.filter(k => f[k]).length;
+  btn.classList.toggle('active', !!n);
+  badge.hidden = !n; badge.textContent = n ? String(n) : '';
+  btn.setAttribute('aria-label', n ? `Filters, ${n} active` : 'Filters');
+  lfBarPaint();
+  lfPopSync();
+}
+function lfBarPaint() {
+  const f = LF.filter, bar = LF.root.querySelector('.lf-bar');
+  // A chip's name opens the filter popover (its own popovertarget); its ✕ takes the filter off.
+  const chip = (key, label, value) => `<span class="tl-chip"><button type="button" class="tl-chip-main" popovertarget="lf-filter-pop" aria-haspopup="true"`
+    + ` aria-label="${esc(`${label ? label + ': ' : ''}${value}. Change`)}" title="${esc(label ? `${label}: ${value}` : value)}">`
+    + `${label ? `<span class="k">${esc(label)}</span>` : ''}<span class="v">${esc(value)}</span></button>`
+    + `<button type="button" class="tl-chip-x" data-lf-clear="${key}" aria-label="${esc(`Remove ${label || value} filter`)}">${TL_ICON.x}</button></span>`;
+  const chips = [
+    f.kind && chip('kind', 'Kind', LF_KINDS.find(([v]) => v === f.kind)?.[1] || f.kind),
+    f.bot && chip('bot', 'Bot', botDisplayName(f.bot)),
+    f.team && chip('team', 'Team', lfTeamName(f.team)),
+    f.days && chip('days', 'Updated', LF_DATES.find(([v]) => v === f.days)?.[1] || f.days),
+    f.task && chip('task', 'Task', 'One task'),
+    f.pinned && chip('pinned', '', 'Pinned'),
+    f.archived && chip('archived', '', 'Archived'),
+  ].filter(Boolean);
+  bar.hidden = !chips.length;
+  bar.innerHTML = chips.length ? chips.join('') + '<button type="button" class="linkish lf-clear" data-lf-clear-all>Clear</button>' : '';
 }
 function lfWire() {
-  const root = LF.root;
-  // On a phone the filters scroll sideways, the right edge fading while more are off it, as the Tasks bar does.
-  const frow = root.querySelector('.lf-frow');
-  frow.onscroll = () => tasksBarEdge(frow);
-  if (window.ResizeObserver) new ResizeObserver(() => tasksBarEdge(frow)).observe(frow);
-  const changed = () => {
-    history.replaceState(null, '', RD_FILES + lfQuery());
-    S.route = LAST_ROUTE = location.hash;
-    void lfLoad();
-  };
+  const root = LF.root, pop = LF.pop;
   let soon = 0;
-  root.querySelector('.lf-q').oninput = ev => { LF.filter.q = ev.target.value.trim(); clearTimeout(soon); soon = setTimeout(changed, 250); };
-  for (const [sel, key] of [['.lf-kind', 'kind'], ['.lf-bot', 'bot'], ['.lf-team', 'team'], ['.lf-days', 'days']])
-    root.querySelector(sel).onchange = ev => { LF.filter[key] = ev.target.value; changed(); };
+  root.querySelector('.lf-q').oninput = ev => { LF.filter.q = ev.target.value.trim(); clearTimeout(soon); soon = setTimeout(lfChanged, 250); };
   root.onclick = ev => {
-    const t = ev.target.closest('[data-lf-toggle]');
-    if (t) { LF.filter[t.dataset.lfToggle] = !LF.filter[t.dataset.lfToggle]; t.setAttribute('aria-pressed', String(LF.filter[t.dataset.lfToggle])); changed(); return; }
-    const c = ev.target.closest('[data-lf-clear]');
-    if (c) { LF.filter[c.dataset.lfClear] = ''; lfControls(); changed(); return; }
+    if (ev.target.closest('.lf-pop')) return;                // the popover's own handler (below) takes its clicks
+    const clear = ev.target.closest('[data-lf-clear]');
+    if (clear) { LF.filter[clear.dataset.lfClear] = ''; lfChanged(); return; }
+    if (ev.target.closest('[data-lf-clear-all]')) { for (const k of LF_COUNTED) LF.filter[k] = ''; lfChanged(); return; }
     if (ev.target.closest('[data-lf-more]')) { void lfLoad(true); return; }
     const row = ev.target.closest('a.lf-row[data-lf-open="tico"]');
     if (row && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); void openFileLink(row.dataset.id, row.dataset.name); }
   };
+  pop.onclick = ev => {
+    const pick = ev.target.closest('[data-lf-set], [data-lf-toggle]');
+    if (!pick) return;
+    if (pick.dataset.lfSet) LF.filter[pick.dataset.lfSet] = pick.dataset.lfValue;
+    else LF.filter[pick.dataset.lfToggle] = !LF.filter[pick.dataset.lfToggle];
+    lfChanged();
+  };
+  // A long bot list has a find box: it hides the items that do not match, within its own section.
+  pop.oninput = ev => {
+    const find = ev.target.closest('.tl-menu-q'); if (!find) return;
+    const words = find.value.trim().toLowerCase();
+    for (const b of find.closest('.lf-sec').querySelectorAll('.tl-mi')) b.hidden = !!words && !b.dataset.label.includes(words);
+  };
+  pop.onkeydown = tasksMenuKeys;
+  // The popover is built as it opens (its teams and bots as they are now), placed under the button, and focused.
+  pop.addEventListener('beforetoggle', ev => { if (ev.newState === 'open') pop.innerHTML = lfPopHTML(); });
+  pop.addEventListener('toggle', ev => {
+    const open = ev.newState === 'open', btn = root.querySelector('.lf-fbtn');
+    btn.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    lfMenuPlace(pop, btn);
+    // The first pick in force, not the bot find box: a phone would open the keyboard over the sheet, and a
+    // focus that scrolls the popover moves Kind out of sight.
+    (pop.querySelector('[aria-checked="true"]') || pop.querySelector('.tl-mi, .lf-pill'))?.focus({preventScroll: true});
+  });
+}
+function lfChanged() {
+  history.replaceState(null, '', RD_FILES + lfQuery());
+  S.route = LAST_ROUTE = location.hash;
+  lfControls();
+  void lfLoad();
+}
+// Under the filter button and inside the window; a phone's popover is the bottom sheet the stylesheet makes it.
+function lfMenuPlace(pop, anchor) {
+  if (matchMedia(PHONE).matches) { pop.style.top = pop.style.left = ''; return; }
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8))}px`;
+  pop.style.left = `${Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8))}px`;
+}
+function lfPopHTML() {
+  const f = LF.filter;
+  const pill = (key, value, label) => `<button type="button" class="tl-mi lf-pill" role="menuitemradio" aria-checked="${f[key] === value}"`
+    + ` data-lf-set="${key}" data-lf-value="${esc(value)}">${esc(label)}</button>`;
+  const item = (key, value, label, face, find) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${f[key] === value}"`
+    + ` data-lf-set="${key}" data-lf-value="${esc(value)}" data-label="${esc(find.toLowerCase())}">${face ? `<span class="tl-opt-face">${face}</span>` : ''}`
+    + `<span class="lf-mi-name">${esc(label)}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
+  const toggle = (key, label) => `<button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${!!f[key]}" data-lf-toggle="${key}">`
+    + `<span class="lf-mi-name">${label}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => ({id: e.id, name: botDisplayName(e.id)}))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+  const groups = LF.groups || [];
+  return `<div class="tl-menu lf-menu" role="group" aria-label="Filters">
+    <div class="lf-sec" role="group" aria-label="Kind"><div class="tl-menu-h" aria-hidden="true">Kind</div>
+      <div class="lf-pills">${LF_KINDS.map(([v, l]) => pill('kind', v, l)).join('')}</div></div>
+    <div class="lf-sec" role="group" aria-label="Updated"><div class="tl-menu-h" aria-hidden="true">Updated</div>
+      <div class="lf-pills">${LF_DATES.map(([v, l]) => pill('days', v, l)).join('')}</div></div>
+    <div class="lf-sec" role="group" aria-label="Bot"><div class="tl-menu-h" aria-hidden="true">Bot</div>
+      ${bots.length > 7 ? '<input type="search" class="tl-menu-q" placeholder="Find a bot" aria-label="Find a bot" autocomplete="off" spellcheck="false">' : ''}
+      <div class="tl-menu-list">${item('bot', '', 'All bots', '', 'all bots')}${bots.map(b => item('bot', b.id, b.name, avatar(b.id, 16), `${b.name} ${b.id}`)).join('')}</div></div>
+    ${groups.length ? `<div class="lf-sec" role="group" aria-label="Team"><div class="tl-menu-h" aria-hidden="true">Team</div>
+      <div class="tl-menu-list">${item('team', '', 'All teams', '', 'all teams')}${groups.map(g => item('team', g.id, g.name, '', g.name)).join('')}</div></div>` : ''}
+    <div class="tl-menu-sep" role="separator"></div>
+    <div class="lf-sec" role="group" aria-label="Show">${toggle('pinned', 'Pinned')}${toggle('archived', 'Archived')}</div>
+  </div>`;
+}
+// The ticks follow a change while the popover stays open (its find box keeps what was typed).
+function lfPopSync() {
+  if (!LF?.pop?.matches(':popover-open')) return;
+  for (const el of LF.pop.querySelectorAll('[data-lf-set]')) el.setAttribute('aria-checked', String(LF.filter[el.dataset.lfSet] === el.dataset.lfValue));
+  for (const el of LF.pop.querySelectorAll('[data-lf-toggle]')) el.setAttribute('aria-checked', String(!!LF.filter[el.dataset.lfToggle]));
 }
 // Search (the box) asks GET /api/v2/files/search and narrows its hits by kind and bot here; the list asks
 // GET /api/v2/files with every filter, a page at a time.
@@ -503,27 +575,39 @@ async function lfLoad(more = false) {
       state.cursor = r.has_more ? r.next_cursor : null;
     }
   } catch (e) {
-    if (LF === state && seq === state.seq) list.innerHTML = `<p class="err lf-pad">${esc(e.message)}</p>`;
+    if (LF === state && seq === state.seq) {
+      state.root.querySelector('.lf-cols').hidden = true;
+      list.innerHTML = `<p class="err lf-pad">${esc(e.message)}</p>`;
+    }
     return;
   }
   lfDraw();
 }
+// One row is one link (the whole row opens the file). Its name cell holds the two-line form a phone shows: the name, then
+// Kind · Bot · time, then the search excerpt; a computer shows the excerpt on the name's line and the columns beside it.
 function lfRowHTML(f) {
   const kind = f.library_kind || 'other';
   const page = kind === 'page', link = f.locator === 'remote_link' || (f.hit && f.url);
   const url = page ? pageHref(f.id) : link ? (f.open?.url || f.url) : f.open?.url || `${API}/v2/files/${encodeURIComponent(f.id)}`;
-  const label = LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other';
-  const pins = (f.pins || []).length ? `<span class="lf-pins" title="${esc(f.pins.join(', '))}">Pinned${f.pins.length > 1 ? ' ' + f.pins.length : ''}</span>` : '';
   const attrs = page ? '' : link ? ' target="_blank" rel="noopener noreferrer"' : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
+  const kindName = (LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other').replace(/s$/, '');
+  const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '—';
+  const pins = (f.pins || []).length ? `<span class="lf-pins" title="${esc(f.pins.join(', '))}">Pinned${f.pins.length > 1 ? ' ' + f.pins.length : ''}</span>` : '';
+  const archived = f.archived ? '<span class="lf-pins">Archived</span>' : '';
+  const excerpt = f.excerpt ? `<span class="lf-excerpt">${esc(f.excerpt)}</span>` : '';
   return `<a class="lf-row" href="${esc(url)}"${attrs}>
-    <span class="nav-icon" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
-    <span class="lf-main"><span class="lf-title">${esc(f.title)}</span>
-      <span class="lf-meta">${esc(label.replace(/s$/, ''))} · ${esc(pageBotName(f))} · ${esc(ago(f.last_activity_at))}${f.archived ? ' · archived' : ''}</span>
-      ${f.excerpt ? `<span class="lf-excerpt">${esc(f.excerpt)}</span>` : ''}</span>${pins}</a>`;
+    <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
+    <span class="lf-name"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(f.title)}</span>${pins}${archived}</span>
+      <span class="lf-meta">${esc(kindName)} · ${esc(bot)} · ${esc(when)}</span>${excerpt}</span>
+    <span class="lf-kind">${esc(kindName)}</span>
+    <span class="lf-by">${f.bot ? avatar(f.bot, 18) : ''}<span class="lf-by-n">${esc(bot)}</span></span>
+    <span class="lf-team">${esc(team)}</span>
+    <span class="lf-when" title="${esc(fmt(f.last_activity_at))}">${esc(when)}</span></a>`;
 }
 function lfDraw() {
-  const list = LF.root.querySelector('.lf-list'), rows = LF.rows;
+  const root = LF.root, list = root.querySelector('.lf-list'), rows = LF.rows;
   const any = LF_FILTERS.some(k => LF.filter[k]);
+  root.querySelector('.lf-cols').hidden = !rows.length;
   list.innerHTML = rows.length ? rows.map(lfRowHTML).join('') + (LF.cursor ? '<button type="button" class="ghost lf-more" data-lf-more>More</button>' : '')
     : `<p class="muted lf-pad">${any ? 'Nothing matches.' : 'No files yet.'}</p>`;
 }
