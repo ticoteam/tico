@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import Request
 
 from . import hubdb, pipeline_manager as PM, pipeline_review, pipeline_rights
+from .pipeline_setup import completion_stage
 from .store import Problem
 
 if TYPE_CHECKING:
@@ -349,15 +350,6 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
     return out
 
 
-def _last_done(c: "sqlite3.Connection", pipeline_id: str) -> str:
-    """A pipeline's last stage of done kind: where its finished work ends, the default output stage of its factory."""
-    row = c.execute(
-        "SELECT id FROM task_steps WHERE type_id=? AND status='done' ORDER BY position DESC, id DESC LIMIT 1",
-        (pipeline_id,),
-    ).fetchone()
-    return str(row[0]) if row else ""
-
-
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
     """Per output stage: the cards that entered it in the period (a factory's done count). Read from the step history, which
     every move writes, so a pipeline with no stage requirements counts too; a card that re-enters a stage counts once."""
@@ -499,12 +491,12 @@ def read(
         }
         for pid in ordered
     ]
-    # A factory's output stage: its own, else the last done stage of its last pipeline in flow order.
+    # A factory's output stage: its own, else the completion stage of its last pipeline in flow order.
     outputs: dict[str, str] = {}
     for fid in factory_order:
         stage = str(factories[fid].get("output_stage_id") or "")
         if not stage and chains[fid]:
-            stage = _last_done(c, chains[fid][-1])
+            stage = completion_stage(c, chains[fid][-1]) or ""
         if stage:
             outputs[fid] = stage
     finished = _done(c, outputs, seen, since)

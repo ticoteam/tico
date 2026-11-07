@@ -368,6 +368,53 @@ def test_the_migration_picks_the_output_stage_by_flow_order_not_creation_order(a
     assert stored == e_steps["Done"]
 
 
+# The stages the boot gives the legacy Product roadmap and Engineering types (roadmap_flow): Engineering's Done is closed.
+BOOTED_PRODUCT = [
+    {"name": "Suggested", "status": "open"},
+    {"name": "Exploring", "status": "doing"},
+    {"name": "Spec", "status": "review"},
+    {"name": "Approved", "status": "review"},
+    {"name": "Building", "status": "doing"},
+    {"name": "Shipped", "status": "done"},
+]
+BOOTED_ENGINEERING = [
+    {"name": "Todo", "status": "open"},
+    {"name": "Doing", "status": "doing"},
+    {"name": "In review", "status": "review"},
+    {"name": "Ready to ship", "status": "ready"},
+    {"name": "Done", "status": "closed"},
+]
+
+
+def test_booted_engineering_output_is_its_closed_done_stage_in_migration_and_overview(api):
+    # Product feeds a booted Engineering type, which has no done stage: its output is the closed Done stage (D56).
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "migrations" / "20261107210000_factory_output_stage.py"
+    spec = importlib.util.spec_from_file_location("migration_factory_output_stage_booted", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    growth = make_factory(api, "Gro")
+    eng, e_steps = make_type(api, "Eng", steps=BOOTED_ENGINEERING, factory=growth)
+    prod, p_steps = make_type(api, "Prod", steps=BOOTED_PRODUCT, factory=growth)
+    link(api, prod, p_steps["Building"], eng)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE factories SET output_stage_id=NULL WHERE id=?", (growth,))
+        migration.up(c)
+        stored = c.execute("SELECT output_stage_id FROM factories WHERE id=?", (growth,)).fetchone()[0]
+    assert stored == e_steps["Done"]
+
+    # Before any migration the overview falls back to the same stage: a card that reaches Done counts for the factory.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE factories SET output_stage_id=NULL WHERE id=?", (growth,))
+    shipped = card(api, eng, e_steps["Todo"])
+    move(api, shipped["id"], step=e_steps["Done"])
+    assert overview(api)["factories"][0]["done"] == 1
+
+
 def test_a_lap_that_left_before_the_period_counts_when_it_returns_in_it(api):
     growth = make_factory(api, "Gro")
     prod, p_steps = make_type(api, "Prod", factory=growth)
