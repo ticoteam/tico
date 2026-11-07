@@ -153,10 +153,11 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(autouse=True)
-def maintenance_runs_end(tmp_path):
+def maintenance_runs_end(pooled_connections_closed, tmp_path):
     """A scheduler tick starts its maintenance run on a thread that outlives the test. Join those runs here, before the
     test's tmp_path is removed at teardown: a run still going would find its database gone (tmp_path is the dependency
-    that makes this teardown run first)."""
+    that makes this teardown run first). It takes the pooled-connection guard as a parameter so the guard is set up
+    first and tears down last: a run this join waits for can still hold a connection the guard checks."""
     yield
     for thread in threading.enumerate():
         if thread.name == "maintenance-run":
@@ -166,11 +167,11 @@ def maintenance_runs_end(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def store_pools_close():
+def store_pools_close(pooled_connections_closed):
     """A store's idle connections stay open until the store is freed, and a store in a reference cycle is freed only by
     the garbage collector, possibly during a later test, which then warns about the connections. Closing every store
     the test made, when the test ends, closes those connections on the spot. A closed store still works: its next read
-    opens a new connection."""
+    opens a new connection. Takes the guard as a parameter, so it tears down before the guard (see maintenance_runs_end)."""
     yield
     connection_guard.close_stores()
 
