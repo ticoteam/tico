@@ -167,9 +167,10 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 
 - **company**: every person on the team. **team**: the people in one group, and the company owner. **members**: the people,
   bots and groups added to the thread. It is private by default.
-- **home**: a bot's or a person's Home, readable by its Read audience. A personal chat with a bot moves into that bot's
-  Home with its messages, unless its owner may not read that Home. Everyone who can read the Home can read those
-  messages, except one that names a task, meeting or file its reader may not read.
+- **home**: a bot's or a person's Home, readable by its Read audience. A person's personal chat with a bot moves into
+  that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
+  chats, and chats with a bot synced from another app, stay where they are. Everyone who can read the Home can read
+  those messages, except one that names a task, meeting or file its reader may not read.
 - **personal**: a DM, read by the people in it, with no owner bypass. **task**: whoever may read the task.
   **meeting**: the people who may see the meeting.
 - The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
