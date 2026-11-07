@@ -41,7 +41,7 @@ from .store import ledger as SL
 MAX_LINES = 6  # a briefing is a few lines, not a report
 LINE_CHARS = 100  # one short line each; the page and the prompt never carry a paragraph
 Row = dict[str, Any]
-PACE = re.compile(r"pace \$[\d,.]+k?")  # the pace figure, which moves with the clock (see fingerprint)
+PACE = re.compile(r"[Pp]ace \$[\d,.]+k?")  # the pace figure, which moves with the clock (see fingerprint)
 
 
 def _int(value: object) -> int:
