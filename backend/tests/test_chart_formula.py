@@ -20,18 +20,6 @@ GOLDEN = json.loads(FIXTURE.read_text())
 CASES = {case["name"]: case for case in GOLDEN["cases"]}
 HOTMIC = CASES["hotmic"]["inputs"]
 CARDS = {role["slug"]: role["department"] for role in D.ROLES}
-# The six cards step 1a makes. Until they are in roles.json the formula names them, and the company file reader refuses
-# them, so the read-back stands in an existing card for each one. test_the_stand_ins_go_once_the_six_cards_are_in_roles_json
-# fails once all six exist, and then STAND_IN is deleted.
-NEW_TEMPLATES = {"cro", "app-store", "affiliates", "lead-generation", "initiative-owner", "pipeline"}
-STAND_IN = {
-    "cro": "paid-media",
-    "app-store": "product-marketing",
-    "affiliates": "paid-media",
-    "lead-generation": "sales",
-    "initiative-owner": "product-manager",
-    "pipeline": "devops-engineer",
-}
 
 
 def titles_of(result):
@@ -47,17 +35,8 @@ def named_bet(number, name, segment=""):
 
 
 def readback(case):
-    """The case's chart written as a company file and read back: its rows, and the draft the reader makes of them. A
-    template with no card in roles.json yet is read as its stand-in."""
-    rows = [
-        dict(
-            seat,
-            template=seat["template"]
-            if seat["template"] in CARDS
-            else STAND_IN.get(seat["template"], seat["template"]),
-        )
-        for seat in F.build(case["inputs"], case.get("removed", ()))["employees"]
-    ]
+    """The case's chart written as a company file and read back: its rows, and the draft the reader makes of them."""
+    rows = F.build(case["inputs"], case.get("removed", ()))["employees"]
     doc = {
         "version": "0.3",
         "created": "2026-11-07T00:00:00.000Z",
@@ -363,23 +342,16 @@ def test_the_formula_channels_are_the_vocabulary_channels_in_the_same_order():
     assert D.CHANNELS == tuple(channel["key"] for channel in F.FORMULA["channels"])
 
 
-def test_every_template_is_a_card_or_one_of_the_six_new_ones():
+def test_every_template_the_formula_can_emit_is_a_card_in_roles_json():
     used = {seat["template"] for team in F.FORMULA["teams"] for seat in team["seats"] if "template" in seat}
     used |= {channel["template"] for channel in F.FORMULA["channels"]}
-    assert used - set(CARDS) <= NEW_TEMPLATES
-    assert NEW_TEMPLATES <= used
-
-
-def test_the_stand_ins_go_once_the_six_cards_are_in_roles_json():
-    assert set(STAND_IN) <= NEW_TEMPLATES
-    assert not (NEW_TEMPLATES <= set(CARDS) and STAND_IN), "all six new cards exist in roles.json: delete STAND_IN"
+    assert used <= set(CARDS)
 
 
 def test_a_seat_on_a_card_carries_the_cards_department():
     for case in CASES.values():
         for seat in F.build(case["inputs"], case.get("removed", ()))["employees"]:
-            if seat["template"] in CARDS:
-                assert seat["department"] == CARDS[seat["template"]], seat["title"]
+            assert seat["department"] == CARDS[seat["template"]], seat["title"]
 
 
 def test_inputs_from_draft_reads_the_picked_segments_channels_and_bets():
