@@ -99,12 +99,12 @@ def test_the_numbers_equal_direct_counts_and_follow_link_order(api):
         H._set_task_tags(c, "human:ana", old["id"], ["ads"])  # the tag a card is labelled by, through the tag writer
         c.execute("UPDATE tasks SET updated_at=?, status='doing' WHERE id=?", (ago(hours=3), old["id"]))
         c.execute(
-            "UPDATE tasks SET status='done', done_at=?, step_id=?, created_at=? WHERE id=?",
-            (ago(hours=1), sales_steps["Done"], ago(days=3), done["id"]),
+            "UPDATE tasks SET status='done', done_at=?, created_at=? WHERE id=?",
+            (ago(hours=1), ago(days=3), done["id"]),
         )
+    move(api, done["id"], step=sales_steps["Done"])  # a real move into the output stage: one done card
     # The late clock is the open stage visit: the old card has been in Doing for three hours.
     visit(api, old["id"], marketing, marketing_steps["Doing"], ago(hours=3), "initial")
-    visit(api, done["id"], sales, sales_steps["Done"], ago(hours=1))  # the output stage of Gro: one done card
     handoff(api, lead, done["id"], ago(days=1))
     handoff(api, lead, done["id"], ago(days=20))  # outside 7 days
 
@@ -303,3 +303,19 @@ def test_a_spawn_counts_only_when_the_reader_may_open_both_its_tickets(api):
 
     assert [e["count"] for e in overview(api)["edges"]] == [1]
     assert overview(api, token="ben-test")["edges"] == []
+
+
+def test_factory_done_counts_real_moves_into_the_output_stage_without_requirements(api):
+    # A pipeline with no stage requirements records no stage visits; its done count still comes from the moves.
+    growth = make_factory(api, "Gro")
+    sales, steps = make_type(api, "Sls", factory=growth)
+    first = card(api, sales, steps["Doing"])
+    second = card(api, sales, steps["Doing"])
+    card(api, sales, steps["Doing"])  # still open
+    move(api, first["id"], step=steps["Done"])
+    move(api, second["id"], step=steps["Done"])
+    move(api, second["id"], step=steps["Doing"])  # back out
+    move(api, second["id"], step=steps["Done"])  # and in again: one entry per card per period
+    assert overview(api)["factories"][0]["done"] == 2
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM stage_visits").fetchone()[0] == 0

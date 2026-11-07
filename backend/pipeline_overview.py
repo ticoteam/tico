@@ -345,14 +345,15 @@ def _last_done(c: "sqlite3.Connection", pipeline_id: str) -> str:
 
 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
-    """Per output stage: the cards that entered it in the period (a factory's done count)."""
-    if not stages or not _columns(c, "stage_visits"):
+    """Per output stage: the cards that entered it in the period (a factory's done count). Read from the step history, which
+    every move writes, so a pipeline with no stage requirements counts too; a card that re-enters a stage counts once."""
+    if not stages:
         return {}
     rows = _rows(
         c,
-        "SELECT v.pipeline_stage_id AS sid, COUNT(DISTINCT v.task_id) AS n FROM stage_visits v "
-        f"WHERE v.pipeline_stage_id IN ({_marks(list(stages.values()))}) AND v.entered_at>=? "
-        f"AND v.task_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY v.pipeline_stage_id",
+        "SELECT e.new AS sid, COUNT(DISTINCT e.subject_id) AS n FROM history_events e "
+        f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({_marks(list(stages.values()))}) "
+        f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen})) GROUP BY e.new",
         [*stages.values(), since],
     )
     return {str(r["sid"]): int(r["n"] or 0) for r in rows}
