@@ -1358,6 +1358,7 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
         "pace_end": None if cut else st.pace_end,
         "spent_from": st.spent_from,
         "as_of": st.as_of,
+        "reported": None if cut else st.reported,
     }
 
 
@@ -1398,7 +1399,8 @@ def budgets(
     """Every budget the viewer sees (their view's, and always their own: handlers.reads_budget), with where it stands today, or in the period holding the day `on` (past or
     future): the amount of the version in effect then, and that period's spend and holds. Spend is read live
     (budgeting's module docstring): in each month a healthy import covers, an ad budget's platform's daily spend
-    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
+    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`
+    (or, for an ad budget that does not swap, the platform's figure beside its books in `reported`)."""
     s = _open(c, viewer, at)
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
