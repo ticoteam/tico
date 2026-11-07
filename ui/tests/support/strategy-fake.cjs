@@ -224,6 +224,11 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (segPage && method === 'GET') return json(segmentPage(segPage[1]));
     if (/^\/api\/v2\/market\/segments\/.+\/research$/.test(p) && method === 'POST') return json({task_id: 't-research', created: true});
     if (p.startsWith('/api/v2/market/sizes/') && method === 'POST') return json({});
+    // The Assistant panel the Strategy page shows: an available Assistant with an empty room, so its composer mounts
+    // and takes the prompt that "Ask Assistant to suggest" hands it.
+    if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant',
+      can_turn_on: false, room_id: 'room1', messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
+    if (p === '/api/v2/conversations/room1/snapshot') return json({messages: [], execution: null, has_more: false, next_before: null});
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + hash);
