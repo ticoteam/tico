@@ -608,4 +608,8 @@ SCENARIOS = [
 
 from .cases import SCENARIOS as _CASES  # evals/factory/cases/: one file per scenario
 
-SCENARIOS += _CASES
+# One list, shared with cases/. A test that imports a case module first (evals.factory.cases.<name>) starts cases/,
+# whose first case imports this module, so this line runs while cases/ is still filling its list: a copy would keep
+# none of the cases. Sharing the list keeps the ones cases/ adds after.
+_CASES[:0] = SCENARIOS
+SCENARIOS = _CASES

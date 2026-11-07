@@ -1,6 +1,10 @@
 """The factory sim's groups (evals/factory/run.py): each VM of a remote run, or each shard of a CI matrix, gets its
 share, and together they run every (scenario, seed) pair exactly once."""
 
+import subprocess
+import sys
+from pathlib import Path
+
 from evals.factory import run
 
 
@@ -26,3 +30,17 @@ def test_shard_flags_cover_the_whole_run(monkeypatch, capsys):
 
 def test_a_scenario_with_no_timing_still_runs():
     assert run.pack([("new", 1), ("old", 1)], 2, {"old": 50}) == [[("new", 1)], [("old", 1)]]
+
+
+def test_every_scenario_is_listed_whichever_module_is_imported_first():
+    """A case module imported before scenarios.py (as test_factory_source_outages does) used to leave
+    scenarios.SCENARIOS without the cases, so the timings check failed on whichever shard ran that file first."""
+    count = "from evals.factory.scenarios import SCENARIOS; print(len({s.name for s in SCENARIOS}))"
+    root = Path(__file__).resolve().parents[2]
+
+    def names(first):
+        out = subprocess.run([sys.executable, "-c", f"{first}\n{count}"], cwd=root, capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        return int(out.stdout)
+
+    assert names("import evals.factory.cases.source_outages") == names("pass") == len(run.timings())
