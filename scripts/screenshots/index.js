@@ -282,6 +282,19 @@ async function capture() {
           };
         });
         const page = await context.newPage();
+        // The market page's second graph fetch (the note's focus, fill=false) replaces the layout's starting positions, so
+        // where the first layout had got to when it arrived decided the picture. That fetch waits until the first layout
+        // has stopped drawing: three reads 100 ms apart with the same count of draws (and at least one).
+        await page.route(url => url.pathname === '/v2/market/graph', async route => {
+          if (new URL(route.request().url()).searchParams.get('fill') !== 'false') return route.fallback();
+          for (let last = -1, still = 0, tries = 0; still < 3 && tries < 100; tries++) {
+            await page.waitForTimeout(100);
+            const draws = await page.evaluate(() => window.__marketDraws || 0);
+            still = draws > 0 && draws === last ? still + 1 : 0;
+            last = draws;
+          }
+          return route.continue();
+        });
         await page.clock.setFixedTime(new Date(DEMO_NOW));
         let where = 'load';
         page.on('console', message => { if (message.type() === 'error') problems.push(`${where}: console error: ${message.text()}`); });
