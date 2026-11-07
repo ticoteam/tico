@@ -155,14 +155,28 @@ def test_a_merge_makes_spend_and_budgets_one_vendor_and_unmerge_restores_exactly
     with books.transaction() as c:
         before = _by_vendor(c)
         assert before == {llc: 30_000, ads: 20_000}
-        budget = act(
+        root = act(
             c,
             OWNER,
             "budget_create",
-            {"name": "Ads", "account_id": account(c, "6100"), "amount": 100_000, "at_limit": "warn", "vendor": ads},
+            {"name": "Software", "account_id": account(c, "6100"), "amount": 200_000, "at_limit": "warn"},
         )
-        assert budget.status == "committed", budget.reason
-        bid = str(budget.result["budget_id"])
+        assert root.status == "committed", root.reason
+        child = act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": "Google",
+                "account_id": account(c, "6100"),
+                "amount": 100_000,
+                "at_limit": "warn",
+                "parent_id": str(root.result["budget_id"]),
+                "vendor": ads,
+            },
+        )
+        assert child.status == "committed", child.reason
+        bid = str(child.result["budget_id"])
         assert FA.budget_state(c, bid, AT).actual == 20_000
     with books.transaction() as c:
         merged = act(c, OWNER, "vendor_merge", {"into": ads, "merge": [llc]})
