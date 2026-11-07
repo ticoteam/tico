@@ -4408,8 +4408,9 @@ def type_create(
     from .roadmap_flow import claim as claim_roles
 
     claim_roles(conn)
-    from . import step_flow
+    from . import pipeline_engine, step_flow
 
+    pipeline_engine.seed_type(conn, ident)  # the default Warn after, now that the type has its role
     step_flow.seed(conn)  # a new Dev tickets type starts with the Dev board's flow
     row = type_get(conn, ident)
     event(conn, actor, "task_type.create", ident, row)

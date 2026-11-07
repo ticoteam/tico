@@ -783,6 +783,27 @@ SEEDED = "pipeline_engine.seeded"
 LATE_MINUTES = 240
 
 
+def seed_type(c: sqlite3.Connection, type_id: str) -> None:
+    """Give one type's steps their default Warn after, once. Boot does it for every type; a type created later (its role
+    set) does it when it is made, so an engineering type never waits for a restart to be late by the default. An event
+    records it, so a limit a person clears stays cleared."""
+    if c.execute("SELECT 1 FROM events WHERE action = ? AND target = ? LIMIT 1", (SEEDED, type_id)).fetchone():
+        return
+    role = c.execute("SELECT role FROM task_types WHERE id = ?", (type_id,)).fetchone()
+    role = role[0] if role else None
+    for step_id, status, flow in c.execute(
+        "SELECT id, status, flow FROM task_steps WHERE type_id = ? AND limit_minutes IS NULL", (type_id,)
+    ).fetchall():
+        hours = _json(flow).get("late_hours")
+        if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
+            minutes: int | None = round(hours * 60)
+        else:
+            minutes = LATE_MINUTES if role == "engineering" and status == "doing" else None
+        if minutes:
+            c.execute("UPDATE task_steps SET limit_minutes = ? WHERE id = ?", (minutes, step_id))
+    H.event(c, H.KEEPER, SEEDED, type_id, {})
+
+
 def boot(c: sqlite3.Connection) -> None:
     """Idempotent, at every start and after the Dev and Product types exist: give the Dev tickets type the prefix D and
     the Product roadmap P while nobody holds them, give the steps of a type not seen before their default Warn after, and
@@ -802,20 +823,8 @@ def boot(c: sqlite3.Connection) -> None:
             "AND NOT EXISTS (SELECT 1 FROM task_types WHERE prefix = ?)",
             (prefix, prefix),
         )
-    for type_id, role in c.execute("SELECT id, role FROM task_types").fetchall():
-        if c.execute("SELECT 1 FROM events WHERE action = ? AND target = ? LIMIT 1", (SEEDED, type_id)).fetchone():
-            continue
-        for step_id, status, flow in c.execute(
-            "SELECT id, status, flow FROM task_steps WHERE type_id = ? AND limit_minutes IS NULL", (type_id,)
-        ).fetchall():
-            hours = _json(flow).get("late_hours")
-            if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
-                minutes: int | None = round(hours * 60)
-            else:
-                minutes = LATE_MINUTES if role == "engineering" and status == "doing" else None
-            if minutes:
-                c.execute("UPDATE task_steps SET limit_minutes = ? WHERE id = ?", (minutes, step_id))
-        H.event(c, H.KEEPER, SEEDED, type_id, {})
+    for (type_id,) in c.execute("SELECT id FROM task_types").fetchall():
+        seed_type(c, type_id)
     c.execute(
         "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, entered_from_stage_id, direction, "
         "entered_by, entered_at, left_at) "
