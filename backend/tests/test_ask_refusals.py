@@ -3,7 +3,7 @@
 
 from backend import question_tasks as QT, team_rules
 from backend.store import H
-from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.test_api import api, assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401  (fixture)
 
 
 def _ask(api, attempt, question, **more):
@@ -59,9 +59,14 @@ def test_a_reversible_default_is_asked_when_the_owner_turned_going_ahead_off(api
 
 
 def test_a_question_on_a_task_that_already_has_one_open_is_refused_and_names_it(api):
-    _, _, attempt = setup_attempt(api)
-    with api.app.state.store.read() as c:
-        mine = H.task(c, c.execute("SELECT id FROM tasks WHERE owner_id='bot:ops'").fetchone()[0])
+    # A chat makes no task, so the bot is handed one and asks while working on it.
+    r = runner(api, "ana")
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    mine = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
+    with api.app.state.store.transaction() as c:  # cpo asked for it, so cpo may file its own question under it
+        c.execute("UPDATE tasks SET requester_id='bot:cpo' WHERE id=?", (mine["id"],))
+    attempt = claim(api, r)
     other = _other_bot_asks(api, "Which vendor should we use for payroll?", title="Payroll vendor", parent=mine)
     detail = _refused(_ask(api, attempt, "Is the weather nice?"), "ask_duplicate")
     assert other in detail and "Payroll vendor" in detail and f"blocked_by {other}" in detail

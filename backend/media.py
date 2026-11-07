@@ -1225,13 +1225,14 @@ def install_media(
         with store.read() as c:
             if not store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
                 person, parent = question_checked(c, who, body)
+                private = question_private(c, who, body, parent)
                 folds = QT.open_for(
                     c,
                     who.actor,
                     person,
                     parent=parent["id"] if parent else None,
                     topic=H.question_topic(body.topic),
-                    private=question_private(c, who, body, parent),
+                    private=private,
                 )
                 ask_refusals.check(
                     c,
@@ -1243,6 +1244,7 @@ def install_media(
                     default=body.if_no_answer.model_dump() if body.if_no_answer else None,
                     folds=folds,
                     topic=body.topic,
+                    private=bool(private),
                 )
         # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
         # person asked. A held question skips ask ingest's call.

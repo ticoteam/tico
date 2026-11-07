@@ -1,3 +1,4 @@
+# pyright: strict
 """Two plain refusals at the moment a bot puts a question to a person, before anything is written (Nov 6: Chris's
 plate had 60 bot questions, 33 with a safe default and many asked two to six times).
 
@@ -13,20 +14,26 @@ refusal: it is a `Problem`, so it counts toward no quarantine or org-rule hold, 
 """
 
 import re
+import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from . import ask_deadlines, ask_ingest, hubdb as H, question_tasks as QT, task_relations as TR, team_rules
 from .store import Problem
+
+if TYPE_CHECKING:
+    from .auth import Identity
 
 SIMILAR = 0.8  # Jaccard share of the same words that makes two titles or questions the same subject
 MIN_WORDS = 3  # fewer words than this match only when identical
 
 
-def words(text):
+def words(text: str | None) -> frozenset[str]:
     """The text's words, lowercase, without punctuation."""
     return frozenset(re.findall(r"[a-z0-9]+", str(text or "").lower()))
 
 
-def same_words(a, b):
+def same_words(a: str | None, b: str | None) -> bool:
     """Whether two texts say the same thing in (nearly) the same words."""
     wa, wb = words(a), words(b)
     if not wa or not wb:
@@ -38,16 +45,16 @@ def same_words(a, b):
     return len(wa & wb) / len(wa | wb) >= SIMILAR
 
 
-def _question_text(card):
-    questions = QT.fields(card)["questions"] or []
+def _question_text(card: dict[str, Any]) -> str:
+    questions: list[dict[str, Any]] = QT.fields(card)["questions"] or []
     return " ".join(str(q.get("question") or "") for q in questions)
 
 
-def go_ahead(c, default):
+def go_ahead(c: sqlite3.Connection, default: dict[str, Any] | None) -> str | None:
     """The refusal text when `default` is a reversible, internal step the bot should just take, else None."""
     if not default or default.get("kind") != ask_deadlines.GOES_AHEAD or not str(default.get("do") or "").strip():
         return None
-    if not team_rules.load(c)["bots_go_ahead"]:
+    if not cast(Callable[[sqlite3.Connection], dict[str, Any]], team_rules.load)(c)["bots_go_ahead"]:
         return None
     do = str(default["do"]).strip()
     return (
@@ -57,22 +64,34 @@ def go_ahead(c, default):
     )
 
 
-def duplicate(c, person, title, question, parent_id, topic=""):
+def duplicate(
+    c: sqlite3.Connection,
+    person: str,
+    title: str | None,
+    question: str,
+    parent_id: str | None,
+    topic: str = "",
+    private: bool = False,
+) -> dict[str, Any] | None:
     """The open question task to `person` that already covers this one, or None. Checked over every bot's open
     questions to the person: the same parent task, the same question text, or nearly the same title or text. Two
-    questions that name different topics on one task are two decisions, not one."""
+    questions that name different topics on one task are two decisions, not one, and so are a keyed and an unkeyed one
+    (backend/question_tasks.py topics). A private question is never matched with a public one, nor a public with a
+    private one: either way the private words would reach the other card."""
     for row in QT.open_rows(c):
         if row["owner_id"] != person:
             continue
-        card = H.task(c, row["id"])
-        if card is None:
+        card = cast(Callable[[sqlite3.Connection, str], dict[str, Any] | None], H.task)(c, row["id"])
+        if card is None or bool(card.get("private")) != private:
             continue
-        theirs = H.question_topic(card.get("question_topic"))
-        distinct = bool(topic and theirs and topic != theirs)
+        theirs = cast(Callable[[object], str | None], H.question_topic)(card.get("question_topic"))
+        if topic and theirs and topic != theirs:
+            continue  # two named topics are two decisions, whatever their words
+        distinct = (topic or None) != (theirs or None)
         if (
             parent_id
             and not distinct
-            and TR.parent_of(c, card["id"]) == parent_id
+            and cast(Callable[[sqlite3.Connection, str], str | None], TR.parent_of)(c, card["id"]) == parent_id
             or same_words(_question_text(card), question)
             or same_words(card.get("title"), title)
             or same_words(card.get("title"), question)
@@ -81,7 +100,19 @@ def duplicate(c, person, title, question, parent_id, topic=""):
     return None
 
 
-def check(c, who, person, *, title, question, parent=None, default=None, folds=None, topic: str | None = ""):
+def check(
+    c: sqlite3.Connection,
+    who: "Identity",
+    person: str,
+    *,
+    title: str,
+    question: str,
+    parent: dict[str, Any] | None = None,
+    default: dict[str, Any] | None = None,
+    folds: dict[str, Any] | None = None,
+    topic: str | None = "",
+    private: bool = False,
+) -> None:
     """Raise the refusal for a bot's question to `person`, or return. `parent` is the task it is filed under, `default`
     its `if_no_answer` ({do, kind, by}), `folds` the open question it joins by topic (never a duplicate of itself)."""
     why = go_ahead(c, default)
@@ -89,11 +120,20 @@ def check(c, who, person, *, title, question, parent=None, default=None, folds=N
         raise Problem("ask_default_go_ahead", why, 422)
     if folds:
         return
-    found = duplicate(c, person, title, question, parent["id"] if parent else None, H.question_topic(topic) or "")
+    found = duplicate(
+        c,
+        person,
+        title,
+        question,
+        parent["id"] if parent else None,
+        cast(Callable[[object], str | None], H.question_topic)(topic) or "",
+        private,
+    )
     if not found:
         return
-    name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-    if ask_ingest.source_readable(c, who.actor, found):
+    actor_id = cast(Callable[[str], str], H.actor_id)
+    name = cast(Callable[[sqlite3.Connection, str], str], H.person_name)(c, actor_id(person)) or actor_id(person)
+    if cast(Callable[[sqlite3.Connection, str, dict[str, Any]], bool], ask_ingest.source_readable)(c, who.actor, found):
         named = f"“{found['title']}” ({found['id']})"
         fix = f"Wait on that one instead: hub task relate <your task> blocked_by {found['id']}. Their answer comes back to you."
     else:
