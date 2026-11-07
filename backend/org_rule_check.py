@@ -66,6 +66,7 @@ import secrets
 import sqlite3
 import threading
 import weakref
+from types import SimpleNamespace
 
 from clients import judge as J
 from . import bot_settings as BS
@@ -74,6 +75,7 @@ from . import org_rules as R
 from . import groups as G
 from . import team_rules
 from . import threads as T
+from .batch_work import isolated
 from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
 from . import sources as SRC
@@ -1226,6 +1228,8 @@ def _person_reviewer(c, who, hold, auth):
 
 
 WITHDRAW_ROLES = ("author", "represented")  # the readers who may take a held write back (it stays blocked)
+HELD_HOURS = 24  # a held write nobody decides in this long is kept unsent (`expire_unreviewed`)
+HELD_EXPIRE_MAX = 50  # holds expired per hourly sweep, oldest first; the rest follow on later sweeps
 
 
 def represented(c, author):
@@ -1568,6 +1572,31 @@ def withdraw(c, who, hold_id, auth=None):
             f"and stays blocked (hold {hold_id}).",
         )
     return view_hold(c, who, _hold(c, hold_id), auth=auth)
+
+
+def expire_unreviewed(c, at, limit=HELD_EXPIRE_MAX):
+    """Keep, unsent, each held write nobody decided within HELD_HOURS. The keeper decides it as `keep` does, so its
+    review task closes, and the bot that wrote it is told it was not sent, so it can write it again within the rules or
+    drop it. Nothing here delivers a held payload. Oldest first, at most `limit` per sweep."""
+    cutoff = H.shift(at, hours=-HELD_HOURS)
+    keeper = SimpleNamespace(actor=H.KEEPER, via="", task_actor="")
+    expired = []
+    rows = c.execute(
+        "SELECT * FROM org_rule_holds WHERE state='held' AND created_at<? ORDER BY created_at, id LIMIT ?",
+        (cutoff, max(0, int(limit))),
+    ).fetchall()
+    for row in rows:
+        hold = dict(row)
+        with isolated(c, "held_expiry", hold["id"]):
+            _decide(c, keeper, hold, "kept", "org_rule_hold.expired")
+            _tell_bot(
+                c,
+                hold["author"],
+                f"Your held {OPERATIONS.get(hold['operation'], hold['operation'])} was not sent: nobody reviewed it "
+                f"within {HELD_HOURS} hours (hold {hold['id']}). Write it again within the rules, or drop it.",
+            )
+            expired.append(hold["id"])
+    return expired
 
 
 def hold_provenance(hold):

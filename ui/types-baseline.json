@@ -81,7 +81,7 @@
     "ui/app/overview.js": 26,
     "ui/app/pages.js": 24,
     "ui/app/person-page.js": 93,
-    "ui/app/pill.js": 13,
+    "ui/app/pill.js": 9,
     "ui/app/pull-refresh.js": 2,
     "ui/app/question-card.js": 18,
     "ui/app/rails.js": 8,

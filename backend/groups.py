@@ -36,6 +36,7 @@ SYSTEM_BOTS = (
     "task-manager",
     "bookkeeper",
     H.COUNSEL,
+    H.BRAND_OWNER,
 )
 
 
