@@ -110,17 +110,19 @@ class World:
         return self.c.execute("SELECT step_id FROM tasks WHERE id=?", (task or self.task,)).fetchone()[0]
 
     def visit(self, task=None, at=None, step=None):
+        """The ticket's open visit at `step`: the one the engine opened at creation is moved there, else one is opened
+        (a ticket has one open visit at a time)."""
+        ticket, when, stage = task or self.task, at or H.now(), step or self.review
+        open_visit = self.c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (ticket,)).fetchone()
+        if open_visit:
+            self.c.execute(
+                "UPDATE stage_visits SET pipeline_stage_id=?, entered_at=? WHERE id=?", (stage, when, open_visit[0])
+            )
+            return
         self.c.execute(
             "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_at) "
             "VALUES (?,?,?,?,?,?)",
-            (
-                f"v-{time.monotonic_ns()}",
-                task or self.task,
-                self.pipeline,
-                step or self.review,
-                "initial",
-                at or H.now(),
-            ),
+            (f"v-{time.monotonic_ns()}", ticket, self.pipeline, stage, "initial", when),
         )
 
     def decide(self, requirement, verdict, judge="llm", task=None, **extra):
@@ -587,6 +589,7 @@ def mixed_queue(path):
     w.visit(badge, "2026-11-03T08:00:00.000000Z", step=w.making)
     w.decide(judge, "unsure", judge="bot", task=badge, pipeline_stage_id=w.making, reason="The badge is too small")
     blank = ticket("Blank")
+    w.c.execute("DELETE FROM stage_visits WHERE task_id=?", (blank,))  # creation opened one; this ticket has none
     H.history_event(w.c, "task", blank, ANA, "step", new=w.review, created_at="2999-02-01T00:00:00.000000Z")
     return w, titles
 

@@ -49,6 +49,15 @@ def ticket(c, type_id, stage="Building", created=None):
 
 
 def visit(c, task_id, type_id, stage, entered):
+    """The ticket's open visit, started at `entered`: the one the engine opened at creation is moved to that time, else
+    one is opened (a ticket has one open visit at a time)."""
+    open_visit = c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (task_id,)).fetchone()
+    if open_visit:
+        c.execute(
+            "UPDATE stage_visits SET pipeline_stage_id=?, entered_at=? WHERE id=?",
+            (step(c, type_id, stage), stamp(entered), open_visit[0]),
+        )
+        return
     c.execute(
         "INSERT INTO stage_visits (id, task_id, pipeline_id, pipeline_stage_id, direction, entered_by, entered_at) "
         "VALUES (?,?,?,?,'initial',?,?)",
