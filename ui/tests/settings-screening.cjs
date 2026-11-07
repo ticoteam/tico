@@ -1,4 +1,4 @@
-// Settings > Security > Screening (#/settings/security, ui/app/settings-release.js, backend/screening.py): an owner or admin sees a switch per
+// Settings > Security > Screening (#/settings/security, ui/app/settings-release.ts, backend/screening.py): an owner or admin sees a switch per
 // detector (Patterns, Model) and one row per door (Webhooks, Mail, Ideas, Watchers) with a mode, mail offering Off and
 // Warn only; a change is one PUT; Run test
 // shows passed/total and each sample; Recent lists holds and warnings with a Task link. A member has no Security tab and
