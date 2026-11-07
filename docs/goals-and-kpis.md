@@ -328,8 +328,8 @@ evidence), its definition and version, its owner, its targets and the Strategy B
 **Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. Each goal in a panel shows its
 [Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is one quiet line at the
-top, shown only when something waits (for example "Strategy Bot suggested a new bet · Review"): red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
-waiting for your confirmation. **Review** opens them in a sheet, where each is answered as it would be in the Ask panel or the Needs you queue. Initial page load makes two requests, the tree and Needs you; the Strategy Bot panel and
+top, shown only when something waits. Its items include Strategy Bot suggestions and recoveries, waiting Why lines, red KPIs,
+stale KPI readings, and definitions and targets awaiting confirmation. **Review** opens them in a sheet, where each is answered as it would be in the Ask panel or the Needs you queue. Initial page load makes two requests, the tree and Needs you; the Strategy Bot panel and
 the historical KPI view load only when opened.
 People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
 from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
