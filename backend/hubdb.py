@@ -4795,7 +4795,8 @@ def _set_status(
         from . import pipeline_engine
 
         if row:
-            pipeline_engine.on_step_change(conn, actor, row, type_id, step_id, ts)
+            # A Close with no step of its own cancels the ticket (pipeline_engine._shipped_ids); a move onto a stage does not.
+            pipeline_engine.on_step_change(conn, actor, row, type_id, step_id, ts, closing=status == "closed" and step is None)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
         if row.get("occurrence"):

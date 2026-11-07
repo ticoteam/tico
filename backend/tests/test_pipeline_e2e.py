@@ -543,15 +543,26 @@ def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_o
 
 
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
-    """A subtask declined is closed without shipping: with nothing shipped the card does not pass. (A close lands a
-    subtask in the Done stage, which the visit rule counts as shipped, so a decline is the not-shipped case.)"""
+    """Finding R5: a subtask closed without finishing is cancelled, not shipped. A Close lands it in Engineering's Done
+    column (status closed), and that must not meet "Engineering shipped" or move the card to Validate. A decline is
+    the same: with nothing shipped the card does not pass."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.set_status(d41, "declined")
+    co.close(d41, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert co.where(d41) == ("Engineering", "Done")
     assert co.where(card) == ("Product", "In development")
     assert co.dots(card)["Engineering shipped"]["state"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
+
+    other = review_card(co, "Dark mode, second try")
+    approve_spec(co, other)
+    (d44,) = subtasks(co, other)
+    co.set_status(d44, "declined")
+    assert co.where(other) == ("Product", "In development")
+    assert co.dots(other)["Engineering shipped"]["state"] == "failed"
+    assert co.advance(other, actor=ANA)["moved"] is False
 
 
 def test_a_subtask_starting_work_does_not_move_its_product_card(co):
@@ -1109,6 +1120,19 @@ def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(
     co.move(d41, "Done", actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
     assert co.where(card) == ("Product", "Validate")
+
+
+def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
+    """Finding R5: a subtask marked done ships the card, and closing it afterwards does not take the shipment back. The
+    done history is the evidence, so the requirement stays met on the card."""
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    co.set_status(d41, "done")
+    assert co.where(card) == ("Product", "Validate")
+    co.close(d41, actor=ANA)
+    assert H.task(co.c, d41)["status"] == "closed"
+    assert standing_names(co, card)["Engineering shipped"] == "met"
 
 
 def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
