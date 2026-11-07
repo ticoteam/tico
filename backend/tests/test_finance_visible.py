@@ -129,7 +129,7 @@ def test_a_revoked_grant_changes_the_next_read(books):
             c,
             OWNER,
             "view_grant",
-            {"subject": SELLER, "what": "expenses", "whose": "teams", "whose_team": "web"},
+            {"subject": SELLER, "what": "expenses", "whose": "team", "whose_team": "web"},
         )
         assert grant.status == "committed", grant.reason
         assert _by_vendor(c, SELLER) == {"Acme Cloud": (16_500, False)}
