@@ -57,7 +57,7 @@ function pageTasks(forced, openId = '') {
         <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Finished" title="Finished tasks">${TL_ICON.archive}</button>
         <button type="button" class="tl-decide" data-go-through hidden></button>
         <button type="button" class="tl-ib" id="task-more" aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${TL_ICON.dots}</button>
-        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
+        <button class="primary add-ctl" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
       </header>
       <div class="tl-bar" id="task-bar" hidden>
         <span class="tl-finished-bar"></span>

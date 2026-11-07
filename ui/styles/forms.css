@@ -45,6 +45,13 @@ a.primary{display:inline-block;text-decoration:none}
 button.ghost{background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;cursor:pointer;color:var(--ink)}
 /* the small size: 28px (regular is 32px), for a row's own actions and a toolbar's secondary ones */
 :is(button,a).primary.small,:is(button,a).ghost.small{padding-top:3px;padding-bottom:3px}
+/* a small button's icon sits on the label's middle, not its baseline (the baseline put it 5px high) */
+:is(button,a).primary.small>.nav-icon,:is(button,a).ghost.small>.nav-icon{vertical-align:middle}
+/* the icon-only add button (Tasks, Automations, Changelog): a square at the row's control height, its + at 14px. It beats
+   the primary padding and line-height above, so the box is its size on every page; a phone row widens it with --add-w/--add-h. */
+:is(button,a).primary.add-ctl{flex:none;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--add-w,var(--ctl));height:var(--add-h,var(--ctl));min-width:0;padding:0;line-height:var(--lh-none);border-radius:var(--r-ctl)}
+:is(button,a).primary.add-ctl[hidden]{display:none}
+:is(button,a).primary.add-ctl svg{width:14px;height:14px}
 /* a link that only says ghost (Open chat, Bot settings, Fix) is a ghost button; links with their own class keep their look */
 a[class="ghost"]{display:inline-block;background:transparent;border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 10px;line-height:20px;color:var(--ink);text-decoration:none}
 :is(button.ghost,a[class="ghost"]):hover:not(:disabled){background:var(--surface2);text-decoration:none}
