@@ -4,8 +4,10 @@ fixes it when it is a known gap today, so a failing check reads as "not built ye
 from collections import Counter
 
 from .board import design_board
-from .sim import Scenario, at, tickets
+from .sim import Allowance, Scenario, at, tickets
 from .world import START
+
+from backend.step_age import LATE_HOURS as STUCK_HOURS  # imported after world, which sets the test environment
 
 QUEUE = "queue cleanup"  # stale notices dropped, the rest folded into one turn (Dev 601 spec)
 TIMEOUT = "Dev 601 task timeout"
@@ -14,7 +16,7 @@ SLOTS = "Dev 542"
 HOE = "Dev 606"
 ASSIGN = "assignment rule"
 REPORT = "report"  # printed for a person to read, never failed: how long work takes is measured, not judged
-LONG_TICKET_HOURS, LONG_STEP_HOURS = 24, 12
+STUCK_CHECK = f"no open or doing task waits {STUCK_HOURS} h with its owner free and nothing happening"
 
 
 # ---------------------------------------------------------------------------------------------- checks
@@ -23,24 +25,16 @@ def all_through(run):
     return not left, ", ".join(left[:6]) + (f" (+{len(left) - 6})" if len(left) > 6 else "")
 
 
-def long_running(run):
-    """Tickets that took over LONG_TICKET_HOURS to merge (or are still open past it), and stays at one step over
-    LONG_STEP_HOURS: most likely a bug, but a hard change can take that long, so they are reported, not failed."""
-    end = run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    long = []
-    for t in run.final:
-        hours = ((run.merged_at.get(t["id"]) or run.end) - run.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
-        steps = [
-            f"{name} {span:.0f}h"
-            for name, span in run.w.step_spans(t["id"], until=end)
-            if span > LONG_STEP_HOURS
-            and run.w.board.step(name)
-            and not run.w.board.step(name).merged
-            and not run.w.board.finished(name)
-        ]
-        if hours > LONG_TICKET_HOURS or steps:
-            long.append(f"{t['title']} {hours:.0f}h" + (f" ({', '.join(steps)})" if steps else ""))
-    return not long, ", ".join(long[:6]) + (f" (+{len(long) - 6})" if len(long) > 6 else "")
+def no_stuck_work(run):
+    """Stuck work: an open or doing task of any kind (a ticket, a review or QA subtask, a lead's task) that waits with its
+    owner free and nothing happening on it for STUCK_HOURS, the product's late hours for a working step (sim.Run.stuck_tick).
+    It fails whatever the scenario is about, unless the scenario declares an allowance for that task with its reason."""
+    found = sorted(run.stuck.values(), key=lambda s: s["since"])
+    text = "; ".join(
+        f"{s['title']} at {s['step']} ({s['owner']}, {s['status']}) waited {s['idle']:.0f} h with its owner free"
+        for s in found[:4]
+    )
+    return not found, text + (f" (+{len(found) - 4})" if len(found) > 4 else "")
 
 
 def never_blocked_after_merge(run):
@@ -348,7 +342,7 @@ def company_cap(per_30m):
 
 BASE = [
     ("tickets not merged by the end", REPORT, all_through),
-    (f"tickets over {LONG_TICKET_HOURS} h, or a step over {LONG_STEP_HOURS} h", REPORT, long_running),
+    (STUCK_CHECK, None, no_stuck_work),
     ("merged tickets never Blocked", HOLD, never_blocked_after_merge),
     ("no call got a server error", None, no_server_error),
 ]
@@ -511,6 +505,13 @@ SCENARIOS = [
         "A ticket keeps an old open blocker; it merges and must still ship.",
         setup=lambda run, w, team: tickets(run, w, 3),
         during=stale_blocker,
+        stuck=(
+            Allowance(
+                "the leftover blocker is a lead's task, not Dev work: the sim's Head of Engineering works only its sweep",
+                None,
+                "Restore an old check",
+            ),
+        ),
         checks=standard(),
     ),
     Scenario(
@@ -609,3 +610,8 @@ SCENARIOS = [
 from .cases import SCENARIOS as _CASES  # evals/factory/cases/: one file per scenario
 
 SCENARIOS += _CASES
+
+# Every scenario carries the stuck-work invariant, whatever checks it lists (a case may leave BASE out).
+for _scenario in SCENARIOS:
+    if not any(fn is no_stuck_work for _, _, fn in _scenario.checks):
+        _scenario.checks.insert(0, (STUCK_CHECK, None, no_stuck_work))

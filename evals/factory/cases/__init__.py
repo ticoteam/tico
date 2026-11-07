@@ -29,3 +29,6 @@ SCENARIOS += _verdict_past_open_sibling
 from .source_outages import SCENARIOS as _source_outages
 
 SCENARIOS += _source_outages
+from .stranded_doing import SCENARIOS as _stranded_doing
+
+SCENARIOS += _stranded_doing

@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from . import bots as B
 from .board import dev_board
 from .world import PRIMARY, Refusal, World
+from backend.step_age import (
+    LATE_HOURS as STUCK_HOURS,
+)  # the product's late hours for a working step (world imports first)
 
 PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}  # $ per million: uncached input, cached input, output
 SHORT_ROUNDS = 40  # a run reads the reasons of at most this many short claim rounds (see Run.reasons)
@@ -71,6 +74,14 @@ class Run:
         self.short_rounds = 0  # short rounds whose reasons were read (at most SHORT_ROUNDS)
         self.stale_busy = None  # a bot a scenario keeps naming busy for its first rounds (see stale_round)
         self.stale_named = None  # the bot stale_round names busy in the current claim round, if any
+        self.stuck = {}  # task id -> the stuck stretch found on it: title, step, owner, status, idle hours, since
+        self.idle = (
+            Counter()
+        )  # task id -> hours it has waited with its owner free and nothing on it since its last event
+        self.acted = {}  # task id -> when a turn last did something on it (a turn that did nothing is no event)
+        self.seen_turns = Counter()  # bot slug -> turns stuck_tick has read
+        self.tick_at = None  # when the last tick was observed
+        self.plate_peak = 0  # the most open items on the owner's plate at any tick (the questions and tasks she owns)
 
     def team(self, w):
         styles = self.scenario.styles
@@ -119,6 +130,7 @@ class Run:
             ci_fail=s.ci_fail,
             signed_in=s.signed_in,
             capacity=s.capacity,
+            profiles=s.profiles,
         ) as w:
             self.w = w
             team = self.team(w)
@@ -476,6 +488,96 @@ class Run:
                 self.violations["merged_blocked"].append((now, t["title"]))
         for b in team.builders:
             self.peak_doing[b.slug] = max(self.peak_doing[b.slug], w.slots(b.slug))
+        self.stuck_tick(w, team)
+        plate = w.sql(
+            "SELECT count(*) n FROM tasks WHERE owner_id IN ('human:ana','ana') AND status IN ('open','doing','review')"
+        )
+        self.plate_peak = max(self.plate_peak, plate[0]["n"])
+
+    def stuck_tick(self, w, team):
+        """The stuck-work invariant, once per tick, over every open or doing task with a bot as its owner (a ticket, a
+        review or QA subtask, a lead's task). Such a task counts the time it waits while its owner is free: no turn
+        running, no job queued for the owner, its computer on, not paused, not on a usage limit. Any event on the task
+        (a history event, a change to it, a turn that did something on it) since the last tick restarts the count, so
+        only a stretch with no event at all is stuck. A task waiting on a hold (Blocked, snoozed), on its subtasks, or on
+        its owner's full slots is not counted. Reaching STUCK_HOURS (or the scenario's allowance for it) records the task
+        once in `stuck`."""
+        H, now, hours = w.H, w.now(), self.scenario.tick_minutes / 60
+        for b in team.all:
+            for r in b.turns[self.seen_turns[b.slug] :]:
+                if r.get("task") and r.get("action"):
+                    self.acted[r["task"]] = r["at"]
+            self.seen_turns[b.slug] = len(b.turns)
+        events = {
+            r["subject_id"]: H.parse_ts(r["at"])
+            for r in w.sql(
+                "SELECT subject_id, max(created_at) at FROM history_events WHERE subject_type='task' GROUP BY subject_id"
+            )
+        }
+        held = {
+            r["task_id"]
+            for r in w.sql(
+                "SELECT task_id FROM task_holds WHERE released_at IS NULL AND (kind='blocked' OR (kind='snoozed' AND until_at>?))",
+                (H.now(),),
+            )
+        }
+        parents = {
+            r["to_task"]
+            for r in w.sql(
+                "SELECT r.to_task FROM task_relations r JOIN tasks c ON c.id=r.from_task "
+                "WHERE r.kind='parent' AND c.status IN ('open','doing','review')"
+            )
+        }
+        queued = {r["bot_id"] for r in w.sql("SELECT DISTINCT bot_id FROM jobs WHERE state='queued'")}
+        bots = {b.slug: b for b in team.all}
+        live = set()
+        for row in w.sql(
+            "SELECT id,title,owner_id,status,step_id,updated_at FROM tasks WHERE status IN ('open','doing') AND owner_id LIKE 'bot:%'"
+        ):
+            bot = bots.get(row["owner_id"][4:])
+            if bot is None:
+                continue
+            tid = row["id"]
+            live.add(tid)
+            last = max(x for x in (events.get(tid), H.parse_ts(row["updated_at"]), self.acted.get(tid)) if x)
+            if self.tick_at is not None and last > self.tick_at:
+                self.idle[tid] = 0.0  # something happened on it since the last tick
+            elif self.waiting(w, row, bot, now, held, parents, queued):
+                self.idle[tid] += hours
+            limit = self.limit_for(row["title"])
+            if limit is not None and self.idle[tid] >= limit - 1e-6 and tid not in self.stuck:
+                self.stuck[tid] = {
+                    "title": row["title"],
+                    "step": w.step_of(row),
+                    "owner": bot.slug,
+                    "status": row["status"],
+                    "idle": self.idle[tid],
+                    "since": now,
+                }
+        for tid in list(self.idle):
+            if tid not in live:
+                del self.idle[tid]
+        self.tick_at = now
+
+    def waiting(self, w, row, bot, now, held, parents, queued):
+        """Whether the task waits for its owner to act: the owner is free to take it, and nothing holds the task back."""
+        if row["id"] in held or row["id"] in parents:
+            return False
+        if not bot.available or bot.slug in self.paused or bot.running or bot.slug in queued:
+            return False
+        if bot.limited_until and now < bot.limited_until:
+            return False
+        if row["status"] == "open" and bot.role == "builder" and w.slots(bot.slug) >= w.board.slots:
+            return False  # its slots are full: the task waits in line, which is no stall
+        return True
+
+    def limit_for(self, title):
+        """The hours a task may wait with its owner free: the scenario's allowance for it (None: not counted), else
+        STUCK_HOURS."""
+        for a in self.scenario.stuck:
+            if not a.match or a.match in title:
+                return a.hours
+        return STUCK_HOURS
 
     def shipped(self, t):
         return t["step"] in self.w.board.merged_steps() or self.w.board.finished(t["step"])
@@ -588,6 +690,7 @@ class Run:
             "parked": sum(1 for r in turns if r.get("parked")),
             "silent": kinds["silent"],
             "crash": kinds["crash"],
+            "restarted": kinds["restart"],
             "limited": kinds["limited"],
             "cost": round(self.cost(), 2),
             "steps": dict(steps),
@@ -608,6 +711,16 @@ class Run:
             if tid == t["id"]
         )
         return round(hours[len(hours) // 2], 1) if hours else None
+
+
+@dataclass
+class Allowance:
+    """A task that may wait longer than STUCK_HOURS with its owner free, and why. `match` names the tasks by their title
+    (empty: every task); `hours` None means the task is not counted at all."""
+
+    reason: str
+    hours: float | None = None
+    match: str = ""
 
 
 @dataclass
@@ -632,6 +745,8 @@ class Scenario:
     signed_in: tuple = ()  # runtimes the computer reports signed in (empty: the plain per-bot readiness map)
     capacity: int = 4  # the computer's slots, as its heartbeat says
     fleet: int = 0  # extra bots beyond the team, for a backlog (their turns do nothing)
+    profiles: dict = field(default_factory=dict)  # slug -> profile name, instead of the template's (World.chart)
+    stuck: tuple = ()  # Allowances: tasks that may wait longer than STUCK_HOURS here, each with its reason
 
 
 def tickets(run, w, n, owner=None, step=None, title="Ticket"):

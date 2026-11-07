@@ -233,6 +233,13 @@ class Bot:
             if window:
                 w.limit_windows.append(window)
             return self.log(record)
+        if self.style.get("restart_mid_turn") and self.chance("restart_mid_turn"):
+            # The runner restarted under the turn: it ends interrupted, and nothing it did is filed (recover files a lost one
+            # the same way). Whether anything picks the work up again is the board's and the wake rules' to decide.
+            self.unfinished.add(message.get("id"))
+            record["kind"] = "restart"
+            self.finish(attempt, "interrupted", tokens=None, text="Runner restarted during execution")
+            return self.log(record)
         if self.chance("silent"):
             self.unfinished.add(message.get("id"))
             record["kind"] = "silent"
@@ -248,7 +255,7 @@ class Bot:
                 w.post("updates", {"body": "- Worked my tickets."}, token=self.token)
                 action = "posted update"
             else:
-                settled = self.settle()
+                settled = self.settle(task)
                 action = self.act(task, message) if task else None
                 action = ", ".join(filter(None, (settled, action))) or None
         except Refusal as exc:
@@ -319,9 +326,9 @@ class Bot:
             )
         return record
 
-    def finish(self, attempt, outcome, limited=False, resets=None, tokens=None, seq=0):
+    def finish(self, attempt, outcome, limited=False, resets=None, tokens=None, seq=0, text="done"):
         w = self.world
-        body = {"outcome": outcome, "text": "done", "last_seq": seq, "limited": limited}
+        body = {"outcome": outcome, "text": text, "last_seq": seq, "limited": limited}
         if resets:
             body["limit_resets_at"] = resets.strftime("%Y-%m-%dT%H:%M:%SZ")
         if self.held:
@@ -360,9 +367,22 @@ class Bot:
     def act(self, task, message):
         raise NotImplementedError
 
-    def settle(self):
+    def settle(self, task=None):
         """What the bot owes from an earlier turn, done first on its next one, whatever woke it."""
         return None
+
+    def ask_owner(self, text, topic, reversible=False):
+        """A decision put to the owner the way a bot asks one (POST task-questions, as `hub task question` does): a question
+        task on the person's plate. Each ask is kept for the checks with the status the server answered."""
+        w = self.world
+        body = {"question": text, "on": "ana", "why": "", "topic": topic}
+        if reversible:
+            body["if_no_answer"] = {"do": "go ahead with the default", "kind": "reversible"}
+        status, _ = w.request("post", "task-questions", body, token=self.token)
+        w.asks.append(
+            {"at": w.now(), "bot": self.slug, "text": text, "topic": topic, "reversible": reversible, "status": status}
+        )
+        return "asked the owner" if status < 300 else f"ask refused ({status})"
 
 
 class Builder(Bot):
@@ -379,6 +399,7 @@ class Builder(Bot):
         self.owed = {}  # ticket id -> what its refused move needs: "receipt", or "push" for a failure at the head
         self.posted = []  # (when, ticket id, head, wording) per receipt, "none" for one left out
         self.moves = []  # (when, ticket id, step, refusal text or None) per move this builder made
+        self.left = []  # (when, ticket id) per turn that ended with the ticket still in progress (`leave_doing`)
 
     def act(self, task, message):
         w, board = self.world, self.world.board
@@ -396,6 +417,10 @@ class Builder(Bot):
             nxt = board.steps[board.steps.index(step) + 1]
             w.update(task["id"], token=self.token, step=nxt.name)
             step = nxt
+        if step.work and self.style.get("leave_doing") and self.chance("leave_doing"):
+            # The turn ends with the ticket still in progress: nothing moved, nothing said, and nothing left to wake it.
+            self.left.append((w.now(), task["id"]))
+            return None
         if step.work:
             fixes = board.fixes_for(step.name)
             return self.fix(task, step, fixes, pr) if fixes else self.build(task, step, pr)
@@ -590,7 +615,15 @@ class Builder(Bot):
         self.moves.append((self.world.now(), task["id"], step, None))
         return "moved to " + step
 
-    def settle(self):
+    def settle(self, task=None):
+        """What the builder owes, and a question it puts to its owner on its turn when its style asks (`asks`: asked
+        directly, two levels below the owner, so the rules route or refuse it)."""
+        asked = None
+        if task and self.style.get("asks") and self.chance("asks"):
+            asked = self.ask_owner(f"Should I keep going on {task['title']}?", f"builder {task['title']}")
+        return "; ".join(filter(None, (asked, self._settle()))) or None
+
+    def _settle(self):
         """A move the gate refused for its receipt, put right as a real builder does on reading the refusal: a clean
         receipt at the head, or, when its tests failed there, a fix pushed with one. Tico makes the move itself."""
         w, done = self.world, []
@@ -823,6 +856,13 @@ class Lead(Bot):
             )
             w.stuck_told.append((w.now(), t["id"]))
             told.append(t["title"])
+            if self.style.get("asks") and self.chance("asks"):
+                # The lead asks the owner what to do with a ticket it sees stuck, each sweep: one level below the owner.
+                self.ask_owner(
+                    f"{t['title']} has sat at {step.name} with no move. What should happen to it?",
+                    f"{t['title']} {self.world.now():%Y-%m-%d %H}",
+                    reversible=bool(self.style.get("reversible")) and self.chance("reversible"),
+                )
         return ("told owners of " + ", ".join(told)) if told else "swept: nothing stuck"
 
 
