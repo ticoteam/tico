@@ -23,6 +23,10 @@ const snap = async (page, name) => {
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 };
 const lastWrite = (writes, path) => writes.filter(w => w.path === path).at(-1);
+// The elements that reach past the screen's right edge: a sideways scroll is only reported, so this names what caused it.
+const pastEdge = page => page.evaluate(() => [...document.querySelectorAll('#main *')]
+  .filter(el => el.getBoundingClientRect().right > innerWidth + 1).slice(0, 6)
+  .map(el => el.tagName.toLowerCase() + '.' + String(el.className).trim().split(/\s+/).join('.') + ' ' + Math.round(el.getBoundingClientRect().right)));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -213,6 +217,7 @@ const lastWrite = (writes, path) => writes.filter(w => w.path === path).at(-1);
       const tag = 'phone list';
       const {page, errors} = await openStrategy(browser, {viewport: PHONE, hash: '#/strategy'});
       await page.locator('#strat-segs .seg-row').first().waitFor();
+      assert.deepEqual(await pastEdge(page), [], tag + ': nothing past the right edge');
       assert.equal(await sideways(page), false, tag + ': no sideways scroll');
       await snap(page, 'strategy-segments-phone');
       assert.deepEqual(errors, [], tag + ': no page errors');
