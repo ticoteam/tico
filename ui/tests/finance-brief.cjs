@@ -15,7 +15,7 @@ const LINES = [
   'Budget: Meta Ads · $3,000. Spent $760 (25%). Pace $3,800, over budget.',
   'Team: Marketing · $9,000. Spent $1,590. Pace $7,950.',
   'Cash $412k. Burn $61k this month.',
-  'Unattributed: $1,940 this month.',
+  'Unattributed: $1,940 (23 lines).',
 ];
 const AS_OF = new Date(Date.now() - 40 * 60e3).toISOString();
 

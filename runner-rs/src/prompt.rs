@@ -953,6 +953,7 @@ mod tests {
         assert!(!prompt(&turn(json!({"lines": []})), &names, None, false).contains(FINANCE_HEADER));
     }
 
+    #[test]
     fn a_chat_turn_carries_what_its_bot_learned_and_the_company_layer_only_in_the_owners_chat() {
         let names = Names {
             company: "Acme".into(),
