@@ -129,7 +129,7 @@ const PAGES = [
         last = draws;
       }
     },
-    ui: ['ui/market-*.js', 'ui/app/redesign.js', 'ui/app/redesign-market.js', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
+    ui: ['ui/market-*.js', 'ui/market-*.ts', 'ui/app/redesign.js', 'ui/app/redesign-market.js', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
       'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'strategy', route: '#/strategy', ready: 'Who we serve',
     ui: ['ui/strategy-page.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js', 'ui/app/redesign-market.js', 'ui/app/strategy-budget.js',
