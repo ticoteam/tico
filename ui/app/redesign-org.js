@@ -245,10 +245,12 @@ async function pageRdOrg() {
         <span class="rdo-pct" id="rdo-pct" aria-hidden="true">100%</span>
         <button type="button" class="ghost" data-rdo-zoom="in" aria-label="Zoom in">+</button>
         <button type="button" class="ghost rdo-fit" data-rdo-zoom="fit" title="Fit the chart to the frame">Fit</button></div>
-      <div class="rdo-pane" id="rdo-pane"><div class="rdo-sz" id="rdo-sz"><div class="rdo-cv rd-org" id="rdo-cv"></div></div></div></div>`;
+      <div class="rdo-pane" id="rdo-pane"><div class="rdo-sz" id="rdo-sz"><div class="rdo-cv rd-org" id="rdo-cv"></div></div></div></div>
+      <div class="org-fac-host" id="org-fac-host"></div>`;
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
   rdoDraw();
+  orgFactoriesMount($('#org-fac-host'));   // the locked Factories section below the chart (ui/app/org-factories.ts)
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
