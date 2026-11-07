@@ -1,6 +1,6 @@
 """Per-segment market briefings (backend/market_briefing.py and the 20261107005705_segment_briefings migration): the table
 rebuild keeps the whole market's rows, a segment's briefing is its own row and page, and the whole market reads as before.
-Examples use Acme and Northwind."""
+Examples use Acme and Harborly."""
 
 import importlib.util
 import sqlite3

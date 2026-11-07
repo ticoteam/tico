@@ -1,5 +1,5 @@
 """The Market page by segment (backend/market_segments.py): the segments compared from stored rows, one segment's page,
-and the Librarian's research task for one segment. Examples use Acme and Northwind."""
+and the Librarian's research task for one segment. Examples use Acme and Harborly."""
 
 from backend.store import H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
@@ -72,7 +72,7 @@ def test_compare_lists_the_newest_briefing_items_tagged_with_their_segment(api, 
     _seed(api, tmp_path)
     first, second, _ = defined(api)
     ours(api, first, second)
-    item = {"text": "Rival cut prices.", "kind": "change", "entity_ids": ["company/northwind"]}
+    item = {"text": "Rival cut prices.", "kind": "change", "entity_ids": ["company/harborly"]}
     write_briefing(api, first, items=[item], answers={"money": "The low end shrinks."})
 
     view = get(api, "market/segments/compare")
@@ -87,7 +87,7 @@ def test_a_segment_page_has_its_answers_sizes_players_and_what_changed(api, tmp_
     ours(api, first, sub)
     size(api, first, spend=4 * B, accept=True)
     proof = evidence(api)
-    figure(api, "company/northwind", first, "arr", 12_000_000, proof)
+    figure(api, "company/harborly", first, "arr", 12_000_000, proof)
     write_briefing(api, first, answers={"changed": "Rivals cut prices.", "money": "The low end shrinks."})
 
     page = get(api, f"market/segments/{first}/page")
@@ -98,7 +98,7 @@ def test_a_segment_page_has_its_answers_sizes_players_and_what_changed(api, tmp_
     assert page["sizes"]["chosen"]["spend_usd"] == 4 * B and page["sizes"]["chosen"]["accepted"] is True
     assert page["sizes"]["rolled_usd"]["spend_usd"] == 4 * B
     holders = {p["entity_id"]: p["figures"] for p in page["players"]}
-    assert holders["company/northwind"][0]["metric"] == "arr" and holders["company/northwind"][0]["value"] == 12_000_000
+    assert holders["company/harborly"][0]["metric"] == "arr" and holders["company/harborly"][0]["value"] == 12_000_000
     assert any(row["subject_id"] == first for row in page["what_changed"])
     assert len(page["what_changed"]) <= 30
 
