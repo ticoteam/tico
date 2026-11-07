@@ -41,8 +41,8 @@ $('.account-wrap').addEventListener('keydown', ev => {
 });
 // phone drawer
 const drawerMedia = window.matchMedia('(max-width: 760px)');
-let drawerTrigger = null;
-function setDrawer(open, returnFocus = false, trigger = null) {
+let drawerTrigger: Element | null = null;
+function setDrawer(open, returnFocus = false, trigger: Element | null = null) {
   setAccountMenu(false);
   open = !!open && drawerMedia.matches;
   if (open && trigger) drawerTrigger = trigger;

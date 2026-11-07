@@ -186,7 +186,7 @@ const pressPending = () => {
 /**
  * @param {string} method
  * @param {string} p
- * @param {unknown} body
+ * @param {unknown} [body]
  * @param {string} [operationId]
  * @param {WriteOptions} [opts]
  */

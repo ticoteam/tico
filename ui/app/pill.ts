@@ -12,7 +12,8 @@ const clock = ms => { const t = Math.max(0, Math.round((ms || 0) / 1000)), h = M
   return (h ? `${h}:` : '') + String(Math.floor(t % 3600 / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
 const PILLS = new Set();
 let PILL_WHY_N = 0;
-let BOT_PILL = null;
+// running/stopping are set by chatStopSync (chat.ts) while the bot runs.
+let BOT_PILL: (ReturnType<typeof makePill> & {running?: {run_id: string | null} | null; stopping?: boolean}) | null = null;
 // What was typed to one bot is still there after visiting another and coming
 // back. The text is kept per bot in this browser, so a reload keeps it too; attached files are
 // kept for the session only. Sending clears it.
@@ -206,8 +207,13 @@ function reachMentions(text) {
 // One composer's reach line. `src` gives the thread id, the way (a send_way mode, '' for the server's Steer, 'goal'
 // for no message), the words and the message replied to; `update()` after any of them changes: a short wait, then one
 // read at a time.
-function composeReach(foot, src) {
-  const R = {foot, src, want: '', got: '', busy: false, timer: 0, data: null, html: ''};
+interface ComposeReach {
+  foot: Element; src: {thread(): string; mode(): string; text(): string; reply?(): string};
+  want: string; got: string; busy: boolean; timer: number; data: import('../types/api').ThreadReach | null; html: string;
+  update(): void;
+}
+function composeReach(foot, src): ComposeReach {
+  const R = {foot, src, want: '', got: '', busy: false, timer: 0, data: null, html: ''} as ComposeReach;
   const btn = foot.querySelector('.p-reach'), pop = foot.querySelector('.p-reach-pop');
   btn.onclick = () => composeReachOpen(R, pop.hidden);
   foot.querySelector('.p-reach-wrap').addEventListener('keydown', ev => {
