@@ -2,6 +2,7 @@
 requirements and attachments, and its links. A non-member gets nothing about it, a member gets it all, and a member whose
 membership is revoked gets nothing again. A list of links is paged, a page at a time."""
 
+import json
 import uuid
 
 from backend import hubdb as H
@@ -270,3 +271,34 @@ def test_a_non_member_who_owns_a_members_only_parent_sees_none_of_its_hidden_chi
     assert hidden_child not in related
     everyone = get(api, f"tasks/{parent}", "ana-test")
     assert {child["id"] for child in everyone["children"]} == {hidden_child, own_child}
+
+
+def test_the_change_feed_reads_a_deleted_ticket_while_a_members_only_pipeline_exists(api):
+    from backend.task_delete import delete_tasks
+
+    tag = uuid.uuid4().hex[:8]
+    public, _ = make_pipeline(api, "Sales" + tag)
+    make_pipeline(api, "Legal" + tag, private=True)  # the hidden pipeline the list rule reads the type against
+    gone_one = ticket(api, public, "Gone " + tag, owner="human:ben")
+    cursor = get(api, "tasks?limit=5", "cara-test")["cursor"]
+    kept = ticket(api, public, "Kept " + tag, owner="human:ben")
+    with api.app.state.store.transaction() as c:
+        report = delete_tasks(c, [gone_one], apply=True, actor="human:ana", keep_work=True)
+    assert report["applied"] is True, report
+
+    feed = get(api, f"tasks?changed_after={cursor}", "cara-test")
+    assert not feed.get("reset")
+    assert gone_one in feed["gone"]
+    assert [t["id"] for t in feed["tasks"]] == [kept]
+
+
+def test_a_change_to_a_ticket_nothing_records_is_not_read_when_a_members_only_pipeline_exists(api):
+    from backend import task_reads
+    from backend.pipeline_rights import list_sql
+
+    tag = uuid.uuid4().hex[:8]
+    make_pipeline(api, "Legal" + tag, private=True)
+    ghost = json.dumps(["human:ben", "human:ana", 0, None])
+    with api.app.state.store.read() as c:
+        visible = list_sql(c, "human:cara", "1")
+        assert task_reads._could_read(c, visible, "no-such-ticket", ghost) is False
