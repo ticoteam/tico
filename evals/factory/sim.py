@@ -787,6 +787,10 @@ class Run:
                 out.append(
                     f"  turn {a['created_at'][11:16]} {a['bot_id']} {a['state']} settled {str(a['settled_at'])[11:16]}"
                 )
+            if t["step"] is None:  # diagnostic: what each turn on a step-less task (a manager's ticket) did
+                for r in self.turns():
+                    if r.get("task") == t["id"]:
+                        out.append(f"  sim turn {str(r['at'])[11:16]} {r.get('news')} -> {r.get('action')}")
             pr = self.w.pr_of(t["id"])
             if pr:
                 out.append(
