@@ -628,15 +628,21 @@ def test_a_segment_strategy_write_names_the_draft_revision_it_read(api):
     write_segment(api, first, {"serve": "Stale."}, revision=read, expected=409)
 
 
-def test_a_merge_moves_the_latest_published_text_of_a_segment_too(api):
+def test_a_merge_moves_the_draft_text_and_leaves_the_published_version_as_it_was(api):
     first, second, _ = defined(api)
     segment(api, "Screening")
     segment(api, "Payments")
     ready(api)
     write_segment(api, first, {"summary": "Small landlords, one building at a time."})
     publish(api)
+    with api.app.state.store.read() as c:
+        published = S.current(c)
     post(api, f"market/entities/{first}/merge", {"into": second})
     with api.app.state.store.read() as c:
-        published = S.current(c)["sections"].get("segments", {})
-    assert first not in published
-    assert published[second]["summary"] == "Small landlords, one building at a time."
+        assert S.current(c) == published  # history is not edited
+        row = c.execute(
+            "SELECT sections FROM strategy_versions WHERE status='draft' ORDER BY n DESC LIMIT 1"
+        ).fetchone()
+    draft_segments = json.loads(row[0])["segments"]
+    assert first not in draft_segments
+    assert draft_segments[second]["summary"] == "Small landlords, one building at a time."

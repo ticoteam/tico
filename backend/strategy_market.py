@@ -243,12 +243,12 @@ def target(c, actor, segment_id, to, company=""):
     return {"id": segment_id, "ours": on}
 
 
-def _move_segment_text(c, actor, old, new, status):
-    """The text of a segment that merged away, in the draft (`status` "draft") or in the latest published version
-    (`status` "published"): the one it merged into keeps the sections it has text for, and the rest move over. Only the
-    draft's revision moves on, so a page that read it sees the change; a published version's text is what a run reads."""
+def _move_draft_text(c, actor, old, new):
+    """The text of a segment that merged away, in the draft: the one it merged into keeps the sections it has text for,
+    and the rest move over. The draft's revision moves on, so a page that read it sees the change. Published versions are
+    history and are not edited: a run reads the latest one as it was published."""
     row = c.execute(
-        "SELECT id, sections FROM strategy_versions WHERE status=? ORDER BY n DESC LIMIT 1", (status,)
+        "SELECT id, sections FROM strategy_versions WHERE status='draft' ORDER BY n DESC LIMIT 1"
     ).fetchone()
     if not row:
         return
@@ -260,24 +260,18 @@ def _move_segment_text(c, actor, old, new, status):
     moved = texts.pop(old)
     texts[new] = {**moved, **(texts.get(new) or {})}
     raw["segments"] = texts
-    if status == "draft":
-        c.execute(
-            "UPDATE strategy_versions SET sections=?, revision=revision+1, updated_at=?, updated_by=? WHERE id=?",
-            (MK.dumps(raw), H.now(), actor, row[0]),
-        )
-    else:
-        c.execute(
-            "UPDATE strategy_versions SET sections=?, updated_at=?, updated_by=? WHERE id=?",
-            (MK.dumps(raw), H.now(), actor, row[0]),
-        )
+    c.execute(
+        "UPDATE strategy_versions SET sections=?, revision=revision+1, updated_at=?, updated_by=? WHERE id=?",
+        (MK.dumps(raw), H.now(), actor, row[0]),
+    )
 
 
 def follow_merge(c, actor, segment_id, into_id):
     """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities). Its Us edge moved there with
     the graph's other edges. Its teammate tags move there when it is one of the company's (else they go), and so do the
-    strategy bets that name it, its text in the draft and in the latest published version, and the rows the other
-    modules key by segment. A size the target already has accepted for the same dimension, basis and year cannot be
-    accepted twice, so the moved one is proposed."""
+    strategy bets that name it, its text in the draft, and the rows the other modules key by segment. Published versions
+    are history and are not edited. A size the target already has accepted for the same dimension, basis and year cannot
+    be accepted twice, so the moved one is proposed."""
     had = c.execute("SELECT 1 FROM segment_members WHERE segment_id=? LIMIT 1", (segment_id,)).fetchone()
     if into_id in ours_ids(c):
         c.execute(
@@ -298,8 +292,7 @@ def follow_merge(c, actor, segment_id, into_id):
     for table in MOVED_BY_SEGMENT:
         if "segment_id" in _columns(c, table):
             c.execute(f"UPDATE {table} SET segment_id=? WHERE segment_id=?", (into_id, segment_id))
-    _move_segment_text(c, actor, segment_id, into_id, "draft")
-    _move_segment_text(c, actor, segment_id, into_id, "published")
+    _move_draft_text(c, actor, segment_id, into_id)
 
 
 def _columns(c, table):

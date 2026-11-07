@@ -8,15 +8,16 @@ A segment is a market graph `segment` entity (backend/market.py) the company pla
 - its fields: the entity's name, one line of who it is for (its summary), a color and a rank (its properties, stamped
   when it becomes one of the company's, backend/strategy_market.py);
 - the teammates tagged with it (`segment_members`): a teammate tagged with a segment is dedicated to it, and `all` tags
-  one who works across every segment. Its leads are the dedicated teammates whose manager is not dedicated to it too
-  (the highest of them when each has a dedicated manager): they see its P&L line (backend/finance). Only teammates on
-  the org chart count: an archived bot or a removed person loses its tags (`forget_member`);
+  one who works across every segment, yet a run gets no segment text from it. Its leads are the dedicated teammates
+  whose manager is not dedicated to it too (the highest of them when each has a dedicated manager): they see its P&L
+  line (backend/finance). Only teammates on the org chart count: an archived bot or a removed person loses its tags
+  (`forget_member`);
 - the segment's own strategy, in the company's draft and versions (`sections.segments`, backend/strategy.py), read
   field by field against the company's text;
 - the segment text a dedicated bot's run is handed (`run_text`, backend/learned.py).
 
-Writes are the owner's, on their own click (goal_routes.company_editor, where a confirmed Assistant or BotOps card
-counts), except teammate tags, which an owner or a bot admin sets as they set groups. Reads are for everyone signed in.
+Writes are the owner's, on their own click (goal_routes.company_editor; a confirmed Assistant card counts), teammate
+tags included: a bot admin cannot tag a teammate. Reads are for everyone signed in.
 A segment that stops being one of the company's loses its tags (strategy_market.untag): a tag names one of the
 company's segments, or `all`, and nothing else.
 """
