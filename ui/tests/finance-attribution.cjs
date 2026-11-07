@@ -253,6 +253,7 @@ async function shot(page, name) {
       const tag = 'phone';
       const {page, errors} = await open(browser, {viewport: PHONE, hash: '#/finance/attribution'});
       await page.locator('[data-fin-rule-row="0"]').waitFor();
+      await page.waitForTimeout(100);
       assert.equal(await sideways(page), false, tag + ': the Attribution tab does not scroll sideways: ' + await wide(page));
       await page.evaluate(() => { location.hash = '#/finance/transactions'; });
       await page.locator('tr[data-fin-tx="feed:f1"]').waitFor();
