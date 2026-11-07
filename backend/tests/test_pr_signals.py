@@ -182,15 +182,18 @@ def test_the_pass_finds_a_conflict_on_an_unknown_pr_once_per_head(api, monkeypat
 
     def fetch(method, path, headers=None, **kw):
         seen.append(path)
+        if fake.get('refused'):
+            return SimpleNamespace(status_code=500, json=lambda: {})
         body = {'state': 'open', 'merged': False, 'draft': False, 'head': {'sha': HEAD, 'ref': 'b'}, **fake}
         return SimpleNamespace(status_code=200, json=lambda: body)
 
     monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a, **k: ('t', 'later'))
     monkeypatch.setattr(service, '_call', fetch)
+    monkeypatch.setattr(G, '_conflict_retry', {})
 
     def age(minutes):
-        old = G._minutes_ago(minutes)
+        old = H.shift(H.now(), minutes=-minutes)
         with service.store.transaction() as c:
             c.execute("UPDATE task_links SET updated_at=? WHERE task_id=? AND kind='pr'", (old, task['id']))
 
@@ -209,3 +212,9 @@ def test_the_pass_finds_a_conflict_on_an_unknown_pr_once_per_head(api, monkeypat
     fake.update(mergeable=True, mergeable_state='clean')
     age(40)
     assert G.refresh_conflicts(service) == 1 and _prs(api, task['id'])[412]['mergeable'] == 'clean'
+    # A read GitHub refuses writes nothing, so it waits half an hour instead of being read every 10 s pass.
+    fake['refused'] = True
+    age(40)
+    reads = len(seen)
+    assert G.refresh_conflicts(service) == 0 and len(seen) == reads + 1
+    assert G.refresh_conflicts(service) == 0 and len(seen) == reads + 1

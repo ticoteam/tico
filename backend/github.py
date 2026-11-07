@@ -464,12 +464,8 @@ def refresh_queue_removals(service):
 CONFLICT_READS_PER_PASS = 30
 CONFLICT_UNKNOWN_MINUTES = 5
 CONFLICT_STALE_MINUTES = 30
-
-
-def _minutes_ago(minutes):
-    from datetime import datetime, timedelta, timezone
-
-    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+CONFLICT_RETRY_S = 1800  # a read GitHub refused or that failed waits half an hour, not one 10 s pass
+_conflict_retry = {}  # link id -> monotonic time a failed read may be tried again
 
 
 def refresh_conflicts(service):
@@ -496,14 +492,21 @@ def refresh_conflicts(service):
                 (
                     str(app["org"] or "").lower() + "/%",
                     *H.ACTIVE_STATUSES,
-                    _minutes_ago(CONFLICT_UNKNOWN_MINUTES),
-                    _minutes_ago(CONFLICT_STALE_MINUTES),
-                    CONFLICT_READS_PER_PASS,
+                    H.shift(H.now(), minutes=-CONFLICT_UNKNOWN_MINUTES),
+                    H.shift(H.now(), minutes=-CONFLICT_STALE_MINUTES),
+                    CONFLICT_READS_PER_PASS * 4,
                 ),
             )
         )
+    # A read refreshes the link's updated_at, so it is not due again for half an hour; a failed read writes nothing,
+    # so it waits here instead of being read again every pass.
+    now = time.monotonic()
+    for gone in [k for k, due in _conflict_retry.items() if due <= now]:
+        _conflict_retry.pop(gone, None)
+    rows = [r for r in rows if r["id"] not in _conflict_retry][:CONFLICT_READS_PER_PASS]
     read = 0
     for r in rows:
+        _conflict_retry[r["id"]] = now + CONFLICT_RETRY_S
         try:
             token, _ = service.mint([r["repo"]], {"pull_requests": "read"})
             response = service._call(
@@ -526,6 +529,7 @@ def refresh_conflicts(service):
                 release_repo=service.settings.release_repo,
                 read_refresh=True,
             )
+        _conflict_retry.pop(r["id"], None)
         read += 1
     return read
 
