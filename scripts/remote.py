@@ -55,6 +55,8 @@ def fail(code, message):
     """Say why remote.py stopped on stderr, and exit with `code` (see EXIT_CODES)."""
     print(f'remote: {message}', file=sys.stderr, flush=True)
     raise SystemExit(code)
+
+
 REFUSED = 3  # the exit code when Tico's CI cap refuses a builder's run
 PERMIT_TIMEOUT = 30  # seconds a permit request may take
 
