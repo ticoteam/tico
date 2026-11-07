@@ -31,7 +31,8 @@ def test_a_test_that_leaves_a_pooled_connection_open_fails_at_its_teardown_and_n
         """
     )
     result = pytester.runpytest_subprocess("-p", "backend.tests.connection_guard")
-    result.assert_outcomes(passed=1, errors=1)
+    # The leaking test passes its call and errors at its teardown; the clean one passes.
+    result.assert_outcomes(passed=2, errors=1)
     result.stdout.fnmatch_lines(
         [
             "*ERROR at teardown of test_the_one_that_leaks*",
