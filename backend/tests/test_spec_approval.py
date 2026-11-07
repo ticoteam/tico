@@ -22,8 +22,9 @@ PICKS = [
 ]
 
 
-def publish_spec(api, item, bot="cpo", who="ana-test", data=HTML, spec="true"):
-    _, attempt = turn(api, bot, who)
+def publish_spec(api, item, bot="cpo", who="ana-test", data=HTML, spec="true", attempt=None):
+    """Publishes the spec page as the card's builder: on `attempt` when the test has one, else on a new turn."""
+    attempt = attempt or turn(api, bot, who)[1]
     return api.post(
         "/api/v2/pages",
         params={"name": "exports.html", "task": item["id"], "spec": spec},
@@ -32,9 +33,9 @@ def publish_spec(api, item, bot="cpo", who="ana-test", data=HTML, spec="true"):
     )
 
 
-def ask_approval(api, item, bot="cpo"):
+def ask_approval(api, item, bot="cpo", attempt=None):
     """The bot asks the person the approval: a question under the card, on the spec topic, with Approve and Not yet."""
-    _, attempt = turn(api, bot, "ana-test")
+    attempt = attempt or turn(api, bot, "ana-test")[1]
     return api.post(
         "/api/v2/task-questions",
         json={
@@ -175,8 +176,9 @@ def test_a_review_child_of_the_builder_ticket_gets_the_spec_link_and_text(api):
 def test_an_approve_answer_moves_the_card_as_the_person_asked_and_files_the_builder_ticket(api):
     _dev_tickets(api)
     item = _item(api, "Exports asked", step="Spec")
-    assert publish_spec(api, item).status_code == 200
-    assert ask_approval(api, item).status_code == 200
+    builder = turn(api, "cpo", "ana-test")[1]  # one builder turn: a second turn for the same bot would conflict
+    assert publish_spec(api, item, attempt=builder).status_code == 200
+    assert ask_approval(api, item, attempt=builder).status_code == 200
     r = answer(api, approval_question(api, item), ["Approve"])
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
@@ -195,8 +197,9 @@ def test_an_approve_answer_moves_the_card_as_the_person_asked_and_files_the_buil
 def test_a_not_yet_answer_leaves_the_card_in_spec(api):
     _dev_tickets(api)
     item = _item(api, "Exports not yet", step="Spec")
-    assert publish_spec(api, item).status_code == 200
-    assert ask_approval(api, item).status_code == 200
+    builder = turn(api, "cpo", "ana-test")[1]  # one builder turn: a second turn for the same bot would conflict
+    assert publish_spec(api, item, attempt=builder).status_code == 200
+    assert ask_approval(api, item, attempt=builder).status_code == 200
     assert answer(api, approval_question(api, item), ["Not yet"]).status_code == 200
     assert step_of(api, item) == "Spec"
     assert builder_ticket(api, item) == (None, None)
