@@ -67,7 +67,8 @@ const PAGES = [
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.js', 'ui/app/goals-kpi-views.js', 'ui/goals-kpis.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js',
       'ui/app/org-fan.js', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
-  {name: 'bot-chat', route: '#/bot/support', ready: 'Have a draft ready for 90 percent of new tickets', ui: BOT_CHAT_UI},
+  // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
+  {name: 'bot-chat', route: '#/bot/support', ready: 'No messages yet', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = await (await fetch('/api/meetings')).json();
@@ -275,8 +276,10 @@ async function capture() {
         for (const spec of pages) {
           const label = `${spec.name}-${width}-${theme}`;
           where = label;
-          // A popover left open by the page before would cover the next one's controls.
-          await page.keyboard.press('Escape').catch(() => {});
+          // Each page starts from a fresh load: the scroll position, hover, focus, open popovers and transitions the page
+          // before left would otherwise differ from run to run, and a same-ref run must shoot the same pictures.
+          await page.goto(demo.url + '/');
+          await page.locator('#tree a.node').first().waitFor({state: 'attached'});
           const route = typeof spec.route === 'function' ? await spec.route(page) : spec.route;
           await page.evaluate(hash => { location.hash = hash; }, route);
           // Settings renders after the route, and keeps System, Webhooks and Billing in a More group that starts closed.
@@ -289,12 +292,19 @@ async function capture() {
           await page.getByText(spec.ready).first().waitFor({timeout: 20000}).catch(() => problems.push(`${label}: never showed "${spec.ready}"`));
           if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
           await page.waitForTimeout(600);
+          // A click scrolls its target into view and a list that loads late moves the page again: every shot starts at the
+          // top of the page and of each scroller (the tour keeps the scroll its steps asked for).
+          if (spec.name !== 'tour') {
+            await page.evaluate(() => {
+              for (const el of document.querySelectorAll('*')) { el.scrollTop = 0; el.scrollLeft = 0; }
+              window.scrollTo(0, 0);
+            });
+          }
           await verify(page, problems, label);
           // A focused cell or field draws its focus ring, and animations are finished: neither is part of the page's content.
           await page.evaluate(() => document.activeElement?.blur());
           await page.screenshot({path: path.join(out, label + '.png'), animations: 'disabled', caret: 'hide'});
           written.push(label + '.png');
-          if (spec.name === 'tour') await page.keyboard.press('Escape');
         }
         await context.close();
       }
