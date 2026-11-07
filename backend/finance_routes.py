@@ -65,6 +65,7 @@ Metric = Literal[
     "unreconciled_days",
     "duplicate_charges",
     "price_increases",
+    "unattributed",
 ]
 
 
@@ -439,6 +440,13 @@ def install(app, store, auth, mutate):
         who = viewer(request)
         return read(lambda c: finance_reads.attribution_rules(c, who.actor))
 
+    @app.get("/api/v2/finance/attribution/dimensions")
+    def finance_attribution_dimensions(request: Request):
+        """The classes, locations and projects on the P&L lines of the last 12 months, with their rules; needs the
+        attribution right or admin."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.attribution_dimensions(c, who.actor))
+
     @app.get("/api/v2/finance/lines/{line_id}/attribution")
     def finance_line_attribution(request: Request, line_id: str, view_as: str | None = None):
         """One posted P&L line's attribution: the shares in force, their amounts and the line's history, as far as the
@@ -795,6 +803,7 @@ def install(app, store, auth, mutate):
             "po",
             "estimate",
             "account",
+            "vendor",
         ]
         | None = None,
         q: str = Query("", max_length=100),
@@ -864,6 +873,20 @@ def install(app, store, auth, mutate):
                 days=days,
             )
         )
+
+    @app.get("/api/v2/finance/unattributed")
+    def finance_unattributed(
+        request: Request,
+        start: str | None = Query(None, pattern=DAY),
+        end: str | None = Query(None, pattern=DAY),
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """The Unattributed queue (backend/finance/visible.py's rule, cut to the caller): the P&L lines in the period
+        (this month by default) with no team, no teammate and no attribution in force, newest first, paged by cursor."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.unattributed(c, actor, start=start, end=end, cursor=cursor, limit=limit))
 
     @app.get("/api/v2/finance/close/{month}")
     def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):
