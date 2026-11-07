@@ -2,6 +2,7 @@
 advance, the 10-second undo, send-back, Message manager and Mark met. The concurrency cases use real connections to one
 file: the database decides, not a Python lock."""
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -1173,15 +1174,28 @@ def test_reviewer_id_is_the_claimant_and_a_plain_member_cannot_mark_met(world, m
     assert seen_by_ana["reviewer_id"] == BEN
 
 
-def test_not_validated_is_offered_at_a_validate_stage_with_a_spawn_link_and_never_to_a_bot_or_first_stage(world):
-    """The queue's can_not_validate flag and the action share one rule: a person, a live stage before the requirement's
-    stage, and a live spawn link from the pipeline. Without the link, or at the first stage, or for a bot, it is off."""
+def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_on_subtasks(world):
+    """Not validated works only on a stage that directly follows an In development stage holding a `subtasks` run, with
+    a spawn link from an earlier stage. The queue flag and the action share that rule. A bot never gets it."""
     w = world
     item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
-    assert item()["can_not_validate"] is False, "no spawn link yet, so no Not validated"
     engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
-    L.create_link(w.c, ANA, w.review, engineering, mode="spawn")
-    assert item()["can_not_validate"] is True, "Review has Making before it and a spawn link: offered"
+    L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
+    rev = w.revision()
+    # Review's requirement sits after Making, which waits on nothing: refused, and the queue does not offer it.
+    assert item()["can_not_validate"] is False
+    refused(
+        "not_validatable", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    # Making now waits on its Engineering subtasks: Review is the Validate stage and Not validated is offered.
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    assert item()["can_not_validate"] is True
     assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review) is None, "a bot never gets the route"
-    assert R._not_validated_route(w.c, ANA, w.pipeline, w.making) is None, "the first stage has nothing to return to"
-    assert R._not_validated_route(w.c, ANA, w.pipeline, w.review) is not None
+    # A stale work version or requirement version refuses, inside the transaction.
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev + 1, requirement_version=1)
+    refused("stale", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=2)
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screenshots never validated", work_version=rev, requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making" and done["follow_up"]

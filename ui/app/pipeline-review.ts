@@ -268,7 +268,7 @@ async function pipelineReviewNotValidated(): Promise<void> {
   if (!note) { state.message = 'Write a note first.'; pipelineReviewRender(); return; }
   state.busy = true; state.message = ''; state.notice = '';
   try {
-    const res = await pipelineNotValidated(item.task_id, item.requirement_id, note);
+    const res = await pipelineNotValidated(item, note);
     void pipelineMineSync(state.pipelineId, true);
     if (!pipelineReviewState) return;
     state.items = state.items.filter(other => other !== item);

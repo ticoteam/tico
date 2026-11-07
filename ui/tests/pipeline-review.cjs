@@ -127,6 +127,8 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       await until(() => state.posts.some(p => p.path.endsWith('/not-validated')));
       assert.deepEqual(state.posts.map(p => p.path), ['tasks/D70/requirements/r-val70/not-validated'], 'Not validated posts to the item');
       assert.equal(state.posts[0].body.note, 'Screenshots never validated', 'the note is the reason sent');
+      assert.equal(state.posts[0].body.work_version, 3, 'Not validated names the work version the reviewer saw');
+      assert.equal(state.posts[0].body.requirement_version, 1, 'and the requirement version');
       await page.waitForFunction(() => document.querySelector('.pipe-review-notice')?.textContent.includes('follow-up'), null, {timeout: t(5000)});
       assert.equal((await page.locator('.pipe-review-notice').innerText()).trim(), 'Back to In development · follow-up D71 filed');
       assert.equal(await page.locator('[data-review-not-validated]').count(), 0, 'the next item is not at Validate');

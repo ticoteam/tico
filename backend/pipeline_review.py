@@ -1037,24 +1037,46 @@ def _back_stage(c: "sqlite3.Connection", stage_id: str) -> Row | None:
 def _not_validated_route(
     c: "sqlite3.Connection", actor: str, pipeline_id: str, stage_id: str
 ) -> tuple[Row, Row] | None:
-    """Where "Not validated" sends a card from this stage (D66): the live stage before it, and the pipeline's live spawn
-    link for the follow-up. None when the reader is not a person, there is no stage before, or no spawn link. The queue
-    flag and the action both read this, so the button shows exactly when the action would work."""
+    """Where "Not validated" sends a card from this stage (D66), or None when it is not offered. It is offered only on a
+    stage that comes directly after a live In development stage: the one before it holds a live run requirement whose
+    source is `subtasks` (the stage that waits on its Engineering subtasks). The card goes back to that stage, and the
+    follow-up spawns from the nearest live spawn link from a stage before this one. The reader must be a person. The
+    queue flag and the action both read this, so the button shows exactly when the action would work."""
     if not str(actor or "").startswith("human:"):
         return None
     back = _back_stage(c, stage_id)
+    if back is None:
+        return None
+    waits_on_subtasks = _one(
+        c,
+        "SELECT 1 AS found FROM stage_requirements WHERE pipeline_stage_id=? AND kind='run' AND retired_at IS NULL "
+        "AND json_extract(needs, '$.source')='subtasks' LIMIT 1",
+        (back["id"],),
+    )
+    if waits_on_subtasks is None:
+        return None
     spawn_link = _one(
         c,
         "SELECT l.* FROM pipeline_links l JOIN task_steps s ON s.id = l.from_pipeline_stage_id "
-        "WHERE s.type_id = ? AND l.mode = 'spawn' AND l.retired_at IS NULL ORDER BY s.position, l.id LIMIT 1",
-        (pipeline_id,),
+        "WHERE s.type_id = ? AND s.position < (SELECT position FROM task_steps WHERE id = ?) "
+        "AND s.status NOT IN ('closed','declined') AND l.mode = 'spawn' AND l.retired_at IS NULL "
+        "ORDER BY s.position DESC, l.id LIMIT 1",
+        (pipeline_id, stage_id),
     )
-    if back is None or spawn_link is None:
+    if spawn_link is None:
         return None
     return back, spawn_link
 
 
-def not_validated(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, reason: str) -> Row:
+def not_validated(
+    c: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    requirement_id: str,
+    reason: str,
+    work_version: int | None = None,
+    requirement_version: int | None = None,
+) -> Row:
     """Validate's "Not validated" (D64), a person's call on the validation requirement. The spec's measures did not hold:
     the card goes back to the stage before Validate (In development, which then waits on the new subtask), and one
     follow-up Engineering subtask is filed under it, with the reason and the source's links. The follow-up is a second
@@ -1065,11 +1087,15 @@ def not_validated(c: "sqlite3.Connection", actor: str, task_id: str, requirement
     with _atomic(c):
         task, requirement = _guard_item(c, actor, task_id, requirement_id)
         _check_claim(c, actor, task, requirement)
+        if work_version is not None and _revision(task) != work_version:
+            raise Declined("stale", "The work changed since you looked", 409, extra={"reason": "work"})
+        if requirement_version is not None and requirement_version != requirement["version"]:
+            raise Declined("stale", "The requirement changed since you looked", 409, extra={"reason": "requirement"})
         if requirement_state(c, task, requirement) == "met":
             raise Declined("already_met", "This requirement is already met", 409)
         route = _not_validated_route(c, actor, str(task["type_id"]), str(requirement["pipeline_stage_id"]))
         if route is None:
-            raise Declined("no_follow_up", "This pipeline has no stage to return to or no Engineering link", 409)
+            raise Declined("not_validatable", "Not validated is not offered at this stage", 409)
         back, spawn_link = route
         current = _current_attachment(c, task_id, requirement_id)
         decision = _decide(c, actor, task, requirement, "failed", text, current)
@@ -1141,6 +1167,13 @@ class ReviewTarget(M.Contract):
 
 class ReviewNote(M.Contract):
     note: str = Field(min_length=1, max_length=2_000)
+
+
+class NotValidated(ReviewNote):
+    """Not validated names the work and the requirement the reviewer saw; either changing since refuses it (stale)."""
+
+    work_version: int = Field(ge=0)
+    requirement_version: int = Field(ge=1)
 
 
 class ReviewMessage(M.Contract):
@@ -1237,9 +1270,22 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         return write(request, tid, body, lambda c, actor: send_back(c, actor, tid, rid, body.note))
 
     @app.post(base + "/not-validated")
-    def review_not_validated(request: Request, tid: str, rid: str, body: ReviewNote) -> Row:  # pyright: ignore[reportUnusedFunction]
+    def review_not_validated(request: Request, tid: str, rid: str, body: NotValidated) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Validate's "Not validated": back to In development, with one follow-up Engineering ticket."""
-        return write(request, tid, body, lambda c, actor: not_validated(c, actor, tid, rid, body.note))
+        return write(
+            request,
+            tid,
+            body,
+            lambda c, actor: not_validated(
+                c,
+                actor,
+                tid,
+                rid,
+                body.note,
+                work_version=body.work_version,
+                requirement_version=body.requirement_version,
+            ),
+        )
 
     @app.post(base + "/message-manager")
     def review_message_manager(request: Request, tid: str, rid: str, body: ReviewMessage) -> Row:  # pyright: ignore[reportUnusedFunction]
