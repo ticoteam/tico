@@ -426,3 +426,30 @@ def test_a_person_reviewed_field_waits_for_the_person_even_when_the_field_is_set
     assert states(c, task) == {"Due date": "waiting"}
     decide(c, task, req, verdict="met", judge="person")
     assert states(c, task) == {"Due date": "met"}
+
+
+def test_an_override_needs_the_rule_editor_of_every_pipeline_whose_requirement_it_passes(tmp_path):
+    c, source = pipeline(tmp_path)
+    dest = H.type_create(
+        c,
+        ANA,
+        "Shipping board",
+        [{"name": "Intake", "status": "doing"}, {"name": "Ship", "status": "doing"}],
+        mover=True,
+    )
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (BEN, dest["id"]))
+    requirement(c, source, "Drafting", "Due", kind="field", needs={"field": "due"}, reviewed_by="nobody")
+    task = card(c, source, owner=BEN)["id"]
+    c.execute("UPDATE tasks SET due_at='2026-12-01' WHERE id=?", (task,))
+    H.task_update(c, ANA, task, step="Review")
+    c.execute("UPDATE tasks SET due_at=NULL WHERE id=?", (task,))
+    # the editor of the source moves the card into the destination past the lapsed source requirement
+    H.task_update(c, ANA, task, type=dest["id"], step=step_id(c, dest["id"], "Intake"), override_requirements=True)
+    E.work_changed(c, task)
+    ship = step_id(c, dest["id"], "Ship")
+    error = refused(lambda: H.task_update(c, BEN, task, step=ship, override_requirements=True))
+    assert error.rule == "requirement" and "Due" in error.detail
+    assert rows(c, "SELECT id FROM stage_decisions WHERE task_id=? AND judge_actor=?", task, BEN) == []
+    H.task_update(c, ANA, task, step=ship, override_requirements=True)
+    overrides = rows(c, "SELECT judge_actor FROM stage_decisions WHERE task_id=? AND verdict='override'", task)
+    assert {r["judge_actor"] for r in overrides} == {ANA}

@@ -899,7 +899,11 @@ def check_move(
     unmet = _unmet(_evaluate(conn, {task_id: scope}, by_stage).get(task_id, []))
     if not unmet:
         return
-    if override and editor:
+    # An override passes each unmet requirement on its own pipeline's rules, so the actor must edit the rules of every
+    # pipeline that owns one of them (a destination's owner cannot override the source's requirements).
+    owners = {str(s.requirement["pipeline_id"]) for s in unmet}
+    editable = all(pipeline_rights.may_edit_rules(conn, actor, owner) for owner in sorted(owners))
+    if override and editable:
         protected = [s for s in unmet if s.requirement["kind"] == "approval"]
         if protected:
             H.refuse(
@@ -912,7 +916,7 @@ def check_move(
             )
         _record_override(conn, actor, task_id, unmet, override_reason(override_note))
         return
-    hint = "" if editor else " A pipeline editor can move it on anyway."
+    hint = "" if editable else " A pipeline editor can move it on anyway."
     H.refuse(conn, actor, "requirement", f"Can't leave {here['name']} yet: {_names(unmet)}.{hint}", task=task_id)
 
 
