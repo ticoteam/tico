@@ -791,8 +791,10 @@ def seed_type(c: sqlite3.Connection, type_id: str) -> None:
         return
     role = c.execute("SELECT role FROM task_types WHERE id = ?", (type_id,)).fetchone()
     role = role[0] if role else None
+    has_flow = any(r[1] == "flow" for r in c.execute("PRAGMA table_info(task_steps)"))  # step_flow adds it at boot
     for step_id, status, flow in c.execute(
-        "SELECT id, status, flow FROM task_steps WHERE type_id = ? AND limit_minutes IS NULL", (type_id,)
+        f"SELECT id, status, {'flow' if has_flow else 'NULL'} FROM task_steps WHERE type_id = ? AND limit_minutes IS NULL",
+        (type_id,),
     ).fetchall():
         hours = _json(flow).get("late_hours")
         if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
