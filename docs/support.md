@@ -83,7 +83,7 @@ Background refresh preserves your draft, focus and scroll position.
   names left out). The box shows a **Diagnostics** line with **Review** and **×** to remove it, and Review shows the exact
   attachment before anything is sent. Every string in it goes through the same redactor as the rest of the diagnostics.
   When support is off, no Report this is offered.
-- **Setup check** in Help runs the checks `tico-setup doctor` runs, from the server against its own address (HTTPS
+- **Setup check** on Health (Settings > Health) runs the checks `tico-setup doctor` runs, from the server against its own address (HTTPS
   certificate, `/healthz`, the sign-in redirect for Google or Microsoft sign-in, the runner hostname), plus Health's red
   and yellow lines, and shows each with a plain fix. A Tico that serves only its own computer has no HTTPS to check.
   The server container, tunnel connector and `.env` permissions need a shell on the server, so for those it points to
@@ -228,7 +228,7 @@ bots and can have the helper, just like a bot's own cloud machine. This switch i
 ## Beta features
 
 A Beta feature works today and may still change. The app shows a **Beta** pill beside it (its nav item, settings section,
-page title or template card), Help lists them under **Beta features**, and its page in this manual opens with a Beta note.
+page title or template card), What's new lists them under **Beta features**, and its page in this manual opens with a Beta note.
 @diagnostics lists the ones your team has on or in use; a Windows computer through WSL 2 reports itself as Linux, so the
 server cannot tell one is connected. One list in `backend/beta.py` drives all of these.
 
@@ -252,8 +252,8 @@ the times, and the thread. It keeps no IP address and no log of a request. Ticke
 with **Delete chat history**, or the team when you ask (say so in the chat, or open an issue). The 13 month rule is for
 the anonymous install rows only. The reference for HQ's routes is in [telemetry.md](telemetry.md#support-tickets).
 
-Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back
-into view, and every 30 seconds while the support rail is open, or about every 5 minutes elsewhere while the app is open
+Your Tico asks HQ about your tickets only when the app asks: when you open Support, when the app regains focus or comes back
+into view, and every 30 seconds while the Support pop-up is open, or about every 5 minutes elsewhere while the app is open
 and you have a ticket that is not closed. It has no timer of its own. Each time, it asks about a ticket at most once every
 30 seconds when it was written on in the last hour or is the one you have open, every 5 minutes when it is open or
 answered but quiet, and every 6 hours when it is closed, the most recent first.
