@@ -1067,6 +1067,8 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
                 "rights": rights,
                 "may_grant": _may_grant(ctx, viewer, m, defaults),
                 "budgets": own.get(m, 0),
+                # The segments this teammate leads: a lead sees their own P&L column, so the page offers the segment view.
+                "segments_led": sorted(ctx.segment_leads(m)),
             }
         )
     teams = [

@@ -1143,7 +1143,8 @@ in order. Add `updated_since=<ISO-8601 time with timezone>` to poll only changed
 leaves out bodies and acceptance criteria. `hub task list` and `hub_task_list` accept the same filters,
 including with `--all`/`all`, and support `number` lookup.
 
-A task names the company's segment it is for with `segment_id`, or `""` for none; create and update take it, and a
+A task names the company's segment it is for with `segment_id`, or `""` for none (the task's Segment row in the app sets it,
+and its card shows the segment's chip; the task board and list have a Segment filter); create and update take it, and a
 subtask created without one takes its parent's. `GET /api/v2/tasks?segment=<id>` (or `segment=none`) and `hub task
 list --segment` narrow the list. A filter by an id that is not one of the company's segments, a former one for
 example, matches no task, and the task keeps its tag; a write with such an id is refused (404).

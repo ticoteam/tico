@@ -21,10 +21,15 @@ function finBudgetsPage(mine = false) {
   const caps = finCaps(), B = FIN_BUD;
   if (!B.month) B.month = finToday().slice(0, 7);
   if (mine) B.q = '';
+  // The Segment filter is the address's (`?segment=<id>`), so a link to it lands filtered.
+  if (!mine) B.seg = segQuery();
   FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
+  const bud = FIN.bud;
+  // The Segment filter names its segment once the list is read (a direct visit has none yet).
+  if (!mine) void segTagsLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.bud === bud) old.outerHTML = segFilterButton(FIN_BUD.seg || ''); });
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><input type="month" data-fin-month value="${B.month}" aria-label="Month"></label>
       ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}
-      <span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
+      ${mine ? '' : segFilterButton(FIN_BUD.seg || '')}<span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bud">${skelRows(6, {dot: false})}</div>`, '', 'Selected budget');
   const body = $('#fin-body');
   body.querySelector('[data-fin-month]').onchange = ev => {
@@ -35,6 +40,9 @@ function finBudgetsPage(mine = false) {
   if (q) q.oninput = ev => { B.q = ev.target.value.trim().toLowerCase(); finBudDraw(); };
   body.onclick = ev => {
     if (ev.target.closest('[data-fin-bud-add]')) { finBudAdd(); return; }
+    const sf = ev.target.closest('[data-seg-filter]');
+    if (sf) { segFilterOpen(sf, FIN_BUD.seg || '', finBudSegPick); return; }
+    if (ev.target.closest('[data-fin-bud-seg]')) { const b = FIN.bud?.rows.find(x => x.id === FIN_BUD.sel); if (b) finBudSegmentEdit(b); return; }
     const tr = ev.target.closest('tr[data-fin-bud]');
     if (!tr || ev.target.closest('input')) return;
     // Marked in place, not redrawn, so a double-click on the amount still finds its cell.
@@ -66,7 +74,7 @@ async function finBudLoad() {
   const at = B.month === today.slice(0, 7) ? today : a;
   const view = caps.company ? 'company' : 'expenses';
   // My budget reads no P&L: its rows are the teammate's own budgets, listed flat.
-  const [bud, pnl] = await Promise.allSettled([get(`/v2/finance/budgets?at=${at}&limit=${FIN_BUD_LIMIT}${finAs()}`, {fresh: true}),
+  const [bud, pnl] = await Promise.allSettled([get(`/v2/finance/budgets?at=${at}&limit=${FIN_BUD_LIMIT}${finAs()}${finBudSegParam()}`, {fresh: true}),
     state.mine ? Promise.resolve(null) : get(`/v2/finance/pnl?period=month&start=${a}&end=${z}&view=${view}${finAs()}`, {fresh: true})]);
   if (FIN?.bud !== state || state.load !== load || !$('#fin-bud')) return;
   if (bud.status === 'rejected') { $('#fin-bud').innerHTML = finFail(bud.reason); finRail(''); return; }
@@ -180,6 +188,8 @@ function finBudRail() {
   const s = b.state || {}, pct = finBudPct(b), month = FIN_MON[Number(B.month.slice(5, 7)) - 1], line = state.lines[b.account_id]?.name;
   const per = {month: 'month', quarter: 'quarter', year: 'year', once: 'once'}[b.period] || b.period;
   const hist = state.hist?.rows?.[b.id];
+  // The segment the budget's spend reports under: its own, or its parent's when it has none (shown muted).
+  const effSeg = b.effective_segment_id || '', inherited = !b.segment_id && !!effSeg;
   finRail(`<div class="fin-rail-title"><h2>${esc(b.name)}</h2><span class="fin-big">${s.amount == null ? '' : finUsd(s.amount)}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${finBudMeterCls(b, pct)}" aria-hidden="true"><i style="width:${Math.min(100, pct)}%"></i></div><div class="muted fin-small">${finUsd(s.actual)} of ${finUsd(s.amount)} · ${month}</div>`}
     ${line ? finKv('Line', esc(line)) : b.catch_all ? finKv('Line', 'Everything else') : ''}${b.team ? finKv('Team', esc(finTeamName(b.team))) : ''}
@@ -189,6 +199,8 @@ function finBudRail() {
     ${finBudAsOf(b) ? finKv('Platform data', esc(finBudAsOf(b).replace(/^Platform data as of /, ''))) : ''}
     ${finKv('Warn at', esc(b.warn_pct + '%'))}${finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit || '') + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : '')))}
     ${b.owner ? finKv('Owner', esc(finWho(b.owner))) : ''}
+    ${segTagRows().length || effSeg ? finKv('Segment', (effSeg ? `<span class="${inherited ? 'fin-inherit' : ''}">${segTagChips([effSeg])}</span>` : '<span class="muted">None</span>')
+      + (finBudMay() && !b.catch_all && !FIN.bud?.mine ? ' <button type="button" class="ghost small" data-fin-bud-seg>Edit</button>' : '')) : ''}
     <h3 class="fin-h">Amount by month</h3><div data-fin-bud-hist>${!state.hist ? '<p class="muted fin-note">…</p>' : hist?.length
       ? hist.map(([label, v]) => finKv(label, v == null ? '<span class="muted">—</span>' : finUsd(v))).join('') : finNote('No amounts yet.')}</div>`);
   if (!state.hist) void finBudHistory();
@@ -236,6 +248,24 @@ function finBudEdit(td) {
   input.onblur = () => void finish(true);
 }
 
+// The Segment filter's pick: the budgets read again for it (GET /v2/finance/budgets?segment=); '' is every budget.
+function finBudSegPick(id) {
+  if ((FIN_BUD.seg || '') === id) return;
+  FIN_BUD.seg = id;
+  segQuerySet(id);
+  const old = $('#fin-body [data-seg-filter]'); if (old) old.outerHTML = segFilterButton(id);
+  finBudReset(); void finBudLoad();
+}
+const finBudSegParam = () => FIN_BUD.seg ? '&segment=' + encodeURIComponent(FIN_BUD.seg) : '';
+// A budget's Segment, from the rail (budget_update; None clears it). A segment is not versioned by month.
+function finBudSegmentEdit(b) {
+  finDecideDialog('Segment', segSelectHtml(b.segment_id || '', {name: 'segment_id'}), 'Save', form => {
+    const picker = form.elements.segment_id;
+    if (!picker) throw new Error('There are no segments to pick from');   // no select: the company has none
+    return ['budget_update', {budget_id: b.id, segment_id: picker.value}];
+  }, 'Saved');
+}
+
 // + Budget: a line, optionally under a budget there, for a teammate or a vendor; amount, warn at, period and the month
 // it starts. A teammate's or vendor's budget sits under the line's (a budget tree starts at a line), which is the
 // default Under. The name is the teammate's, else the vendor's, else the line's.
@@ -254,6 +284,7 @@ function finBudAdd() {
     ${finAmountField('Amount')}
     <label>Warn at %<input name="warn_pct" type="number" min="1" max="100" step="1" value="80" required></label>
     <label>Period<select name="period">${FIN_BUD_PERIODS.map(([v, l]) => opt(v, l, v === 'month')).join('')}</select></label>
+    ${segSelectHtml('', {name: 'segment_id'})}
     ${finFromField(FIN_BUD.month, true)}`, 'Add', form => {
     const f = form.elements, account = f.account_id.value, parent = state.rows.find(b => b.id === f.parent_id.value);
     const teammate = f.teammate.value, vendor = f.vendor.value.trim(), cents = finAmountValue(form);
@@ -264,6 +295,8 @@ function finBudAdd() {
     if (parent) payload.parent_id = parent.id;
     if (teammate) payload.teammate = teammate;
     if (vendor) payload.vendor = vendor;
+    const seg = f.segment_id?.value || '';   // no select when the company has no segments
+    if (seg) payload.segment_id = seg;
     return ['budget_create', payload];
   }, 'Saved');
   const form = dlg.querySelector('form'), f = form.elements;

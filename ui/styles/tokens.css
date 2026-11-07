@@ -77,6 +77,8 @@
      the soft shadow under it. The Ask pill's face it sits on; Tico Support's blue-gray in the chat (ask.css). */
   --dot:#56a578;--dot-hi:#5fb083;--dot-lo:#4d966c;--dot-shadow:rgba(0,0,0,.55);--ask-face:var(--g1);
   --sup:#20253a;--sup-ink:#b9c2f0;
+  /* The automations palette (automations.css, the segment colours in segment-tags.css): one set for every page. */
+  --au-amber:#e2b25a;--au-orange:#f0a35a;--au-violet:#b9a8f0;--au-green:#6cc48f;--au-blue:#7fb3f0;--au-teal:#5fc4c4;--au-pink:#d99ad0;--au-gray:#979a99;--au-red:#f08080;
   --sans:"Inter","Inter Fallback",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* The conversation: one centred column this wide at most, in slightly larger type with roomier lines. */
   --read-width:800px;--read-size:var(--t-md);--read-leading:1.55;
@@ -91,6 +93,7 @@
   --run-bg:#e4edf7;--wait-bg:#f6ecd6;--fail-bg:#fbe7e4;--ok-bg:#e7f2ea;
   --dot:#4f9c71;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(23,34,33,.22);--ask-face:#ffffff;
   --sup:#eef0fa;--sup-ink:#3d4a8a;
+  --au-amber:#a8701a;--au-orange:#b85a18;--au-violet:#6650bd;--au-green:#2f7a4f;--au-blue:#2b5f96;--au-teal:#1d7778;--au-pink:#a3458b;--au-gray:#6a736e;--au-red:#c53030;
   color-scheme:light}
 @media (prefers-color-scheme:light){:root[data-theme="system"]{
   --g0:#fbfbf8;--g1:#f4f5f0;--g2:#eceee8;--g3:#dfe3db;--g4:#cdd3ca;--g5:#98a39c;--g6:#56635e;--g7:#3a4540;--g8:#172221;
@@ -101,4 +104,5 @@
   --run-bg:#e4edf7;--wait-bg:#f6ecd6;--fail-bg:#fbe7e4;--ok-bg:#e7f2ea;
   --dot:#4f9c71;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(23,34,33,.22);--ask-face:#ffffff;
   --sup:#eef0fa;--sup-ink:#3d4a8a;
+  --au-amber:#a8701a;--au-orange:#b85a18;--au-violet:#6650bd;--au-green:#2f7a4f;--au-blue:#2b5f96;--au-teal:#1d7778;--au-pink:#a3458b;--au-gray:#6a736e;--au-red:#c53030;
   color-scheme:light}}

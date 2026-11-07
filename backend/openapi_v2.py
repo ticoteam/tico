@@ -5491,6 +5491,7 @@ SCHEMAS.update(
                             "rights": {"type": ["array", "null"], "items": {"type": "string"}},
                             "may_grant": "b",
                             "budgets": "i",
+                            "segments_led": items({"type": "string"}),
                         }
                     )
                 ),

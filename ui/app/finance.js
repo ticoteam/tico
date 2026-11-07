@@ -34,8 +34,10 @@ function finCapsOf(acc, who) {
   // their own sees only My budget (backend/finance/handlers.py reads_budget), and one with none sees no Finance at all.
   const sees = all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin');
   const mine = !owner && (row.budgets || 0) > 0;
-  return {row, owner, all, rights, may, sees, mine,
-    any: sees || mine,
+  // A segment's lead sees that segment's P&L (By segment, and its own column), and nothing else of Finance.
+  const segments = Array.isArray(row.segments_led) ? row.segments_led : [];
+  return {row, owner, all, rights, may, sees, mine, segments, leads: segments.length > 0,
+    any: sees || mine || segments.length > 0,
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
@@ -58,7 +60,7 @@ function finCaps() {
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
-const finTabShown = (tab, caps, acc) => !!caps?.any && FIN_TABS.some(([id]) => id === tab) && (tab === 'mine' ? caps.mine : !caps.sees ? false : tab === 'balance' ? caps.balance : tab === 'budgets' ? caps.budgets : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
+const finTabShown = (tab, caps, acc) => !!caps?.any && FIN_TABS.some(([id]) => id === tab) && (tab === 'mine' ? caps.mine : !caps.sees ? tab === 'pnl' && caps.leads : tab === 'balance' ? caps.balance : tab === 'budgets' ? caps.budgets : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
   : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || caps.rights.has('finance.admin') || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';

@@ -100,6 +100,13 @@ its cells, so a filtered P&L never shows what the rest of a pay run was paid. A 
 column sums, gated as the P&L's filter is. Its `next_month` and `next_by` are the line's whole projection, not split by
 segment. The expenses view (`/finance/expenses`) does not group by segment.
 
+In the app, **Finance › P&L** has a **By segment** view (shown only when the segment read is open to you, probed once a
+visit): a column per segment, then Unallocated and Total, with revenue, costs and contribution. A segment's column, or the
+Segment filter on the company P&L, opens that segment's P&L; a line on it opens its page filtered the same way. A pay run
+left out of the view is noted. **Finance › Budgets** has a Segment filter, a Segment select when adding a budget, and a
+Segment row in the rail that edits the budget's segment. A segment's P&L is read-only (no budget is edited from it). The
+customer review list (`segment-review`) has no screen in the app yet.
+
 Who sees what:
 
 - The owner, and anyone with the whole P&L (a company-wide `pnl` grant), sees every column, Unallocated and Total.

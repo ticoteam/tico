@@ -5,6 +5,7 @@
 .gt-row,.gt-group{display:grid;grid-template-columns:calc(var(--d,0) * var(--ind)) 28px max(48px,calc(var(--name-w) - var(--d,0) * var(--ind) - 28px)) minmax(0,1fr) auto 30px;
   grid-template-areas:"ind av name goal kpis add";align-items:stretch;min-height:36px;padding:0 var(--gt-pad);font-size:var(--t-base);line-height:var(--lh-tight)}
 .gt-row{cursor:pointer}.gt-row:hover,.gt-row:focus-visible{background:var(--surface2);outline:none}
+.gt-row.gt-ctx{opacity:.55}
 /* "+" adds a goal for the line's owner (a group's: its lead), always in its own column: quiet, and plain under a
    pointer on the line. */
 .gt-row,.gt-group{position:relative}

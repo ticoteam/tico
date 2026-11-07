@@ -321,6 +321,9 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       billsEmail = body.address;
       return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
     }
+    // The segment P&L is for the owner (who sees the whole P&L) and segment leads; a manager is denied (reads.py pnl_by).
+    // Read as the person viewed as (?view_as=), like the P&L itself: the owner viewing as a manager is denied.
+    if (p === '/api/v2/finance/reports/pnl_by') return (url.searchParams.get('view_as') || (viewer === 'ana' ? 'human:ana' : '')) === 'human:ana' ? json({columns: [], sections: [], lines: []}) : denied();
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
     // budgetsExcl: a viewer whose budget figures leave payroll out (the read and each row say excluded).
     if (p === '/api/v2/finance/budgets') return json(budgetsExcl ? {budgets: BUDGETS.map(b => ({...b, state: {...b.state, excluded: true}})), more: false, excluded: true} : {budgets: BUDGETS, more: false});
@@ -1265,7 +1268,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => location.hash === '#/finance/pnl?view=expenses');
       await page.locator('.fin-pl').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions', 'Access'], tag + ': only the tabs in view');
-      assert.deepEqual(await page.locator('[data-fin-seg="view"] button').allInnerTexts(), ['Expenses'], tag + ': no Company view');
+      // One view (Expenses) and no switch: the View control shows only when there is more than one (finance-pnl.js views).
+      assert.equal(await page.locator('[data-fin-seg="view"]').count(), 0, tag + ': no Company or By segment view to switch to');
       assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': no budget editing without the right');
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count() > 0, true, tag + ': lines drill down');
       const priv = page.locator('.fin-ln:has-text("Payroll (private)")');

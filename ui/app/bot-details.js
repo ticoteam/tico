@@ -52,6 +52,16 @@ async function botSettingsHistoryLoad(slug) {
   } catch (error) { if (host.isConnected) host.textContent = error.message; }
 }
 
+// The bot's Segments row, the last row of its Info card: its tags, and the owner's Edit (ui/app/segment-tags.ts).
+function botSegmentsPaint(slug) {
+  const dl = $('#bot-setup-card dl'), bot = /** @type {any} */ (botRow(slug));
+  if (!dl || !bot) return;
+  const ref = 'bot:' + bot.id, row = segTagRowHtml(ref);
+  dl.querySelectorAll('[data-seg-dt], [data-seg-dd]').forEach(n => { n.remove(); });
+  if (!row) return;
+  dl.insertAdjacentHTML('beforeend', `<dt data-seg-dt>Segments</dt><dd data-seg-dd>${row}</dd>`);
+  segTagRowWire(dl, ref, bot.display_name || bot.id);
+}
 function botInfoRefresh(slug) {
   const bot = botRow(slug), host = $('#bot-setup-card');
   if (!bot || !host || botLimited(bot)) return;

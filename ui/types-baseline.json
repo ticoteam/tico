@@ -42,7 +42,7 @@
     "ui/app/finance-books.js": 15,
     "ui/app/finance-budgets.js": 17,
     "ui/app/finance-docs.js": 54,
-    "ui/app/finance-pnl.js": 31,
+    "ui/app/finance-pnl.js": 29,
     "ui/app/finance-tax.js": 39,
     "ui/app/finance.js": 29,
     "ui/app/format.js": 3,
