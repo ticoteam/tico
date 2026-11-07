@@ -159,6 +159,24 @@ def gone(c, visible_sql, was, matched):
     return out
 
 
+def _pipeline_of(c, tid):
+    """(known, type_id): the pipeline a ticket the change log names was on, from the ticket itself or, once it is deleted,
+    from the row its trash kept. `known` is False when neither says, and the caller fails closed."""
+    row = c.execute("SELECT type_id FROM tasks WHERE id=?", (tid,)).fetchone()
+    if row is not None:
+        return True, row[0]
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_trash'").fetchone() is None:
+        return False, None
+    found = c.execute(
+        "SELECT json_type(rows,'$.rows.tasks[0].type_id'), json_extract(rows,'$.rows.tasks[0].type_id') "
+        "FROM task_trash WHERE task_id=?",
+        (tid,),
+    ).fetchone()
+    if found is None or found[0] is None:  # a purged or unreadable trash row keeps no snapshot
+        return False, None
+    return True, found[1]
+
+
 def _could_read(c, visible_sql, tid, ref):
     try:
         # (owner, requester, private, readers): an older change has three parts, or a one-person `guest` fourth.
@@ -171,11 +189,14 @@ def _could_read(c, visible_sql, tid, ref):
         readers = json.dumps([readers])
     elif not isinstance(readers, str):
         readers = None
+    known, type_id = _pipeline_of(c, tid)
+    if not known:  # the pipeline rule (pipeline_rights.list_sql) cannot be applied: the ticket is not read
+        return False
     return (
         c.execute(
-            f"SELECT 1 FROM (SELECT ? AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS readers) tasks "
-            f"WHERE {visible_sql}",
-            (tid, owner, requester, private, readers),
+            f"SELECT 1 FROM (SELECT ? AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS readers, "
+            f"? AS type_id) tasks WHERE {visible_sql}",
+            (tid, owner, requester, private, readers, type_id),
         ).fetchone()
         is not None
     )

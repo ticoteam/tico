@@ -65,6 +65,7 @@ def register(
             snoozed=f.snoozed,
             by_id=f.ids is not None or f.number is not None,
             exact=True,
+            viewer=who.task_actor or who.actor,
         )
         visible_sql = auth.task_sql(c, who)
         if f.ids is not None:

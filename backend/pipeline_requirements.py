@@ -496,7 +496,12 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         guard: Any = auth
         with db.read() as c:
             guard.domain(who)
-            return affected_count(c, stage_id, label, guard.task_sql(c, who))
+            pipeline_id, _ = _stage(c, stage_id)
+            # A stage of a members-only pipeline is not found to anyone outside it, as its requirements are not.
+            if not pipeline_rights.may_see(c, who.actor, pipeline_id):
+                raise Problem("not_found", "No such stage", 404)
+            visible = pipeline_rights.list_sql(c, who.task_actor or who.actor, guard.task_sql(c, who))
+            return affected_count(c, stage_id, label, visible)
 
     @app.get("/api/v2/requirements/{requirement_id}")
     def requirement_read(request: Request, requirement_id: str) -> dict[str, Any]:

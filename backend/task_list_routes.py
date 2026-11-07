@@ -65,6 +65,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 member=member,
                 role=role,
                 snoozed=snoozed,
+                viewer=who.task_actor or who.actor,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
@@ -288,12 +289,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         auth.domain(who)
         with store.read() as c:
             visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
-            tag = reads.etag("labels", reads.version(c), reads.access(visible_sql), reads.names(c), who.actor)
+            # The tag is of the labels this reader sees, not of the newest task change: an edit to a ticket it cannot
+            # read (on a members-only pipeline) leaves the tag, and the answer, as they were.
+            keys = H.labels_in_use(c, visible_sql)
+            tags = [H.tag_by_key(c, key) for key in keys]
+            tag = reads.etag("labels", reads.access(visible_sql), reads.names(c), who.actor, keys, tags)
             if reads.fresh(request, tag):
                 return reads.not_modified(tag)
-            keys = H.labels_in_use(c, visible_sql)
             response.headers["ETag"] = tag
-            return {"labels": keys, "tags": [H.tag_by_key(c, key) for key in keys]}
+            return {"labels": keys, "tags": tags}
 
     @app.get("/api/v2/tasks/stuck")
     def tasks_stuck(request: Request, hours: int = H.STUCK_HOURS):
@@ -337,6 +341,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             owner = H.resolve_actor(c, owner) if owner else None
             requester = H.resolve_actor(c, requester) if requester else None
             typ = H.type_get(c, type) if type else None
+            # A members-only pipeline is no type to someone outside it: refused as an unknown one is.
+            if typ and not pipeline_rights.may_see(c, who.task_actor or who.actor, typ["id"]):
+                typ = None
             if type and not typ:
                 raise Problem("type", "No task type " + type, 422)
             tz = max(-840, min(840, tz))  # minutes east of UTC; days are the viewer's days
