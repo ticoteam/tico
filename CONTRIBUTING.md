@@ -69,6 +69,9 @@ The UI's API calls are checked against the backend's routes by `bash scripts/che
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
 `python3 scripts/check_ui_routes.py --write`.
+Which browser scripts run each UI file is `scripts/ui-test-map.json`, measured weekly by `.github/workflows/ui-test-map.yml`
+(never edit it by hand). After you delete a UI file or a browser script, run `python3 scripts/ui_test_map.py prune`;
+`python3 scripts/ui_test_map.py check` fails on a name the map still holds.
 
 ## Profiling API test setup
 

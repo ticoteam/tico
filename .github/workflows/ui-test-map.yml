@@ -1,0 +1,161 @@
+name: UI test map
+
+# Rebuilds scripts/ui-test-map.json, which maps each UI file to the browser scripts that run its code, from a full run of
+# every browser script under scripts/ui-coverage.cjs. Weekly, and on demand. The map is data: this workflow writes it and
+# nobody edits it by hand. A scheduled run, or a dispatch with publish, opens or updates one pull request with the map.
+# Measuring uses GitHub-hosted runners (the repo is public), so it does not wait on RunsOn.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Open or update the map pull request (scheduled runs always do)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-test-map
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: measure shard ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    env:
+      PYTHONUNBUFFERED: '1'
+      TICO_BROWSER_CHANNEL: ''
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: bash scripts/ci_install.sh browser-measure
+      - name: Run this shard's browser scripts under the coverage hook
+        timeout-minutes: 60
+        continue-on-error: true
+        env:
+          SHARD: ${{ matrix.shard }}
+          TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
+          TICO_UI_BUNDLE: off
+          TICO_UI_COVERAGE: ${{ runner.temp }}/measure/coverage
+          TICO_UI_TIMINGS: ${{ runner.temp }}/measure/timings-${{ matrix.shard }}.json
+          TICO_UI_SCRIPT_TIMEOUT: '300'
+          NODE_OPTIONS: --require ${{ github.workspace }}/scripts/ui-coverage.cjs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/measure"
+          mapfile -t names < <(python3 scripts/ui_test_map.py shard "$SHARD" 8)
+          node scripts/ui-tests.cjs -j 2 "${names[@]}"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: measure-${{ matrix.shard }}
+          path: ${{ runner.temp }}/measure
+          retention-days: 7
+          if-no-files-found: warn
+
+  build:
+    name: build the map from the measured run
+    needs: measure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: measure-*
+          path: ${{ runner.temp }}/measured
+          merge-multiple: true
+      - name: Build the map (fails if any browser script has no coverage record)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/map"
+          python3 scripts/ui_test_map.py build --measured "$RUNNER_TEMP/measured" --summary "$RUNNER_TEMP/map/summary.md"
+      - name: Check the map
+        run: python3 scripts/ui_test_map.py check
+      - name: Copy the map for the pull request
+        run: cp scripts/ui-test-map.json "$RUNNER_TEMP/map/ui-test-map.json"
+      - name: Summary
+        run: cat "$RUNNER_TEMP/map/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-test-map
+          path: ${{ runner.temp }}/map
+          retention-days: 30
+
+  pull-request:
+    name: open or update the map pull request
+    needs: build
+    if: github.event_name == 'schedule' || inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ui-test-map
+          path: ${{ runner.temp }}/map
+      - name: Put the map on one branch, from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          git switch -C auto/ui-test-map origin/main
+          cp "$RUNNER_TEMP/map/ui-test-map.json" scripts/ui-test-map.json
+          if git diff --quiet -- scripts/ui-test-map.json; then
+            echo "The map matches main: nothing to open."
+            exit 0
+          fi
+          git add scripts/ui-test-map.json
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -F - <<'MSG'
+          Refresh the UI test map from a measured run
+
+          Generated by .github/workflows/ui-test-map.yml.
+          MSG
+          git push --force origin auto/ui-test-map
+          {
+            cat "$RUNNER_TEMP/map/summary.md"
+            echo
+            echo "Measured run: $RUN_URL"
+            echo
+            echo "The map is generated. Do not edit it by hand: change the UI or the browser scripts, then run the workflow again."
+          } > "$RUNNER_TEMP/body.md"
+          number=$(gh pr list --head auto/ui-test-map --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head auto/ui-test-map --title "Refresh the UI test map" \
+              --body-file "$RUNNER_TEMP/body.md"
+          fi

@@ -316,6 +316,8 @@ jobs:
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
+      - name: UI test map (every named file and script exists)
+        run: python3 scripts/ui_test_map.py check
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
       - name: Shell scripts (shellcheck, pinned)
