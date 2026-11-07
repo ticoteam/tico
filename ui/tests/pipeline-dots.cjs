@@ -37,7 +37,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.equal(await page.locator('[data-task-key="tD52"] .pdots[data-open]').count(), 0, 'a tap elsewhere closes the names');
 
       // The board's ▶ count is the tickets waiting on Ana: D52 and D61 at the pipeline level.
-      assert.equal((await page.locator('.pipe-play-row .pipe-play').first().innerText()).trim(), '2 for you');
+      assert.equal((await page.locator('.tl-head .pipe-play').first().innerText()).trim(), '2 for you');
+      // A column's ▶ is a compact chip as tall as the column's count, named for its tickets.
+      const chip = page.locator('[data-col="build"] .pipe-play-chip');
+      assert.equal((await chip.innerText()).trim(), '1');
+      assert.equal(await chip.getAttribute('aria-label'), '1 for you');
+      const chipBox = await chip.boundingBox(), countBox = await page.locator('[data-col="build"] header .cnt').boundingBox();
+      assert.ok(Math.abs(chipBox.height - countBox.height) <= 1, 'the chip is as tall as the count');
 
       // Open the ticket: its requirements, and Mark met on the waiting one with a why.
       await page.locator('[data-task-key="tD52"] .bcard-open').click();

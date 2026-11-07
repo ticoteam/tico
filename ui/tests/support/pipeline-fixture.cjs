@@ -11,7 +11,9 @@ const steps = [
   {id: 'build', name: 'Build', status: 'doing', position: 1},
   {id: 'review1', name: 'Review 1', status: 'review', position: 2},
 ];
-const type = {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, can_edit_rules: true, steps: steps.map(s => ({...s, type_id: 'dev-tickets'}))};
+// The Build stage warns after a day (the phone's "warn after 24h"); the cards' own step copies carry no limit, as the server sends them.
+const type = {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, can_edit_rules: true,
+  steps: steps.map(s => ({...s, type_id: 'dev-tickets', limit_minutes: s.id === 'build' ? 1440 : null}))};
 
 function task(id, title, stepId, requirements) {
   const step = steps.find(s => s.id === stepId);
@@ -34,6 +36,8 @@ function tasks() {
     task('D61', 'Pipeline stages + manager', 'spec', [
       {id: 'r-spec61', name: 'Spec page', state: 'waiting', next_actor: ME}]),
     task('D17', 'Sim stuck checks', 'build'),
+    // D38 is the manager's own ticket: its open tasks are the rail's Tasks tab.
+    {...task('D38', 'Stage rules spec', 'spec'), owner_id: 'bot:product-manager'},
   ];
 }
 

@@ -6,6 +6,9 @@
 'use strict';
 
 const PIPELINE_UNDO_MS = 10000;
+/** The Exit button: "Exit Esc" on a desktop, a 44px round × on a phone (the words hide there). */
+const PIPELINE_REVIEW_EXIT = '<button type="button" class="ghost pipe-review-exit" data-review-exit aria-label="Exit review">'
+  + '<span class="pipe-review-exit-word">Exit <kbd>Esc</kbd></span><span class="pipe-review-x" aria-hidden="true">×</span></button>';
 let pipelineReviewState: {
   pipelineId: string;
   items: PipelineReviewItem[];
@@ -47,12 +50,28 @@ async function pipelineMineSync(pipelineId: string, force = false): Promise<void
   tasksRender(TASKS_ST);
 }
 
-/** The ▶ button for a count (the pipeline's, or one stage's when `stage` names it), or '' when nothing waits on this person. */
-function pipelineForYouHTML(count: number, pipelineId: string, stage = ''): string {
+/** The ▶ button for a count, or '' when nothing waits on this person. The header's (no `stage`) reads "▶ 2 for you" beside
+    the pipeline picker; a stage's is `compact`: a bare "▶ 2", as tall as the count. `stage` names the stage it opens. */
+function pipelineForYouHTML(count: number, pipelineId: string, stage = '', compact = false): string {
   if (!count) return '';
-  const where = stage ? `in ${stage}` : 'waiting on you';
-  return `<button type="button" class="pipe-play" data-pipeline-review="${esc(pipelineId)}"${stage ? ` data-review-stage="${esc(stage)}"` : ''}`
-    + ` aria-label="${esc(`Review ${count} ${where}`)}"><span class="pipe-play-tri" aria-hidden="true"></span>${count} for you</button>`;
+  const stageAttr = stage ? ` data-review-stage="${esc(stage)}"` : '';
+  const tri = '<span class="pipe-play-tri" aria-hidden="true"></span>';
+  if (compact) return `<button type="button" class="pipe-play pipe-play-chip" data-pipeline-review="${esc(pipelineId)}"${stageAttr} aria-label="${count} for you">${tri}${count}</button>`;
+  return `<button type="button" class="pipe-play" data-pipeline-review="${esc(pipelineId)}"${stageAttr} aria-label="${esc(`Review ${count} waiting on you`)}">${tri}<span class="pipe-play-text">${count}<span class="pipe-play-word"> for you</span></span></button>`;
+}
+
+/** Draws the header's ▶ beside the pipeline picker: on the board, the queue rows on its tickets that are this person's.
+    Returns whether it changed, so the caller refits the header row. */
+function pipelinePlayPaint(state: { view: string; tasks: { id: string | number }[] }): boolean {
+  const slot = document.getElementById('task-play');
+  if (!slot) return false;
+  const type = state.view === 'board' ? (pipelineSelectedType(state) as { id: string } | undefined) : undefined;
+  const count = type ? pipelineForYouCount(state.tasks.map(task => ({task: {id: String(task.id)}}))) : 0;
+  const html = type && count ? pipelineForYouHTML(count, type.id) : '';
+  if (slot.innerHTML === html) return false;
+  slot.innerHTML = html;
+  slot.hidden = !html;
+  return true;
 }
 
 function pipelineReviewClose(): void {
@@ -90,7 +109,7 @@ function pipelineReviewRender(): void {
   const undo = state.undo ? `<div class="pipe-review-toast" role="status">Approved · <button type="button" class="linkish" data-review-undo>Undo</button></div>` : '';
   if (!item) {
     host.innerHTML = `<header class="pipe-review-head"><span class="pipe-review-count">${state.message ? 'Queue not loaded' : 'For you · none'}</span>
-      <span class="spacer"></span><button type="button" class="ghost" data-review-exit>Exit <kbd>Esc</kbd></button></header>
+      <span class="spacer"></span>${PIPELINE_REVIEW_EXIT}</header>
       <p class="pipe-review-empty" role="status">${esc(state.message || 'Nothing is waiting on you.')}</p>${undo}`;
     return;
   }
@@ -101,9 +120,9 @@ function pipelineReviewRender(): void {
     : `<div class="pipe-review-card"><strong>${esc(tab.label)}</strong>${tab.detail ? `<span class="muted">${esc(tab.detail)}</span>` : ''}${tab.url ? `<a href="${esc(tab.url)}" target="_blank" rel="noopener">Open</a>` : ''}</div>`;
   const assignee = item.assignee?.name ?? 'assignee';
   host.innerHTML = `<header class="pipe-review-head">
-      <button type="button" class="ghost" data-review-exit aria-label="Exit review">Exit <kbd>Esc</kbd></button>
-      <span class="pipe-review-count">For you · ${state.index + 1} of ${total}</span>
-      <span class="muted">${esc([item.stage_name, item.task_title].filter(Boolean).join(' · '))}</span>
+      ${PIPELINE_REVIEW_EXIT}
+      <div class="pipe-review-title"><span class="pipe-review-count">For you · ${state.index + 1} of ${total}</span>
+        <span class="muted pipe-review-stage">${esc(item.stage_name || '')}${item.task_title ? `<span class="pipe-review-where"> · ${esc(item.task_title)}</span>` : ''}</span></div>
       <span class="spacer"></span>
       <button type="button" class="ghost" data-review-prev aria-label="Previous" ${state.index === 0 ? 'disabled' : ''}>‹</button>
       <button type="button" class="ghost" data-review-next aria-label="Next" ${state.index >= total - 1 ? 'disabled' : ''}>›</button>
@@ -124,9 +143,9 @@ function pipelineReviewRender(): void {
         <div class="pipe-review-sendback">
           <button type="button" class="btn" data-review-send="assignee">Message ${esc(assignee)}</button>
           <button type="button" class="btn" data-review-send="manager">Message manager</button>
-          ${item.can_mark_met ? '<button type="button" class="btn" data-review-send="met">Mark met</button>' : ''}
         </div>
         <button type="button" class="pipe-review-approve" data-review-approve ${state.busy ? 'disabled' : ''}>Approve <kbd class="pipe-review-kbd">⌘⏎</kbd></button>
+        ${item.can_mark_met ? '<button type="button" class="pipe-review-met" data-review-send="met">Mark met</button>' : ''}
         <p class="muted pipe-review-moves">${item.moves_to ? `Last requirement · moves ${esc(item.task_id)} to ${esc(item.moves_to)}` : ''}</p>
       </aside>
     </div>

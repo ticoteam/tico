@@ -9,8 +9,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
 const SIZES = [{width: 1440, height: 940, phone: false}, {width: 390, height: 844, phone: true}];
 
-async function openReview(browser, {width, height, theme, refuseApprove = false}) {
-  const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block'});
+async function openReview(browser, {width, height, theme, refuseApprove = false, touch = false}) {
+  const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', ...(touch ? {isMobile: true, hasTouch: true} : {})});
   await context.addInitScript(([theme]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
   }, [theme]);
@@ -19,8 +19,8 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
   page.on('pageerror', e => errors.push(e.message));
   const state = await install(page, {refuseApprove});
   await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
-  await page.waitForSelector('.pipe-play-row .pipe-play', {timeout: t(8000)});
-  await page.locator('.pipe-play-row .pipe-play').click();
+  await page.waitForSelector('.tl-head .pipe-play', {timeout: t(8000)});
+  await page.locator('.tl-head .pipe-play').click();
   await page.waitForSelector('.pipe-review .pipe-review-count', {timeout: t(5000)});
   return {context, page, state, errors};
 }
@@ -35,6 +35,16 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
         assert.equal((await count()).trim(), 'For you · 1 of 2');
         assert.equal(await page.locator('.pipe-review-tab').count(), 1, 'every attachment is a tab');
         assert.equal(await page.locator('.pipe-review-approve kbd, .pipe-review-kbd').count() > 0, true);
+        const label = `${theme} ${size.width}`;
+
+        // The two Message buttons share one row; Mark met is a quiet text button under Approve, outside that row.
+        const toAssignee = await page.locator('[data-review-send="assignee"]').boundingBox();
+        const toManager = await page.locator('[data-review-send="manager"]').boundingBox();
+        assert.ok(Math.abs(toAssignee.y - toManager.y) < 2 && toAssignee.height <= 44, label + ': the Message buttons share one row');
+        assert.equal(await page.locator('.pipe-review-sendback [data-review-send="met"]').count(), 0, label + ': Mark met is not in the row');
+        const approveBox = await page.locator('.pipe-review-approve').boundingBox();
+        const metBox = await page.locator('.pipe-review-met').boundingBox();
+        assert.ok(metBox.y >= approveBox.y + approveBox.height - 1, label + ': Mark met sits under Approve');
 
         // Layout: no sideways scroll; on a phone the decision sits under the attachment, not beside it.
         const scroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
@@ -43,6 +53,16 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
         const sideBox = await page.locator('.pipe-review-side').boundingBox();
         if (size.phone) assert.ok(sideBox.y >= mainBox.y + mainBox.height - 2, 'the phone stacks the decision below');
         else assert.ok(sideBox.x >= mainBox.x + mainBox.width - 2, 'the desktop puts the decision beside');
+        if (size.phone) {
+          // A phone: a 44px round × to exit, ‹ › at 44px, and the stage under the count.
+          const exit = await page.locator('.pipe-review-exit').boundingBox();
+          assert.ok(exit.width === 44 && exit.height === 44, label + ': Exit is a 44px round button');
+          for (const sel of ['[data-review-prev]', '[data-review-next]']) {
+            const box = await page.locator(sel).boundingBox();
+            assert.ok(box.width === 44 && box.height === 44, label + ': ' + sel + ' is 44px');
+          }
+          assert.equal((await page.locator('.pipe-review-stage').innerText()).trim(), 'Build', label + ': the stage sits under the count');
+        }
 
         // ⌘⏎ does nothing while the note box does not have focus.
         await page.locator('.pipe-review-approve').focus();
@@ -75,6 +95,15 @@ async function openReview(browser, {width, height, theme, refuseApprove = false}
         assert.deepEqual(errors, [], 'no page errors');
         await context.close();
       }
+    }
+
+    // A touch phone has no keyboard to hint at: Esc and ⌘⏎ are not drawn where no hover is possible.
+    {
+      const {context, page, errors} = await openReview(browser, {width: 390, height: 844, theme: 'light', touch: true});
+      const drawn = await page.locator('.pipe-review kbd').evaluateAll(els => els.filter(el => el.getClientRects().length > 0).length);
+      assert.equal(drawn, 0, 'no key hints on a touch phone');
+      assert.deepEqual(errors, [], 'touch phone: no page errors');
+      await context.close();
     }
 
     // A refused approval (the work changed under the reviewer) does not approve stale work: the queue reloads.

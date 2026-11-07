@@ -8,6 +8,11 @@ const {install} = require('./support/pipeline-fixture.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const overflow = page => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+// The composer sits inside its panel with a gutter on both sides, never on the viewport's edge.
+const composerInside = async (page, panel) => {
+  const box = await page.locator(panel).boundingBox(), composer = await page.locator('.pr-chat .thv-composer').boundingBox();
+  return composer.x >= box.x + 12 && composer.x + composer.width <= box.x + box.width - 12;
+};
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -39,10 +44,13 @@ const overflow = page => page.evaluate(() => document.documentElement.scrollWidt
         assert.ok((await page.locator('.pr-head b').innerText()).length > 0, 'the manager is named');
         assert.match(await page.locator('.pr-ran').innerText(), /Ran \d\d:\d\d/);
         assert.deepEqual(await page.locator('.pr-tab').allInnerTexts().then(a => a.map(s => s.replace(/\s+\d+$/, '').trim())), ['Log', 'Tasks', 'Learned']);
+        assert.equal((await page.locator('.pr-tab').nth(1).innerText()).trim(), 'Tasks 1', 'the Tasks tab counts the manager\'s open tasks');
         assert.match(await page.locator('.pr-late').first().innerText(), /D17/);
         const lines = await page.locator('.pr-log .pr-line').allInnerTexts();
         assert.match(lines[0], /unreachable/, 'errors first');
         assert.equal(await page.locator('.pr-chat').count(), 1, 'chat with the manager is in the rail');
+        await page.waitForSelector('.pr-chat .thv-composer', {timeout: t(5000)});
+        assert.ok(await composerInside(page, '.pr-panel'), label + ': the composer sits inside the rail');
         // Hide to a strip and remember it as a user pref; a fresh load reads it back.
         await page.locator('[data-rail-hide]').click();
         await page.waitForFunction(() => document.querySelector('#pipe-rail').classList.contains('hidden') || getComputedStyle(document.querySelector('.pr-panel')).display === 'none');
@@ -56,13 +64,16 @@ const overflow = page => page.evaluate(() => document.documentElement.scrollWidt
       } else {
         // The phone: one stage with its chips, the rail as a bar, the sheet from the bar.
         assert.ok(await page.locator('.pchips .pchip').count() >= 3, label + ': a chip for each stage');
-        assert.equal(await page.locator('#task-body .bcol').count(), 1, label + ': one stage at a time');
+        assert.equal(await page.locator('#task-body .pipe-stage').count(), 1, label + ': one stage at a time');
         const chip = await page.locator('.pchips .pchip').first().boundingBox();
         const reach = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('.pchip') !== null, [chip.x + chip.width / 2, chip.y - 5]);
         assert.ok(chip.height >= 32 && reach, label + ': chips reach a 44px target');
         await page.locator('.pchips .pchip').nth(1).click();
         await page.waitForFunction(() => document.querySelector('.pchip.on')?.dataset.pipeChip === 'build');
         await stepAge();
+        assert.equal((await page.locator('.pipe-stage-name').innerText()).trim(), 'Build · warn after 1d', label + ': the stage line names its limit');
+        const stageCards = await page.locator('.pipe-stage-cards').boundingBox(), card = await page.locator('[data-task-key="tD52"]').boundingBox();
+        assert.ok(Math.abs(card.x - (stageCards.x + 16)) <= 1 && Math.abs(card.width - (stageCards.width - 32)) <= 1, label + ': cards run full width with 16px gutters');
         assert.ok(await page.locator('[data-task-key="tD52"]').count(), label + ': Build shows D52');
         assert.ok(await page.locator('.pchip-dot').count() >= 1, label + ': a dot where something waits on you');
         const bar = page.locator('#pipe-rail-bar');
@@ -73,6 +84,8 @@ const overflow = page => page.evaluate(() => document.documentElement.scrollWidt
         await page.waitForFunction(() => document.querySelector('#pipe-rail')?.classList.contains('sheet-open'));
         await page.locator('.pr-late').first().waitFor({state: 'visible'});
         assert.match(await page.locator('.pr-late').first().innerText(), /D17/);
+        await page.waitForSelector('.pr-chat .thv-composer', {timeout: t(5000)});
+        assert.ok(await composerInside(page, '.pr-panel'), label + ': the composer sits inside the sheet');
         await page.locator('.pr-x[data-rail-close]').click();
         await page.waitForFunction(() => !document.querySelector('#pipe-rail').classList.contains('sheet-open'));
       }

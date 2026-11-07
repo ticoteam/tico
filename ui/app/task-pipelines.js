@@ -93,7 +93,7 @@ function taskPipelineBoard(items, state, head = '') {
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
   if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}});
+  const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
     hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
   const columns = [];
@@ -111,15 +111,26 @@ function taskPipelineBoard(items, state, head = '') {
   const STEP_KIND = {open: 'starting', doing: 'doing', waiting: 'waiting', review: 'review', ready: 'review', done: 'done', closed: 'closed', declined: 'needs'};
   for (const column of columns) {
     column.items.sort(taskByStepRank);
-    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.name)});
+    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.name, true)});
     const step = type.steps.find(step => step.id === column.id);
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
-  const play = pipelineForYouHTML(pipelineForYouCount(items), type.id);
-  const top = head + (play ? `<div class="pipe-play-row">${play}</div>` : '');
   const one = phone ? pipelinePhoneBoard(state, columns) : null;
-  if (one) return boardColumnsHTML([one.column], {head: top + one.chips, cls: 'pipe-phone'}) + one.next;
-  return boardColumnsHTML(columns, {head: top});
+  if (one) return head + one.chips + pipePhoneStageHTML(one.column, type) + one.next;
+  return boardColumnsHTML(columns, {head});
+}
+// A phone's one stage: its name and "warn after" limit, with the compact ▶ N and select-all on the right, then its cards
+// full width. The column box and its header do not show; the stage chips above name the stage.
+function pipePhoneStageHTML(column, type) {
+  const limit = column.limit ? ` · warn after ${pipelineLimit(column.limit)}` : '';
+  const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
+  const all = column.items.length && tasksCanSelect()
+    ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
+  const notices = taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true);
+  const cards = column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>';
+  return `<div class="pipe-phone"><section class="pipe-stage" data-col="${esc(column.id)}" aria-label="${esc(column.name)}">
+    <div class="pipe-stage-line"><span class="pipe-stage-name">${esc(column.name + limit)}</span>${pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.name, true)}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}</div>
+    ${notices}<div class="pipe-stage-cards">${cards}</div></section></div>`;
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
   || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));
