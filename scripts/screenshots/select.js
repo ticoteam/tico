@@ -21,7 +21,7 @@ const SHARED = [
   'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css',
   'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.js', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
   'ui/app/session.js', 'ui/app/notices.js', 'ui/app/sidebar.js', 'ui/app/drawer.js', 'ui/app/viewport.js',
-  'ui/app/refresh.js', 'ui/app/boot.ts', 'ui/app/boot-snap.js', 'ui/app/boot-timing.js', 'ui/app/nav-events.js',
+  'ui/app/refresh.ts', 'ui/app/boot.ts', 'ui/app/boot-snap.js', 'ui/app/boot-timing.js', 'ui/app/nav-events.js',
   'ui/app/markdown.js', 'ui/app/tooltip.js', 'ui/app/avatars.js', 'ui/app/liquid-dot.js', 'ui/app/heartbeat.js',
   'ui/app/pill.js', 'ui/app/live.js', 'ui/app/motion.js', 'ui/app/rails.js', 'ui/app/stick-scroll.js',
   'ui/app/org-fan.js', 'ui/app/native.js', 'ui/app/ask-panel.js', 'ui/app/ask-rules.js', 'ui/assistant.js',

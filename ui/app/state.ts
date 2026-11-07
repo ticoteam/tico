@@ -47,7 +47,7 @@ const S: AppState = { emps: [], people: [], orgGroups: [], status: null, statusP
             v2: {on: false, status: {}, needs: []},
             // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
             // return visit paints it in the same task as the page's shell, then reads again and patches what changed,
-            // so switching pages never flashes a skeleton. Live events keep or drop it (ui/app/refresh.js).
+            // so switching pages never flashes a skeleton. Live events keep or drop it (ui/app/refresh.ts).
             lastRead: {} };
 const appName = (): string => S.config.app_name || CONFIG_DEFAULTS.app_name;
 // The assistant bot's name. Neither the product's name nor the team's is ever the bot's: a config that names it

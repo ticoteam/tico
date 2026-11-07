@@ -108,7 +108,7 @@ function liveRestart() {
   clearTimeout(LIVE.restart);
   LIVE.restart = setTimeout(liveEventsConnect, 30);       // several views following at once reconnect once
 }
-// The task changes this page shows (refresh.js liveTasksApply): every task's on a task list, a bot's or a person's
+// The task changes this page shows (refresh.ts liveTasksApply): every task's on a task list, a bot's or a person's
 // own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope() {
   const r = typeof S !== 'undefined' && S.route || '';

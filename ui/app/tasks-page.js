@@ -37,7 +37,7 @@ function pageTasks(forced, openId = '') {
   };
   if (keptPref) { prefApply(keptPref); state.migrate = false; }
   // A kept list read to its end keeps its cursor too, so coming back asks only for what changed since (a delta read),
-  // and the 15-minute clock (refresh.js tasksFreshen) runs on from its last full read.
+  // and the 15-minute clock (refresh.ts tasksFreshen) runs on from its last full read.
   if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true,
     since: kept.since || null, fullAt: kept.since ? kept.fullAt || 0 : 0, activeComplete: !!kept.since});
   const main = $('#main');
@@ -447,7 +447,7 @@ async function tasksRead(state, opts = {}) {
     complete = await drain(active.next_offset);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;      // a newer read took over
     // Only a list read to its end can be caught up from its cursor, drops what left it, and starts the clock for the
-    // next full read again (refresh.js tasksFreshen).
+    // next full read again (refresh.ts tasksFreshen).
     state.activeComplete = complete;
     state.since = complete ? active.cursor || null : null;
     if (complete) {

@@ -1,4 +1,4 @@
-// Live task events at scale (ui/app/live.js, ui/app/refresh.js): every open tab gets every task change, and a busy
+// Live task events at scale (ui/app/live.js, ui/app/refresh.ts): every open tab gets every task change, and a busy
 // team's bots create and change tasks every few seconds. When each change made a tab read whole task lists, a few
 // open tabs kept the server at 100% CPU. This sends 50 task events over about three seconds and caps the requests
 // the page makes in reply:

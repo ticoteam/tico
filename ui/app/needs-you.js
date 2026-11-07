@@ -425,7 +425,7 @@ document.addEventListener('click', ev => {
 // Browser notifications for new thread items, while the page is in the background, when the person turned them on
 // (their Notifications card, person-page.js). The ids already notified are kept per person (their id, from /api/me) in
 // localStorage, so a reload does not repeat them; the first read after a fresh start records what is listed without
-// notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.js after a live change), and the calls
+// notifying. Both reads of the list call this (hub-v2.js after a refresh, refresh.ts after a live change), and the calls
 // run one after another, so they share one memory and an item is notified once.
 let notifyQueue = Promise.resolve();
 function notifyNewThreadNeeds(items) {
