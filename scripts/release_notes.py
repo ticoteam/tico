@@ -36,6 +36,9 @@ HEADING = re.compile(r"^##\s+(.+?)\s*$")
 RISK = re.compile(r"^(high|medium|low)\b(?:\s+risk\b)?[\s:,.;—–-]*(.*)$", re.IGNORECASE)
 RISK_LABELS = {"risk:high": "high", "high-risk": "high", "risk:medium": "medium", "risk:low": "low"}
 RECEIPT = re.compile(r"^\s*[-*]?\s*\**(verdict|receipt)\**\s*:\s*(.+)$", re.IGNORECASE)
+# The line Tico writes into a Dev ticket's pull request at merge: `Review page: <url>`, or `Review page: none (<reason>)`.
+# No line at all means the pull request has no Dev ticket, and it is exempt from the review-page count.
+REVIEW_PAGE = re.compile(r"^Review page:[ \t]*(.*?)[ \t]*$", re.M)
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 NONE_RECORDED = "none recorded"  # checks_of's answer for a head commit with no check runs
 NOTHING_GIVEN = "No spec, demo steps or risk given."
@@ -75,6 +78,7 @@ class Pull:
     checks: str
     failed: tuple[str, ...]
     reviews: tuple[str, ...]
+    review_page: str | None = None  # the body's Review page line: a URL or "none (...)"; None when there is no line
 
 
 def area_of(path: str) -> str:
@@ -223,6 +227,7 @@ def load(api: Api, number: int, shas: set[str]) -> Pull | None:
         checks=checks,
         failed=failed,
         reviews=reviews_of(reviews, comments),
+        review_page=review_page_of(str(data.get("body") or "")),
     )
 
 
@@ -233,6 +238,17 @@ def pulls_between(api: Api, base: str, head: str) -> tuple[list[Pull], bool]:
     loaded = [load(api, number, shas) for number in pr_numbers(commits)]
     pulls = [pull for pull in loaded if pull is not None]
     return pulls, len(commits) >= PAGE * COMMIT_PAGES
+
+
+def review_page_of(body: str) -> str | None:
+    """The body's Review page value (a URL, or `none (reason)`), or None when the body has no such line."""
+    found = REVIEW_PAGE.search(body)
+    return found.group(1) if found else None
+
+
+def review_page_text(pull: Pull) -> str:
+    """The Review page line's value as the notes say it: the link, or why there is none."""
+    return pull.review_page or "none recorded"
 
 
 def field(name: str, text: str) -> list[str]:
@@ -272,6 +288,8 @@ def block(pull: Pull) -> list[str]:
         lines.append(checks)
     if pull.reviews:
         lines.append("- Review: " + "; ".join(pull.reviews))
+    if pull.review_page is not None:
+        lines.append("- Review page: " + review_page_text(pull))
     lines.append("- Touches: " + (", ".join(pull.areas) or "tests only"))
     for provider in EVIDENCE:
         lines += ["- " + line for line in provider(pull)]
@@ -287,6 +305,10 @@ def build(api: Api, base: str, head: str) -> str:
         % (base, count["user"], count["high"], count["backend"], count["internal"]),
         "",
     ]
+    paged = [pull for pull in pulls if pull.review_page is not None]
+    if paged:
+        linked = sum(1 for pull in paged if pull.review_page.startswith("http"))
+        lines += ["Review pages: %d of %d" % (linked, len(paged)), ""]
     if truncated:
         lines += ["The range has more commits than these notes read; the list stops at the last one read.", ""]
     if not pulls:
@@ -300,7 +322,8 @@ def build(api: Api, base: str, head: str) -> str:
         lines += ["## " + title, ""]
         for pull in group:
             if key == "internal":
-                lines.append("- #%d %s (@%s)" % (pull.number, pull.title, pull.author))
+                suffix = " · Review page: " + review_page_text(pull) if pull.review_page is not None else ""
+                lines.append("- #%d %s (@%s)%s" % (pull.number, pull.title, pull.author, suffix))
             else:
                 lines += block(pull)
     return "\n".join(lines).rstrip() + "\n"

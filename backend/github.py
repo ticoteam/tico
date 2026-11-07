@@ -677,9 +677,10 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
             # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
-            from . import verdict_moves
+            from . import review_pages, verdict_moves
 
             verdict_moves.merged(c, task)
+            review_pages.queue(c, task, link["id"])
         elif new_head and action == "synchronize" and state == "open":
             # A push at a check step whose check already finished needs a check of the new head.
             from . import check_pools, verdict_moves

@@ -383,3 +383,51 @@ def test_checks_print_only_when_one_failed_or_none_ran():
     failed = notes.block(pull(checks="1 passed, 1 failed", failed=("e2e",)))
     assert "- Checks: 1 passed, 1 failed (failed: e2e)" in failed
     assert "- Checks: none recorded" in notes.block(pull(checks=notes.NONE_RECORDED))
+
+
+# ---- the review page line a Dev ticket's pull request carries ----
+
+
+def test_the_review_line_is_read_from_the_body_and_absent_when_there_is_none():
+    body = "## Spec\nShows the week.\n\nReview page: https://tico.example/#/page/p1\n"
+    assert notes.review_page_of(body) == "https://tico.example/#/page/p1"
+    assert notes.review_page_of("Review page: none (could not build it)") == "none (could not build it)"
+    assert notes.review_page_of("## Spec\nno line here") is None
+
+
+def test_a_block_prints_its_review_page_line_only_when_the_body_has_one():
+    assert not any(line.startswith("- Review page") for line in notes.block(pull(number=5)))
+    lines = notes.block(pull(number=6, review_page="https://tico.example/#/page/p6"))
+    assert "- Review page: https://tico.example/#/page/p6" in lines
+
+
+def review_scenario():
+    """Three merged pull requests: a Dev ticket's with its page, a Dev ticket's whose page could not be built, and one
+    with no Dev ticket (no line, so exempt from the count)."""
+    routes = {}
+    routes.update(
+        pr_routes(
+            21,
+            title="Dashboard",
+            body="## Spec\nShows the week.\n\nReview page: https://tico.example/#/page/p21\n",
+            files=("backend/dash.py",),
+            runs=[check("unit")],
+        )
+    )
+    routes.update(
+        pr_routes(22, title="Copy tweak", body="Review page: none (could not build it)\n", files=("scripts/copy.py",))
+    )
+    routes.update(pr_routes(23, title="Lint config", files=("scripts/lint.py",)))
+    commits = [("Dashboard (#21)", 21), ("Copy tweak (#22)", 22), ("Lint config (#23)", 23)]
+    routes["compare/v0.5.200...v0.5.201"] = {
+        "commits": [{"sha": SHA[number], "commit": {"message": subject}} for subject, number in commits]
+    }
+    return FakeApi(routes)
+
+
+def test_the_notes_count_review_pages_among_the_pull_requests_that_have_a_line_and_link_each_one():
+    text = notes.build(review_scenario(), "v0.5.200", "v0.5.201")
+    assert "Review pages: 1 of 2\n" in text
+    assert "- Review page: https://tico.example/#/page/p21\n" in text
+    assert "- #22 Copy tweak (@alice) · Review page: none (could not build it)\n" in text
+    assert "- #23 Lint config (@alice)\n" in text
