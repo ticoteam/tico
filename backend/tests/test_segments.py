@@ -217,6 +217,21 @@ def test_faces_are_the_dedicated_teammates_highest_on_the_chart_and_leads_have_n
     assert detail["teammates"] == 2 and detail["faces"][1]["kind"] == "bot"
 
 
+def test_lead_map_names_for_each_teammate_what_led_by_names(api):
+    first, second, _ = defined(api)
+    segment(api, "Screening")
+    segment(api, "Payments")
+    setup_attempt(api, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")  # ops reports to cpo
+    post(api, "segments/members", {"member": "bot:ops", "segments": [first, second]})
+    post(api, "segments/members", {"member": "bot:cpo", "segments": [first]})
+    with api.app.state.store.read() as c:
+        mapped = SG.lead_map(c)
+        assert mapped == {"bot:cpo": {first}, "bot:ops": {second}}  # ops's manager is dedicated to Screening
+        assert all(SG.led_by(c, ref) == sids for ref, sids in mapped.items())
+
+
 def test_a_cycle_of_dedicated_managers_leads_with_the_highest_face(api):
     first, _, _ = defined(api)
     segment(api, "Screening")

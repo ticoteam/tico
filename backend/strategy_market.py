@@ -306,15 +306,17 @@ def leave_company_guard(c, who, segment_id):
     remove_segment(c, who.actor, segment_id)
 
 
-def merge_guard(c, who, segment_id):
-    """A merge (market/entities/{id}/merge) moves one of the company's segments into the one it merges into: its Us
-    edge, tags, bets and draft text go with it (`follow_merge`). Only the owner's click merges one; anyone else gets 403."""
-    if segment_id not in ours_ids(c):
+def merge_guard(c, who, segment_id, into_id):
+    """A merge (market/entities/{id}/merge) moves a segment into the one it merges into: the company's place, tags, bets
+    and draft text go with one of the company's segments out of it, and a segment merged into one of the company's takes
+    its place in. Either side being the company's needs the owner's click; anyone else gets 403."""
+    if segment_id not in ours_ids(c) and into_id not in ours_ids(c):
         return
     from . import goal_routes
 
     if not goal_routes.company_editor(who, tap=True):
-        raise Problem("forbidden", f"{segment_id} is one of the company's segments; only the owner merges it", 403)
+        which = segment_id if segment_id in ours_ids(c) else into_id
+        raise Problem("forbidden", f"{which} is one of the company's segments; only the owner merges it", 403)
 
 
 def remove_segment(c, actor, segment_id):

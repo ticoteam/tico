@@ -1360,7 +1360,8 @@ def line_detail(
     Private totals come only from whole cohorts: a vendor filter is always narrow (so a payroll cell is never rebuilt
     from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is. `segment`
     keeps the entries that count toward one company segment (`unallocated` for none): the lines a segment column sums,
-    gated and narrowed as the P&L's segment filter is."""
+    gated and narrowed as the P&L's segment filter is. `next_month` and `next_by` are the whole line's projection, not
+    split by segment (the segment P&L leaves projections out)."""
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     account = s.ctx.accounts.get(account_id)
@@ -1450,7 +1451,7 @@ def line_detail(
         visible: list[tuple[Any, dict[str, str]]] = []
         for lo, hi, tree, mine in spans:
             if mine:
-                visible += _month_entries(c, s.ctx.book.id, tree, lo, hi, mine, f, keys, cap)
+                visible += _month_entries(c, s.ctx.book.id, tree, lo, hi, mine, f, keys, cap, want)
         visible.sort(key=lambda pair: str(pair[0]["line_id"]))
         visible.sort(key=lambda pair: str(pair[0]["entry_date"]), reverse=True)
         visible = visible[:cap]
@@ -1510,10 +1511,14 @@ def _month_entries(
     f: _Filter,
     keys: list[str] | None,
     cap: int,
+    want: str | None,
 ) -> list[tuple[Any, dict[str, str]]]:
     """The newest lines on `mine` in [lo, hi] that `tree`'s view takes and the filter keeps, up to `cap`, each with its
-    tags. Read in batches, so a run of lines the view hides never cuts a visible one short."""
+    tags. `want` keeps only the lines that count toward that segment ("" for Unallocated), judged as `_cells` judges
+    them: the explicit tag, else the budget, else the customer. Read in batches, so a run of lines the view hides never
+    cuts a visible one short."""
     out: list[tuple[Any, dict[str, str]]] = []
+    vendors: dict[str, str] = {}  # each contact's resolved id, looked up once for the whole read
     offset = 0
     while len(out) < cap:
         batch = SL.entries_on(c, book_id, sorted(mine), lo, hi, _ENTRY_BATCH, keys, offset)
@@ -1527,7 +1532,21 @@ def _month_entries(
         for r in batch:
             mark = tags.get(r["line_id"], {})
             account = tree.ctx.accounts.get(r["account_id"])
-            if account is None or not tree.view.sees(account, mark) or origins[str(r["line_id"])] in cut:
+            if account is None or origins[str(r["line_id"])] in cut:
+                continue
+            # The segment a line counts toward is _cells' own answer, so the view and the segment filter judge the same
+            # line: a lead keeps a budget- or customer-attributed line, and a segment drill-down drops the others.
+            seg = _segment(
+                tree,
+                account,
+                str(mark.get("team") or ""),
+                str(mark.get("teammate") or ""),
+                _vendor(tree, vendors, str(r["contact_id"] or "")),
+                str(mark.get("segment") or ""),
+            )
+            if not tree.view.sees(account, {**mark, "segment": seg}):
+                continue
+            if want is not None and seg != want:
                 continue
             if f.any and not f.keeps(str(mark.get("team") or ""), str(mark.get("teammate") or "")):
                 continue
