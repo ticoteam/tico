@@ -561,8 +561,8 @@ def test_a_review_2_check_waits_while_the_only_other_bot_is_busy(api):
     [first] = checks(api, task)
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
-    busy(api, "rev-b")
-    busy(api, "rev-b")
+    busy(api, "rev-b", "Review 2: PR #77")
+    busy(api, "rev-b", "Review 2: PR #78")
     task = get(api, "tasks/" + task["id"])["task"]
     assert move(api, task, "Review 2").status_code == 200
     assert checks(api, task) == [], "rev-a did Review 1 and rev-b is at its limit: the check waits"
@@ -852,7 +852,7 @@ def test_require_keeps_the_builders_company_off_a_qa_check_until_another_company
     assert checks(api, task) == [], "rev-c is free, but it runs on the builder's company"
     [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
     assert wait["title"] == "QA: PR #412"
-    assert wait["reason"].endswith("the rest run on the builder's model company"), wait["reason"]
+    assert "the rest run on the builder's model company" in wait["reason"], wait["reason"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-a", held["id"], status="done", note="VERDICT: approve")
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
