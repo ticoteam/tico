@@ -19,8 +19,13 @@ def goal(api, title, **more):
     return post(api, "goals", {"title": title, "owner": "me", **more})["goal"]
 
 
+def written(response):
+    """A task write's task: a write that also warns or reads back keeps its task beside that envelope."""
+    return response.get("task", response)
+
+
 def task(api, title, **more):
-    return post(api, "tasks", {"owner": "ben", "title": title, "body": "Acme's first pass.", **more})
+    return written(post(api, "tasks", {"owner": "ben", "title": title, "body": "Acme's first pass.", **more}))
 
 
 def task_ids(api, query):
@@ -95,9 +100,9 @@ def test_a_task_is_for_a_segment_and_a_subtask_is_for_its_parents_unless_it_name
 def test_a_task_update_sets_and_clears_its_segment_and_refuses_one_that_is_not_ours(api):
     screening, payments, sub = segments(api)
     first = task(api, "Onboarding copy", segment_id=screening)
-    moved = post(api, f"tasks/{first['id']}", {"version": first["version"], "segment_id": payments})
+    moved = written(post(api, f"tasks/{first['id']}", {"version": first["version"], "segment_id": payments}))
     assert moved["segment_id"] == payments
-    cleared = post(api, f"tasks/{first['id']}", {"version": moved["version"], "segment_id": ""})
+    cleared = written(post(api, f"tasks/{first['id']}", {"version": moved["version"], "segment_id": ""}))
     assert cleared["segment_id"] is None
     post(api, f"tasks/{first['id']}", {"version": cleared["version"], "segment_id": sub}, expected=404)
 
@@ -120,10 +125,15 @@ def test_the_growth_marketing_board_narrows_to_its_segment(api):
 
     def live(query):
         board = next(
-            p["card"]["data"]
-            for p in get(api, "places/growth" + query)["pins"]
-            if p.get("card", {}).get("template") == "growth_board"
+            (
+                p["card"]["data"]
+                for p in get(api, "places/growth" + query)["pins"]
+                if p.get("card", {}).get("template") == "growth_board"
+            ),
+            None,
         )
+        if board is None:  # a board with nothing on it is hidden: its data is None (cards.card_view)
+            return []
         return sorted(card["title"] for lane in board["lanes"] if lane["stage"] == "testing" for card in lane["cards"])
 
     assert live("") == ["Payments webinar", "Screening referral ads"]
