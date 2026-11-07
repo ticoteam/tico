@@ -9,7 +9,7 @@
 // Paths outside ui/ draw no page. A glob's `*` stays within one path segment; `**` crosses segments.
 
 const NON_RENDERING = [
-  'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json', 'ui/strict-legacy.json',
+  'ui/tests/**', 'ui/README.md', 'ui/**/*.md', 'ui/*-baseline.json', 'ui/baselines/**', 'ui/types/**', 'ui/tsconfig.json', 'ui/tsconfig.*.json', 'ui/strict-legacy.json',
   'ui/package.json', 'ui/package-lock.json', 'ui/**/LICENSE*', 'ui/**/AUTHORS',
 ];
 
