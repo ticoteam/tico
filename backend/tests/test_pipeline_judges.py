@@ -56,7 +56,9 @@ def test_the_bands_decide_met_not_met_or_unsure(tmp_path):
 
 
 def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monkeypatch):
-    monkeypatch.setattr(P, "_STORE", None)  # no installed app: no production engine, so no engine means unsure
+    monkeypatch.setattr(
+        P, "_installed_store", None
+    )  # no installed app: no production engine, so no engine means unsure
     path = tmp_path / "hub.sqlite"
     boot(path)
     c = hub(path)
@@ -533,7 +535,7 @@ def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp
 
         return engine
 
-    monkeypatch.setattr(P, "_STORE", object())
+    monkeypatch.setattr(P, "_installed_store", object())
     monkeypatch.setattr(P, "live_engine", recording_engine)
     P.judge_once(c, REQ, ATTACHMENT, "haiku-5.5", settings=_settings(path))
     assert asked == ["haiku-5.5"]

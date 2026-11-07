@@ -23,7 +23,7 @@ import math
 import sqlite3
 import threading
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, TYPE_CHECKING, cast
 
 from clients import judge as clients_judge
 
@@ -71,7 +71,7 @@ JUDGE_SYSTEM = (
 # latency_ms}. None, with no installed store, asks no one, so every answer is unsure until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
 # The store the server installed (install): judge_once asks the production engine on it when no engine is given.
-_STORE: Any = None
+_installed_store: Any = None
 
 
 def judge_model_of(conn: sqlite3.Connection, pipeline_id: str | None) -> str:
@@ -156,7 +156,7 @@ def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], d
     the installed store, else None (every answer is unsure)."""
     if ENGINE is not None:
         return ENGINE
-    return live_engine(_STORE) if _STORE is not None else None
+    return live_engine(_installed_store) if _installed_store is not None else None
 
 
 def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
@@ -219,9 +219,10 @@ def _gateway_haiku(store: "Store", state: dict[str, Any], questions: dict[str, A
         usage is charged at its reservation ceiling (judge.metered). The body is handed back unchanged."""
         with J.gateway_open(request, timeout) as response:
             body = response.read()
-        payload = json.loads(body or b"{}")
+        payload: object = json.loads(body or b"{}")
+        data = cast("dict[str, Any]", payload) if isinstance(payload, dict) else {}
         usage.clear()
-        usage.update(J.clean_usage(payload.get("usage")) if isinstance(payload, dict) else {})
+        usage.update(J.clean_usage(data.get("usage")))
         return io.BytesIO(body)
 
     write = J.gateway_writer(key_of, base, gateway_tiers.default_model("low"), timeout=GATEWAY_TIMEOUT, opener=opener)
@@ -600,6 +601,6 @@ def dispatch(store: "Store", at: Any, failures: list[dict[str, str]]) -> threadi
 def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: "Auth") -> None:
     """Judges have no routes: a decision is read through the requirement and ticket routes. The installed store is what
     judge_once asks the production engine on when no engine is given."""
-    global _STORE
-    _STORE = store
+    global _installed_store
+    _installed_store = store
     return None
