@@ -328,7 +328,9 @@ function taskSessionsHTML(t) {
 // Runs on (POST /v2/tasks/{id}/model, backend/task_run_models.py): the model this task's runs use, or the bot's task model
 // until one is set on it. The model list is GET /v2/models, read once here and by the automation step editor, which offers
 // the same models. Gateway tier picks (tico-*) are made in the bot's settings, so they stay out of both.
-let TASK_RUN_ROWS = null, TASK_RUN_LOADING = null;
+/** @type {AuRunModel[] | null} */
+let TASK_RUN_ROWS = null;
+let TASK_RUN_LOADING = null;
 function taskRunCatalog() {
   TASK_RUN_LOADING ||= get('/v2/models').then(d => {
     TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !m.meeting && !/^tico-/.test(m.id || ''));

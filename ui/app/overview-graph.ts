@@ -114,23 +114,23 @@ function ogLayout(tree: { nodes: Map<string, OgNode>; kids: Record<string, strin
   const {nodes, kids} = tree, box: Record<string, OgBox> = {};
   const leaf = (k: string): boolean => !(kids[k] || []).length;
   const measure = (k: string): OgBox => {
-    const list = kids[k] || [], self = k ? ogNodeH(nodes.get(k)!) : 0, gap = k ? OG_GY : 0;
+    const list = kids[k] || [], self = k ? ogNodeH(nodes.get(k)!) : 0, gap = k ? OG_GY : 0;   // `!`: k is a child walk() gave a node
     list.forEach(measure);
     if (!list.length) { const b: OgBox = {w: OG_W, h: self, stack: 0}; box[k] = b; return b; }
     if (list.length > 3 && list.every(leaf) && k) {
       const cols = list.length > 8 ? 2 : 1, rows = Math.ceil(list.length / cols);
-      const h = list.reduce((m, c) => Math.max(m, ogNodeH(nodes.get(c)!)), 0);
+      const h = list.reduce((m, c) => Math.max(m, ogNodeH(nodes.get(c)!)), 0);   // `!`: c is a child walk() gave a node
       const b: OgBox = {w: Math.max(OG_W, cols * OG_W + (cols - 1) * OG_GX + (cols === 1 ? 24 : 0)), h: self + gap + rows * h + (rows - 1) * OG_SY, stack: cols, rowH: h};
       box[k] = b; return b;
     }
-    const w = list.reduce((t, c) => t + box[c]!.w, 0) + (list.length - 1) * OG_GX;
-    const b: OgBox = {w: Math.max(k ? OG_W : 0, w), h: self + gap + Math.max(...list.map(c => box[c]!.h)), stack: 0};
+    const w = list.reduce((t, c) => t + box[c]!.w, 0) + (list.length - 1) * OG_GX;   // `!`: measure() boxed every child above
+    const b: OgBox = {w: Math.max(k ? OG_W : 0, w), h: self + gap + Math.max(...list.map(c => box[c]!.h)), stack: 0};   // `!`: measure() boxed every child above
     box[k] = b; return b;
   };
   measure('');
   const edges: string[] = [];
   const place = (k: string, x: number, y: number): void => {
-    const b = box[k]!, list = kids[k] || [];
+    const b = box[k]!, list = kids[k] || [];   // `!`: measure("") boxed k before placing
     const node = k ? nodes.get(k) : null, self = node ? ogNodeH(node) : 0;
     if (node) Object.assign(node, {x: x + (b.w - OG_W) / 2, y, w: OG_W, h: self});
     const top = y + self + (node ? OG_GY : 0), cx = x + b.w / 2;
@@ -142,7 +142,7 @@ function ogLayout(tree: { nodes: Map<string, OgNode>; kids: Record<string, strin
         // A stacked box always has its row height (rowH is set where stack is).
         const cy = top + row * (b.rowH! + OG_SY);
         place(c, left + col * (OG_W + OG_GX), cy);
-        const cn = nodes.get(c)!, mid = cy + cn.h / 2, end = col === 0 && cols === 2 ? cn.x + OG_W : cn.x;
+        const cn = nodes.get(c)!, mid = cy + cn.h / 2, end = col === 0 && cols === 2 ? cn.x + OG_W : cn.x;   // `!`: a stacked leaf is a node walk() gave
         edges.push(`M${spine} ${mid}H${end}`);
       });
       // A stacked column has more than three leaves, so list[list.length - 1] exists.
@@ -150,18 +150,18 @@ function ogLayout(tree: { nodes: Map<string, OgNode>; kids: Record<string, strin
       edges.push(`M${cx} ${y + self}V${y + self + OG_GY / 2}H${spine}V${mid}`);
       return;
     }
-    let at = x + (b.w - (list.reduce((t, c) => t + box[c]!.w, 0) + (list.length - 1) * OG_GX)) / 2;
+    let at = x + (b.w - (list.reduce((t, c) => t + box[c]!.w, 0) + (list.length - 1) * OG_GX)) / 2;   // `!`: measure() boxed every child above
     for (const c of list) {
       place(c, at, top);
       if (node) {
-        const ccx = at + box[c]!.w / 2, midY = y + self + OG_GY / 2;
+        const ccx = at + box[c]!.w / 2, midY = y + self + OG_GY / 2;   // `!`: measure() boxed every child above
         edges.push(`M${cx} ${y + self}V${midY}H${ccx}V${top}`);
       }
-      at += box[c]!.w + OG_GX;
+      at += box[c]!.w + OG_GX;   // `!`: measure() boxed every child above
     }
   };
   place('', 0, 0);
-  return {...tree, edges, w: box['']!.w, h: box['']!.h};
+  return {...tree, edges, w: box['']!.w, h: box['']!.h};   // `!`: measure("") boxed the root
 }
 
 // ----------------------------------------------------------------- what each node carries

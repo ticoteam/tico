@@ -16,14 +16,8 @@ interface AuStepView {
   cost: unknown;
   outputs: Record<string, unknown>;
 }
-/** A step of an automation's flow, as automations-flow.js's auFind returns it: the fields the log reads. */
-interface AuFlowStep {
-  do?: unknown;
-  as?: unknown;
-  bot?: unknown;
-  rules?: Array<{ when?: unknown; match?: unknown; then?: unknown }>;
-  paths?: Array<{ name?: unknown }>;
-}
+/** A step of an automation's flow, as automations-flow.ts auFind returns it (the shared AuStep). */
+type AuFlowStep = AuStep;
 
 const AU_RUNS_PAGE = 25;
 const AU_RUN_STATUS: Record<string, string> = {ok: 'Done', failed: 'Failed', skipped: 'Skipped', empty: 'Nothing found', waiting: 'Waiting', running: 'Running',
@@ -50,12 +44,11 @@ function auStepView(raw: Record<string, unknown>): AuStepView {
 function auRunSteps(run: AuRunRow): AuStepView[] {
   return (run.steps || []).map(auStepView);
 }
-// The step with this id in an automation's flow (automations-flow.js auFind), or undefined.
-function auFlowStep(flow: unknown[], id: unknown): AuFlowStep | undefined {
-  const hit: { step?: AuFlowStep } | undefined = auFind(flow, id);
-  return hit?.step;
+// The step with this id in an automation's flow (automations-flow.ts auFind), or undefined.
+function auFlowStep(flow: AuStep[], id: unknown): AuFlowStep | undefined {
+  return auFind(flow, id)?.step;
 }
-// automations-flow.js's word tables, read by any key: a key the table does not have reads as undefined, as it always did.
+// automations-flow.ts's word tables, read by any key: a key the table does not have reads as undefined, as it always did.
 function auStepWord(type: unknown): string | undefined {
   const words: Record<string, string | undefined> = AU_STEP_WORDS;
   return words[String(type)];
@@ -158,7 +151,7 @@ function auRunStepDid(rs: AuStepView): string {
     const rule = step?.rules?.[n];
     return rule ? `${auCondsText(rule.when, rule.match) || 'rule ' + (n + 1)} → ${auThenWords(rule.then).join(', ')}` : 'rule ' + (n + 1);
   }
-  if (rs.type === 'decide') return Object.entries(o).filter(([, v]) => v && typeof v === 'object').map(([q, v]) => auAnswer(q, v).text).join(' · ');
+  if (rs.type === 'decide') return Object.entries(o).filter((e): e is [string, Record<string, unknown>] => auIsRecord(e[1])).map(([q, v]) => auAnswer(q, v).text).join(' · ');
   if (rs.type === 'llm') return [String(auActorName(step?.as)), o.text ? auFirstLine(o.text).slice(0, 80) : ''].filter(Boolean).join(' · ');
   if (rs.type === 'find') return `${o.count ?? auItemCount(o.items)} found`;
   if (rs.type === 'bot_turn') return String(auActorName(step?.bot)) + ' · turn started';

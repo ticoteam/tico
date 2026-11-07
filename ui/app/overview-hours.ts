@@ -95,6 +95,7 @@ function overviewHoursDraw(): void {
   } else {
     // People above zero means human hours above zero, so the server sends a ratio here (backend/bot_hours.py ratio()).
     plot = !!(last.full && weeks.length);
+    // `!`: the server sends a ratio once people count is above zero (see above)
     body = `<p class="ovh-head"><strong class="tnum">${hoursTimes(last.ratio!)}</strong> bot hours per human hour · last 7 days</p>
       ${plot ? `<div class="ovh-plot">${overviewHoursChart(weeks)}</div>` : '<p class="ovh-note">Chart fills in as weeks pass</p>'}
       <p class="ovh-note">Bot hours = time bots spent working (pauses over ${d.gap_minutes || 30} min left out). Human hours =
@@ -119,7 +120,7 @@ function overviewHoursHover(plot: HTMLElement, weeks: OverviewHoursPoint[]): voi
     // Centred on the point, kept inside the chart's width so a phone never scrolls sideways.
     const width = plot.clientWidth, centre = parseFloat(dot.style.left) / 100 * width;
     tip.style.left = Math.max(0, Math.min(width - tip.offsetWidth, centre - tip.offsetWidth / 2)) + 'px';
-    const hit = plot.querySelector<SVGRectElement>(`.ovh-hit[data-i="${i}"]`)!;
+    const hit = plot.querySelector<SVGRectElement>(`.ovh-hit[data-i="${i}"]`)!;   // `!`: overviewHoursChart draws one hit per week, and week i exists here
     const cx = Number(hit.getAttribute('x')) + Number(hit.getAttribute('width')) / 2;
     cross.setAttribute('x1', String(cx)); cross.setAttribute('x2', String(cx));
     dots.forEach((d, j) => { d.classList.toggle('on', j === i); });

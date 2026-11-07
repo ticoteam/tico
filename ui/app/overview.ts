@@ -67,7 +67,7 @@ function overviewModel(): OverviewModel {
       const group: OverviewGroup = {id: 'computer:' + id, name: label || 'Computer', kind: 'computer', members: []};
       machines.set(id, group); groups.push(group);
     }
-    return machines.get(id)!;
+    return machines.get(id)!;   // `!`: set just above when the id was missing
   };
   for (const c of OVERVIEW_PAGE?.computers || []) {
     if (c.id && !c.revoked_at) computer(String(c.id), c.label);
@@ -125,7 +125,7 @@ async function overviewLoadComputers(): Promise<void> {
   finally { state.loadingComputers = false; }
 }
 function pageOverview(): void {
-  const main = document.querySelector<HTMLElement>('#main')!; main.classList.add('overview-layout');
+  const main = document.querySelector<HTMLElement>('#main')!; main.classList.add('overview-layout');   // `!`: the app shell always has #main when a page draws
   main.innerHTML = `<section class="overview-page" aria-label="Company overview">
     <div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('campus')}</div>
     <a class="overview-needs" id="overview-needs" href="#/tasks" hidden></a>
@@ -156,7 +156,7 @@ function pageOverview(): void {
     }
     if (ev.data?.type === 'tico-overview-replay-load') void overviewReplayLoad(state);
   }, {signal: state.abort.signal});
-  const hours = document.querySelector<HTMLElement>('#overview-hours')!;
+  const hours = document.querySelector<HTMLElement>('#overview-hours')!;   // `!`: the markup above includes the hours card
   hours.addEventListener('click', ev => { if (!eventElement(ev)?.closest('a')) overviewHoursOpen(); }, {signal: state.abort.signal});
   hours.addEventListener('keydown', ev => {
     if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === hours) { ev.preventDefault(); overviewHoursOpen(); }

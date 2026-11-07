@@ -113,7 +113,7 @@ window.addEventListener('message', event => {
   if (event.source !== parent || event.origin !== origin || disposed) return;
   if (event.data?.type === 'tico-overview-data') update(event.data.model);
   if (event.data?.type === 'tico-overview-dispose') dispose();
-  // The app parks this frame while another page shows (ui/app/overview.js): no frames are drawn until it is back.
+  // The app parks this frame while another page shows (ui/app/overview.ts): no frames are drawn until it is back.
   if (event.data?.type === 'tico-overview-pause') { paused = true; if (replaying) stopReplay(); scene?.pause?.(); }
   if (event.data?.type === 'tico-overview-resume') { paused = false; scene?.resume?.(); }
   if (event.data?.type === 'tico-overview-replay-data') showReplay(event.data);

@@ -7,7 +7,7 @@
 // WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
 // picks their schedule preset and runs them now. Who may change a job is the server's `can_change`, enforced there too.
-// Fetched again at most once a minute while the screen is open (ui/app/automations-maintenance.js auSysJobsPane).
+// Fetched again at most once a minute while the screen is open (ui/app/automations-maintenance.ts auSysJobsPane).
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 // Jobs a happening starts, not a clock: they keep no run log, so the row says so in place of a last run.

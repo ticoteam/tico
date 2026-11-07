@@ -176,7 +176,7 @@ interface Employee {
   agent?: BotAgent | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
-  /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
+  /** Read by overview.ts; no server path sends it on a bot row today, so it is optional and not relied on. */
   owners?: BriefPerson[];
   [key: string]: unknown;
 }
@@ -280,7 +280,7 @@ interface V2State {
 
 /** The copies each page keeps for its next visit (S.lastRead). Pages not listed here keep their own shape. */
 interface LastRead {
-  automations?: { list?: unknown[]; groups?: unknown; stats?: unknown; range?: string; maint?: unknown; heart?: unknown };
+  automations?: { list?: AuAutomation[] | null; groups?: unknown; stats?: unknown; range?: string; maint?: unknown; heart?: unknown };
   /** The Overview's bot-hours card (ui/app/overview-hours.ts). */
   hours?: OverviewHours | undefined;
   /** The Dashboard's places, keyed by the place's key. */
