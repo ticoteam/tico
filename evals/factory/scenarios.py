@@ -215,6 +215,8 @@ def _round_line(m):
     text = f"{m['at']:%H:%M} free {m['free']}, ready {ready}, started {m['started_at']}"
     if m.get("why"):
         text += " [" + m["why"][:700] + "]"
+    if m.get("cap_seen"):
+        text += " {usage holds: " + "; ".join(m["cap_seen"][:4]) + "}"
     return text
 
 

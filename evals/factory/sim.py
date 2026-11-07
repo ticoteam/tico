@@ -257,9 +257,10 @@ class Run:
             "blocked": blocked,
             "started_bots": list(started_bots),
             "cap_held": {},
+            "cap_seen": [],
         }
         if free and ready and started < min(free, len(ready)):
-            mark["cap_held"] = self.cap_holds(w, [b for b in ready if b not in started_bots])
+            mark["cap_held"], mark["cap_seen"] = self.cap_holds(w, [b for b in ready if b not in started_bots])
         if free and ready and started < min(free, len(ready)) and self.short_rounds < SHORT_ROUNDS:
             self.short_rounds += 1
             gone = [job for job in before if job not in queued and job not in started_jobs]
@@ -273,41 +274,47 @@ class Run:
         self.marks.append(mark)
 
     def cap_holds(self, w, bots):
-        """The bots a usage cap holds that the records show reached: {bot: {scope, period, limit, spent}}. The server holds
-        a bot on a limit (usage_limits.over) only when its window's spend has reached the limit; this reads that spend
-        again from the runs' own records (attempts, the rows the caps are counted from), and keeps a bot only when the
-        spend is at or over the limit. A hold the records do not show is not kept, so its round stays judged."""
+        """The bots a usage cap holds that the records show reached: ({bot: {scope, period, limit, spent}}, seen). The
+        server holds a bot on a limit (usage_limits.over) only when its window's spend has reached the limit. This reads
+        that spend again from the usage records the caps are counted from (usage_records.RUNS, the runs the window's
+        spend is summed over, with the company's subscription setting), in its own query, and keeps a bot only when the
+        spend is at or over the limit. A hold the records do not show is not kept, so its round stays judged. `seen`
+        says, for each bot the caps name, what the hold reads and what the records sum to, for a failing round."""
         from backend import usage_limits
+        from backend.usage_records import RUNS
 
-        held = {}
+        held, seen = {}, []
         if not bots:
-            return held
-        now = usage_limits.clock().strftime("%Y-%m-%dT%H:%M:%S")
+            return held, seen
         with w.store.read() as c:
+            subscription = bool(usage_limits.company(c)["count_subscription"])
             for bot in bots:
                 found = usage_limits.over(c, bot)
                 if not found or found.get("scope") == "budget" or not found.get("limit"):
+                    seen.append(f"{bot} no usage hold")
                     continue
                 scope, period = found["scope"], found["period"]
                 _, start, end = usage_limits.bounds(None)[period]
                 sql = (
-                    "SELECT coalesce(sum(est_cost_usd), 0) FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) "
-                    "AND created_at >= ? AND created_at < ? AND settled_at IS NOT NULL AND settled_at < ?"
+                    f"SELECT coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
+                    "AND (? OR coalesce(billing, 'api') != 'subscription')"
                 )
-                params = [start, end, now]
+                params = [start, end, 1 if subscription else 0]
                 if scope == "bot":
-                    sql += " AND bot_id = ?"
+                    sql += " AND bot = ?"
                     params.append(bot)
                 elif scope != usage_limits.COMPANY:
                     members = sorted(usage_limits.members(c, scope))
                     if not members:
+                        seen.append(f"{bot} {scope} has no members")
                         continue
-                    sql += " AND bot_id IN (" + ",".join("?" * len(members)) + ")"
+                    sql += " AND bot IN (" + ",".join("?" * len(members)) + ")"
                     params += members
                 amount = float(c.execute(sql, params).fetchone()[0] or 0.0)
+                seen.append(f"{bot} {scope} {period} limit ${found['limit']:g}, records ${amount:.2f}")
                 if amount + 1e-9 >= found["limit"]:
                     held[bot] = {"scope": scope, "period": period, "limit": found["limit"], "spent": round(amount, 2)}
-        return held
+        return held, seen
 
     def places_used(self, team):
         """The computer's places in use: its running turns, less the parked ones, which hold no place."""

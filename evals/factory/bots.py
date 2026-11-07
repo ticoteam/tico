@@ -369,6 +369,12 @@ class Bot:
             if pr and self.world.prs[pr]["head"] != head:
                 return f"its CI news was for head {head[:7]}, the PR is at {self.world.prs[pr]['head'][:7]}"
             return ""
+        # The server's queue cleanup (execution.obsolete_notices_sql) drops a step's news once the task is at another step:
+        # a late warning, a review gate's comment and a step's verdict (at_step). A resume of an awaited task keeps its turn
+        # after a move, so only those refs make a notice stale here.
+        refs = message.get("refs") or {}
+        if not any(refs.get(key) for key in ("step_late", "review_gate", "at_step")):
+            return ""
         moved = self.world.step_entered_at(task["id"], claimed_by="bot:" + self.slug)
         if moved and message.get("created_at") and message["created_at"] < moved:
             return "its task moved to another step after the notice was written"
