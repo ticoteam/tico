@@ -82,7 +82,7 @@ function liveTasksApply(events) {
   // The open list, or away from it the list kept for the next visit (S.lastRead.tasks): kept current the same way, so a
   // return paints what is true now. A bulk change drops the kept list; the next visit reads it.
   if (bulk && !state) S.lastRead.tasks = null;
-  const list = state && isTasksRoute(S.route) && state.tasks ? state : !state ? S.lastRead.tasks : null;
+  const list = state && isTasksRoute(S.route) && state.tasks ? state : !state ? (S.lastRead.tasks as {tasks: TaskRow[]; since?: string | null} | null | undefined) : null;
   if (list) {
     const known = new Map(list.tasks.map((t, i) => [String(t.id), i]));
     let changed = false;
@@ -151,7 +151,7 @@ function liveWire() {
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.ts dashFollow).
   for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; const kept = S.lastRead.tasks as {tasks: TaskRow[]; since?: string | null} | null | undefined; if (kept) kept.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
