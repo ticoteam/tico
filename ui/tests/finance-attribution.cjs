@@ -14,7 +14,7 @@ const {unrouted} = require('./support/routes.cjs');
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
-const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'mia', name: 'Mia Park', role: 'member', team: 'mkt'}];
+const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'mia', name: 'Mia Park', role: 'member', team: 'mkt'}, {id: 'raj', name: 'Raj Rao', role: 'member', team: 'mkt'}];
 const emps = [['rental-mgr', 'Rental Marketing Manager', 'rental'], ['rental-google', 'Rental Google Ad Owner', 'rental'],
   ['consumer-google', 'Consumer Google Ad Owner', 'consumer']].map(([name, display_name, team]) =>
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
@@ -23,6 +23,7 @@ const teams = [{id: 'mkt', name: 'Marketing', parent: '', lead: 'human:ana'}, {i
 const mate = (teammate, kind, team, def, extra = {}) => ({teammate, kind, team, reports_to: '', default: def, grants: [], rights: [], ...extra});
 const MATES = [mate('human:ana', 'person', '', 'everything', {rights: ['finance.book', 'finance.budgets', 'finance.attribution', 'finance.admin']}),
   mate('human:mia', 'person', 'mkt', 'own_expenses', {rights: ['finance.budgets']}),
+  mate('human:raj', 'person', 'mkt', 'none', {rights: ['finance.attribution'], attribute: true}),
   ...emps.map(e => mate('bot:' + e.name, 'bot', e.team, 'own_expenses'))];
 const access = viewer => ({teams, private_lines: [], defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1',
   teammates: viewer === 'ana' ? MATES : MATES.filter(m => m.teammate === 'human:' + viewer), can_view_as: viewer === 'ana', can_edit_defaults: viewer === 'ana'});
@@ -187,6 +188,15 @@ async function shot(page, name) {
       assert.ok(!(await tabs(page)).includes('Attribution'), tag + ': no Attribution tab');
       await page.evaluate(() => { location.hash = '#/finance/attribution'; });
       await page.waitForFunction(() => !/attribution/.test(location.hash));
+      assert.deepEqual(errors, [], tag + ': no page errors');
+    }
+
+    // A teammate whose only Finance right is finance.attribution: Finance shows, and lands on Attribution.
+    {
+      const tag = 'raj';
+      const {page, errors} = await open(browser, {viewer: 'raj', hash: '#/finance'});
+      await page.waitForFunction(() => /\/finance\/attribution/.test(location.hash));
+      assert.deepEqual(await tabs(page), ['Attribution'], tag + ': only the Attribution tab');
       assert.deepEqual(errors, [], tag + ': no page errors');
     }
 

@@ -34,8 +34,11 @@ function finCapsOf(acc, who) {
   // their own sees only My budget (backend/finance/handlers.py reads_budget), and one with none sees no Finance at all.
   const sees = all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin');
   const mine = !owner && (row.budgets || 0) > 0;
-  return {row, owner, all, rights, may, sees, mine,
-    any: sees || mine,
+  // Attribution: the backend's flag when present (finance.attribution; admin and owner imply it), else the same rule here.
+  const attribute = typeof row.attribute === 'boolean' ? row.attribute
+    : owner || rights.has('finance.attribution') || rights.has('finance.admin');
+  return {row, owner, all, rights, may, sees, mine, attribute,
+    any: sees || mine || attribute,
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
@@ -43,8 +46,6 @@ function finCapsOf(acc, who) {
     sources: all || what.has('sources'),
     // Budgets: the owner and whoever holds finance.budgets (or finance.admin, which implies it).
     budgets: owner || rights.has('finance.budgets') || rights.has('finance.admin'),
-    // Attribution: the owner, and whoever holds finance.attribution (finance.admin implies it).
-    attribute: owner || rights.has('finance.attribution') || rights.has('finance.admin'),
     // Bills and invoices show to a payables or receivables view, or to the right whose work they are
     // (backend/finance/tab_ap.py sees_side).
     payables: all || what.has('payables') || may('finance.ap'),
@@ -282,7 +283,7 @@ function finShow(state) {
   if (!caps?.any) { finHeadDraw(); $('#fin-body').innerHTML = finNote('Nothing in Finance is in your view.'); return; }
   const tab = state.tab === 'line' ? 'pnl' : state.tab;
   if (!tab || !finTabShown(tab, caps, acc)) {
-    location.replace(caps.sees ? finHref('/pnl', {view: caps.company ? '' : 'expenses'}) : finHref('/mine'));
+    location.replace(caps.sees ? finHref('/pnl', {view: caps.company ? '' : 'expenses'}) : caps.mine ? finHref('/mine') : finHref('/attribution'));
     return;
   }
   finHeadDraw();
