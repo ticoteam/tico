@@ -119,3 +119,21 @@ def test_a_handoff_row_follows_its_ticket_through_delete_and_restore(tmp_path):
     assert task_delete.restore_tasks(c, [task], actor=ANA)["restored"] == [task]
     assert [(h["source_task_id"], h["target_task_id"]) for h in L.handoffs(c, link["id"])] == [(task, other)]
     c.close()
+
+
+def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_changes(tmp_path):
+    """The source pipeline's approval, given before the handoff, still gates the target: new work makes it out of date
+    and the ticket cannot move on in the target pipeline until it is approved again."""
+    from backend.tests.test_pipeline_engine import decide
+
+    c, sales, success, _ = two(tmp_path)
+    L.create_link(c, ANA, step_id(c, sales["id"], "Won"), success["id"], "move")
+    signed = requirement(c, sales, "Won", "Signed off")
+    task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Won", lint=False)["id"]
+    decide(c, task, signed)
+    assert E.advance(c, ANA, task)["moved"]
+    assert states(c, task) == {}  # met at the source: its dot is hidden on the target stage
+    E.work_changed(c, task)
+    assert states(c, task) == {"Signed off": "out_of_date"}
+    error = refused(lambda: H.task_update(c, ANA, task, step=step_id(c, success["id"], "Active")))
+    assert error.rule == "requirement" and "Signed off" in error.detail
