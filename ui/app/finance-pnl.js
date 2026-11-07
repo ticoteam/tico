@@ -6,16 +6,20 @@
    month's, on a budget it has. Saving is a dry run first: an allowed change saves, one needing approval names the
    approver and is sent from a small dialog. A line opens its page: by vendor, team or teammate, last month and this
    one, each vendor's budget edited in place.
-   Reads: GET /api/v2/finance/pnl, /finance/budgets, /finance/lines/{account_id}. Writes: budget_create and
+   Reads: GET /api/v2/finance/pnl, /finance/budgets, /finance/lines/{account_id}, and /finance/reports/pnl_by?by=segment
+   (the By segment view; a segment's column opens the P&L filtered to it). Writes: budget_create and
    budget_update through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // The P&L's controls, kept for the visit.
 const FIN_PNL = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: '', picked: false, compare: '', teams: [], mates: [],
-  who: 'both', unattributed: false, sel: null, budgetCol: -1, last: null};
+  who: 'both', unattributed: false, seg: '', sel: null, budgetCol: -1, last: null};
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
+// Whether the segment P&L is open to this viewer (the By segment view, the Segment filter): probed once per visit with
+// the pnl_by read; a 403 (neither the whole P&L nor a segment's lead) hides both. Kept per viewing-as.
+const FIN_SEG = {as: null, ok: undefined, busy: false};
 
 // ----------------------------------------------------------------- periods
 // The window a period opens on: a few periods back and a few ahead of today.
@@ -54,11 +58,14 @@ function finCompareOptions() {
 // ----------------------------------------------------------------- the page
 function finPnlPage() {
   const caps = finCaps(), p = FIN_PNL;
-  const view = FIN.q.get('view') === 'expenses' || !caps.company ? 'expenses' : 'company';
+  const asked = FIN.q.get('view');
+  const view = asked === 'segments' && FIN_SEG.ok !== false ? 'segments' : asked === 'expenses' || !caps.company ? 'expenses' : 'company';
+  finSegProbe();
+  const bySeg = FIN_SEG.ok === true;
   // A range the person chose stays through a change of period; until then each period opens on its own window.
   if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
-  const views = caps.company ? [['company', 'Company'], ['expenses', 'Expenses']] : [['expenses', 'Expenses']];
+  const views = [...(caps.company ? [['company', 'Company']] : []), ...(bySeg ? [['segments', 'By segment']] : []), ['expenses', 'Expenses']];
   const filters = view === 'expenses' ? `<div class="fin-filters" id="fin-filters"></div>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('view', 'View', views, view)}${finSeg('period', 'Period', FIN_PERIODS, p.period)}
       <span class="fin-pop-at"><button type="button" class="ghost" data-fin-range aria-expanded="false" aria-controls="fin-range">${esc(finRangeLabel(p.start, p.end))}</button>
@@ -67,11 +74,11 @@ function finPnlPage() {
       ${finSeg('basis', 'Basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}<span id="fin-pl-marks" class="fin-marks"></span>
       ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><span class="fin-sel"><span class="fin-sel-v" aria-hidden="true">${esc((finCompareOptions().find(([v]) => v === p.compare) || finCompareOptions()[0])?.[1] || '')}</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
         `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></span></label>` : ''}
-      <span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>
-    ${filters}` + finSplit(view === 'expenses'
+      ${view === 'company' && bySeg ? segFilterButton(p.seg) : ''}<span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>
+    ${filters}` + (view === 'segments' ? `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>` : finSplit(view === 'expenses'
       // The org-chart picker: a column beside the table on a wide screen, "+ Filter" on a phone (finance.css).
       ? `<div class="fin-exp"><div class="fin-tree fin-tree-col" id="fin-tree-col" role="group" aria-label="Filter"></div><div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div></div>`
-      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
+      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown'));
   const body = $('#fin-body');
   body.onclick = ev => finPnlClick(ev);
   body.ondblclick = ev => { const td = ev.target.closest('td[data-fin-budget]'); if (td) finPnlEdit(td); };
@@ -99,7 +106,7 @@ function finPnlClick(ev) {
   const seg = t.closest('[data-fin-seg] button');
   if (seg) {
     const name = seg.parentElement.dataset.finSeg, v = seg.dataset.v;
-    if (name === 'view') { location.hash = finHref('/pnl', {view: v === 'expenses' ? 'expenses' : ''}); return; }
+    if (name === 'view') { location.hash = finHref('/pnl', {view: v === 'expenses' || v === 'segments' ? v : ''}); return; }
     if (name === 'period' && v !== p.period) { p.period = v; p.sel = null; p.budgetCol = -1; finPnlPage(); return; }
     if (name === 'basis' && v !== p.basis) { p.basis = v; finSegSet(seg); void finPnlLoad(); return; }
     if (name === 'who' && v !== p.who) { p.who = v; p.sel = null; finFiltersDraw(); void finPnlLoad(); return; }
@@ -109,6 +116,10 @@ function finPnlClick(ev) {
   if (range) { finPop(range, $('#fin-range')); return; }
   const filter = t.closest('[data-fin-filter]');
   if (filter) { finPop(filter, $('#fin-tree')); return; }
+  const segBtn = t.closest('[data-seg-filter]');
+  if (segBtn) { segFilterOpen(segBtn, p.seg, id => { p.seg = id; p.sel = null; p.budgetCol = -1; finPnlPage(); }); return; }
+  const segCol = t.closest('[data-fin-segcol]');
+  if (segCol) { finSegDrill(segCol.dataset.finSegcol); return; }
   const clear = t.closest('[data-fin-clear]');
   if (clear) { finPickSet(clear.dataset.finClear, false); p.sel = null; finFiltersDraw(); void finPnlLoad(); return; }
   if (t.closest('[data-fin-export]')) { finPnlExport(); return; }
@@ -120,6 +131,27 @@ function finPnlClick(ev) {
   }
 }
 const finSegSet = btn => btn.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
+// A segment's column opens the company P&L filtered to it (the lines that count toward it), at the same address.
+function finSegDrill(key) {
+  const p = FIN_PNL, href = finHref('/pnl', {});
+  p.seg = key; p.sel = null; p.budgetCol = -1;
+  if (location.hash === href) finPnlPage(); else location.hash = href;
+}
+// Probes the segment P&L once per visit: a 200 opens the By segment view and the Segment filter, a 403 hides them.
+function finSegProbe() {
+  const key = FIN_VIEW_AS || '';
+  if (FIN_SEG.as !== key) { FIN_SEG.as = key; FIN_SEG.ok = undefined; }
+  if (FIN_SEG.ok !== undefined || FIN_SEG.busy) return;
+  FIN_SEG.busy = true;
+  const [a, z] = finMonthBounds(finToday().slice(0, 7));
+  get(`/v2/finance/reports/pnl_by?by=segment&start=${a}&end=${z}&basis=${FIN_PNL.basis}${finAs()}`, {fresh: true})
+    .then(() => { FIN_SEG.ok = true; }, e => { if (e?.status === 403) FIN_SEG.ok = false; })
+    .finally(() => {
+      FIN_SEG.busy = false;
+      // A page drawn before the answer has no By segment option or Segment filter: draw it once more.
+      if (FIN_SEG.ok === true && $('[data-fin-seg="view"]') && !$('[data-fin-seg="view"] [data-v="segments"]')) finPnlPage();
+    });
+}
 // A popover under its button; a click outside or Escape closes it.
 function finPop(btn, pop) {
   if (!pop) return;
@@ -139,7 +171,10 @@ function finPop(btn, pop) {
 
 async function finPnlLoad() {
   const state = FIN.pnl, p = FIN_PNL, caps = finCaps(), load = ++state.load;
-  const qs = new URLSearchParams({start: p.start, end: p.end, period: p.period, basis: p.basis, view: state.view});
+  const bySeg = state.view === 'segments';
+  const qs = bySeg ? new URLSearchParams({start: p.start, end: p.end, by: 'segment', basis: p.basis})
+    : new URLSearchParams({start: p.start, end: p.end, period: p.period, basis: p.basis, view: state.view});
+  if (state.view === 'company' && p.seg) qs.set('segment', p.seg);
   const compare = state.view === 'company' ? p.compare : '';
   if (compare) qs.set('budget_as_of', compare);
   if (!caps.companyExpenses) p.unattributed = false;
@@ -147,17 +182,22 @@ async function finPnlLoad() {
   for (const [k, v] of finFilterQs(snap)) qs.append(k, v);
   state.busy = true;
   $('#fin-pl')?.setAttribute('aria-busy', 'true');
-  const editing = caps.may('finance.budgets');
-  const [pnl, budgets] = await Promise.allSettled([get('/v2/finance/pnl?' + qs + finAs(), {fresh: true}),
+  // A segment's P&L is not edited here (its budgets are the company's to change), so it reads no budgets to edit.
+  const segd = state.view === 'company' && !!p.seg;
+  const editing = caps.may('finance.budgets') && !bySeg && !segd;
+  const [pnl, budgets] = await Promise.allSettled([get((bySeg ? '/v2/finance/reports/pnl_by?' : '/v2/finance/pnl?') + qs + finAs(), {fresh: true}),
     editing ? get('/v2/finance/budgets' + finAs('?'), {fresh: true}) : Promise.resolve(null)]);
   if (!FIN || FIN.pnl !== state || state.load !== load || !$('#fin-pl')) return;
   state.busy = false;
   $('#fin-pl').removeAttribute('aria-busy');
+  // Not open to this viewer: the By segment view goes, and the page falls back to the P&L.
+  if (pnl.status === 'rejected' && bySeg && pnl.reason?.status === 403) { FIN_SEG.ok = false; location.hash = finHref('/pnl', {}); return; }
   if (pnl.status === 'rejected') { state.data = null; $('#fin-pl').innerHTML = finFail(pnl.reason); finRail(''); return; }
   state.data = p.last = pnl.value;
   state.snap = snap; state.compare = compare;
   state.budgets = budgets.status === 'fulfilled' ? budgets.value?.budgets || [] : [];
   state.budgetsRead = budgets.status === 'fulfilled' ? budgets.value : null;
+  if (bySeg) { FIN_SEG.ok = true; state.model = {sections: [], lines: []}; finPnlDraw(); return; }
   state.model = finPnlModel(state.data);
   const cols = state.data.columns || [];
   if (!(p.budgetCol >= 0 && p.budgetCol < cols.length)) {
@@ -213,6 +253,7 @@ const finSide = (rows, f) => rows.length ? finSum(rows, f) : 0;
 const finLess = (a, b) => a == null || b == null ? null : a - b;
 function finPnlDraw() {
   const state = FIN.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
+  if (state.view === 'segments') { finSegDraw(box, state); return; }
   const data = state.data, cols = data.columns || [], p = FIN_PNL, bi = p.budgetCol, caps = finCaps();
   const {sections} = state.model;
   if (!sections.length) { box.innerHTML = finNote(state.view !== 'expenses' ? 'No lines yet.' : finFilterAny(state.snap || p) ? 'No expenses in this filter.' : 'No expenses.'); return; }
@@ -228,7 +269,9 @@ function finPnlDraw() {
   const sub = `<tr class="fin-sub-head"><th></th>${past ? `<th colspan="${past}"><span>${cur ? 'Actual · ' + esc(finColLabel(cur, years)) + ' to date' : 'Actual'}</span></th>` : ''}${cols.length - past
     ? `<th class="fin-p fin-b" colspan="${cols.length - past}"><span>Projected</span></th>` : ''}<th class="fin-b" colspan="${showToDate ? 3 : 2}"></th></tr>`;
   const sign = r => r.type === 'income' ? 1 : -1;
-  const fq = finFilterQs(state.snap).toString(), lineQs = fq ? '?' + fq : '';
+  const lq = finFilterQs(state.snap);
+  if (state.view === 'company' && p.seg) lq.set('segment', p.seg);
+  const lineQs = lq.toString() ? '?' + lq : '';
   // A narrow viewer's totals leave payroll out (§7.5): they say so.
   const excl = finExcl(data), hasPrivate = rows => rows.some(r => r.private);
   // Compare shows the plan as it stood on a past day: not the live budget, so not editable.
@@ -292,9 +335,24 @@ function finPnlDraw() {
     out.push(`<tr class="fin-tot"><td>${esc(`Total expenses${excl}${finSliceLabel(state)}`)}</td>${nums(spent, finSum(allLines, finBudgetOf(bi)), spent[bi], -1, finSum(allLines, finToDateOf(bi)))}</tr>`);
   }
   const left = box.scrollLeft;
-  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget${finExcl(state.budgetsRead)}</th>${showToDate ? '<th>To date</th>' : ''}<th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>`;
+  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget${finExcl(state.budgetsRead)}</th>${showToDate ? '<th>To date</th>' : ''}<th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>${p.seg ? finExclNote(data) : ''}`;
   box.style.setProperty('--fin-first', `${box.querySelector('th')?.offsetWidth || 0}px`);
   box.scrollLeft = left;   // a redraw stays where it was scrolled
+}
+// The By segment view (reports/pnl_by?by=segment): a column per segment, then Unallocated and Total, and the revenue,
+// costs and contribution rows. A segment's column opens the company P&L filtered to it (finSegDrill).
+const finExclNote = data => data?.excluded ? finNote('A pay run is left out of this view.') : '';
+function finSegDraw(box, state) {
+  const data = state.data, cols = data.columns || [], rows = data.rows || [], caps = finCaps(), left = box.scrollLeft;
+  if (!cols.length) { box.innerHTML = finNote('No segments yet.'); return; }
+  const head = cols.map(c => {
+    const label = `${c.color ? segTagDot(c.color) : ''}<span>${esc(c.label)}</span>`;
+    return `<th>${caps?.company && c.key !== 'total' ? `<button type="button" class="fin-seg-col" data-fin-segcol="${esc(c.key)}">${label}</button>` : label}</th>`;
+  }).join('');
+  const body = rows.map(r => `<tr class="${r.key === 'contribution' ? 'fin-tot' : ''}"><td>${esc(r.label)}</td>${cols.map(c => `<td>${finNum(r.values?.[c.key] ?? null)}</td>`).join('')}</tr>`).join('');
+  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}</tr></thead><tbody>${body}</tbody></table>${finExclNote(data)}`;
+  box.style.setProperty('--fin-first', `${box.querySelector('th')?.offsetWidth || 0}px`);
+  box.scrollLeft = left;
 }
 // Wider than the page, the table opens on the newest actual (once the rail is drawn, which narrows it).
 function finPnlOpenAt() {
@@ -345,6 +403,7 @@ function finTeamsBelow(id) {
 // unfiltered, since a team's or teammate's budget sits under the line's); false when the cell sums several budgets or
 // shows one kept by quarter or year, which a month's cell cannot say.
 function finBudgetFor(accountId) {
+  if (FIN.pnl?.view === 'company' && FIN_PNL.seg) return false;   // a segment's budgets are not edited here
   const tops = finScopeBudgets(accountId);
   if (!tops.length) return finFiltered() ? false : null;
   if (tops.length > 1 || tops[0].period !== 'month') return false;
@@ -456,8 +515,11 @@ async function finPnlRail() {
   const col = cols[p.sel.col], sel = p.sel;
   try {
     const fq = finFilterQs(state.snap).toString();
-    const d = await get(`/v2/finance/lines/${encodeURIComponent(row.account_id)}?start=${col.start}&end=${col.end}&top_n=6&limit=1${fq ? '&' + fq : ''}`, {fresh: true});
+    const sg = state.view === 'company' && p.seg ? '&segment=' + encodeURIComponent(p.seg) : '';
+    const d = await get(`/v2/finance/lines/${encodeURIComponent(row.account_id)}?start=${col.start}&end=${col.end}&top_n=6&limit=1${fq ? '&' + fq : ''}${sg}`, {fresh: true});
     if (FIN?.pnl !== state || p.sel !== sel || !$('#fin-by')) return;
+    // A read that does not say it kept the segment (the server echoes `segment`) is not shown as the segment's.
+    if (sg && d.segment !== p.seg) return;
     const by = (d.by_teammate || []).filter(r => r.amount);
     $('#fin-by').innerHTML = by.length ? `<h3 class="fin-h">By teammate</h3>${finBars(by.map(r => ({label: r.key === FIN_OTHER ? r.label : finWho(r.key), amount: r.amount})))}` : '';
   } catch { /* the figures above stand on their own */ }
@@ -548,12 +610,13 @@ function finLinePage(accountId) {
   if (caps.viewing) { location.replace(finHref('/pnl')); return; }
   const L = FIN_LINE;
   if (!L.month) L.month = finToday().slice(0, 7);
-  const filter = finFilterFrom(FIN.q), fq = finFilterQs(filter).toString();
-  FIN.line = {id: accountId, cur: null, prev: null, budgets: [], vendors: {}, load: 0, fq};
+  const filter = finFilterFrom(FIN.q), fq = finFilterQs(filter).toString(), seg = FIN.q.get('segment') || '';
+  const lq = new URLSearchParams(fq); if (seg) lq.set('segment', seg);
+  FIN.line = {id: accountId, cur: null, prev: null, budgets: [], vendors: {}, load: 0, fq: lq.toString(), seg};
   const rows = FIN_PNL.last?.rows || [], me = rows.find(r => r.account_id === accountId), parent = me && rows.find(r => r.account_id === me.parent_id);
-  const chips = [...finPicked(filter).map(finPickName), ...(filter.who !== 'both' ? [filter.who === 'bots' ? 'Bots' : 'People'] : [])]
+  const chips = [...finPicked(filter).map(finPickName), ...(filter.who !== 'both' ? [filter.who === 'bots' ? 'Bots' : 'People'] : []), ...(seg ? [seg === 'unallocated' ? 'Unallocated' : segTagName(seg)] : [])]
     .map(n => `<span class="fin-chip">${esc(n)}</span>`).join('');
-  $('#fin-body').innerHTML = `<nav class="fin-crumbs" aria-label="Breadcrumb"><a href="${finHref('/pnl', {view: fq || FIN_PNL.view === 'expenses' ? 'expenses' : ''})}">P&amp;L</a>${parent ? `<span class="muted">›</span><span class="muted">${esc(parent.name)}</span>` : ''}<span class="muted">›</span><h2 id="fin-line-name">${esc(me?.name || '')}</h2></nav>
+  $('#fin-body').innerHTML = `<nav class="fin-crumbs" aria-label="Breadcrumb"><a href="${finHref('/pnl', {view: !seg && (fq || FIN_PNL.view === 'expenses') ? 'expenses' : '', segment: seg})}">P&amp;L</a>${parent ? `<span class="muted">›</span><span class="muted">${esc(parent.name)}</span>` : ''}<span class="muted">›</span><h2 id="fin-line-name">${esc(me?.name || '')}</h2></nav>
     <div class="fin-bar"><label class="fin-inline"><span class="sr-only">Month</span><input type="month" data-fin-month value="${L.month}" aria-label="Month"></label>
       <label class="fin-inline"><span class="muted">Rows</span><select data-fin-by>${[['vendor', 'Vendor'], ['team', 'Team'], ['teammate', 'Teammate']].map(([v, l]) =>
         `<option value="${v}"${v === L.by ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -586,12 +649,15 @@ async function finLineLoad() {
   const state = FIN.line, L = FIN_LINE, load = ++state.load, id = encodeURIComponent(state.id);
   const [a, z] = finMonthBounds(L.month), [pa, pz] = finMonthBounds(finPrevMonth(L.month));
   const fq = state.fq ? '&' + state.fq : '';
+  const bud = state.seg ? '&segment=' + encodeURIComponent(state.seg) : '';
   const [cur, prev, budgets] = await Promise.allSettled([get(`/v2/finance/lines/${id}?start=${a}&end=${z}&top_n=${FIN_LINE_TOP}&limit=200${fq}`, {fresh: true}),
     get(`/v2/finance/lines/${id}?start=${pa}&end=${pz}&top_n=${FIN_LINE_TOP}&limit=1${fq}`, {fresh: true}),
     // Each budget as it stands in the month shown (the version in effect then), so a future month shows its own amount.
-    get(`/v2/finance/budgets?at=${a}`, {fresh: true})]);
+    get(`/v2/finance/budgets?at=${a}${bud}`, {fresh: true})]);
   if (FIN?.line !== state || state.load !== load || !$('#fin-line')) return;
   if (cur.status === 'rejected') { $('#fin-line').innerHTML = finFail(cur.reason); finRail(''); return; }
+  // A segment's line the server did not split (no `segment` echo) is not shown: it would be the company's figures.
+  if (state.seg && cur.value?.segment !== state.seg) { $('#fin-line').innerHTML = finNote("This line can't be split by segment yet."); finRail(''); return; }
   state.cur = cur.value; state.prev = prev.status === 'fulfilled' ? prev.value : null;
   state.budgets = budgets.status === 'fulfilled' ? budgets.value?.budgets || [] : [];
   state.budgetsRead = budgets.status === 'fulfilled' ? budgets.value : null;
@@ -632,7 +698,7 @@ function finLineLabel(key, label) {
 }
 function finLineDraw() {
   const state = FIN.line, box = $('#fin-line'); if (!box || !state.cur) return;
-  const L = FIN_LINE, vendor = L.by === 'vendor', may = finCaps().may('finance.budgets');
+  const L = FIN_LINE, vendor = L.by === 'vendor', may = finCaps().may('finance.budgets') && !FIN.line?.seg;
   const rows = finLineKeys(), parent = finLineParent();
   const add = $('#fin-line-add');
   if (add) add.innerHTML = !may ? '' : parent ? '<button type="button" class="primary" data-fin-vendor-add>+ Vendor budget</button>'
@@ -683,7 +749,7 @@ function finLineRail() {
     ${teams.length && (namesTeam || !namesMate) ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === FIN_NONE ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
     ${namesMate ? `<h3 class="fin-h">By teammate · ${month}</h3>${finBars(mates.map(r => ({label: r.key === FIN_NONE ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finWho(r.key), amount: r.amount})))}` : ''}
     ${entries.length ? `<h3 class="fin-h">Transactions</h3>${entries.map(e => finKv(finDayLabel(e.date), finCents(e.amount))).join('')}` : ''}
-    ${row.key !== FIN_OTHER ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
+    ${row.key !== FIN_OTHER && !state.seg ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
   if (!one || got) return;
   const ask = state.vendors[row.key] = {data: null}, [a, z] = finMonthBounds(L.month);
   const v = row.key === FIN_NONE ? '' : row.key;
