@@ -106,6 +106,11 @@ async function install(page, {refuseApprove = false, manager = false, refuseMove
       state.affectedReads.push(label);
       return json({stage: 'Build', label: label || null, count: label === 'urgent' ? 1 : 3});
     }
+    if (p === '/api/v2/pipelines/dev-tickets/late') {
+      // The Late list the cards read (no manager needed): every late ticket of the pipeline, keyed by id.
+      state.lateReads = (state.lateReads || 0) + 1;
+      return json({late: Object.fromEntries(late.map(item => [item.task_id, {since: item.since, hours: item.hours, limit_hours: item.limit_hours}]))});
+    }
     if (p === '/api/v2/pipelines/dev-tickets/manager') {
       state.managerReads++;
       const run = (id, at, status, error) => ({id, started_at: at, finished_at: at, status, error});

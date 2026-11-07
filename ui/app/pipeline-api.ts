@@ -388,6 +388,13 @@ async function pipelineAffectedCount(stageId: string, label: string): Promise<{ 
 }
 
 /** The manager's status for one pipeline: last run, late cards, the log. */
+/** The ids of the pipeline's Late tickets (GET .../late): every live ticket past its stage's Warn after, uncapped, from the
+    server's one Late rule. It needs no manager, so a pipeline without one still shows its late time. */
+async function pipelineLateTicketIds(pipelineId: string): Promise<string[]> {
+  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/late`)) as { late: Record<string, unknown> };
+  return Object.keys(res.late ?? {});
+}
+
 async function pipelineManagerView(pipelineId: string): Promise<PipelineManagerView> {
   const rail = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/manager`)) as ServerRail;
   return managerViewFromRail(rail);

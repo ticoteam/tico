@@ -634,3 +634,23 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
         if out is None:
             raise Problem("not_found", "No such pipeline", 404)
         return out
+
+    @app.get("/api/v2/pipelines/{pipeline_id}/late")
+    def pipeline_late(request: Request, pipeline_id: str) -> dict[str, Any]:
+        """The Late list the board's cards read for their "Nh in step" time: every live ticket of the pipeline past its
+        Warn after (late_tickets), with no cap and no manager. Tickets the reader may not see are left out."""
+        who = request.state.identity
+        if who.role not in ("owner", "human", "bot"):
+            raise Problem("forbidden", "People and bots read the pipeline's Late list", 403)
+        with store.read() as c:
+            seen = pipeline_rights.may_see(c, who.task_actor or who.actor, pipeline_id)
+            if not seen:
+                raise Problem("not_found", "No such pipeline", 404)
+            late = over_limit(c, pipeline_id, datetime.now(timezone.utc))
+            late = [item for item in late if _readable(c, who.actor, item["task_id"])]
+        return {
+            "late": {
+                item["task_id"]: {"since": item["since"], "hours": item["hours"], "limit_hours": item["limit_hours"]}
+                for item in late
+            }
+        }
