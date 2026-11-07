@@ -8,16 +8,43 @@
 (function () {
   'use strict';
   const API_BASE = () => (typeof API === 'string' ? API : '/api') + '/v2';
-  const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-  const say = (msg, error, action) => typeof toast === 'function' && toast(msg, error, action);
+  // The shapes this file reads: the person's tickets as backend/support.py sends them, and its own state.
+  interface SupportMessage { body: string; from: string; created_at: string; has_diagnostics?: boolean; author_name?: string; author?: string }
+  interface SupportTicket {
+    id: string; status: string; message: string; created_at: string; unread?: number;
+    sent?: { diagnostics?: unknown }; messages?: SupportMessage[];
+  }
+  interface SupportList { enabled?: boolean; tickets?: SupportTicket[]; unread?: number; refresh_failed?: boolean }
+  interface SupportState { enabled: boolean | null; tickets: SupportTicket[]; unread: number }
+  interface SupportBundle { id: string; text: string; bytes: number }
+  interface ReportCheck { name: string; status: string; detail: string; fix: string; source: string }
+  interface SupportReport { kind: string; title: string; detail: string; ref: string; group?: string; checks?: ReportCheck[] }
+  type ReportInput = { kind: string; [key: string]: unknown };
+  interface SupportDraft {
+    message: string; diag: boolean; perf: number; bundle: SupportBundle | null; key: string; kind: string;
+    report: SupportReport | null; error?: string; creating?: string; kindBefore?: string;
+  }
+  interface AccessSession { id: string; ticket_id: string; seconds_left: number; started_by?: string; tier: string }
+  interface AccessInfo {
+    available: boolean; can_start?: boolean; can_full?: boolean; active: AccessSession | null; sessions: AccessSession[]; at: number;
+  }
+  interface AccessLogItem { created_at: string; by: string; method: string; path: string; status: string | number }
+  interface AccessLog { at: number; items?: AccessLogItem[]; busy?: boolean }
+  type FormControl = HTMLButtonElement | HTMLInputElement | HTMLSelectElement;
+  interface ComposerControls { message: HTMLTextAreaElement }
+  interface BrowserFailure { kind: string; at: string; file: string; line: number; column: number; count: number }
+  const escape = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c as '&' | '<' | '>' | '"' | "'"]));
+  const say = (msg: string, error?: boolean, action?: ToastAction | null) => typeof toast === 'function' && toast(msg, error, action);
   // randomUUID exists only in a secure context; a Tico served over plain http on a LAN still needs keys.
   const uid = () => crypto.randomUUID?.() || [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
   const NAME = 'Tico team';
-  const browserFailures = [];
-  function browserFailure(kind, event) {
+  // The code call() puts on the error it throws ('' when it has none).
+  const thrownCode = (error: unknown): string => typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : '';
+  const browserFailures: BrowserFailure[] = [];
+  function browserFailure(kind: string, event?: ErrorEvent) {
     // No error message, rejection value, URLs, stack text or user input enters diagnostics.
     let file = '';
-    try { file = new URL(event?.filename || '', location.href).pathname.split('/').pop(); } catch (_) {}
+    try { file = new URL(event?.filename || '', location.href).pathname.split('/').pop() ?? ''; } catch (_) {}
     const item = {kind, at: new Date().toISOString(), file: /^[A-Za-z0-9_-]+\.(?:js|ts)$/.test(file) ? file : '',
       line: Math.max(0, Math.min(10000000, event?.lineno || 0)), column: Math.max(0, Math.min(10000000, event?.colno || 0)), count: 1};
     const prior = browserFailures.find(x => x.kind === item.kind && x.file === item.file && x.line === item.line && x.column === item.column);
@@ -33,35 +60,35 @@
     if (!(window.ticoNativeFeatures || []).includes('appLog') || typeof window.ticoNativeLog !== 'function') return null;
     try {
       const got = await window.ticoNativeLog();
-      return {version: String(got?.version || '').slice(0, 40), lines: (Array.isArray(got?.lines) ? got.lines : []).slice(-200).map(x => String(x).slice(0, 2000)),
+      return {version: String(got?.version || '').slice(0, 40), lines: (Array.isArray(got?.lines) ? got.lines : []).slice(-200).map((x: unknown) => String(x).slice(0, 2000)),
         mac: /Macintosh|Mac OS X/.test(navigator.userAgent)};
     } catch (_) { return null; }
   }
   // `hours` of each computer's performance history go with the attachment (0: none); `report` is what Report this or
   // Setup check attached (backend/support.py Report).
-  async function capture(hours, report) {
+  async function capture(hours: number, report?: SupportReport | null): Promise<SupportBundle> {
     const app = await appShell();
     return browserFailures.length || app || report
-      ? call('POST', '/support/diagnostics/capture', {browser: browserFailures, performance_hours: hours, ...(app ? {app} : {}), ...(report ? {report} : {})})
-      : call('GET', '/support/diagnostics?performance_hours=' + hours);
+      ? call<SupportBundle>('POST', '/support/diagnostics/capture', {browser: browserFailures, performance_hours: hours, ...(app ? {app} : {}), ...(report ? {report} : {})})
+      : call<SupportBundle>('GET', '/support/diagnostics?performance_hours=' + hours);
   }
-  const REPORTED = {toast: 'Error', run: 'Failed run', health: 'Health', stuck: 'Stuck bot', setup_check: 'Setup check'};
-  const prefill = report => REPORTED[report.kind] + ': details attached. ';
+  const REPORTED: Record<string, string> = {toast: 'Error', run: 'Failed run', health: 'Health', stuck: 'Stuck bot', setup_check: 'Setup check'};
+  const prefill = (report: SupportReport) => (REPORTED[report.kind] ?? '') + ': details attached. ';
   // The message without any kind's untouched prefill: a new report or Remove replaces it rather than stacking on it.
-  const unprefilled = message => { const kind = Object.values(REPORTED).find(k => message.startsWith(k + ': details attached. ')); return kind ? message.slice(kind.length + 20) : message; };
+  const unprefilled = (message: string) => { const kind = Object.values(REPORTED).find(k => message.startsWith(k + ': details attached. ')); return kind ? message.slice(kind.length + 20) : message; };
   // The same problem gets the same group wherever it is reported: numbers and quoted names don't split it.
-  const group = (kind, words) => (kind + ':' + String(words || '').replace(/(["'“‘]).*?["'”’]/g, '"…"').replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()).slice(0, 120);
-  const clip = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
-  function asReport(r) {
+  const group = (kind: string, words: unknown) => (kind + ':' + String(words || '').replace(/(["'“‘]).*?["'”’]/g, '"…"').replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()).slice(0, 120);
+  const clip = (s: unknown, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+  function asReport(r: ReportInput | null | undefined): SupportReport | null {
     if (!r || !REPORTED[r.kind]) return null;
-    const out = {kind: r.kind, title: clip(r.title, 200), detail: String(r.detail ?? '').slice(0, 2000), ref: clip(r.ref, 120)};
+    const out: SupportReport = {kind: r.kind, title: clip(r.title, 200), detail: String(r.detail ?? '').slice(0, 2000), ref: clip(r.ref, 120)};
     out.group = clip(r.group, 120) || group(r.kind, r.title);
     if (Array.isArray(r.checks)) out.checks = r.checks.slice(0, 40).map(c => ({name: clip(c.name, 120) || 'Check', status: ['ok', 'bad', 'warn', 'info'].includes(c.status) ? c.status : 'info',
       detail: clip(c.detail, 600), fix: String(c.fix ?? '').slice(0, 1200), source: c.source === 'health' ? 'health' : 'doctor'}));
     return out;
   }
   // Report this pressed anywhere: the chat opens with the report attached as diagnostics.
-  let pending = null;
+  let pending: { report: SupportReport | null } | null = null;
   const PERF_WINDOWS = [[0, 'None'], [24, '1 day'], [168, '7 days'], [336, '14 days']];
   const ICON = {
     // The composers' paperclip (app/pill.js ICON_CLIP), drawn here because this file loads first.
@@ -69,32 +96,32 @@
     send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
   };
   const AVATAR = '<span class="support-av" aria-hidden="true"><span class="nav-icon">headset_mic</span></span>';
-  let state = {enabled: null, tickets: [], unread: 0}, pop = null, timer, busyRefresh = null, stateRevision = 0;
+  let state: SupportState = {enabled: null, tickets: [], unread: 0}, pop: HTMLDialogElement | null = null, timer: ReturnType<typeof setTimeout> | undefined, busyRefresh: Promise<SupportState> | null = null, stateRevision = 0;
   // `inFlight`: the send on its way, settled either way; `deleting`: Delete chat history running.
-  let inFlight = null, deleting = false;
+  let inFlight: Promise<void> | null = null, deleting = false;
   // `lastUnread`: the unread replies this tab has been told of. A rise above it opens the chat once (announceReply).
-  let owner = '', lastUnread = 0, announceWaiting = false, compose = null, editor = null, opener = null, loading = null, sending = null;
+  let owner = '', lastUnread = 0, announceWaiting = false, compose: { email?: string } | null = null, editor: HTMLDialogElement | null = null, opener: HTMLElement | null = null, loading: Promise<void> | null = null, sending: SupportDraft | null = null;
   // The one draft: what is in the box and what goes with it. `kind` is only for a message that starts a new ticket.
-  const newDraft = () => ({message: '', diag: false, perf: 24, bundle: null, key: uid(), kind: 'support', report: null});
+  const newDraft = (): SupportDraft => ({message: '', diag: false, perf: 24, bundle: null, key: uid(), kind: 'support', report: null});
   let draft = newDraft();
-  const when = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}); };
-  const dayOf = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toDateString(); };
-  function dayLabel(iso) {
+  const when = (iso: string) => { const d = new Date(iso); return isNaN(Number(d)) ? '' : d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}); };
+  const dayOf = (iso: string) => { const d = new Date(iso); return isNaN(Number(d)) ? '' : d.toDateString(); };
+  function dayLabel(iso: string) {
     const d = new Date(iso), today = new Date(), yesterday = new Date(Date.now() - 86400000);
     if (d.toDateString() === today.toDateString()) return 'Today';
     if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
     return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(d.getFullYear() === today.getFullYear() ? {} : {year: 'numeric'})});
   }
-  const last = t => (t.messages || []).at(-1)?.created_at || t.created_at;
-  const newestFirst = list => [...list].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
-  const ended = t => ['closed', 'gone'].includes(t.status);
+  const last = (t: SupportTicket) => (t.messages || []).at(-1)?.created_at || t.created_at;
+  const newestFirst = (list: SupportTicket[]) => [...list].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
+  const ended = (t: SupportTicket) => ['closed', 'gone'].includes(t.status);
   // Where a message goes: the ticket written on most recently that is still open. None: a new one.
   const latest = () => newestFirst(state.tickets).find(t => !ended(t));
   const isOpen = () => !!pop?.open;
-  async function call(method, path, body, key) {
+  async function call<T = SupportList>(method: string, path: string, body?: unknown, key?: string): Promise<T> {
     const r = await fetch(API_BASE() + path, {method, cache: 'no-store',
       headers: body === undefined ? {} : {'Content-Type': 'application/json', 'Idempotency-Key': key || uid()},
-      body: body === undefined ? undefined : JSON.stringify(body)});
+      body: body === undefined ? undefined : JSON.stringify(body)} as RequestInit);   // exactOptionalPropertyTypes: body may be undefined
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach the Tico team. Try again.'), {status: r.status, code: data.error?.code || ''});
     return data;
@@ -113,7 +140,7 @@
   }
   // The unread replies on the person's own tickets: the ? counts them and they open the chat. A bot's report is not in
   // the chat at all, so its replies are not counted (backend/support.py OWN).
-  function accept(data) {
+  function accept(data: SupportList) {
     state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread || 0};
     if (state.unread > lastUnread) announceWaiting = true;
     lastUnread = state.unread;
@@ -128,7 +155,7 @@
   // is in: a field they are typing in, a dialog, the Ask panel, the phone's drawer, Needs you, a hidden tab.
   // Then it waits, and opens when that ends: focus leaving a field, a dialog closing, the panel going away, the tab
   // coming back, or the next check.
-  const typing = el => !!el && (el.matches?.('input, textarea, select') || el.isContentEditable === true);
+  const typing = (el: Element | null) => !!el && (el.matches?.('input, textarea, select') || (el instanceof HTMLElement && el.isContentEditable === true));
   const occupied = () => document.hidden || typing(document.activeElement) || !!document.querySelector('dialog[open], .needs-you')
     || document.body.classList.contains('ask-open') || document.body.classList.contains('drawer');
   function announceReply() {
@@ -141,7 +168,7 @@
   // A hold ends with a class change that no event announces: the Ask panel or the drawer going away.
   const holdEnds = () => { if (announceWaiting) announceReply(); };
   new MutationObserver(holdEnds).observe(document.body, {attributes: true, attributeFilter: ['class']});
-  function note(message, error = false) {
+  function note(message: string, error = false) {
     const el = pop?.querySelector('[data-connection]');
     if (el) { el.textContent = message; el.classList.toggle('err', error); }
   }
@@ -181,7 +208,7 @@
     if (!unread.length) return;
     const revision = stateRevision;
     try {
-      const read = await Promise.all(unread.map(t => call('POST', `/support/tickets/${encodeURIComponent(t.id)}/read`)));
+      const read = await Promise.all(unread.map(t => call<SupportTicket>('POST', `/support/tickets/${encodeURIComponent(t.id)}/read`)));
       if (revision !== stateRevision) return;
       stateRevision++;
       state.tickets = state.tickets.map(x => read.find(n => n.id === x.id) || x);
@@ -195,9 +222,9 @@
   const lockSending = (on = true) => {
     if (!pop || (on && !sending && !deleting)) return;
     if (!on && deleting) return;
-    pop.querySelectorAll(LOCKED).forEach(el => { el.disabled = on; });
+    pop.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>(LOCKED).forEach(el => { el.disabled = on; });
     // Delete chat history waits for a message on its way: what it repopulates would be left behind.
-    const yes = pop.querySelector('[data-confirm-yes]');
+    const yes = pop.querySelector<HTMLButtonElement>('[data-confirm-yes]');
     if (yes && !deleting) yes.disabled = on && !!sending;
     const submit = pop.querySelector('[data-compose] [type=submit]');
     if (on) submit?.setAttribute('aria-busy', 'true'); else submit?.removeAttribute('aria-busy');
@@ -206,17 +233,17 @@
   function render(pin = false) {
     if (!pop) return;
     const off = state.enabled === false, known = state.enabled !== null;
-    pop.querySelector('[data-loading]').hidden = known || !loading;
-    pop.querySelector('[data-off]').hidden = !off;
-    const asking = !pop.querySelector('[data-confirm]').hidden;
-    pop.querySelector('[data-view]').hidden = !known || off || asking;
-    pop.querySelector('[data-delete]').hidden = !known || off || !state.tickets.length;
+    pop.querySelector<HTMLElement>('[data-loading]')!.hidden = known || !loading;
+    pop.querySelector<HTMLElement>('[data-off]')!.hidden = !off;
+    const asking = !pop.querySelector<HTMLElement>('[data-confirm]')!.hidden;
+    pop.querySelector<HTMLElement>('[data-view]')!.hidden = !known || off || asking;
+    pop.querySelector<HTMLElement>('[data-delete]')!.hidden = !known || off || !state.tickets.length;
     if (!known || off) return;
     renderThread(pin); renderAccess(); lockSending();
   }
   // Every ticket's messages as one conversation, oldest first. A ticket's first message is the person's.
   function lines() {
-    const out = [];
+    const out: { body: string; mine: boolean; at: string; diag: boolean; name?: string }[] = [];
     for (const t of state.tickets) {
       out.push({body: t.message, mine: true, at: t.created_at, diag: !!t.sent?.diagnostics});
       for (const m of t.messages || []) out.push({body: m.body, mine: m.from !== 'staff', at: m.created_at, diag: !!m.has_diagnostics,
@@ -227,7 +254,8 @@
   // Bubbles: theirs on the left (the writer's name above when it changes), the person's on the right; a date line
   // where the day changes.
   function renderThread(pin = false) {
-    const host = pop.querySelector('[data-thread]');
+    if (!pop) return;
+    const host = pop.querySelector<HTMLElement>('[data-thread]')!;
     let html = '', day = '', who = null;
     for (const r of lines()) {
       const d = dayOf(r.at);
@@ -252,9 +280,9 @@
   }
   // Letting the Tico team in (docs/support.md): a banner on every screen while a session lasts; over the box, the
   // button that starts one from the open conversation, for an owner or admin; and what the team did in each session.
-  let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0, accessRevision = 0;
-  const accessLogs = new Map();
-  const TIERS = {app: 'App only', full: 'Full access'};
+  let access: AccessInfo = {available: false, active: null, sessions: [], at: 0}, accessTimer: ReturnType<typeof setTimeout> | 0 = 0, accessRevision = 0;
+  const accessLogs = new Map<string, AccessLog>();
+  const TIERS: Record<string, string> = {app: 'App only', full: 'Full access'};
   const remaining = () => access.active ? access.active.seconds_left - (Date.now() - access.at) / 1000 : 0;
   const timeLeft = () => {
     const m = Math.max(1, Math.ceil(remaining() / 60)), h = Math.floor(m / 60);
@@ -262,28 +290,28 @@
   };
   const canStop = () => !!access.active && (!!access.can_start || access.active.started_by === 'human:' + (typeof S === 'undefined' ? '' : S.me?.id || ''));
   // The same words on the banner and in the chat: the tier and the time left.
-  const accessWords = live => `${NAME} has access (${TIERS[live.tier] || live.tier}), ${timeLeft()} left`;
+  const accessWords = (live: AccessSession) => `${NAME} has access (${TIERS[live.tier] || live.tier}), ${timeLeft()} left`;
   const liveAccess = () => access.active && remaining() > 0 ? access.active : null;
   function renderBanner() {
     const bar = document.getElementById('support-access-banner'), live = liveAccess();
     if (!bar) return;
     bar.hidden = !live;
     if (!live) return;
-    bar.querySelector('[data-access-left]').textContent = accessWords(live);
-    bar.querySelector('[data-access-stop]').hidden = !canStop();
+    bar.querySelector<HTMLElement>('[data-access-left]')!.textContent = accessWords(live);
+    bar.querySelector<HTMLElement>('[data-access-stop]')!.hidden = !canStop();
   }
-  async function loadLog(id) {
+  async function loadLog(id: string) {
     const held = accessLogs.get(id);
     if (held && (held.busy || Date.now() - held.at < 30000)) return;
     accessLogs.set(id, {...held, busy: true, at: Date.now()});
-    try { accessLogs.set(id, {at: Date.now(), items: (await call('GET', `/support/access/${encodeURIComponent(id)}/log`)).log || []}); }
+    try { accessLogs.set(id, {at: Date.now(), items: (await call<{ log?: AccessLogItem[] }>('GET', `/support/access/${encodeURIComponent(id)}/log`)).log || []}); }
     catch (_) { accessLogs.set(id, {at: Date.now(), items: held?.items || []}); }
     renderAccess();
   }
   // Over the box: a live session with Stop, else the start button (an open conversation, an owner or admin, no session
   // live), or why it is off; then what the team did in every session started from this chat, newest first.
   function renderAccess() {
-    const host = pop?.querySelector('[data-access]'), t = latest();
+    const host = pop?.querySelector<HTMLElement>('[data-access]'), t = latest();
     if (!host) return;
     const live = liveAccess(), mine = new Set(state.tickets.map(x => x.id)), here = live && mine.has(live.ticket_id) ? live : null;
     let html = '';
@@ -303,7 +331,8 @@
       // Opened or closed by hand, the log stays so.
       const open = host.querySelector('details')?.open;
       host.innerHTML = html; host.dataset.shown = html;
-      if (open !== undefined && host.querySelector('details')) host.querySelector('details').open = open;
+      const reopened = host.querySelector('details');
+      if (open !== undefined && reopened) reopened.open = open;
     }
   }
   async function pollAccess() {
@@ -311,7 +340,7 @@
     if (typeof S !== 'undefined' && S.me && !document.hidden) {
       const revision = ++accessRevision;
       try {
-        const data = await call('GET', '/support/access');
+        const data = await call<Omit<AccessInfo, 'at'>>('GET', '/support/access');
         if (revision === accessRevision) access = {...data, at: Date.now()};    // an older answer never undoes a Stop
       } catch (_) { /* the next poll asks again */ }
       renderBanner(); renderAccess();
@@ -323,16 +352,17 @@
   async function stopAccess() {
     if (!access.active) return;
     try {
-      const stopped = await call('POST', `/support/access/${encodeURIComponent(access.active.id)}/stop`, {});
+      const stopped = await call<AccessSession>('POST', `/support/access/${encodeURIComponent(access.active.id)}/stop`, {});
       // Show it ended at once, on the banner and in the chat, whatever a poll still in flight answers.
       accessRevision++;
       access = {...access, active: null, sessions: (access.sessions || []).map(x => x.id === stopped?.id ? stopped : x)};
       renderBanner(); renderAccess();
       say(`The ${NAME} no longer has access.`);
-    } catch (e) { say(e.message, true); }
+    } catch (e) { say(errorMessage(e, ''), true); }
     await pollAccess();
   }
-  function openAccess(t) {
+  interface AccessControls { hours: HTMLSelectElement; custom: HTMLInputElement; tier: RadioNodeList }
+  function openAccess(t: SupportTicket) {
     const dialog = document.createElement('dialog');
     dialog.className = 'tmodal support-modal'; dialog.setAttribute('aria-label', `Let the ${NAME} in`);
     dialog.innerHTML = `<div class="tmodal-head"><strong>Let the ${NAME} in</strong><span class="spacer"></span><button type="button" class="ghost" data-close aria-label="Close">✕</button></div>
@@ -345,52 +375,56 @@
       <p class="err" data-error role="alert" hidden></p>
       <div class="support-row"><button class="ghost" type="button" data-close>Cancel</button><button class="primary" type="submit">Start</button></div></form>`;
     document.body.appendChild(dialog); dialog.showModal();
-    const form = dialog.querySelector('form'), err = dialog.querySelector('[data-error]');
-    form.elements.hours.onchange = () => { dialog.querySelector('[data-custom]').hidden = form.elements.hours.value !== 'custom'; };
-    form.onsubmit = async e => {
+    const accessForm = dialog.querySelector('form')!, err = dialog.querySelector<HTMLElement>('[data-error]')!;
+    const controls = accessForm.elements as unknown as AccessControls;
+    controls.hours.onchange = () => { dialog.querySelector<HTMLElement>('[data-custom]')!.hidden = controls.hours.value !== 'custom'; };
+    accessForm.onsubmit = async e => {
       e.preventDefault();
-      const hours = Number(form.elements.hours.value === 'custom' ? form.elements.custom.value : form.elements.hours.value);
+      const hours = Number(controls.hours.value === 'custom' ? controls.custom.value : controls.hours.value);
       if (!Number.isInteger(hours) || hours < 1 || hours > 8760) { err.textContent = 'Choose 1 to 8760 hours.'; err.hidden = false; return; }
-      form.querySelectorAll('button, input, select').forEach(el => { el.disabled = true; });
+      accessForm.querySelectorAll<FormControl>('button, input, select').forEach(el => { el.disabled = true; });
       try {
-        await call('POST', '/support/access', {ticket_id: t.id, tier: form.elements.tier.value, hours});
+        await call('POST', '/support/access', {ticket_id: t.id, tier: controls.tier.value, hours});
         dialog.close(); say(`The ${NAME} has access.`); await pollAccess();
       } catch (error) {
-        err.textContent = error.message; err.hidden = false;
-        form.querySelectorAll('button, input, select').forEach(el => { el.disabled = false; });
-        if (!access.can_full) form.querySelector('[value=full]').disabled = true;
+        err.textContent = errorMessage(error, ''); err.hidden = false;
+        accessForm.querySelectorAll<FormControl>('button, input, select').forEach(el => { el.disabled = false; });
+        if (!access.can_full) accessForm.querySelector<HTMLInputElement>('[value=full]')!.disabled = true;
       }
     };
-    dialog.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dialog.close(); });
+    dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dialog.close(); });
     dialog.onclose = () => dialog.remove();
   }
   document.addEventListener('click', e => {
-    if (e.target.closest('#support-access-banner [data-access-stop], [data-access] [data-access-stop]')) void stopAccess();
-    else if (e.target.closest('[data-access] [data-access-start]') && latest()) openAccess(latest());
+    const target = eventElement(e);
+    if (target?.closest('#support-access-banner [data-access-stop], [data-access] [data-access-stop]')) void stopAccess();
+    else if (target?.closest('[data-access] [data-access-start]') && latest()) openAccess(latest()!);
     // The banner itself opens the chat, where Stop and the log are.
-    else if (e.target.closest('#support-access-banner [data-access-left]')) void open();
-    else if (e.target.closest('#support-open')) { if (document.body.classList.contains('drawer') && typeof setDrawer === 'function') setDrawer(false); void open(); }
+    else if (target?.closest('#support-access-banner [data-access-left]')) void open();
+    else if (target?.closest('#support-open')) { if (document.body.classList.contains('drawer') && typeof setDrawer === 'function') setDrawer(false); void open(); }
   });
   // The message box grows to what it holds (a "Want help setting up?" snapshot reads whole), up to the CSS cap and never
   // past the room the chat has left: the thread keeps its minimum and Send stays on screen. The rest scrolls in the box.
-  function fitBox(box) {
+  function fitBox(box: HTMLTextAreaElement | null) {
     if (!box || !box.isConnected) return;
     box.style.height = 'auto';
     const want = box.scrollHeight + box.offsetHeight - box.clientHeight;
-    const thread = pop?.querySelector('[data-thread]'), sheet = pop?.querySelector('.support-pop-in');
+    const thread = pop?.querySelector<HTMLElement>('[data-thread]'), sheet = pop?.querySelector('.support-pop-in');
     let room = want;
     if (thread?.getClientRects().length && sheet) {
       const spare = Math.max(0, thread.offsetHeight - (parseFloat(getComputedStyle(thread).minHeight) || 0));
-      const over = Math.max(0, box.form.getBoundingClientRect().bottom - sheet.getBoundingClientRect().bottom);
+      const over = Math.max(0, box.form!.getBoundingClientRect().bottom - sheet.getBoundingClientRect().bottom);
       room = Math.max(parseFloat(getComputedStyle(box).minHeight) || 0, box.offsetHeight + spare - over);
     }
     box.style.height = Math.min(want, room) + 'px';
   }
-  const fitVisibleBox = () => { if (isOpen()) fitBox(pop.querySelector('[data-view]:not([hidden]) [name=message]')); };
+  const fitVisibleBox = () => { if (isOpen() && pop) fitBox(pop.querySelector<HTMLTextAreaElement>('[data-view]:not([hidden]) [name=message]')); };
   // The box, Send, and the paperclip that attaches diagnostics (reviewed before they go). Attached, a small line over
   // the box says so, with Review and ×.
   function renderComposer() {
-    const d = draft, form = pop.querySelector('[data-compose]');
+    const dialog = pop;
+    if (!dialog) return;
+    const d = draft, form = dialog.querySelector<HTMLFormElement>('[data-compose]')!;
     form.innerHTML = `${d.diag ? `<p class="support-report" data-report><span class="nav-icon" aria-hidden="true">description</span><span>Diagnostics${d.report ? ': ' + escape(REPORTED[d.report.kind]) : ''}</span>
         <button class="linkish" type="button" data-preview>Review</button><button class="support-x" type="button" data-unreport aria-label="Remove diagnostics" title="Remove diagnostics"><span class="nav-icon" aria-hidden="true">close</span></button></p>` : ''}
       <div class="support-input">
@@ -400,32 +434,33 @@
         <button class="support-send" type="submit" aria-label="Send" title="Send (Enter)">${ICON.send}</button></div>
       <p class="err support-error" data-error role="alert"${d.error ? '' : ' hidden'}>${escape(d.error || '')}</p>
       <small class="sr-only" id="support-keys">Enter sends. Shift+Enter adds a new line.</small>`;
-    fitBox(form.elements.message);
+    const controls = form.elements as unknown as ComposerControls;
+    fitBox(controls.message);
     form.querySelector('[data-unreport]')?.addEventListener('click', () => {
       // An untouched prefill would say "details attached" with nothing attached.
       d.message = unprefilled(d.message);
       if (d.report?.kind === 'setup_check') d.kind = d.kindBefore || 'support';
-      d.report = null; d.diag = false; d.bundle = null; d.key = uid(); renderComposer(); form.elements.message?.focus();
+      d.report = null; d.diag = false; d.bundle = null; d.key = uid(); renderComposer(); controls.message?.focus();
     });
-    form.oninput = () => { d.message = form.elements.message.value; fitBox(form.elements.message); d.key = uid(); };
-    form.elements.message.onkeydown = e => {
+    form.oninput = () => { d.message = controls.message.value; fitBox(controls.message); d.key = uid(); };
+    controls.message.onkeydown = e => {
       if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
       e.preventDefault(); form.requestSubmit();
     };
-    form.querySelector('[data-attach]').onclick = () => openEditor(d);
+    form.querySelector<HTMLElement>('[data-attach]')!.onclick = () => openEditor(d);
     form.querySelector('[data-preview]')?.addEventListener('click', () => openEditor(d));
     // The outcome is kept on the draft and shown in whichever composer is on screen when it settles: the chat may have
     // been closed and reopened (a new form) since Send was pressed.
-    const shown = text => {
+    const shown = (text: string) => {
       d.error = text;
-      const err = pop.querySelector('[data-compose] [data-error]');
+      const err = dialog.querySelector<HTMLElement>('[data-compose] [data-error]');
       if (err && draft === d) { err.textContent = text; err.hidden = !text; }
     };
     form.onsubmit = async e => {
       e.preventDefault();
       if (sending || deleting) return;
       shown('');
-      if (!d.message.trim()) { form.elements.message.focus(); return; }
+      if (!d.message.trim()) { controls.message.focus(); return; }
       // To the open conversation, or a new ticket that starts with this message; nothing about that is asked.
       // A new conversation already sent with this key (its reply lost) is sent again the same way, never as a follow-up
       // to the ticket it may have made: HQ answers a repeated key with that ticket, so nothing is added twice.
@@ -434,28 +469,29 @@
       // What goes is what was in the box when Send was pressed, with its own attachment.
       const sent = {message: d.message, diag: d.diag, perf: d.perf, report: d.report, bundle: d.bundle, kind: d.kind};
       sending = d; lockSending();
-      let done; inFlight = new Promise(r => { done = r; });
+      let done!: () => void; inFlight = new Promise<void>(r => { done = r; });
       try {
         let bundle = sent.bundle;
         if (sent.diag && !bundle) {
           bundle = await capture(sent.perf, sent.report);
           if (d.key === key) d.bundle = bundle;     // kept for a retry only while the draft is still the one sent
         }
-        const body = {message: sent.message, diagnostics: sent.diag ? bundle.id : ''};
+        const body = {message: sent.message, diagnostics: sent.diag ? bundle!.id : ''};
         const fresh = () => Object.assign({}, body, {email: compose?.email || (typeof S === 'undefined' ? '' : S.me?.email || ''), include_ids: true},
           appVersion() ? {app_version: appVersion()} : {}, sent.kind !== 'support' ? {kind: sent.kind} : {});
-        let next, rolled = '';
-        try { next = await call('POST', to ? `/support/tickets/${encodeURIComponent(to)}/messages` : '/support/tickets', to ? body : fresh(), key); }
+        let next: SupportTicket, rolled = '';
+        try { next = await call<SupportTicket>('POST', to ? `/support/tickets/${encodeURIComponent(to)}/messages` : '/support/tickets', to ? body : fresh(), key); }
         catch (error) {
           // HQ refuses a follow-up to a ticket that is full (60 messages), closed or gone: the same message starts a new
           // one, once, and shows as sent like any other.
-          const refused = error.status === 404 || (error.status === 409 && (!error.code || error.code === 'support_closed'));
+          const status = errorStatus(error), code = thrownCode(error);
+          const refused = status === 404 || (status === 409 && (!code || code === 'support_closed'));
           if (!to || !refused) throw error;
           state.tickets = state.tickets.map(t => t.id === to ? {...t, status: 'closed'} : t);
           // The draft keeps the new ticket's key: a retry after a lost reply repeats this creation, not a second one.
           rolled = (key + '-new').slice(0, 200);
           if (d.key === key) d.key = d.creating = rolled;
-          next = await call('POST', '/support/tickets', fresh(), rolled);
+          next = await call<SupportTicket>('POST', '/support/tickets', fresh(), rolled);
         }
         stateRevision++;
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
@@ -467,15 +503,16 @@
       } catch (error) {
         settled(); done();
         // Said where the person is looking: the message did not arrive and is still in the box.
-        shown(!error.status || error.status >= 500 ? `Not sent. Could not reach the ${NAME}. Try again in a moment.` : 'Not sent. ' + error.message);
-        if (isOpen() && draft === d) pop.querySelector('[data-compose] [name=message]')?.focus();
+        const status = errorStatus(error);
+        shown(!status || status >= 500 ? `Not sent. Could not reach the ${NAME}. Try again in a moment.` : 'Not sent. ' + errorMessage(error, ''));
+        if (isOpen() && draft === d) dialog.querySelector<HTMLElement>('[data-compose] [name=message]')?.focus();
       }
       // A Report this or setup snapshot that came while the message was on its way starts from what is left now.
       if (isOpen()) { openPending(); startPending(); }
     };
     lockSending();
   }
-  async function openEditor(d) {
+  async function openEditor(d: SupportDraft) {
     if (editor) return;
     const dialog = document.createElement('dialog'); editor = dialog;
     dialog.className = 'tmodal support-modal'; dialog.setAttribute('aria-label', 'Review and edit diagnostics');
@@ -486,21 +523,23 @@
       <p class="support-note" data-result role="status">Loading diagnostics…</p><p class="err" data-error role="alert" hidden></p>
       <div class="support-row"><button class="ghost" type="button" data-refresh>Refresh capture</button><button class="ghost" type="button" data-save>Check edits</button><button class="primary" type="button" data-use disabled>Use diagnostics</button></div></div>`;
     document.body.appendChild(dialog); dialog.showModal();
-    const area = dialog.querySelector('textarea'), err = dialog.querySelector('[data-error]'), result = dialog.querySelector('[data-result]'), use = dialog.querySelector('[data-use]');
-    let base = d.bundle, checked = null, loading = false, perf = d.perf;
-    const fail = e => { err.textContent = e.message; err.hidden = false; };
+    const area = dialog.querySelector('textarea')!, err = dialog.querySelector<HTMLParagraphElement>('[data-error]')!, result = dialog.querySelector<HTMLElement>('[data-result]')!, use = dialog.querySelector<HTMLButtonElement>('[data-use]')!;
+    let base = d.bundle, checked: SupportBundle | null = null, loading = false, perf = d.perf;
+    const fail = (e: unknown) => { err.textContent = errorMessage(e, ''); err.hidden = false; };
     const invalidate = () => { checked = null; use.disabled = true; result.textContent = 'Check edits to see the final redacted attachment.'; };
     area.oninput = invalidate;
-    const show = bundle => {
+    const show = (bundle: SupportBundle) => {
       base = checked = bundle; area.value = bundle.text; use.disabled = false;
       result.textContent = 'This is the exact attachment (' + Math.ceil(bundle.bytes / 1024) + ' KB).';
-      const data = JSON.parse(bundle.text), sections = dialog.querySelector('[data-sections]');
+      const data = JSON.parse(bundle.text), sections = dialog.querySelector<HTMLElement>('[data-sections]')!;
       sections.innerHTML = Object.keys(data).filter(k => !['format', 'created', 'capture'].includes(k)).map(k => `<label><input type="checkbox" data-section="${escape(k)}" checked> ${escape(k)}</label>`).join('');
       sections.onchange = e => {
-        const key = e.target.dataset.section;
+        const box = eventElement(e);
+        if (!(box instanceof HTMLInputElement)) return;
+        const key = box.dataset.section;
         if (!key) return;
-        try { const value = JSON.parse(area.value); if (e.target.checked) value[key] = data[key]; else delete value[key]; area.value = JSON.stringify(value, null, 2); invalidate(); }
-        catch (_) { fail(new Error('Fix the JSON before changing sections.')); e.target.checked = !e.target.checked; }
+        try { const value = JSON.parse(area.value); if (box.checked) value[key] = data[key]; else delete value[key]; area.value = JSON.stringify(value, null, 2); invalidate(); }
+        catch (_) { fail(new Error('Fix the JSON before changing sections.')); box.checked = !box.checked; }
       };
     };
     const load = async () => {
@@ -510,18 +549,19 @@
       catch (e) { fail(e); }
       finally { loading = false; }
     };
-    dialog.querySelector('[name=perf]').onchange = e => { perf = Number(e.target.value); void load(); };
-    dialog.querySelector('[data-refresh]').onclick = () => {
+    const perfSelect = dialog.querySelector<HTMLSelectElement>('[name=perf]')!;
+    perfSelect.onchange = () => { perf = Number(perfSelect.value); void load(); };
+    dialog.querySelector<HTMLElement>('[data-refresh]')!.onclick = () => {
       if (area.value && !confirm('Replace this capture and its edits with current diagnostics?')) return;
       void load();
     };
-    dialog.querySelector('[data-save]').onclick = async () => {
+    dialog.querySelector<HTMLElement>('[data-save]')!.onclick = async () => {
       if (loading || !base) return;
       err.hidden = true; loading = true; use.disabled = true;
       try {
         const input = area.value;
         JSON.parse(input);
-        const value = await call('POST', '/support/diagnostics', {id: base.id, text: input});
+        const value = await call<SupportBundle>('POST', '/support/diagnostics', {id: base.id, text: input});
         // An in-flight validation must not overwrite text the user continued editing.
         if (area.value !== input) { invalidate(); return; }
         show(value); result.textContent = 'Edits checked and redacted. Review the final text, then use this attachment.';
@@ -534,7 +574,7 @@
       if (isOpen() && draft === d) renderComposer();
       dialog.close();
     };
-    dialog.querySelector('[data-close]').onclick = () => dialog.close();
+    dialog.querySelector<HTMLButtonElement>('[data-close]')!.onclick = () => dialog.close();
     dialog.onclose = () => { editor = null; dialog.remove(); };
     if (base) show(base); else await load();
   }
@@ -566,19 +606,19 @@
   // Pages re-render once support's state loads; a toast does not, so it asks for `known` and waits for a yes.
   window.supportOn = known => known ? state.enabled === true : state.enabled !== false;
   // `icon`: a small flag button for a dense row (Settings > History > Runs); the words become its label and tooltip.
-  window.reportThisHTML = (report, icon = false) => icon
+  window.reportThisHTML = (report: unknown, icon = false) => icon
     ? `<button type="button" class="report-this report-this-icon" data-report-this="${escape(JSON.stringify(report))}" aria-label="Report this" title="Report this"><span class="nav-icon" aria-hidden="true">bug_report</span></button>`
     : `<button type="button" class="linkish report-this" data-report-this="${escape(JSON.stringify(report))}">Report this</button>`;
   document.addEventListener('click', e => {
-    const report = e.target.closest?.('[data-report-this]');
+    const report = eventElement(e)?.closest<HTMLElement>('[data-report-this]');
     if (!report) return;
     e.preventDefault(); e.stopPropagation();
     let value = null;
-    try { value = JSON.parse(report.dataset.reportThis); } catch (_) {}
-    window.talkToUs(value);
+    try { value = JSON.parse(String(report.dataset.reportThis)); } catch (_) {}
+    window.talkToUs!(value);
   });
   // "Want help setting up?" and #/support/manage put words in the box for the person to read, edit and send.
-  let starting = null;
+  let starting: { message: string; kind: string } | null = null;
   function startPending() {
     if (starting && busy()) return;
     if (!starting || !isOpen() || !state.enabled) { starting = null; return; }
@@ -590,28 +630,28 @@
     renderComposer(); focusBox();
   }
   window.supportState = () => ({enabled: state.enabled, unread: state.unread});
-  window.supportStart = (message, kind = 'support') => {
+  window.supportStart = (message: string, kind = 'support') => {
     starting = {message, kind};
     void open();
   };
   document.addEventListener('click', async e => {
-    const button = e.target.closest('[data-setup-help]');
+    const button = eventElement(e)?.closest<HTMLButtonElement>('[data-setup-help]');
     if (!button || button.disabled) return;
     e.preventDefault(); button.disabled = true;
     try {
-      const snapshot = await call('GET', '/support/setup-snapshot?asked_from=' + encodeURIComponent(button.dataset.setupHelp));
+      const snapshot = await call<{ message: string; kind: string }>('GET', '/support/setup-snapshot?asked_from=' + encodeURIComponent(String(button.dataset.setupHelp)));
       window.supportStart(snapshot.message, snapshot.kind);
-    } catch (error) { say(error.message, true); }
+    } catch (error) { say(errorMessage(error, ''), true); }
     finally { button.disabled = false; }
   });
 
   // The chat: a panel beside the sidebar on a computer, a full page above the tab bar on a phone. Focus moves into it,
   // Tab stays inside, and Esc, ✕ or a click outside closes it and gives focus back to whatever opened it.
-  function build() {
+  function build(): HTMLDialogElement {
     if (pop) return pop;
-    pop = document.createElement('dialog');
-    pop.id = 'support-pop'; pop.className = 'support-pop'; pop.setAttribute('aria-labelledby', 'support-pop-h');
-    pop.innerHTML = `<div class="support-pop-in">
+    const dialog = document.createElement('dialog'); pop = dialog;
+    dialog.id = 'support-pop'; dialog.className = 'support-pop'; dialog.setAttribute('aria-labelledby', 'support-pop-h');
+    dialog.innerHTML = `<div class="support-pop-in">
       <header class="support-head">${AVATAR}<h2 id="support-pop-h">${NAME}</h2><span class="spacer"></span>
         <button type="button" class="support-close support-trash" data-delete aria-label="Delete chat history" title="Delete chat history" hidden><span class="nav-icon" aria-hidden="true">delete</span></button>
         <button type="button" class="support-close" data-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></header>
@@ -628,15 +668,15 @@
         <div class="support-access" data-access hidden></div>
         <form class="support-write" data-compose novalidate></form>
       </div></div>`;
-    document.body.appendChild(pop);
-    pop.querySelector('[data-close]').onclick = () => pop.close();
+    document.body.appendChild(dialog);
+    dialog.querySelector<HTMLElement>('[data-close]')!.onclick = () => dialog.close();
     // Delete chat history: asked inside the chat, then every one of the person's tickets is deleted at HQ.
-    const ask = pop.querySelector('[data-confirm]'), askErr = pop.querySelector('[data-confirm-error]');
-    const asking = on => { ask.hidden = !on; askErr.hidden = true; pop.querySelector('[data-view]').hidden = on || state.enabled !== true; if (!on) focusBox(); };
-    pop.querySelector('[data-delete]').onclick = () => { asking(true); pop.querySelector('[data-confirm-no]').focus(); };
-    pop.querySelector('[data-confirm-no]').onclick = () => asking(false);
-    pop.querySelector('[data-confirm-yes]').onclick = async e => {
-      const yes = e.currentTarget;
+    const ask = dialog.querySelector<HTMLElement>('[data-confirm]')!, askErr = dialog.querySelector<HTMLElement>('[data-confirm-error]')!;
+    const no = dialog.querySelector<HTMLElement>('[data-confirm-no]')!, yes = dialog.querySelector<HTMLButtonElement>('[data-confirm-yes]')!;
+    const asking = (on: boolean) => { ask.hidden = !on; askErr.hidden = true; dialog.querySelector<HTMLElement>('[data-view]')!.hidden = on || state.enabled !== true; if (!on) focusBox(); };
+    dialog.querySelector<HTMLElement>('[data-delete]')!.onclick = () => { asking(true); no.focus(); };
+    no.onclick = () => asking(false);
+    yes.onclick = async () => {
       if (sending || deleting) return;
       deleting = true; yes.disabled = true; lockSending();
       try {
@@ -662,29 +702,29 @@
         }
         state.tickets = []; state.unread = 0; lastUnread = 0;
         deleting = false; mark(); asking(false); render(); renderComposer(); focusBox();
-      } catch (error) { askErr.textContent = error.message; askErr.hidden = false; mark(); }
+      } catch (error) { askErr.textContent = errorMessage(error, ''); askErr.hidden = false; mark(); }
       finally { deleting = false; yes.disabled = !!sending; lockSending(false); }
     };
     // A click that starts and ends on the backdrop (the dialog itself, outside its box) closes it.
     let downOutside = false;
-    pop.addEventListener('pointerdown', e => { downOutside = e.target === pop; });
-    pop.addEventListener('click', e => { if (e.target === pop && downOutside) pop.close(); downOutside = false; });
-    pop.addEventListener('keydown', e => {
+    dialog.addEventListener('pointerdown', e => { downOutside = e.target === dialog; });
+    dialog.addEventListener('click', e => { if (e.target === dialog && downOutside) dialog.close(); downOutside = false; });
+    dialog.addEventListener('keydown', e => {
       if (e.key !== 'Tab') return;
-      const all = [...pop.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      const all = [...dialog.querySelectorAll<HTMLElement & { disabled?: boolean }>('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
         .filter(el => !el.disabled && el.checkVisibility({visibilityProperty: true}));
       if (!all.length) return;
-      const first = all[0], end = all.at(-1);
+      const first = all[0]!, end = all.at(-1)!;
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); end.focus(); }
       else if (!e.shiftKey && document.activeElement === end) { e.preventDefault(); first.focus(); }
     });
-    pop.addEventListener('close', () => {
+    dialog.addEventListener('close', () => {
       editor?.close();
       const back = opener?.isConnected && opener.getClientRects().length ? opener : null;
       opener = null; back?.focus();
       schedule();
     });
-    return pop;
+    return dialog;
   }
   // On a phone the chat ends at the bottom of what is visible: with the keyboard up, the space above it. The visual
   // viewport's height shrinks for the keyboard and for pinch zoom, so height × scale is the visible height in page pixels.
@@ -697,10 +737,10 @@
   window.visualViewport?.addEventListener('resize', fit);
   window.addEventListener('resize', fit);
   function focusBox() {
-    if (!isOpen()) return;
-    const box = pop.querySelector('[data-view]:not([hidden]) [name=message]');
+    if (!isOpen() || !pop) return;
+    const box = pop.querySelector<HTMLTextAreaElement>('[data-view]:not([hidden]) [name=message]');
     if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
-    else if (!pop.contains(document.activeElement) || document.activeElement === pop) pop.querySelector('[data-close]').focus();
+    else if (!pop.contains(document.activeElement) || document.activeElement === pop) pop.querySelector<HTMLElement>('[data-close]')!.focus();
   }
   // Whose chat this is: someone else signed in, and everything kept for the last person goes. Every read of the list
   // asks first, so a reply the check at load announced is not news again to the chat's own load (it re-opened the chat
@@ -718,16 +758,16 @@
       const revision = stateRevision;
       const data = await call('GET', '/support/tickets');
       if (revision === stateRevision) accept(data);
-      if (state.enabled) compose = await call('GET', '/support/compose');
+      if (state.enabled) compose = await call<{ email?: string }>('GET', '/support/compose');
       note('');
-    } catch (e) { if (state.enabled === null) note(e.message, true); else note(POLL_FAILED, true); }
+    } catch (e) { if (state.enabled === null) note(errorMessage(e, ''), true); else note(POLL_FAILED, true); }
   }
   async function open() {
-    build();
+    const dialog = build();
     announceWaiting = false;      // the person is looking now: nothing left to announce
     if (!isOpen()) {
-      opener = document.activeElement !== document.body ? document.activeElement : null;
-      pop.showModal();
+      opener = document.activeElement !== document.body ? document.activeElement as HTMLElement | null : null;
+      dialog.showModal();
     }
     fit();
     const run = loading = load();
