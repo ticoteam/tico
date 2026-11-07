@@ -69,12 +69,12 @@ def visit(api, task, pipeline, stage, entered, direction="forward"):
         )
 
 
-def handoff(api, link_id, target, created, returned=None):
+def handoff(api, link_id, target, created, returned=None, source=None):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO pipeline_handoffs(id, pipeline_link_id, source_task_id, target_task_id, created_at, returned_at) "
             "VALUES (?,?,?,?,?,?)",
-            ("ph-" + uuid.uuid4().hex[:8], link_id, target, target, created, returned),
+            ("ph-" + uuid.uuid4().hex[:8], link_id, source or target, target, created, returned),
         )
 
 
@@ -260,3 +260,46 @@ def test_a_factory_with_no_links_renders_cleanly(api):
     assert {p["id"] for p in week["pipelines"]} >= {marketing, sales}
     assert [f["name"] for f in week["factories"]] == ["Gro"]
     assert week["factories"][0]["done"] == 0
+
+
+def move(api, task, token="ana-test", **fields):
+    """A real ticket update (POST /api/v2/tasks/{id}) with the version the ticket has now."""
+    version = get(api, "tasks/" + task, token)["task"]["version"]
+    return post(api, "tasks/" + task, {"version": version, **fields}, token)
+
+
+def test_a_ticket_moved_into_a_members_only_pipeline_stops_counting_for_a_non_member(api):
+    growth = make_factory(api, "Gro")
+    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    sales, _ = make_type(api, "Sls", factory=growth)
+    legal, _ = make_type(api, "Lgl", pipeline_visibility="members", pipeline_owner_id="human:ana")
+    lead = link(api, marketing, m_steps["Doing"], sales)
+    made = card(api, marketing, m_steps["Doing"])  # company-wide: Ben may read it
+    handoff(api, lead, made["id"], ago(hours=1))
+
+    def counted(token):
+        week = overview(api, token=token)
+        inputs = sum(i["count"] for i in week["inputs"] if i["to"] == marketing)
+        edges = sum(e["count"] for e in week["edges"] if e["from"] == marketing and e["to"] == sales)
+        return inputs, edges
+
+    assert counted("ben-test") == (1, 1)
+    move(api, made["id"], type=legal)  # now members-only: Ben may not open it
+    assert counted("ben-test") == (0, 0)
+    assert counted("ana-test") == (
+        0,
+        1,
+    )  # Ana may open it: its handoff counts; its card now starts in Legal, not Marketing
+
+
+def test_a_spawn_counts_only_when_the_reader_may_open_both_its_tickets(api):
+    growth = make_factory(api, "Gro")
+    marketing, m_steps = make_type(api, "Mkt", factory=growth)
+    sales, s_steps = make_type(api, "Sls", factory=growth)
+    spawn = link(api, marketing, m_steps["Doing"], sales, mode="spawn")
+    parent = card(api, marketing, m_steps["Doing"], private=True)  # Ana's: Ben may not open the parent
+    child = card(api, sales, s_steps["Doing"])  # Ben may read the subtask
+    handoff(api, spawn, child["id"], ago(hours=1), source=parent["id"])
+
+    assert [e["count"] for e in overview(api)["edges"]] == [1]
+    assert overview(api, token="ben-test")["edges"] == []

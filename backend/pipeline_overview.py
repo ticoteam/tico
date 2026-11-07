@@ -229,7 +229,8 @@ def _edges(c: "sqlite3.Connection", ids: list[str], seen: str, since: str) -> li
         "FROM pipeline_handoffs h JOIN pipeline_links l ON l.id=h.pipeline_link_id "
         "LEFT JOIN tasks t ON t.id=h.source_task_id "
         f"WHERE l.retired_at IS NULL AND l.from_pipeline_id IN ({m}) AND l.to_pipeline_id IN ({m}) "
-        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen}))), "
+        f"AND h.created_at>=? AND h.returned_at IS NULL AND h.target_task_id IN (SELECT id FROM tasks WHERE ({seen})) "
+        f"AND (l.mode<>'spawn' OR h.source_task_id IN (SELECT id FROM tasks WHERE ({seen})))), "
         "ranked AS (SELECT a, b, mode, age, ROW_NUMBER() OVER (PARTITION BY a, b, mode ORDER BY age) AS rn, "
         "COUNT(*) OVER (PARTITION BY a, b, mode) AS n FROM hops) "
         "SELECT a, b, mode, n AS count, AVG(age) AS median_age FROM ranked "
@@ -419,7 +420,8 @@ def read(
     days = PERIODS.get(period)
     if days is None:
         raise Problem("validation", "Period is 1d, 7d or 30d", 422)
-    seen = visible_sql or _own_cards(actor)
+    # Every aggregate reads only the cards the reader may open now: the caller's rule, then the members-only pipelines.
+    seen = pipeline_rights.list_sql(c, actor, visible_sql or _own_cards(actor))
     now = str(H.now())
     since = _stamp(H.parse_ts(now) - timedelta(days=days))
 
