@@ -23,7 +23,6 @@ declare var marked: { parse(src: string, options?: object): string };
 /** Vendored livekit-client.umd.min.js. */
 declare var LivekitClient: any;
 
-declare var DocsEditor: any;
 declare var DocsSearch: any;
 declare var TicoModelLogin: any;
 declare var assistantChat: any;
@@ -58,7 +57,6 @@ declare var obResizeWired: any;
 declare var openMeetingImporter: any;
 declare var pageCard: any;
 declare var pageChangelog: any;
-declare var pageCompanyDocs: any;
 declare var pageLenses: any;
 declare var pageMarket: any;
 declare var pageStrategy: any;

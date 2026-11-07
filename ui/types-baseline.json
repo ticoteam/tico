@@ -149,8 +149,6 @@
     "ui/app/welcome.js": 13,
     "ui/changelog.js": 73,
     "ui/directory-sync.js": 5,
-    "ui/docs-editor.js": 160,
-    "ui/docs-page.js": 36,
     "ui/docs-search.js": 1,
     "ui/first-run.js": 11,
     "ui/getting-started.js": 14,
