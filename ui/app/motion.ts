@@ -1,20 +1,22 @@
-/* ui/app/motion.js — The state changes a stylesheet cannot see: the sidebar's sliding current-row bar, counts that
+/* ui/app/motion.ts — The state changes a stylesheet cannot see: the sidebar's sliding current-row bar, counts that
    tick when their number changes, where a menu grows from, the check a task draws when it is marked done
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    Every effect here is short (styles/motion.css), moves only transform and opacity, waits on nothing, never plays on a
    page's first paint, and is skipped under reduced motion. */
 'use strict';
 
-const motionStill = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const motionStill = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---- counts. A badge's number set through countSet ticks when it changes from one number to another: the old one
 // slides up and out (drawn over the badge by ::before), the new one, the badge's own text, comes up from below. The
 // first number drawn, a badge appearing or going away, and the same number again never tick. The badge's text is the
 // new number throughout, so whoever reads it reads the count.
-function countTick(el, was) {
+// The timer that ends a badge's tick, by badge (it was a property on the element).
+const countTimers = new WeakMap<HTMLElement, number>();
+function countTick(el: HTMLElement, was: string): void {
   if (motionStill() || !el.isConnected) return;
   const text = el.textContent;
-  clearTimeout(el._countTick);
+  clearTimeout(countTimers.get(el));
   if (getComputedStyle(el).position === 'static') el.classList.add('m-tick-rel');   // a box for the old number
   el.dataset.tickWas = was;
   const span = document.createElement('span');
@@ -22,15 +24,16 @@ function countTick(el, was) {
   span.textContent = text;
   el.replaceChildren(span);
   el.classList.add('m-ticking');
-  el._countTick = setTimeout(() => {
+  countTimers.set(el, setTimeout(() => {
     if (el.firstChild === span && el.childNodes.length === 1) el.textContent = span.textContent;
     el.classList.remove('m-ticking', 'm-tick-rel');
     delete el.dataset.tickWas;
-  }, 200);
+  }, 200));
 }
-function countSet(el, text) {
-  if (!el) return;
-  text = String(text ?? '');
+// Callers pass any Element (a badge drawn by a list, or a document query); only an HTML badge has a count to set.
+function countSet(el: Element | null, value: unknown): void {
+  if (!(el instanceof HTMLElement)) return;
+  const text = String(value ?? '');
   const was = el.dataset.count;
   el.dataset.count = text;
   if (el.textContent !== text || el.firstElementChild) el.textContent = text;
@@ -40,26 +43,32 @@ function countSet(el, text) {
 // what it counts, and one that comes back drawn with another number ticks. `keyOf(badge)` names what it counts ('' to
 // leave it alone); `when()` false skips the redraws a watch does not care about. A page's own counts are forgotten when
 // the page changes, so returning to a page is a first paint.
-function countWatch(root, sel, keyOf, {when = () => true, page = false} = {}) {
+function countWatch(root: Element | null, sel: string, keyOf: (el: HTMLElement) => string,
+  {when = () => true, page = false}: {when?: () => boolean; page?: boolean} = {}): void {
   if (!root) return;
-  const seen = new Map();
-  const remember = el => { const k = keyOf(el); if (k) seen.set(k, el.textContent.trim()); };
-  root.querySelectorAll(sel).forEach(remember);
-  const badges = node => node.nodeType !== 1 ? [] : node.matches(sel) ? [node] : [...node.querySelectorAll(sel)];
+  const seen = new Map<string, string>();
+  const remember = (el: HTMLElement): void => { const k = keyOf(el); if (k) seen.set(k, (el.textContent ?? '').trim()); };
+  root.querySelectorAll<HTMLElement>(sel).forEach(remember);
+  const badges = (node: Node): HTMLElement[] => {
+    if (!(node instanceof HTMLElement)) return [];
+    return node.matches(sel) ? [node] : [...node.querySelectorAll<HTMLElement>(sel)];
+  };
   new MutationObserver(records => {
     if (!when()) return;
     // A redraw takes a row out and puts its new copy in: a count taken out now and not put back is gone ('').
-    const gone = new Map();
+    const gone = new Map<string, string | undefined>();
     for (const r of records) for (const n of r.removedNodes) for (const b of badges(n)) {
       const k = keyOf(b); if (k && !gone.has(k)) gone.set(k, seen.get(k));
     }
     for (const k of gone.keys()) seen.set(k, '');
     for (const r of records) {
-      const found = r.type === 'characterData' ? [r.target.parentElement?.closest(sel)].filter(Boolean) : [...r.addedNodes].flatMap(badges);
+      const found: HTMLElement[] = r.type === 'characterData'
+        ? [r.target.parentElement?.closest<HTMLElement>(sel)].filter((el): el is HTMLElement => !!el)
+        : [...r.addedNodes].flatMap(badges);
       for (const b of found) {
         if (b.classList.contains('m-ticking')) continue;
         const k = keyOf(b); if (!k) continue;
-        const now = b.textContent.trim(), was = gone.has(k) ? gone.get(k) : seen.get(k);
+        const now = (b.textContent ?? '').trim(), was = gone.has(k) ? gone.get(k) : seen.get(k);
         seen.set(k, now);
         if (was && now && was !== now && b.isConnected) countTick(b, was);
       }
@@ -67,10 +76,10 @@ function countWatch(root, sel, keyOf, {when = () => true, page = false} = {}) {
   }).observe(root, {childList: true, subtree: true, characterData: true});
   if (page) addEventListener('hashchange', () => seen.clear());
 }
-countWatch($('#tree'), '.cnt', b => b.closest('[data-org]')?.dataset.org || '');
-const motionTasksPage = () => /^#\/(tasks|task\/)/.test(location.hash);
+countWatch($('#tree'), '.cnt', b => b.closest<HTMLElement>('[data-org]')?.dataset.org || '');
+const motionTasksPage = (): boolean => /^#\/(tasks|task\/)/.test(location.hash);
 countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
-  const tab = b.closest('[data-view]'), col = b.closest('.bcol');
+  const tab = b.closest<HTMLElement>('[data-view]'), col = b.closest<HTMLElement>('.bcol');
   return tab ? 'view:' + tab.dataset.view : col ? 'col:' + col.dataset.col : '';
 }, {when: motionTasksPage, page: true});
 
@@ -78,8 +87,8 @@ countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
 // to the new one when the page changes. sidebar.js marks the row (navCurSync, and the page links' own pass); this
 // only watches the marks, so the list's markup is untouched. It snaps instead of sliding when it first appears, when
 // rows above it fold or are added (the same row, moved), and when the sidebar is resized.
-(function navIndicator() {
-  const scroller = $('#side .side-scroll');
+(function navIndicator(): void {
+  const scroller: HTMLElement | null = $('#side .side-scroll');
   if (!scroller || !window.MutationObserver) return;
   const bar = document.createElement('span');
   bar.className = 'nav-ind';
@@ -88,9 +97,9 @@ countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
   scroller.prepend(bar);
   const ROWS = ':scope > .nav-link.cur, :scope > .nav-row > .nav-link.cur, :scope > .rd-lib > .nav-link.cur, #tree a.node.cur, #tree a.dept-label.cur, .inbox-list a.cur';
   let at = '', queued = 0;
-  const place = () => {
+  const place = (): void => {
     queued = 0;
-    const row = [...scroller.querySelectorAll(ROWS)].find(el => el.checkVisibility ? el.checkVisibility() : el.offsetParent);
+    const row = [...scroller.querySelectorAll<HTMLElement>(ROWS)].find(el => el.checkVisibility ? el.checkVisibility() : el.offsetParent);
     if (!row) { bar.classList.remove('slide'); bar.hidden = true; at = ''; return; }
     const s = scroller.getBoundingClientRect(), r = row.getBoundingClientRect();
     if (!r.height) return;
@@ -103,11 +112,11 @@ countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
     bar.hidden = false;
     at = key;
   };
-  const soon = () => { if (!queued) queued = requestAnimationFrame(place); };
+  const soon = (): void => { if (!queued) queued = requestAnimationFrame(place); };
   new MutationObserver(records => { if (records.some(r => r.target !== bar)) soon(); })
     .observe(scroller, {subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'hidden', 'aria-expanded']});
   // A resize moves the same row: no slide.
-  const snap = () => { at = ''; bar.hidden = true; soon(); };
+  const snap = (): void => { at = ''; bar.hidden = true; soon(); };
   if (window.ResizeObserver) new ResizeObserver(snap).observe(scroller);
   document.fonts?.ready.then(snap);
   soon();
@@ -115,8 +124,8 @@ countWatch($('#main'), '.tl-scope .cnt, .bcol > header .cnt', b => {
 
 // ---- where a menu grows from. A menu placed by script (a popover, the task list's pickers, the team's + menu)
 // scales up from the side of it nearest the button that opened it; the others keep their stylesheet's origin.
-let MOTION_PRESS = null;
-document.addEventListener('pointerdown', ev => { MOTION_PRESS = {el: ev.target.closest?.('button, a, summary, [role=button]'), at: performance.now()}; }, true);
+let MOTION_PRESS: {el: Element | null; at: number} | null = null;
+document.addEventListener('pointerdown', ev => { MOTION_PRESS = {el: eventElement(ev)?.closest('button, a, summary, [role=button]') ?? null, at: performance.now()}; }, true);
 document.addEventListener('animationstart', ev => {
   const pop = ev.target;
   if (ev.animationName !== 'm-pop' || !(pop instanceof HTMLElement) || pop.closest('.ask-panel')) return;
@@ -135,8 +144,8 @@ document.addEventListener('animationstart', ev => {
 // or card settles to muted while the list reads the server again. A list row then leaves its open view; a board's
 // finished cards stay muted (styles/motion.css .bcard[data-done]). The task page's Done button draws its own check.
 const MOTION_CHECK = '<svg class="m-check" viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M3 7.3l2.6 2.6L11 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-function taskDoneMotion(key) {
-  for (const el of document.querySelectorAll(`#main [data-task-key="${CSS.escape(key)}"]`)) {
+function taskDoneMotion(key: string): void {
+  for (const el of document.querySelectorAll<HTMLElement>(`#main [data-task-key="${CSS.escape(key)}"]`)) {
     if (el.classList.contains('m-task-done')) continue;
     el.classList.add('m-task-done');
     if (motionStill()) continue;
@@ -146,6 +155,6 @@ function taskDoneMotion(key) {
   }
 }
 document.addEventListener('click', ev => {
-  const done = ev.target.closest?.('[data-task-finish="done"]');
+  const done = eventElement(ev)?.closest('[data-task-finish="done"]');
   if (done && !motionStill()) done.classList.add('m-checking');
 }, true);

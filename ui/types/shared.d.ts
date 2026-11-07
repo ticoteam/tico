@@ -303,3 +303,11 @@ interface AppState {
   notifyBrowser?: boolean;
   overviewRosterFresh?: boolean;
 }
+
+// ---------------------------------------------------------------- the anchor a script-placed popover carries
+
+/** The element a menu or popover placed by script opens from (settings-bots.js, subscriptions.js, task-props.js set it;
+ *  motion.ts reads it to grow the menu from that side). Absent on everything else. */
+interface HTMLElement {
+  anchor?: Element | null;
+}

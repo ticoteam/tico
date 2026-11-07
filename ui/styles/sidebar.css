@@ -206,7 +206,7 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 
 .bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
 
-/* ---- The current row's bar (ui/app/motion.js navIndicator). Kept apart from the rules above: one 2px ink bar in
+/* ---- The current row's bar (ui/app/motion.ts navIndicator). Kept apart from the rules above: one 2px ink bar in
    the scrolling list, moved onto whichever row is current (a page link, a teammate, a group, a mailbox) and sliding
    there when the page changes. The row keeps its own background, so without the script it reads as before. Transform
    only; it snaps (no slide) on first paint, when the list itself moves, and under reduced motion. The one bar the

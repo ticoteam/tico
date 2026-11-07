@@ -9,7 +9,7 @@ window.renderChangelogNotice = function () {
     notice.hidden = !count || nvUpdateShown();
     notice.querySelector('.changelog-notice-label').textContent = S.config.version ? `Updated to ${nvVersion(S.config.version)}` : "What's new";
   }
-  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = count; }   // ticks (ui/app/motion.js)
+  if (badge) { badge.hidden = !count; if (window.countSet) window.countSet(badge, count); else badge.textContent = count; }   // ticks (ui/app/motion.ts)
 };
 
 // The top of What's new: the Beta features, from the server's one list (backend/beta.py), each with its pages in the

@@ -177,7 +177,7 @@ function updOrder(state, fresh) {
 }
 function updBadge(n) {
   S.updUnread = n;
-  // A new number ticks in (countSet, ui/app/motion.js).
+  // A new number ticks in (countSet, ui/app/motion.ts).
   for (const el of document.querySelectorAll('[data-upd-badge]')) { el.hidden = !n; countSet(el, n > 99 ? '99+' : String(n || '')); }
   // In the tree the badge also counts direct reports' updates from other days: the button follows it both ways.
   const allRead = $('#upd-allread');
