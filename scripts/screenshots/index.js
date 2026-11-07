@@ -248,6 +248,9 @@ async function capture() {
     for (const theme of themes) {
       for (const width of widths) {
         const context = await browser.newContext({...WIDTHS[width], colorScheme: THEMES[theme], locale: 'en-US', timezoneId: 'America/Los_Angeles'});
+        // ui/theme.js is dark unless this browser saved a choice, so colorScheme alone shot dark for both themes: save the
+        // theme before the page's scripts read it. colorScheme stays for the CSS that follows the system.
+        await context.addInitScript(saved => { try { localStorage.setItem('tico.theme', saved); } catch { /* no storage */ } }, theme);
         const page = await context.newPage();
         let where = 'load';
         page.on('console', message => { if (message.type() === 'error') problems.push(`${where}: console error: ${message.text()}`); });

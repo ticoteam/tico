@@ -542,8 +542,11 @@ def run(
         f'release shots: {len(selection.pages)} pages, {len(shots)} pictures, {changed} changed pairs, '
         f'{sum(1 for shot in shots if shot.unchanged)} unchanged -> {out}'
     )
+    if problems.before or problems.after:
+        # A before problem is not fatal (a page the base lacks has no before), but it still belongs in the log.
+        lines_out = [f'before: {text}' for text in problems.before] + [f'after: {text}' for text in problems.after]
+        print('release shots: capture problems:\n  ' + '\n  '.join(lines_out), file=sys.stderr)
     if problems.after:
-        print('release shots: the after capture has problems:\n  ' + '\n  '.join(problems.after), file=sys.stderr)
         return 1
     return 0
 
