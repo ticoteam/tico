@@ -7636,7 +7636,9 @@ def task_update(
 
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
         if step_id and row and step_id != row.get("step_id"):
-            pipeline_engine.check_move(conn, actor, {**row, "type_id": type_id}, step_id, override_requirements)
+            pipeline_engine.check_move(
+                conn, actor, {**row, "type_id": type_id}, step_id, override_requirements, override_note=note
+            )
 
         if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):
             from . import review_gate

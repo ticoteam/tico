@@ -579,14 +579,36 @@ def _names(unmet: list[Standing]) -> str:
     return ", ".join(named) + (f" and {len(unmet) - 3} more" if len(unmet) > 3 else "")
 
 
-def check_move(conn: sqlite3.Connection, actor: str, row: Row, step_id: str | None, override: bool = False) -> None:
+OVERRIDE_REASON = "Moved on without it"
+# stage_decisions.reason takes at most 500 bytes (a CHECK in the table), and a note is capped at 500 characters.
+NOTE_MAX_CHARS = 500
+REASON_MAX_BYTES = 500
+
+
+def override_reason(note: str | None) -> str:
+    """The reason an override is logged with: the fixed text, then the person's note when they gave one. The whole reason
+    is cut to the bytes the table takes, so a long note with accents or emoji cannot fail the write."""
+    text = str(note or "").strip()[:NOTE_MAX_CHARS]
+    if not text:
+        return OVERRIDE_REASON
+    return f"{OVERRIDE_REASON}: {text}".encode()[:REASON_MAX_BYTES].decode(errors="ignore")
+
+
+def check_move(
+    conn: sqlite3.Connection,
+    actor: str,
+    row: Row,
+    step_id: str | None,
+    override: bool = False,
+    override_note: str | None = None,
+) -> None:
     """Before a ticket changes to `step_id`: refuse the move (rule "requirement") when the stage's requirements do not
     allow it, unless a rule editor overrides them (logged). A pipeline with no requirements allows every move.
 
     Forward, every requirement that counts must be met: the stage the ticket is at, the stages it passes through and the
     ones it visited. A rule editor may move it past them with `override`; that writes one `override` decision for each
-    requirement it passed. Backward, only a rule editor and Tico itself (the legacy flows move as Tico) may move a
-    ticket; the move is logged as `stage_move_back` by `on_step_change`."""
+    requirement it passed, its reason the editor's `override_note` (override_reason). Backward, only a rule editor and Tico
+    itself (the legacy flows move as Tico) may move a ticket; the move is logged as `stage_move_back` by `on_step_change`."""
     task_id = str(row.get("id") or "")
     if not step_id or not task_id:
         return
@@ -615,15 +637,15 @@ def check_move(conn: sqlite3.Connection, actor: str, row: Row, step_id: str | No
     if not unmet:
         return
     if override and editor:
-        _record_override(conn, actor, task_id, unmet)
+        _record_override(conn, actor, task_id, unmet, override_reason(override_note))
         return
     hint = "" if editor else " A pipeline editor can move it on anyway."
     H.refuse(conn, actor, "requirement", f"Can't leave {here['name']} yet: {_names(unmet)}.{hint}", task=task_id)
 
 
-def _record_override(conn: sqlite3.Connection, actor: str, task_id: str, unmet: list[Standing]) -> None:
+def _record_override(conn: sqlite3.Connection, actor: str, task_id: str, unmet: list[Standing], reason: str) -> None:
     """A rule editor moved a ticket past requirements that were not met: one `override` decision for each, bound to the work
-    as it is now, and one line in the ticket's history."""
+    as it is now, its reason as the editor gave it, and one line in the ticket's history."""
     visit = ensure_visit(conn, task_id)
     revision = work_version(conn, task_id)
     stamp = H.now()
@@ -643,7 +665,7 @@ def _record_override(conn: sqlite3.Connection, actor: str, task_id: str, unmet: 
                 s.attachment["digest"] if s.attachment else None,
                 revision,
                 actor,
-                "Moved on without it",
+                reason,
                 stamp,
             ),
         )

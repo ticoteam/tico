@@ -54,12 +54,14 @@ function pipelineStepLate(task: { id: string | number; step_since?: string; step
 }
 
 /** Whether this person may change the pipeline's rules (and so move a ticket past its requirements, or mark one met):
-    the pipeline's owner, the company's owner or an Admin. The routes send no such field, so this is the same rule as the
-    server's (backend/pipeline_rights.py); the server still decides. */
+    the pipeline's owner or an Admin. The task types list says so per pipeline (can_edit_rules, backend/pipeline_rights.py),
+    and that answer is read. Only when a server sends no such field does this guess the same rule from what the page knows;
+    the server still decides. */
 function pipelineMayEditRules(typeId: string | null | undefined): boolean {
+  const type = (TASK_TYPES as { id: string; owner_id?: string; can_edit_rules?: boolean }[]).find(item => item.id === typeId);
+  if (typeof type?.can_edit_rules === 'boolean') return type.can_edit_rules;
   const me = myActor();
   if (!me) return false;
-  const type = (TASK_TYPES as { id: string; owner_id?: string }[]).find(item => item.id === typeId);
   return type?.owner_id === me || S.me?.role === 'owner' || S.me?.bot_admin === true;
 }
 

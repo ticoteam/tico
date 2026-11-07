@@ -144,3 +144,62 @@ def test_the_setup_and_requirements_routes(tmp_path):
             )
         shown = client.get(f"/api/v2/tasks/{task['id']}/requirements", headers={"Authorization": "Bearer ana-test"})
         assert shown.status_code == 200 and shown.json() == {"requirements": []}
+
+
+def test_task_types_say_each_steps_warn_time_and_who_may_edit_rules(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from backend import access
+    from backend.app import create_app
+    from backend.auth import Identity
+    from backend.config import Settings
+
+    app = create_app(
+        Settings(
+            db_path=tmp_path / "hub.db",
+            registry_dir=tmp_path,
+            test_identities={
+                "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+                "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+                "cara-test": Identity("human:cara", "human", "cara@acme.example"),
+            },
+        )
+    )
+    # Ben is an Admin here; Ana owns the pipeline; Cara is neither.
+    monkeypatch.setattr(access, "owner_and_admin_emails", lambda conn: ["ben@acme.example"])
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            H.sync_registry(
+                c, {}, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]}
+            )
+            board = H.type_create(
+                c,
+                "human:ana",
+                "Content",
+                [{"name": "Drafting", "status": "doing"}, {"name": "Review", "status": "review"}],
+                mover=True,
+            )
+            c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", ("human:ana", board["id"]))
+            c.execute("UPDATE task_steps SET limit_minutes=2880 WHERE type_id=? AND name='Drafting'", (board["id"],))
+            task = H.task_create(
+                c, "human:ana", "Launch post", "", "human:ana", type=board["id"], step="Drafting", lint=False
+            )
+
+        def listed(token):
+            r = client.get("/api/v2/task-types", headers={"Authorization": "Bearer " + token})
+            assert r.status_code == 200, r.text
+            return {t["name"]: t for t in r.json()["types"]}
+
+        types = listed("cara-test")
+        steps = {s["name"]: s for s in types["Content"]["steps"]}
+        assert steps["Drafting"]["limit_minutes"] == 2880
+        assert steps["Review"]["limit_minutes"] is None
+        assert types["Content"]["can_edit_rules"] is False
+        assert listed("ana-test")["Content"]["can_edit_rules"] is True
+        assert listed("ben-test")["Content"]["can_edit_rules"] is True
+
+        shown = client.get(f"/api/v2/tasks/{task['id']}", headers={"Authorization": "Bearer ana-test"})
+        assert shown.status_code == 200, shown.text
+        view = shown.json().get("task", shown.json())
+        assert view["step"]["name"] == "Drafting" and view["step"]["limit_minutes"] == 2880
+        assert "check_pool" not in view["step"] and "flow" not in view["step"]
