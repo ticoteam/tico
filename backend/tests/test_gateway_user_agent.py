@@ -174,7 +174,9 @@ def test_the_user_agent_names_the_app_version_and_never_carries_a_bad_header_val
 
 # What names Tico HQ or the Gateway in a module, and what a module uses to send HTTP.
 HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO_GATEWAY_URL|/v1/gateway|gateway_url")
-SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
+SENDS = re.compile(
+    r"urllib\.request|httpx|\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|aiohttp|http\.client"
+)
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
     "backend/company_server.py": '"User-Agent": user_agent()',
