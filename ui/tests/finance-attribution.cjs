@@ -135,7 +135,7 @@ async function shot(page, name) {
       await page.locator('[data-share-line="l1"]').waitFor();
       const sec = page.locator('[data-share-line="l1"]');
       assert.equal((await sec.locator('h3').textContent()).trim(), 'Attributed to', tag + ': the rail section');
-      assert.deepEqual(await sec.locator('.fin-kv').evaluateAll(els => els.map(e => [...e.children].map(c => c.textContent.trim()).join(' '))),
+      assert.deepEqual(await sec.locator(':scope > .fin-kv').evaluateAll(els => els.map(e => [...e.children].map(c => c.textContent.trim()).join(' '))),
         ['Rental Google Ad Owner 50% · $1,500', 'Consumer 30% · $900', 'Unattributed 20%'], tag + ': each part with its share and amount');
       assert.match(await sec.locator('p.muted').innerText(), /^Set by Ana Silva · Nov 5/, tag + ': the source and when');
       assert.equal(await sec.locator('[data-share-edit="l1"]').count(), 1, tag + ': Edit when the viewer can change it');
