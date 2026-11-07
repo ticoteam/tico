@@ -513,13 +513,13 @@ function bindProposals(root: Element, after: () => Promise<void>) {
   };
 }
 
-function kpiOwnerChoices(current: string | undefined): string[][] {
+function kpiOwnerChoices(current: string | undefined): (string | undefined)[][] {
   const me = mePerson(), mine = me ? 'human:' + me.id : '';
   const all = S.me?.role === 'owner' ? [[GOAL_COMPANY, goalOwnerInfo(GOAL_COMPANY).name], ...goalOwnerChoices(mine)] : [[mine, 'Me']];
   const out = current && !all.some(([v]) => v === current) ? [[current, goalActorName(current)], ...all] : all;
   return out.filter(([v]) => v);
 }
-const ownerOptions = (choices: string[][], selected: string | undefined) => choices.map(([v, name]) => `<option value="${esc(v)}"${v === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
+const ownerOptions = (choices: (string | undefined)[][], selected: string | undefined) => choices.map(([v, name]) => `<option value="${esc(v)}"${v === selected ? ' selected' : ''}>${esc(name)}</option>`).join('');
 
 function kpiReadingRow(r: GkReading, d: GkKpiDetail) {
   const k = d.kpi;
@@ -593,8 +593,10 @@ function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
   bindProposals(body, again);
   const inPanel = dlg.id === 'goal-panel' && GOALS_ST;
   for (const b of body.querySelectorAll<GkEl<'kpiGoalOpen'>>('[data-kpi-goal-open]')) b.onclick = () => {
-    const g = inPanel && GOALS_ST.goals.find((x: GkGoal) => x.id === b.dataset.kpiGoalOpen);
-    if (g) goalPanelOpen(GOALS_ST, g.owner_id, {goal: g.id});
+    const st = GOALS_ST;
+    if (inPanel && !st) throw new Error('Goals page state is missing');
+    const g = st && inPanel ? st.goals.find((x: GkGoal) => x.id === b.dataset.kpiGoalOpen) : undefined;
+    if (st && g) goalPanelOpen(st, g.owner_id, {goal: g.id});
     else { dlg.close(); openGoal(b.dataset.kpiGoalOpen); }
   };
   const back = dlg.querySelector<HTMLElement>('[data-kpi-back]');
@@ -684,10 +686,11 @@ function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
 
 // On the Goals page a KPI opens inside the owner's panel, with a way back; anywhere else in a dialog of its own.
 async function kpiOpen(id: string): Promise<void> {
-  const inPage = !!(GOALS_ST && document.getElementById('goal-body'));
+  const st = GOALS_ST;
+  const inPage = !!(st && document.getElementById('goal-body'));
   // The lookup finds none the first time: the dialog is made below, so every use after it has one.
-  let dlg = (inPage ? goalPanelDialog(GOALS_ST) : document.getElementById('kpi-panel')) as HTMLDialogElement;
-  if (inPage) (GOALS_ST.panel ||= {owner: '', goal: '', kpiAdd: ''}).kpi = id;
+  let dlg = (inPage ? goalPanelDialog(st) : document.getElementById('kpi-panel')) as HTMLDialogElement;
+  if (inPage) (st.panel ||= {owner: '', goal: '', kpiAdd: ''}).kpi = id;
   if (!dlg) {
     dlg = document.createElement('dialog');
     dlg.id = 'kpi-panel'; dlg.className = 'tmodal kpi-panel'; dlg.setAttribute('aria-label', 'KPI');
@@ -699,7 +702,11 @@ async function kpiOpen(id: string): Promise<void> {
   const data = await v2Get('/v2/kpis/' + encodeURIComponent(id));
   if (dlg.dataset.kpi !== id || !dlg.open) return;
   if (!data) { dlg.innerHTML = '<div class="tmodal-body"><p class="err">Could not load the KPI.</p><div class="goal-actions"><button class="ghost" type="button" data-kpi-close>Close</button></div></div>'; dlg.querySelector<HTMLElement>('[data-kpi-close]')!.onclick = () => dlg.close(); return; }
-  if (inPage && !GOALS_ST.panel.owner) GOALS_ST.panel.owner = data.kpi.owner_id;
+  if (inPage) {
+    const panel = GOALS_ST?.panel;   // read after the await: the page may have re-rendered meanwhile
+    if (!panel) throw new Error('The goal panel is not open');
+    if (!panel.owner) panel.owner = data.kpi.owner_id;
+  }
   dlg.innerHTML = kpiPanelHtml(data, {back: inPage});
   kpiPanelBind(dlg, data);
 }
@@ -825,7 +832,7 @@ function goalStatusNote(g: GkGoal) {
 function goalTreeRows(actor: string, depth: number, goals: GkGoal[], loose: GkKpi[], standing: unknown = '') {
   const info = goalOwnerInfo(actor);
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc(String(info.name || 'C').trim()[0] || 'C').toUpperCase()}</span>` : info.avatar;
-  const bet = (g: GkGoal) => { const st = GOALS_ST?.strategy, c = g.bet_id && (st?.bets || []).find((x: GkStrategyBet) => x.id === g.bet_id); return c ? ` · ${st.label_one || 'Bet'}: ${c.statement}` : ''; };
+  const bet = (g: GkGoal) => { const st = GOALS_ST?.strategy, c = g.bet_id && (st?.bets || []).find((x: GkStrategyBet) => x.id === g.bet_id); return c ? ` · ${st?.label_one || 'Bet'}: ${c.statement}` : ''; };
   const goalCell = (g: GkGoal) => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
   // "+" adds a goal for this owner: always there, quiet until a pointer is over the line.
   const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<button type="button" class="gt-add" data-goal-add="${esc(actor)}" title="Add goal" aria-label="Add goal for ${esc(info.name)}">+</button>` : '';
@@ -1066,7 +1073,7 @@ window.addEventListener('hashchange', () => {
 // goal opens on a new one; the team line opens its goal when it has just one.
 function goalPanelOpen(state: GkState<GkPanel | null>, owner: string, {goal = '', tapped = ''}: {goal?: string; tapped?: string} = {}) {
   const live = state.goals.filter(g => goalLive(g) && g.owner_id === owner);
-  if (!goal && !live.length && goalMayEdit({owner}, state.goals)) goal = 'new';
+  if (!goal && !live.length && goalMayEdit({owner_id: owner}, state.goals)) goal = 'new';
   if (!goal && owner === GOAL_COMPANY && live.length === 1) goal = live[0]!.id;
   state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
     historyLoading: false, historyError: false, why: '', whyFrom: '', whyDraft: null, update: '', updateDraft: null, updateError: '', updateFocus: false, updatePending: null};
@@ -1086,7 +1093,7 @@ const GOAL_SIGNALS: [string, string][] = [['on_track', 'On track'], ['at_risk', 
 const GOAL_JUDGED: readonly (string | null | undefined)[] = ['red', 'yellow', 'green'];
 function goalUpdateNote(g: Partial<GkGoal>) {
   if (g.status_source === 'person' && GOAL_JUDGED.includes(g.status)) return 'A person set its colour; this update is kept as your words';
-  if ((g.kpis || []).some(k => ['improve', 'maintain'].includes(k.link?.kind!) && GOAL_JUDGED.includes(k.status))) return 'Its measures set its colour; this update is kept as your words';
+  if ((g.kpis || []).some(k => ['improve', 'maintain'].includes(k.link?.kind ?? '') && GOAL_JUDGED.includes(k.status))) return 'Its measures set its colour; this update is kept as your words';
   return '';
 }
 // While a post is out the form is frozen (words, answer, Cancel): what comes back is about exactly what was sent, and
@@ -1162,7 +1169,7 @@ function goalPanelRender(state: GkState<GkPanel | null>) {
   const setGoal = (id: string) => { P.goal = id; P.kpiAdd = ''; history.replaceState(null, '', id && id !== 'new' ? goalsBase() + '/' + encodeURIComponent(id) : goalsBase()); redraw(); };
   dlg.querySelector<HTMLElement>('[data-gp-close]')!.onclick = () => dlg.close();
   for (const b of body.querySelectorAll<GkEl<'gpEdit'>>('[data-gp-edit]')) b.onclick = () => setGoal(b.dataset.gpEdit);
-  const form = body.querySelector<HTMLFormElement & GkEl<'goalForm'>>('[data-goal-form]');
+  const form = body.querySelector<GoalForm & GkEl<'goalForm'>>('[data-goal-form]');
   if (form) {
     const id = form.dataset.goalForm, g = state.goals.find(x => x.id === id) || {};
     bindGoalForm(form, g, state.goals, {company: id === 'company', owner: P.owner}, async (ok: unknown) => {
