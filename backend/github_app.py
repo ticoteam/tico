@@ -1379,6 +1379,7 @@ def install_github_app(app, settings, store):
             ]
         return {
             "connected": True,
+            "checks_withheld": None if service.checks_write_accepted() else CHECKS_WITHHELD,
             "slug": row["slug"],
             "org": row["org"],
             "app_id": row["app_id"],

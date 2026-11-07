@@ -848,6 +848,11 @@ class Scheduler:
             run_invariants(self.store, self.execution.auth, at, failures)
         # Pipeline managers, their watchdog and the Factory Managers: plain code, one guarded call (backend/pipeline_manager.py).
         pipeline_manager.run_due(self.store, at, failures)
+        if self.github_app is not None:
+            # Tico's approval checks on pull requests (backend/pipeline_github_checks.py): recorded and posted on their own thread.
+            from . import pipeline_github_checks
+
+            pipeline_github_checks.dispatch(self.store, self.github_app, failures)
         if self.tools_checked is None or at - self.tools_checked >= timedelta(minutes=5):
             # API tools on the proxy with a check path, each every 30 minutes (backend/api_tools.py): a real call with
             # each key, on its own thread, so a slow vendor never holds a tick.
