@@ -270,8 +270,32 @@ class Run:
                 f"({', '.join(sorted({before[job] for job in gone})) or 'none'}); the last claim answered "
                 f"{answers[-1] if answers else None}"
             )
+            lines.extend(self.turn_states(w, team, [b for b in ready if b not in started_bots]))
             mark["why"] = " | ".join(lines)
         self.marks.append(mark)
+
+    def turn_states(self, w, team, slugs):
+        """Diagnostic only, read on a short round: for each ready bot the round did not start, the sim's own turn for it
+        (running, parked, since when) and the server's newest attempt for it (id, state, lease, stop, and the start
+        place's wait reason). A bot the sim names busy in the claim body is refused by the claim, whatever readiness says."""
+        lines = []
+        with w.store.read() as c:
+            for slug in slugs:
+                try:
+                    bot = team.bot(slug)
+                    row = c.execute(
+                        "SELECT a.id,a.state,a.lease_until,a.stop_requested_at,p.wait_reason,p.start_until "
+                        "FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+                        "WHERE a.bot_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT 1",
+                        (slug,),
+                    ).fetchone()
+                    lines.append(
+                        f"{slug} turn: sim running {bot.running}, parked {bot.parked} since {bot.parked_since}; "
+                        f"server newest attempt {tuple(row) if row else None}"
+                    )
+                except Exception as error:  # a diagnostic never stops the run
+                    lines.append(f"{slug}: diagnostic error {error!r}")
+        return lines
 
     def cap_holds(self, w, bots):
         """The bots a usage cap holds that the records show reached: ({bot: {scope, period, limit, spent}}, seen). The
