@@ -11,7 +11,7 @@ interface SegFace { ref: string; name: string; kind: string; }
 interface SegRow { id: string; name: string; who: string; color: string; rank: number; faces: SegFace[]; teammates: number; }
 // One tagged teammate as GET /api/v2/segments/members lists it: `bot:<id>` or `person:<id>`, and the ids or `all`.
 interface SegMember { member: string; segments: string[]; }
-interface SegTags { list: SegRow[] | null; tags: Map<string, string[]>; loading: Promise<boolean> | null; error: string; }
+interface SegTags { list: SegRow[] | null; tags: Map<string, string[]>; loading: Promise<boolean> | null; listing: Promise<boolean> | null; error: string; }
 // The one open menu or filter list, closed by a press outside it or Escape.
 interface SegPop { el: HTMLElement; close: () => void; }
 // A Segment filter's options: only these segment ids (a segment lead's own, from the P&L probe) or every segment with
@@ -21,7 +21,7 @@ interface SegFilterOpts { ids?: readonly string[]; unallocated?: boolean; }
 // The eight colours a segment takes (backend/segments.py color_of). Each maps to an --au-* token (ui/styles/tokens.css).
 const SEG_COLOURS = ['blue', 'green', 'amber', 'red', 'purple', 'teal', 'pink', 'gray'] as const;
 const SEG_TICK = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-let SEG_TAGS: SegTags = {list: null, tags: new Map(), loading: null, error: ''};
+let SEG_TAGS: SegTags = {list: null, tags: new Map(), loading: null, listing: null, error: ''};
 let SEG_POP: SegPop | null = null;
 // A route change takes an open menu or filter list away: the router keeps its own listeners, so this one hears the hash.
 window.addEventListener('hashchange', () => segPopClose());
@@ -33,6 +33,19 @@ function segTagMe(): {id?: string; role?: string} | null {
 const segTagOwner = (): boolean => segTagMe()?.role === 'owner';
 // A segment's colour name, one of the eight (anything else reads as gray).
 const segColour = (colour: string): string => (SEG_COLOURS as readonly string[]).includes(colour) ? colour : 'gray';
+
+// Reads the segments alone, for a page that names or lists segments and shows no one's tags (a Segment filter, a segment
+// list). Resolves true when it answered; a failed read keeps what it had.
+function segsListLoad(): Promise<boolean> {
+  if (SEG_TAGS.listing) return SEG_TAGS.listing;
+  const listing = get<{segments?: SegRow[]}>('/v2/segments', {fresh: true}).then(list => {
+    SEG_TAGS.list = list.segments || [];
+    SEG_TAGS.error = '';
+    return true;
+  }, (e: unknown) => { SEG_TAGS.error = (e as {message?: string} | null)?.message || ''; return false; }).finally(() => { SEG_TAGS.listing = null; });
+  SEG_TAGS.listing = listing;
+  return listing;
+}
 
 // Reads the segments and the teammates' tags at once. Resolves true when both answered; a failed read keeps what it had.
 function segTagsLoad(): Promise<boolean> {
@@ -125,7 +138,8 @@ function segPopMount(anchor: HTMLElement, el: HTMLElement): void {
   el.style.position = 'fixed';
   el.style.top = `${below ? box.bottom + 4 : Math.max(8, box.top - height - 4)}px`;
   el.style.left = `${Math.max(8, Math.min(box.left, innerWidth - el.offsetWidth - 8))}px`;
-  const outside = (ev: Event): void => { if (!el.contains(ev.target as Node) && ev.target !== anchor) segPopClose(); };
+  // The anchor's own press (and anything inside it) is left to the anchor, which opens or closes its menu.
+  const outside = (ev: Event): void => { if (!el.contains(ev.target as Node) && !anchor.contains(ev.target as Node)) segPopClose(); };
   const key = (ev: KeyboardEvent): void => {
     if (ev.key !== 'Escape') return;
     ev.preventDefault();

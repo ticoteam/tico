@@ -36,18 +36,22 @@ function finCapsOf(acc, who) {
   const mine = !owner && (row.budgets || 0) > 0;
   // A segment's lead sees that segment's P&L (By segment, and its own column), and nothing else of Finance.
   const segments = Array.isArray(row.segments_led) ? row.segments_led : [];
+  // The segments they are dedicated to: their budgets read only (backend/finance/handlers.py reads_budget), so a report
+  // with no other access still has a Budgets tab for those segments.
+  const dedicated = Array.isArray(row.segments_dedicated) ? row.segments_dedicated : [];
   // Attribution: the backend's flag when present (finance.attribution; admin and owner imply it), else the same rule here.
   const attribute = typeof row.attribute === 'boolean' ? row.attribute
     : owner || rights.has('finance.attribution') || rights.has('finance.admin');
-  return {row, owner, all, rights, may, sees, mine, attribute, segments, leads: segments.length > 0,
-    any: sees || mine || attribute || segments.length > 0,
+  return {row, owner, all, rights, may, sees, mine, attribute, segments, dedicated, leads: segments.length > 0,
+    any: sees || mine || attribute || segments.length > 0 || dedicated.length > 0,
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
     balance: all || what.has('balance_sheet') || what.has('bs_lines'),
     sources: all || what.has('sources'),
-    // Budgets: the owner and whoever holds finance.budgets (or finance.admin, which implies it).
-    budgets: owner || rights.has('finance.budgets') || rights.has('finance.admin'),
+    // Budgets: the owner and whoever holds finance.budgets (or finance.admin, which implies it); and read only, the
+    // budgets of their dedicated segments.
+    budgets: owner || rights.has('finance.budgets') || rights.has('finance.admin') || dedicated.length > 0,
     // Bills and invoices show to a payables or receivables view, or to the right whose work they are
     // (backend/finance/tab_ap.py sees_side).
     payables: all || what.has('payables') || may('finance.ap'),
@@ -94,6 +98,17 @@ async function finProbe() {
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
 function finProbeOnce() { finBooksReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+// A segment page's links into Finance, for this viewer: its budget (a Budgets tab this viewer is shown, which a report
+// has for their dedicated segments) and its P&L (a whole-P&L viewer, or the segment's lead). Both answers are read
+// first, so the links are right on the first paint.
+async function finSegmentLinks(id) {
+  await finProbe();
+  const pnl = finSegmentProbe();
+  if (pnl) await pnl;
+  const caps = finCaps();
+  return {budget: finTabShown('budgets', caps, FIN_ACCESS),
+    pnl: FIN_SEGP.ok === true && !!caps && (caps.company || FIN_SEGP.ids.includes(id))};
+}
 
 const FIN_BOOKS = {quickbooks: 'QuickBooks', xero: 'Xero'};
 // Back from connecting QuickBooks or Xero: the server sends the browser to #/finance?books=connected or
@@ -285,7 +300,10 @@ function finShow(state) {
   if (!caps?.any) { finHeadDraw(); $('#fin-body').innerHTML = finNote('Nothing in Finance is in your view.'); return; }
   const tab = state.tab === 'line' ? 'pnl' : state.tab;
   if (!tab || !finTabShown(tab, caps, acc)) {
-    location.replace(caps.sees ? finHref('/pnl', {view: caps.company ? '' : 'expenses'}) : caps.mine ? finHref('/mine') : finHref('/attribution'));
+    // Where a viewer lands is a tab they can open: a lead's P&L, a report's Budgets (their dedicated segments), else the
+    // rest in turn. Any other address would replace itself and leave the page blank.
+    location.replace(caps.sees ? finHref('/pnl', {view: caps.company ? '' : 'expenses'}) : caps.mine ? finHref('/mine')
+      : caps.attribute ? finHref('/attribution') : caps.leads ? finHref('/pnl') : finHref('/budgets'));
     return;
   }
   finHeadDraw();

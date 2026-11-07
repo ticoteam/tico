@@ -409,6 +409,21 @@ def test_access_tells_a_lead_their_segments_and_anyone_else_none(books):  # noqa
         assert _led(FR.access(c, OWNER, at=AT), "bot:coder") == [S2]  # the owner's view shows a bot's lead too
 
 
+def _dedicated_to(out: dict[str, Any], who: str) -> list[str]:
+    return next(r["segments_dedicated"] for r in out["teammates"] if r["teammate"] == who)
+
+
+def test_access_tells_a_dedicated_teammate_their_segments_as_reads_budget_does(books):  # noqa: F811
+    # handlers.reads_budget lets a teammate read the budgets of the segments they are dedicated to: the access row says the same.
+    with books.transaction() as c:
+        _month(c)
+        assert _dedicated_to(FR.access(c, "human:eve", at=AT), "human:eve") == [S1]  # dedicated, not a lead
+        assert _dedicated_to(FR.access(c, "human:cara", at=AT), "human:cara") == [S1]  # dedicated and a lead
+        assert _dedicated_to(FR.access(c, "human:ben", at=AT), "human:ben") == []  # no segment of his own
+        assert _dedicated_to(FR.access(c, OWNER, at=AT), "bot:coder") == [S2]
+        assert "Hosting small" in _budgets(c, "human:eve")  # the same answer the budget read gives
+
+
 def _migration():
     path = Path(__file__).resolve().parents[1] / "migrations" / "20261107010204_finance_segments.py"
     spec = importlib.util.spec_from_file_location("finance_segments_migration", path)

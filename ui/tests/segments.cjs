@@ -47,7 +47,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.equal(await first.locator('.seg-face').count(), 2, tag + ': the faces, two of three shown');
       assert.equal(await first.locator('.seg-face .av').count(), 2, tag + ': each face draws the app avatar');
       assert.equal(await first.locator('.seg-face .av[data-av="cmo"]').count(), 1, tag + ': the bot face is the bot avatar');
-      assert.equal(await first.locator('.seg-more').innerText(), '+1', tag + ': the rest as a count');
+      assert.equal(await first.locator('.seg-faces-more').innerText(), '+1', tag + ': the rest as a count');
       assert.equal(await first.locator('.seg-main').getAttribute('href'), segPath(CHECKS), tag + ': a row opens the segment');
       assert.equal(await page.locator('#strat-segs [data-seg-add]').innerText(), '+ Segment');
       assert.equal(await page.locator('#strat-segs [data-seg-suggest]').innerText(), 'Ask Assistant to suggest');
@@ -295,6 +295,29 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.deepEqual(await attrs(page, '.seg-links a', 'segLink'), ['goals', 'growth'], tag + ': no Budget or P&L link without Finance');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
+    }
+    // A report's Budget link is for their dedicated segment, with no P&L (their P&L probe is a 403); a lead's P&L link is
+    // for the segment they lead, and a segment they do not lead has none.
+    {
+      const tag = 'segment: report';
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(CHECKS), finance: 'report'});
+      await page.locator('.seg-head h2').waitFor();
+      assert.deepEqual(await attrs(page, '.seg-links a', 'segLink'), ['goals', 'growth', 'budget'], tag + ': Budget, no P&L');
+      assert.equal(await page.locator('[data-seg-link="budget"]').getAttribute('href'), '#/finance/budgets?segment=segment%2Fchecks', tag + ': Budgets for the segment');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    {
+      const tag = 'segment: lead';
+      const led = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(CHECKS), finance: 'lead'});
+      await led.page.locator('.seg-head h2').waitFor();
+      assert.deepEqual(await attrs(led.page, '.seg-links a', 'segLink'), ['goals', 'growth', 'pnl'], tag + ': P&L of the segment they lead, no Budget');
+      assert.deepEqual(led.errors, [], tag + ': no page errors');
+      await led.page.close();
+      const other = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(DEPLOY), finance: 'lead'});
+      await other.page.locator('.seg-head h2').waitFor();
+      assert.deepEqual(await attrs(other.page, '.seg-links a', 'segLink'), ['goals', 'growth'], tag + ': no P&L for a segment they do not lead');
+      await other.page.close();
     }
     // A phone: the segment page and the list, no sideways scroll.
     {

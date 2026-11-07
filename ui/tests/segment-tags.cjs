@@ -102,6 +102,9 @@ const ACCESS = {teams: [], private_lines: [], defaults: {manager: 'team_expenses
 // Cara leads Consumer and has no other Finance access (backend/finance/tab.py: segments_led on her teammate row).
 const LEAD_ACCESS = {...ACCESS, can_view_as: false, teammates: [{teammate: 'human:cara', kind: 'person', team: '', reports_to: '', default: 'none', grants: [],
   rights: [], may_grant: false, budgets: 0, segments_led: ['seg-consumer']}]};
+// Cara reports on Rental: her dedicated segment reads its budgets only (backend/finance/handlers.py reads_budget), with no P&L.
+const REPORT_ACCESS = {...ACCESS, can_view_as: false, teammates: [{teammate: 'human:cara', kind: 'person', team: '', reports_to: '', default: 'none', grants: [],
+  rights: [], may_grant: false, budgets: 0, segments_led: [], segments_dedicated: ['seg-rental']}]};
 // GET /api/v2/finance/lines/<id>: the vendors of the line; the segment is echoed only when the server splits it.
 const lineRead = (url, echo) => {
   const seg = url.searchParams.get('segment') || '';
@@ -135,7 +138,7 @@ async function report(what) {
 // One page on the fake hub. viewer: who is signed in (ana is the owner; cara a member). segmentsOk: false answers the
 // segment P&L probe with a 403. echo: false leaves the segment out of a line's answer.
 async function open(browser, {viewport = DESKTOP, viewer = 'ana', theme = 'dark', hash = '#/strategy/org', segmentsOk = true, echo = true,
-  lead = false, noSegments = false} = {}) {
+  lead = false, report = false, noSegments = false} = {}) {
   const me = viewer === org.me.id ? org.me
     : {id: viewer, name: org.people.find(p => p.id === viewer).name, email: viewer + '@acme.example', role: 'member', company_role: 'member', cloud: true};
   const config = {company_name: 'Acme Lights'};
@@ -204,12 +207,14 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', theme = 'dark'
       return json({task: row});
     }
     // Finance.
-    if (p === '/api/v2/finance/access') return json(lead ? LEAD_ACCESS : ACCESS);
+    if (p === '/api/v2/finance/access') return json(lead ? LEAD_ACCESS : report ? REPORT_ACCESS : ACCESS);
     if (p === '/api/v2/places/growth') return json(GROWTH);
     if (p === '/api/v2/finance/pnl') return json(pnl(url));
     if (p === '/api/v2/finance/budgets') {
       const seg = url.searchParams.get('segment') || '';
-      return json({budgets: BUDGETS.filter(b => !seg || b.segment_id === seg || b.id === 'b-mkt'), more: false, on: url.searchParams.get('at'), excluded: false});
+      // A report reads the budgets of the segment they are dedicated to, and no other.
+      const scope = report ? BUDGETS.filter(b => b.effective_segment_id === 'seg-rental') : BUDGETS;
+      return json({budgets: scope.filter(b => !seg || b.segment_id === seg || b.id === 'b-mkt'), more: false, on: url.searchParams.get('at'), excluded: false});
     }
     if (p === '/api/v2/finance/reports/budget_vs_actual') {
       const s = url.searchParams.get('start'), z = url.searchParams.get('end'), cols = s && z ? columns(s, z) : [];
@@ -580,6 +585,27 @@ async function openOrgMenu(page, ref) {
     });
 
     // 10. A line split by segment: the chip reads the name (exact text, once the list has loaded), and the segment's vendors.
+    // Landing: a lead's only tab is P&L, so #/finance lands there (an address with no tab they can open loops back to itself).
+    await run('lead: #/finance lands on P&L', async () => {
+      const {page, errors} = await open(browser, {viewer: 'cara', hash: '#/finance', lead: true});
+      await page.waitForSelector('[data-fin-segcol="seg-consumer"]');
+      assert.ok((await page.evaluate(() => location.hash)).startsWith('#/finance/pnl'), 'the address is the P&L');
+      assert.deepEqual(await page.locator('[data-fin-tab]').evaluateAll(els => els.map(e => e.dataset.finTab)), ['pnl'], 'the only tab is P&L');
+      assert.deepEqual(errors, [], 'no page errors');
+      await page.close();
+    });
+    // A report on their dedicated segment: the Budgets tab only, read only, and only that segment's budgets.
+    await run('report: #/finance lands on Budgets, read only, for their segment', async () => {
+      const {page, errors} = await open(browser, {viewer: 'cara', hash: '#/finance', report: true, segmentsOk: false});
+      await page.waitForSelector('tr[data-fin-bud="b-rental-g"]');
+      assert.ok((await page.evaluate(() => location.hash)).startsWith('#/finance/budgets'), 'the address is the Budgets');
+      assert.deepEqual(await page.locator('[data-fin-tab]').evaluateAll(els => els.map(e => e.dataset.finTab)), ['budgets'], 'the only tab is Budgets');
+      assert.equal(await page.locator('[data-fin-bud-add]').count(), 0, 'no + Budget: read only');
+      assert.equal(await page.locator('tr[data-fin-bud="b-consumer"]').count(), 0, 'another segment\'s budget is not shown');
+      assert.deepEqual(errors, [], 'no page errors');
+      await page.close();
+    });
+
     await run('line: split by segment', async () => {
       const tag = 'line';
       const {page, errors, hub} = await open(browser, {hash: '#/finance/line/a-6400?segment=seg-rental'});

@@ -360,7 +360,7 @@ function tasksLoad(state, opts = {}) {
   // The segments the Segment filter and the cards name: read once for this page, then the list draws them.
   if (!state.segLoaded) {
     state.segLoaded = true;
-    void segTagsLoad().then(() => { if (TASKS_ST === state) { tasksRender(state); tasksFilterMenuLoaded(state); } });
+    void segsListLoad().then(() => { if (TASKS_ST === state) { tasksRender(state); tasksFilterMenuLoaded(state); } });
   }
   if (state.fullRead) {
     if (opts.poll) return state.fullRead;

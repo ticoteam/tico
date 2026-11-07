@@ -59,7 +59,8 @@ function listeningStats(now = new Date()) {
 // market with nothing in it yet.
 // segments: the company's segments (SEGMENTS by default; [] for none). refusals: {'METHOD /api/path': {status, detail}}
 // answers that write with that refusal, for a test of the server's text on failure (a GET too, for a failed read).
-// finance: true makes the viewer one who sees Finance beyond their own budgets (GET /api/v2/finance/access).
+// finance: true makes the viewer one who sees Finance beyond their own budgets (GET /api/v2/finance/access). 'report' is a
+// viewer whose dedicated segment is CHECKS (their budgets read only, no P&L), and 'lead' one who leads CHECKS (its P&L only).
 async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true,
   segments = SEGMENTS, refusals = {}, finance = false} = {}) {
   const mk = fixture('redesign-market.json');
@@ -175,10 +176,18 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
         segment_changes: owner ? db.segments.filter(s => Object.keys(s.own).length).length : 0,
         website: 'https://acme.example', goals_by_bet: {}, live_by_bet: {}, health_by_bet: {}});
     }
-    // Finance access: a finance viewer's row (everything); anyone else has no row, so no Finance beyond their own budgets.
-    if (p === '/api/v2/finance/access') return json({teammates: finance ? [{teammate: 'human:' + me.id, default: 'everything', grants: [], rights: ['finance.admin'], budgets: 0}] : []});
-    // The segment P&L's probe (F2's finSegProbe): a column per segment for a finance viewer, 403 for anyone else.
-    if (p === '/api/v2/finance/reports/pnl_by') return finance ? json({columns: [...db.segments.map(s => ({key: s.id, label: s.name})), {key: 'total', label: 'Total'}]}) : refuse(403, 'forbidden', 'Not in your view');
+    // Finance access: a finance viewer's row (everything); a report's and a lead's (segments_dedicated, segments_led); anyone
+    // else has no row, so no Finance beyond their own budgets.
+    const mine = 'human:' + me.id, FIN_CHECKS = 'segment/checks';
+    if (p === '/api/v2/finance/access') return json({teammates: finance === true ? [{teammate: mine, default: 'everything', grants: [], rights: ['finance.admin'], budgets: 0}]
+      : finance === 'report' ? [{teammate: mine, default: 'none', grants: [], rights: [], budgets: 0, segments_led: [], segments_dedicated: [FIN_CHECKS]}]
+      : finance === 'lead' ? [{teammate: mine, default: 'none', grants: [], rights: [], budgets: 0, segments_led: [FIN_CHECKS], segments_dedicated: []}] : []});
+    // The segment P&L's probe (finSegmentProbe): a column per segment for a finance viewer, a lead's own column, 403 for anyone else.
+    if (p === '/api/v2/finance/reports/pnl_by') {
+      if (finance === true) return json({columns: [...db.segments.map(s => ({key: s.id, label: s.name})), {key: 'total', label: 'Total'}]});
+      if (finance === 'lead') return json({columns: [{key: FIN_CHECKS, label: 'Checks', color: 'blue'}]});
+      return refuse(403, 'forbidden', 'Not in your view');
+    }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});

@@ -80,7 +80,7 @@ function rdoCount(by, key, seen = new Set()) {
 }
 
 // ----------------------------------------------------------------- drawing
-function rdoCard(n, {top = false} = {}) {
+function rdoCard(n, {top = false, segments = true} = {}) {
   const ref = rdoRef(n), name = rdoName(n);
   const lead = rdoLeadOf(ref).length > 0;
   const bot = n.kind === 'bot' ? botRow(n.id) : null;
@@ -90,9 +90,10 @@ function rdoCard(n, {top = false} = {}) {
   const cls = ['rdo-card', n.kind === 'person' && 'person', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
   const label = title ? `${name} · ${title}` : name;
   // The owner's Segments button sits over the card's top right, shown on a hover or a focus within it (ui/styles/redesign-strategy.css).
-  const seg = segTagOwner() && !segNone('') ? `<button type="button" class="rdo-seg-btn" data-rdo-seg="${esc(ref)}" aria-haspopup="menu" aria-label="${esc('Segments for ' + name)}">Segments</button>` : '';
+  // The Org page only: a card on the Rules map (`segments: false`) has no Segments button or dots.
+  const seg = segments && segTagOwner() && !segNone('') ? `<button type="button" class="rdo-seg-btn" data-rdo-seg="${esc(ref)}" aria-haspopup="menu" aria-label="${esc('Segments for ' + name)}">Segments</button>` : '';
   return `<span class="rdo-cardwrap"><button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
-    <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}${segTagCard(segTagsOf(ref))}</span></button>${seg}</span>`;
+    <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}${segments ? segTagCard(segTagsOf(ref)) : ''}</span></button>${seg}</span>`;
 }
 // A teammate and, under it on a rail, whoever reports to it inside the same group. A person who heads people or groups
 // has them side by side underneath instead, as the top person does. `ctx.group` draws a group in place of
@@ -123,7 +124,7 @@ function rdoChartHtml(by = rdoTree(), ctx = {seen: new Set()}) {
   if (top) ctx.seen.add(rdoKey(top));
   const cols = rdoSorted(row, '').map(n => rdoNode(by, n, ctx, 0)).filter(Boolean);
   if (!top && !cols.length) return '<p class="muted rd-empty">No one on the chart yet.</p>';
-  return (top ? `<div class="rdo-top${cols.length ? ' has-row' : ''}">${rdoCard(top, {top: true})}</div>` : '')
+  return (top ? `<div class="rdo-top${cols.length ? ' has-row' : ''}">${rdoCard(top, {top: true, segments: ctx.segments})}</div>` : '')
     + (cols.length ? `<ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul>` : '');
 }
 function rdoDraw({refit = false} = {}) {

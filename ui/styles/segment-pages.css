@@ -19,19 +19,13 @@
 .seg-face{display:inline-flex;margin-left:-6px}
 .seg-face:first-child{margin-left:0}
 .seg-face>*{box-shadow:0 0 0 2px var(--surface)}
-.seg-more{margin-left:6px;color:var(--muted);font-size:12px}
+.seg-faces-more{margin-left:6px;color:var(--muted);font-size:12px}
 .seg-acts{display:flex;align-items:center;gap:2px;flex:none;opacity:0;transition:opacity .12s}
 .seg-row:hover .seg-acts,.seg-row:focus-within .seg-acts,.seg-editing .seg-acts{opacity:1}
 @media (hover:none){.seg-acts{opacity:1}}
 .seg-act{width:30px;height:30px;display:inline-grid;place-items:center;border:0;background:none;color:var(--muted);border-radius:6px;cursor:pointer;font:inherit;font-size:16px;line-height:1}
 .seg-act:hover,.seg-act:focus-visible{color:var(--ink);background:var(--surface)}
 .seg-act svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.seg-more-wrap{position:relative}
-.seg-more-menu{position:absolute;right:0;top:100%;z-index:5;display:grid;min-width:150px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 16%,transparent)}
-.seg-more-menu[hidden]{display:none}
-.seg-more-menu button{background:none;border:0;text-align:left;padding:8px 10px;border-radius:6px;color:var(--ink);cursor:pointer;font:inherit}
-.seg-more-menu button:hover:not(:disabled),.seg-more-menu button:focus-visible{background:var(--surface2)}
-.seg-more-menu button:disabled{color:var(--muted);cursor:default}
 .seg-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%}
 .seg-form input[type="text"]{flex:1 1 160px;min-width:0}
 .seg-form-acts{display:flex;gap:6px}

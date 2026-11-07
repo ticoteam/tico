@@ -26,7 +26,7 @@ function finBudgetsPage(mine = false) {
   FIN.bud = {rows: [], lines: {}, kids: new Map(), hist: null, load: 0, mine};
   const bud = FIN.bud;
   // The Segment filter names its segment once the list is read (a direct visit has none yet).
-  if (!mine) void segTagsLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.bud === bud) old.outerHTML = segFilterButton(FIN_BUD.seg || ''); });
+  if (!mine) void segsListLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.bud === bud) old.outerHTML = segFilterButton(FIN_BUD.seg || ''); });
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><input type="month" data-fin-month value="${B.month}" aria-label="Month"></label>
       ${mine ? '' : `<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(B.q)}" placeholder="Search budgets" aria-label="Search budgets"></label>`}
       ${mine ? '' : segFilterButton(FIN_BUD.seg || '')}<span class="spacer"></span>${!mine && caps.may('finance.budgets') ? '<button type="button" class="primary" data-fin-bud-add>+ Budget</button>' : ''}</div>`
@@ -256,7 +256,8 @@ function finBudSegPick(id) {
   const old = $('#fin-body [data-seg-filter]'); if (old) old.outerHTML = segFilterButton(id);
   finBudReset(); void finBudLoad();
 }
-const finBudSegParam = () => FIN_BUD.seg ? '&segment=' + encodeURIComponent(FIN_BUD.seg) : '';
+// My budget is not filtered by the Budgets page's segment (its address may still name one from an earlier visit).
+const finBudSegParam = () => FIN_BUD.seg && !FIN.bud?.mine ? '&segment=' + encodeURIComponent(FIN_BUD.seg) : '';
 // A budget's Segment, from the rail (budget_update; None clears it). A segment is not versioned by month.
 function finBudSegmentEdit(b) {
   finDecideDialog('Segment', segSelectHtml(b.segment_id || '', {name: 'segment_id'}), 'Save', form => {
