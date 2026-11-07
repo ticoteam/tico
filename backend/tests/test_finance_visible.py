@@ -119,19 +119,24 @@ def test_another_bot_sees_nothing_of_the_vendor(books):
 
 
 def test_a_revoked_grant_changes_the_next_read(books):
-    """SELLER has no default view of its own expenses (CODER does, so a grant to CODER changes nothing it could show)."""
+    """Members already see their own expenses by default, so the grant here is the web team's expenses: lines SELLER
+    cannot see without it (Acme's 15,000 on Web, plus SELLER's own 1,500 it sees anyway)."""
     with books.transaction() as c:
         ids = _post(c)
         spend(c, "6100", 1_500, day="2026-10-12", teammate=SELLER, vendor=ids["Acme Cloud"])
-        assert _search(c, SELLER) == {}
-        grant = act(c, OWNER, "view_grant", {"subject": SELLER, "what": "expenses", "whose": "own"})
+        assert _by_vendor(c, SELLER) == {"Acme Cloud": (1_500, False)}
+        grant = act(
+            c,
+            OWNER,
+            "view_grant",
+            {"subject": SELLER, "what": "expenses", "whose": "teams", "whose_team": "web"},
+        )
         assert grant.status == "committed", grant.reason
-        assert set(_search(c, SELLER)) == {"Acme Cloud"}
+        assert _by_vendor(c, SELLER) == {"Acme Cloud": (16_500, False)}
         before = FR.view_version(c)
         assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
         assert FR.view_version(c) == before + 1
-        assert _search(c, SELLER) == {}
-        assert _by_vendor(c, SELLER) == {}
+        assert _by_vendor(c, SELLER) == {"Acme Cloud": (1_500, False)}
 
 
 def test_a_name_in_search_matches_the_spend_its_row_reports(books):
