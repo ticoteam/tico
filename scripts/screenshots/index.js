@@ -117,16 +117,16 @@ const PAGES = [
     await page.locator('#docs-h-linked').waitFor();
   }},
   {name: 'market', route: '#/strategy/market?note=company%2Fbrightyard', ready: 'It launched a free scene tier for home projectors last month.',
-    // The graph lays itself out a frame at a time until it settles, so the shot waits until the canvas stops changing.
+    // The graph lays itself out a frame at a time until it settles. The shot waits until its canvas stops being drawn:
+    // two reads 500 ms apart with the same count (capped at 6 s).
     steps: async page => {
-      const canvas = page.locator('#market-canvas');
-      await canvas.waitFor();
-      let last = await canvas.screenshot();
-      for (let quiet = 0, tries = 0; quiet < 6 && tries < 60; tries++) {
-        await page.waitForTimeout(250);
-        const now = await canvas.screenshot();
-        quiet = now.equals(last) ? quiet + 1 : 0;
-        last = now;
+      await page.locator('#market-canvas').waitFor();
+      let last = -1;
+      for (const until = Date.now() + 6000; Date.now() < until;) {
+        await page.waitForTimeout(500);
+        const draws = await page.evaluate(() => window.__marketDraws || 0);
+        if (draws === last) break;
+        last = draws;
       }
     },
     ui: ['ui/market-*.js', 'ui/app/redesign.js', 'ui/app/redesign-market.js', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
@@ -272,6 +272,15 @@ async function capture() {
             + ' *, *::before, *::after { transition: none !important; animation-duration: 0s !important; animation-delay: 0s !important; }';
           document.head.append(style);
         }));
+        // The market graph clears its canvas once per frame while its layout runs, and asks for no frame once it settles.
+        // Counting those clears is how the shot knows the layout has stopped (its node positions are not visible from here).
+        await context.addInitScript(() => {
+          const clear = CanvasRenderingContext2D.prototype.clearRect;
+          CanvasRenderingContext2D.prototype.clearRect = function (...args) {
+            if (this.canvas?.id === 'market-canvas') window.__marketDraws = (window.__marketDraws || 0) + 1;
+            return clear.apply(this, args);
+          };
+        });
         const page = await context.newPage();
         await page.clock.setFixedTime(new Date(DEMO_NOW));
         let where = 'load';
