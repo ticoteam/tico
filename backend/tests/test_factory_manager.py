@@ -88,7 +88,10 @@ def test_the_same_bottleneck_on_two_passes_wakes_the_manager_once(api):
         assert [r["model_called"] for r in runs(c)] == [0, 1, 0]
         assert c.execute("SELECT COUNT(*) FROM factory_manager_actions WHERE action='ask_manager'").fetchone()[0] == 1
         proposed = c.execute("SELECT note FROM factory_manager_actions WHERE action='propose_rule'").fetchall()
-        assert len(proposed) == 1 and "logged only" in proposed[0][0]
+        assert len(proposed) == 1 and proposed[0][0].startswith("Rule proposal: Building")
+        # The proposal is delivered: a task for the factory's owner that names the stage and the rule.
+        [delivered] = c.execute("SELECT owner_id, body FROM tasks WHERE title LIKE 'Rule proposal:%'").fetchall()
+        assert delivered[0] == "human:ana" and "add a requirement to Building" in delivered[1]
         assert c.execute("SELECT step_id FROM tasks WHERE type_id=?", (type_id,)).fetchone()[0] == before
         assert c.execute("SELECT COUNT(*) FROM stage_decisions").fetchone()[0] == 0
 

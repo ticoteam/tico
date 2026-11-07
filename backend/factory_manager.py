@@ -11,7 +11,8 @@ A pass is plain code. It finds the judgment items of the factory:
 The bot is woken only for those items, and only when the set of items changed since the previous pass, so the same
 bottleneck two passes running wakes it once. A wake updates one open "Factory check" task for the factory. Its allowed
 actions are ask_manager, open_botops, propose_rule and post_note (the amendment's list). A wake records ask_manager, and
-a bottleneck wake also logs propose_rule (action only: there is no rule-proposal row yet). Daily notes are posted by _daily_note.
+a bottleneck wake also delivers a rule proposal to the factory owner (a task) and logs propose_rule once it is made.
+Daily notes are posted by _daily_note.
 The Factory Manager never moves a card and never marks one met: the only writes are its run log and its check task.
 Factories without a manager, and databases without the factories.manager_id column (Track A's migration), are skipped.
 """
@@ -63,7 +64,7 @@ def _actor(manager_id: str) -> str:
 def _pipelines(c: "sqlite3.Connection", factory_id: str) -> list[dict[str, Any]]:
     return H._rows(
         c.execute(
-            "SELECT id, name, manager, manager_every_minutes, created_at FROM task_types WHERE factory_id=? ORDER BY name",
+            "SELECT id, name, manager, manager_every_minutes, goal, created_at FROM task_types WHERE factory_id=? ORDER BY name",
             (factory_id,),
         )
     )
@@ -85,7 +86,16 @@ def _bottleneck(c: "sqlite3.Connection", pipelines: list[dict[str, Any]], at: da
     for pipeline in pipelines:
         for item in PM.over_limit(c, pipeline["id"], at):
             stage = item["pipeline_stage_id"]
-            entry = counts.setdefault(stage, {"stage_id": stage, "name": item["stage"], "count": 0})
+            entry = counts.setdefault(
+                stage,
+                {
+                    "stage_id": stage,
+                    "name": item["stage"],
+                    "count": 0,
+                    "pipeline": pipeline["name"],
+                    "goal": pipeline.get("goal"),
+                },
+            )
             entry["count"] += 1
     if not counts:
         return None
@@ -101,7 +111,7 @@ def _no_intake(c: "sqlite3.Connection", factory_id: str, at: datetime) -> list[d
             "SELECT DISTINCT l.id, l.to_pipeline_id, t.name AS to_name FROM pipeline_links l "
             "JOIN task_types t ON t.id = l.to_pipeline_id "
             "JOIN task_types f ON f.id = l.from_pipeline_id "
-            "JOIN pipeline_handoffs h ON h.pipeline_link_id = l.id AND h.created_at >= ? "
+            "JOIN pipeline_handoffs h ON h.pipeline_link_id = l.id AND h.created_at >= ? AND h.returned_at IS NULL "
             "WHERE f.factory_id=? AND l.retired_at IS NULL "
             "AND NOT EXISTS (SELECT 1 FROM stage_visits v WHERE v.pipeline_id = l.to_pipeline_id AND v.entered_at >= ?)",
             (since, factory_id, since),
@@ -152,6 +162,41 @@ def _daily_note(
         "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
         "created_at) VALUES (?,?,?,'post_note',?,?,?)",
         (PM.new_id("fma"), fid, run_id, factory["owner_id"], title, PM.stamp_of(at)),
+    )
+    return True
+
+
+def _propose_rule(
+    c: "sqlite3.Connection", factory: dict[str, Any], run_id: str, bottleneck: dict[str, Any], at: datetime
+) -> bool:
+    """Deliver a concrete rule proposal for the bottleneck stage to the factory's owner, as a task of its own (a person
+    reads it in their list; no bot is woken). The action is logged only once the task is made. Returns whether it was."""
+    owner = factory["owner_id"]
+    if not owner:
+        return False
+    goal = f" The pipeline's goal: {bottleneck['goal']}." if bottleneck.get("goal") else ""
+    title = f"Rule proposal: {bottleneck['name']} in {factory['name']}"
+    body = (
+        f"{bottleneck['name']} has {bottleneck['count']} cards over their Limit, the most in {factory['name']}.{goal} "
+        f"Proposed: add a requirement to {bottleneck['name']} that a card must meet before it moves on, so the stage "
+        "stops taking work it cannot finish. Accept it, change it or decline it in the stage's settings."
+    )
+    H.task_create(
+        c,
+        H.KEEPER,
+        title,
+        body,
+        owner,
+        deduplicate=False,
+        lint=False,
+        private=False,
+        trigger="schedule",
+        trigger_source=WAKE,
+    )
+    c.execute(
+        "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
+        "created_at) VALUES (?,?,?,'propose_rule',?,?,?)",
+        (PM.new_id("fma"), factory["id"], run_id, owner, title, PM.stamp_of(at)),
     )
     return True
 
@@ -213,6 +258,8 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
         if bottleneck is not None and f"bottleneck:{bottleneck['stage_id']}" in items:
             lines.append(f"- Bottleneck: {bottleneck['name']} ({bottleneck['count']} over their Limit).")
         lines += [f"- Handoff to {link['to_name']} has no stages to take the card." for link in no_intake]
+        if bottleneck is not None and bottleneck.get("goal") and f"bottleneck:{bottleneck['stage_id']}" in items:
+            lines.append(f"- Goal of {bottleneck['pipeline']}: {bottleneck['goal']}")
         _open_check(c, factory, owner, "\n".join(lines))
         c.execute(
             "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
@@ -220,20 +267,7 @@ def _pass(c: "sqlite3.Connection", factory: dict[str, Any], at: datetime) -> dic
             (PM.new_id("fma"), factory_id, run_id, owner, "judgment wake: " + ", ".join(items), stamp),
         )
         if bottleneck is not None and f"bottleneck:{bottleneck['stage_id']}" in items:
-            # No rule-proposal mechanism exists yet (goal proposals are for goals and KPIs), so the proposal is logged
-            # as an action only; the owner sees it in the factory's check task, not as a proposal row.
-            c.execute(
-                "INSERT INTO factory_manager_actions (id, factory_id, factory_manager_run_id, action, target_actor, note, "
-                "created_at) VALUES (?,?,?,'propose_rule',?,?,?)",
-                (
-                    PM.new_id("fma"),
-                    factory_id,
-                    run_id,
-                    factory["owner_id"] or owner,
-                    f"consider a rule for {bottleneck['name']} ({bottleneck['count']} over their Limit); logged only",
-                    stamp,
-                ),
-            )
+            _propose_rule(c, factory, run_id, bottleneck, at)
     c.execute(
         "UPDATE factory_manager_runs SET finished_at=?, bottleneck_stage_id=?, judgment_count=?, wake_key=?, woke=?, "
         "model_called=? WHERE id=?",
