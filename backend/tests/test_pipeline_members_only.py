@@ -202,3 +202,17 @@ def test_the_manager_rail_and_the_review_queues_leave_out_a_members_only_pipelin
     get(api, f"pipelines/{typ}/stages/{steps['Doing']}/review/queue", "cara-test", expected=404)
     get(api, f"pipelines/{typ}/manager", "cara-test", expected=404)
     get(api, f"pipelines/{typ}/manager", "ana-test")
+
+
+def test_the_affected_count_of_a_members_only_stage_is_not_found_to_a_non_member(api):
+    tag = uuid.uuid4().hex[:8]
+    typ, steps = make_pipeline(api, "Legal" + tag, private=True)
+    ticket(api, typ, "Open " + tag, owner="human:ben")
+    path = f"pipeline-stages/{steps['Doing']}/affected"
+    get(api, path, "cara-test", expected=404)  # the same answer as a stage that does not exist
+    assert get(api, path, "ana-test")["count"] == 1
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO pipeline_members (pipeline_id, actor_id, created_at) VALUES (?,?,?)", (typ, "human:cara", T)
+        )
+    assert get(api, path, "cara-test")["count"] == 1
