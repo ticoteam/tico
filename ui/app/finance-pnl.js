@@ -18,8 +18,10 @@ const FIN_PNL = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: ''
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
 // Whether the segment P&L is open to this viewer (the By segment view, the Segment filter): probed once per visit with
-// the pnl_by read; a 403 (neither the whole P&L nor a segment's lead) hides both. Kept per viewing-as.
-const FIN_SEG = {as: /** @type {string | null} */ (null), ok: /** @type {boolean | undefined} */ (undefined), busy: false};
+// the pnl_by read; a 403 (neither the whole P&L nor a segment's lead) hides both. Kept per viewing-as. `ids` are the
+// segments a lead's columns name (the whole P&L's viewers have every segment, so none is kept).
+const FIN_SEG = {as: /** @type {string | null} */ (null), ok: /** @type {boolean | undefined} */ (undefined), probed: false,
+  ids: /** @type {string[]} */ ([])};
 
 // ----------------------------------------------------------------- periods
 // The window a period opens on: a few periods back and a few ahead of today.
@@ -59,24 +61,42 @@ function finCompareOptions() {
 function finPnlPage() {
   const caps = finCaps(), p = FIN_PNL;
   const asked = FIN.q.get('view');
-  const view = asked === 'segments' && FIN_SEG.ok !== false ? 'segments' : asked === 'expenses' || !caps.company ? 'expenses' : 'company';
-  finSegProbe();
-  const bySeg = FIN_SEG.ok === true;
-  if (!bySeg) p.seg = '';   // a segment picked while the read was open is dropped once it is closed (a view-as change)
-  // A range the person chose stays through a change of period; until then each period opens on its own window.
-  if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
+  // The first answer to the segment probe is waited for, so the page reads the P&L once, with the views it can show.
+  const probe = finSegProbe();
+  const segOk = FIN_SEG.ok !== false, bySeg = FIN_SEG.ok === true;
+  // The address names the segment (the picks and the column links write it): a segment the probe refused is dropped.
+  p.seg = segOk ? segQuery() : '';
+  if (!segOk && segQuery()) segQuerySet('');
+  // A segment's P&L opens for its lead too; a lead with no whole-P&L access opens on their segments.
+  const view = asked === 'expenses' ? 'expenses'
+    : p.seg && segOk ? 'company'
+    : segOk && (asked === 'segments' || !caps?.company) ? 'segments'
+    : caps?.company ? 'company' : 'expenses';
+  if (probe && FIN_SEG.ok === undefined) {
+    const load = FIN?.load;
+    $('#fin-body').innerHTML = `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`;
+    void probe.then(() => { if (FIN && FIN.load === load && FIN.tab === 'pnl') finPnlPage(); });
+    return;
+  }
+  // The By segment view reads actual periods to date: its own window (this year to today), and no Period control.
+  if (view === 'segments') {
+    if (!p.picked) { p.start = finIso(new Date(new Date().getFullYear(), 0, 1)); p.end = finToday(); }
+    p.rangeOf = '';
+  } else if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }   // a range the person chose stays through a change of period
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
   const page = FIN.pnl;
   // The Segment filter names its segment once the list is read (a direct visit has none yet).
   void segTagsLoad().then(() => { const old = $('#fin-body [data-seg-filter]'); if (old && FIN.pnl === page) old.outerHTML = segFilterButton(p.seg); });
-  const views = [...(caps.company ? [['company', 'Company']] : []), ...(bySeg ? [['segments', 'By segment']] : []), ['expenses', 'Expenses']];
+  // Expenses is for those who see the company's expense lines, not a lead who sees only their segments.
+  const views = [...(caps?.company ? [['company', 'Company']] : []), ...(bySeg ? [['segments', 'By segment']] : []),
+    ...(caps?.company || caps?.sees || view === 'expenses' ? [['expenses', 'Expenses']] : [])];
   const filters = view === 'expenses' ? `<div class="fin-filters" id="fin-filters"></div>` : '';
-  $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('view', 'View', views, view)}${finSeg('period', 'Period', FIN_PERIODS, p.period)}
+  $('#fin-body').innerHTML = `<div class="fin-bar">${views.length > 1 ? finSeg('view', 'View', views, view) : ''}${view === 'segments' ? '' : finSeg('period', 'Period', FIN_PERIODS, p.period)}
       <span class="fin-pop-at"><button type="button" class="ghost" data-fin-range aria-expanded="false" aria-controls="fin-range">${esc(finRangeLabel(p.start, p.end))}</button>
         <form class="fin-pop" id="fin-range" hidden><label>From<input type="date" name="start" value="${p.start}" required></label>
           <label>To<input type="date" name="end" value="${p.end}" required></label><button type="submit" class="primary">Apply</button></form></span>
       ${finSeg('basis', 'Basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}<span id="fin-pl-marks" class="fin-marks"></span>
-      ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><span class="fin-sel"><span class="fin-sel-v" aria-hidden="true">${esc((finCompareOptions().find(([v]) => v === p.compare) || finCompareOptions()[0])?.[1] || '')}</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
+      ${view === 'company' && caps?.company ? `<label class="fin-inline"><span class="muted">Compare</span><span class="fin-sel"><span class="fin-sel-v" aria-hidden="true">${esc((finCompareOptions().find(([v]) => v === p.compare) || finCompareOptions()[0])?.[1] || '')}</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
         `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></span></label>` : ''}
       ${view === 'company' && bySeg ? segFilterButton(p.seg) : ''}<span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>
     ${filters}` + (view === 'segments' ? `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>` : finSplit(view === 'expenses'
@@ -105,6 +125,8 @@ function finPnlPage() {
   if (view === 'expenses') finFiltersDraw();
   void finPnlLoad();
 }
+// The Segment filter's choices: every segment and Unallocated for the whole P&L's viewers; a lead's own segments only.
+const finSegOpts = () => finCaps()?.company ? {unallocated: true} : {ids: FIN_SEG.ids};
 function finPnlClick(ev) {
   const p = FIN_PNL, t = ev.target;
   const seg = t.closest('[data-fin-seg] button');
@@ -121,7 +143,7 @@ function finPnlClick(ev) {
   const filter = t.closest('[data-fin-filter]');
   if (filter) { finPop(filter, $('#fin-tree')); return; }
   const segBtn = t.closest('[data-seg-filter]');
-  if (segBtn) { segFilterOpen(segBtn, p.seg, id => { p.seg = id; p.sel = null; p.budgetCol = -1; finPnlPage(); }); return; }
+  if (segBtn) { segFilterOpen(segBtn, p.seg, id => { segQuerySet(id); p.sel = null; p.budgetCol = -1; finPnlPage(); }, finSegOpts()); return; }
   const segCol = t.closest('[data-fin-segcol]');
   if (segCol) { finSegDrill(segCol.dataset.finSegcol); return; }
   const clear = t.closest('[data-fin-clear]');
@@ -135,26 +157,27 @@ function finPnlClick(ev) {
   }
 }
 const finSegSet = btn => btn.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
-// A segment's column opens the company P&L filtered to it (the lines that count toward it), at the same address.
+// A segment's column opens the P&L filtered to it (the lines that count toward it), at an address that says so (the
+// Segment filter and a link to it read the same segment).
 function finSegDrill(key) {
-  const p = FIN_PNL, href = finHref('/pnl', {});
-  p.seg = key; p.sel = null; p.budgetCol = -1;
+  const p = FIN_PNL, href = finHref('/pnl', {segment: key});
+  p.sel = null; p.budgetCol = -1;
   if (location.hash === href) finPnlPage(); else location.hash = href;
 }
-// Probes the segment P&L once per visit: a 200 opens the By segment view and the Segment filter, a 403 hides them.
+// Probes the segment P&L once per visit (a new answer per viewing-as): a 200 opens the By segment view and the Segment
+// filter and names a lead's segments, a 403 hides them. Resolves with the probe's read, or null when there is none to
+// wait for; a failure other than a 403 is not asked again on each redraw.
 function finSegProbe() {
   const key = FIN_VIEW_AS || '';
-  if (FIN_SEG.as !== key) { FIN_SEG.as = key; FIN_SEG.ok = undefined; }
-  if (FIN_SEG.ok !== undefined || FIN_SEG.busy) return;
-  FIN_SEG.busy = true;
+  if (FIN_SEG.as !== key) { FIN_SEG.as = key; FIN_SEG.ok = undefined; FIN_SEG.probed = false; FIN_SEG.ids = []; }
+  if (FIN_SEG.probed) return null;
+  FIN_SEG.probed = true;
   const [a, z] = finMonthBounds(finToday().slice(0, 7));
-  get(`/v2/finance/reports/pnl_by?by=segment&start=${a}&end=${z}&basis=${FIN_PNL.basis}${finAs()}`, {fresh: true})
-    .then(() => { FIN_SEG.ok = true; }, e => { if (e?.status === 403) FIN_SEG.ok = false; })
-    .finally(() => {
-      FIN_SEG.busy = false;
-      // A page drawn before the answer has no By segment option or Segment filter: draw it once more.
-      if (FIN_SEG.ok === true && $('[data-fin-seg="view"]') && !$('[data-fin-seg="view"] [data-v="segments"]')) finPnlPage();
-    });
+  return get(`/v2/finance/reports/pnl_by?by=segment&start=${a}&end=${z}&basis=${FIN_PNL.basis}${finAs()}`, {fresh: true})
+    .then(data => {
+      FIN_SEG.ok = true;
+      FIN_SEG.ids = (data?.columns || []).map(c => c.key).filter(k => k !== 'total' && k !== 'unallocated');
+    }, e => { if (e?.status === 403) FIN_SEG.ok = false; });
 }
 // A popover under its button; a click outside or Escape closes it.
 function finPop(btn, pop) {
@@ -349,9 +372,11 @@ const finExclNote = data => data?.excluded ? finNote('A pay run is left out of t
 function finSegDraw(box, state) {
   const data = state.data, cols = data.columns || [], rows = data.rows || [], caps = finCaps(), left = box.scrollLeft;
   if (!cols.length) { box.innerHTML = finNote('No segments yet.'); return; }
+  // A column opens its P&L: the whole P&L's viewers on every column but Total; a lead on their own segments.
   const head = cols.map(c => {
-    const label = `${c.color ? segTagDot(c.color) : ''}<span>${esc(c.label)}</span>`;
-    return `<th>${caps?.company && c.key !== 'total' ? `<button type="button" class="fin-seg-col" data-fin-segcol="${esc(c.key)}">${label}</button>` : label}</th>`;
+    const label = `${c.color ? segDot({color: c.color}) : ''}<span>${esc(c.label)}</span>`;
+    const drill = c.key !== 'total' && (caps?.company || c.key !== 'unallocated');
+    return `<th>${drill ? `<button type="button" class="fin-seg-col" data-fin-segcol="${esc(c.key)}">${label}</button>` : label}</th>`;
   }).join('');
   const body = rows.map(r => `<tr class="${r.key === 'contribution' ? 'fin-tot' : ''}"><td>${esc(r.label)}</td>${cols.map(c => `<td>${finNum(r.values?.[c.key] ?? null)}</td>`).join('')}</tr>`).join('');
   box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}</tr></thead><tbody>${body}</tbody></table>${finExclNote(data)}`;
@@ -618,8 +643,8 @@ function finLinePage(accountId) {
   const lq = new URLSearchParams(fq); if (seg) lq.set('segment', seg);
   FIN.line = {id: accountId, cur: null, prev: null, budgets: [], vendors: {}, load: 0, fq: lq.toString(), seg};
   const rows = FIN_PNL.last?.rows || [], me = rows.find(r => r.account_id === accountId), parent = me && rows.find(r => r.account_id === me.parent_id);
-  const chips = [...finPicked(filter).map(finPickName), ...(filter.who !== 'both' ? [filter.who === 'bots' ? 'Bots' : 'People'] : []), ...(seg ? [seg === 'unallocated' ? 'Unallocated' : segTagName(seg)] : [])]
-    .map(n => `<span class="fin-chip">${esc(n)}</span>`).join('');
+  const chips = [...finPicked(filter).map(finPickName), ...(filter.who !== 'both' ? [filter.who === 'bots' ? 'Bots' : 'People'] : [])]
+    .map(n => `<span class="fin-chip">${esc(n)}</span>`).join('') + (seg ? `<span class="fin-chip" data-fin-line-seg>${esc(segTagName(seg))}</span>` : '');
   $('#fin-body').innerHTML = `<nav class="fin-crumbs" aria-label="Breadcrumb"><a href="${finHref('/pnl', {view: !seg && (fq || FIN_PNL.view === 'expenses') ? 'expenses' : '', segment: seg})}">P&amp;L</a>${parent ? `<span class="muted">›</span><span class="muted">${esc(parent.name)}</span>` : ''}<span class="muted">›</span><h2 id="fin-line-name">${esc(me?.name || '')}</h2></nav>
     <div class="fin-bar"><label class="fin-inline"><span class="sr-only">Month</span><input type="month" data-fin-month value="${L.month}" aria-label="Month"></label>
       <label class="fin-inline"><span class="muted">Rows</span><select data-fin-by>${[['vendor', 'Vendor'], ['team', 'Team'], ['teammate', 'Teammate']].map(([v, l]) =>
@@ -627,6 +652,8 @@ function finLinePage(accountId) {
       ${chips}<span class="spacer"></span><span id="fin-line-add"></span></div>`
     + finSplit(`<div class="fin-scroll" id="fin-line">${skelRows(6, {dot: false})}</div>`, '', 'Selected row');
   const body = $('#fin-body');
+  // A segment's name waits for the list (a direct visit has none yet), so the chip never shows its id.
+  if (seg) void segTagsLoad().then(() => { const chip = $('[data-fin-line-seg]'); if (chip && FIN.line?.id === accountId) chip.textContent = segTagName(seg); });
   body.querySelector('[data-fin-month]').onchange = ev => { if (ev.target.value) { L.month = ev.target.value; L.sel = ''; void finLineLoad(); } };
   body.querySelector('[data-fin-by]').onchange = ev => { L.by = ev.target.value; L.sel = ''; finLineDraw(); finLineRail(); };
   body.onclick = ev => {
