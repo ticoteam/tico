@@ -1300,3 +1300,59 @@ def test_protected_approval_is_not_offered_mark_met_in_the_queue(world):
     rows = {i["requirement_id"]: i for i in R.queue_for(w.c, ANA)}
     assert rows[w.signoff]["can_mark_met"] is False
     assert rows[w.mockup]["can_mark_met"] is True
+
+
+def _company_owner_is_chris(monkeypatch):
+    """The company owner sees every members-only pipeline; in these tests it is Chris, so ana is only a reviewer."""
+    monkeypatch.setattr(access, "owner_email", lambda conn: "chris@acme.example")
+
+
+def _members_only(w, title, owner):
+    """A members-only pipeline owned by `owner` (ana is not a member and not its owner), with one stage."""
+    pipeline = H.type_create(w.c, ANA, title, [{"name": f"{title} intake", "status": "open"}], mover=True)["id"]
+    w.c.execute(
+        "UPDATE task_types SET pipeline_owner_id=?, pipeline_visibility='members' WHERE id=?", (owner, pipeline)
+    )
+    return pipeline, w.c.execute("SELECT id FROM task_steps WHERE type_id=?", (pipeline,)).fetchone()[0]
+
+
+def test_the_queue_leaves_out_a_ticket_the_reader_cannot_open(world):
+    """A ticket on a visible pipeline that is private to its owner and requester is not in ana's queue, though her review
+    of its requirements would be (ST2, O1)."""
+    w = world
+    secret = w.ticket("Secret")
+    w.c.execute("UPDATE tasks SET private=1, owner_id=?, requester_id=? WHERE id=?", (BEN, BEN, secret))
+    w.attach(task=secret)
+    assert {i["task_id"] for i in R.queue_for(w.c, ANA)} == {w.task}
+
+
+def test_the_queue_leaves_out_a_visited_stage_row_once_the_ticket_is_on_a_hidden_pipeline(world, monkeypatch):
+    """Design's Review is left (both its requirements were approved), then the work changes, so Mockup is out of date on
+    a stage the ticket has left and waits on ana. The ticket then moves to a members-only pipeline ana may not see: its
+    stale row is left out of her queue."""
+    w = world
+    _company_owner_is_chris(monkeypatch)
+    legal, legal_step = _members_only(w, "Legal", BEN)
+    w.approve(w.mockup)
+    w.approve(w.signoff)  # the stage's last requirement: the ticket moves on to Shipped
+    assert w.step_of() == w.shipped
+    w.c.execute(
+        "UPDATE tasks SET status='doing' WHERE id=?", (w.task,)
+    )  # Shipped is a done stage; the card is still open
+    w.push()  # the work changed: both requirements of the stage it left are out of date, and wait on ana again
+    assert any(i["requirement_id"] == w.mockup for i in R.queue_for(w.c, ANA))
+    # The card is now on Legal (its row is written as the move would leave it: Shipped's requirements are out of date, so
+    # the engine would hold a move out of Shipped; the visibility rule is what this test is about).
+    w.c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (legal, legal_step, w.task))
+    assert [i["task_id"] for i in R.queue_for(w.c, ANA)].count(w.task) == 0
+
+
+def test_moves_to_never_names_a_destination_pipeline_the_reader_may_not_see(world, monkeypatch):
+    w = world
+    _company_owner_is_chris(monkeypatch)
+    legal, legal_step = _members_only(w, "Legal", BEN)
+    L.create_link(w.c, ANA, w.review, legal, "move")
+    w.approve(w.mockup)  # the sign-off is now the stage's last unmet requirement
+    item = next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.signoff)
+    assert item["moves_to"] is None
+    assert R.queue_for(w.c, BEN) == []  # and Ben, who may see Legal, is not a reviewer of Design

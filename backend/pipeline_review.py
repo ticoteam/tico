@@ -571,7 +571,7 @@ def _queue_fields(
         r["id"]: r
         for r in _read(c, "SELECT id, display_name, slug FROM bots WHERE id IN (SELECT value FROM json_each(?))", bare)
     }
-    links = {
+    raw_links = {
         r["from_pipeline_stage_id"]: r["to_pipeline_id"]
         for r in _read(
             c,
@@ -580,6 +580,10 @@ def _queue_fields(
             [item["stage_id"] for item in items],
         )
     }
+    # A move link into a pipeline the reader may not see names nothing: its stage is left out of the destinations (D67).
+    targets = pipeline_rights.visible_pipeline_ids(c, actor, sorted(set(raw_links.values())))
+    blocked = {stage for stage, target in raw_links.items() if target not in targets}
+    links = {stage: target for stage, target in raw_links.items() if stage not in blocked}
     pipeline_ids = {item["pipeline_id"] for item in items}
     steps = _read(
         c,
@@ -615,8 +619,9 @@ def _queue_fields(
         # An approval is never overridden (mark_met refuses protected_approval), so the action is not offered for one.
         item["can_mark_met"] = bool(rights[item["pipeline_id"]]) and item["kind"] != "approval"
         at_stage = tasks[item["task_id"]].get("step_id") == item["stage_id"]
+        # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
         item["can_not_validate"] = at_stage and _route_ok(item)
-        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names) if at_stage else None
+        item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names, blocked) if at_stage else None
 
 
 def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
@@ -634,9 +639,13 @@ def _moves_to(
     links: dict[str, str],
     steps: list[Row],
     names: dict[str, str],
+    blocked: set[str] | None = None,
 ) -> Row | None:
     """Where the ticket goes if this item is the stage's last unmet requirement, the same destination approve uses;
-    None while another requirement of the stage is unmet, or at the last stage."""
+    None while another requirement of the stage is unmet, at the last stage, or when the stage's move link leads to a
+    pipeline the reader may not see (`blocked`)."""
+    if blocked and item["stage_id"] in blocked:
+        return None
     labels = facts.labels.get(item["task_id"], set())
     for other in live:
         if other["pipeline_stage_id"] != item["stage_id"] or other["id"] == item["requirement_id"]:
@@ -654,12 +663,52 @@ def _moves_to(
     return {"stage_id": destination[1], "name": names.get(destination[1], "")}
 
 
+def _authorized(
+    c: "sqlite3.Connection",
+    actor: str,
+    task_ids: "Iterable[str]",
+    pipeline_ids: "Iterable[str]",
+    visible_sql: str | None,
+) -> tuple[set[str], set[str]]:
+    """The tickets the reader may open now and the pipelines they may see, of those given. A ticket is readable when its
+    current pipeline is visible to them, it passes the task rules (`visible_sql`, the route's list clause, when given) and
+    `hubdb.task_private_readable` admits them. Reads only the ticket rows, never their tags, decisions or attachments."""
+    found: dict[str, Row] = {}
+    ids = sorted({str(t) for t in task_ids if t})
+    for chunk in _chunks(ids):
+        sql = "SELECT * FROM tasks WHERE id IN (SELECT value FROM json_each(?))"
+        if visible_sql:
+            sql += f" AND id IN (SELECT id FROM tasks WHERE {visible_sql})"
+        found.update({str(row["id"]): row for row in _rows(c, sql, (chunk,))})
+    types = {str(row["type_id"]) for row in found.values() if row.get("type_id")}
+    visible = pipeline_rights.visible_pipeline_ids(c, actor, sorted(types | {str(p) for p in pipeline_ids if p}))
+    # The copied-page provenance is read once; a public ticket with no copy is open to everyone, so only the private or
+    # copied tickets need the per-ticket rule.
+    from . import counsel
+
+    copies = counsel.page_copies(c)
+    allowed: set[str] = set()
+    for tid, row in found.items():
+        if row.get("type_id") and str(row["type_id"]) not in visible:
+            continue
+        open_to_all = tid not in copies and not _hub().task_private(c, row)
+        if open_to_all or _hub().task_private_readable(c, actor, row):
+            allowed.add(tid)
+    return allowed, visible
+
+
 def queue_for(
-    c: "sqlite3.Connection", actor: str, pipeline_id: str | None = None, stage_id: str | None = None
+    c: "sqlite3.Connection",
+    actor: str,
+    pipeline_id: str | None = None,
+    stage_id: str | None = None,
+    visible_sql: str | None = None,
 ) -> list[Row]:
     """The items waiting for this reviewer, Late first, then oldest. `pipeline_id` and `stage_id` narrow it to one
     pipeline or one stage. Only a reviewer, a send-back's route or an asked backup sees an item; a bot sees none. An item
-    is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place."""
+    is a requirement of the ticket's current stage, or a stale one of a stage it has left (D33), reviewed in place. The
+    tickets the reader may not open, and the items on pipelines they may not see, are left out (`visible_sql` is the
+    route's task list clause, which also applies the bot activity controls)."""
     if not str(actor or "").startswith("human:"):
         return []
     people = ",".join("?" * len(PERSON_REVIEWED))
@@ -686,7 +735,6 @@ def queue_for(
     )
     now = _now()
     pairs = _rows(c, sql, tuple([*args, *args]))
-    tasks = _tasks(c, [pair["task_id"] for pair in pairs])
     live = _read(
         c,
         "SELECT * FROM stage_requirements WHERE pipeline_stage_id IN (SELECT value FROM json_each(?)) "
@@ -694,6 +742,21 @@ def queue_for(
         [pair["stage_id"] for pair in pairs],
     )
     requirements = {r["id"]: r for r in live}
+    # Who may open what is decided before any ticket is hydrated or any attachment, decision or visit is read: a ticket the
+    # reader may not open, and an item on a pipeline they may not see, are dropped here (D67).
+    allowed, visible = _authorized(
+        c,
+        actor,
+        [pair["task_id"] for pair in pairs],
+        [requirement["pipeline_id"] for requirement in requirements.values()],
+        visible_sql,
+    )
+    pairs = [
+        pair
+        for pair in pairs
+        if pair["task_id"] in allowed and requirements.get(pair["requirement_id"], {}).get("pipeline_id") in visible
+    ]
+    tasks = _tasks(c, [pair["task_id"] for pair in pairs])
     facts = _Facts.load(c, tasks, live)
     waiting: list[tuple[Row, Row, str]] = []
     for pair in pairs:
@@ -1328,12 +1391,13 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
         who = request.state.identity
         human_only(who)
         with cast(Any, store).read() as c:
-            # A members-only pipeline the reader may not see has no queue for them: its items are left out, and its own
-            # queue is the same answer as a pipeline that is not there.
+            # A pipeline the reader may not see has no queue for them, and it answers exactly as one that is not there.
+            # Items on members-only pipelines they may not see are left out, and so are tickets they may not open.
             hidden = pipeline_rights.hidden_pipeline_ids(c, who.task_actor or who.actor)
             if pipeline_id and pipeline_id in hidden:
                 raise Problem("not_found", "No such pipeline", 404)
-            items = queue_for(c, who.actor, pipeline_id, stage_id)
+            scope = pipeline_rights.list_sql(c, who.actor, cast(Any, auth).task_sql(c, who))
+            items = queue_for(c, who.actor, pipeline_id, stage_id, visible_sql=scope)
             return {"items": [item for item in items if item["pipeline_id"] not in hidden]}
 
     @app.get("/api/v2/pipelines/review/queue")
