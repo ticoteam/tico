@@ -396,3 +396,49 @@ def test_a_type_created_after_boot_gets_the_default_warn_after_on_its_working_st
         }
     assert limits["In Progress"] == 240 and limits["QA Fixes"] == 240
     assert limits["Done"] is None and limits["In QA"] is None
+
+
+def test_a_ticket_with_no_visit_is_late_from_its_move_into_the_step_not_from_its_creation(api):
+    """Fix L2-4: a card made at 08:00 and moved into a stage with no requirements (so no visit row) at 12:00 is not Late
+    at 12:30 with a 4 h Warn after, and is Late at 16:00."""
+    store = api.app.state.store
+    t0 = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        building = step(c, type_id, "Building")
+        c.execute("UPDATE task_steps SET limit_minutes=240 WHERE id=?", (building,))
+        task = ticket(c, type_id, created=t0)
+        c.execute("DELETE FROM stage_visits WHERE task_id=?", (task["id"],))
+        H.history_event(c, "task", task["id"], ANA, "step", None, building, created_at=stamp(t0 + timedelta(hours=4)))
+        rows = [H.task(c, task["id"])]
+        assert PM.late_tickets(c, rows, t0 + timedelta(hours=4, minutes=30)) == {}
+        assert task["id"] in PM.late_tickets(c, rows, t0 + timedelta(hours=8))
+
+
+def test_waiting_pauses_the_clock_without_a_hold_row(api):
+    """Fix L2-5: entered 08:00, waiting 08:10, back to doing 11:59. The clock restarts at 11:59, as it does after a hold
+    (test_a_hold_pauses_the_limit...): at 12:58 it is 59 minutes in, and Late at 12:59 with a 60 min Warn after."""
+    store = api.app.state.store
+    t0 = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        task = ticket(c, type_id, created=t0)
+        visit(c, task["id"], type_id, "Building", t0)
+        H.history_event(
+            c, "task", task["id"], ANA, "status", "doing", "waiting", created_at=stamp(t0 + timedelta(minutes=10))
+        )
+        H.history_event(
+            c,
+            "task",
+            task["id"],
+            ANA,
+            "status",
+            "waiting",
+            "doing",
+            created_at=stamp(t0 + timedelta(hours=3, minutes=59)),
+        )
+        rows = [H.task(c, task["id"])]
+        assert PM.late_tickets(c, rows, t0 + timedelta(hours=4, minutes=58)) == {}
+        late = PM.late_tickets(c, rows, t0 + timedelta(hours=4, minutes=59))
+        assert late[task["id"]]["since"] == stamp(t0 + timedelta(hours=3, minutes=59))
