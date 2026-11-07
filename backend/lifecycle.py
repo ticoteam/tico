@@ -394,8 +394,19 @@ def _insert(c, actor, title, description, reports_to, team, description_by=None,
     c.execute(
         "INSERT INTO seats(id,title,description,reports_to,team,created_at,created_by,updated_at,updated_by,description_by,"
         "template) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (seat_id, _clean_title(title), description, reports_to, str(team or "").strip(), now, actor, now, actor, by,
-         str(template or "")),
+        (
+            seat_id,
+            _clean_title(title),
+            description,
+            reports_to,
+            str(team or "").strip(),
+            now,
+            actor,
+            now,
+            actor,
+            by,
+            str(template or ""),
+        ),
     )
     H.event(c, actor, "seat.created", seat_id, {"reports_to": reports_to})
     return seat_id
