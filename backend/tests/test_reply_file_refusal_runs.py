@@ -140,3 +140,41 @@ def test_event_and_attachment_on_a_reply_to_a_refused_file_are_hidden(api):
         # Depth 2 below a refused file: the event and the attachment are hidden.
         assert index.event("refused-leaf", READER, H.now(), encode({})) is False
         assert index.blob("b-leaf") is False
+
+
+def chain(c, prefix, cid, length):
+    """A reply chain of `length` plain messages, root first; each replies to the one before it."""
+    ids = []
+    for i in range(length):
+        mid = f"{prefix}-{i}"
+        stored(c, mid, cid, {}, in_reply_to=ids[-1] if ids else None)
+        ids.append(mid)
+    return ids
+
+
+@pytest.mark.parametrize("settled", [False, True])
+@pytest.mark.parametrize("refused_chain", ["job", "input"])
+def test_two_long_reply_chains_on_one_run_each_keep_their_file_refusal(api, settled, refused_chain):
+    """A run whose job and input each sit on a 60-deep reply chain. The file refusal sits on an ancestor 55 replies up
+    from the leaf, past where a batch read of both chains would stop if it counted rows, not levels."""
+    r, work, attempt, cid = running_turn(api)
+    aid = attempt["id"]
+    fid = refused_file(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        job_chain = chain(c, "job", cid, 60)
+        input_chain = chain(c, "input", cid, 60)
+        c.execute(
+            "UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (job_chain[-1], aid)
+        )
+        queue(c, "input-leaf", cid, {}, sender="human:cara", in_reply_to=input_chain[-1])
+        c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id='input-leaf'", (aid,))
+        c.execute(
+            "INSERT INTO attempt_inputs(attempt_id,message_id,acked_at) VALUES(?,?,?)", (aid, "input-leaf", H.now())
+        )
+    assert run_visible(api, aid, settled) is True
+    refused = job_chain if refused_chain == "job" else input_chain
+    with store.transaction() as c:
+        # Index 4 of a 60-long chain is 55 replies above its leaf.
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"target": fid}), refused[4]))
+    assert run_visible(api, aid, settled) is False

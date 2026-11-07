@@ -897,7 +897,12 @@ def attempt_pages_readable(c, actor, aid):
     parents = reply_chain_rows(c, messages)
     return all(
         page_message_readable(c, actor, H._json(message.get("refs"), {}) or {})
-        and reply_pages_readable(c, actor, message, lookup=parents.get)
+        and reply_pages_readable(
+            c,
+            actor,
+            message,
+            lookup=lambda mid: parents[mid] if mid in parents else H.message(c, mid, include_deleted=True),
+        )
         for message in messages
     )
 
@@ -1359,9 +1364,13 @@ REPLY_CHAIN_LIMIT = 100
 
 
 def reply_chain_rows(c, messages):
-    """The stored messages on the in_reply_to chains of `messages`, keyed by id: one query per level of the chains."""
+    """The stored messages on the in_reply_to chains of `messages`, keyed by id, one query per level of the chains.
+    The bound is the level: each chain is read as far as its own walk reads (REPLY_CHAIN_LIMIT), however many chains
+    the batch holds, so no chain is cut short by another's rows."""
     found, frontier = {}, {m["in_reply_to"] for m in messages if m.get("in_reply_to")}
-    while frontier and len(found) < REPLY_CHAIN_LIMIT:
+    for _ in range(REPLY_CHAIN_LIMIT):
+        if not frontier:
+            break
         marks = ",".join("?" * len(frontier))
         rows = {
             row["id"]: dict(row)
