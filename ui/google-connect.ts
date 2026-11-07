@@ -472,7 +472,7 @@ interface Window { mountGoogleConnect: (host: GoogleConnectHost | null, options?
 
   async function copy(el: HTMLElement) {
     const area = el.hasAttribute('data-copy-prompt') ? el.closest('.google-prompt')?.querySelector('textarea') : null;
-    try { await copyText(area ? area.value : el.dataset.copy); toast(el.hasAttribute('data-copy-link') ? 'Link copied' : 'Copied'); }
+    try { await copyText(area ? area.value : el.dataset.copy ?? ''); toast(el.hasAttribute('data-copy-link') ? 'Link copied' : 'Copied'); }
     catch (error) {
       const code = el.closest('.machine-command')?.querySelector('code');
       if (area) area.select();
