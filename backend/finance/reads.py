@@ -3037,7 +3037,7 @@ def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str |
         raise FinanceError(NOT_FOUND, "no such line in your view")
     rows = SATT.history(c, line_id)
     now = rows[0] if rows else None
-    splits = SATT.parse_splits(str(now["splits_json"])) if now is not None else ()
+    splits = SATT.parse_splits(str(now["splits"])) if now is not None else ()
     shares = CATT.shares_of(splits, line.amount)
     source = str(now["source"]) if now is not None and splits else "tags"
     rule_id = str(now["rule_id"]) if now is not None and splits and now["rule_id"] else None
@@ -3060,7 +3060,7 @@ def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str |
                 "rule_id": str(r["rule_id"]) if r["rule_id"] else None,
                 "splits": [
                     {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
-                    for x in SATT.parse_splits(str(r["splits_json"]))
+                    for x in SATT.parse_splits(str(r["splits"]))
                 ],
                 "set_by": str(r["set_by"]),
                 "set_at": str(r["created_at"]),

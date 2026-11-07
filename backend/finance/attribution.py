@@ -282,7 +282,7 @@ def attribute_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if prior is None:
         raise FinanceError(CONFLICT, "nothing to undo on that line")
     before = ATT.in_force_splits(ctx.c, line_id)
-    target = ATT.parse_splits(str(prior["splits_json"]))
+    target = ATT.parse_splits(str(prior["splits"]))
     source = str(prior["source"])
     rule_id = str(prior["rule_id"] or "")
 

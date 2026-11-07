@@ -680,7 +680,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
-    assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
+    assert.ok(tabs.includes('home') && !tabs.includes('dm'), 'one chat tab, Home; DM sits behind Incognito: ' + tabs);
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
@@ -1049,7 +1049,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     const tabs = page.locator('#btabs [data-bt]');
     await tabs.first().waitFor();
-    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Home', 'DM']);
+    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Chat', 'Tasks']);
     for (const width of [390, 320]) {
       await page.setViewportSize({width, height: 700});
       for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
@@ -1057,10 +1057,10 @@ let browser = null;
     }
     await page.setViewportSize({width: 390, height: 844});
     await shot(page, 'bot-tabs-phone');
-    await page.locator('#btabs [data-bt="dm"]').tap();
-    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#btabs [data-bt="dm"]').getAttribute('aria-selected') === 'true');
-    await page.locator('#btabs [data-bt="home"]').tap();
-    await page.waitForFunction(() => document.querySelector('#btabs [data-bt="home"]').getAttribute('aria-selected') === 'true');
+    await page.locator('#bot-incognito').tap();
+    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'true');
+    await page.locator('#bot-incognito').tap();
+    await page.waitForFunction(() => document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
 
     // A person's page starts a DM with them; your own does not offer one.

@@ -105,7 +105,7 @@ def test_undo_restores_the_row_a_change_superseded_and_history_is_newest_first(b
         assert undone.status == "committed", undone.reason
         assert _by_teammate(c, "6100") == {CARA: 4_000}
         history = ATT.history(c, line)
-        assert [ATT.parse_splits(str(h["splits_json"]))[0].teammate for h in history] == [CARA, DAN, CARA]
+        assert [ATT.parse_splits(str(h["splits"]))[0].teammate for h in history] == [CARA, DAN, CARA]
 
 
 def test_a_rule_applies_to_lines_from_its_apply_from_day_and_deleting_it_gives_tags_back(books):

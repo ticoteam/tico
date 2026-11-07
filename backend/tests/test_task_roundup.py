@@ -485,7 +485,7 @@ def test_a_waiting_task_that_waits_on_nothing_is_listed_after_two_days(api):
         assert f"{stranded['id'][:8]} Confirm the delivery date: Waiting on nothing for 2 days" in only_list(c)
 
 
-def test_a_waiting_task_held_by_a_live_blocker_or_by_a_person_is_not_listed(api):
+def test_a_waiting_task_held_by_a_live_blocker_or_by_a_person_is_not_listed_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         quote = H.task_create(c, H.human_actor("ana"), "Get the quote", "Ana gets it.", "human:ana")
@@ -509,7 +509,7 @@ def test_a_waiting_task_held_by_a_live_blocker_or_by_a_person_is_not_listed(api)
         assert lists(c) == []
 
 
-def test_a_private_task_is_listed_by_its_id_without_its_title(api):
+def test_a_private_task_is_listed_by_its_id_without_its_title_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         private = H.task_create(
@@ -529,7 +529,7 @@ def test_a_private_task_is_listed_by_its_id_without_its_title(api):
         assert "Confidential merger plan" not in body
 
 
-def test_sending_each_bot_list_in_its_own_transaction_rechecks_the_run(api):
+def test_sending_each_bot_list_in_its_own_transaction_rechecks_the_run_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")
@@ -545,7 +545,7 @@ def test_sending_each_bot_list_in_its_own_transaction_rechecks_the_run(api):
         assert len(lists(c)) == 1
 
 
-def test_a_list_is_rebuilt_from_the_live_database_when_it_is_sent(api):
+def test_a_list_is_rebuilt_from_the_live_database_when_it_is_sent_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         gone = task(c, "Renew the parking permit")
@@ -561,7 +561,7 @@ def test_a_list_is_rebuilt_from_the_live_database_when_it_is_sent(api):
         assert fresh["id"][:8] in body and gone["id"][:8] not in body
 
 
-def test_a_bot_that_asked_for_a_task_is_woken_once_when_the_bot_that_owns_it_finishes_it(api):
+def test_a_bot_that_asked_for_a_task_is_woken_once_when_the_bot_that_owns_it_finishes_it_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         asked = H.task_create(c, H.bot_actor("finance"), "Fix the kiosk", "Build.", "bot:ops")
@@ -571,7 +571,7 @@ def test_a_bot_that_asked_for_a_task_is_woken_once_when_the_bot_that_owns_it_fin
         assert after - before == 1
 
 
-def test_a_step_set_later_on_a_task_that_had_none_is_news_but_its_creation_row_is_not(api):
+def test_a_step_set_later_on_a_task_that_had_none_is_news_but_its_creation_row_is_not_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         mine = task(c, "Plan the hike")
@@ -589,7 +589,7 @@ def test_a_step_set_later_on_a_task_that_had_none_is_news_but_its_creation_row_i
         assert f"{mine['id'][:8]} Plan the hike: Update you may have missed: step changed by " in only_list(c)
 
 
-def test_a_retained_blocker_that_someone_else_finished_after_the_turn_counts_as_news(api):
+def test_a_retained_blocker_that_someone_else_finished_after_the_turn_counts_as_news_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         blocker = H.task_create(c, H.human_actor("ana"), "Sign the lease", "Ana signs it.", "human:ana")
@@ -611,7 +611,7 @@ def test_a_retained_blocker_that_someone_else_finished_after_the_turn_counts_as_
         ) in only_list(c)
 
 
-def test_a_bot_reached_only_through_an_external_inbox_is_sent_its_list_once_with_no_job(api):
+def test_a_bot_reached_only_through_an_external_inbox_is_sent_its_list_once_with_no_job_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         BS.update(
@@ -633,7 +633,7 @@ def test_a_bot_reached_only_through_an_external_inbox_is_sent_its_list_once_with
         assert "finance" not in task_roundup.run(c, NOON)["woke"]
 
 
-def test_an_explicit_follow_up_that_has_come_is_listed_first_once_and_then_cleared(api):
+def test_an_explicit_follow_up_that_has_come_is_listed_first_once_and_then_cleared_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         mine = task(c, "Chase the quote")
@@ -655,7 +655,7 @@ def test_an_explicit_follow_up_that_has_come_is_listed_first_once_and_then_clear
         assert "finance" not in task_roundup.run(c, NOON)["woke"]  # listed once: not again
 
 
-def test_a_follow_up_still_to_come_is_not_listed_and_wakes_nothing_on_its_own(api):
+def test_a_follow_up_still_to_come_is_not_listed_and_wakes_nothing_on_its_own_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         mine = task(c, "Chase the quote")
@@ -673,7 +673,7 @@ def test_a_follow_up_still_to_come_is_not_listed_and_wakes_nothing_on_its_own(ap
         assert H.task(c, mine["id"])["check_back_at"] is None  # consumed by its listing
 
 
-def test_migration_0071_clears_a_follow_up_nobody_set_and_keeps_one_that_was(api):
+def test_migration_0071_clears_a_follow_up_nobody_set_and_keeps_one_that_was_first(api):
     store = api.app.state.store
     migration = importlib.import_module("backend.migrations.0071_explicit_follow_ups")
     with store.transaction() as c:
@@ -690,7 +690,7 @@ def test_migration_0071_clears_a_follow_up_nobody_set_and_keeps_one_that_was(api
         assert H.task(c, person_set["id"])["check_back_note"] == "Look again"
 
 
-def test_a_bot_with_no_live_task_is_skipped_before_any_per_task_query(api, monkeypatch):
+def test_a_bot_with_no_live_task_is_skipped_before_any_per_task_query_first(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as c:
         finished = task(c, "File the receipts")
@@ -715,7 +715,7 @@ def test_a_bot_with_no_live_task_is_skipped_before_any_per_task_query(api, monke
         assert "finance" in asked
 
 
-def test_a_bot_whose_tasks_need_no_look_gets_no_message_and_no_sent_mark(api):
+def test_a_bot_whose_tasks_need_no_look_gets_no_message_and_no_sent_mark_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         fresh = task(c, "Draft the budget")
@@ -728,7 +728,7 @@ def test_a_bot_whose_tasks_need_no_look_gets_no_message_and_no_sent_mark(api):
         assert c.execute("SELECT count(*) FROM events WHERE action='task_roundup.sent'").fetchone()[0] == 0
 
 
-def test_a_private_task_names_neither_its_follow_up_who_or_note_nor_what_changed(api):
+def test_a_private_task_names_neither_its_follow_up_who_or_note_nor_what_changed_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         due = H.task_create(
@@ -769,7 +769,7 @@ def test_a_private_task_names_neither_its_follow_up_who_or_note_nor_what_changed
             assert secret not in body, secret
 
 
-def test_an_update_after_the_run_but_before_its_list_is_built_is_listed_once(api, monkeypatch):
+def test_an_update_after_the_run_but_before_its_list_is_built_is_listed_once_first(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")
@@ -788,7 +788,7 @@ def test_an_update_after_the_run_but_before_its_list_is_built_is_listed_once(api
         assert len(lists(c)) == 1
 
 
-def test_a_list_is_written_to_the_bot_alone_so_no_person_gets_a_delivery_for_it(api):
+def test_a_list_is_written_to_the_bot_alone_so_no_person_gets_a_delivery_for_it_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         idle = task(c, "Renew the parking permit")  # finance is Ana's bot: her personal room is where a list used to go
@@ -813,7 +813,7 @@ def test_a_list_is_written_to_the_bot_alone_so_no_person_gets_a_delivery_for_it(
         )
 
 
-def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an_explicit_follow_up_does(api):
+def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an_explicit_follow_up_does_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         left = task(c, "Renew the parking permit")
@@ -835,7 +835,7 @@ def test_a_date_a_snooze_left_behind_holds_nothing_while_a_snooze_in_force_or_an
         assert explicit["id"][:8] not in body
 
 
-def test_a_private_subtask_or_blocker_its_bot_cannot_read_is_neither_counted_nor_described(api):
+def test_a_private_subtask_or_blocker_its_bot_cannot_read_is_neither_counted_nor_described_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         parent = task(c, "Ship the kiosk")  # public, owned by finance
@@ -903,7 +903,7 @@ def test_a_private_subtask_or_blocker_its_bot_cannot_read_is_neither_counted_nor
             assert secret not in body, secret
 
 
-def test_a_title_that_names_a_person_makes_no_mention_in_the_roundup_so_no_person_gets_a_delivery_for_it(api):
+def test_a_title_that_names_a_person_makes_no_mention_in_the_roundup_so_no_person_gets_a_delivery_for_it_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         idle = H.task_create(
@@ -925,7 +925,9 @@ def test_a_title_that_names_a_person_makes_no_mention_in_the_roundup_so_no_perso
         )
 
 
-def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_and_is_relisted_after_seven_days(api):
+def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_and_is_relisted_after_seven_days_first(
+    api,
+):
     store = api.app.state.store
     with store.transaction() as c:
         typ = dev_type(c)
@@ -988,7 +990,7 @@ def late_manager_ticket(c):
     return row
 
 
-def test_a_manager_whose_list_has_only_a_late_line_gets_one_queued_list_per_run(api):
+def test_a_manager_whose_list_has_only_a_late_line_gets_one_queued_list_per_run_first(api):
     with api.app.state.store.transaction() as c:
         late_manager_ticket(c)
         assert "coo" in task_roundup.run(c, DAY)["woke"]
@@ -997,7 +999,7 @@ def test_a_manager_whose_list_has_only_a_late_line_gets_one_queued_list_per_run(
         assert len(lists(c, "coo")) == 1
 
 
-def test_a_list_held_as_a_note_is_not_sent_and_its_lines_are_listed_again_next_run(api, monkeypatch):
+def test_a_list_held_as_a_note_is_not_sent_and_its_lines_are_listed_again_next_run_first(api, monkeypatch):
     from backend import rules
 
     real = rules.judge
@@ -1016,7 +1018,7 @@ def test_a_list_held_as_a_note_is_not_sent_and_its_lines_are_listed_again_next_r
         assert "Late in In Progress" in lists(c, "coo")[-1]
 
 
-def test_a_late_ticket_its_manager_cannot_read_is_not_listed(api):
+def test_a_late_ticket_its_manager_cannot_read_is_not_listed_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         typ = dev_type(c)
@@ -1042,7 +1044,7 @@ def test_a_late_ticket_its_manager_cannot_read_is_not_listed(api):
         assert lists(c, "coo") == []
 
 
-def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_both_lines_in_order(api):
+def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_both_lines_in_order_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         typ = dev_type(c)
@@ -1069,7 +1071,7 @@ def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_bot
         assert body.index("Late in In Progress: 5 h") < body.index("Backlog: 4 tickets wait at Inbox")
 
 
-def test_a_step_over_its_backlog_is_one_line_on_its_oldest_ticket_for_its_manager_once_per_every_hours(api):
+def test_a_step_over_its_backlog_is_one_line_on_its_oldest_ticket_for_its_manager_once_per_every_hours_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         typ = backlog_board(c, {"over": 3, "notify": ["manager"], "every_hours": 4})
@@ -1083,7 +1085,7 @@ def test_a_step_over_its_backlog_is_one_line_on_its_oldest_ticket_for_its_manage
         assert sum("Backlog: 4 tickets" in found for found in lists(c, "coo")) == 2
 
 
-def test_a_backlog_named_to_a_person_reaches_no_person_through_the_roundup(api):
+def test_a_backlog_named_to_a_person_reaches_no_person_through_the_roundup_first(api):
     store = api.app.state.store
     with store.transaction() as c:
         typ = backlog_board(c, {"over": 3, "notify": ["manager", "human:ana"]})
@@ -1105,7 +1107,7 @@ def test_a_backlog_named_to_a_person_reaches_no_person_through_the_roundup(api):
         )
 
 
-def test_a_backlog_of_snoozed_tickets_lists_nothing_for_its_owner_and_queues_no_roundup_job(api, monkeypatch):
+def test_a_backlog_of_snoozed_tickets_lists_nothing_for_its_owner_and_queues_no_roundup_job_first(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: DAY)
     store = api.app.state.store
     with store.transaction() as c:
@@ -1123,7 +1125,7 @@ def test_a_backlog_of_snoozed_tickets_lists_nothing_for_its_owner_and_queues_no_
         )
 
 
-def test_a_backlog_of_snoozed_tickets_still_lists_for_its_manager(api, monkeypatch):
+def test_a_backlog_of_snoozed_tickets_still_lists_for_its_manager_first(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: DAY)
     store = api.app.state.store
     with store.transaction() as c:
@@ -2197,3 +2199,21 @@ def test_an_external_inbox_with_no_notice_since_its_snooze_ended_has_a_missed_st
         complete_jobs(c)
         assert "finance" in task_roundup.run(c, DAY)["woke"]
         assert f"{tid[:8]} Call the venue: Snooze ended at 09:00 UTC and nothing has picked it up" in only_list(c)
+
+
+def test_a_team_lead_with_sweeps_off_hears_the_backlog_of_the_type_it_manages(api):
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "coo", {"profile": "lead"})
+        typ = backlog_board(c, {"over": 3, "notify": ["manager"], "every_hours": 4})
+        backlog_tickets(c, typ, "bot:ops", 4)
+        assert "coo" in task_roundup.run(c, DAY)["woke"], "the lead's board is over its backlog: it is told"
+        assert "Backlog: 4 tickets wait at Inbox (over 3; ops 4)." in only_list(c, "coo")
+
+
+def test_a_sweeps_off_bot_named_for_a_backlog_it_does_not_manage_gets_no_backlog_line(api):
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {"profile": "lead"})  # sweeps off, and it takes ordinary tasks (a reviewer takes none)
+        typ = backlog_board(c, {"over": 3, "per": "owner", "notify": ["owner"], "every_hours": 4})
+        backlog_tickets(c, typ, "bot:ops", 4)
+        task_roundup.run(c, DAY)
+        assert not any("Backlog:" in body for body in lists(c, "ops")), "a lead is not the type's manager"

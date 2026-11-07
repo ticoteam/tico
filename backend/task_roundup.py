@@ -51,8 +51,9 @@ force hides the task (task_snooze.snoozed) until it ends.
 A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
 only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
 profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
-its own follow-up times only: never an idle, late, exception, backlog or assigned line. A manager and a doer get all
-of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
+its own follow-up times only: never an idle, late, exception or assigned line. The one exception is a backlog line for
+the type it manages (step_backlog's `manager` target): the team lead hears of its own board's backlog with sweeps off. A
+manager and a doer get all of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
 a person a line would name is never told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
@@ -404,7 +405,7 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
             + _blocked_by(c, slug, actor, at, shared)
         )
         if sweeping
-        else []
+        else _backlogs(c, slug, actor, at, shared, managed_only=True)
     )
     for group, sort, item in _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines:
         groups[group].append((sort, item))
@@ -749,9 +750,16 @@ def _engineering_types(c):
     return out
 
 
-def _backlogs(c, slug, actor, at, shared):
+def _manages(c, actor, row):
+    """Whether `actor` is the bot that manages the row's type: the bot step_backlog names as its `manager`."""
+    found = H.resolve_bot(c, H.type_manager(c, row)) or {}
+    return bool(found) and H.bot_actor(found["id"]) == actor
+
+
+def _backlogs(c, slug, actor, at, shared, *, managed_only=False):
     """A step over its backlog (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there. Relisted
-    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing for its owner, as its wake did before."""
+    after the step's every_hours while it stays over. A snoozed oldest ticket lists nothing for its owner, as its wake did before.
+    `managed_only` keeps only the warnings of the type the bot manages (a sweeps-off bot's one backlog line)."""
     from . import step_backlog, task_snooze as TS
 
     out = []
@@ -759,6 +767,8 @@ def _backlogs(c, slug, actor, at, shared):
         if actor not in warning["targets"]:
             continue
         first = warning["first"]
+        if managed_only and not _manages(c, actor, first):
+            continue
         key = _key("backlog", slug, warning["key"])
         snoozed_for_owner = actor == first.get("owner_id") and TS.snoozed(first, at)
         if (

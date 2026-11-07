@@ -1914,6 +1914,13 @@ def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
             "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
             (H.shift(H.now(), hours=-30), idle["id"], busy["id"]),
         )
+        # Creating a task queues its owner's wake on the opening message; the idle ticket has no run live or queued,
+        # so that wake is finished here. The busy ticket keeps its queued run.
+        c.execute(
+            "UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
+            "(SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.task_id=?)",
+            (idle["id"],),
+        )
     check = health_of(api)[1]["dev_board_idle"]
     assert check["status"] == "warn"
     [item] = check["items"]
