@@ -54,6 +54,7 @@
  "file review": "not_found",
  "file touch": "not_found",
  "finance action": "not_found",
+ "gateway digest": "not_json_list",
  "gateway fetch": "gateway_not_connected",
  "gateway image": "gateway_not_connected",
  "gateway search": "gateway_not_connected",
