@@ -140,6 +140,9 @@ company already owns, so their commits need no sign-off, and their pull requests
 - Keep real team names, human names, domains and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
 - Describe the behavior change and how you checked it in the pull request.
+- Fill in the template's Spec, Demo steps and Risk sections. The release notes that approvers read are built from them:
+  the Spec link, the steps to see the change work in the Acme Lights demo company, and the risk level with what could go
+  wrong.
 
 ## How we work
 
@@ -158,7 +161,9 @@ Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's note
 
 A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
-GitHub Actions validates main's head, ships the first green candidate to Tico Team's install, and promotes it to
-stable after it has baked. A hotfix is for major production issues only. The Release Manager bot no longer tags or
-rolls out Tico releases; it only monitors them. The details are in
-[docs/releasing.md](docs/releasing.md#release-windows).
+GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
+(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
+`release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
+The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
+[docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in
+[docs/releasing.md](docs/releasing.md#approval).

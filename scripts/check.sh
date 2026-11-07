@@ -5,8 +5,8 @@
 #   scripts/check.sh --all    every tracked file, every check (CI runs these too)
 # Checks: lint.sh (Python baseline), ruff format (once ruff.toml has a [format] section), shell_lint.sh (shellcheck),
 # actionlint (workflows), cargo fmt (the Rust crates scripts/rust_checks.sh formats), migration order,
-# check_ui_types.sh and check_types.sh (basedpyright on the backend against its baseline), and the OpenAPI document's
-# drift check. Each runs only when its inputs changed.
+# check_ui_types.sh, check_ui_strict.py (new UI code is strict TypeScript), check_types.sh (basedpyright on the backend
+# against its baseline), and the OpenAPI document's drift check. Each runs only when its inputs changed.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -187,6 +187,17 @@ if [ "$ALL" = 1 ] || changed_matches '^ui/|^backend/.*\.py$|^scripts/(check_ui_r
   run "ui routes (API paths)" bash scripts/check_ui_routes.sh
 else
   skip "ui routes (API paths)" "no UI or backend Python changed"
+fi
+
+# 7c. New UI code is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
+if [ "$ALL" = 1 ] || changed_matches '^ui/|^scripts/check_ui_strict\.py$'; then
+  if [ -n "$base" ]; then
+    run "ui strict (new .ts, legacy list)" python3 scripts/check_ui_strict.py --base "$base"
+  else
+    run "ui strict (new .ts, legacy list)" python3 scripts/check_ui_strict.py
+  fi
+else
+  skip "ui strict (new .ts, legacy list)" "no UI file changed"
 fi
 
 # 8. Python types: basedpyright on pyrightconfig.json's include list, against its baseline and the strict-module ratchet.

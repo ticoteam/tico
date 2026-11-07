@@ -22,8 +22,9 @@ pull request, on free GitHub-hosted runners; `checks` is the one required check.
 queue group on the merged result, on RunsOn Spot VMs (4 vCPU; x64 labels take the m and r families of generations 6–8) in Tico's own AWS account: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page,
-CHANGELOG.md or GitHub file runs the tests that read it; dependency, conftest, pytest.ini and deleted or unparsable files
-fall back to the full default Python and core browser suites. Draft pull requests run no checks until marked ready for
+CHANGELOG.md or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
+and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
+the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched with `scripts/remote.py` before marking a PR
 ready. A newer push cancels a pull request's superseded run; a queue group is never canceled. Hosted PR runs cannot read
@@ -109,4 +110,7 @@ flight file, not the database.
 - Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh` and never committed. `docs/openapi/v2.json`
   is written by `python3 -m backend.openapi_v2`; never edit it by hand. On a rebase conflict, resolve
   `backend/openapi_v2.py` and regenerate (CONTRIBUTING.md registers the merge driver that handles most).
+- New UI code is strict TypeScript, enforced by `scripts/check_ui_strict.py`: a new `.js` under `ui/` fails unless it is a
+  vendor or bundler entry, and each `.ts` must pass `ui/tsconfig.strict.json` with zero findings. Only files on
+  `ui/strict-legacy.json` are exempt, and that list only shrinks.
 - Comments say why in the present tense; they do not name who asked or when.
