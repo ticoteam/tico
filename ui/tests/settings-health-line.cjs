@@ -55,7 +55,7 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
       if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    // A route change cross-fades (router.js): the shot waits for it to end.
+    // A route change cross-fades (router.ts): the shot waits for it to end.
     const shot = async name => {
       if (!shotsDir) return;
       fs.mkdirSync(shotsDir, {recursive: true});

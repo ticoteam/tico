@@ -20,11 +20,11 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-// Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.js, settingsShow).
+// Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.ts, settingsShow).
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
-// the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
+// the old Strategy Bot address only redirects to its tab (ui/app/router.ts), so no link is drawn to it, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.ts toolsRoute; checked below), System's (Rules and Routines before it)
 // leave for Automations (ui/app/settings.js settingsMovedOut; checked below), and Webhooks (once Triggers) went to
 // Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).

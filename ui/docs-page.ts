@@ -72,7 +72,7 @@ interface DocsSearchResult {
   results: DocsSearchHit[];
 }
 
-/** The page's entry point, which the router calls (ui/app/router.js). */
+/** The page's entry point, which the router calls (ui/app/router.ts). */
 declare var pageCompanyDocs: () => Promise<void>;
 
 let DOC_DATA: DocsPageData = {docs: [], linked: []};

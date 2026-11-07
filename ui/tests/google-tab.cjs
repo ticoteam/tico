@@ -35,7 +35,7 @@ const READY = '#set-google [data-google-mode], #set-google .google-card';
 const CARD = '#/tools/settings/email';
 // Whether the card is on the page and shown, as watchable() in ui/google-connect.js reads it before a timer checks.
 const cardShown = page => page.evaluate(() => !!MB_GOOGLE_HOST?.isConnected && !MB_GOOGLE_HOST.closest('[hidden]'));
-// A new page draws in a view transition (ui/app/router.js routeChanged), a frame or more after the address changes,
+// A new page draws in a view transition (ui/app/router.ts routeChanged), a frame or more after the address changes,
 // and the card stays on the page until then. Running the fake clock in that gap fires the card's timers as if it were
 // still shown, so each move waits until the card has really left or come back.
 const moved = async (page, shown, what) => {

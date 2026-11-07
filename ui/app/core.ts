@@ -14,7 +14,7 @@ const RECORDINGS = '#/recordings';    // legacy route
 const MEETINGS = '#/meetings';        // imported meeting transcripts: the list, Import, and each meeting
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
-const DECIDE = '#/decide';            // retired: old links land on Needs you, or open the item's card (ui/app/router.js)
+const DECIDE = '#/decide';            // retired: old links land on Needs you, or open the item's card (ui/app/router.ts)
 const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; answerable cards walked by Catch up (ui/app/decide.js)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.js)

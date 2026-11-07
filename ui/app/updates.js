@@ -12,7 +12,7 @@
 // "Update cards nested by org chart": by default the page is one day's updates as the org chart, your card
 // on top and an icon on each card opening the cards of its reports; Below me or Whole org; only direct
 // reports' updates alert (backend/updates.py tree). List keeps the plain newest-first feed.
-let UPD = null;
+/** @type {any} bridged: ui/app/router.ts reads it on every page change; typed when this file converts */ let UPD = null;
 const UPD_DRAFTS = new Map();
 const UPD_CACHE = state => updIsTree(state) ? `tico.updates.tree.${state.kind}.${state.scope || 'auto'}${state.day ? '.' + state.day : ''}`
   : `tico.updates.${state.kind}.${state.view}.${state.mine ? 'mine' : 'all'}`;

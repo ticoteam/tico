@@ -96,7 +96,7 @@ window.ticoAppUpdate = ({state, detail} = {}) => {
 };
 // The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It
 // would sit over the first-run wizard and its after-Create screen, so it waits for the first other page. Before the
-// first route() (LAST_ROUTE, ui/app/router.js) there is no page yet: a new install's boot sends it to the wizard after
+// first route() (LAST_ROUTE, ui/app/router.ts) there is no page yet: a new install's boot sends it to the wizard after
 // its config is read.
 let usageNoticeShown = false;
 function renderUsageNotice() {

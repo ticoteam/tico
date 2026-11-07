@@ -35,7 +35,7 @@ const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
 const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
 const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
 // The row is there from the first paint (index.html); a click before /me answers opens Ask once the first page is
-// drawn (router.js calls askSync), and boot that never gets a person hides the row (boot.js).
+// drawn (router.ts calls askSync), and boot that never gets a person hides the row (boot.js).
 let ASK_EARLY = false;
 function askSync() {
   const row = $('#ask-row'), tab = $('#mobile-ask'), panel = $('#ask-panel');

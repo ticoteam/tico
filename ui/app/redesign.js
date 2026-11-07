@@ -159,7 +159,7 @@ function redesignNavCurrent(nav) {
 }
 
 // ----------------------------------------------------------------- routes
-// Runs before the router's own list (router.js); true when it handled the address.
+// Runs before the router's own list (router.ts); true when it handled the address.
 function redesignRoute(r) {
   // Old addresses of what moved.
   if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }
