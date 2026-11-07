@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import Field
 
 from . import models as M
-from . import pipeline_rights
+from . import pipeline_links, pipeline_rights
 from .store import H, Problem
 
 if TYPE_CHECKING:
@@ -869,6 +869,10 @@ def _advance(c: "sqlite3.Connection", actor: str, task: Row, requirement: Row) -
             mover=True,
             note="Approved",
         )
+        link = pipeline_links.link_for_stage(c, requirement["pipeline_stage_id"])
+        if link is not None and link["mode"] == "move" and link["to_pipeline_id"] == to_type:
+            # The same record the engine writes for a move through a link, so the flow map counts this handoff.
+            pipeline_links.record_handoff(c, str(link["id"]), task["id"], task["id"])
     except _hub().Refused:
         c.execute("ROLLBACK TO pipeline_advance")
         c.execute("RELEASE pipeline_advance")
