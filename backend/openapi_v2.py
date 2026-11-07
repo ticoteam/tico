@@ -4093,6 +4093,23 @@ SCHEMAS = {
         },
         required=["goals", "owners", "unaligned", "other_kpis", "proposals"],
     ),
+    # GET /api/v2/strategy (backend/strategy.py view): the company's sections and bets; the draft for the owner only.
+    "StrategyView": obj(
+        {
+            "segment_changes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many segments' text the draft changes against the latest published version (0 with "
+                "no draft, and 0 for everyone but the owner); a segment's text is GET /api/v2/segments/{id}'s",
+            },
+            "may_edit": {
+                "type": "boolean",
+                "description": "The owner on their own click; the draft is then in `draft`",
+            },
+            "bets": items({"type": "object"}),
+        },
+        required=["segment_changes", "may_edit", "bets"],
+    ),
     "StrategyBotView": obj(
         {
             "name": "s",
@@ -6936,7 +6953,7 @@ STABLE.extend(
             'Strategy',
             'getStrategy',
             'The published strategy, its bets with their goals and colour, the website; the owner also gets the draft',
-            None,
+            'StrategyView',
         ),
         (
             '/api/v2/strategy/draft',
