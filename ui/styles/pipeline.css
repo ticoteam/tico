@@ -4,3 +4,88 @@
 .tl-pipeline-edit[hidden] {
   display: none;
 }
+
+/* Requirement dots on a ticket card. A dot is a button with a bigger hit area than its 8px mark; the names open on hover,
+   on a tap or a long press (data-open, set by ui/app/pipeline-dots.ts). */
+.pdots { position: relative; display: inline-flex; gap: 3px; align-items: center; flex: none; }
+.pdot { position: relative; width: 8px; height: 8px; border-radius: 4px; box-sizing: border-box; padding: 0; margin: 0;
+  border: 0; background: none; cursor: pointer; flex: none; }
+.pdot::before { content: ""; position: absolute; inset: -6px; }
+.pdot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pdot-met { background: var(--accent); }
+.pdot-waiting { border: 1.5px solid var(--accent); background: linear-gradient(90deg, var(--accent) 50%, transparent 50%); }
+.pdot-out_of_date { border: 1.5px solid var(--wait); }
+.pdot-failed { background: var(--wait); }
+.pdot-missing { border: 1.5px solid var(--idle); }
+.pdots-tip { display: none; position: absolute; left: -6px; top: calc(100% + 6px); z-index: 30; min-width: max-content;
+  background: var(--surface2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); }
+.pdots-tip ul { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 18px; color: var(--ink); }
+.pdots:hover > .pdots-tip, .pdots[data-open] > .pdots-tip { display: block; }
+
+/* A ticket's requirements (ui/app/task-requirements.ts). */
+.task-requirements { display: flex; flex-direction: column; }
+.task-req { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 32px; gap: 10px; align-items: center;
+  padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.task-req .pdot { cursor: default; }
+.task-req-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.task-req-name { min-width: 0; overflow-wrap: anywhere; }
+.task-req-more { width: 28px; height: 28px; padding: 0; border-radius: 6px; }
+.task-req-mark { position: absolute; right: 0; top: calc(100% + 4px); z-index: 10; width: 260px; box-sizing: border-box; padding: 10px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgba(0, 0, 0, .3);
+  display: flex; flex-direction: column; gap: 8px; }
+.task-req-mark[hidden] { display: none; }
+.task-req-mark label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.task-req-mark input { height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.task-req-err { font-size: 12px; color: var(--fail); }
+
+/* The "▶ N for you" buttons: on the board header and on each column (ui/app/pipeline-review.ts). */
+.pipe-play-row { display: flex; gap: 8px; padding: 0 0 8px; }
+.pipe-play { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; border: 0;
+  background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; flex: none; }
+.pipe-play-tri { width: 0; height: 0; border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent currentColor; }
+
+/* Review mode: one full-window dialog. Desktop puts the attachment beside the decision; a phone stacks them. */
+.pipe-review { position: fixed; inset: 0; z-index: 1000; background: var(--bg); color: var(--ink); display: flex; flex-direction: column;
+  font-size: 13px; overflow: hidden; }
+.pipe-review-head { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.pipe-review-count { font-weight: 600; }
+.pipe-review-body { flex: 1 1 auto; display: flex; min-height: 0; }
+.pipe-review-main { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; padding: 16px 24px; min-width: 0; }
+.pipe-review-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.pipe-review-tab { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 5px; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.pipe-review-tab.on { background: var(--surface2); color: var(--ink); }
+.pipe-review-view { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); padding: 16px; overflow: auto; }
+.pipe-review-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.pipe-review-card { display: flex; flex-direction: column; gap: 6px; }
+.pipe-review-bot { margin: 0; font-size: 12px; color: var(--wait-ink); }
+.pipe-review-side { width: 360px; flex: none; border-left: 1px solid var(--line); background: var(--surface); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.pipe-h { margin: 0; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.pipe-review-side textarea { box-sizing: border-box; width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); font: inherit; resize: vertical; }
+.pipe-review-note-label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.pipe-review-sendback { display: flex; gap: 8px; }
+.pipe-review-sendback .btn { flex: 1 1 0; height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2);
+  color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.pipe-review-approve { height: 56px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-ink); font: inherit; font-size: 17px;
+  font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.pipe-review-approve:disabled { opacity: .6; cursor: default; }
+.pipe-review-kbd { font-size: 12px; padding: 0 6px; border-radius: 3px; border: 1px solid currentColor; opacity: .8; font-family: inherit; }
+.pipe-review-moves { text-align: center; margin: 0; font-size: 12px; color: var(--muted); }
+.pipe-review-err { margin: 0; color: var(--fail); font-size: 12px; }
+.pipe-review-empty { padding: 40px 20px; color: var(--muted); }
+.pipe-review-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
+  padding: 10px 14px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--line); box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
+.pipe-review .linkish { font: inherit; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
+
+@media (max-width: 600px) {
+  .pipe-review-head { padding: 10px 16px; gap: 8px; }
+  .pipe-review-body { flex-direction: column; overflow-y: auto; }
+  .pipe-review-main { padding: 12px 16px; flex: none; }
+  .pipe-review-view { min-height: 260px; }
+  .pipe-review-side { width: auto; border-left: 0; border-top: 1px solid var(--line); padding: 14px 16px 20px; flex: none; }
+  .pipe-review-sendback .btn { height: 44px; }
+  .pipe-review-approve { height: 56px; }
+  .pipe-review-toast { left: 16px; right: 16px; transform: none; justify-content: space-between; }
+}

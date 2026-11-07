@@ -412,7 +412,7 @@ function taskCard(it) {
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${taskBuilderNotices(taskBuilderActors(t))}
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? pipelineDotsHTML(t) + taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}
@@ -469,7 +469,7 @@ function boardColumnsHTML(columns, {head = ''} = {}) {
     const all = column.items.length && tasksCanSelect()
       ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
     return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${column.play || ''}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
       ${taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true)}
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;
