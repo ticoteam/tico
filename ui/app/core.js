@@ -33,6 +33,7 @@ const LEARNINGS = '#/learnings';     // the nightly learning run: what each nigh
 const MESSAGING = '#/messaging';       // selected Message bot: setup, schedules, and example messages
 // Bot notices still flow through /api/v2/messages?unread=1. People read mail on #/mail, not live Gmail.
 const $ = (s, r=document) => r.querySelector(s);
+/** @param {unknown} s @returns {string} */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // The one filter icon: every button that opens or applies filters shows it, with no word (aria-label carries it).
 const filterIcon = (size = 14) => `<svg viewBox="0 0 14 14" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path d="M2 3.5h10M4 7h6M5.8 10.5h2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
