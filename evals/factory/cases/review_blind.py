@@ -82,7 +82,20 @@ def during(run, w, team, i):
         ticket = read["ticket"]
         if ticket in run.person or not (read["mids"] or read["texts"]):
             continue
-        paths = [f"tasks/{ticket}", f"tasks/{ticket}/comments", *(f"tasks/{sub}/comments" for sub in read["subs"])]
+        # The ticket's thread too: the findings a review forwards to the ticket are notices, which its comments leave
+        # out (only says, asks and answers are comments), and the thread is what the app opens.
+        conv = w.sql("SELECT conversation_id FROM tasks WHERE id=?", (ticket,))
+        thread = (
+            [f"conversations/{conv[0]['conversation_id']}/messages?limit=200"]
+            if conv and conv[0]["conversation_id"]
+            else []
+        )
+        paths = [
+            f"tasks/{ticket}",
+            f"tasks/{ticket}/comments",
+            *(f"tasks/{sub}/comments" for sub in read["subs"]),
+            *thread,
+        ]
         seen = []
         for path in paths:
             status, reply = w.request("get", path, token=PERSON)
@@ -134,17 +147,37 @@ def person_reads_findings(run):
     _scan(run)
     if not run.person:
         return False, "no person read a ticket with an earlier review's findings on it"
-    label = ["ticket", "ticket comments"]
     missing = [t for t, shown in run.person.items() if not shown]
-    detail = "; ".join(
-        f"{run.w.title(t)}: "
-        + ", ".join(
-            f"{label[k] if k < len(label) else 'earlier review comments'} {status}{'*' if found else ''}"
-            for k, (_, status, found) in enumerate(run.paths.get(t, []))
+    detail = []
+    for t in missing:
+        reads = ", ".join(
+            f"{_label(path, t)} {status}{'*' if found else ''}" for path, status, found in run.paths.get(t, [])
         )
-        for t in missing
+        detail.append(f"{run.w.title(t)}: {reads}; the findings are {_kinds(run, t)}")
+    return not missing, "; ".join(detail)[:600]
+
+
+def _label(path, ticket):
+    """What a read path of a ticket is, for a miss's detail."""
+    if path == f"tasks/{ticket}":
+        return "ticket"
+    if path == f"tasks/{ticket}/comments":
+        return "ticket comments"
+    if path.startswith("conversations/"):
+        return "ticket thread"
+    return "earlier review comments"
+
+
+def _kinds(run, ticket):
+    """The kinds of the messages that carry the findings on a ticket (a comment is say, ask or answer; a forwarded
+    review result is a notice), with how many of each."""
+    mids = [m for r in run.later if r["ticket"] == ticket for m in r["mids"]]
+    if not mids:
+        return "only in texts"
+    rows = run.w.sql(
+        f"SELECT kind, COUNT(*) AS n FROM messages WHERE id IN ({','.join('?' * len(mids))}) GROUP BY kind", tuple(mids)
     )
-    return not missing, detail[:600]
+    return ", ".join(f"{r['kind']} x{r['n']}" for r in rows) or "missing"
 
 
 SCENARIOS = [
