@@ -1,3 +1,4 @@
+# pyright: strict
 """Product: the built-in task type a product idea is filed as, the board the product work runs on. It lives on the Tasks
 page with the rest of the work, like the Marketing type (backend/marketing_tasks.py).
 
@@ -9,6 +10,8 @@ The type's name is Product unless a team's own type already has that name; then 
 id is `product`, and its steps are `product-<key>`. No retire or rename touches it: it is seeded at every start, which
 gives a fresh install and an existing one the same type.
 """
+
+import sqlite3
 
 from . import hubdb as H
 
@@ -26,15 +29,15 @@ STEPS = (
 )
 
 
-def step_id(key):
+def step_id(key: str) -> str:
     return f"{TYPE_ID}-{key}"
 
 
-def ensure(c):
+def ensure(c: sqlite3.Connection) -> str | None:
     """The Product task type and its steps, under the type's own id. A step missing from an older seed is added; one a
     team renamed keeps its name. Returns the type id, or None when the team's own types already use every name."""
-    if not H._one(c, "SELECT id FROM task_types WHERE id=?", (TYPE_ID,)):
-        taken = {r[0].lower() for r in c.execute("SELECT name FROM task_types")}
+    if not c.execute("SELECT id FROM task_types WHERE id=?", (TYPE_ID,)).fetchone():
+        taken = {str(r[0]).lower() for r in c.execute("SELECT name FROM task_types").fetchall()}
         name = next((n for n in TYPE_NAMES if n.lower() not in taken), None)
         if not name:
             return None
@@ -42,8 +45,8 @@ def ensure(c):
         c.execute(
             "INSERT INTO task_types (id, name, created_at, updated_at) VALUES (?,?,?,?)", (TYPE_ID, name, now, now)
         )
-    names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (TYPE_ID,))}
-    have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (TYPE_ID,))}
+    names = {str(r[0]).lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (TYPE_ID,)).fetchall()}
+    have = {str(r[0]) for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (TYPE_ID,)).fetchall()}
     for position, (key, name, status) in enumerate(STEPS):
         sid = step_id(key)
         if sid in have:

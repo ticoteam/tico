@@ -533,10 +533,11 @@ def update(
         sets.append("bet_id=:bet_id")
         args["bet_id"] = _bet(conn, actor, bet_id) if bet_id else None
         _event(conn, goal_id, actor, "bet_id", row.get("bet_id"), args["bet_id"])
-    if segment_id is not None and (segment_id or None) != row.get("segment_id"):
+    before = row.get("segment_id") if row else None
+    if segment_id is not None and (segment_id or None) != before:
         sets.append("segment_id=:segment_id")
         args["segment_id"] = _segment(conn, segment_id)
-        _event(conn, goal_id, actor, "segment_id", row.get("segment_id"), args["segment_id"])
+        _event(conn, goal_id, actor, "segment_id", before, args["segment_id"])
     if not sets:
         return row
     args["id"], args["updated_at"] = goal_id, H.now()

@@ -7929,10 +7929,11 @@ def task_update(
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
-    if segment_id is not None and (segment_id or None) != row.get("segment_id"):
+    before = row.get("segment_id") if row else None
+    if segment_id is not None and (segment_id or None) != before:
         sets.append("segment_id=:segment_id")
         args["segment_id"] = segment_id or None
-        _task_event(conn, task_id, actor, "segment_id", row.get("segment_id"), segment_id or None, note or "")
+        _task_event(conn, task_id, actor, "segment_id", before, segment_id or None, note or "")
     # A task keeps only the times of the state it is in: one moved out of closed loses its close time (the close
     # rule reads closed_at IS NULL, so a done task that kept it would never close again), one out of done its done time.
     if status == "done":
