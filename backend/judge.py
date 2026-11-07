@@ -166,11 +166,11 @@ def cache_writes(usage):
     return int(value) if isinstance(value, int | float) and _count(value) else 0
 
 
-def _list_cost(model, fresh, cached, out, usage):
-    """The list-price USD of one call to a priced `model`, or None when it has no price. A model in
-    `providers.PER_REQUEST_LONG_TIER` is one request: its prompt is the uncached input, the cache writes and the cache
-    reads, and it pays the long tier when over the limit."""
-    if providers.per_request_long_tier(model):
+def _list_cost(model, fresh, cached, out, usage, judge=True):
+    """The list-price USD of one call to a priced `model`, or None when it has no price. A model that
+    `providers.per_request_long_tier` names for this call is one request: its prompt is the uncached input, the cache
+    writes and the cache reads, and it pays the long tier when over the limit."""
+    if providers.per_request_long_tier(model, judge):
         prompt = fresh + cache_writes(usage)
         return providers.estimate_cost(model, prompt, cached, out, [(prompt, cached, out)])
     return providers.estimate_cost(model, fresh, cached, out)
@@ -193,7 +193,7 @@ def priced(settings, model):
     return providers.estimate_cost(model, 1, 0, 1) is not None
 
 
-def cost_usd(settings, model, usage):
+def cost_usd(settings, model, usage, judge=True):
     """What one call cost in USD: the provider's own figure when it sends one (OpenRouter's `usage.cost`), else its
     tokens at list price (Jev at the settings' rates, the company's models at `providers.PRICES`), else, for a model
     with no known price, its tokens at `CEILING`. Never None: an unknown price is counted high, not as nothing."""
@@ -209,7 +209,7 @@ def cost_usd(settings, model, usage):
         rate_in, rate_out = (listed[0], listed[2]) if listed else GATEWAY_USD_PER_MTOK
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
-    elif priced(settings, model) and (listed := _list_cost(model, fresh, cached, out, usage)) is not None:
+    elif priced(settings, model) and (listed := _list_cost(model, fresh, cached, out, usage, judge)) is not None:
         return round(listed, 6)
     else:
         rate_in, rate_out = CEILING
@@ -305,15 +305,15 @@ def _in_flight(key):
     return _RESERVED[key] if key == 0 else _RESERVED.get(key, 0.0)
 
 
-def reservation(settings, models, state, questions):
+def reservation(settings, models, state, questions, judge=True):
     """The most one call can cost: all of its input and MAX_OUTPUT_TOKENS of output at each of `models`, the providers
     a chain asks in turn. Each can be paid: an answer that comes back unusable still costs, and the next is asked."""
     size = len(json.dumps(state, default=str)) + len(json.dumps(questions, default=str))
     usage = {"input_tokens": size // 3 + 1000, "output_tokens": MAX_OUTPUT_TOKENS}
-    return sum(cost_usd(settings, model, usage) for model in models or [""])
+    return sum(cost_usd(settings, model, usage, judge) for model in models or [""])
 
 
-def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
+def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET, judge=True):
     """One paid decision call under the team's monthly cap, for every caller (server and Slack gateway alike).
 
     Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here
@@ -325,11 +325,12 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
     reservation. That bound is for the two processes that ask today, the server and the Slack gateway: each further
     process with its own meter can add its own calls in flight on top. A call stays within its reservation because
     every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher. Another
-    `budget` (cap field, spend action) meters against its own cap and writes its own spend rows."""
+    `budget` (cap field, spend action) meters against its own cap and writes its own spend rows. `judge` says whether
+    this is a judge call: only a judge call pays Claude Haiku 5.5's long-prompt tier (providers.per_request_long_tier)."""
     settings = store.settings
     with store.read() as c:
         cap = budget_cap(c, settings, budget)
-    reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
+    reserved = reservation(settings, models, state, questions, judge) if cap > 0 else 0.0
     with _METER:
         if cap > 0:
             with store.read() as c:
@@ -349,17 +350,17 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
             result = call()
         except J.JudgeError as exc:
             if getattr(exc, "paid", None):
-                exc.cost_usd = _spend(store, label, exc.paid, state, questions, budget[1])
+                exc.cost_usd = _spend(store, label, exc.paid, state, questions, budget[1], judge)
             raise
         result = dict(result)
         paid = result.pop("paid", None) or []
-        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions, budget[1])}
+        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions, budget[1], judge)}
     finally:
         with _METER:
             _RESERVED[_held(budget)] = max(0.0, _in_flight(_held(budget)) - reserved)
 
 
-def _spend(store, label, attempts, state, questions, action="judge.spend"):
+def _spend(store, label, attempts, state, questions, action="judge.spend", judge=True):
     """One `judge.spend` row per paid attempt (the answer is the last; any before it were unusable), in one
     transaction. Returns their total USD. An attempt whose usage gives neither a cost nor any tokens is counted at its
     most (`reservation`), not as nothing, and says `usage: unknown`."""
@@ -368,7 +369,11 @@ def _spend(store, label, attempts, state, questions, action="judge.spend"):
         for attempt in attempts:
             model, usage = attempt.get("model"), attempt.get("usage")
             known = _own_cost(attempt) or any(tokens(usage))
-            cost = cost_usd(settings, model, usage) if known else reservation(settings, [model], state, questions)
+            cost = (
+                cost_usd(settings, model, usage, judge)
+                if known
+                else reservation(settings, [model], state, questions, judge)
+            )
             total += cost
             H.event(
                 c,
