@@ -341,6 +341,7 @@ def test_a_private_ticket_is_never_named_by_its_private_title_for_anyone(api):
         assert "Visual replies" in body and "Acme payroll" not in body
         assert "...and 1 private ticket with no public title. " in body and LEAVE_OUT in body
         c.execute("UPDATE tasks SET public_title=? WHERE id=?", ("Faster payroll exports", secret["id"]))
+        tickets = RF.pending(c)  # the rows as they are now: the listing reads each ticket's public title
         body = RF._listing(c, tickets, "x")
         assert "- Faster payroll exports\n" in body + "\n" and "Acme payroll" not in body
         assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
