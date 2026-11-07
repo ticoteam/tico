@@ -282,7 +282,13 @@ def test_a_budget_on_the_old_name_key_counts_the_new_bank_line_once(books):
             c,
             OWNER,
             "budget_create",
-            {"name": "Google", "amount": 100_000, "at_limit": "warn", "vendor": "google *ads8812"},
+            {
+                "name": "Google",
+                "account_id": account(c, "6900"),  # where an unmatched bank debit posts
+                "amount": 100_000,
+                "at_limit": "warn",
+                "vendor": "google *ads8812",
+            },
         )
         assert made.status == "committed", made.reason
         assert FA.budget_state(c, str(made.result["budget_id"]), AT).actual == 12_000
