@@ -6955,7 +6955,8 @@ SCHEMAS['TaskType']['properties'].update(
         'has_requirements': {
             'type': 'boolean',
             'description': "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A "
-            "pipeline without one keeps the plain board layout and shows no rail (backend/pipeline_engine.py)",
+            "pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements "
+            "(backend/pipeline_engine.py)",
         },
         'can_edit_rules': {
             'type': 'boolean',
