@@ -109,6 +109,30 @@ helper enrollment code.
 The helper is never installed on a shared host serving several companies. The shared cloud machine described above
 belongs to one company, so it can have the helper.
 
+## When a machine can't start
+
+*This section describes v0.5.85. Other parts of this page about Replace machine, or a create wait that survives restarts, describe later code; for v0.5.85, use the rules here.*
+
+When a bot's cloud machine can't start, the problem replaces the machine's state. It shows on the bot's page under
+**Computer**, on the work queued for the bot, and on the Health page (in Settings; its old address still opens it).
+When the bot has queued work and its machine is not connected to this server, Health lists that work as stuck if the
+machine has a problem, or if the work has waited over 15 minutes for the machine to start. A bot with no queued work
+is not named there. *code* is the reason HQ or the server gives.
+
+| Shown as | Means |
+|---|---|
+| Out of credit | The company is out of credit, or its Tico Cloud plan is locked (the trial ended without a card, or the month is unpaid), so its cloud machines don't start until HQ says the company is open again. |
+| Didn't start (*code*): trying again | HQ didn't answer, or refused to make or start the machine. Tico waits 15 seconds after the first failure, twice as long after the next, and so on, up to 15 minutes. If HQ refused the list that a waiting create needs, *code* is the list's reason, and Tico asks for the list again each minute. |
+| Couldn't be made or started (*code*): trying again | Something on the server failed during one of Tico's looks at the machine, for example while it was made or started. Tico tries again on the next look, about every 10 seconds, unless a create request is waiting, as described below. |
+| Started, but its work did not run there | Tico started the machine for the bot's work, and the work did not run on it. |
+| Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until a person changes its cloud settings or deletes its machine (with the API routes `DELETE /api/v2/bots/{bot}/cloud-machine`, or `DELETE /api/v2/cloud-machines/shared` for the shared machine). |
+
+A create or start that HQ refuses for lack of credit is not sent again for at least 10 minutes, and not while the company is still out of credit or locked. Once HQ says the company is open, Tico tries at its next look, without reading HQ's list first.
+
+A create that gets no answer, or that HQ refuses for any reason except lack of credit or `sandbox_stopping`, is not sent again until HQ's list has been read. Tico asks for the list at its next look, about 10 seconds later. If the list shows the bot's machine running or starting, Tico uses it and asks for no new one. If the list cannot be read, the wait continues until it can be read, or until this server restarts. A create that HQ answers with `sandbox_stopping` is tried again after 5 seconds, without waiting for HQ's list.
+
+Any of these problems clears when a start, stop or create succeeds, when the bot's mode or placement is set, or when its machine is deleted. **Didn't start** also clears when HQ's list can be read again, unless any action has failed since the last one that worked. **Couldn't be made or started** clears when a later look runs clean. **Started, but its work did not run there** clears when the work waiting for the bot changes or goes away. **Made, but it never connected** clears when a person changes any of its cloud settings.
+
 ## A stop never lands under a turn
 
 The server decides an idle stop on a read of the hub, and a runner can claim work between that read and HQ's stop.
