@@ -405,14 +405,14 @@ function taskStepAge(t) {
 // question, the owner's face and the age.
 function taskCard(it) {
   const t = it.task, st = TASKS_ST;
-  const chips = t ? taskChipsHTML(t, {maxTags: 2}) : '', refused = taskRefused(st, t);
+  const chips = t ? taskChipsHTML(t, {maxTags: 2}) : '', refused = taskRefused(st, t), seg = t?.segment_id ? segTagChips([t.segment_id]) : '';
   void st;   // selection, cursor and peek are painted on (task-list.js), so the card's signature only changes with its content
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}"${t?.status === 'done' ? ' data-done' : ''}>${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${taskBuilderNotices(taskBuilderActors(t))}
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${seg}${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}

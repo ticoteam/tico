@@ -4,7 +4,7 @@
 'use strict';
 
 // ---- filters: chips over the loaded tasks, kept in the address (#/tasks?owner=bot:eng&tag=bug) so a view can be shared
-const TASK_FILTER_FIELDS = [['owner', 'Owner'], ['team', 'Team'], ['tag', 'Tag'], ['repo', 'Repo'], ['pr', 'Has PR'], ['due', 'Due'], ['asked', 'Asked by']];
+const TASK_FILTER_FIELDS = [['owner', 'Owner'], ['team', 'Team'], ['segment', 'Segment'], ['tag', 'Tag'], ['repo', 'Repo'], ['pr', 'Has PR'], ['due', 'Due'], ['asked', 'Asked by']];
 const TASK_FILTER_WORDS = {pr: {yes: 'Yes', no: 'No'}, due: {overdue: 'Overdue', week: 'Next 7 days', any: 'Has a date', none: 'No date'}};
 const TASK_GROUPS = [['need', 'Kind'], ['status', 'Status'], ['owner', 'Owner'], ['team', 'Team'], ['parent', 'Parent task'], ['tag', 'Tag'], ['requester', 'Asked by']];
 const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
@@ -181,6 +181,7 @@ function taskPassesFilters(t, f) {
   if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
   if (f.asked?.length && !f.asked.some(v => resolveMe(v) === taskRequester(t))) return false;
   if (f.team?.length && !f.team.includes(taskTeam(t) || 'none')) return false;
+  if (f.segment?.length && !f.segment.includes(t.segment_id || 'none')) return false;
   if (f.tag?.length && !f.tag.some(v => (t.labels || []).includes(v))) return false;
   if (f.repo?.length && !f.repo.some(v => taskRepos(t).includes(v))) return false;
   if (f.pr?.length && !f.pr.includes(taskHasPR(t) ? 'yes' : 'no')) return false;
@@ -385,6 +386,7 @@ function tasksFilterOptions(state, field) {
     const keys = [...new Set([...(state.labels || []), ...tasks.flatMap(t => t.labels || []), ...selected])];
     return keys.map(key => ({value: key, label: tagSummary(rich.get(key) || {key, label: key})})).sort((a, b) => a.label.localeCompare(b.label));
   }
+  if (field === 'segment') return [...segTagRows().map(row => ({value: row.id, label: row.name})), {value: 'none', label: 'No segment'}];
   if (field === 'repo') return [...new Set([...tasks.flatMap(taskRepos), ...selected])].sort().map(r => ({value: r, label: r}));
   return Object.entries(TASK_FILTER_WORDS[field] || {}).map(([value, label]) => ({value, label}));
 }

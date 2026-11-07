@@ -91,6 +91,9 @@ function taskPropsHTML(t, opts = {}) {
     || (r.links ? '' : '<span class="prop-v ro empty"><span class="prop-txt">None</span></span>')}${r.links
     ? (chips ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>`
       : `<button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Tags: none, add a tag"><span class="prop-txt">Add tags</span></button>`) : ''}</span></span></div>`);
+  // Segment: the one the task is for, optional; None clears it. Its menu is the segments in the company's order.
+  rows.push(row('segment', 'Segment', segTagChips(t.segment_id ? [t.segment_id] : []) || txt('None'),
+    {edit: r.edit, empty: !t.segment_id, words: t.segment_id ? segTagName(t.segment_id) : 'none'}));
   // Part of: the parent's title is a link to it, × takes the task out; empty, a picker finds one. Blockers and
   // other relations are in the Related section.
   const parent = taskParent(t);
@@ -355,6 +358,10 @@ function taskPropsBind(d, task, change) {
         if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
         void save('step', body);
       }});
+    } else if (key === 'segment') {
+      const items = [{value: '', text: 'None', html: '<span>None</span>', checked: !task.segment_id},
+        ...segTagRows().map(row => ({value: row.id, text: row.name, html: `${segTagDot(row.color)}<span>${esc(row.name)}</span>`, checked: row.id === task.segment_id}))];
+      propMenu(d, b, /** @type {any} */ ({label: 'Segment', items, onPick: it => { if (it.value !== (task.segment_id || '')) void save('segment', {segment_id: it.value}); }}));
     } else if (key === 'type') {
       taskTypeMenu(d, b, task, save);
     } else if (key === 'people') {
