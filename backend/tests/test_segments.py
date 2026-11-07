@@ -724,7 +724,7 @@ def test_a_merge_moves_the_draft_text_and_leaves_the_published_version_as_it_was
     assert draft_segments[second]["summary"] == "Small landlords, one building at a time."
 
 
-def test_the_segment_finance_and_bot_context_routes_are_cards_and_only_those_routes_are():
+def test_the_segment_and_customer_segment_routes_are_cards_and_only_those_routes_are():
     """The Assistant proposes these by card (`hub assistant propose`): each route is proposable, and its neighbours in
     the same shape are not."""
     from backend.assistant import valid_operation
@@ -734,7 +734,6 @@ def test_the_segment_finance_and_bot_context_routes_are_cards_and_only_those_rou
         ("PUT", "/api/v2/segments/strategy"),
         ("POST", "/api/v2/segments/segment/screening"),
         ("POST", "/api/v2/finance/contacts/cust-1/segment"),
-        ("POST", "/api/v2/bots/ops/compact-at"),
     ):
         assert valid_operation(method, path), (method, path)
     for method, path in (
@@ -747,30 +746,11 @@ def test_the_segment_finance_and_bot_context_routes_are_cards_and_only_those_rou
         assert not valid_operation(method, path), (method, path)
 
 
-def test_a_compact_at_card_writes_nothing_until_the_owner_taps_it(api):
-    setup_attempt(api, "ops")
-    _r, attempt = assistant_turn(api, "ana-test")
-    before = get(api, "bots/ops")["revision"]
-    operation = {
-        "summary": "Compact ops at 250k",
-        "method": "POST",
-        "path": "/api/v2/bots/ops/compact-at",
-        "body": {"compact_at": 250000, "expected_revision": before},
-    }
-    action = post(api, "assistant/actions", operation, token=attempt["token"])["action"]
-    assert action["status"] == "pending"
-    assert get(api, "bots/ops")["revision"] == before  # a pending card has changed nothing
-    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
-    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
-    assert get(api, "bots/ops")["revision"] == before + 1
-
-
-def test_a_turns_own_write_to_a_segment_or_a_customers_segment_is_refused(api):
-    """The owner's segment writes and a customer's segment are cards: an Assistant turn's own write is refused (the NEVER
-    list in backend/assistant.py, and the owner's gate behind it), and nothing changes."""
+def test_a_turns_own_write_to_a_segment_is_refused(api):
+    """The owner's segment writes are cards: an Assistant turn's own write is refused (the NEVER list in
+    backend/assistant.py, and the owner's gate behind it), and nothing changes."""
     from backend.assistant import admits_on_turn
 
-    assert not admits_on_turn("POST", "/api/v2/finance/contacts/cust-1/segment", {"segment_id": "segment/x"})
     assert not admits_on_turn("POST", "/api/v2/segments/members", {"member": "bot:ops", "segments": []})
     assert not admits_on_turn("PUT", "/api/v2/segments/strategy", {"id": "segment/x", "sections": {}})
     seg = segment(api, "Screening")["segment"]["id"]

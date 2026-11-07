@@ -2472,6 +2472,8 @@ def test_the_hub_segment_commands_send_each_route_its_body(monkeypatch):
     with pytest.raises(APIError):
         run("segment", "strategy", "segment/screening", "--revision", "4", "--set", "bogus=text")
     with pytest.raises(APIError):
+        run("segment", "strategy", "segment/screening", "--set", "serve")  # KEY=TEXT, not a bare key
+    with pytest.raises(APIError):
         run("segment", "tag", "bot:ops")  # no segment and no --clear: never a silent clear
     with pytest.raises(APIError):
         run("segment", "tag", "bot:ops", "segment/a", "--clear")
@@ -2520,13 +2522,21 @@ def test_hub_segment_list_prints_one_line_per_segment_in_list_order():
                     "who": "Landlords",
                     "color": "blue",
                     "faces": [{"id": "bot:ops"}],
+                    "teammates": 1,
                 },
-                {"id": "segment/creators", "name": "Creators", "who": "", "color": "green", "faces": []},
+                {
+                    "id": "segment/creators",
+                    "name": "Creators",
+                    "who": "",
+                    "color": "green",
+                    "faces": [],
+                    "teammates": 0,
+                },
             ]
         }
     )
     assert text.splitlines() == [
-        "● blue  Small businesses  segment/small-businesses  Landlords  1 face",
-        "● green  Creators  segment/creators  0 faces",
+        "● blue  Small businesses  segment/small-businesses  Landlords  1 teammate",
+        "● green  Creators  segment/creators  0 teammates",
     ]
     assert remotecli.segment_list_text({"segments": []}).startswith("No segments yet")

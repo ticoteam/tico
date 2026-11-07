@@ -149,14 +149,15 @@ the Assistant (`assistant_direct`, `assistant_approvals`); a Tico support report
 company's server connection or its storage. A write whose body carries a secret is refused from chat too: a secret goes
 in Credentials (`hub credential request`). A person-only setting stays person-only, with the reason and the link.
 
-**Segments and their money are cards.** A segment, its strategy text, a teammate's tags, a new bot, a customer's segment
-and a weekly note routine are the owner's own click: the route refuses the Assistant's direct write (`403`), so the turn
+**Segments and their money are cards.** A segment, its strategy text, a teammate's tags, a customer's segment and a
+weekly note routine are the owner's own click: the route refuses the Assistant's direct write (`403`), so the turn
 proposes each one as a card (`hub assistant propose`). A tag card sends the teammate's whole list, since the route
 replaces it. A strategy card is `PUT /api/v2/segments/strategy` with the sections it drafted and no revision: the tap
-writes only those keys. A customer's segment (`/api/v2/finance/contacts/{id}/segment`) and a new bot's context length
-(`/api/v2/bots/{bot}/compact-at`) are cards too. Budgets and the Finance Manager's customer and spend tags are tasks for
-it ([playbooks/set-up-segments.md](../templates/catalog/assistant/playbooks/set-up-segments.md)), and its own approvals
-apply. The owner publishes the strategy on the Strategy page after the tap.
+writes only those keys. A customer's segment (`/api/v2/finance/contacts/{id}/segment`) is a card too. A new bot is a
+BotOps task (job 29), not a card. Budgets and the customer tags are tasks for the finance bot (template `finance-lead`),
+and its own approvals apply
+([playbooks/set-up-segments.md](../templates/catalog/assistant/playbooks/set-up-segments.md)). The owner publishes the
+strategy on the Strategy page after the tap.
 
 **The citation is checked.** The message must be yours, typed in your own Assistant DM (not written by a bot or the
 Assistant, not in another thread), and no more than 30 minutes old when the write is made. A run whose message is not

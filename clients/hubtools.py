@@ -4174,18 +4174,12 @@ def segment_remove(api, args):
             "description": "Section key to its text. Keys: summary, serve, sell, proof, now, know, how, not",
             "additionalProperties": {"type": "string"},
         },
-        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
     },
     ("id",),
     writes=True,
 )
 def segment_strategy(api, args):
     sections = dict(args.get("sections") or {})
-    for item in args.get("section") or []:
-        key, sep, text = str(item).partition("=")
-        if not sep:
-            raise APIError("validation", f"'{item}': use KEY=TEXT (KEY= gives the company's text back)", 422)
-        sections[key.strip()] = text
     unknown = sorted(set(sections) - set(SEGMENT_STRATEGY_KEYS))
     if unknown:
         raise APIError("validation", f"Unknown section {unknown[0]}: use {', '.join(SEGMENT_STRATEGY_KEYS)}", 422)
@@ -9492,30 +9486,11 @@ def turns(api, args):
 
 @tool(
     "hub_pipeline",
-    "A task type's pipeline and the fleet's queues in one read, counted the way the Tasks board counts "
-    "(only tickets you may read; closed and finished ones never count). Defaults: the engineering board (Dev tickets), "
-    "snoozed tickets included, failures since 24h. Use it for \"where is work stuck and on whom\" instead of paging "
-    "hub_task_list or hub_sql. Fields, one line each:\n"
-    "- steps[]: each working step in board order: id, name, status.\n"
-    "- steps[].count / snoozed: tickets in the step now / how many of them are snoozed.\n"
-    "- steps[].oldest_hours / median_hours / oldest: time since tickets entered this step; `oldest` is that ticket's number (or id).\n"
-    "- steps[].ids / ids_more: up to 50 ticket numbers (or ids) in board order / how many more there are.\n"
-    "- steps[].by_owner: tickets per owner.\n"
-    "- steps[].waits_on: tickets waiting on a bot, a person, something external (GitHub, a release) or nothing (the owner acts).\n"
-    "- steps[].waits_on_actor: tickets per actor waited on (an open child's or blocker's owner, an asked person, `person` for an approval).\n"
-    "- steps[].prs: open pull requests linked to the step's tickets and the oldest one's age in hours.\n"
-    "- no_step: live tickets of the type with no step of it, counted the same way (absent when none).\n"
-    "- total / truncated: tickets counted / true when the type holds more than 5000 live ones.\n"
-    "- queues.<bot>.running / stalled: runs out now / of those, silent for 5+ minutes.\n"
-    "- queues.<bot>.queued / oldest_queued_hours: jobs that will be handed out when a turn is free / the oldest one's wait.\n"
-    "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
-    "- queues.<bot>.quarantine_held: jobs held after repeated refusals; resume after cooldown or quarantine clear.\n"
-    "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
-    "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-    "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
-    "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-    "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
-    "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
+    "A task type's pipeline and the queues in one read, counted as the Tasks board counts (closed ones never count). "
+    "Defaults: the engineering board, snoozed included, failures since 24h. Use it for where work is stuck and on whom, "
+    "not hub_task_list. steps[] (board order): count, snoozed, oldest_hours, median_hours, ids, by_owner, waits_on, "
+    "waits_on_actor, prs. queues.<bot>: running, stalled, queued, held, quarantine_held, dead, uncertain. "
+    "failures: total, by_cause, by_bot. exceptions[]: the engineering manager only.",
     {
         "type": _s("Task type id or name; default the engineering board"),
         "owner": _s("Only tickets this person or bot owns"),
