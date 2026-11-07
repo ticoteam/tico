@@ -3,12 +3,234 @@
 'use strict';
 
 // ---- chat over messages, with the reply streamed from the keeper's turn ----
-// biome-ignore lint/suspicious/noExplicitAny: JS typed this null-started global as any; the strict burn-down gives it a type
-let V2C: any = null;                                   // the live v2 chat; one per visit
+// ---- shapes ----
+// findLast and findLastIndex ship in every browser Tico supports; the compiler's library setting predates them.
+interface Array<T> {
+  findLast(predicate: (value: T, index: number, array: T[]) => unknown): T | undefined;
+  findLastIndex(predicate: (value: T, index: number, array: T[]) => unknown): number;
+}
+// A file a message carries (refs.attachments[]), as the chips and thumbnails read it.
+interface ChatFile {
+  id: string;
+  name?: string | undefined;
+  title?: string | undefined;
+  content_type?: string | undefined;
+}
+// What a message's `refs` says: the fields this page reads; any other the server sends stays unknown.
+interface ChatRefs {
+  credential_request?: string | undefined;
+  action?: string | undefined;
+  chat_goal?: unknown;
+  task?: string | { id?: string | undefined; title?: string | undefined } | undefined;
+  task_started?: unknown;
+  task_report?: unknown;
+  note?: unknown;
+  org_rule?: unknown;
+  topic_changed?: unknown;
+  read_back?: unknown;
+  warnings?: string[] | undefined;
+  attachments?: ChatFile[] | undefined;
+  turn_id?: string | undefined;
+  maintenance?: string | undefined;
+  approval?: unknown;
+  questions?: unknown;
+  action_result?: { approval?: string | undefined; decision?: string | undefined } | undefined;
+  slack?: { permalink?: string | undefined; channel_name?: string | undefined } | undefined;
+  routing?: { recipients?: { bot?: string | undefined; confidence?: unknown }[] | undefined; routed_by?: string | undefined; fallback?: unknown } | undefined;
+  [key: string]: unknown;
+}
+// One thing a reply's turn did (message.run.did[]).
+interface ChatDid {
+  kind?: string | undefined;
+  task_id: string;
+  owner_id?: string | undefined;
+  title?: string | undefined;
+  url?: string | undefined;
+  to?: string | undefined;
+  text?: string | undefined;
+  rule?: string | undefined;
+}
+interface ChatRun {
+  did?: ChatDid[] | undefined;
+  steps?: number | undefined;
+  tool_calls?: number | undefined;
+  took_s?: number | undefined;
+  state?: string | undefined;
+}
+// Where a bot-to-bot message shown in this chat came from (v2BotsLoad, v2BotsOpen).
+interface ChatElsewhere {
+  kind?: string | undefined;
+  subject?: string | undefined;
+  id?: string | undefined;
+  preview?: boolean | undefined;
+  open?: boolean | undefined;
+  before?: string | undefined;
+}
+// A message of a conversation (GET /v2/conversations/<id>/messages).
+interface ChatMessage {
+  id?: string | undefined;
+  kind?: string | undefined;
+  body?: string | undefined;
+  created_at?: string | undefined;
+  sender_id?: string | undefined;
+  /** The Ask panel's own lines name their sender here (ui/app/ask-panel.ts). */
+  from_actor?: string | undefined;
+  recipient_id?: string | undefined;
+  in_reply_to?: string | undefined;
+  prompted_by?: string | undefined;
+  refs?: ChatRefs | undefined;
+  ref_tasks?: Record<string, { title?: string | undefined }> | undefined;
+  run?: ChatRun | undefined;
+  delivery?: { mode?: string | undefined; run_id?: string | undefined } | undefined;
+  elsewhere?: ChatElsewhere | undefined;
+}
+interface ChatConversation {
+  id: string;
+  kind?: string | undefined;
+  subject?: string | undefined;
+  task_id?: string | undefined;
+  closed_at?: string | undefined;
+  scope?: string | undefined;
+  participants?: string[] | undefined;
+}
+// A conversation's run, as a snapshot gives it (`execution`).
+interface ChatExecution {
+  state: string;
+  text?: string | undefined;
+  label?: string | undefined;
+  waiting?: string | undefined;
+  readiness_reason?: string | undefined;
+  message_id?: string | undefined;
+  run_id: string;
+}
+// The reply on its way: its text so far, and whether the stream dropped.
+interface ChatLive {
+  text?: string | undefined;
+  interrupted?: boolean | undefined;
+}
+// The chat's last look at one bot, kept for the page load (CHAT_CACHE).
+interface ChatCacheEntry {
+  mode: string;
+  conv: ChatConversation | null;
+  messages: ChatMessage[];
+  nextBefore: string | undefined;
+  execution: ChatExecution | null | undefined;
+  live: ChatLive | null;
+}
+// The chat's goal (ui/app/chat-goal.ts): what it is, whether it is active, paused, met or stopped.
+interface ChatGoal {
+  id?: string | undefined;
+  objective?: string | undefined;
+  status?: string | undefined;
+  note?: string | undefined;
+}
+// A conversation read: its messages, the cursor to older ones, the run and the goal (snapshot).
+interface ChatPage {
+  conversations?: ChatConversation[] | undefined;
+  messages?: ChatMessage[] | undefined;
+  next_before?: string | undefined;
+  has_more?: boolean | undefined;
+  execution?: ChatExecution | null | undefined;
+  goal?: ChatGoal | null | undefined;
+}
+// The live v2 chat: one per visit (V2C). The goal, holds and outline fields belong to chat-goal.ts, org-rule-holds.ts and chat-outline.ts.
+interface ChatState {
+  slug: string;
+  mode: string;
+  conv: ChatConversation | null;
+  messages: ChatMessage[];
+  mine: ChatMessage[];
+  live: ChatLive | null;
+  poll: number;
+  rendered: boolean;
+  loaded: boolean;
+  failed: boolean;
+  empty: string;
+  listed?: boolean | undefined;
+  nextBefore?: string | undefined;
+  execution?: ChatExecution | null | undefined;
+  botTalk?: ChatMessage[] | undefined;
+  liveOff?: (() => void) | null | undefined;
+  liveCid?: string | null | undefined;
+  waitTimer?: number | undefined;
+  openFolds?: Set<string> | undefined;
+  openSide?: Set<string | undefined> | undefined;
+  openSteps?: Set<string | undefined> | undefined;
+  steps?: Record<string, string> | undefined;
+  dismissed?: string | undefined;
+  sentAt?: number | undefined;
+  thread?: Element | null | undefined;
+  html?: string | null | undefined;
+  stick?: StickScroll | null | undefined;
+  lastMain?: ChatMessage | null | undefined;
+  seenLast?: string | undefined;
+  holdsFor?: string | undefined;
+  holds?: unknown[] | undefined;
+  goalSupported?: boolean | undefined;
+  goalEditing?: boolean | undefined;
+  goalRefused?: boolean | undefined;
+  goalOpen?: boolean | undefined;
+  prepending: boolean;
+  loadingOlder?: boolean | undefined;
+  latestIds?: Set<string | undefined> | undefined;
+  older?: ChatMessage[] | undefined;
+  reading?: boolean | undefined;
+  readAgain?: boolean | undefined;
+  outputSince?: number | undefined;
+  goal?: ChatGoal | null | undefined;
+}
+// One step of a turn (GET /v2/turns/<id>/steps).
+interface ChatStep {
+  kind?: string | undefined;
+  text?: string | undefined;
+  label?: string | undefined;
+  tool?: string | undefined;
+  at?: string | undefined;
+  nested?: boolean | undefined;
+}
+// What POST /v2/chat/<bot> answers: the message and room it made, or the org rule that held it.
+interface ChatSendReply {
+  message?: ChatMessage | undefined;
+  conversation?: ChatConversation | undefined;
+  held?: unknown;
+}
+// A send that failed: api.js throws an Error with the HTTP status and the answer's body; the send adds the flags.
+interface ChatSendError extends Error {
+  status?: number | undefined;
+  body?: { error?: { detail?: string | undefined; idempotency_refused?: boolean | undefined } | undefined; detail?: { type?: string | undefined }[] | string | undefined } | undefined;
+  signedOut?: boolean | undefined;
+  unconfirmed?: boolean | undefined;
+  timedOut?: boolean | undefined;
+}
+// A message whose delivery the page cannot confirm: kept with its request id so a resend is not saved twice.
+interface ChatUnconfirmed {
+  text: string;
+  at: number;
+  key: string;
+  signature: string;
+  inFlight?: Promise<unknown> | null | undefined;
+  acknowledged?: boolean | undefined;
+  refused?: boolean | undefined;
+}
+// The composer under the chat (BOT_PILL, ui/app/pill.ts): the fields the send reads and sets.
+interface ChatComposer {
+  slug: string;
+  el?: Element | null | undefined;
+  files: File[];
+  sending?: boolean | undefined;
+  sent?: Promise<unknown> | null | undefined;
+  unconfirmed?: ChatUnconfirmed | null | undefined;
+  retryTries?: number | undefined;
+  retryTimer?: number | undefined;
+  sendRetrying?: boolean | undefined;
+  running?: { run_id: string | null } | null | undefined;
+  stopping?: boolean | undefined;
+}
+let V2C: ChatState | null = null;                      // the live v2 chat; one per visit
 // "every switch is slow... bring down switching to less than 1s". Each bot's
 // last chat (its conversation and messages) and tasks stay in memory for this page load, so going
 // back to a bot paints what it showed at once while the fresh copy loads behind it.
-const CHAT_CACHE = new Map(), BOT_TASKS_CACHE = new Map();
+const CHAT_CACHE = new Map<string, ChatCacheEntry>(), BOT_TASKS_CACHE = new Map();
 function v2ChatStop() {
   if (!V2C) return;
   V2C.liveOff?.();
@@ -18,16 +240,16 @@ function v2ChatStop() {
 }
 // Which of the viewer's rooms with a bot is its chat: the shared room, or one of their own. The bot page shows this
 // one room.
-function v2ChatMode(slug) {
+function v2ChatMode(slug: string): string {
   slug = botBranchChatTarget(slug);
   const bot = botRow(slug);
   const configured = bot?.thread_mode;
   // A shared room belongs to the people the bot works for who may read it; anyone else talks to it in a room of their own.
   const member = S.me?.role === 'owner' || (bot?.users || []).some(u => u.id === S.me?.id);
   return slug === assistantBot() || !member || (bot?.my_access && !bot.my_access.read) ? 'personal'
-    : (configured || (slug === 'cpo' ? 'shared' : 'personal'));
+    : String(configured || (slug === 'cpo' ? 'shared' : 'personal'));
 }
-function v2ChatRoom(conversations, slug, mode = v2ChatMode(slug)) {
+function v2ChatRoom(conversations: ChatConversation[] | undefined, slug: string, mode: string = v2ChatMode(slug)): ChatConversation | null {
   const me = myActor();
   slug = botBranchChatTarget(slug);
   return (conversations || []).find(c => String(c.kind) === 'chat' && !c.task_id
@@ -37,14 +259,15 @@ function v2ChatRoom(conversations, slug, mode = v2ChatMode(slug)) {
     && (!me || (c.participants || []).includes(me))) || null;
 }
 // A run still to show as live: not one that finished, nor one a person stopped or dismissed.
-const v2RunLive = x => !!x && !['completed', 'canceled'].includes(x.state);
+const v2RunLive = (x: ChatExecution | null | undefined): x is ChatExecution => !!x && !['completed', 'canceled'].includes(x.state);
 // `room` is a chat the caller already holds (the Assistant page: GET /v2/assistant gives its room and messages), so
 // nothing is looked up; `empty` is what an empty thread shows instead of the default line.
-async function v2ChatLoad(slug, room = null) {
+interface ChatRoom { conv: ChatConversation | null; messages?: ChatMessage[] | undefined; nextBefore?: string | undefined; execution?: ChatExecution | null | undefined; empty?: string | undefined }
+async function v2ChatLoad(slug: string, room: ChatRoom | null = null) {
   v2ChatStop();
   const mode = v2ChatMode(slug);
-  const state = V2C = {slug, mode, conv: null, messages: [], mine: [], live: null, poll: 0, rendered: false,
-                       loaded: false, failed: false, empty: room?.empty || ''};
+  const state: ChatState = V2C = {slug, mode, conv: null, messages: [], mine: [], live: null, poll: 0, rendered: false,
+                       loaded: false, failed: false, empty: room?.empty || '', prepending: false};
   const seen = CHAT_CACHE.get(slug);
   if (room) {
     const x = room.execution;
@@ -91,12 +314,12 @@ async function v2ChatLoad(slug, room = null) {
 // Find my chat with this bot and its messages, trying again quietly when a request fails (a
 // deploy restarting the hub, a phone on a weak signal). A failed load showed
 // "Nothing yet. Say something below." for a bot with a long history.
-async function v2ChatFind(state) {
+async function v2ChatFind(state: ChatState) {
   for (const wait of [0, 800, 2500]) {
     if (wait) await new Promise(done => setTimeout(done, wait));
     if (V2C !== state) return;
     if (!state.listed) {
-      const list = await v2Get(`/v2/conversations?chat_with=${encodeURIComponent(state.slug)}`);
+      const list: ChatPage | null = await v2Get(`/v2/conversations?chat_with=${encodeURIComponent(state.slug)}`);
       if (!list) continue;
       if (!state.listed) {                        // a message sent while this loaded already put its chat in place
         state.listed = true;
@@ -118,9 +341,9 @@ async function v2ChatFind(state) {
 const BOTS_SHOWN = 5;
 // A chat opens at its newest 50 messages, at most 160 KB of them; older pages load on request (v2ChatOlder).
 const CHAT_PAGE = 'limit=50&max_bytes=163840';
-async function v2BotsLoad(state) {
+async function v2BotsLoad(state: ChatState) {
   if (V2C !== state) return;
-  const list = await v2Get(`/v2/conversations?bot=${encodeURIComponent(state.slug)}`);
+  const list: ChatPage | null = await v2Get(`/v2/conversations?bot=${encodeURIComponent(state.slug)}`);
   if (V2C !== state || !list) return;
   const me = `bot:${state.slug}`;
   const convs = (list.conversations || [])
@@ -128,31 +351,33 @@ async function v2BotsLoad(state) {
       && (c.participants || []).some(p => p !== me && String(p).startsWith('bot:')))
     .slice(0, BOTS_SHOWN);
   if (!convs.length) return;
-  const bodies = await Promise.all(convs.map(c => v2Get(`/v2/conversations/${encodeURIComponent(c.id)}/messages?limit=1`)));
+  const bodies: (ChatPage | null)[] = await Promise.all(convs.map(c => v2Get(`/v2/conversations/${encodeURIComponent(c.id)}/messages?limit=1`)));
   if (V2C !== state) return;
-  state.botTalk = convs.flatMap((c, n) => (bodies[n]?.messages || []).map(m => ({...m,
-    elsewhere: {kind: c.kind, subject: c.subject || '', id: c.id, preview: !!bodies[n].has_more}})));
+  const talk: ChatMessage[] = convs.flatMap((c, n) => (bodies[n]?.messages || []).map(m => ({...m,
+    elsewhere: {kind: c.kind, subject: c.subject || '', id: c.id, preview: !!bodies[n]?.has_more}})));
+  state.botTalk = talk;
   if (state.botTalk.length) v2ChatRender(state);
 }
 // A bot-to-bot conversation shown as its newest message: its newest page in place of the preview, then each
 // "Earlier messages" loads the page before the oldest one shown (its cursor rides on that message).
-async function v2BotsOpen(state, cid) {
+async function v2BotsOpen(state: ChatState, cid: string) {
   const mine = (state.botTalk || []).filter(m => m.elsewhere?.id === cid);
-  const was = mine.find(m => m.elsewhere?.before)?.elsewhere || mine[0]?.elsewhere || {};
+  const was: Partial<ChatElsewhere> = mine.find(m => m.elsewhere?.before)?.elsewhere || mine[0]?.elsewhere || {};
   const before = was.before ? `before=${encodeURIComponent(was.before)}&` : '';
-  const d = await get(`/v2/conversations/${encodeURIComponent(cid)}/messages?${before}${CHAT_PAGE}`);
+  const d = await get<ChatPage>(`/v2/conversations/${encodeURIComponent(cid)}/messages?${before}${CHAT_PAGE}`);
   if (V2C !== state) return;
-  const tag = m => ({...m, elsewhere: {kind: was.kind, subject: was.subject || '', id: cid, open: true}});
+  const tag = (m: ChatMessage): ChatMessage => ({...m, elsewhere: {kind: was.kind, subject: was.subject || '', id: cid, open: true}});
   const kept = was.before ? mine.map(tag) : [];
-  const page = [...(d.messages || []).filter(m => !kept.some(k => k.id === m.id)).map(tag), ...kept];
-  if (d.has_more && d.next_before && page.length) page[0].elsewhere = {...page[0].elsewhere, preview: true, before: d.next_before};
+  const page: ChatMessage[] = [...(d.messages || []).filter(m => !kept.some(k => k.id === m.id)).map(tag), ...kept];
+  const head = page[0];
+  if (d.has_more && d.next_before && head) head.elsewhere = {...head.elsewhere, preview: true, before: d.next_before};
   state.botTalk = [...(state.botTalk || []).filter(m => m.elsewhere?.id !== cid), ...page];
   v2ChatRender(state);
 }
-async function v2ChatMessages(state) {
+async function v2ChatMessages(state: ChatState) {
   if (!state.conv) return false;
   const sent = state.mine.length;
-  const d = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/${S.me?.cloud ? 'snapshot' : 'messages'}?${CHAT_PAGE}`);
+  const d: ChatPage | null = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/${S.me?.cloud ? 'snapshot' : 'messages'}?${CHAT_PAGE}`);
   if (V2C !== state || !d) return false;
   // A message sent while this was loading is newer than the copy that came back: keep it, and leave the
   // live turn to the stream (this copy has not seen it start).
@@ -171,24 +396,26 @@ async function v2ChatMessages(state) {
 // "image.png". /api/v2/files serves every file as a sandboxed download, so the page fetches the
 // bytes itself and shows them from a blob URL of the file's own image type; other files stay links.
 const CHAT_IMAGE_RE = /\.(png|jpe?g|gif|webp|heic|avif)$/i;
-const isChatImage = f => /^image\//.test(String(f?.content_type || '')) && !/svg/.test(f.content_type) || (!f?.content_type && CHAT_IMAGE_RE.test(String(f?.name || '')));
+const isChatImage = (f: ChatFile) => /^image\//.test(String(f?.content_type || '')) && !/svg/.test(String(f.content_type)) || (!f?.content_type && CHAT_IMAGE_RE.test(String(f?.name || '')));
 const CHAT_IMAGES = new Map();                 // file id -> {promise: Promise<object URL>, url, bytes}; a byte budget (fileKeep)
-function chatImageURL(f) {
-  return fileKeep(CHAT_IMAGES, f.id, () => fetch(`${API}/v2/files/${encodeURIComponent(f.id)}`, {credentials: 'same-origin'})
+// A file whose image is fetched: a chat file, or the thumbnail button's data-* attributes (any of which may be missing).
+interface ChatImageRef { id: string | undefined; content_type?: string | undefined; name?: string | undefined }
+function chatImageURL(f: ChatImageRef) {
+  return fileKeep(CHAT_IMAGES, f.id, () => fetch(`${API}/v2/files/${encodeURIComponent(String(f.id))}`, {credentials: 'same-origin'})
     .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
     .then(b => {
-      const blob = new Blob([b], {type: /^image\//.test(f.content_type || '') ? f.content_type : 'image/png'}), url = URL.createObjectURL(blob);
+      const blob = new Blob([b], {type: /^image\//.test(f.content_type || '') ? String(f.content_type) : 'image/png'}), url = URL.createObjectURL(blob);
       return {value: url, url, bytes: blob.size};
     }));
 }
 // The first visuals show as cards (ui/app/visual-cards.js); the rest stay these chips and thumbnails.
-function chatAttachmentsHTML(files, key = '') {
-  return visualCardsHTML(files, {key, chips: rest => chatChipsHTML(rest)});
+function chatAttachmentsHTML(files: ChatFile[], key = '') {
+  return visualCardsHTML(files, {key, chips: (rest: ChatFile[]) => chatChipsHTML(rest)});
 }
 // A chip or thumbnail shows the title the sender gave the file (refs.attachments[].title), else its name; data-name
 // keeps the file's own name for the viewer and the download.
-const chatFileLabel = f => String(f?.title || '').trim() || f?.name || 'file';
-function chatChipsHTML(files) {
+const chatFileLabel = (f: ChatFile | undefined) => String(f?.title || '').trim() || f?.name || 'file';
+function chatChipsHTML(files: ChatFile[]) {
   if (!files.length) return '';
   return `<div class="chat-files">${files.map(f => {
     const label = chatFileLabel(f), titled = label !== (f.name || 'file');
@@ -198,19 +425,19 @@ function chatChipsHTML(files) {
   }).join('')}</div>`;
 }
 // Thumbnails fetch only near the viewport, so a long history doesn't pull every picture at once.
-const CHAT_IO = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
-  for (const e of entries) if (e.isIntersecting) { CHAT_IO.unobserve(e.target); chatThumbShow(e.target); }
+const CHAT_IO = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries, observer) => {
+  for (const e of entries) if (e.isIntersecting && e.target instanceof HTMLElement) { observer.unobserve(e.target); chatThumbShow(e.target); }
 }, {rootMargin: '300px'}) : null;
-function chatThumbsLoad(root = document) {
-  for (const button of root.querySelectorAll('.chat-thumb:not([data-loading])')) {
+function chatThumbsLoad(root: ParentNode = document) {
+  for (const button of root.querySelectorAll<HTMLElement>('.chat-thumb:not([data-loading])')) {
     button.dataset.loading = '1';
     if (CHAT_IMAGES.has(button.dataset.chatImage) || !CHAT_IO) chatThumbShow(button); else CHAT_IO.observe(button);
   }
 }
-function chatThumbShow(button) {
+function chatThumbShow(button: HTMLElement) {
   const f = {id: button.dataset.chatImage, content_type: button.dataset.type, name: button.dataset.name};
-  chatImageURL(f).then(url => { const img = button.querySelector('img'); img.src = url; img.hidden = false; button.classList.add('ready'); })
-    .catch(() => { (button.closest('.chat-titled') || button).replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(f.id)}`, download: f.name, textContent: button.dataset.title || f.name})); });
+  chatImageURL(f).then((url: string) => { const img = button.querySelector('img'); if (!img) throw new Error('the thumbnail has no image'); img.src = url; img.hidden = false; button.classList.add('ready'); })
+    .catch(() => { (button.closest('.chat-titled') || button).replaceWith(Object.assign(document.createElement('a'), {className: 'pill', href: `${API}/v2/files/${encodeURIComponent(String(f.id))}`, download: f.name, textContent: button.dataset.title || f.name})); });
 }
 let CHAT_THUMBS_QUEUED = false;
 new MutationObserver(() => {
@@ -218,11 +445,11 @@ new MutationObserver(() => {
   CHAT_THUMBS_QUEUED = true;
   setTimeout(() => { CHAT_THUMBS_QUEUED = false; if (document.querySelector('.chat-thumb:not([data-loading])')) chatThumbsLoad(); }, 60);
 }).observe(document.documentElement, {childList: true, subtree: true});
-function chatImageOpen(button) {
-  let d = $('#img-lightbox');
+function chatImageOpen(button: HTMLElement) {
+  let d = $('#img-lightbox') as HTMLDialogElement | null;
   if (!d) {
     d = document.createElement('dialog'); d.id = 'img-lightbox'; d.className = 'img-lightbox';
-    d.addEventListener('click', ev => { if (!ev.target.closest('a')) d.close(); });
+    d.addEventListener('click', ev => { if (!eventElement(ev)?.closest('a')) d?.close(); });
     document.body.append(d);
   }
   const src = button.querySelector('img')?.src; if (!src) return;
@@ -231,13 +458,13 @@ function chatImageOpen(button) {
   d.showModal();
 }
 // Attached chat images open in the one viewer (see viewerOpenFrom), with the message's other files.
-function v2MessageCards(m) {
-  const refs = (m.refs && typeof m.refs === 'object') ? m.refs : {};
-  const bits = [];
+function v2MessageCards(m: ChatMessage) {
+  const refs: ChatRefs = (m.refs && typeof m.refs === 'object') ? m.refs : {};
+  const bits: string[] = [];
   // Tasks are rows with their titles (v2RunHTML), never an id chip.
   for (const [k, v] of Object.entries(refs)) {
     if (k === 'action_result' || !/approval/i.test(k)) continue;
-    for (const one of [].concat(v)) bits.push(`<span class="fchip">approval <span class="mono">${esc(String(one).slice(0, 8))}</span></span>`);
+    for (const one of ([] as unknown[]).concat(v)) bits.push(`<span class="fchip">approval <span class="mono">${esc(String(one).slice(0, 8))}</span></span>`);
   }
   if (refs.action_result?.approval) bits.push(`<span class="fchip">${esc(refs.action_result.decision || 'updated')} approval <span class="mono">${esc(String(refs.action_result.approval).slice(0, 8))}</span></span>`);
   // A message that came in from Slack (docs/slack-gateway.md): where, and why the decision model sent it here.
@@ -255,18 +482,18 @@ function v2MessageCards(m) {
 // was about, work it handed out, links it filed, questions and messages it sent, what the hub
 // refused. Titles and names come with the message (backend/turns.py); a task this reader cannot
 // open never comes, so no id is ever shown. Under them, the turn's work folded to one line.
-const youAware = actor => { const who = actorLabel(actor); return who === 'You' ? 'you' : who; };
-function v2RunRow(verb, what, {task = '', href = '', failed = false, title = ''} = {}) {
+const youAware = (actor: string | undefined) => { const who = actorLabel(actor); return who === 'You' ? 'you' : who; };
+function v2RunRow(verb: string, what: string, {task = '', href = '', failed = false, title = ''} = {}) {
   const inner = `<span class="did-arrow">${failed ? '✗' : '↳'}</span><span class="did-verb">${verb}</span>${what ? `<span class="did-what">${what}</span>` : ''}`;
   const tip = title ? ` title="${esc(title)}"` : '';
   if (task) return `<button type="button" class="did" data-task-conversation="${esc(task)}"${tip}>${inner}</button>`;
   if (href) return `<a class="did" href="${esc(href)}"${/^https?:/.test(href) ? ' target="_blank" rel="noopener"' : ''}${tip}>${inner}</a>`;
   return `<div class="did${failed ? ' failed' : ''}"${tip}>${inner}</div>`;
 }
-const tookWords = s => s == null ? '' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m`;
+const tookWords = (s: number | null | undefined) => s == null ? '' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m`;
 // What the run did reads as one folded line under the reply, named by its first few actions.
 // `state` keeps which folds are open and the steps read so far: the chat's (V2C), or a thread view's own.
-function v2RunHTML(m, state = V2C) {
+function v2RunHTML(m: ChatMessage, state: ChatState | null = V2C) {
   const run = m.run || {}, rows = [], said = [], given = new Set((run.did || []).filter(d => d.kind === 'task').map(d => d.task_id));
   for (const [id, t] of Object.entries(m.ref_tasks || {}))
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
@@ -289,7 +516,7 @@ function v2RunHTML(m, state = V2C) {
     const label = [`${run.steps} step${run.steps === 1 ? '' : 's'}`, run.tool_calls ? `${run.tool_calls} tool call${run.tool_calls === 1 ? '' : 's'}` : '', tookWords(run.took_s)].filter(Boolean).join(' · ');
     const turn = m.refs?.turn_id, open = state?.openSteps?.has(turn);
     rows.push(`<details class="run-steps" data-turn="${esc(turn)}"${open ? ' open' : ''}><summary>${esc(label)}</summary><div class="steps-list">${
-      state?.steps?.[turn] || '<div class="step muted">Loading…</div>'}</div></details>`);
+      state?.steps?.[String(turn)] || '<div class="step muted">Loading…</div>'}</div></details>`);
   }
   const about = Object.values(m.ref_tasks || {})[0]?.title;
   if (!said.length && !about) return rows.length ? `<div class="run-did">${rows.join('')}</div>` : '';
@@ -299,12 +526,12 @@ function v2RunHTML(m, state = V2C) {
   const label = [head.charAt(0).toUpperCase() + head.slice(1), tookWords(run.took_s)].filter(Boolean).join(' · ');
   return `<details class="run-did run-fold" data-fold="${esc(m.id || '')}"${v2FoldOpen(m, state) ? ' open' : ''}><summary>${esc(label)}</summary>${rows.join('')}</details>`;
 }
-const chatLine = (text, n) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+const chatLine = (text: unknown, n: number) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // Folded lines stay as the reader left them across redraws.
-const v2FoldOpen = (m, state = V2C) => !!(m.id && state?.openFolds?.has(m.id));
-const v2FoldAttrs = m => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
+const v2FoldOpen = (m: {id?: string | undefined}, state: ChatState | null = V2C) => !!(m.id && state?.openFolds?.has(m.id));
+const v2FoldAttrs = (m: ChatMessage) => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
 // A turn's steps are read when someone opens them, once, and kept open across redraws.
-function v2StepsHTML(d) {
+function v2StepsHTML(d: {steps?: ChatStep[]}) {
   const steps = d.steps || [];
   if (!steps.length) return '<div class="step muted">No steps were recorded for this run.</div>';
   return steps.map(st => st.kind === 'thinking'
@@ -312,27 +539,27 @@ function v2StepsHTML(d) {
     : `<div class="step${st.kind === 'error' ? ' err' : ''}${st.nested ? ' nested' : ''}" title="${esc(fmt(st.at))}"><span class="step-tool">${esc(st.kind === 'tool' ? (st.label || st.tool) : st.kind)}</span><span class="step-sum">${esc(st.text)}</span></div>`).join('');
 }
 // `root` is where the fold sits when it is not the chat's thread (a thread view).
-async function v2StepsOpen(state, el, root = null) {
-  const turn = el.dataset.turn;
+async function v2StepsOpen(state: ChatState, el: HTMLDetailsElement, root: Element | null = null) {
+  const turn = String(el.dataset.turn);
   state.openSteps ||= new Set(); state.steps ||= {};
   if (!el.open) { state.openSteps.delete(turn); return; }
   state.openSteps.add(turn);
   if (turn in state.steps) return;          // loaded, or on its way ('')
   state.steps[turn] = '';
-  let html;
-  try { html = state.steps[turn] = v2StepsHTML(await get(`/v2/turns/${encodeURIComponent(turn)}/steps`)); }
-  catch (error) { delete state.steps[turn]; html = `<div class="step err">${esc(error.message)}</div>`; }   // reopening tries again
+  let html: string;
+  try { html = state.steps[turn] = v2StepsHTML(await get<{steps?: ChatStep[]}>(`/v2/turns/${encodeURIComponent(turn)}/steps`)); }
+  catch (error) { delete state.steps[turn]; html = `<div class="step err">${esc(errorMessage(error, ''))}</div>`; }   // reopening tries again
   if (root ? !root.isConnected : V2C !== state) return;
   const list = (root || $('#conv-thread'))?.querySelector(`details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
   if (list) list.innerHTML = html;
 }
 // Copy the original message, not timestamps, action labels or rendered link shortcuts. `fb`: a bot's message's feedback
 // key, whose 👍 / 👎 follow Copy on the row under it (ui/app/feedback.js).
-function chatCopyHTML(text, fb = '') {
+function chatCopyHTML(text: string | undefined, fb = '') {
   return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button>${fbButtonsHTML(fb)}</div>` : '';
 }
 document.addEventListener('click', async ev => {
-  const button = ev.target.closest('.bubble [data-chat-copy]');
+  const button = eventElement(ev)?.closest<HTMLElement>('.bubble [data-chat-copy]');
   if (!button) return;
   ev.preventDefault();
   try { await copyText(button.dataset.chatCopy); toast('Message copied'); }
@@ -343,14 +570,14 @@ document.addEventListener('click', async ev => {
 const CHAT_TOUCH = window.matchMedia('(pointer: coarse)');
 document.addEventListener('click', ev => {
   if (!CHAT_TOUCH.matches) return;
-  const bubble = ev.target.closest('.bubble');
-  const keep = bubble && (ev.target.closest('a,button,summary,input,textarea,select,details') || String(getSelection?.() || ''));
+  const target = eventElement(ev), bubble = target?.closest('.bubble');
+  const keep = bubble && (target?.closest('a,button,summary,input,textarea,select,details') || String(getSelection?.() || ''));
   for (const el of document.querySelectorAll('.bubble.acts')) if (el !== bubble) el.classList.remove('acts');
   if (bubble && !keep && bubble.querySelector(':scope>.chat-message-actions')) bubble.classList.toggle('acts');
 });
 // A bot-owned task works in a room of its own. The main chat keeps one quiet row when it starts (refs.task_started)
 // and one per milestone (refs.task_report: blocked, done, declined, stuck); a tap opens the task's thread.
-function chatTaskMark(m) {
+function chatTaskMark(m: ChatMessage) {
   const refs = m.refs || {};
   if (!refs.task || !(refs.task_started || refs.task_report)) return null;
   const id = String(typeof refs.task === 'object' ? refs.task.id || '' : refs.task);
@@ -359,21 +586,22 @@ function chatTaskMark(m) {
   const title = known?.title || (refs.task_started ? String(m.body || '').replace(/^Started task:\s*/i, '') : '') || 'Task';
   return {id, title, state: refs.task_report ? String(refs.task_report) : 'started'};
 }
-function chatTaskRowHTML(m) {
-  const t = chatTaskMark(m);
+function chatTaskRowHTML(m: ChatMessage | undefined) {
+  const t = m && chatTaskMark(m);
+  if (!m || !t) throw new Error('not a task row');
   return `<button type="button" class="chat-task-row" data-task-conversation="${esc(t.id)}" data-message="${esc(m.id || '')}" title="${esc(plainActors(m.body || ''))}">
     <span class="ct-dot ${esc(t.state)}" aria-hidden="true"></span><span class="ct-title">${esc(chatLine(t.title, 90))}</span><span class="ct-state">· ${esc(t.state)}</span>${
     m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : ''}</button>`;
 }
 // Task rows in a row, from one sender: more than three show the oldest, a count of the rest, and the newest.
-function chatTaskRunHTML(run) {
+function chatTaskRunHTML(run: ChatMessage[]) {
   if (run.length <= 3) return run.map(chatTaskRowHTML).join('');
   return chatTaskRowHTML(run[0])
     + `<div class="chat-task-row chat-task-more" data-task-hidden="${run.length - 2}"><span class="ct-state">...${run.length - 2} more...</span></div>`
     + chatTaskRowHTML(run.at(-1));
 }
 // Tico Live was retired; the lines it left in rooms (refs.live) read as plain messages.
-function v2MessageHTML(m) {
+function v2MessageHTML(m: ChatMessage) {
   // A Confirm card a bot left for you (BotOps: adding a person, a role, a shared credential): filled in from the action.
   // A bot asking for a secret: the card takes it here and it goes straight to Credentials (ui/credential-card.js).
   if (m.refs?.credential_request) return `<div class="conv-run chat" data-message="${esc(m.id)}"><div data-credential-host="${esc(m.refs.credential_request)}"><div class="asst-state">Loading the card…</div></div></div>`;
@@ -424,7 +652,7 @@ function v2MessageHTML(m) {
 }
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
 // harness's `steer`). Its sender, if they may stop the bot, can have it replace the turn instead: Stop and redirect.
-function v2DeliveryHTML(m) {
+function v2DeliveryHTML(m: ChatMessage) {
   if (m.run?.state === 'added_to_run') return `<div class="chat-delivery">Steered into the running turn</div>`;
   const d = m.delivery;
   if (!d) return '';
@@ -435,23 +663,25 @@ function v2DeliveryHTML(m) {
   return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-run="${esc(d.run_id)}">Stop and redirect</button>` : ''}</div>`;
 }
 document.addEventListener('click', async ev => {
-  const button = ev.target.closest('[data-redirect]'); if (!button) return;
+  const button = eventElement(ev)?.closest<HTMLButtonElement>('[data-redirect]'); if (!button) return;
   ev.preventDefault();
   button.disabled = true;
   try {
-    await post(`/v2/bots/${encodeURIComponent(button.dataset.redirectBot)}/stop`,
+    await post(`/v2/bots/${encodeURIComponent(String(button.dataset.redirectBot))}/stop`,
       {run_id: button.dataset.redirectRun, redirect: button.dataset.redirect});
-    button.closest('.chat-delivery').textContent = 'Stopping this turn; this message starts the next one';
-  } catch (e) { button.disabled = false; toast(`Not redirected: ${e.message}`, true); }
+    const delivery = button.closest('.chat-delivery');
+    if (!delivery) throw new Error('the delivery line is gone');
+    delivery.textContent = 'Stopping this turn; this message starts the next one';
+  } catch (e) { button.disabled = false; toast(`Not redirected: ${errorMessage(e, '')}`, true); }
 });
 // The chat is the person and the bot. A person's own words, the bot's replies to them, and anything that waits on them
 // (a question, an approval, a Confirm or credential card) are the conversation. Everything else is side traffic:
 // bots talking to each other, a bot's message relayed from another bot's run, the keeper's task and system notices, a
 // task's notes. Side traffic folds into one line per run (v2MessagesHTML); nothing is dropped. Read from the message's
 // fields, never its words: a reply that quotes another bot is still a reply.
-const chatNeedsYou = m => !!(m.refs?.action || m.refs?.credential_request)
+const chatNeedsYou = (m: ChatMessage) => !!(m.refs?.action || m.refs?.credential_request)
   || !!actorPerson(m.recipient_id) && (m.kind === 'ask' || !!m.refs?.approval || !!m.refs?.questions);
-function chatSideKind(m, slug) {
+function chatSideKind(m: ChatMessage, slug: string | undefined) {
   const from = String(m.sender_id || ''), refs = m.refs || {};
   if (m.elsewhere) return 'bots';                       // a conversation between bots, shown in this chat's timeline
   // A task's start or milestone: its own row in time order (not folded with side traffic), never the conversation's last line.
@@ -472,14 +702,14 @@ function chatSideKind(m, slug) {
   return SOURCE_LINES.has(src.kind) || m.kind === 'notice' ? 'notice' : 'bots';
 }
 // Who a side item is from, as the folded line names it: the other bot in a bot-to-bot message, else the sender.
-function chatSideName(m, slug) {
+function chatSideName(m: ChatMessage, slug: string | undefined) {
   const src = rowSource(m);
   if (SOURCE_LINES.has(src.kind)) return src.kind === 'task_update' ? 'tasks' : src.name;
-  const self = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
+  const self: (string | undefined)[] = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
   if (self.includes(m.sender_id) && actorSlug(m.recipient_id) && !self.includes(m.recipient_id)) return actorLabel(m.recipient_id);
   return actorLabel(m.sender_id);
 }
-function chatSideHead(m) {
+function chatSideHead(m: ChatMessage) {
   if (m.refs?.note) return 'Note' + ((t => t ? ' · ' + t : '')(Object.values(m.ref_tasks || {})[0]?.title || ''));
   const src = rowSource(m);
   if (SOURCE_LINES.has(src.kind)) return src.name;          // a system line has no sender
@@ -487,7 +717,7 @@ function chatSideHead(m) {
   return actorLabel(m.sender_id) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
 }
 // The head in bold; an automation's name links to it; a system line has none.
-function chatSideHeadHTML(m) {
+function chatSideHeadHTML(m: ChatMessage) {
   const src = rowSource(m);
   if (src.kind === 'automation' && src.link) return `<a class="src-name" href="${esc(src.link)}"><b>${esc(src.name)}</b></a>`;
   const head = chatSideHead(m);
@@ -496,7 +726,7 @@ function chatSideHeadHTML(m) {
 // About two lines at phone width: longer text, or more than one line of it, gets "Show more".
 const CHAT_SIDE_SHORT = 110;
 // One side item, at most two lines; a longer one opens in place with "Show more", with its files.
-function chatSideItemHTML(m) {
+function chatSideItemHTML(m: ChatMessage) {
   const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
   const open = long && V2C?.openSide?.has(m.id);
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
@@ -507,8 +737,10 @@ function chatSideItemHTML(m) {
       m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
-function chatSideHTML(messages, slug) {
-  const first = messages[0], last = messages.at(-1), key = `side:${first.id || ''}`;
+function chatSideHTML(messages: ChatMessage[], slug: string | undefined) {
+  const first = messages[0], last = messages.at(-1);
+  if (!first) throw new Error('a side run has no messages');
+  const key = `side:${first.id || ''}`;
   const when = last?.created_at ? `<time class="chat-time" data-ago="${esc(last.created_at)}" title="${esc(fmt(last.created_at))}">${esc(ago(last.created_at))}</time>` : '';
   const names = [...new Set(messages.map(m => chatSideName(m, slug)).filter(Boolean))];
   const who = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
@@ -525,27 +757,31 @@ function chatSideHTML(messages, slug) {
 // The thread: the conversation as it was, each run of side items folded to one line. Side items that came after the
 // last thing in the conversation join the line just above it, so the conversation's last message stays at the bottom
 // and a bot-to-bot exchange arriving while you read changes a count instead of pushing the chat up.
-function v2MessagesHTML(messages, goalLine, slug = V2C?.slug) {
-  const feed = [];
+// One line of the thread before it is drawn: the goal line's HTML, or a message and where it goes.
+interface ChatFeedItem { html?: string | undefined; message?: ChatMessage; side?: boolean; task?: boolean }
+function v2MessagesHTML(messages: ChatMessage[], goalLine: {at?: number; html?: string} | null | undefined, slug: string | undefined = V2C?.slug) {
+  const feed: ChatFeedItem[] = [];
   messages.forEach((message, i) => {
     if (goalLine?.at === i) feed.push({html: goalLine.html});
     const kind = chatSideKind(message, slug);
     feed.push({message, side: !!kind && kind !== 'task', task: kind === 'task'});
   });
   if (goalLine?.at === messages.length) feed.push({html: goalLine.html});
-  const lastMain = feed.findLastIndex(item => !item.side);
+  const lastMain = feed.findLastIndex((item: ChatFeedItem) => !item.side);
   if (lastMain >= 0 && lastMain < feed.length - 1) feed.splice(lastMain, 0, ...feed.splice(lastMain + 1));
-  const rows = [];
+  const rows: string[] = [];
   for (let i = 0; i < feed.length;) {
-    if (feed[i].task) {
-      const run = [], from = feed[i].message.sender_id;
-      while (i < feed.length && feed[i].task && feed[i].message.sender_id === from) run.push(feed[i++].message);
+    const item = feed[i];
+    if (!item) break;
+    if (item.task && item.message) {
+      const run: ChatMessage[] = [], from = item.message.sender_id;
+      for (let next = feed[i]; next?.task && next.message && next.message.sender_id === from; next = feed[i]) { run.push(next.message); i++; }
       rows.push(chatTaskRunHTML(run));
       continue;
     }
-    if (!feed[i].side) { rows.push(feed[i].html || v2MessageHTML(feed[i].message)); i++; continue; }
-    const run = [];
-    while (i < feed.length && feed[i].side) run.push(feed[i++].message);
+    if (!item.side) { rows.push(item.html || v2MessageHTML(item.message!)); i++; continue; }
+    const run: ChatMessage[] = [];
+    for (let next = feed[i]; next?.side; next = feed[i]) { if (next.message) run.push(next.message); i++; }
     rows.push(chatSideHTML(run, slug));
   }
   return rows.join('');
@@ -556,7 +792,7 @@ function v2MessagesHTML(messages, goalLine, slug = V2C?.slug) {
 const REPLY_WAIT_MS = 20 * 60000;
 // Quiet — three dots and at most a word; the sentence is the tooltip.
 // {word, tip, mode}: mode 'run' animates the dots, 'wait' breathes them slowly.
-function v2PendingText(state) {
+function v2PendingText(state: ChatState) {
   const x = state.execution, name = botDisplayName(state.slug);
   if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
   if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
@@ -565,7 +801,7 @@ function v2PendingText(state) {
 }
 // The words for one run, wherever a message waits on it (this chat, a task's chat): Sent, Queued and why, Starting,
 // "<Bot> is working", or how it ended (Reply failed).
-function pendingRunText(x, slug) {
+function pendingRunText(x: ChatExecution | null | undefined, slug: string) {
   const name = botDisplayName(slug);
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
@@ -582,14 +818,14 @@ function pendingRunText(x, slug) {
   return {word: x.label || x.state, tip: x.label || x.state, mode: 'wait'};
 }
 // The hint a queued run carries when its bot cannot start: no AI provider, or its computer not signed in to its model.
-function pendingHintHTML(x) {
+function pendingHintHTML(x: ChatExecution | null | undefined) {
   if (x?.state !== 'queued') return '';
   if (x.readiness_reason === 'missing_provider') return ' <a href="#/settings" data-gs-tab="models">Add an AI provider</a>';
   return x.readiness_reason === 'model_sign_in'
     ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
     : '';
 }
-function v2PendingHTML(state) {
+function v2PendingHTML(state: ChatState) {
   const x = state.execution, key = x?.message_id || 'sent';
   if (state.dismissed === key) return '';
   const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created_at || '') || state.sentAt || 0;
@@ -606,31 +842,31 @@ function v2PendingHTML(state) {
 // Bot-to-bot messages from this bot's other conversations (v2BotsLoad), in time order with the chat's own. Those older
 // than the loaded page wait until older messages are loaded, so they never pile up above the history; a conversation
 // the person opened shows all it has loaded, so its "Earlier messages" stays in reach.
-function v2WithBotTalk(state, messages) {
+function v2WithBotTalk(state: ChatState, messages: ChatMessage[]) {
   const own = new Set(messages.map(m => m.id)), from = state.nextBefore ? Date.parse(messages[0]?.created_at || '') || 0 : 0;
   const talk = (state.botTalk || []).filter(m => !own.has(m.id) && (m.elsewhere?.open || (Date.parse(m.created_at || '') || 0) >= from));
   if (!talk.length) return messages;
   // Merged in, never re-sorted: the chat's own order stays exactly as the server gave it.
-  const time = m => Date.parse(m.created_at || '') || 0, out = [];
+  const time = (m: ChatMessage) => Date.parse(m.created_at || '') || 0, out: ChatMessage[] = [];
   talk.sort((a, b) => time(a) - time(b));
   let t = 0;
   for (const m of messages) {
-    while (t < talk.length && time(talk[t]) <= time(m)) out.push(talk[t++]);
+    for (let next = talk[t]; next && time(next) <= time(m); next = talk[t]) { out.push(next); t++; }
     out.push(m);
   }
   return out.concat(talk.slice(t));
 }
-const shownById = (state, id) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
+const shownById = (state: ChatState, id: string | undefined) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
 // Scrolled up when something new lands: a small pill above the composer takes you to it (ui/app/stick-scroll.ts).
 // Only the conversation counts, and a reply as it streams in; a side item joins its folded line without a pill.
-const v2Latest = state => state.lastMain ? state.lastMain.id + (state.live?.text ? ':live' : '') : '';
-function v2Jump(state) {
+const v2Latest = (state: ChatState) => state.lastMain ? state.lastMain.id + (state.live?.text ? ':live' : '') : '';
+function v2Jump(state: ChatState) {
   if (!state.stick) return '';
   const last = v2Latest(state), fresh = !!last && last !== state.seenLast;
   if (state.stick.atBottom) state.seenLast = last;
-  return fresh && (actorPerson(state.lastMain.sender_id) && !state.live?.text ? 'Latest' : 'New reply');
+  return fresh && (actorPerson(state.lastMain?.sender_id) && !state.live?.text ? 'Latest' : 'New reply');
 }
-function v2ChatRender(state) {
+function v2ChatRender(state: ChatState) {
   const thread = $('#conv-thread');
   if (!thread || V2C !== state) return;
   if (state.thread !== thread) {
@@ -639,28 +875,32 @@ function v2ChatRender(state) {
     state.stick = stickScroll(thread, {pill: $('#conv-jump'), onBottom: () => { if (V2C === state) v2Jump(state); }});
     state.stick.toBottom();
     thread.addEventListener('scroll', () => v2OlderUpdate(state), {passive: true});
-    thread.addEventListener('toggle', ev => {
+    thread.addEventListener('toggle', (ev: Event) => {
       if (V2C !== state) return;
-      if (ev.target.matches?.('details.run-steps')) v2StepsOpen(state, ev.target);
-      const fold = ev.target.dataset?.fold;
-      if (fold) { state.openFolds ||= new Set(); state.openFolds[ev.target.open ? 'add' : 'delete'](fold); }
+      const target = eventElement(ev);
+      if (target instanceof HTMLDetailsElement && target.matches('details.run-steps')) v2StepsOpen(state, target);
+      const fold = target instanceof HTMLElement ? target.dataset.fold : undefined;
+      if (fold) { state.openFolds ||= new Set(); state.openFolds[target instanceof HTMLDetailsElement && target.open ? 'add' : 'delete'](fold); }
     }, true);
-    thread.addEventListener('click', ev => {
-      const conv = ev.target.closest('[data-bots-open]');
+    thread.addEventListener('click', (ev: Event) => {
+      const target = eventElement(ev);
+      const conv = target?.closest<HTMLButtonElement>('[data-bots-open]');
       if (conv && V2C === state) {
         conv.disabled = true;
-        void v2BotsOpen(state, conv.dataset.botsOpen).catch(error => { conv.disabled = false; toast(error.message, true); });
+        void v2BotsOpen(state, String(conv.dataset.botsOpen)).catch(error => { conv.disabled = false; toast(errorMessage(error, ''), true); });
         return;
       }
-      const more = ev.target.closest('[data-cs-more]');
+      const more = target?.closest<HTMLElement>('[data-cs-more]');
       if (more && V2C === state) {
+        const id = more.dataset.csMore, item = more.closest('.cs-item'), shown = shownById(state, id);
         state.openSide ||= new Set();
-        state.openSide[state.openSide.has(more.dataset.csMore) ? 'delete' : 'add'](more.dataset.csMore);
-        more.closest('.cs-item').outerHTML = chatSideItemHTML(shownById(state, more.dataset.csMore));
+        state.openSide[state.openSide.has(id) ? 'delete' : 'add'](id);
+        if (!item || !shown) throw new Error('the side item is gone');
+        item.outerHTML = chatSideItemHTML(shown);
         return;
       }
-      if (!ev.target.closest('[data-pending-dismiss]') || V2C !== state) return;
-      state.dismissed = ev.target.closest('[data-pending]')?.dataset.pending;
+      if (!target?.closest('[data-pending-dismiss]') || V2C !== state) return;
+      state.dismissed = target.closest<HTMLElement>('[data-pending]')?.dataset.pending;
       v2ChatRender(state);
     });
   }
@@ -684,9 +924,11 @@ function v2ChatRender(state) {
   if (agoStill(html) === state.html) agoTick(thread);
   else {
     state.html = agoStill(html);
-    state.stick.update(() => {
+    const stick = state.stick;
+    if (!stick) throw new Error('the thread has no scroller');
+    stick.update(() => {
       // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
-      const focused = thread.contains(document.activeElement) ? document.activeElement : null;
+      const focused = thread.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement : null;
       // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
       patchHTML(thread, html, visualSwap);
       if (thread.querySelector('[data-hold]')) ruleChatWire(state, thread);
@@ -705,12 +947,12 @@ function v2ChatRender(state) {
   const older = $('#conv-older');
   if (older) {
     older.innerHTML = state.nextBefore ? '<button class="ghost" type="button" data-cloud-older>Load older messages</button>' : '';
-    older.querySelector('[data-cloud-older]')?.addEventListener('click', async ev => {
-      const button = ev.target.closest('[data-cloud-older]');
+    older.querySelector('[data-cloud-older]')?.addEventListener('click', async (ev: Event) => {
+      const button = eventElement(ev)?.closest<HTMLButtonElement>('[data-cloud-older]');
       if (state.loadingOlder || !button) return;
       state.loadingOlder = true; button.disabled = true;
       try { if (await v2ChatOlder(state)) v2ChatRender(state); }
-      catch (error) { toast(error.message, true); }
+      catch (error) { toast(errorMessage(error, ''), true); }
       finally { state.loadingOlder = false; v2OlderUpdate(state); }
     });
     v2OlderUpdate(state);
@@ -734,12 +976,12 @@ function v2ChatRender(state) {
 // Stop shows while this chat's message runs, or waits behind a run the bot is still in, for a person who manages the bot.
 // `x` is a conversation snapshot's execution; {run_id} is the run Stop ends (POST /v2/bots/<bot>/stop), none when the
 // message only waits behind one. A bot's Home and DM read it too (thread-view.js thvRunRead).
-function chatRunning(x, slug) {
-  const own = ['leased', 'running'].includes(x?.state);
+function chatRunning(x: ChatExecution | null | undefined, slug: string) {
+  const own = x && ['leased', 'running'].includes(x.state) ? x : null;
   const busy = own || x?.state === 'queued' && v2StatusOf(slug)?.state === 'running';
-  return busy && settingsCanManageBot(botRow(slug)) ? {run_id: own ? x.run_id : null} : null;
+  return busy && settingsCanManageBot(botRow(slug)) ? {run_id: own ? own.run_id : null} : null;
 }
-function chatStopSync(state) {
+function chatStopSync(state: ChatState) {
   const P = BOT_PILL;
   if (!P || P.slug !== state.slug) return;
   const running = chatRunning(state.execution, state.slug);
@@ -748,7 +990,7 @@ function chatStopSync(state) {
   pillButtons(P);
 }
 // Keep paging discoverable at the history boundary without taking space beside new messages.
-function v2OlderUpdate(state) {
+function v2OlderUpdate(state: ChatState) {
   const older = $('#conv-older'), thread = $('#conv-thread');
   if (V2C !== state || !older || !thread) return;
   older.hidden = !state.nextBefore || thread.scrollTop > 40;
@@ -756,17 +998,20 @@ function v2OlderUpdate(state) {
   if (button) button.disabled = !!state.loadingOlder;
 }
 // One page further back; the outline's jump reuses it. False when the chat changed meanwhile.
-async function v2ChatOlder(state) {
-  const d = await get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/messages?before=${encodeURIComponent(state.nextBefore)}&${CHAT_PAGE}`);
+async function v2ChatOlder(state: ChatState) {
+  if (!state.conv) throw new Error('this chat has no conversation');
+  const d = await get<ChatPage>(`/v2/conversations/${encodeURIComponent(state.conv.id)}/messages?before=${encodeURIComponent(String(state.nextBefore))}&${CHAT_PAGE}`);
   if (V2C !== state) return false;
-  state.messages = [...d.messages, ...state.messages.filter(m => !d.messages.some(x => x.id === m.id))]; state.nextBefore = d.next_before;
+  const got = d.messages;
+  if (!got) throw new Error('the page has no messages');
+  state.messages = [...got, ...state.messages.filter(m => !got.some(x => x.id === m.id))]; state.nextBefore = d.next_before;
   state.older = state.messages.filter(m => !state.latestIds?.has(m.id));
   state.stick?.release(); state.prepending = true;
   return true;
 }
 // A message sent to a bot (the composer, Start setup) lands in the chat that is open on that bot, in the conversation the
 // server put it in; a chat that was empty when it loaded is not "Nothing yet" any more.
-function v2ChatAdopt(slug, j) {
+function v2ChatAdopt(slug: string, j: ChatSendReply) {
   const state = V2C;
   if (!state || state.slug !== slug) { CHAT_CACHE.delete(slug); return; }
   const fresh = j.conversation && j.conversation.id !== state.conv?.id;
@@ -780,7 +1025,7 @@ function v2ChatAdopt(slug, j) {
   v2ChatStream(state);
 }
 // `extra` adds fields to the message itself: {command: true} hands the text to the harness as its own slash command.
-async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
+async function v2ChatSend(P: ChatComposer, text: string, slug: string = P.slug, extraRefs: object = {}, extra: object = {}) {
   // Return during a send that is still out waits for it, then sends what the box still holds; returning
   // here without a word was a message lost.
   while (P.sending || P.unconfirmed?.inFlight) {
@@ -803,7 +1048,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     chatPendingSave();
   }
   P.sending = true;
-  let sent; P.sent = new Promise(done => sent = done);
+  let sent!: () => void; P.sent = new Promise<void>(done => sent = done);
   const pending = P.unconfirmed;
   if (pending) pending.inFlight = P.sent;
   const files = P.files.slice(), draftScope = sessionScope(pq(P, '.p-text'));
@@ -818,7 +1063,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
   }), 400);
   try {
     let refs = {...extraRefs};
-    const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
+    const j: ChatSendReply | null = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
       {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
         onRetry: watch.retry, onResponse: watch.response, operationId: P.unconfirmed?.key});
     // An org rule held the message: nothing was sent, the box keeps the text, and the chat shows the hold with its rule.
@@ -837,14 +1082,15 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     v2ChatAdopt(slug, j);
     P.retryTries = 0;
     return true;
-  } catch (e) {
+  } catch (caught) {
+    const e: ChatSendError = caught instanceof Error ? caught : new Error(String(caught)), status = e.status ?? 0;
     // Access can fail before replay or after storage, even on the first attempt. Only a recorded refusal
     // proves this key created no message; an unmarked 4xx cannot resolve delivery.
-    const accessRefused = !!pending && e.status >= 400 && e.status < 500 && !e.unconfirmed && e.body?.error?.idempotency_refused !== true;
+    const accessRefused = !!pending && status >= 400 && status < 500 && !e.unconfirmed && e.body?.error?.idempotency_refused !== true;
     watch.end(accessRefused ? 'unconfirmed' : e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
     // A confirmed rule refusal created no message. The server caches that refusal too, so a later explicit Send
     // must be able to try again after its cause is resolved. Uncertain deliveries always retain their key.
-    if (pending && e.status >= 400 && e.status < 500 && !e.unconfirmed && !accessRefused) pending.refused = true;
+    if (pending && status >= 400 && status < 500 && !e.unconfirmed && !accessRefused) pending.refused = true;
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
     if (chatReplayExpired(P)) toast(CHAT_REPLAY_EXPIRED, true);
@@ -864,24 +1110,26 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
 // A message without files gives up after `timeout` ms, retries included (writeRequestOnce); an upload has no limit.
 // After `slow` ms a send says it is still going. One object, so the browser tests can shorten both.
 const CHAT_SEND = {timeout: 30000, slow: 5000};
-function chatSendReason(error) {
+function chatSendReason(error: ChatSendError) {
   if (error.status === 413) return 'The attachments are too large. Remove or shrink a file and try again.';
-  if (error.status === 422 && (error.body?.detail?.some?.(e => e.type === 'string_too_long')
+  const detail = error.body?.detail;
+  if (error.status === 422 && ((Array.isArray(detail) && detail.some(e => e.type === 'string_too_long'))
       || /(?:body\.)?text: String should have at most \d+ characters/.test(error.body?.error?.detail || '')))
     return 'This message is too long. Shorten it and try again.';
   if (error.status === 401 || error.signedOut) return "You've been signed out. Sign in again, then try again.";
   if (error.status === 404) return 'This bot is unavailable. Refresh the page or choose another bot.';
   if (error.status === 429 || error.status === 503) return `The server is busy (HTTP ${error.status}). Try again shortly.`;
-  if (error.status >= 500) return `The server could not send this message (HTTP ${error.status}). Try again shortly.`;
+  if ((error.status ?? 0) >= 500) return `The server could not send this message (HTTP ${error.status}). Try again shortly.`;
   return error.message || 'The server refused this message. Try again.';
 }
 // What a send that is taking a while shows under the box, and the one line it leaves in the console when it was slow
 // or failed: how long, how many retries, the last HTTP status and how it ended. Never the message text.
-function chatSendWatch(P, fileCount) {
+function chatSendWatch(P: ChatComposer, fileCount: number) {
   const started = performance.now(), line = pq(P, '.p-slow');
   let retries = 0, status = 0, slow = false, accessReported = false;
-  const report = window.TicoObservability?.chatSend?.();
-  const diagnostic = outcome => report?.({outcome, duration_ms: Math.round(performance.now() - started), retries, status});
+  const observability = window.TicoObservability;
+  const report = observability && 'chatSend' in observability && typeof observability.chatSend === 'function' ? observability.chatSend() : undefined;
+  const diagnostic = (outcome: string) => report?.({outcome, duration_ms: Math.round(performance.now() - started), retries, status});
   const say = () => {
     if (!line || !slow) return;
     line.hidden = false;
@@ -890,14 +1138,14 @@ function chatSendWatch(P, fileCount) {
   };
   const timer = setTimeout(() => { slow = true; say(); diagnostic('slow'); }, CHAT_SEND.slow);
   return {
-    response(code) {
+    response(code: number) {
       status = code;
       // Auth failures retire telemetry immediately in api.js; report before that
       // privacy boundary, never restore the retired identity to send an event.
       if ((code === 401 || code === 403) && !accessReported) { diagnostic(P.unconfirmed ? 'unconfirmed' : 'refused'); accessReported = true; }
     },
-    retry(attempt, code) { retries = attempt; status = code || status; say(); P.sendRetrying = true; pillWhy(P); },
-    end(outcome, code) {
+    retry(attempt: number, code?: number) { retries = attempt; status = code || status; say(); P.sendRetrying = true; pillWhy(P); },
+    end(outcome: string, code?: number) {
       clearTimeout(timer); P.sendRetrying = false;
       if (line) { line.hidden = true; line.textContent = ''; }
       const ms = Math.round(performance.now() - started);
@@ -912,8 +1160,8 @@ function chatSendWatch(P, fileCount) {
 // this bot in the same tab. Beyond the server's replay retention (backend/store.py), never resend automatically.
 const CHAT_REPLAY_MS = 48 * 60 * 60000;
 const CHAT_REPLAY_EXPIRED = 'This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.';
-const chatReplayExpired = P => !!P.unconfirmed && Date.now() - P.unconfirmed.at >= CHAT_REPLAY_MS;
-function chatForgetUnconfirmed(P) {
+const chatReplayExpired = (P: ChatComposer) => !!P.unconfirmed && Date.now() - P.unconfirmed.at >= CHAT_REPLAY_MS;
+function chatForgetUnconfirmed(P: ChatComposer) {
   const u = P.unconfirmed; if (!u) return;
   if (!u.acknowledged && u.inFlight) return;        // edit-and-restore while sending is still the same uncertain send
   if (!u.acknowledged && !u.refused && (pq(P, '.p-text')?.value || '').trim() === u.text && !P.files.length) return;
@@ -924,11 +1172,11 @@ function chatForgetUnconfirmed(P) {
 // message that never reached the hub (the network dropped) sends itself when the connection is
 // back, or on a backoff up to a minute. It uses the same request id, so the hub never records it
 // twice. Editing or clearing the box hands it back to the person.
-function chatRetryLater(P, text, slug, extraRefs, extra, status) {
+function chatRetryLater(P: ChatComposer, text: string, slug: string, extraRefs: object, extra: object, status: number | undefined) {
   clearTimeout(P.retryTimer);
   const pending = P.unconfirmed;
   const tries = P.retryTries = (P.retryTries || 0) + 1;
-  const busy = status === 429 || status >= 500;
+  const busy = status === 429 || (status ?? 0) >= 500;
   if (tries > 8) { P.retryTries = 0; toast(`${busy ? 'The server is still busy.' : 'Still offline or no connection.'} Your message may already have sent. Check the chat before resending.`, true); return; }
   if (tries === 1) toast(busy ? `The server is busy (HTTP ${status}). Your message may still arrive; trying again automatically.`
     : 'Offline or connection lost. Your message will send by itself when you are back online.');
@@ -944,13 +1192,13 @@ function chatRetryLater(P, text, slug, extraRefs, extra, status) {
 }
 // A snapshot read (the newest messages, the run and its text, the goal) put on the page: from the first load, and
 // again whenever live events say this conversation changed.
-function v2ChatApply(state, d) {
-  state.latestIds = new Set((d.messages || []).map(m => m.id));
+function v2ChatApply(state: ChatState, d: ChatPage) {
+  const latestIds = state.latestIds = new Set((d.messages || []).map(m => m.id));
   // A snapshot the server built just before a message of mine landed does not list it yet. What I sent stays on
   // the page, and the run the send started stays live; the next snapshot lists it and this copy drops away.
   const newest = String((d.messages || []).at(-1)?.created_at || '');
-  const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created_at || '') >= newest);
-  state.messages = [...(state.older || []).filter(m => !state.latestIds.has(m.id)), ...(d.messages || []), ...late];
+  const late = state.mine.filter(m => !latestIds.has(m.id) && String(m.created_at || '') >= newest);
+  state.messages = [...(state.older || []).filter(m => !latestIds.has(m.id)), ...(d.messages || []), ...late];
   if (!state.older?.length) state.nextBefore = d.next_before;
   const wasRunning = !!state.live;
   if (!late.length) {
@@ -968,7 +1216,7 @@ function v2ChatApply(state, d) {
 }
 // Read the snapshot again: one read at a time, and one more after it when changes arrived meanwhile, so a run
 // streaming its reply costs a read per burst rather than one per word.
-async function v2ChatSnapshot(state) {
+async function v2ChatSnapshot(state: ChatState) {
   if (V2C !== state || !state.conv) return;
   if (state.reading) { state.readAgain = true; return; }
   state.reading = true;
@@ -981,7 +1229,7 @@ async function v2ChatSnapshot(state) {
   }
 }
 // A goal set, paused, met or stopped: read it as the goal route shows it.
-async function v2ChatGoalChanged(state) {
+async function v2ChatGoalChanged(state: ChatState) {
   if (V2C !== state || !state.conv) return;
   const d = await v2Get(goalPath(state.conv.id));
   if (V2C === state && d) chatGoalApply(state, d.goal || null);
@@ -990,7 +1238,9 @@ async function v2ChatGoalChanged(state) {
 // just read; otherwise (a send, a new room) it is read once now, for what happened before the stream followed it.
 // A reply's message and its run's end arrive in one stream read, ms apart: 30 ms still reads them as one snapshot.
 const CHAT_SOON_MS = 30;
-function v2ChatStream(state, loaded = false) {
+// An event of the live stream (ui/app/live.ts) for a conversation on screen.
+interface ChatLiveEvent { conversation_id?: string | undefined; goal_id?: string | undefined; output?: unknown }
+function v2ChatStream(state: ChatState, loaded = false) {
   if (!state.conv) return;
   if (!liveAvailable()) return;                   // the 15 s poll reads it instead
   const cid = state.conv.id;
@@ -998,11 +1248,11 @@ function v2ChatStream(state, loaded = false) {
   if (state.liveOff && state.liveCid === cid) return;
   state.liveOff?.();
   state.liveCid = cid;
-  const mine = d => d.conversation_id === cid && V2C === state;
+  const mine = (d: ChatLiveEvent) => d.conversation_id === cid && V2C === state;
   let down = 0;
   const offs = [
     liveFollow(cid),
-    liveOn('messages', d => {
+    liveOn('messages', (d: ChatLiveEvent) => {
       if (!mine(d)) return;
       if (d.goal_id) void v2ChatGoalChanged(state);
       liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
@@ -1010,7 +1260,7 @@ function v2ChatStream(state, loaded = false) {
     // A run's output arrives step by step (hundreds a minute while it works): the snapshot reads again at most every
     // 0.4 s for the first 10 s of output, so a short reply streams, then every 3 s; never in a hidden tab. A run
     // starting or ending reads at once.
-    liveOn('runs', d => {
+    liveOn('runs', (d: ChatLiveEvent) => {
       if (!mine(d)) return;
       if (d.output) {
         const first = state.outputSince ||= Date.now();
@@ -1024,7 +1274,7 @@ function v2ChatStream(state, loaded = false) {
     liveOn('reset', () => { if (V2C === state) void v2ChatSnapshot(state); }),
     // A stream that stays down for a few seconds (not the moment it takes to reconnect) marks the reply as interrupted;
     // persisted messages stay on the page meanwhile.
-    liveOn('status', st => {
+    liveOn('status', (st: {connected?: boolean}) => {
       if (V2C !== state) return;
       clearTimeout(down);
       if (!st.connected) down = setTimeout(() => { if (V2C === state && state.live && !liveConnected()) { state.live.interrupted = true; v2ChatRender(state); } }, 3000);
@@ -1035,31 +1285,31 @@ function v2ChatStream(state, loaded = false) {
 }
 
 const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';
-const taskConversationButton = task => `<button class="chat-btn" type="button" data-task-conversation="${esc(task)}" aria-label="Open task conversation" title="Open task conversation">${ICON_CHAT}</button>`;
+const taskConversationButton = (task: string) => `<button class="chat-btn" type="button" data-task-conversation="${esc(task)}" aria-label="Open task conversation" title="Open task conversation">${ICON_CHAT}</button>`;
 document.addEventListener('click', async ev => {
-  const button = ev.target.closest('[data-task-conversation]'); if (!button) return;
+  const button = eventElement(ev)?.closest<HTMLElement>('[data-task-conversation]'); if (!button) return;
   ev.preventDefault(); ev.stopPropagation();
   await taskThreadOpen(button.dataset.taskConversation);       // the task's own thread (ui/app/task-modal.js)
 });
 // Bots link a task as <hub>/tasks/<id>, an address the server does not serve, or as #/task/<id>,
 // which leaves the chat. Either opens the task pop-up in place.
-function taskLinkId(a) {
-  let url; try { url = new URL(a.getAttribute('href') || '', location.href); } catch { return ''; }
+function taskLinkId(a: Element) {
+  let url: URL; try { url = new URL(a.getAttribute('href') || '', location.href); } catch { return ''; }
   if (!hubUrl(url)) return '';
   const m = url.hash.match(/^#\/tasks?\/([^/?#]+)$/) || (!url.hash && url.pathname.match(/^\/tasks?\/([A-Za-z0-9-]{8,80})\/?$/));
   if (!m) return '';
-  try { return decodeURIComponent(m[1]); } catch { return ''; }
+  try { return decodeURIComponent(String(m[1])); } catch { return ''; }
 }
 document.addEventListener('click', async ev => {
   if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-  const a = ev.target.closest('a[href]');
+  const a = eventElement(ev)?.closest('a[href]');
   if (!a || a.hasAttribute('download')) return;
   const id = taskLinkId(a);
   // a #/task/ link outside a message (the board, a run row) still goes to the Tasks page
-  if (!id || (a.getAttribute('href').startsWith('#') && !a.closest('.md, .bubble, .conv-run, .upd-card, .upd-msg'))) return;
+  if (!id || (a.getAttribute('href')?.startsWith('#') && !a.closest('.md, .bubble, .conv-run, .upd-card, .upd-msg'))) return;
   ev.preventDefault();
   try {
-    const data = await get('/v2/tasks/' + encodeURIComponent(id));
+    const data = await get<{task: unknown}>('/v2/tasks/' + encodeURIComponent(id));
     void taskModalShow(data.task);
-  } catch (error) { toast(error.message, true); }
+  } catch (error) { toast(errorMessage(error, ''), true); }
 });
