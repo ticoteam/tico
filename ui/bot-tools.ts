@@ -11,6 +11,45 @@
    deps) when More opens; deps keeps this file free of the page's globals (get, esc). Nothing here reads
    a secret: the server sends names, never values. */
 'use strict';
+
+// A tool as the bot's tools list sends it (ui/types/api.d.ts, generated from the server).
+type BtTool = import('./types/api').BotTool;
+type BtStatus = BtTool['status'];
+// GET /api/v2/bots/{bot}/tools, with the report_error line the server adds beside the list (not in api.d.ts).
+type BtToolsPage = import('./types/api').ListBotToolsResponse & {report_error?: string | null};
+// GET /api/v2/messaging/bots: the channels each bot reads. Only its Slack sources are used here (not in api.d.ts).
+interface BtInboxBots {
+  bots?: Array<{bot: string; sources?: Array<{kind: string; name: string}>}>;
+}
+// The page's get(path) from ui/app/api.js: resolves with the parsed JSON body.
+type BtGet = <T>(path: string) => Promise<T>;
+// The page's esc from ui/app/core.js.
+type BtEsc = (value: unknown) => string;
+// window.toolIcons from ui/tool-icons.js. The fallback below has no has(); the real one does.
+interface BtIcons {
+  has?: (key: unknown) => boolean;
+  markup: (tool: BtTool) => string;
+  hue: (name: string) => number;
+}
+// What mountList needs from the page: the bot's slug, and the page's get and esc (ui/app/bot-page.js passes them).
+interface BtListDeps {
+  slug: string;
+  get: BtGet;
+  esc: BtEsc;
+}
+// mountStrip also takes the Manage link, and skipModel (a runtime bot leaves the model out of the strip).
+interface BtStripDeps extends BtListDeps {
+  href: string;
+  skipModel?: boolean;
+}
+// window.botTools, which ui/app/bot-page.js calls once a bot page is drawn.
+interface BtApi {
+  mountStrip(hostEl: Element | null, deps: BtStripDeps): void;
+  mountList(hostEl: Element | null, deps: BtListDeps): void;
+  summary(tool: BtTool): string;
+}
+declare var botTools: BtApi;
+
 (function () {
   const STRIP_MAX = 3;
 
@@ -66,37 +105,44 @@
 .bt-list .bt-problem{color:var(--fail)}
 `;
 
-  const STATUS = {ready: ['ok', 'Ready'], problem: ['fail', 'Needs attention'], pending: ['', 'Pending'], unknown: ['', 'Not checked']};
-  const label = key => String(key).replace(/[_-]+/g, ' ').replace(/^./, c => c.toUpperCase());
-  const asList = value => (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
+  const STATUS: Record<BtStatus, [string, string]> = {ready: ['ok', 'Ready'], problem: ['fail', 'Needs attention'], pending: ['', 'Pending'], unknown: ['', 'Not checked']};
+  const ORDER: BtStatus[] = ['problem', 'pending', 'unknown', 'ready'];
+  const isStatus = (value: unknown): value is BtStatus => value === 'ready' || value === 'problem' || value === 'pending' || value === 'unknown';
+  const statusOf = (status: unknown): [string, string] => (isStatus(status) ? STATUS[status] : STATUS.unknown);
+  const kindOf = (tool: BtTool): BtStatus => (isStatus(tool.status) ? tool.status : 'unknown');
+  const label = (key: string): string => String(key).replace(/[_-]+/g, ' ').replace(/^./, c => c.toUpperCase());
+  const asList = (value: unknown): string[] => {
+    const items: unknown[] = Array.isArray(value) ? value : [value];
+    return items.map(String).filter(Boolean);
+  };
 
   // What a person reads: "pull_requests" is "pull requests"; a model is written one way everywhere (ui/app/format.js).
-  const canWord = v => String(v).replace(/[_-]+/g, ' ');
-  const shownIdentity = tool => tool.id === 'model' && typeof modelWords === 'function' ? modelWords(tool.identity) : tool.identity;
+  const canWord = (v: unknown): string => String(v).replace(/[_-]+/g, ' ');
+  const shownIdentity = (tool: BtTool): string => (tool.id === 'model' && typeof modelWords === 'function' ? modelWords(tool.identity) : tool.identity || '');
   // A repository's Access row already says own or granted; the status line keeps only the rest ("Checked out on its computer").
-  const shownDetail = tool => {
+  const shownDetail = (tool: BtTool): string => {
     if (!isRepo(tool)) return tool.detail || '';
     const rest = String(tool.detail || '').split(/;\s*/).filter(part => !/^(own|granted) repository\b/i.test(part)).join('; ');
     return rest.charAt(0).toUpperCase() + rest.slice(1);
   };
   // A GitHub repository: the bot's own (instructions and memory) or one granted to it, read only or read and write.
-  const isRepo = tool => /^github(-app)?$/i.test(String(tool.service || '')) && !!(tool.scope?.repo || tool.url);
-  const ownRepo = tool => tool.id === 'repo' || /own repository/i.test(tool.detail || '');
-  const can = tool => (tool.can || []).map(String);
-  function access(tool) {
+  const isRepo = (tool: BtTool): boolean => /^github(-app)?$/i.test(String(tool.service || '')) && !!(tool.scope?.repo || tool.url);
+  const ownRepo = (tool: BtTool): boolean => tool.id === 'repo' || /own repository/i.test(tool.detail || '');
+  const can = (tool: BtTool): string[] => (tool.can || []).map(String);
+  function access(tool: BtTool): string {
     const write = can(tool).includes('write'), read = write || can(tool).includes('read');
     const level = write ? 'Read and write' : read ? 'Read only' : '';
     return [ownRepo(tool) ? 'Own repository' : '', level].filter(Boolean).join(' · ');
   }
-  function stateWord(tool) {
+  function stateWord(tool: BtTool): string {
     if (tool.status === 'problem') return tool.problem || STATUS.problem[1];
     if (tool.pending === 'remove') return 'Removal pending';
     if (tool.pending === 'update') return 'Change pending';
-    return (STATUS[tool.status] || STATUS.unknown)[1];
+    return statusOf(tool.status)[1];
   }
   // The lines a tooltip shows, as [label, value]; the identity is the head line.
-  function facts(tool) {
-    const rows = [];
+  function facts(tool: BtTool): Array<[string, string]> {
+    const rows: Array<[string, string]> = [];
     if (isRepo(tool)) { if (access(tool)) rows.push(['Access', access(tool)]); }
     else if (tool.id !== 'model' && can(tool).length) rows.push(['Can', can(tool).map(canWord).join(', ')]);
     for (const [key, value] of Object.entries(tool.scope || {})) {
@@ -107,12 +153,12 @@
     rows.push(['State', stateWord(tool)]);
     return rows.filter(([, v]) => v);
   }
-  function summary(tool) {
-    return [tool.name, shownIdentity(tool), ...facts(tool).map(([k, v]) => k === 'State' ? v : `${k.toLowerCase()} ${v}`)].filter(Boolean).join(', ');
+  function summary(tool: BtTool): string {
+    return [tool.name, shownIdentity(tool), ...facts(tool).map(([k, v]) => (k === 'State' ? v : `${k.toLowerCase()} ${v}`))].filter(Boolean).join(', ');
   }
 
   // One open list at a time; leaving the page closes it.
-  let closeOpen = null;
+  let closeOpen: (() => void) | null = null;
   window.addEventListener('hashchange', () => closeOpen?.());
 
   function style() {
@@ -123,59 +169,66 @@
     document.head.append(el);
   }
 
-  const icons = () => window.toolIcons || {markup: () => '', hue: () => 0};
-  const tint = tool => (icons().has && icons().has(tool.logo_key) ? '' : ` bt-tint" style="--h:${icons().hue(tool.name)}`);
+  const NO_ICONS: BtIcons = {markup: () => '', hue: () => 0};
+  const icons = (): BtIcons => window.toolIcons || NO_ICONS;
+  const tint = (tool: BtTool): string => (icons().has?.(tool.logo_key) ? '' : ` bt-tint" style="--h:${icons().hue(tool.name)}`);
 
   // The bot's tools, with the Slack channels it reads (Tools > Slack channels) folded into its Slack tool.
-  async function load(slug, get) {
-    const page = await get(`/v2/bots/${encodeURIComponent(slug)}/tools`);
-    const tools = Array.isArray(page?.tools) ? page.tools : [];
-    const inbox = await get('/v2/messaging/bots').catch(() => null);
+  async function load(slug: string, get: BtGet): Promise<{tools: BtTool[]; reportError: string}> {
+    const page = await get<BtToolsPage | null>(`/v2/bots/${encodeURIComponent(slug)}/tools`);
+    const tools: BtTool[] = Array.isArray(page?.tools) ? page.tools : [];
+    const inbox = await get<BtInboxBots | null>('/v2/messaging/bots').catch(() => null);
     const channels = (inbox?.bots || []).find(b => b.bot === slug)?.sources?.filter(s => s.kind === 'slack').map(s => s.name) || [];
     if (channels.length) {
       const slackTool = tools.find(t => t.id === 'slack' || t.service === 'slack');
       if (slackTool) slackTool.scope = {...(slackTool.scope || {}), channels};
-      else tools.push({id: 'slack', service: 'slack', logo_key: 'slack', name: 'Slack', can: ['read'], status: 'ready', scope: {channels}});
+      else tools.push({id: 'slack', service: 'slack', logo_key: 'slack', name: 'Slack', identity: '', note: '', can: ['read'], status: 'ready', scope: {channels}});
     }
     return {tools, reportError: page?.report_error || ''};
   }
 
   // Beside the name: one button, up to three small icons overlapped and "+N"; it opens a short list of the
   // tools (name, what it acts as, a problem in red) with "Manage" to the full list (deps.href).
-  function mountStrip(host, deps) {
-    if (!host) return;
+  function mountStrip(hostEl: Element | null, deps: BtStripDeps): void {
+    if (!(hostEl instanceof HTMLElement)) return;
+    const host: HTMLElement = hostEl;
     style();
     const {slug, get, esc, href, skipModel} = deps;
     host.classList.add('bot-tool-strip');
-    let tools = [], open = false;
-    const shownTools = () => skipModel ? tools.filter(t => t.id !== 'model') : tools;
-    const icon = tool => `<span class="bts-icon${tint(tool)}" data-tool="${esc(tool.id)}">${icons().markup(tool)}${tool.status === 'problem' ? '<span class="bt-dot" aria-hidden="true"></span>' : ''}</span>`;
-    function close(focus) {
+    let tools: BtTool[] = [];
+    let open = false;
+    const shownTools = (): BtTool[] => (skipModel ? tools.filter(t => t.id !== 'model') : tools);
+    const icon = (tool: BtTool): string => `<span class="bts-icon${tint(tool)}" data-tool="${esc(tool.id)}">${icons().markup(tool)}${tool.status === 'problem' ? '<span class="bt-dot" aria-hidden="true"></span>' : ''}</span>`;
+    function close(focus: boolean): void {
       if (!open) return;
       open = false; closeOpen = null;
       host.querySelector('.bts-pop')?.remove();
       host.querySelector('.bts-stack')?.setAttribute('aria-expanded', 'false');
       document.removeEventListener('pointerdown', outside, true);
-      if (focus) host.querySelector('.bts-stack')?.focus();
+      if (focus) host.querySelector<HTMLElement>('.bts-stack')?.focus();
     }
-    function outside(ev) { if (!host.contains(ev.target)) close(false); }
-    function openPop() {
+    function outside(ev: Event): void {
+      const target = ev.target;
+      if (!(target instanceof Node) || !host.contains(target)) close(false);
+    }
+    function openPop(): void {
       const shown = shownTools();
       open = true; closeOpen = () => close(false);
       const pop = document.createElement('div');
       pop.className = 'bts-pop'; pop.id = 'bts-pop'; pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-label', 'Tools');
       pop.innerHTML = shown.map(tool => `<div class="bts-row" data-tool="${esc(tool.id)}" title="${esc(summary(tool))}">${icon(tool)}
-          <span class="bts-name">${esc(tool.name)}</span><span class="bts-id">${esc(shownIdentity(tool) || '')}</span>${
+          <span class="bts-name">${esc(tool.name)}</span><span class="bts-id">${esc(shownIdentity(tool))}</span>${
           tool.status === 'problem' ? `<span class="bt-problem">${esc(stateWord(tool))}</span>` : ''}</div>`).join('')
         + `<a class="bts-manage" href="${esc(href)}">Manage</a>`;
       host.append(pop);
-      host.querySelector('.bts-stack').setAttribute('aria-expanded', 'true');
-      pop.querySelector('.bts-manage').addEventListener('click', () => close(false));
+      host.querySelector('.bts-stack')?.setAttribute('aria-expanded', 'true');
+      const manage = pop.querySelector<HTMLAnchorElement>('.bts-manage');
+      manage?.addEventListener('click', () => close(false));
       document.addEventListener('pointerdown', outside, true);
-      pop.querySelector('.bts-manage').focus();
+      manage?.focus();
     }
     host.addEventListener('keydown', ev => { if (ev.key === 'Escape' && open) { ev.stopPropagation(); close(true); } });
-    function render() {
+    function render(): void {
       const shown = shownTools();
       host.hidden = !shown.length;
       const few = shown.slice(0, STRIP_MAX), rest = shown.length - few.length;
@@ -183,10 +236,10 @@
       close(false);
       host.innerHTML = `<button type="button" class="bts-stack" aria-haspopup="dialog" aria-expanded="false" aria-controls="bts-pop"
           aria-label="Tools: ${shown.length}" title="Tools">${few.map(icon).join('')}${rest > 0 ? `<span class="bts-more">+${rest}</span>` : ''}</button>`;
-      host.querySelector('.bts-stack').addEventListener('click', () => open ? close(false) : openPop());
+      host.querySelector('.bts-stack')?.addEventListener('click', () => (open ? close(false) : openPop()));
       if (wasOpen) openPop();
     }
-    async function refresh() {
+    async function refresh(): Promise<void> {
       try { const got = await load(slug, get); if (!host.isConnected) return; tools = got.tools; }
       catch { if (!host.isConnected) return; }
       render();
@@ -197,8 +250,8 @@
     // never skips a minute): switching tabs often must not
     // ask more than the minute timer did.
     let loadedAt = Date.now();
-    const due = () => { if (!document.hidden && Date.now() - loadedAt >= 55000) { loadedAt = Date.now(); refresh(); } };
-    const onVis = () => {
+    const due = (): void => { if (!document.hidden && Date.now() - loadedAt >= 55000) { loadedAt = Date.now(); refresh(); } };
+    const onVis = (): void => {
       if (!host.isConnected) { document.removeEventListener('visibilitychange', onVis); return; }
       due();
     };
@@ -213,15 +266,19 @@
 
   // The Tools card under More: one line a tool (icon, name, its key values, status) that opens to every detail,
   // and the GitHub repositories folded into one line that opens to a short line each.
-  function mountList(host, deps) {
-    if (!host) return;
+  function mountList(hostEl: Element | null, deps: BtListDeps): void {
+    if (!(hostEl instanceof HTMLElement)) return;
+    const host: HTMLElement = hostEl;
     style();
     const {slug, get, esc} = deps;
-    const statusPill = tool => { const [kind, word] = STATUS[tool.status] || STATUS.unknown; return `<span class="pill ${kind}">${esc(word)}</span>`; };
-    const repoLink = tool => tool.url ? `<a href="${esc(tool.url)}" target="_blank" rel="noopener noreferrer">${esc(tool.identity)}</a>` : esc(tool.identity);
+    const statusPill = (status: unknown): string => {
+      const [kind, word] = statusOf(status);
+      return `<span class="pill ${kind}">${esc(word)}</span>`;
+    };
+    const repoLink = (tool: BtTool): string => (tool.url ? `<a href="${esc(tool.url)}" target="_blank" rel="noopener noreferrer">${esc(tool.identity)}</a>` : esc(tool.identity));
     // Every fact about a tool; a repository's line already carries its linked name, so its details leave it out.
-    function detail(tool, named) {
-      const rows = [];
+    function detail(tool: BtTool, named: boolean): string {
+      const rows: Array<[string, string]> = [];
       const repo = isRepo(tool);
       const identityLabel = tool.id === 'model' ? 'Runs on' : repo ? 'Repository' : 'Acts as';
       if (tool.identity && !(repo && named)) rows.push([identityLabel, repo ? repoLink(tool) : esc(shownIdentity(tool))]);
@@ -236,7 +293,7 @@
       if (tool.note) rows.push(['Note', esc(tool.note)]);
       const status = tool.status === 'problem' && tool.problem
         ? `<span class="bt-problem">${esc(tool.problem)}</span>`
-        : `${statusPill(tool)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
+        : `${statusPill(tool.status)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
       rows.push(['Status', status]);
       // Who else has it and its credentials live in Tools (ui/app/redesign-library.js).
       const open = tool.service ? `<a class="bt-open" href="#/tools/${encodeURIComponent(tool.service)}">Open in Tools</a>` : '';
@@ -244,43 +301,48 @@
     }
     // The line's key values: the model and effort for the model, access for a repository, otherwise who it acts
     // as and what it may do. A problem takes their place, so it is read without opening the tool.
-    function keyValues(tool) {
+    function keyValues(tool: BtTool): string[] {
       if (tool.id === 'model') return [shownIdentity(tool), ...asList(tool.scope?.effort || [])];
       if (isRepo(tool)) return [access(tool)];
       return [shownIdentity(tool), can(tool).map(canWord).join(', ')];
     }
-    const meta = tool => tool.status === 'problem' && tool.problem
+    const meta = (tool: BtTool): string => (tool.status === 'problem' && tool.problem
       ? `<span class="bt-meta bt-problem">${esc(tool.problem)}</span>`
-      : `<span class="bt-meta">${esc(keyValues(tool).filter(Boolean).join(' · '))}</span>`;
-    const tip = tool => [summary(tool), shownDetail(tool)].filter(Boolean).join('. ');
-    const icon = tool => `<span class="bt-icon-static${tint(tool)}">${icons().markup(tool)}</span>`;
-    const line = tool => `<details class="bt-item" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">${icon(tool)}
-        <span class="bt-name">${esc(tool.name)}</span>${meta(tool)}<span class="bt-line-status">${statusPill(tool)}</span></summary>${detail(tool, false)}</details>`;
-    const repoLine = tool => `<details class="bt-repo" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">
-        <span class="bt-name">${repoLink(tool)}</span>${meta(tool)}<span class="bt-line-status">${statusPill(tool)}</span></summary>${detail(tool, true)}</details>`;
+      : `<span class="bt-meta">${esc(keyValues(tool).filter(Boolean).join(' · '))}</span>`);
+    const tip = (tool: BtTool): string => [summary(tool), shownDetail(tool)].filter(Boolean).join('. ');
+    const icon = (tool: BtTool): string => `<span class="bt-icon-static${tint(tool)}">${icons().markup(tool)}</span>`;
+    const line = (tool: BtTool): string => `<details class="bt-item" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">${icon(tool)}
+        <span class="bt-name">${esc(tool.name)}</span>${meta(tool)}<span class="bt-line-status">${statusPill(tool.status)}</span></summary>${detail(tool, false)}</details>`;
+    const repoLine = (tool: BtTool): string => `<details class="bt-repo" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">
+        <span class="bt-name">${repoLink(tool)}</span>${meta(tool)}<span class="bt-line-status">${statusPill(tool.status)}</span></summary>${detail(tool, true)}</details>`;
     // The repositories' line: how many, their access added up, and the most urgent status among them.
-    function repoGroup(repos) {
-      const count = (test, word) => { const n = repos.filter(test).length; return n ? `${n} ${word}` : ''; };
-      const writes = tool => can(tool).includes('write');
+    function repoGroup(repos: BtTool[], lead: BtTool): string {
+      const count = (test: (tool: BtTool) => boolean, word: string): string => {
+        const n = repos.filter(test).length;
+        return n ? `${n} ${word}` : '';
+      };
+      const writes = (tool: BtTool): boolean => can(tool).includes('write');
       const levels = [count(writes, 'read and write'), count(tool => !writes(tool) && can(tool).includes('read'), 'read only')].filter(Boolean).join(', ');
-      const worst = ['problem', 'pending', 'unknown', 'ready'].find(s => repos.some(tool => (STATUS[tool.status] ? tool.status : 'unknown') === s));
-      const states = Object.entries(repos.reduce((n, tool) => { const w = stateWord(tool); n[w] = (n[w] || 0) + 1; return n; }, {}))
+      const worst = ORDER.find(s => repos.some(tool => kindOf(tool) === s));
+      const states = Object.entries(repos.reduce<Record<string, number>>((n, tool) => { const w = stateWord(tool); n[w] = (n[w] || 0) + 1; return n; }, {}))
         .map(([w, n]) => `${n} ${w.toLowerCase()}`).join(', ');
       const title = `GitHub, ${repos.length} repositories: ${repos.map(tool => `${tool.identity} (${[access(tool), stateWord(tool)].filter(Boolean).join(', ')})`).join('; ')}`;
-      return `<details class="bt-item bt-group" data-tool="github-repos"><summary title="${esc(title)}">${icon(repos[0])}
+      return `<details class="bt-item bt-group" data-tool="github-repos"><summary title="${esc(title)}">${icon(lead)}
           <span class="bt-name">GitHub</span><span class="bt-meta">${esc([`${repos.length} repositories`, levels].filter(Boolean).join(' · '))}</span>
-          <span class="bt-line-status" title="${esc(states)}">${statusPill({status: worst})}</span></summary>
+          <span class="bt-line-status" title="${esc(states)}">${statusPill(worst)}</span></summary>
         <div class="bt-repos">${repos.map(repoLine).join('')}</div></details>`;
     }
     // Two or more repositories share one line, where the first of them would be; one stays a tool line.
-    function lines(tools) {
+    function lines(tools: BtTool[]): string {
       const repos = tools.filter(isRepo);
-      if (repos.length < 2) return tools.map(line).join('');
-      return tools.map(tool => !isRepo(tool) ? line(tool) : tool === repos[0] ? repoGroup(repos) : '').join('');
+      const lead = repos[0];
+      if (!lead || repos.length < 2) return tools.map(line).join('');
+      return tools.map(tool => (!isRepo(tool) ? line(tool) : tool === lead ? repoGroup(repos, lead) : '')).join('');
     }
-    async function refresh() {
-      let got = null, failed = '';
-      try { got = await load(slug, get); } catch (e) { failed = e.message || 'Could not load the tools.'; }
+    async function refresh(): Promise<void> {
+      let got: {tools: BtTool[]; reportError: string} | null = null;
+      let failed = '';
+      try { got = await load(slug, get); } catch (e) { failed = errorMessage(e, 'Could not load the tools.'); }
       if (!host.isConnected) return;
       host.classList.add('bt-list');
       if (!got) { host.innerHTML = `<div class="err">${esc(failed)}</div>`; return; }
@@ -289,7 +351,9 @@
     }
     // A repository's name is a link inside its line: following it opens GitHub and leaves the line as it was.
     host.addEventListener('click', ev => {
-      const link = ev.target.closest('summary a[href]');
+      const clicked = ev.target;
+      if (!(clicked instanceof Element)) return;
+      const link = clicked.closest<HTMLAnchorElement>('summary a[href]');
       if (!link) return;
       ev.preventDefault();
       window.open(link.href, '_blank', 'noopener,noreferrer');

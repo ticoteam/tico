@@ -28,7 +28,6 @@ declare var DocsSearch: any;
 declare var TicoModelLogin: any;
 declare var assistantChat: any;
 declare var botFiles: any;
-declare var botTools: any;
 declare var cloudAgentHire: any;
 declare var cloudAgentRequest: any;
 declare var cloudAgentsOpen: any;
