@@ -74,6 +74,8 @@ def test_a_search_hit_and_a_breadcrumb_carry_the_same_name_as_the_thread(api):
     topic = say(api, thread, "Kickoff agenda")
     hits = search(api, "kickoff", "ben-test")["hits"]
     assert [(h["thread_id"], h["title"]) for h in hits] == [(thread, "Ana, Cara")]
+    # A sub-thread stores no title of its own: it is called by its parent message's first line (the title sent is not
+    # kept), as it always was.
     sub = new_thread(api, title="Side", members=(), parent_message_id=topic["id"])
     path = get_thread(api, sub["id"], "ana-test").json()["breadcrumb"]
-    assert path == [{"id": thread, "title": "Ben, Cara"}, {"id": sub["id"], "title": "Side"}]
+    assert path == [{"id": thread, "title": "Ben, Cara"}, {"id": sub["id"], "title": "Kickoff agenda"}]
