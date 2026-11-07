@@ -23,8 +23,12 @@ const DASH_EMPTY = {};
 
 const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 // The place as it reads: the Growth page's for the month picked there.
-const dashReadUrl = state => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
-const dashKey = state => state.place + (state.month ? '?month=' + state.month : '');
+// The Growth page's segment (state.segment, ?segment=) narrows its marketing tasks; other places have none.
+const dashReadUrl = state => {
+  const q = [state.month ? 'month=' + encodeURIComponent(state.month) : '', state.segment ? 'segment=' + encodeURIComponent(state.segment) : ''].filter(Boolean).join('&');
+  return dashApi(state.place) + (q ? '?' + q : '');
+};
+const dashKey = state => state.place + (state.month ? '?month=' + state.month : '') + (state.segment ? (state.month ? '&' : '?') + 'segment=' + state.segment : '');
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Company">${
   [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
@@ -133,9 +137,9 @@ function dashPrefetch() {
   const place = location.hash === HOME ? 'person:me' : location.hash === OVERVIEW ? 'dashboard' : '';
   if (place) getPrefetch(dashApi(place));
 }
-async function pageDashboard(place, {month = ''} = {}) {
+async function pageDashboard(place, {month = '', segment = ''} = {}) {
   const team = place.startsWith('team:'), own = DASH_PLACES[place];
-  const state = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now()};
+  const state = {place, month, segment, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now()};
   const key = state.key = dashKey(state), kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
   const head = own ? own.head(state) : `<h1>${team ? '' : 'Company'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;

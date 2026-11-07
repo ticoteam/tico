@@ -7,18 +7,14 @@
    TypeScript: npm run build:ui compiles it to build/ui/app/segment-pages.js. */
 'use strict';
 
-// One teammate on a segment's faces (backend/segments.py _face): a ref (`person:<id>` or `bot:<id>`), a name and a kind.
-type SegFace = {ref: string; name: string; kind: string};
-// A segment as the list shows it (GET /api/v2/segments): its id, name, who, color, rank, faces (at most five kept) and
-// how many teammates are dedicated to it.
-type SegItem = {id: string; name: string; who: string; color: string; rank: number; faces: SegFace[]; teammates: number};
+// A segment as the list shows it is SegRow, and a teammate on its faces is SegFace (ui/app/segment-tags.ts, shared).
 // One strategy field the segment reads (GET /api/v2/segments/{id} strategy.fields): its text is the segment's own when it
 // changed the field, else the company's (from says which).
 type SegField = {key: string; title: string; text: string; company: string; changed: boolean; from: string};
 type SegStrategy = {draft: boolean; revision: number | null; version: number | null; fields: SegField[]};
 type SegBet = {id: string; statement: string; status: string};
 // GET /api/v2/segments/{id}: the segment, its leads, its strategy and its live bets.
-type SegDetail = SegItem & {leads: SegFace[]; strategy: SegStrategy; bets: SegBet[]};
+type SegDetail = SegRow & {leads: SegFace[]; strategy: SegStrategy; bets: SegBet[]};
 // A segment's row in the compare table (GET /api/v2/market/segments/compare). The rows carry no faces: the compare view
 // joins them from the segments list (GET /api/v2/segments), by id.
 type SegCompareRow = {id: string; name: string; color: string; money: number | null; yearly_spend: number | null;
@@ -29,14 +25,12 @@ type SegChanged = {text: string; kind?: string; segment_id: string; week: string
 // GET /api/v2/market/segments/{id}/page: the segment's five answers, briefing, sizes, players and history.
 type SegPage = {segment: {id: string; name: string; who: string; color: string; rank: number | null};
   answers: Record<string, string>; briefing: any; sizes: any; players: any[]; what_changed: any[];
-  // The company's share of the segment's spend, in percent (track D). Absent until the page carries it.
-  our_share?: number | null};
+  // The company's share of the segment's spend, in percent.
+  our_share: number | null};
 // What a Market view hands the router back: its shell and the calls the router makes on it.
 type SegMount = {shell: HTMLElement; open: (at?: any) => void; stop: () => void};
 
 const SEG_ROUTE = '#/strategy/segment/';
-// The eight colours a segment can have (backend/models.py SegmentCreate). Each maps to an existing token in the stylesheet.
-const SEG_COLOURS = ['blue', 'green', 'amber', 'red', 'purple', 'teal', 'pink', 'gray'];
 const SEG_FACES = 5;
 const SEG_STATUS: Record<string, string> = {active: 'Active', proposed: 'Proposed', retired: 'Retired'};
 const SEG_ASK = 'Run the "Set up segments" job for this company.';
@@ -48,8 +42,6 @@ const segmentRouteId = (r: string): string => {
   try { return decodeURIComponent(raw); } catch { return raw; }
 };
 const segHref = (id: string): string => SEG_ROUTE + encodeURIComponent(id);
-const segColour = (c: string): string => (SEG_COLOURS.includes(c) ? c : 'gray');
-const segDot = (color: string): string => `<span class="seg-dot" data-seg-color="${esc(segColour(color))}" aria-hidden="true"></span>`;
 const segErr = (error: any, fail: string): string => String(error?.message || fail);
 
 // The faces: the first few teammates as avatars, then how many more are dedicated.
@@ -62,13 +54,13 @@ function segFacesHtml(faces: SegFace[], teammates: number): string {
 // ---------------------------------------------------------------- the list on the Strategy page
 // What the list is doing: which row is being edited, whether the add row is open, which ⋯ menu is open. It lives while
 // the same box is drawn; a new page draws a new box and starts clean.
-let SEG_LIST: {box: HTMLElement | null; list: SegItem[]; owner: boolean; again: () => void; adding: boolean; editing: string} =
+let SEG_LIST: {box: HTMLElement | null; list: SegRow[]; owner: boolean; again: () => void; adding: boolean; editing: string} =
   {box: null, list: [], owner: false, again: () => {}, adding: false, editing: ''};
 
-function segRowHtml(seg: SegItem, i: number, n: number, owner: boolean): string {
+function segRowHtml(seg: SegRow, i: number, n: number, owner: boolean): string {
   const name = esc(seg.name);
   if (owner && SEG_LIST.editing === seg.id) {
-    return `<li class="seg-row seg-editing" data-seg-id="${esc(seg.id)}"><form class="seg-form" data-seg-form novalidate>${segDot(seg.color)}
+    return `<li class="seg-row seg-editing" data-seg-id="${esc(seg.id)}"><form class="seg-form" data-seg-form novalidate>${segDot(seg)}
         <input type="text" name="name" maxlength="120" value="${esc(seg.name)}" aria-label="Name" required>
         <input type="text" name="who" maxlength="200" value="${esc(seg.who)}" aria-label="Who it is for" placeholder="Who it is for">
         <span class="seg-form-acts"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-seg-cancel>Cancel</button></span></form></li>`;
@@ -77,11 +69,11 @@ function segRowHtml(seg: SegItem, i: number, n: number, owner: boolean): string 
       <button class="seg-act" type="button" data-seg-edit aria-label="Edit ${name}" title="Edit">${SEG_PENCIL}</button>
       <button class="seg-act" type="button" data-seg-del aria-label="Remove ${name}" title="Remove">${SEG_X}</button>
       <span class="seg-more-wrap"><button class="seg-act" type="button" data-seg-menu aria-haspopup="menu" aria-expanded="false" aria-label="More for ${name}" title="More">⋯</button>
-        <span class="seg-menu" role="menu" hidden>
+        <span class="seg-more-menu" role="menu" hidden>
           <button type="button" role="menuitem" data-seg-up${i ? '' : ' disabled'}>Move up</button>
           <button type="button" role="menuitem" data-seg-down${i < n - 1 ? '' : ' disabled'}>Move down</button>
         </span></span></span>` : '';
-  return `<li class="seg-row" data-seg-id="${esc(seg.id)}">${segDot(seg.color)}
+  return `<li class="seg-row" data-seg-id="${esc(seg.id)}">${segDot(seg)}
       <a class="seg-main" href="${segHref(seg.id)}"><b>${name}</b>${seg.who ? `<span class="seg-who">${esc(seg.who)}</span>` : ''}</a>
       ${segFacesHtml(seg.faces, seg.teammates)}${acts}</li>`;
 }
@@ -90,7 +82,7 @@ const SEG_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M1
 
 // The list's card: its head (the add button and the suggestion, one style), the add row when open, then the segments. A
 // failed read (`failed`, its text) shows where the list would be, and the add button stays.
-function segmentListHtml(list: SegItem[], owner: boolean, failed = ''): string {
+function segmentListHtml(list: SegRow[], owner: boolean, failed = ''): string {
   const add = owner && !SEG_LIST.adding ? '<button class="strat-add" type="button" data-seg-add>+ Segment</button>' : '';
   const suggest = owner ? '<button class="strat-add" type="button" data-seg-suggest>Ask Assistant to suggest</button>' : '';
   // The two buttons share a group pinned to the right edge (strategy.css gives each .strat-add its own auto margin).
@@ -107,7 +99,7 @@ function segmentListHtml(list: SegItem[], owner: boolean, failed = ''): string {
 }
 
 // Draws the list into its card, then binds it. `list` undefined is still loading.
-function segmentListPaint(box: HTMLElement, list: SegItem[] | null | undefined, owner: boolean, again: () => void, failed = ''): void {
+function segmentListPaint(box: HTMLElement, list: SegRow[] | null | undefined, owner: boolean, again: () => void, failed = ''): void {
   if (SEG_LIST.box !== box) SEG_LIST = {box, list: [], owner, again, adding: false, editing: ''};
   SEG_LIST.owner = owner;
   SEG_LIST.again = again;
@@ -162,9 +154,9 @@ function segmentListBind(box: HTMLElement): void {
     }
     const menu = target.closest('[data-seg-menu]');
     if (menu) {
-      const pop = menu.parentElement?.querySelector<HTMLElement>('.seg-menu');
+      const pop = menu.parentElement?.querySelector<HTMLElement>('.seg-more-menu');
       const open = !!pop?.hidden;
-      document.querySelectorAll<HTMLElement>('.seg-menu').forEach(m => { m.hidden = true; });
+      document.querySelectorAll<HTMLElement>('.seg-more-menu').forEach(m => { m.hidden = true; });
       if (pop) pop.hidden = !open;
       menu.setAttribute('aria-expanded', String(open));
       return;
@@ -203,7 +195,7 @@ function listenSegMenus(): void {
 function closeSegMenus(ev: Event): void {
   const target = ev.target as Element;
   if (target.closest?.('.seg-more-wrap')) return;
-  document.querySelectorAll<HTMLElement>('.seg-menu').forEach(m => { if (!m.hidden) { m.hidden = true; m.parentElement?.querySelector('[data-seg-menu]')?.setAttribute('aria-expanded', 'false'); } });
+  document.querySelectorAll<HTMLElement>('.seg-more-menu').forEach(m => { if (!m.hidden) { m.hidden = true; m.parentElement?.querySelector('[data-seg-menu]')?.setAttribute('aria-expanded', 'false'); } });
 }
 
 // ---------------------------------------------------------------- the segment page
@@ -225,7 +217,7 @@ window.pageSegment = async function pageSegment(): Promise<void> {
   main.classList.add('strategy-layout');
   main.innerHTML = strategyHeadHtml('segment') + `<div id="seg-body" class="seg-page">${skelRows(6, {dot: false})}</div>`;
   let seg: SegDetail, sees: boolean;
-  try { [seg, sees] = await Promise.all([get('/v2/segments/' + id, {fresh: true}), segFinanceSees()]); }
+  try { [seg, sees] = await Promise.all([get('/v2/segments/' + id, {fresh: true}), segFinSees()]); }
   catch (error) {
     if (load === SEG_PAGE_LOAD && $('#seg-body')) $('#seg-body').innerHTML = `<p class="err">${esc(segErr(error, 'Could not load the segment'))}</p>`;
     return;
@@ -234,12 +226,13 @@ window.pageSegment = async function pageSegment(): Promise<void> {
   segPageDraw(seg, load, sees);
 };
 
-// Whether the viewer sees Finance beyond their own budgets. The Budget and P&L links follow it, as the sidebar's Finance
-// entry does (the same test, from the same one read per visit).
-async function segFinanceSees(): Promise<boolean> {
-  finProbeOnce();
-  await FIN_PROBE;
-  return !!finCapsOf(FIN_ACCESS, finMe())?.any;
+// Whether the segment P&L is open to the viewer, by F2's probe (once a visit): a 200 is the whole P&L's viewers or a
+// segment's lead, a 403 neither. The Budget and P&L links follow it. A probe already in flight leaves it undecided,
+// which hides the links until the next draw.
+async function segFinSees(): Promise<boolean> {
+  const probe = finSegProbe();
+  if (probe) await probe;
+  return FIN_SEG.ok === true;
 }
 
 function segPageDraw(seg: SegDetail, load: number, sees: boolean): void {
@@ -257,7 +250,7 @@ function segHeadHtml(seg: SegDetail, sees: boolean): string {
   const links: [string, string, string][] = [[RD_GOALS, 'Goals', 'goals'], [GR_ROUTE, 'Growth', 'growth']];
   if (sees) links.push([FIN_ROUTE + '/budgets', 'Budget', 'budget'], [FIN_ROUTE + '/pnl', 'P&L', 'pnl']);
   return `<header class="seg-head">
-      <div class="seg-title">${segDot(seg.color)}<h2>${esc(seg.name)}</h2></div>
+      <div class="seg-title">${segDot(seg)}<h2>${esc(seg.name)}</h2></div>
       ${seg.who ? `<p class="seg-who-l">${esc(seg.who)}</p>` : ''}
       <div class="seg-meta">${segFacesHtml(seg.faces, seg.teammates)}
         <nav class="seg-links" aria-label="Segment's pages">${links.map(([base, label, key]) =>
@@ -385,11 +378,10 @@ function segMarketDraw(el: HTMLElement, id: string, page: SegPage): void {
   const sizes = page.sizes || {}, chosen = sizes.chosen || null, estimates: any[] = sizes.estimates || [];
   const briefing = page.briefing || null, answers = page.answers || {}, players = page.players || [];
   const spend: number | null = chosen?.spend_usd ?? sizes.rolled_usd?.spend_usd ?? null;
-  // The players' revenue feeds the players table. The share is the page's own (our_share); until the page carries it,
-  // it is worked out from that revenue.
+  // The company's share of the segment's spend is the server's (our_share, in percent).
+  const share: number | null = typeof page.our_share === 'number' ? page.our_share : null;
+  // The players' revenue feeds the players table.
   const revenue = rdqRevenue({segments: [{id: seg.id, parent: null, players}]});
-  const ours = revenue.get(marketSelfId()) || 0;
-  const share = typeof page.our_share === 'number' ? page.our_share : spend && ours ? 100 * ours / spend : null;
   const owner = mktOwner();
   const tiles: string[] = [];
   // The money is this tile (its range beside it), so the question below carries only the sizes.
@@ -456,12 +448,12 @@ async function segResearch(el: HTMLElement, id: string): Promise<void> {
 // The chips that move between the compare view and one segment's market.
 function segChipsHtml(active: string, segs: SegCompareRow[]): string {
   return `<nav class="seg-chips" aria-label="Segments">
-    <a class="seg-chip${active === 'all' ? ' cur' : ''}" href="${MARKET_ROUTE}"${active === 'all' ? ' aria-current="page"' : ''}>All segments</a>
-    ${segs.map(s => `<a class="seg-chip${active === s.id ? ' cur' : ''}" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}"${active === s.id ? ' aria-current="page"' : ''}>${segDot(s.color)}${esc(s.name)}</a>`).join('')}
+    <a class="seg-chip${active === 'all' ? ' cur' : ''}" href="${MARKET_ROUTE}"${active === 'all' ? ' aria-current="page"' : ''}><span class="seg-chip-name">All segments</span></a>
+    ${segs.map(s => `<a class="seg-chip${active === s.id ? ' cur' : ''}" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}"${active === s.id ? ' aria-current="page"' : ''}>${segDot(s)}<span class="seg-chip-name">${esc(s.name)}</span></a>`).join('')}
   </nav>`;
 }
 function segCompareHtml(segs: SegCompare[]): string {
-  const rows = segs.map(s => `<tr><td><a class="seg-name" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s.color)}${esc(s.name)}</a></td>
+  const rows = segs.map(s => `<tr><td><a class="seg-name" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s)}${esc(s.name)}</a></td>
       <td class="mkt-num" data-col="money">${s.money != null ? mktMoney(s.money) : ''}</td><td class="mkt-num" data-col="yearly">${s.yearly_spend != null ? mktMoney(s.yearly_spend) : ''}</td>
       <td class="mkt-num seg-opt" data-col="growth">${s.growth != null ? rdqGrowth(s.growth) : ''}</td><td class="mkt-num seg-opt" data-col="share">${s.our_share != null ? rdqPct(s.our_share) : ''}</td>
       <td class="seg-opt" data-col="team">${segFacesHtml(s.faces, s.teammates)}</td></tr>`).join('');
@@ -475,7 +467,7 @@ function segChangedHtml(changed: SegChanged[], segs: SegCompareRow[]): string {
   const by = new Map(segs.map(s => [s.id, s]));
   const items = changed.map(c => {
     const s = by.get(c.segment_id);
-    const tag = s ? `<a class="seg-tag" data-seg-tag="${esc(s.id)}" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s.color)}${esc(s.name)}</a>` : '<span class="seg-tag" data-seg-tag="all">All</span>';
+    const tag = s ? `<a class="seg-tag" data-seg-tag="${esc(s.id)}" href="${MARKET_ROUTE}?segment=${encodeURIComponent(s.id)}">${segDot(s)}${esc(s.name)}</a>` : '<span class="seg-tag" data-seg-tag="all">All</span>';
     return `<li>${tag}<span class="mkt-it">${esc(c.text)}</span></li>`;
   }).join('');
   return rdqSection('changed', 'What changed across all', '', '', `<ul class="mkt-card mkt-items seg-changed">${items}</ul>`);
@@ -495,15 +487,15 @@ async function segMarketBlank(): Promise<boolean> {
 // The Market tab's compare view: the segments side by side, what changed across them, and the chips to each segment's
 // market. With no market yet it shows the setup; with no segments, the whole market.
 async function mountMarketCompare(shell: HTMLElement): Promise<SegMount> {
-  const [data, list, blank] = await Promise.all([
+  const [data, , blank] = await Promise.all([
     get('/v2/market/segments/compare', {fresh: true}),
-    get('/v2/segments', {fresh: true}).catch(() => null),
+    segTagsLoad(),
     segMarketBlank(),
   ]);
   if (blank) return await mountBlank(shell);
   if (!(data?.segments || []).length) return await mountMarketPage(shell);
-  // The faces and teammates come from the segments list by id; a segment missing there shows no faces.
-  const people = new Map<string, SegItem>((list?.segments || []).map((x: SegItem) => [x.id, x]));
+  // The faces and teammates come from the shared segment list by id; a segment missing there shows no faces.
+  const people = new Map<string, SegRow>(segTagRows().map(x => [x.id, x]));
   const segs: SegCompare[] = (data?.segments || []).map((r: SegCompareRow) => ({
     ...r, faces: people.get(r.id)?.faces || [], teammates: people.get(r.id)?.teammates || 0}));
   const changed: SegChanged[] = data?.changed || [];

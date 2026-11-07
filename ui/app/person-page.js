@@ -12,6 +12,17 @@ const PERSON_TAB_LABELS = {assistant: 'Assistant', profile: 'Profile', slack: 'S
 function personCanEdit(p) {
   return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
 }
+// The teammate's Segments row, in the About card: its tags, and the owner's Edit (ui/app/segment-tags.ts). Nothing
+// until there is something to show.
+function personSegmentsPaint(p) {
+  const card = /** @type {HTMLElement | null} */ ($('#person-about'));
+  if (!card || card.dataset.for !== p.id) return;
+  const ref = 'person:' + p.id, row = segTagRowHtml(ref);
+  card.querySelector('[data-person-seg]')?.remove();
+  if (!row) return;
+  card.insertAdjacentHTML('beforeend', `<div class="seg-tags-field" data-person-seg><span class="muted">Segments</span>${row}</div>`);
+  segTagRowWire(card, ref, p.name || p.id);
+}
 function fieldEditor(label, value, {placeholder, rows, save}) {
   const current = String(value || '');
   return `<section class="card"><header><h2>${esc(label)}</h2>
@@ -75,7 +86,7 @@ function pagePerson(id, tab) {
         ${p.phone ? `<dt>Phone</dt><dd><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></dd>` : ''}
         ${p.bot ? `<dt>Notes go to</dt><dd>${empChip(p.bot)}</dd>` : ''}
       </dl></section>
-    ${p.title || p.team || p.about || edit ? `<section class="card" id="person-about"><header><h2>About</h2>
+    ${p.title || p.team || p.about || edit || segTagsOf('person:' + id).length ? `<section class="card" id="person-about" data-for="${esc(id)}"><header><h2>About</h2>
         ${edit ? '<button class="linkish person-edit-btn" type="button" id="person-edit">Edit</button>' : ''}</header>
       <div id="person-id">${p.title || p.team ? `<div class="meta">${esc([...new Set([p.title, p.team ? teamLabel(p.team) : ''].filter(Boolean))].join(' · '))}</div>` : ''}
         ${p.about ? `<div class="role">${esc(about.lead)}${about.rest ? `<span id="goal-rest" hidden> ${esc(about.rest)}</span> <button class="linkish" type="button" id="goal-more" aria-expanded="false">more</button>` : ''}</div>`
@@ -118,6 +129,8 @@ function pagePerson(id, tab) {
   </div>`;
   void headGoalsLoad('human:' + p.id);
   void personAccessLoad(p);
+  personSegmentsPaint(p);
+  void segTagsLoad().then(() => personSegmentsPaint(p));
   const dmButton = $('#person-dm');
   if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
   $('#ptabs').onclick = ev => {

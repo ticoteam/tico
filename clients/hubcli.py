@@ -270,6 +270,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                                 instead
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top] [--bet ID|--bet ""]
+    hub segment list                       the company's segments in list order: name, who, color, faces
+    hub segment show <segment-id>          one segment: its leads, its strategy fields (the draft for the owner), its bets
+    hub segment add --name "..." [--who "..."] [--color blue|green|amber|red|purple|teal|pink|gray]   owner
+    hub segment edit <segment-id> [--name ...] [--who "..."|--who ""] [--color ...]   owner: only what you pass changes
+    hub segment order <segment-id> <segment-id>...   owner: the list order, every segment once each
+    hub segment remove <segment-id>        owner: take a segment out of the company's; its teammate tags go
+    hub segment strategy <segment-id> [--revision N] [--set KEY=TEXT ...]   owner: the segment's own text, in the draft;
+                                           KEY= gives the company's text back (keys: summary serve sell proof now know how not)
+    hub segment members                    the teammates tagged with a segment (or all), highest on the chart first
+    hub segment tag <bot:ID|person:ID> <segment-id|all>...   owner: a teammate's segments; --clear takes them all off
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
                                            KPIs with latest reading and colour; --bot: that bot's five automatic KPIs
     hub kpi show <id> [--effective]        definition and versions, the goals using it, every reading, check-ins
@@ -3257,6 +3267,60 @@ def parser():
     s.add_argument("--lens", dest="lens")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="lens runs")
+
+    segment_colors = ("blue", "green", "amber", "red", "purple", "teal", "pink", "gray")
+    segment = sub.add_parser(
+        "segment",
+        help="the company's segments: list, show, add, edit, order, remove, strategy, teammate tags",
+    ).add_subparsers(dest="sub")
+    s = segment.add_parser("list", help="the segments in list order: name, who, color, faces")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="segment list")
+    s = segment.add_parser("show", help="one segment: its leads, its strategy fields, its live bets")
+    s.add_argument("id", metavar="SEGMENT_ID", help="segment/<slug>")
+    s.set_defaults(fn="segment show")
+    s = segment.add_parser("add", help="owner: a segment the company plays in")
+    s.add_argument("--name", required=True)
+    s.add_argument("--who", help="one line: who it is for")
+    s.add_argument("--color", choices=segment_colors)
+    s.set_defaults(fn="segment add")
+    s = segment.add_parser("edit", help="owner: a segment's name, who it is for or color; only what you pass changes")
+    s.add_argument("id", metavar="SEGMENT_ID")
+    s.add_argument("--name")
+    s.add_argument("--who", help='one line; "" clears it')
+    s.add_argument("--color", choices=segment_colors)
+    s.set_defaults(fn="segment edit")
+    s = segment.add_parser("order", help="owner: the list order, every segment once each")
+    s.add_argument("ids", nargs="+", metavar="SEGMENT_ID")
+    s.set_defaults(fn="segment order")
+    s = segment.add_parser("remove", help="owner: take a segment out of the company's; its teammate tags go")
+    s.add_argument("id", metavar="SEGMENT_ID")
+    s.set_defaults(fn="segment remove")
+    s = segment.add_parser("strategy", help="owner: a segment's own strategy text for some sections, in the draft")
+    s.add_argument("id", metavar="SEGMENT_ID")
+    s.add_argument(
+        "--revision",
+        type=int,
+        help="the draft's revision, as hub segment show reads it (optional: a confirmed card writes its keys only)",
+    )
+    s.add_argument(
+        "--set",
+        dest="section",
+        action="append",
+        default=[],
+        metavar="KEY=TEXT",
+        help="summary, serve, sell, proof, now, know, how or not; KEY= gives the company's text back; repeatable",
+    )
+    s.set_defaults(fn="segment strategy")
+    s = segment.add_parser("members", help="the teammates tagged with a segment (or all), highest on the chart first")
+    s.set_defaults(fn="segment members")
+    s = segment.add_parser(
+        "tag", help="owner: a teammate's segments, replaced by the ones given; --clear takes them off"
+    )
+    s.add_argument("member", metavar="MEMBER", help="bot:<id> or person:<id>")
+    s.add_argument("segments", nargs="*", metavar="SEGMENT_ID", help="segment ids, or all")
+    s.add_argument("--clear", action="store_true", help="no segments: take every tag off")
+    s.set_defaults(fn="segment tag")
 
     market = sub.add_parser(
         "market", help="the shared market graph: read it, report into it, curate it"

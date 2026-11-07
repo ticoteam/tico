@@ -719,7 +719,8 @@ function goalTreeRows(actor, depth, goals, loose, standing = '') {
   const goalCell = g => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
   // "+" adds a goal for this owner: always there, quiet until a pointer is over the line.
   const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<button type="button" class="gt-add" data-goal-add="${esc(actor)}" title="Add goal" aria-label="Add goal for ${esc(info.name)}">+</button>` : '';
-  const row = (cls, goal, inner) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
+  // A parent kept only for the tree's shape (a Segment filter's context, goal.context) is muted: it is not in the filter.
+  const row = (cls, goal, inner) => `<li class="gt-row${cls}${goal?.context ? ' gt-ctx' : ''}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
     + `<span class="gt-ind" aria-hidden="true"></span>${inner}${cls.includes('gt-cont') ? '' : add}</li>`;
   const first = goals[0], words = String(standing || '').trim();
   const lead = first ? goalCell(first) + `<span class="gt-kpis">${goalChips(first.kpis)}</span>`

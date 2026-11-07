@@ -89,8 +89,10 @@ function rdoCard(n, {top = false} = {}) {
   const av = n.kind === 'person' ? personAvatar(n.person || {name}, 16) : avatar(n.id, 16);
   const cls = ['rdo-card', n.kind === 'person' && 'person', top && 'top', lead && 'lead'].filter(Boolean).join(' ');
   const label = title ? `${name} · ${title}` : name;
-  return `<button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
-    <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}</span></button>`;
+  // The owner's Segments button sits over the card's top right, shown on a hover or a focus within it (ui/styles/redesign-strategy.css).
+  const seg = segTagOwner() && !segNone('') ? `<button type="button" class="rdo-seg-btn" data-rdo-seg="${esc(ref)}" aria-haspopup="menu" aria-label="${esc('Segments for ' + name)}">Segments</button>` : '';
+  return `<span class="rdo-wrap"><button type="button" class="${cls}" data-rdo-ref="${esc(ref)}" aria-label="${esc(label)}" title="${esc(label)}"><b>${esc(name)}</b>
+    <span class="rdo-r">${av}${role ? `<span class="rdo-rl">${esc(role)}</span>` : ''}${segTagCard(segTagsOf(ref))}</span></button>${seg}</span>`;
 }
 // A teammate and, under it on a rail, whoever reports to it inside the same group. A person who heads people or groups
 // has them side by side underneath instead, as the top person does. `ctx.group` draws a group in place of
@@ -129,7 +131,7 @@ function rdoDraw({refit = false} = {}) {
   if (!cv || !pane) return;
   cv.innerHTML = rdoChartHtml();
   // The roster has no leads: sheets need the viewer and the full groups before deciding who may move whom.
-  if (!rdoReady()) cv.querySelectorAll('[data-rdo-ref]').forEach(card => { card.disabled = true; });
+  if (!rdoReady()) cv.querySelectorAll('[data-rdo-ref],[data-rdo-seg]').forEach(card => { card.disabled = true; });
   rdoFitHeight();
   if (RDO.zoom == null || (refit && !RDO.manual)) rdoFit();
   else rdoSize();
@@ -252,7 +254,7 @@ async function pageRdOrg() {
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO.manual) rdoFit(); });
   // The groups with their leads.
-  const groups = await get('/v2/groups').catch(() => null);
+  const [groups] = await Promise.all([get('/v2/groups').catch(() => null), segTagsLoad()]);
   if (seq !== RDO_SEQ || !$('#rdo-cv')) return;
   RDO.groupsTried = true;
   if (groups) RDO.groups = Array.isArray(groups) ? groups : groups.groups || [];
@@ -340,6 +342,9 @@ document.addEventListener('click', ev => {
     else { RDO.manual = true; rdoZoom(RDO.zoom * (how === 'in' ? 1.25 : 0.8), {animate: true}); }
     return;
   }
+  // The Segments button is the card's sibling: it is checked first, and it opens the menu in place (no sheet).
+  const seg = /** @type {HTMLElement | null} */ (/** @type {Element} */ (ev.target).closest('[data-rdo-seg]'));
+  if (seg) { const ref = seg.dataset.rdoSeg || ''; segTagMenuOpen(seg, ref, rdoRefName(ref), () => rdoDraw()); return; }
   const card = ev.target.closest('[data-rdo-ref]');
   if (card) rdoSheet(card.dataset.rdoRef);
 });
@@ -362,8 +367,11 @@ function rdoSheet(ref) {
   const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref), targets = rdoMoveTargets(from);
   const may = !targets || targets.length > 0;
   const id = ref.slice(ref.indexOf(':') + 1), href = ref.startsWith('person:') ? `#/person/${encodeURIComponent(id)}` : `#/bot/${encodeURIComponent(id)}`;
+  // A touch screen has no hover for the card's button, so its sheet keeps the Segments row; elsewhere the card's button does it.
+  const segs = matchMedia('(hover: none)').matches ? segTagRowHtml(ref) : '';
   const body = `<div class="bd-fields rdo-sheet">
       <div class="bd-field"><span>Group</span><span data-rdo-home>${esc(rdoGroupName(from))}${led.length ? ` · lead of ${esc(led.map(rdoGroupName).join(', '))}` : ''}</span></div>
+      ${segs ? `<div class="bd-field"><span>Segments</span>${segs}</div>` : ''}
       ${may ? `<label class="bd-field"><span>Move to…</span><select name="to">${rdoGroupOptions(from, targets)}</select></label>` : ''}
       <a class="rdo-open" href="${href}">Open ${esc(name)}</a></div>`;
   const dlg = useDialog(name, body, async form => {
@@ -373,6 +381,7 @@ function rdoSheet(ref) {
     toast(`${name} moved to ${rdoGroupName(to)}`);
   }, () => void rdoReload());
   dlg.classList.add('rd-sheet', 'rdo-dialog');
+  segTagRowWire(dlg, ref, name, () => rdoDraw());
   const submit = dlg.querySelector('[type=submit]');
   if (may) submit.textContent = 'Move';
   else dlg.querySelector('.use-dialog-row').remove();

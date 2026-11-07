@@ -350,7 +350,7 @@ async function strategyMarketRead(key, load, fresh = false) {
   const opts = fresh ? {fresh: true} : undefined;
   let value = null, failed = '';
   try {
-    if (key === 'segments') value = (await get('/v2/segments', opts))?.segments || [];
+    if (key === 'segments') { if (!(await segTagsLoad())) throw new Error(segTagsError() || 'The segments did not load.'); value = segTagRows(); }
     else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
     else if (key === 'growth') {
       // The Brand strip (ui/app/brand-page.js).

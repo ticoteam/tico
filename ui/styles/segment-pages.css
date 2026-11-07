@@ -2,17 +2,7 @@
    page (ui/strategy-page.js), the segment page at #/strategy/segment/<id>, and the Market tab's compare view and chips.
    The cascade runs in the order index.html links these files; keep rules in order. */
 
-/* A segment's colour is one of the app's tokens: the eight names map to the status and Market hues, and teal is the
-   midpoint of blue and green. The Market hues are on the root (ui/styles/market-spend.css). */
-.seg-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none;background:var(--idle)}
-.seg-dot[data-seg-color="blue"]{background:var(--run)}
-.seg-dot[data-seg-color="green"]{background:var(--ok)}
-.seg-dot[data-seg-color="amber"]{background:var(--wait)}
-.seg-dot[data-seg-color="red"]{background:var(--fail)}
-.seg-dot[data-seg-color="purple"]{background:var(--mkt-c2)}
-.seg-dot[data-seg-color="teal"]{background:color-mix(in srgb,var(--run),var(--ok))}
-.seg-dot[data-seg-color="pink"]{background:var(--mkt-c5)}
-.seg-dot[data-seg-color="gray"]{background:var(--idle)}
+/* A segment's dot, chip and popover are the shared ones (ui/styles/segment-tags.css), so a segment reads the same on every page. */
 
 /* The list: one row a segment, its dot, name and who, its faces at the row's right edge, and its actions on hover (always,
    on touch). The actions keep their slot when hidden, so the faces do not move when they show. */
@@ -37,11 +27,11 @@
 .seg-act:hover,.seg-act:focus-visible{color:var(--ink);background:var(--surface)}
 .seg-act svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .seg-more-wrap{position:relative}
-.seg-menu{position:absolute;right:0;top:100%;z-index:5;display:grid;min-width:150px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 16%,transparent)}
-.seg-menu[hidden]{display:none}
-.seg-menu button{background:none;border:0;text-align:left;padding:8px 10px;border-radius:6px;color:var(--ink);cursor:pointer;font:inherit}
-.seg-menu button:hover:not(:disabled),.seg-menu button:focus-visible{background:var(--surface2)}
-.seg-menu button:disabled{color:var(--muted);cursor:default}
+.seg-more-menu{position:absolute;right:0;top:100%;z-index:5;display:grid;min-width:150px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 16%,transparent)}
+.seg-more-menu[hidden]{display:none}
+.seg-more-menu button{background:none;border:0;text-align:left;padding:8px 10px;border-radius:6px;color:var(--ink);cursor:pointer;font:inherit}
+.seg-more-menu button:hover:not(:disabled),.seg-more-menu button:focus-visible{background:var(--surface2)}
+.seg-more-menu button:disabled{color:var(--muted);cursor:default}
 .seg-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%}
 .seg-form input[type="text"]{flex:1 1 160px;min-width:0}
 .seg-form-acts{display:flex;gap:6px}
@@ -76,9 +66,9 @@ span.seg-field-acts{display:flex;gap:6px;margin-left:auto}
 /* The Market tab's segment chips: one row that scrolls sideways, never wraps. */
 .seg-chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0 10px;margin:0}
 .seg-chips::-webkit-scrollbar{display:none}
-.seg-chip{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:6px 12px;border:1px solid var(--line);border-radius:999px;color:var(--ink);text-decoration:none;font-size:14px;flex:none}
-.seg-chip:hover{background:var(--surface2)}
-.seg-chip.cur{background:var(--surface2);border-color:var(--ink);font-weight:600}
+.seg-chips .seg-chip{flex:none;text-decoration:none}
+.seg-chips a.seg-chip:hover{background:var(--hover)}
+.seg-chips .seg-chip.cur{background:var(--hover);border-color:var(--ink);font-weight:600}
 .seg-cmp td,.seg-cmp th{white-space:nowrap}
 .seg-name{display:inline-flex;align-items:center;gap:8px;color:var(--ink);text-decoration:none;font-weight:600}
 .seg-tag{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);min-width:0;overflow-wrap:anywhere}

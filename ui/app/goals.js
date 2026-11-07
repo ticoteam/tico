@@ -214,6 +214,8 @@ function goalNoteHtml(g, may) {
 // The bets a goal may serve (ui/strategy-page.js): the active ones, and the one it serves now whatever its status, so
 // saving never drops it, even one this person can't see (retired or not yet published). Its caption is the strategy's
 // word for one ("Bet").
+// The goal's segment, beside Bet: optional, and a choice only where the goal may be edited.
+const goalSegmentHtml = (g, may) => segSelectHtml(g.segment_id || '', {cls: 'goal-f goal-seg-f', disabled: !may});
 function goalBetHtml(g, may) {
   const st = GOALS_ST?.strategy, all = st?.bets || [];
   const options = all.filter(c => c.status === 'active' || c.id === g.bet_id).sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
@@ -350,6 +352,7 @@ function goalFormHtml(g, goals, {owner = '', company = false, fixed = false, she
       : choices.length ? `<div class="goal-fs">${ownerSel}${supports(false, who)}</div>`
       : company ? '' : supports(!may, g.owner_id || who)}
       ${goalBetHtml(g, may)}
+      ${goalSegmentHtml(g, may)}
       ${sheet ? goalMeasureHtml(g, may) : ''}
       ${kids.length ? `<div class="goal-ed-kids"><span>Supported by</span>${kids.map(k =>
         `<a href="${GOALS}/${encodeURIComponent(k.id)}" data-goal-go="${esc(k.id)}">${esc(k.title)} <span class="muted">· ${esc(goalOwnerInfo(k.owner_id).name)}</span></a>`).join('')}</div>` : ''}
@@ -389,7 +392,7 @@ function goalMeasurePlan(form, g) {
 }
 const n2 = v => v == null || v === '' ? null : Number(v);
 function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) {
-  const title = form.elements.title, ownerSel = form.elements.owner, parentSel = form.elements.parent, betSel = form.elements.bet;
+  const title = form.elements.title, ownerSel = form.elements.owner, parentSel = form.elements.parent, betSel = form.elements.bet, segSel = form.elements.segment;
   const save = form.querySelector('[type=submit]');
   form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
   form.querySelector('[data-goal-cancel]').onclick = () => done();
@@ -432,11 +435,13 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
         if (parentSel && !parentSel.disabled && parentSel.value !== (g.parent_id || '')) body.parent_id = parentSel.value;
         else if (body.owner === GOAL_COMPANY && g.parent_id) body.parent_id = '';   // a team goal supports nothing
         if (betSel && betSel.value !== (g.bet_id || '')) body.bet_id = betSel.value;   // "" unlinks it
+        if (segSel && !segSel.disabled && segSel.value !== (g.segment_id || '')) body.segment_id = segSel.value;   // "" unlinks it
         if (Object.keys(body).length) await post('/v2/goals/' + encodeURIComponent(g.id), body);
       } else {
         const body = {title: words, owner: company && !ownerSel ? GOAL_COMPANY : ownerSel ? ownerSel.value : owner || 'me'};
         if (parentSel?.value && !parentSel.disabled) body.parent_id = parentSel.value;
         if (betSel?.value) body.bet_id = betSel.value;
+        if (segSel?.value) body.segment_id = segSel.value;
         gid = (await post('/v2/goals', body))?.goal?.id;
       }
       if (measure.post && gid) await measure.post(gid);
@@ -447,26 +452,44 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
   title.focus();
 }
 function pageGoals() {
-  const base = goalsBase(), open = S.route.startsWith(base + '/') ? decodeURIComponent(S.route.slice(base.length + 1)) : '';
+  const base = goalsBase(), path = S.route.split('?')[0];   // the address's ?segment= is not part of the goal's id
+  const open = path.startsWith(base + '/') ? decodeURIComponent(path.slice(base.length + 1)) : '';
   const was = document.getElementById('goal-panel');
   if (was) { was._state = null; if (was.open) was.close(); }
   const sheet = document.getElementById('goal-sheet'); if (sheet?.open) sheet.close();
-  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null, q: ''};
+  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null, q: '', segment: segQuery()};
   // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
   $('#main').classList.add('strategy-layout', 'rd-goals');
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><input type="search" id="goal-search" class="goal-search" aria-label="Search goals or people" autocomplete="off" placeholder="Search goals or people…"><div id="goal-body"><p class="muted">Loading…</p></div>
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
-  const actions = $('#strat-actions');
-  if (actions && (mePerson() || S.me?.role === 'owner')) {
-    actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
-    actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
-  }
+  goalsHeadActions(state);
+  // The Segment filter names its segment, and the choices are there, once the list is read (a direct visit has none yet).
+  void segTagsLoad().then(() => { if (GOALS_ST === state) goalsHeadActions(state); });
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
   const search = $('#goal-search');
   search.oninput = () => { state.q = search.value; goalsRender(state); };
   search.onkeydown = ev => { if (ev.key === 'Escape' && search.value) { ev.preventDefault(); ev.stopPropagation(); search.value = ''; search.oninput(); } };
   goalsLoad(state);
   goalsKpiViews($('#goal-kpis'));   // Tree · Loops · Journey (ui/app/goals-kpi-views.js)
+}
+// The page's top row: the Segment filter icon, then + Goal for whoever may add one. Drawn again when the filter changes.
+function goalsHeadActions(state) {
+  const actions = $('#strat-actions');
+  if (!actions) return;
+  const may = Boolean(mePerson() || S.me?.role === 'owner');
+  actions.innerHTML = segFilterButton(state.segment) + (may ? '<button class="primary" type="button" id="goal-new">+ Goal</button>' : '');
+  const filter = actions.querySelector('[data-seg-filter]');
+  if (filter) filter.onclick = () => segFilterOpen(filter, state.segment, id => goalsSegmentPick(state, id));
+  const add = actions.querySelector('#goal-new');
+  if (add) add.onclick = () => { if (state.loaded) goalSheetOpen(state); };
+}
+// A new pick in the Segment menu: the address keeps it, and the tree is read again for it.
+function goalsSegmentPick(state, id) {
+  if (state.segment === id) return;
+  state.segment = id;
+  segQuerySet(id);
+  goalsHeadActions(state);
+  void goalsReload(state);
 }
 function goalsApply(state, data, needs) {
   state.goals = (data.goals || []).filter(g => !goalBuiltInOwner(g.owner_id));
@@ -479,9 +502,11 @@ function goalsApply(state, data, needs) {
 // The strategy comes with them, for the bets a goal may serve, and the groups, for their leads (a group's "+"). The
 // goals never wait on either: if one cannot be read, the picker or the group's "+" is left out.
 const goalStrategyGet = () => v2Get('/v2/strategy').catch(() => null);
+// The goals tree for the page's segment filter (?segment=); every goal when none is picked.
+const goalsTreePath = seg => '/v2/goals/tree' + (seg ? '?segment=' + encodeURIComponent(seg) : '');
 async function goalsLoad(state) {
   let data, needs, strategy, groups;
-  try { [data, needs, strategy, groups] = await Promise.all([get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalStrategyGet(), get('/v2/groups').catch(() => null)]); }
+  try { [data, needs, strategy, groups] = await Promise.all([get(goalsTreePath(state.segment)), v2Get('/v2/goals/needs-you'), goalStrategyGet(), get('/v2/groups').catch(() => null)]); }
   catch (e) { const body = GOALS_ST === state && $('#goal-body'); if (body) body.innerHTML = `<p class="err">${esc(e.message || 'Could not load goals')}</p>`; return; }
   // Left Goals before the tree came: opening a goal now would cover the next page and rewrite its address.
   if (GOALS_ST !== state || !$('#goal-body')) return;
@@ -512,13 +537,17 @@ function headGoalsReload() {
   if (BOT && $('#bot-goal')) void botGoalLoad(BOT.slug);
   if (BOT && $('#bot-goals-list')) void botGoalsCardLoad(BOT.slug);
 }
-function openGoal(id) { location.hash = goalsBase() + '/' + encodeURIComponent(id); }
+// A goal opened from the tree keeps the page's segment filter.
+function openGoal(id) {
+  const seg = location.hash.startsWith(goalsBase()) ? segQuery() : '';
+  location.hash = goalsBase() + '/' + encodeURIComponent(id) + (seg ? '?segment=' + encodeURIComponent(seg) : '');
+}
 async function goalsRefresh() {
   GOAL_OPTIONS = null;
   if (GOALS_ST && $('#goal-body')) {
-    const st = GOALS_ST;
-    const [r, needs, strategy] = await Promise.all([v2Get('/v2/goals/tree'), v2Get('/v2/goals/needs-you'), goalStrategyGet()]);
-    if (r && st === GOALS_ST) { goalsApply(st, r, needs); if (Array.isArray(strategy?.bets)) st.strategy = strategy; }
+    const st = GOALS_ST, seg = st.segment;
+    const [r, needs, strategy] = await Promise.all([v2Get(goalsTreePath(seg)), v2Get('/v2/goals/needs-you'), goalStrategyGet()]);
+    if (r && st === GOALS_ST && seg === st.segment) { goalsApply(st, r, needs); if (Array.isArray(strategy?.bets)) st.strategy = strategy; }
   }
   headGoalsReload();
 }

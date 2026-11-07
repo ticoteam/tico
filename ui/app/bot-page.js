@@ -676,7 +676,7 @@ function showBotTab(tab) {
   if (view === 'history') void botHistoryLoad(BOT.slug);
   if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
-  if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
+  if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); botSegmentsPaint(BOT.slug); void segTagsLoad().then(() => botSegmentsPaint(BOT.slug)); }
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();

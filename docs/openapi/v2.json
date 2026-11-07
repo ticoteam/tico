@@ -131,6 +131,10 @@
       "description": "The business segments the company plays in (docs/strategy.md#segments): each with its dedicated teammates, leads, strategy and live bets. Anyone signed in reads them; the owner writes them, and an owner or bot admin tags teammates."
     },
     {
+      "name": "Market",
+      "description": "The Market page by segment (docs/market-briefing.md): the company's segments side by side, one segment's market, and the Librarian's research for one segment. Anyone signed in reads them; asking for research takes a person, or a bot the bot-contact rules admit."
+    },
+    {
       "name": "Inbound",
       "description": "Shared company inbound email and SMS for people and agents; reads never consume messages."
     },
@@ -26101,6 +26105,170 @@
         },
         "tags": [
           "Health"
+        ]
+      }
+    },
+    "/api/v2/market/segments/compare": {
+      "get": {
+        "summary": "Every segment the company plays in, in list order, side by side: money, yearly spend, growth, our share and its newest briefing, and the newest changes across the market and them, each tagged with its segment",
+        "operationId": "compareMarketSegments",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketSegmentCompare"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Market"
+        ]
+      }
+    },
+    "/api/v2/market/segments/{segment_id}/page": {
+      "get": {
+        "summary": "One segment's market: its five answers and newest briefing, its sizes, its players and what changed. An id that is not one of the company's segments is a 404",
+        "operationId": "getMarketSegmentPage",
+        "parameters": [
+          {
+            "name": "segment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Segment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketSegmentPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Market"
+        ]
+      }
+    },
+    "/api/v2/market/segments/{segment_id}/research": {
+      "post": {
+        "summary": "Ask the Librarian for one segment's five answers and sizes. While its task is open, the open task comes back with created false",
+        "operationId": "requestMarketSegmentResearch",
+        "parameters": [
+          {
+            "name": "segment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Segment Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentResearch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketSegmentResearch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Market"
         ]
       }
     },
@@ -56549,6 +56717,12 @@
                 },
                 "budgets": {
                   "type": "integer"
+                },
+                "segments_led": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               },
               "required": [
@@ -56560,6 +56734,7 @@
                 "may_grant",
                 "reports_to",
                 "rights",
+                "segments_led",
                 "team",
                 "teammate"
               ],
@@ -67271,6 +67446,428 @@
         "type": "object",
         "title": "MarketAnswers"
       },
+      "MarketBriefing": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "segment_id": {
+            "type": "string"
+          },
+          "week": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "bets": {
+            "type": "array"
+          },
+          "answers": {
+            "type": "object"
+          },
+          "touched": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "answers",
+          "bets",
+          "items",
+          "segment_id",
+          "touched",
+          "week"
+        ],
+        "additionalProperties": true
+      },
+      "MarketChange": {
+        "type": "object",
+        "properties": {
+          "segment_id": {
+            "type": "string"
+          },
+          "week": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "entity_ids": {
+            "type": "array"
+          },
+          "bets": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "bets",
+          "segment_id",
+          "text",
+          "week"
+        ],
+        "additionalProperties": true
+      },
+      "MarketEventRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "subject_kind": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "old": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "insight_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "created_at",
+          "id",
+          "subject_id",
+          "subject_kind"
+        ],
+        "additionalProperties": true
+      },
+      "MarketFigure": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "metric",
+          "value"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentCompare": {
+        "type": "object",
+        "properties": {
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketSegmentRow"
+            }
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketChange"
+            }
+          }
+        },
+        "required": [
+          "changed",
+          "segments"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentHead": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "who": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "color": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "color",
+          "id",
+          "name",
+          "rank",
+          "who"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentPage": {
+        "type": "object",
+        "properties": {
+          "segment": {
+            "$ref": "#/components/schemas/MarketSegmentHead"
+          },
+          "our_share": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "answers": {
+            "type": "object"
+          },
+          "briefing": {
+            "$ref": "#/components/schemas/MarketBriefing"
+          },
+          "sizes": {
+            "$ref": "#/components/schemas/MarketSegmentSizes"
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketSegmentPlayer"
+            }
+          },
+          "what_changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketEventRow"
+            }
+          }
+        },
+        "required": [
+          "answers",
+          "briefing",
+          "our_share",
+          "players",
+          "segment",
+          "sizes",
+          "what_changed"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentPlayer": {
+        "type": "object",
+        "properties": {
+          "entity_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "figures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MarketFigure"
+            }
+          }
+        },
+        "required": [
+          "entity_id",
+          "figures",
+          "name"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentResearch": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "created",
+          "task_id"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "money": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "yearly_spend": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "growth": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "our_share": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "briefing_week": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "briefing_week",
+          "color",
+          "growth",
+          "id",
+          "money",
+          "name",
+          "our_share",
+          "yearly_spend"
+        ],
+        "additionalProperties": true
+      },
+      "MarketSegmentSizes": {
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "integer"
+          },
+          "dimension": {
+            "type": "string"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "chosen": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "spend_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "accepted": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "accepted"
+            ],
+            "additionalProperties": true
+          },
+          "rolled_usd": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "spend_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [],
+            "additionalProperties": true
+          },
+          "estimates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "disagree": {
+            "type": "boolean"
+          },
+          "bases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "bases",
+          "basis",
+          "chosen",
+          "dimension",
+          "disagree",
+          "estimates",
+          "rolled_usd",
+          "year"
+        ],
+        "additionalProperties": true
+      },
       "MarketSetup": {
         "properties": {
           "answers": {
@@ -73798,6 +74395,19 @@
         ],
         "title": "SegmentOrder",
         "description": "Every segment the company plays in, once each, in the order they should list."
+      },
+      "SegmentResearch": {
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SegmentResearch"
       },
       "SegmentStrategy": {
         "properties": {

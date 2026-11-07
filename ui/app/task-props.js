@@ -37,6 +37,22 @@ function snoozeMenu(d, anchor, save) {
       void save('snooze', {snooze: at.toISOString()});
     }});
 }
+// The Segment row, drawn on its own so it can be drawn again once the segments are read (taskSegmentPaint). Nothing
+// when the company has no segments and this task has none.
+function taskSegmentRowHTML(t, r) {
+  if (!t.segment_id && segNone()) return '';
+  const words = t.segment_id ? segTagName(t.segment_id) : 'none', value = t.segment_id ? segTagChips([t.segment_id]) : '<span class="prop-txt">None</span>';
+  const v = r.edit
+    ? `<button type="button" class="prop-v${t.segment_id ? '' : ' empty'}" data-prop="segment" aria-haspopup="menu" aria-label="${esc('Segment: ' + words)}">${value}</button>`
+    : `<span class="prop-v ro${t.segment_id ? '' : ' empty'}" aria-label="${esc('Segment: ' + words)}">${value}</span>`;
+  return `<div class="prop" data-prop-row="segment"><span class="prop-k" aria-hidden="true">Segment</span><span class="prop-vwrap">${v}</span></div>`;
+}
+// Draws the Segment row again once the segment list is read: a task opened from elsewhere has none yet.
+function taskSegmentPaint(d, task) {
+  const old = d.querySelector('[data-prop-row="segment"]'), html = taskSegmentRowHTML(task, taskPropRights(task));
+  if (old) old.outerHTML = html;
+  else if (html) d.querySelector('[data-prop-row="tags"]')?.insertAdjacentHTML('afterend', html);
+}
 function taskPropsHTML(t, opts = {}) {
   const r = taskPropRights(t);
   const type = pipelineType(t), typed = !!type && pipelineTypeId(t) !== 'general';
@@ -91,6 +107,8 @@ function taskPropsHTML(t, opts = {}) {
     || (r.links ? '' : '<span class="prop-v ro empty"><span class="prop-txt">None</span></span>')}${r.links
     ? (chips ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>`
       : `<button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Tags: none, add a tag"><span class="prop-txt">Add tags</span></button>`) : ''}</span></span></div>`);
+  // Segment: the one the task is for, optional; None clears it. Its menu is the segments in the company's order.
+  rows.push(taskSegmentRowHTML(t, r));
   // Part of: the parent's title is a link to it, × takes the task out; empty, a picker finds one. Blockers and
   // other relations are in the Related section.
   const parent = taskParent(t);
@@ -304,6 +322,7 @@ function taskPropLoops(t, key, rows) {
 function taskPropsBind(d, task, change) {
   const box = $('[data-task-props]', d); if (!box) return;
   taskPropsMsgPaint(d);
+  void segTagsLoad().then(() => taskSegmentPaint(d, task));
   const save = (key, body) => {
     d.focusProp = key;
     const done = change(body);
@@ -355,6 +374,11 @@ function taskPropsBind(d, task, change) {
         if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
         void save('step', body);
       }});
+    } else if (key === 'segment') {
+      await segTagsLoad();   // the menu's segments: a task opened from elsewhere has none until they are read
+      const items = [{value: '', text: 'None', html: '<span>None</span>', checked: !task.segment_id},
+        ...segTagRows().map(row => ({value: row.id, text: row.name, html: `${segDot(row)}<span>${esc(row.name)}</span>`, checked: row.id === task.segment_id}))];
+      propMenu(d, b, /** @type {any} */ ({label: 'Segment', items, onPick: it => { if (it.value !== (task.segment_id || '')) void save('segment', {segment_id: it.value}); }}));
     } else if (key === 'type') {
       taskTypeMenu(d, b, task, save);
     } else if (key === 'people') {

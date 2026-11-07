@@ -357,6 +357,11 @@ const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_a
 // on its way never starts the list over: the 2-minute poll shares it, and a load after a save waits for it and then
 // reads what changed since its cursor, which takes in the save. A list with a cursor reads only what changed.
 function tasksLoad(state, opts = {}) {
+  // The segments the Segment filter and the cards name: read once for this page, then the list draws them.
+  if (!state.segLoaded) {
+    state.segLoaded = true;
+    void segTagsLoad().then(() => { if (TASKS_ST === state) { tasksRender(state); tasksFilterMenuLoaded(state); } });
+  }
   if (state.fullRead) {
     if (opts.poll) return state.fullRead;
     return state.loadAfter ||= state.fullRead.then(() => {

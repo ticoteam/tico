@@ -4,7 +4,7 @@
 'use strict';
 
 // ---- filters: chips over the loaded tasks, kept in the address (#/tasks?owner=bot:eng&tag=bug) so a view can be shared
-const TASK_FILTER_FIELDS = [['owner', 'Owner'], ['team', 'Team'], ['tag', 'Tag'], ['repo', 'Repo'], ['pr', 'Has PR'], ['due', 'Due'], ['asked', 'Asked by']];
+const TASK_FILTER_FIELDS = [['owner', 'Owner'], ['team', 'Team'], ['segment', 'Segment'], ['tag', 'Tag'], ['repo', 'Repo'], ['pr', 'Has PR'], ['due', 'Due'], ['asked', 'Asked by']];
 const TASK_FILTER_WORDS = {pr: {yes: 'Yes', no: 'No'}, due: {overdue: 'Overdue', week: 'Next 7 days', any: 'Has a date', none: 'No date'}};
 const TASK_GROUPS = [['need', 'Kind'], ['status', 'Status'], ['owner', 'Owner'], ['team', 'Team'], ['parent', 'Parent task'], ['tag', 'Tag'], ['requester', 'Asked by']];
 const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
@@ -12,6 +12,8 @@ const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
 // queue, which is yours alone.
 const taskGroupsFor = (view, state) => TASK_GROUPS.filter(([k]) => k !== 'need' || (view === 'foryou' && (!state || tasksNeedsQueue(state, view))));
 const tasksEmptyFilters = () => Object.fromEntries(TASK_FILTER_FIELDS.map(([k]) => [k, []]));
+// The fields the filter menu offers: Segment only where the company has segments, or a task list is filtered to one.
+const tasksFilterFields = state => TASK_FILTER_FIELDS.filter(([k]) => k !== 'segment' || !segNone() || !!state.filters.segment?.length);
 const isTasksRoute = r => [TASKS, BOARD, ISSUES].includes(String(r || '').split('?')[0]);
 const PHONE = '(max-width:760px)';
 // Small inline icons (the icon font is a fixed subset; these never need it).
@@ -181,6 +183,7 @@ function taskPassesFilters(t, f) {
   if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
   if (f.asked?.length && !f.asked.some(v => resolveMe(v) === taskRequester(t))) return false;
   if (f.team?.length && !f.team.includes(taskTeam(t) || 'none')) return false;
+  if (f.segment?.length && !f.segment.includes(t.segment_id || 'none')) return false;
   if (f.tag?.length && !f.tag.some(v => (t.labels || []).includes(v))) return false;
   if (f.repo?.length && !f.repo.some(v => taskRepos(t).includes(v))) return false;
   if (f.pr?.length && !f.pr.includes(taskHasPR(t) ? 'yes' : 'no')) return false;
@@ -385,6 +388,7 @@ function tasksFilterOptions(state, field) {
     const keys = [...new Set([...(state.labels || []), ...tasks.flatMap(t => t.labels || []), ...selected])];
     return keys.map(key => ({value: key, label: tagSummary(rich.get(key) || {key, label: key})})).sort((a, b) => a.label.localeCompare(b.label));
   }
+  if (field === 'segment') return [...segTagRows().map(row => ({value: row.id, label: row.name})), {value: 'none', label: 'No segment'}];
   if (field === 'repo') return [...new Set([...tasks.flatMap(taskRepos), ...selected])].sort().map(r => ({value: r, label: r}));
   return Object.entries(TASK_FILTER_WORDS[field] || {}).map(([value, label]) => ({value, label}));
 }
@@ -856,7 +860,7 @@ function tasksFieldMenu(state, anchor) {
   const groupable = state.view === 'list' || state.view === 'foryou', by = tasksGroupBy(state);
   const group = !groupable ? '' : `<div class="tl-menu-h" aria-hidden="true">Group</div><div class="tl-gpicks" role="group" aria-label="Group by">
     ${taskGroupsFor(state.view, state).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi tl-gpick" data-pick-group="${k}">${esc(label)}</button>`).join('')}</div>`;
-  const fields = tasksNeedsQueue(state) ? [] : TASK_FILTER_FIELDS;
+  const fields = tasksNeedsQueue(state) ? [] : tasksFilterFields(state);
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Filter">${group}
     ${fields.length ? `<div class="tl-menu-h" aria-hidden="true">Filter</div>` : ''}
     ${fields.map(([k, name]) => `<button type="button" role="menuitem" class="tl-mi" data-pick-field="${k}">${esc(name)}</button>`).join('')}</div>`, pop => {

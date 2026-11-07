@@ -98,7 +98,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
       briefing: fx ? fixture('redesign-briefing.json').briefing : null,
       sizes: {year: 2025, dimension: 'offering', basis: 'product', chosen: fx?.size || null, rolled_usd: fx?.rolled_usd || null,
         estimates: fx?.estimates || [], disagree: false, bases: []},
-      players: fx?.players || [], what_changed: []};
+      players: fx?.players || [], what_changed: [], our_share: COMPARE[id]?.our_share ?? null};
   };
   const writes = [];
   // A teammate joins a group and leaves the one it was in (backend/groups.py); `remove` leaves it in no group.
@@ -177,6 +177,8 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     }
     // Finance access: a finance viewer's row (everything); anyone else has no row, so no Finance beyond their own budgets.
     if (p === '/api/v2/finance/access') return json({teammates: finance ? [{teammate: 'human:' + me.id, default: 'everything', grants: [], rights: ['finance.admin'], budgets: 0}] : []});
+    // The segment P&L's probe (F2's finSegProbe): a column per segment for a finance viewer, 403 for anyone else.
+    if (p === '/api/v2/finance/reports/pnl_by') return finance ? json({columns: [...db.segments.map(s => ({key: s.id, label: s.name})), {key: 'total', label: 'Total'}]}) : refuse(403, 'forbidden', 'Not in your view');
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});
@@ -197,6 +199,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     }
     // The company's segments (backend/segments.py): the list, one segment, its order, its strategy and its remove. The
     // owner writes; anyone else is refused.
+    if (p === '/api/v2/segments/members' && method === 'GET') return json({members: []});
     if (p === '/api/v2/segments' && method === 'GET') return json({segments: db.segments.map(segmentItem)});
     if (p === '/api/v2/segments' && method === 'POST') {
       if (!owner) return refuseOwner();

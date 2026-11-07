@@ -396,6 +396,19 @@ def test_a_company_can_turn_the_segment_lead_view_off(books):  # noqa: F811
             FR.pnl_by(c, "human:cara", "segment", *OCTOBER, basis="accrual")
 
 
+def _led(out: dict[str, Any], who: str) -> list[str]:
+    return next(r["segments_led"] for r in out["teammates"] if r["teammate"] == who)
+
+
+def test_access_tells_a_lead_their_segments_and_anyone_else_none(books):  # noqa: F811
+    with books.transaction() as c:
+        _month(c)
+        assert _led(FR.access(c, "human:cara", at=AT), "human:cara") == [S1]  # her own row
+        assert _led(FR.access(c, "human:ben", at=AT), "human:ben") == []  # her manager leads nothing
+        assert _led(FR.access(c, "human:eve", at=AT), "human:eve") == []  # dedicated, not a lead
+        assert _led(FR.access(c, OWNER, at=AT), "bot:coder") == [S2]  # the owner's view shows a bot's lead too
+
+
 def _migration():
     path = Path(__file__).resolve().parents[1] / "migrations" / "20261107010204_finance_segments.py"
     spec = importlib.util.spec_from_file_location("finance_segments_migration", path)

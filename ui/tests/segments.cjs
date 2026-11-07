@@ -43,7 +43,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.deepEqual(await texts(page, '#strat-segs .seg-main b'), ['Release checks', 'Deploy pipelines'], tag + ': the list in its order');
       assert.deepEqual(await texts(page, '#strat-segs .seg-who'), ['Platform teams that ship several times a day', 'CI plans that bundle the checks'], tag + ': who');
       const first = page.locator('#strat-segs .seg-row').first();
-      assert.equal(await first.locator('.seg-dot').getAttribute('data-seg-color'), 'blue', tag + ': the colour name');
+      assert.equal(await first.locator('.seg-dot.c-blue').count(), 1, tag + ': the dot is the shared blue');
       assert.equal(await first.locator('.seg-face').count(), 2, tag + ': the faces, two of three shown');
       assert.equal(await first.locator('.seg-face .av').count(), 2, tag + ': each face draws the app avatar');
       assert.equal(await first.locator('.seg-face .av[data-av="cmo"]').count(), 1, tag + ': the bot face is the bot avatar');
@@ -203,11 +203,14 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       await page.locator('[data-seg-field="serve"]').waitFor();
       assert.equal(await page.locator('.seg-head h2').innerText(), 'Release checks', tag + ': the name');
       assert.equal(await page.locator('.seg-who-l').innerText(), 'Platform teams that ship several times a day', tag + ': who');
-      assert.equal(await page.locator('.seg-title .seg-dot').getAttribute('data-seg-color'), 'blue', tag + ': the dot');
+      assert.equal(await page.locator('.seg-title .seg-dot.c-blue').count(), 1, tag + ': the dot is the shared blue');
       assert.deepEqual(await attrs(page, '.seg-links a', 'segLink'), ['goals', 'growth', 'budget', 'pnl'], tag + ': Budget and P&L for a Finance viewer');
       for (const href of await hrefs(page, '.seg-links a')) assert.match(href, /\?segment=segment%2Fchecks$/, tag + ': each link filters to the segment: ' + href);
       assert.equal(await page.locator('[data-seg-link="budget"]').getAttribute('href'), '#/finance/budgets?segment=segment%2Fchecks', tag + ': Budget is Finance Budgets for the segment');
       assert.equal(await page.locator('[data-seg-link="pnl"]').getAttribute('href'), '#/finance/pnl?segment=segment%2Fchecks', tag + ': P&L is Finance P&L for the segment');
+      // The market's company share is the server's our_share (4.2 in the fixture), not a figure worked out from revenue.
+      await page.waitForFunction(() => /\bshare\b[\s\S]*\d/.test(document.querySelector('#seg-market')?.innerText || ''));
+      assert.match(await page.locator('#seg-market').innerText(), /\bshare\b[\s\S]*4\.2%/, tag + ': the company share is the server\'s our_share');
       assert.equal(await page.locator('[data-seg-field]').count(), 8, tag + ': all eight strategy fields');
       await snap(page, 'segment-page-desktop-top');
       const serve = page.locator('[data-seg-field="serve"]'), sell = page.locator('[data-seg-field="sell"]');
@@ -322,7 +325,7 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       assert.equal(await page.locator('#seg-cmp-h').count(), 0, tag + ': no heading over the table');
       assert.deepEqual(await texts(page, '.seg-cmp tbody .seg-name'), ['Release checks', 'Deploy pipelines'], tag + ': the rows');
       const row = page.locator('.seg-cmp tbody tr').first();
-      assert.equal(await row.locator('.seg-dot').getAttribute('data-seg-color'), 'blue', tag + ': the dot');
+      assert.equal(await row.locator('.seg-dot.c-blue').count(), 1, tag + ': the dot is the shared blue');
       assert.match(await row.locator('td').nth(1).innerText(), /\$700/, tag + ': money');
       assert.match(await row.locator('td').nth(2).innerText(), /\$700/, tag + ': yearly spend');
       assert.match(await row.locator('td').nth(3).innerText(), /22%/, tag + ': growth');
@@ -420,6 +423,15 @@ const writesTo = (writes, path) => writes.filter(w => w.path === path).length;
       await page.locator('[data-strat-publish]').waitFor();
       assert.equal(await page.locator('[data-strat-status]').count(), 0, tag + ': the draft matches');
       assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A header link lands on its Finance page with the segment in the address, and the page reads it back (segQuery).
+    for (const [key, route] of [['budget', 'budgets'], ['pnl', 'pnl']]) {
+      const tag = 'landing ' + key;
+      const {page} = await openStrategy(browser, {viewport: DESKTOP, hash: segPath(CHECKS), finance: true});
+      await page.locator(`[data-seg-link="${key}"]`).click();
+      await page.waitForFunction(r => location.hash.startsWith('#/finance/' + r + '?segment='), route);
+      assert.equal(await page.evaluate(() => segQuery()), CHECKS, tag + ': the page reads the segment from its address');
       await page.close();
     }
     console.log('segments ok');

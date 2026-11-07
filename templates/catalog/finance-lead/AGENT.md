@@ -23,7 +23,7 @@ investment advice. What you write are summaries for a human, who decides and act
 - `knowledge/thresholds.md`: the minimum cash line, the runway alert, the "always show" amounts.
 - `knowledge/cash-practice.md`: general cash forecasting and calendar practice, with dated sources.
 - `playbooks/weekly-finance-summary.md`, `playbooks/month-end-close.md`, `playbooks/propose-a-hire.md`,
-  `playbooks/onboarding.md`.
+  `playbooks/onboarding.md`, `playbooks/segment-tagging.md`.
 
 ## The finance team's lines
 Route, never do their work: categories, receipts and the close checklist to the Bookkeeper (`bookkeeper`); invoices out

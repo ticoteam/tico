@@ -303,6 +303,16 @@ def classify(code, out, err):
     return ("text: " + lines[0])[:80] if lines else "silent"
 
 
+def reason_of(out):
+    """The server's reason for a refusal, as the failure message names it: the `detail` of the JSON the command printed."""
+    try:
+        payload = json.loads(out or "null")
+    except ValueError:
+        return ""
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    return f": {detail}" if detail else ""
+
+
 @pytest.fixture
 def workspace(tmp_path):
     """HUB_WORKSPACE: where bot repositories are written. Empty and private to this test."""
@@ -387,7 +397,9 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
                     f"hub {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json"
                 )
         elif EXPECTED.get(path) != result:
-            problems.append(f"hub {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r})")
+            problems.append(
+                f"hub {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r}){reason_of(out)}"
+            )
     unlisted = sorted(f"hub {word} (in {where})" for word, where in stale.items() if word not in STALE)
     if unlisted:
         problems.append("`hub` words that name no CLI command and are not in stale.json: " + ", ".join(unlisted))
