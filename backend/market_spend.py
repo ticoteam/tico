@@ -1219,7 +1219,17 @@ def research(conn, auth, who, description):
     if not (defn or {}).get("description"):
         set_definition(conn, who.actor, {"description": description})
     safe = MK._for_task(description)
-    text = "\n".join([f"Define and size our market: {safe}", "", f"Follow {PLAYBOOK}."])
+    from . import onboarding
+
+    serves = onboarding.regions(conn)  # the sizes are for the places the company serves
+    text = "\n".join(
+        [
+            f"Define and size our market: {safe}",
+            "",
+            *(["Serves: " + ", ".join(serves) + ". Size the market for these places.", ""] if serves else []),
+            f"Follow {PLAYBOOK}.",
+        ]
+    )
     task = H.task_create(
         conn,
         who.actor,

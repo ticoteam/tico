@@ -69,10 +69,13 @@ EMPTY_ANSWERS = {
     "software_product": "",
     "departments": [],
     "briefings": {},
+    # Where the company serves (a company file's company.regions); [] is none given.
+    "regions": [],
 }
 ANSWER_LABELS = (
     ("building", "What we're building"),
     ("what_we_do", "What we do"),
+    ("regions", "Serves"),
     ("customers", "Customers"),
     ("team_size", "Team size"),
     ("work_arrives", "Work arrives by"),
@@ -335,6 +338,11 @@ def load(c):
     }
 
 
+def regions(c):
+    """Where the company serves (a company file's company.regions, or the setup page's): [] when none is given."""
+    return list(load(c)["answers"].get("regions") or [])
+
+
 def display_names(settings, record):
     """The environment's configured names, with whatever onboarding saved on top."""
     configured = {
@@ -444,6 +452,8 @@ def _answer_lines(answers):
     lines = []
     for key, label in ANSWER_LABELS:
         value = answers.get(key)
+        if key == "regions" and not value:
+            continue  # a team that names no places gets the setup text it always had
         text = ", ".join(str(item) for item in value) if isinstance(value, list) else str(value or "")
         lines.append("- " + label + ": " + (text or "not answered"))
     # What the owner said about each department in the org builder, so a bot starts from their own words.
@@ -701,6 +711,8 @@ class Onboarding:
             if "building" in body.answers.model_fields_set
             else record["answers"].get("building") or ""
         )
+        if "regions" not in body.answers.model_fields_set:  # a client that never asks keeps where the company serves
+            answers["regions"] = record["answers"].get("regions") or []
         if (
             not names["website"]
             and not answers["building"]
@@ -850,7 +862,7 @@ class Onboarding:
                 who,
                 LIBRARIAN,
                 GS._market_title(c, "bot:" + LIBRARIAN, who.actor),
-                LS.market_text(answers),
+                LS.market_text(answers, record["answers"].get("regions") or []),
             )
         except (H.Refused, Problem):
             c.execute("ROLLBACK TO setup_market_task")

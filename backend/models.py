@@ -2598,6 +2598,14 @@ class OnboardingNames(Contract):
     website: str = Field(default="", max_length=300)
 
 
+def _each_place_once(places):
+    """A repeat of a place, whatever its case, is dropped: the first spelling and the order are kept."""
+    first = {}
+    for place in places:
+        first.setdefault(place.casefold(), place)
+    return list(first.values())
+
+
 class OnboardingAnswers(Contract):
     """The interview behind the recommendations. Free text is shown to a person, never parsed."""
 
@@ -2621,6 +2629,10 @@ class OnboardingAnswers(Contract):
     # The org builder: the departments chosen, in order, and the one-line answer to each department's question.
     departments: list[Department] = Field(default_factory=list, max_length=9)
     briefings: dict[Department, Annotated[str, Field(max_length=500)]] = Field(default_factory=dict, max_length=9)
+    # Where the company serves (a company file's company.regions): free text, 0..12 places, each 1..60 characters.
+    regions: Annotated[list[Annotated[str, Field(min_length=1, max_length=60)]], AfterValidator(_each_place_once)] = (
+        Field(default_factory=list, max_length=12)
+    )
 
 
 class OnboardingSelection(Contract):

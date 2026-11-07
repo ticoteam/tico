@@ -1334,3 +1334,31 @@ def test_two_teams_in_one_department_import_as_two_groups_each_holding_its_own_s
     assert names.index("Lab network") < names.index("Biopharma accounts")
     # The Assistant and BotOps are built-ins: outside groups, whatever team the file gives them.
     assert not [r for r in rows(api, "SELECT bot,team FROM bot_config WHERE bot IN ('coo','botops')") if r["team"]]
+
+
+def test_import_keeps_where_the_company_serves_and_each_segments_own_places(environment):
+    from backend import onboarding as O
+
+    api = environment()
+    draft = strategy_draft()
+    draft["company"]["regions"] = ["Worldwide", "united states"]
+    draft["strategy"]["market"]["segments"][0]["regions"] = ["Texas", "TEXAS"]
+    preview_and_import(api, C.to_yaml(draft))
+    with api.app.state.store.read() as c:
+        assert O.load(c)["answers"]["regions"] == ["Worldwide", "united states"]
+    gc = rows(api, "SELECT properties, summary FROM market_entities WHERE id='segment/gc-suites'")[0]
+    assert json.loads(gc["properties"]) == {"regions": ["Texas"]}
+    assert gc["summary"] == "Serves: Texas."
+    bim = rows(api, "SELECT properties, summary FROM market_entities WHERE id='segment/bim'")[0]
+    assert "regions" not in json.loads(bim["properties"]) and bim["summary"] == ""
+
+
+def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_given():
+    from backend import librarian_setup as LS
+    from backend import onboarding as O
+
+    assert "- Serves: Worldwide, Texas" in O._answer_lines({"regions": ["Worldwide", "Texas"]})
+    assert not any("Serves" in line for line in O._answer_lines({"regions": []}))
+    blank = {key: "" for key in LS.QUESTIONS}
+    assert "Serves: Texas. Size the market for these places." in LS.market_text(blank, ["Texas"])
+    assert "Serves" not in LS.market_text(blank)

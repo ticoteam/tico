@@ -241,12 +241,14 @@
   "player_name": 80,
   "request": 300,
   "post_title": 200,
-  "url": 1000
+  "url": 1000,
+  "regions": 12,
+  "region": 60
  },
  "actions": [
   {
    "name": "company_set",
-   "description": "Set the company's name, what it does, or the signals read from it.",
+   "description": "Set the company's name, what it does, the signals read from it, or where it serves.",
    "input_schema": {
     "type": "object",
     "properties": {
@@ -282,6 +284,14 @@
        ]
       },
       "description": "Every signal that applies (replaces the list). The first chart's company model follows them: sells_software is a software company, onsite_jobs a local service business (on-site jobs, crews, bookings), sells_services a services firm (hours or projects), sells_products an online store; none of these is Everything"
+     },
+     "regions": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "description": "One place: a country, a state, a city, or \"Worldwide\""
+      },
+      "description": "Where the company serves, in the visitor's words, every place that applies (replaces the list). Leave it out unless the visitor says where they serve."
      }
     },
     "required": [],

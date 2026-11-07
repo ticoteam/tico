@@ -523,14 +523,16 @@ def _join(names):
 # ---------------------------------------------------------------------------------------------------- the actions
 def company_set(draft, args, today, notes):
     company = draft["company"]
-    if not any(key in args for key in ("name", "about", "signals")):
-        raise Refusal("Say what to change: the name, what the company does, or its signals.")
+    if not any(key in args for key in ("name", "about", "signals", "regions")):
+        raise Refusal("Say what to change: the name, what the company does, its signals, or where it serves.")
     if "name" in args:
         company["name"] = _text(args, "name", D.LIMITS["name"], needed=False)
     if "about" in args:
         company["about"] = _text(args, "about", D.LIMITS["about"], needed=False)
     if "signals" in args:
         company["signals"] = [s for s in D.SIGNALS if s in args["signals"]]
+    if "regions" in args:
+        company["regions"] = D.regions(args["regions"], "regions")
     return "Updated the company."
 
 

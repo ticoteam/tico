@@ -120,7 +120,11 @@ def plan(onboarding, c, who, text):
                 template=card["template"], display_name=bot["title"], instructions=instructions, reports_to=parent
             )
         body = M.OnboardingDraft(
-            names=names, answers=M.OnboardingAnswers(what_we_do=draft["company"]["about"]), selected=selected
+            names=names,
+            answers=M.OnboardingAnswers(
+                what_we_do=draft["company"]["about"], regions=draft["company"].get("regions") or []
+            ),
+            selected=selected,
         )
         seats = {}
         for key, (bot, card) in roles.items():
@@ -401,15 +405,21 @@ def _market(c, actor, market, company, skipped):
             continue
 
         def made(segment=segment, parent=parent):
-            # Forced past a name the tree already has: a segment named like the root is still the file's own.
+            # Forced past a name the tree already has: a segment named like the root is still the file's own. Its own
+            # places (`regions`) are kept on it, and say so in its summary, where a bot reads a segment.
+            serves = segment.get("regions") or []
+            properties: dict[str, object] = {"next": True} if segment["next"] else {}
+            if serves:
+                properties["regions"] = serves
             seg = MS._new_segment(
                 c,
                 actor,
                 segment["name"] or segment["key"],
+                summary=("Serves: " + ", ".join(serves) + ".") if serves else "",
                 evidence_ids=[evidence],
                 parent=parent,
                 entity_id=_segment_id(c, segment["key"]),
-                properties={"next": True} if segment["next"] else None,
+                properties=properties or None,
                 force=True,
             )
             urls = [u for u in map(_safe_url, segment["evidence"]) if u]

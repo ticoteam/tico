@@ -1531,3 +1531,67 @@ def test_a_saved_draft_with_a_retired_template_loses_that_seat_and_keeps_the_res
     by_id = {b["id"]: b for b in out["bots"]}
     assert "books" not in by_id and "old-books" in by_id
     assert "reports_to" not in by_id["books-helper"]
+
+
+# ------------------------------------------------------------------------------------- where the company serves
+def test_regions_are_optional_trimmed_deduped_and_held_to_their_limits():
+    draft = C.blank()
+    assert "regions" not in D.check(draft)["company"]  # absent is unknown, and an old file stays valid
+    draft["company"]["regions"] = []
+    assert "regions" not in D.check(draft)["company"]  # no places given is the same as absent
+    draft["company"]["regions"] = ["  Worldwide ", "United States", "worldwide", "Texas"]
+    assert D.check(draft)["company"]["regions"] == ["Worldwide", "United States", "Texas"]
+    for bad in (["x" * 61], [" "], [7], "Texas", ["place %d" % i for i in range(13)]):
+        draft["company"]["regions"] = bad
+        with pytest.raises(D.DraftError):
+            D.check(draft)
+    draft["company"]["regions"] = ["x" * 60]
+    assert D.check(draft)["company"]["regions"] == ["x" * 60]
+
+
+def test_a_segment_keeps_its_own_regions_and_a_bad_one_is_refused():
+    draft = C.blank()
+    draft["strategy"] = D.blank_strategy()
+    draft["strategy"]["market"]["segments"] = [
+        {"key": "homes", "name": "Homes", "regions": ["Texas", "TEXAS"]},
+        {"key": "shops", "name": "Shops"},
+    ]
+    segments = D.check(draft)["strategy"]["market"]["segments"]
+    assert segments[0]["regions"] == ["Texas"] and "regions" not in segments[1]
+    draft["strategy"]["market"]["segments"][1]["regions"] = [""]
+    with pytest.raises(D.DraftError, match=r"segments\[1\]"):
+        D.check(draft)
+
+
+def test_regions_round_trip_through_the_company_file_and_an_unset_file_writes_none():
+    draft = C.blank()
+    draft["company"].update(
+        name="Acme", about="Kits.", signals=["sells_products"], regions=["Worldwide", "United States"]
+    )
+    draft["strategy"] = D.blank_strategy()
+    draft["strategy"]["market"]["segments"] = [{"key": "homes", "name": "Homes", "regions": ["Texas"]}]
+    text = C.to_yaml(draft, CREATED)
+    assert '\n  regions: ["Worldwide", "United States"]\n' in text
+    assert '    regions: ["Texas"]\n' in text
+    back = C.from_yaml(text)
+    assert back["company"]["regions"] == ["Worldwide", "United States"]
+    assert back["strategy"]["market"]["segments"][0]["regions"] == ["Texas"]
+    with pytest.raises(D.DraftError):
+        C.from_yaml(text.replace('regions: ["Worldwide", "United States"]', 'regions: "Texas"'))
+    plain = C.blank()
+    plain["company"].update(name="Acme", about="Kits.")
+    plain_text = C.to_yaml(plain, CREATED)
+    assert "regions" not in plain_text
+    assert "regions" not in C.from_yaml(plain_text)["company"]
+
+
+def test_company_set_takes_where_the_company_serves_from_the_visitor():
+    draft, results = run(
+        started(),
+        ("company_set", {"regions": ["Texas", "texas", "Worldwide"]}),
+        ("company_set", {"regions": ["x" * 61]}),
+    )
+    assert results[0]["ok"] and draft["company"]["regions"] == ["Texas", "Worldwide"]
+    assert not results[1]["ok"] and "60" in results[1]["refused"]
+    draft, results = run(draft, ("company_set", {"regions": []}))
+    assert results[0]["ok"] and "regions" not in draft["company"]
