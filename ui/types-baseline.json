@@ -1,6 +1,6 @@
 {
   "files": {
-    "ui/app/ask-panel.js": 16,
+    "ui/app/ask-panel.js": 15,
     "ui/app/assistant-page.js": 5,
     "ui/app/automations-editors.js": 15,
     "ui/app/automations-flow.js": 4,
