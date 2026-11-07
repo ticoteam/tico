@@ -113,6 +113,33 @@ def register(app, auth, settings):
             raise Problem("not_found", "Not found", 404)
         return name
 
+    # A compiled script is sent with a weak ETag of its content, the same whether or not it is gzipped, and a 304 when
+    # the browser has it. StaticFiles did this for the .js files before the flip; FileResponse does not.
+    compiled_tags = {}
+
+    def compiled_reply(request, path):
+        import hashlib
+
+        stat = path.stat()
+        entry = compiled_tags.get(path)
+        if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
+            raw = path.read_bytes()
+            entry = compiled_tags[path] = (
+                (stat.st_mtime_ns, stat.st_size),
+                raw,
+                'W/"' + hashlib.sha256(raw).hexdigest()[:32] + '"',
+            )
+        _, raw, etag = entry
+        headers = {"ETag": etag, "Vary": "Accept-Encoding"}
+        offered = [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]
+        if etag.removeprefix("W/") in offered:
+            return Response(status_code=304, headers=headers)
+        return Response(
+            raw if request.method == "GET" else None,
+            media_type="text/javascript; charset=utf-8",
+            headers=headers,
+        )
+
     @app.api_route("/tico/ui/{name:path}.ts", methods=["GET", "HEAD"], include_in_schema=False)
     async def ui_typescript(request: Request, name: str):
         name = ui_typescript_source(name)
@@ -120,7 +147,7 @@ def register(app, auth, settings):
             path = ui_build.compiled(settings.ui_dir, name)
         except ui_build.StaleBuild as exc:
             raise Problem("ui_not_built", str(exc), 503) from None
-        return FileResponse(path, media_type="text/javascript; charset=utf-8")
+        return compiled_reply(request, path)
 
     # The service worker is registered at the root (ui/app/boot.ts), so it is served there, compiled, not from ui/.
     @app.api_route("/sw.js", methods=["GET", "HEAD"], include_in_schema=False)
