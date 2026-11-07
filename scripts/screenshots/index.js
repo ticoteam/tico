@@ -1,76 +1,109 @@
 #!/usr/bin/env node
 // Regenerates the product screenshots in docs/images/ from demo mode, so they show the product as it is
 // today and never a stale or half-loaded page. It boots `python -m backend.demo` (or uses --url), visits a
-// fixed list of pages at desktop and phone widths in light and dark, and FAILS, saving nothing further to
+// fixed list of pages at the chosen widths in the chosen themes, and FAILS, saving nothing further to
 // trust, if any page logs a console error, makes a failing request, shows an error banner, or renders an
 // icon as its ligature text (the icon font not loaded yet).
 //
-//   node scripts/screenshots                        # all pages, both widths, both themes -> docs/images
+//   node scripts/screenshots                        # all pages, desktop and phone, both themes -> docs/images
 //   node scripts/screenshots --only updates,settings-health  # some pages
-//   node scripts/screenshots --url http://127.0.0.1:8765 --out /tmp/shots
+//   node scripts/screenshots --url http://127.0.0.1:8765 --out /tmp/shots --widths desktop-1440,phone --themes light
+//   node scripts/screenshots --pages-for-diff v0.5.204..origin/main   # the pages a change to ui/ touches (JSON)
+//   node scripts/screenshots --list-pages           # the page table: each page's ui/ globs and the files they match
 //
+// --report FILE also writes {written, problems} as JSON; scripts/release_shots.py reads it.
 // Needs `npm ci` and a browser: TICO_BROWSER_CHANNEL=chrome (the default, your own Chrome) or empty for
 // Playwright's Chromium (`npx playwright install chromium`, what CI does). TICO_PYTHON picks the interpreter.
-const {chromium} = require('playwright');
-const {spawn} = require('node:child_process');
+const {spawn, execFileSync} = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const select = require('./select.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const WIDTHS = {
   desktop: {viewport: {width: 1280, height: 800}, deviceScaleFactor: 1},
+  'desktop-1440': {viewport: {width: 1440, height: 900}, deviceScaleFactor: 1},
   phone: {viewport: {width: 390, height: 844}, deviceScaleFactor: 2, isMobile: true, hasTouch: true},
 };
-const THEMES = ['light', 'dark'];
+const THEMES = {light: 'light', dark: 'dark'};
+const DEFAULT_WIDTHS = 'desktop,phone';
+const DEFAULT_THEMES = 'light,dark';
+
+// The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
+const TASKS_UI = [
+  'ui/app/tasks.js', 'ui/app/tasks-page.js', 'ui/app/task-*.js', 'ui/app/pull-refresh.js', 'ui/app/hub-v2.js',
+  'ui/app/issues.js', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
+];
+const BOT_CHAT_UI = [
+  'ui/app/bot-*.js', 'ui/bot-files.js', 'ui/bot-tools.js', 'ui/app/chat*.js', 'ui/app/feedback.js',
+  'ui/app/slash-commands.js', 'ui/app/visual-*.js', 'ui/app/question-card.js', 'ui/styles/bot-*.css',
+  'ui/styles/chat*.css', 'ui/styles/feedback.css', 'ui/styles/visual-*.css',
+];
+const MEETINGS_UI = [
+  'ui/app/meetings*.js', 'ui/app/live-meetings.js', 'ui/meeting-importers.js', 'ui/app/task-meetings.js',
+  'ui/styles/meetings.css', 'ui/styles/task-meetings.css',
+];
+const SETTINGS_UI = ['ui/app/settings.js', 'ui/styles/settings.css'];
 
 // name: the file is <name>-<width>-<theme>.png. route: the hash to open. ready: text that means the page has
 // its data. tab: a Settings tab to select first (Settings remembers the last tab in sessionStorage, so a
 // capture never assumes the one it wants is the one showing). steps: what to do before the picture (click,
-// open a dialog).
+// open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.js): a change
+// to one of them shoots this page, and a change to a file no page claims is listed, never silently dropped.
 const PAGES = [
-  {name: 'updates', route: '#/updates', ready: 'Write your update'},
-  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', steps: async page => {
+  {name: 'updates', route: '#/updates', ready: 'Write your update', ui: ['ui/app/updates.js', 'ui/styles/updates.css']},
+  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
     await page.click('#task-scope');
     await page.click('#task-filter-pop [data-task-type="general"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
-  {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?'},
-  {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season'},
-  {name: 'bot-chat', route: '#/bot/support', ready: 'Threads with Support Agent'},
-  {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call'},
+  {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
+    ui: [...TASKS_UI, 'ui/app/needs-you.js', 'ui/app/decide.js', 'ui/app/question-card.js', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
+  {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
+    ui: ['ui/app/goals.js', 'ui/app/goals-kpi-views.js', 'ui/goals-kpis.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js',
+      'ui/app/org-fan.js', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
+  {name: 'bot-chat', route: '#/bot/support', ready: 'Threads with Support Agent', ui: BOT_CHAT_UI},
+  {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = await (await fetch('/api/meetings')).json();
     return list.find(m => m.title === 'Weekly ops sync').id;
-  })), ready: 'Meeting context', steps: async page => {
-    await page.getByText('Transcript \u00b7 Zoom').click();
+  })), ready: 'Meeting context', ui: MEETINGS_UI, steps: async page => {
+    await page.getByText('Transcript · Zoom').click();
     await page.getByText('Ana').first().waitFor();
   }},
-  {name: 'usage', route: '#/usage', ready: 'Support Agent', steps: async page => {
+  {name: 'usage', route: '#/usage', ready: 'Support Agent', ui: ['ui/app/usage.js', 'ui/styles/usage.css'], steps: async page => {
     await page.locator('.use-line').first().click();
     await page.locator('.use-col').first().waitFor();
   }},
-  {name: 'settings-health', route: '#/settings/health', ready: 'Setup check'},
-  {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook"},
-  {name: 'support', route: '#/updates', ready: 'Write your update', steps: async page => {
-    await page.evaluate(() => window.supportOpen());
-    await page.locator('#support-pop[open] [data-compose] [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
-    await page.waitForTimeout(300);
-  }},
-  {name: 'tour', route: '#/settings', tab: 'devices', ready: "Ana's MacBook", steps: async page => {
-    // On a phone the account menu is in the drawer, which stays closed (and inert) until More opens it.
-    if (await page.locator('#mobile-more').isVisible()) await page.click('#mobile-more');
-    await page.click('#account');
-    await page.click('#account-tour');
-    await page.locator('.gs-tour-card').waitFor();
-    await page.click('[data-tour-next]');
-    await page.waitForTimeout(400);
-  }},
+  {name: 'settings-health', route: '#/settings/health', ready: 'Setup check',
+    ui: [...SETTINGS_UI, 'ui/app/settings-storage.js', 'ui/app/settings-release.js', 'ui/app/settings-repositories.js',
+      'ui/app/settings-hosted.js', 'ui/health.js', 'ui/runner-updates.js']},
+  {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
+    ui: [...SETTINGS_UI, 'ui/app/settings-devices.js', 'ui/app/computer-detail.js', 'ui/app/cloud-machines.js',
+      'ui/app/subscriptions.js', 'ui/runner-updates.js']},
+  {name: 'support', route: '#/updates', ready: 'Write your update', ui: ['ui/support.js', 'ui/styles/support.css', 'ui/app/updates.js', 'ui/styles/updates.css'],
+    steps: async page => {
+      await page.evaluate(() => window.supportOpen());
+      await page.locator('#support-pop[open] [data-compose] [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
+      await page.waitForTimeout(300);
+    }},
+  {name: 'tour', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
+    ui: ['ui/app/welcome.js', 'ui/getting-started.js', 'ui/styles/getting-started.css', 'ui/app/settings-devices.js', ...SETTINGS_UI],
+    steps: async page => {
+      // On a phone the account menu is in the drawer, which stays closed (and inert) until More opens it.
+      if (await page.locator('#mobile-more').isVisible()) await page.click('#mobile-more');
+      await page.click('#account');
+      await page.click('#account-tour');
+      await page.locator('.gs-tour-card').waitFor();
+      await page.click('[data-tour-next]');
+      await page.waitForTimeout(400);
+    }},
   {name: 'docs', route: async page => '#/docs/' + encodeURIComponent(await page.evaluate(async () => {
     const {docs} = await (await fetch('/api/v2/docs?limit=500')).json();
     return docs.find(doc => doc.title === 'Returns and replacements').id;
-  })), ready: 'Support may send a replacement lens set without asking.', steps: async page => {
+  })), ready: 'Support may send a replacement lens set without asking.', ui: ['ui/docs-*.js', 'ui/styles/hub-v2.css'], steps: async page => {
     if (page.viewportSize().width < 600) {
       await page.locator('#docs-reader .docs-back').click();
       await page.locator('#docs-h-linked').waitFor();
@@ -80,22 +113,80 @@ const PAGES = [
     await page.locator('#docs-h-internal').waitFor();
     await page.locator('#docs-h-linked').waitFor();
   }},
-  {name: 'market', route: '#/strategy/market?note=company%2Fbrightyard', ready: 'It launched a free scene tier for home projectors last month.'},
-  {name: 'strategy', route: '#/strategy', ready: 'Who we serve'},
-  {name: 'growth', route: '#/growth', ready: 'Growth'},
-  {name: 'finance', route: '#/finance', ready: 'P&L'},
-  {name: 'rules', route: '#/rules', ready: 'Rules'},
-  {name: 'automations', route: '#/automations', ready: 'Automations'},
-  {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating'},
-  {name: 'threads', route: '#/threads', ready: 'Threads'},
+  {name: 'market', route: '#/strategy/market?note=company%2Fbrightyard', ready: 'It launched a free scene tier for home projectors last month.',
+    ui: ['ui/market-*.js', 'ui/app/redesign.js', 'ui/app/redesign-market.js', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
+      'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
+  {name: 'strategy', route: '#/strategy', ready: 'Who we serve',
+    ui: ['ui/strategy-page.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js', 'ui/app/redesign-market.js', 'ui/app/strategy-budget.js',
+      'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
+  {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.js', 'ui/app/growth-*.ts', 'ui/app/brand-page.js', 'ui/styles/growth.css']},
+  {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/styles/finance.css']},
+  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.js', 'ui/app/org-rule-holds.js', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
+  {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/styles/automations.css']},
+  {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
+    ui: ['ui/app/learnings.js', 'ui/app/learned.js', 'ui/app/bot-learnings.js', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css']},
+  {name: 'threads', route: '#/threads', ready: 'Threads',
+    ui: ['ui/app/threads*.js', 'ui/app/thread-*.js', 'ui/app/catch-up.js', 'ui/app/chat*.js', 'ui/app/feedback.js', 'ui/app/visual-*.js',
+      'ui/app/slash-commands.js', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
+      'ui/styles/visual-*.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
-    (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post'},
-  {name: 'settings-inboxes', route: '#/settings', tab: 'inboxes', ready: 'Customer care'},
+    (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post',
+    ui: ['ui/app/recruit.js', 'ui/app/team-build.js', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
+  {name: 'settings-inboxes', route: '#/settings', tab: 'inboxes', ready: 'Customer care',
+    ui: [...SETTINGS_UI, 'ui/app/inboxes*.js', 'ui/app/tools*.js', 'ui/app/redesign-library.js', 'ui/bot-tools.js',
+      'ui/styles/inboxes.css', 'ui/styles/inbound.css', 'ui/styles/tools.css', 'ui/styles/redesign-library.css']},
 ];
 
 function argument(name, fallback = '') {
   const at = process.argv.indexOf('--' + name);
   return at > 0 ? process.argv[at + 1] : fallback;
+}
+
+// A comma list of names from a fixed set: a typo fails here, not as an empty run.
+function choices(flag, fallback, known) {
+  const values = argument(flag, fallback).split(',').map(value => value.trim()).filter(Boolean);
+  const unknown = values.filter(value => !known.includes(value));
+  if (!values.length || unknown.length) {
+    throw new Error(`--${flag}: ${unknown.join(', ') || 'no value'} (choose from ${known.join(', ')})`);
+  }
+  return values;
+}
+
+const git = args => execFileSync('git', args, {cwd: process.cwd(), encoding: 'utf8', maxBuffer: 256 << 20});
+
+// Which ui/ files have a changed line that mentions dark (a dark-theme rule or its test), from the diff's own lines.
+function darkPaths(base, head) {
+  const found = new Set();
+  let file = '';
+  for (const line of git(['diff', '-U0', '--no-renames', base, head, '--', 'ui']).split('\n')) {
+    const header = /^diff --git a\/(\S+) b\/(\S+)/.exec(line);
+    if (header) { file = header[2]; continue; }
+    const changed = (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---'));
+    if (changed && /dark/i.test(line)) found.add(file);
+  }
+  return [...found];
+}
+
+function pagesForDiff(range) {
+  const [base, head, ...extra] = range.split('..');
+  if (!base || !head || extra.length) throw new Error('--pages-for-diff takes <base>..<head>');
+  const paths = git(['diff', '--name-only', '--no-renames', base, head, '--']).split('\n').filter(Boolean);
+  return {base, head, ...select.selectPages(paths, PAGES, darkPaths(base, head))};
+}
+
+// The page table and, for every glob in it, the tracked files it matches: a glob that matches nothing is a stale entry.
+function listPages() {
+  const tracked = git(['ls-files']).split('\n').filter(Boolean);
+  const matching = globs => Object.fromEntries(globs.map(glob => [glob, tracked.filter(file => select.globToRegExp(glob).test(file))]));
+  return {
+    pages: PAGES.map(page => ({name: page.name, ui: page.ui, matched: matching(page.ui)})),
+    shared: matching(select.SHARED),
+    unshown: matching(select.UNSHOWN),
+    nonRendering: matching(select.NON_RENDERING),
+    darkFiles: select.DARK_FILES,
+    // A ui/ file no table names: a change to it shoots every page. The test suite fails on any, so it gets a line here.
+    unmapped: tracked.filter(file => file.startsWith('ui/') && select.classify(file, PAGES).kind === 'unmapped'),
+  };
 }
 
 const freePort = () => new Promise((resolve, reject) => {
@@ -140,19 +231,23 @@ async function verify(page, problems, label) {
   if (found.loading) problems.push(`${label}: still loading`);
 }
 
-async function main() {
+async function capture() {
+  const {chromium} = require('playwright');
   const out = path.resolve(ROOT, argument('out', 'docs/images'));
-  const only = argument('only') ? new Set(argument('only').split(',')) : null;
+  const widths = choices('widths', DEFAULT_WIDTHS, Object.keys(WIDTHS));
+  const themes = choices('themes', DEFAULT_THEMES, Object.keys(THEMES));
+  const only = argument('only') ? choices('only', '', PAGES.map(page => page.name)) : null;
+  const pages = PAGES.filter(page => !only || only.includes(page.name));
   fs.mkdirSync(out, {recursive: true});
   const demo = argument('url') ? {url: argument('url').replace(/\/$/, ''), stop() {}} : await bootDemo();
   const channel = process.env.TICO_BROWSER_CHANNEL ?? 'chrome';
   const browser = await chromium.launch({channel: channel || undefined, headless: true});
   const problems = [];
-  let written = 0;
+  const written = [];
   try {
-    for (const theme of THEMES) {
-      for (const [width, device] of Object.entries(WIDTHS)) {
-        const context = await browser.newContext({...device, colorScheme: theme, locale: 'en-US', timezoneId: 'America/Los_Angeles'});
+    for (const theme of themes) {
+      for (const width of widths) {
+        const context = await browser.newContext({...WIDTHS[width], colorScheme: THEMES[theme], locale: 'en-US', timezoneId: 'America/Los_Angeles'});
         const page = await context.newPage();
         let where = 'load';
         page.on('console', message => { if (message.type() === 'error') problems.push(`${where}: console error: ${message.text()}`); });
@@ -168,8 +263,7 @@ async function main() {
         await page.evaluate(() => document.fonts.ready);
         await page.reload();
         await page.locator('#tree a.node').first().waitFor({state: 'attached'});
-        for (const spec of PAGES) {
-          if (only && !only.has(spec.name)) continue;
+        for (const spec of pages) {
           const label = `${spec.name}-${width}-${theme}`;
           where = label;
           // A popover left open by the page before would cover the next one's controls.
@@ -188,7 +282,7 @@ async function main() {
           await page.waitForTimeout(600);
           await verify(page, problems, label);
           await page.screenshot({path: path.join(out, label + '.png')});
-          written++;
+          written.push(label + '.png');
           if (spec.name === 'tour') await page.keyboard.press('Escape');
         }
         await context.close();
@@ -198,11 +292,27 @@ async function main() {
     await browser.close();
     demo.stop();
   }
-  console.log(`${written} screenshots in ${path.relative(ROOT, out) || '.'}`);
-  if (problems.length) {
-    console.error('\nScreenshots are not trustworthy:\n  ' + [...new Set(problems)].join('\n  '));
+  const unique = [...new Set(problems)];
+  if (argument('report')) {
+    fs.writeFileSync(path.resolve(argument('report')), JSON.stringify({written, problems: unique}, null, 2) + '\n');
+  }
+  console.log(`${written.length} screenshots in ${path.relative(ROOT, out) || '.'}`);
+  if (unique.length) {
+    console.error('\nScreenshots are not trustworthy:\n  ' + unique.join('\n  '));
     process.exit(1);
   }
 }
 
-main().catch(error => { console.error(error); process.exit(1); });
+function main() {
+  if (process.argv.includes('--list-pages')) {
+    console.log(JSON.stringify(listPages(), null, 2));
+    return;
+  }
+  if (argument('pages-for-diff')) {
+    console.log(JSON.stringify(pagesForDiff(argument('pages-for-diff')), null, 2));
+    return;
+  }
+  return capture();
+}
+
+Promise.resolve().then(main).catch(error => { console.error(error); process.exit(1); });
