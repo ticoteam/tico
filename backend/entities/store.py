@@ -52,6 +52,8 @@ KEY = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 LIMIT = 50  # the most rows a list returns (spec §9.1 item 9)
 COUNT_CAP = 1000  # counts stop here and say they are approximate (spec §9.1 item 7)
 CARD_LINKS = 30  # the links a card shows (spec §6 keeps `get` under about 2k tokens)
+SHARED_PLACES_ACTOR = "places-pack"  # who wrote a place from the shared places tree (places/adapter.py ACTOR)
+WORKS_AT = ("works_at", "member_of")  # the links a person's organization is read from, for a list's Organization column
 # The tables a merge moves an entity's rows from. entity_sources skips a source the kept entity already has.
 MOVES = {
     "entity_identifiers": "SELECT id FROM entity_identifiers WHERE entity_id = :drop",
@@ -1563,9 +1565,12 @@ def find(
     link: str | None = None,
     after: str | None = None,
     limit: int = LIMIT,
+    detail: bool = False,
 ) -> dict[str, Any]:
-    """A page of one type's visible entities, by name (a prefix), status, or a self link key (customer_of). Keyset
-    paged on (name_key, id): `after` is the `next` the last page gave. The count stops at COUNT_CAP and says so."""
+    """A page of one type's visible entities, by name (a prefix), status, or a self link key (customer_of; a person also
+    matches by the organization they work at). Keyset
+    paged on (name_key, id): `after` is the `next` the last page gave. The count stops at COUNT_CAP and says so.
+    `detail` adds what the Directory page's list shows: each row's organization, owner and the sources it is known from."""
     r = V.reader(c, who)
     limit = _limit(limit)
     cl, cparams = V.clause(r)
@@ -1579,8 +1584,15 @@ def find(
         where.append("e.status = ?")
         args.append(status)
     if link:
-        where.append("(' ' || e.self_link_keys || ' ') LIKE ?")
-        args.append(f"% {link} %")
+        # A person matches through the organization they work at, too: Jane at a customer is one of our customers' people.
+        ocl, oparams = V.clause(r, "o")
+        where.append(
+            "((' ' || e.self_link_keys || ' ') LIKE ? OR (e.type = 'person' AND EXISTS (SELECT 1 FROM entity_links l "
+            "JOIN entities o ON o.id = l.to_entity_id WHERE l.from_entity_id = e.id "
+            "AND l.link_key IN (SELECT value FROM json_each(?)) AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) "
+            f"AND o.status <> 'merged' AND (' ' || o.self_link_keys || ' ') LIKE ? AND {ocl})))"
+        )
+        args += [f"% {link} %", json.dumps(list(WORKS_AT)), _today(), f"% {link} %", *oparams]
     if after:
         name_key, row_id = _decode(after)
         where.append("(e.name_key, e.id) > (?, ?)")
@@ -1594,8 +1606,11 @@ def find(
     total = _count(
         c, f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE {condition} LIMIT ?)", [*args, COUNT_CAP + 1]
     )
+    shown = [brief(row) for row in rows]
+    if detail:
+        _list_detail(c, r, rows, shown)
     return {
-        "rows": [brief(row) for row in rows],
+        "rows": shown,
         "next": _encode([rows[-1]["name_key"], rows[-1]["id"]]) if more and rows else None,
         "count": min(total, COUNT_CAP),
         "approximate": total > COUNT_CAP,
@@ -1616,6 +1631,76 @@ def brief(row: Row) -> Row:
         "last_activity_at": row["last_activity_at"],
         "mentions_count": row["mentions_count"],
     }
+
+
+def _owner(row: Row) -> str | None:
+    return f"{row['owner_type']}:{row['owner_id']}" if row.get("owner_id") else None
+
+
+def _sources_seen(c: sqlite3.Connection, r: V.Reader, ids: Sequence[str]) -> dict[str, list[str]]:
+    """Each entity's source types the reader can see (company-wide ones, and the restricted ones the reader is granted),
+    so a list never says an entity is known from a book or an inbox the reader cannot read."""
+    out: dict[str, list[str]] = {}
+    if not ids:
+        return out
+    for row in _rows(
+        c,
+        "SELECT entity_id, source_type, source_id, visibility FROM entity_sources "
+        "WHERE entity_id IN (SELECT value FROM json_each(?)) ORDER BY entity_id, created_at, id",
+        (json.dumps(list(ids)),),
+    ):
+        source_type = str(row["source_type"])
+        if row["visibility"] != "company" and not r.system:
+            granted = r.grants.get(source_type, ())
+            if granted is not None and str(row["source_id"]) not in granted:
+                continue
+        kinds = out.setdefault(str(row["entity_id"]), [])
+        if source_type not in kinds:
+            kinds.append(source_type)
+    return out
+
+
+def _list_detail(c: sqlite3.Connection, r: V.Reader, rows: Sequence[Row], shown: list[Row]) -> None:
+    """The list columns beyond brief(): a person's organization (a current works_at or member_of to an organization the
+    reader sees), the owner, and the source types the reader may see. One query each for the page."""
+    ids = [str(row["id"]) for row in rows]
+    cl, cparams = V.clause(r, "o")
+    orgs: dict[str, Row] = {}
+    if ids:
+        for link in _rows(
+            c,
+            "SELECT l.from_entity_id AS entity_id, o.id, o.name, o.self_link_keys FROM entity_links l "
+            "JOIN entities o ON o.id = l.to_entity_id "
+            "WHERE l.from_entity_id IN (SELECT value FROM json_each(?)) AND l.link_key IN (SELECT value FROM json_each(?)) "
+            f"AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) AND o.status <> 'merged' AND {cl} "
+            "ORDER BY l.valid_from_on DESC, o.name_key, o.id",
+            [json.dumps(ids), json.dumps(list(WORKS_AT)), _today(), *cparams],
+        ):
+            orgs.setdefault(
+                str(link["entity_id"]),
+                {"id": link["id"], "name": link["name"], "links_to_us": (link["self_link_keys"] or "").split()},
+            )
+    sources = _sources_seen(c, r, ids)
+    for row, item in zip(rows, shown, strict=True):
+        item["organization"] = orgs.get(str(row["id"]))
+        item["owner"] = _owner(row)
+        item["sources"] = sources.get(str(row["id"]), [])
+
+
+def type_counts(c: sqlite3.Connection, who: str) -> list[Row]:
+    """How many entities of each type the reader sees, each stopping at COUNT_CAP and saying so: the Directory's tabs and
+    Settings › Directory's types read it."""
+    r = V.reader(c, who)
+    cl, cparams = V.clause(r)
+    out: list[Row] = []
+    for kind in types(c):
+        total = _count(
+            c,
+            f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE e.type = ? AND e.status <> 'merged' AND {cl} LIMIT ?)",
+            [kind["key"], *cparams, COUNT_CAP + 1],
+        )
+        out.append({"type": kind["key"], "count": min(total, COUNT_CAP), "approximate": total > COUNT_CAP})
+    return out
 
 
 def target(c: sqlite3.Connection, actor: str, ref: object) -> str:
@@ -1782,7 +1867,10 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         )
         if V.note_visible(r, row)
     ][:20]
-    return {
+    # The list's columns (organization, owner, sources), read the same way, so the page and its row agree.
+    detail: dict[str, Any] = {}
+    _list_detail(c, r, [ent], [detail])
+    body: dict[str, Any] = {
         "id": ent["id"],
         "type": ent["type"],
         "name": ent["name"],
@@ -1790,11 +1878,27 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         "self": bool(ent["self"]),
         "primary_email": ent["primary_email"],
         "primary_domain": ent["primary_domain"],
+        "summary": ent["summary"],
+        "links_to_us": (ent["self_link_keys"] or "").split(),
+        **detail,
         "values": values,
         "links": links,
         "refs": refs,
         "notes": notes,
     }
+    if ent["type"] == "place":
+        # A place from the shared places tree says so (the page marks it Shared), with its kind and governing body.
+        try:
+            props = json.loads(ent["properties"] or "{}")
+        except ValueError:
+            props = {}
+        props = cast(dict[str, Any], props) if isinstance(props, dict) else {}
+        body["place"] = {
+            "kind": props.get("place_kind") or "",
+            "governing_body": props.get("governing_body") or "",
+            "shared": ent["created_by_id"] == SHARED_PLACES_ACTOR,
+        }
+    return body
 
 
 def history(
