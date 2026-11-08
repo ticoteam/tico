@@ -25,8 +25,14 @@ def is_test_module(dotted):
     return len(parts) >= 2 and parts[-1].startswith("test_") and "tests" in parts[:-1]
 
 
+# A test module whose shared names went to a helper not named after it.
+HELPERS = {"backend.tests.test_api": "backend.tests.helpers.api_app (the api fixture) or backend.tests.helpers.api"}
+
+
 def helper_for(dotted):
     """The helpers/ module a test module's shared names belong in."""
+    if dotted in HELPERS:
+        return HELPERS[dotted]
     parts = dotted.split(".")
     return ".".join([*parts[:-1], "helpers", parts[-1][len("test_") :]])
 

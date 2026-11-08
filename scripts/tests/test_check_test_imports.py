@@ -73,3 +73,7 @@ def test_the_allowlist_keeps_a_pair_or_every_importer_of_a_module(tmp_path):
 
 def test_the_repository_imports_no_test_module_outside_the_allowlist():
     assert guard.problems() == []
+
+
+def test_the_api_fixture_is_named_where_it_went():
+    assert guard.helper_for("backend.tests.test_api").startswith("backend.tests.helpers.api_app")
