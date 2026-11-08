@@ -333,11 +333,18 @@ def _spawn_laps(c: "sqlite3.Connection", members: list[str], seen: str) -> list[
 
 
 def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: str, since: str) -> list[Row]:
-    """Cycles in the links the reader sees, with their completed laps in the period. A move lap is one card's hops round a
-    cycle; the hops of a card that came back in the period are loaded whole, so a lap that left before the period still
-    counts when it returns in it. A spawn lap is read from the parent's departure and resumption (_spawn_laps). The median
-    lap time shows only from LOOP_MEDIAN_LAPS laps."""
-    groups = _sccs(ordered, [(str(r["from_pipeline_id"]), str(r["to_pipeline_id"])) for r in links])
+    """Cycles in the links the reader sees, with their completed laps in the period. A spawn link also closes a cycle: the
+    parent resumes in its own pipeline (D64). A move lap is one card's hops round a cycle; the hops of a card that came back
+    in the period are loaded whole, so a lap that left before the period still counts when it returns in it. A spawn lap
+    is read from the parent's departure and resumption (_spawn_laps). The median lap time shows only from LOOP_MEDIAN_LAPS
+    laps."""
+    edges: list[tuple[str, str]] = []
+    for r in links:
+        a, b = str(r["from_pipeline_id"]), str(r["to_pipeline_id"])
+        edges.append((a, b))
+        if str(r["mode"]) == "spawn":
+            edges.append((b, a))  # the parent resumes in its own pipeline (D64): that is the way back, no link needed
+    groups = _sccs(ordered, edges)
     if not groups or not _columns(c, "pipeline_handoffs"):
         return []
     members = sorted({p for g in groups for p in g})
