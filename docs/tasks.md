@@ -471,7 +471,9 @@ worktree holds, and people's tasks are never reopened this way.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
-snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A task waiting only on
+bots is listed to the bot it waits on, except while that bot has a run queued or running on the subtask or blocker
+that holds it. A bot whose profile has its
 sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
 times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
