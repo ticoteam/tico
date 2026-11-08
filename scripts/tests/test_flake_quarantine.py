@@ -11,11 +11,10 @@ import pytest
 import yaml
 
 from scripts import flake_quarantine as quarantine
-from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
 REPO = "ticoteam/tico"
-TEST = "backend/tests/test_recruiting.py::test_titles_draft_from_the_template"
+TEST = "fixture_tests/test_quarantine_fixture_a.py::test_titles_draft_from_the_template"
 
 
 def entry(test=TEST, first_seen="2026-11-01", **extra):
@@ -41,7 +40,7 @@ def write(root, data, name=None):
 def test_each_entry_is_its_own_file_named_from_its_test_id():
     name = quarantine.entry_name(TEST)
     assert name.endswith(".json") and "/" not in name and ":" not in name
-    assert name.startswith("backend-tests-test_recruiting.py-test_titles_draft_from_the_template-")
+    assert name.startswith("fixture_tests-test_quarantine_fixture_a.py-test_titles_draft_from_the_template-")
     # Two ids that sanitize alike still get two files, and a very long id stays a short name.
     assert quarantine.entry_name("a.py::t[x/y]") != quarantine.entry_name("a.py::t[x-y]")
     assert len(quarantine.entry_name("a.py::" + "t" * 500)) < 140
@@ -53,17 +52,19 @@ def test_the_repository_entries_are_valid():
 
 
 def test_a_malformed_misnamed_or_stale_entry_is_a_problem(tmp_path):
-    (tmp_path / "backend/tests").mkdir(parents=True)
-    (tmp_path / "backend/tests/test_recruiting.py").write_text("def test_titles_draft_from_the_template(): pass\n")
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_quarantine_fixture_a.py").write_text(
+        "def test_titles_draft_from_the_template(): pass\n"
+    )
     assert quarantine.problems(tmp_path) == []  # no folder: nothing quarantined
     write(tmp_path, entry())
     assert quarantine.problems(tmp_path) == []
     assert set(quarantine.load(tmp_path)) == {TEST}
     write(tmp_path, entry(), name="renamed.json")
-    write(tmp_path, entry(test="backend/tests/test_gone.py::test_x"))
-    write(tmp_path, {**entry(test="backend/tests/test_recruiting.py::test_other"), "first_seen": "yesterday"})
-    write(tmp_path, {**entry(test="backend/tests/test_recruiting.py::test_more"), "runs": []})
-    write(tmp_path, {**entry(test="backend/tests/test_recruiting.py::test_extra"), "owner": "me"})
+    write(tmp_path, entry(test="fixture_tests/test_gone.py::test_x"))
+    write(tmp_path, {**entry(test="fixture_tests/test_quarantine_fixture_a.py::test_other"), "first_seen": "yesterday"})
+    write(tmp_path, {**entry(test="fixture_tests/test_quarantine_fixture_a.py::test_more"), "runs": []})
+    write(tmp_path, {**entry(test="fixture_tests/test_quarantine_fixture_a.py::test_extra"), "owner": "me"})
     write(tmp_path, {"test": "no-node-id"})
     (tmp_path / quarantine.QUARANTINE / "broken.json").write_text("{")
     found = "\n".join(quarantine.problems(tmp_path))
@@ -82,7 +83,7 @@ def test_an_entry_matches_its_test_and_every_parameter_of_it_and_nothing_else():
     assert quarantine.matching("a.py::test_one[x]", tests) == "a.py::test_one[x]"
     assert quarantine.matching("a.py::test_one[y]", tests) is None
     assert quarantine.matching(TEST + "_longer", tests) is None
-    assert quarantine.matching("backend/tests/test_recruiting.py::test_titles", tests) is None
+    assert quarantine.matching("fixture_tests/test_quarantine_fixture_a.py::test_titles", tests) is None
 
 
 def run_pytest(tmp_path, *args):
@@ -121,92 +122,6 @@ def test_pr_checks_run_a_quarantined_test_without_failing_on_it(tmp_path):
     assert report.count('type="pytest.xfail"') == 3 and 'type="pytest.skip"' not in report
 
 
-def junit(*skips):
-    cases = "".join(
-        f'<testcase classname="t" name="n{i}">'
-        + (f'<skipped type="{kind}" message="m"/>' if kind else "")
-        + "</testcase>"
-        for i, kind in enumerate(skips)
-    )
-    return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
-
-
-def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
-    tmp_path, monkeypatch
-):
-    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
-    which JUnit writes as a skipped element too, and must not make the suite fail."""
-    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["backend/tests/test_x.py"]}]}}
-    (tmp_path / "backend/tests").mkdir(parents=True)
-    (tmp_path / "backend/tests/test_x.py").touch()
-    (tmp_path / "plan.json").write_text(json.dumps(plan))
-    report = {}
-
-    def fake(command, **kw):
-        (tmp_path / "ci-results/python-1.xml").write_text(report["xml"])
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(checks.subprocess, "run", fake)
-    report["xml"] = junit("pytest.xfail")
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
-    report["xml"] = junit("pytest.skip", None)
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
-    report["xml"] = junit("pytest.skip", "pytest.skip")
-    with pytest.raises(RuntimeError, match="skip every test"):
-        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
-
-
-def test_without_the_flag_a_quarantined_test_still_fails(tmp_path):
-    result = run_pytest(tmp_path)
-    assert result.returncode == 1 and "3 failed, 1 passed" in result.stdout
-
-
-def test_the_root_conftest_wires_the_quarantine(request, tmp_path):
-    """The repository's conftest registers --quarantine and marks quarantined items only when it is passed."""
-    assert request.config.getoption("--quarantine") in (True, False)  # registered; CI runs this file with it on
-    plugin = request.config.pluginmanager.get_plugin(str(ROOT / "conftest.py"))
-    assert plugin is not None and hasattr(plugin, "pytest_collection_modifyitems")
-    (tmp_path / "x.py").write_text("def test_a(): pass\n")
-    write(tmp_path, entry(test="x.py::test_a"))
-    marked = []
-
-    def item(nodeid):
-        return SimpleNamespace(nodeid=nodeid, add_marker=lambda mark: marked.append((nodeid, mark)))
-
-    def config(on):
-        return SimpleNamespace(getoption=lambda name: on, rootpath=tmp_path)
-
-    plugin.pytest_collection_modifyitems(config(False), [item("x.py::test_a")])
-    assert marked == []
-    plugin.pytest_collection_modifyitems(config(True), [item("x.py::test_a"), item("x.py::test_b")])
-    assert [nodeid for nodeid, _ in marked] == ["x.py::test_a"]
-    mark = marked[0][1]
-    assert mark.name == "xfail" and mark.kwargs["strict"] is False and mark.kwargs.get("run", True)
-
-
-def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
-    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["backend/tests/test_x.py"]}]}}
-    (tmp_path / "backend/tests").mkdir(parents=True)
-    (tmp_path / "backend/tests/test_x.py").touch()
-    (tmp_path / "plan.json").write_text(json.dumps(plan))
-    calls = []
-    monkeypatch.setattr(
-        checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
-    )
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
-    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
-    assert "--quarantine" in calls[-1] and calls[-1][-1] == "backend/tests/test_x.py"
-    # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
-    assert quarantine.test_files(capsys.readouterr().out) == ["backend/tests/test_x.py"]
-    workflows = ROOT / ".github/workflows"
-    tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
-    step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
-    assert "scripts/pr_checks.py run --quarantine" in step["run"]
-    for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "quarantine" not in (workflows / name).read_text(), name
-
-
 def log(*lines, commit="b" * 40):
     stamp = "2026-11-07T07:11:20.9819248Z "
     head = [
@@ -220,23 +135,23 @@ def log(*lines, commit="b" * 40):
 def test_failed_tests_are_read_from_the_pytest_summary_of_a_job_log():
     text = log(
         "=========================== short test summary info ============================",
-        "\x1b[31mFAILED\x1b[0m backend/tests/test_a.py::test_one - AssertionError: assert 1 == 2",
-        "FAILED backend/tests/test_b.py::test_two[case a-1] - KeyError: 'x'",
-        "ERROR backend/tests/test_c.py::test_three - RuntimeError: fixture",
-        "ERROR backend/tests/test_d.py - ImportError: no module",  # a collection error names no test
-        "FAILED backend/tests/test_e.py::TestKind::test_four",
-        "FAILED backend/tests/test_f.py::test_five[foo - bar] - AssertionError: x[1] - y",
-        "FAILED backend/tests/test_g.py::test_six[a] - assert b[0] == 1",
+        "\x1b[31mFAILED\x1b[0m fixture_tests/test_a.py::test_one - AssertionError: assert 1 == 2",
+        "FAILED fixture_tests/test_b.py::test_two[case a-1] - KeyError: 'x'",
+        "ERROR fixture_tests/test_c.py::test_three - RuntimeError: fixture",
+        "ERROR fixture_tests/test_d.py - ImportError: no module",  # a collection error names no test
+        "FAILED fixture_tests/test_e.py::TestKind::test_four",
+        "FAILED fixture_tests/test_f.py::test_five[foo - bar] - AssertionError: x[1] - y",
+        "FAILED fixture_tests/test_g.py::test_six[a] - assert b[0] == 1",
         "some FAILED text that is not a summary line",
         "\x1b[31m===== 4 failed, 10 passed in 3.2s =====\x1b[0m",
     )
     assert quarantine.failed_tests(text) == [
-        "backend/tests/test_a.py::test_one",
-        "backend/tests/test_b.py::test_two[case a-1]",
-        "backend/tests/test_c.py::test_three",
-        "backend/tests/test_e.py::TestKind::test_four",
-        "backend/tests/test_f.py::test_five[foo - bar]",
-        "backend/tests/test_g.py::test_six[a]",
+        "fixture_tests/test_a.py::test_one",
+        "fixture_tests/test_b.py::test_two[case a-1]",
+        "fixture_tests/test_c.py::test_three",
+        "fixture_tests/test_e.py::TestKind::test_four",
+        "fixture_tests/test_f.py::test_five[foo - bar]",
+        "fixture_tests/test_g.py::test_six[a]",
     ]
     assert quarantine.tested_commit(text) == "b" * 40
     assert quarantine.tested_commit("no checkout here\n") is None
@@ -344,7 +259,7 @@ class FakeGitHub:
 
 
 def test_a_rerun_attempt_that_passes_flips_the_test_its_first_attempt_failed():
-    flaky = "backend/tests/test_hub_command_tree.py::test_the_runner_lists_exactly_the_command_paths"
+    flaky = "fixture_tests/test_quarantine_fixture_c.py::test_the_runner_lists_exactly_the_command_paths"
     gh = FakeGitHub(
         runs=[run(1, attempts=2)],
         jobs={
@@ -364,8 +279,8 @@ def test_a_rerun_attempt_that_passes_flips_the_test_its_first_attempt_failed():
 def test_a_rerun_is_a_pass_only_for_the_tests_it_ran_again():
     """A failed test passed only when a leg that ran its file passed: rerunning another leg proves nothing about it,
     and a rerun of the whole run may pack files into other legs, so only a leg's own file list counts then."""
-    flaky = "backend/tests/test_runner_wire_contract.py::test_wire"
-    other = "backend/tests/test_other.py::test_other"
+    flaky = "fixture_tests/test_quarantine_fixture_d.py::test_wire"
+    other = "fixture_tests/test_other.py::test_other"
     single = FakeGitHub(
         runs=[run(1, attempts=2)],
         jobs={
@@ -374,9 +289,9 @@ def test_a_rerun_is_a_pass_only_for_the_tests_it_ran_again():
             (1, 2): [job(10, "plan", "success"), job(11, "python-1", "failure"), job(22, "python-2", "success")],
         },
         logs={
-            11: log(f"FAILED {flaky} - AssertionError", "Test files: backend/tests/test_runner_wire_contract.py"),
-            12: log(f"FAILED {other} - AssertionError", "Test files: backend/tests/test_other.py"),
-            22: log("Test files: backend/tests/test_other.py", "1 passed"),
+            11: log(f"FAILED {flaky} - AssertionError", "Test files: fixture_tests/test_quarantine_fixture_d.py"),
+            12: log(f"FAILED {other} - AssertionError", "Test files: fixture_tests/test_other.py"),
+            22: log("Test files: fixture_tests/test_other.py", "1 passed"),
         },
     )
     assert list(flips_of(single)) == [other]
@@ -392,7 +307,7 @@ def test_a_rerun_is_a_pass_only_for_the_tests_it_ran_again():
         jobs=rerun_all,
         logs={
             11: failing,
-            21: log("Test files: backend/tests/test_a.py"),
+            21: log("Test files: fixture_tests/test_a.py"),
             22: log(f"Test files: {flaky.split('::')[0]}"),
         },
     )
@@ -403,7 +318,7 @@ def test_a_rerun_is_a_pass_only_for_the_tests_it_ran_again():
 def test_pull_request_runs_are_keyed_by_the_merge_commit_they_tested_not_the_branch_head():
     """A pull_request run tests the branch merged into main as main was then: two runs of one branch head test two
     commits once main moved, so a failure then a pass across them is not a flip unless the merge commit matches."""
-    flaky = "backend/tests/test_e2e_mcp.py::test_every_remote_tool_answers"
+    flaky = "fixture_tests/test_quarantine_fixture_b.py::test_every_remote_tool_answers"
     head = "d" * 40
     gh = FakeGitHub(
         runs=[
@@ -418,8 +333,10 @@ def test_pull_request_runs_are_keyed_by_the_merge_commit_they_tested_not_the_bra
         },
         logs={
             11: log(f"FAILED {flaky} - TimeoutError", commit="1" * 40),
-            21: log("Test files: backend/tests/test_e2e_mcp.py", commit="2" * 40),  # main moved: another commit
-            31: log("Test files: backend/tests/test_e2e_mcp.py", commit="1" * 40),  # the same merge commit
+            21: log(
+                "Test files: fixture_tests/test_quarantine_fixture_b.py", commit="2" * 40
+            ),  # main moved: another commit
+            31: log("Test files: fixture_tests/test_quarantine_fixture_b.py", commit="1" * 40),  # the same merge commit
         },
     )
     found = flips_of(gh)
@@ -444,7 +361,7 @@ def test_a_proposal_skips_what_is_already_quarantined_and_writes_one_file_each(t
     found = {
         TEST: {"commit": "c1", "failed": ["u1"], "passed": ["u2"], "first_seen": "2026-11-07"},
         TEST + "[x]": {"commit": "c1", "failed": ["u3"], "passed": ["u2"], "first_seen": "2026-11-07"},
-        "backend/tests/test_new.py::test_y": {
+        "fixture_tests/test_new.py::test_y": {
             "commit": "c2",
             "failed": ["u4"],
             "passed": ["u5"],
@@ -452,13 +369,13 @@ def test_a_proposal_skips_what_is_already_quarantined_and_writes_one_file_each(t
         },
     }
     # A flip in a test file that only a pull request branch has cannot be an entry on main: its file is not here.
-    found["backend/tests/test_branch_only.py::test_z"] = {**found[TEST], "commit": "c3"}
-    (tmp_path / "backend/tests").mkdir(parents=True)
-    (tmp_path / "backend/tests/test_new.py").write_text("def test_y(): pass\n")
+    found["fixture_tests/test_branch_only.py::test_z"] = {**found[TEST], "commit": "c3"}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_new.py").write_text("def test_y(): pass\n")
     proposed = quarantine.propose(found, {TEST}, root=tmp_path)
-    assert [p["test"] for p in proposed] == ["backend/tests/test_new.py::test_y"]
+    assert [p["test"] for p in proposed] == ["fixture_tests/test_new.py::test_y"]
     assert proposed[0] == {
-        "test": "backend/tests/test_new.py::test_y",
+        "test": "fixture_tests/test_new.py::test_y",
         "first_seen": "2026-11-06",
         "commit": "c2",
         "runs": ["u4", "u5"],
@@ -466,7 +383,7 @@ def test_a_proposal_skips_what_is_already_quarantined_and_writes_one_file_each(t
         "reason": "failed and passed on the same commit",
     }
     written = quarantine.write_entries(proposed, tmp_path / "out")
-    assert [p.name for p in written] == [quarantine.entry_name("backend/tests/test_new.py::test_y")]
+    assert [p.name for p in written] == [quarantine.entry_name("fixture_tests/test_new.py::test_y")]
     assert json.loads(written[0].read_text()) == proposed[0]
 
 
@@ -496,3 +413,31 @@ def test_the_flaky_tests_workflow_detects_daily_reports_weekly_and_reads_only():
     # The report fails its own job: nothing in PR checks or the queue reads it.
     pr = (ROOT / ".github/workflows/pr-checks.yml").read_text()
     assert "flaky-tests" not in pr and "flake_quarantine.py report" not in pr
+
+
+def test_without_the_flag_a_quarantined_test_still_fails(tmp_path):
+    result = run_pytest(tmp_path)
+    assert result.returncode == 1 and "3 failed, 1 passed" in result.stdout
+
+
+def test_the_root_conftest_wires_the_quarantine(request, tmp_path):
+    """The repository's conftest registers --quarantine and marks quarantined items only when it is passed."""
+    assert request.config.getoption("--quarantine") in (True, False)  # registered; CI runs this file with it on
+    plugin = request.config.pluginmanager.get_plugin(str(ROOT / "conftest.py"))
+    assert plugin is not None and hasattr(plugin, "pytest_collection_modifyitems")
+    (tmp_path / "x.py").write_text("def test_a(): pass\n")
+    write(tmp_path, entry(test="x.py::test_a"))
+    marked = []
+
+    def item(nodeid):
+        return SimpleNamespace(nodeid=nodeid, add_marker=lambda mark: marked.append((nodeid, mark)))
+
+    def config(on):
+        return SimpleNamespace(getoption=lambda name: on, rootpath=tmp_path)
+
+    plugin.pytest_collection_modifyitems(config(False), [item("x.py::test_a")])
+    assert marked == []
+    plugin.pytest_collection_modifyitems(config(True), [item("x.py::test_a"), item("x.py::test_b")])
+    assert [nodeid for nodeid, _ in marked] == ["x.py::test_a"]
+    mark = marked[0][1]
+    assert mark.name == "xfail" and mark.kwargs["strict"] is False and mark.kwargs.get("run", True)

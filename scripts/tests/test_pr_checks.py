@@ -10,7 +10,9 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from scripts import flake_quarantine as quarantine
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1571,3 +1573,61 @@ def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_req
     assert "cancel-superseded" in step["run"] and "--head-ref" in step["run"] and "--run-number" in step["run"]
     # Pull requests keep their own group, keyed on the number, so no queue group can share it.
     assert doc["concurrency"]["group"] == "pr-checks-${{ github.event.pull_request.number || github.ref }}"
+
+
+def junit(*skips):
+    cases = "".join(
+        f'<testcase classname="t" name="n{i}">'
+        + (f'<skipped type="{kind}" message="m"/>' if kind else "")
+        + "</testcase>"
+        for i, kind in enumerate(skips)
+    )
+    return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
+
+
+def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
+    tmp_path, monkeypatch
+):
+    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
+    which JUnit writes as a skipped element too, and must not make the suite fail."""
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    report = {}
+
+    def fake(command, **kw):
+        (tmp_path / "ci-results/python-1.xml").write_text(report["xml"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(checks.subprocess, "run", fake)
+    report["xml"] = junit("pytest.xfail")
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", None)
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", "pytest.skip")
+    with pytest.raises(RuntimeError, match="skip every test"):
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
+
+
+def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    calls = []
+    monkeypatch.setattr(
+        checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
+    )
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
+    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
+    assert "--quarantine" in calls[-1] and calls[-1][-1] == "fixture_tests/test_x.py"
+    # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
+    assert quarantine.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
+    workflows = ROOT / ".github/workflows"
+    tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
+    step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
+    assert "scripts/pr_checks.py run --quarantine" in step["run"]
+    for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
+        assert "quarantine" not in (workflows / name).read_text(), name
