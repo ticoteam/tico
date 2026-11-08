@@ -297,6 +297,8 @@ def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
     blob behind it. A link has no file to check, so the ticket's readability decides it alone."""
     from . import task_privacy
 
+    blob_readable: Callable[..., bool] = task_privacy.blob_readable  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    attempt_readable: Callable[..., bool] = task_privacy.attempt_readable  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     if row.get("file_id"):
         versions = _rows(
             conn,
@@ -306,13 +308,13 @@ def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
         if not versions:
             return False
         for version in versions:
-            if version["blob_id"] and not task_privacy.blob_readable(conn, owner, version["blob_id"]):
+            if version["blob_id"] and not blob_readable(conn, owner, version["blob_id"]):
                 return False
-            if version["attempt_id"] and not task_privacy.attempt_readable(conn, owner, version["attempt_id"]):
+            if version["attempt_id"] and not attempt_readable(conn, owner, version["attempt_id"]):
                 return False
         return True
     if row.get("blob_id"):
-        return bool(task_privacy.blob_readable(conn, owner, row["blob_id"]))
+        return blob_readable(conn, owner, row["blob_id"])
     return True
 
 
