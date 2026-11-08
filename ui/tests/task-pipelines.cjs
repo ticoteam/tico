@@ -370,7 +370,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-modal [data-modal-close]').click();
     // Blocked is a real engineering column, before the active build, on desktop and phone.
     const dev = types.find(type => type.id === 'dev-tickets');
-    // The one-stage phone layout is for a pipeline with requirements; one without keeps the board.
+    // The one-stage phone layout is for every pipeline, with requirements or without.
     dev.has_requirements = true;
     dev.steps = [
       {id: 'dev-deck', name: 'On Deck', status: 'open'},
@@ -390,8 +390,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         // A phone shows one stage at a time, with a chip for each; the stage with tickets is the one on show.
         assert.deepEqual(await page.locator('#task-body .pchips [data-pipe-chip]').evaluateAll(els => els.map(el => el.dataset.pipeChip)),
           ['dev-deck', 'dev-blocked', 'dev-building', 'dev-review']);
-        // The phone's stage has no column box: its name is the stage line, and its tickets sit under it.
-        assert.deepEqual(await page.locator('#task-body .pipe-stage-name').allTextContents(), ['Blocked']);
+        // The phone's stage has no column box, and its name is on its chip only: the stage line does not repeat it.
+        assert.equal(await page.locator('#task-body .pipe-stage-line').allInnerTexts().then(lines => lines.some(line => /Blocked/.test(line))), false,
+          'the stage line does not repeat the stage name');
       } else {
         assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['On Deck', 'Blocked', 'In Progress', 'Review 1']);
         assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
