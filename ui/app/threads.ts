@@ -239,6 +239,8 @@ async function threadsLoad(): Promise<void> {
       if (!r) { if (THREADS.on !== true) THREADS.on = false; return; }
       const moved = JSON.stringify(r.dms) !== JSON.stringify(THREADS.dms);
       Object.assign(THREADS, {on: true, ...r, needsSeen: gen === THREADS.gen ? seen : null, readAt: Date.now()});
+      // An open Catch up follows what this read counts, an empty one too.
+      if (typeof cuReconcile === 'function') cuReconcile();
       if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {

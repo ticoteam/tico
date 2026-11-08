@@ -180,6 +180,19 @@ function catchUpGone(id, leave = false) {
   cuDraw();
   cuMore();
 }
+// The Catch up ids of the rail's latest read (THREADS.cu) are what the server counts now. An open card whose task is no
+// longer counted (the task finished, so its thread left the list and Catch up) goes, even when that read brought nothing.
+// Not at the server's cap: the ids stop short of the whole. A card with a reply typed or on its way stays.
+const CU_SHOWN = 99;   // backend/thread_rail.py CATCH_UP_SHOWN
+function cuReconcile() {
+  const cu = THREADS.cu;
+  if (!CU.open || !cu || THREADS.catchUp >= CU_SHOWN) return;
+  for (const it of [...CU.queue, ...CU.later]) {
+    const id = it.thread?.id;
+    if (!id || !it.thread?.task_id || cu.has(id) || CU.sending.has(id) || (CU.drafts.get(id) || '').trim()) continue;
+    catchUpGone(id, true);
+  }
+}
 async function cuReply(form) {
   const it = cuCurrent(), input = form.querySelector('input'), raw = input?.value || '', text = raw.trim();
   if (!it || !text) return;
