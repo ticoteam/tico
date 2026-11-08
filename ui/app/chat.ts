@@ -192,7 +192,7 @@ interface ChatStep {
 interface ChatSendReply {
   message?: ChatMessage | undefined;
   conversation?: ChatConversation | undefined;
-  held?: unknown;
+  held?: RuleHold | undefined;
 }
 // A send that failed: api.js throws an Error with the HTTP status and the answer's body; the send adds the flags.
 interface ChatSendError extends Error {
@@ -502,7 +502,7 @@ function v2RunHTML(m: ChatMessage, state: ChatState | null = V2C) {
       const verb = d.owner_id === m.sender_id ? 'made itself a task' : `gave ${youAware(d.owner_id)} a task`;
       rows.push(v2RunRow(esc(verb) + ' ·', esc(d.title), {task: d.task_id})); said.push(verb);
     } else if (d.kind === 'link') {
-      const ref = shortRef(d.url);
+      const ref = shortRef(d.url ?? '');
       const mark = ref ? `<span class="ref ref-${ref.kind}">${esc(ref.label)}</span> ` : '';
       rows.push(v2RunRow('filed', mark + esc(d.title || (ref ? '' : d.url)), {href: d.url, title: d.url})); said.push('filed');
     } else if (d.kind === 'ask' || d.kind === 'say') {

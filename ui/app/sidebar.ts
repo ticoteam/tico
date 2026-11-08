@@ -90,7 +90,7 @@ function orgGroupUnderStrategyBot(id: string): boolean {
 // Who a group answers to, as a key (`p:<id>` or `b:<bot id>`): whoever its lead (`bot:<id>` or `person:<id>`) reports
 // to, else whoever most of the teammates at its top report to; up the reporting lines (`org_parent`) past anyone inside
 // the group or the groups in it, and past helpers. '' when nobody is above it. Reporting lines, not groups.
-function orgGroupHead(gid: string, lead = ''): string {
+function orgGroupHead(gid: string | undefined, lead = ''): string {
   const groups = S.orgGroups || [], within = new Set<string | undefined>([gid]);
   for (let grew = true, hops = 0; grew && hops < 20; hops++) {
     grew = false;
