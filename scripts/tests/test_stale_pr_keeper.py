@@ -201,6 +201,13 @@ def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
     assert keeper.read_log([f"worker 'gw1' crashed while running {test!r}\n"])[0] == [(test, True)]
 
 
+def test_a_log_that_ends_inside_the_summary_is_never_a_flake():
+    lines = summary(f"FAILED {RECRUITING} - x")[:-1]  # no result line: the log was cut off
+    tests, _, _ = keeper.read_log(lines)
+    assert tests == [(RECRUITING, False), ("pytest's summary, cut off", False)]
+    assert not keeper.flaky([finding(*tests)], QUARANTINE)
+
+
 def test_a_parameter_id_holding_a_dash_is_read_whole():
     test = "backend/tests/test_x.py::test_split[a - b]"
     assert keeper.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
@@ -540,6 +547,38 @@ def test_a_comment_naming_tests_with_an_html_comment_end_still_reads():
     assert marker.tests == [test] and marker.quarantine == keeper.quarantine_key([test], {test})
 
 
+def with_mergeable(gh, number, state):
+    for page in gh.pages:
+        for node in page["data"]["repository"]["pullRequests"]["nodes"]:
+            if node["number"] == number:
+                node["mergeable"] = state
+    return gh
+
+
+def test_a_conflicting_flake_is_re_enqueued_once_the_conflict_is_gone():
+    first = with_mergeable(FakeGitHub(), 2984, "CONFLICTING")
+    run(first)
+    (call,) = written_to(first, 2984)
+    assert "once it no longer conflicts with main" in call[2] and keeper.markers([(1, call[2])])[0].deferred
+    still = with_mergeable(FakeGitHub(comments={2984: [call[2]]}), 2984, "CONFLICTING")
+    run(still)
+    assert written_to(still, 2984) == [] and still.writes("edit_comment") == []
+    clean = FakeGitHub(comments={2984: [call[2]]})
+    run(clean)
+    assert [c[0] for c in written_to(clean, 2984)] == ["enqueue"]
+
+
+def test_huge_test_ids_keep_the_comment_small_and_are_never_a_flake():
+    many = [(f"backend/tests/test_x.py::test_y[{i}{'p' * 1000}]", True) for i in range(200)]
+    findings = [finding(*many, job=f"python-{n}") for n in range(1, 6)]
+    pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
+    body = keeper.comment_body(pr, findings, set(), "https://x")
+    assert len(body) < 40_000
+    (marker,) = keeper.markers([(1, body)])
+    assert 0 < len(marker.tests) < 200 and marker.tests == [t for t, _ in many[: len(marker.tests)]]
+    assert not keeper.flaky(findings, set())  # every one a crash, but too many to be flakes
+
+
 def test_a_requeued_head_whose_comment_is_current_is_done():
     gh = FakeGitHub(comments={2953: [requeued_marker(sha("d3"), sha("8a"))]})
     run(gh)
@@ -820,6 +859,21 @@ def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tm
         gh.read_job_log(1)
     fake_gh("", 0)
     assert gh.read_job_log(1) == ([], [], [])
+
+
+def test_comment_bodies_go_through_stdin(monkeypatch):
+    seen = []
+
+    def fake_run(args, input=None, **_):
+        seen.append((args, input))
+        return subprocess.CompletedProcess(args, 0, stdout='{"id": 5}')
+
+    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
+    gh = keeper.GitHub("ticoteam/tico")
+    assert gh.comment(12, "x" * 300_000) == 5
+    gh.edit_comment(5, "body")
+    assert all("--input" in args and all(len(a) < 200 for a in args) for args, _ in seen)
+    assert json.loads(seen[0][1])["body"] == "x" * 300_000 and json.loads(seen[1][1]) == {"body": "body"}
 
 
 def test_enqueue_uses_the_queue_token_and_the_inspected_head(monkeypatch):

@@ -52,8 +52,12 @@ PYTEST_STEPS = [
     (re.compile(r"python-\d+|contracts"), TEST_STEP),
     (re.compile(r"caddy-linux-[\w-]+"), "Actual pinned Linux Caddy runtime and lifecycle"),
 ]
-# More failed tests than this in one queue run is a breakage, not flakes; the marker names at most this many.
-MAX_MARKED = 200
+# A queue run whose failed test ids take more than this as JSON is a breakage, not flakes, and its comment's marker
+# names only the tests that fit. Shown names are cut at MAX_SHOWN characters and MAX_LINES lines: a comment stays far
+# under GitHub's 65,536 characters.
+MAX_MARKED = 20_000
+MAX_SHOWN = 300
+MAX_LINES = 40
 # The jobs that only report another job's failure: pr-checks.yml's required gate and its timing receipt.
 REPORTING_JOBS = {"checks", "PR job timings"}
 MARKER = re.compile(
@@ -358,6 +362,8 @@ def read_log(lines):
             scenario = f"{header.group('scenario')} seed {header.group('seed')}"
         elif scenario and SIM_FAIL.match(line) and scenario not in scenarios:
             scenarios.append(scenario)
+    if in_summary:
+        blockers.append("pytest's summary, cut off")  # the log ends inside it: later failures are unknown
     if not tests:
         # A crash pytest never summarised (the session itself went down) still names its test.
         tests = crashes
@@ -383,7 +389,7 @@ def failed_jobs(jobs):
 def flaky(findings, tests):
     """True when every failure is a quarantined test or a crashed xdist worker in a pytest-only leg, and there is at
     least one."""
-    if not findings or sum(len(f.tests) for f in findings) > MAX_MARKED:
+    if not findings or not marked(findings)[1]:
         return False
     for f in findings:
         if not any(job.fullmatch(f.job) and f.step == step for job, step in PYTEST_STEPS) or f.log_missing:
@@ -395,6 +401,22 @@ def flaky(findings, tests):
     return True
 
 
+def marked(findings):
+    """(the failed test ids a comment's marker names, whether that is all of them)."""
+    out, size = [], 2
+    every = list(dict.fromkeys(test for f in findings for test, _ in f.tests))
+    for test in every:
+        size += len(json.dumps(test)) + 2
+        if size > MAX_MARKED:
+            return out, False
+        out.append(test)
+    return out, True
+
+
+def _short(name):
+    return name if len(name) <= MAX_SHOWN else name[: MAX_SHOWN - 1] + "…"
+
+
 def describe(findings, tests):
     """Markdown bullets naming each failure."""
     lines = []
@@ -402,14 +424,16 @@ def describe(findings, tests):
         names = []
         for test, crashed in f.tests:
             note = " (worker crashed)" if crashed else " (quarantined)" if is_quarantined(test, tests) else ""
-            names.append(f"`{test}`{note}")
-        names += [f"`{name}` (UI script)" for name in f.scripts]
-        names += [f"`{name}` (factory sim)" for name in f.scenarios]
+            names.append(f"`{_short(test)}`{note}")
+        names += [f"`{_short(name)}` (UI script)" for name in f.scripts]
+        names += [f"`{_short(name)}` (factory sim)" for name in f.scenarios]
         if not names:
             names = [f"{f.step} (no test named{'; log expired' if f.log_missing else ''})"]
         shown = names[:MAX_NAMED] + ([f"{len(names) - MAX_NAMED} more"] if len(names) > MAX_NAMED else [])
         job = f.job + (f" (attempt {f.attempt})" if f.attempt > 1 else "")
         lines += [f"- {name} in [{job}]({f.url})" for name in shown]
+    if len(lines) > MAX_LINES:
+        lines = lines[: MAX_LINES - 1] + [f"- {len(lines) - MAX_LINES + 1} more in the queue run"]
     return "\n".join(lines)
 
 
@@ -421,8 +445,9 @@ REASONS = {
 
 
 def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred=False, header=None):
-    """The keeper's one comment for a head. Its marker records the queue run and quarantine list it was written for,
-    and whether the head was re-enqueued (requeued) or a flake was left for a person for want of a token (deferred)."""
+    """The keeper's one comment for a head. Its marker records the queue run and the failed tests it was written for,
+    and whether the head was re-enqueued (requeued) or a flake was not re-enqueued for want of a token or because the
+    pull request conflicted with main (deferred)."""
     why = REASONS.get(pr.removed_reason, pr.removed_reason.replace("_", " "))
     lines = [header or f"The merge queue removed this: {why}."]
     if findings:
@@ -433,7 +458,7 @@ def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred
         lines += ["", f"Queue run: {run_url}"]
     if note:
         lines += ["", note]
-    failed = list(dict.fromkeys(test for f in findings for test, _ in f.tests))[:MAX_MARKED]
+    failed = marked(findings)[0]
     flags = (" requeued" if requeued else "") + (" deferred" if deferred else "")
     marker = f"queue={pr.queue_commit or 'none'} quarantine={quarantine_key(failed, tests)}{flags}"
     named = json.dumps(failed).replace("-->", "--\\u003e")
@@ -473,9 +498,11 @@ class GitHub:
     def can_enqueue(self):
         return bool(self.queue_token)
 
-    def _gh(self, *args, env=None):
+    def _gh(self, *args, env=None, stdin=None):
         try:
-            return subprocess.run(["gh", *args], capture_output=True, text=True, check=True, env=env).stdout
+            return subprocess.run(
+                ["gh", *args], capture_output=True, text=True, check=True, env=env, input=stdin
+            ).stdout
         except subprocess.CalledProcessError as error:
             raise _checked(error) from None
 
@@ -565,10 +592,14 @@ class GitHub:
 
     def comment(self, number, body):
         """Posts a comment; its id."""
-        return json.loads(self._gh("api", f"repos/{self.repo}/issues/{number}/comments", "-f", f"body={body}"))["id"]
+        payload = json.dumps({"body": body})  # through stdin: a body is no command line argument
+        return json.loads(
+            self._gh("api", f"repos/{self.repo}/issues/{number}/comments", "--input", "-", stdin=payload)
+        )["id"]
 
     def edit_comment(self, comment_id, body):
-        self._gh("api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{comment_id}", "-f", f"body={body}")
+        payload = json.dumps({"body": body})
+        self._gh("api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{comment_id}", "--input", "-", stdin=payload)
 
     def delete_comment(self, comment_id):
         self._gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/comments/{comment_id}")
@@ -699,7 +730,8 @@ def keep(gh, tests, now, dry_run=False):
             comment is not None
             and comment.queue == (pr.queue_commit or "none")
             and comment.quarantine == quarantine_key(comment.tests, tests)
-            and not (comment.deferred and gh.can_enqueue)  # a queue token has been added since
+            # a deferred flake is read again once it could be re-enqueued: a token was added, or the conflict is gone
+            and not (comment.deferred and gh.can_enqueue and pr.mergeable == "MERGEABLE")
         )
         if current:  # a re-enqueue only stops another enqueue: a new failure is still diagnosed
             done["skipped"].append(f"#{pr.number}: already commented on {pr.head[:10]}")
@@ -726,10 +758,12 @@ def keep(gh, tests, now, dry_run=False):
         note, deferred = "", False
         if requeued:
             note = "Already re-queued once for this commit, so not again."
-        elif is_flake and pr.mergeable != "CONFLICTING":
+        elif is_flake and pr.mergeable == "CONFLICTING":
+            note, deferred = "Only flakes failed. It is re-enqueued once it no longer conflicts with main.", True
+        elif is_flake:
             note, deferred = f"Only flakes failed. Re-enqueue it: `gh pr merge {pr.number}`.", True
         body = comment_body(pr, findings, tests, run_url, note, requeued, deferred)
-        names = ", ".join(t for f in findings for t, _ in f.tests[:3]) or pr.removed_reason
+        names = ", ".join(_short(t) for f in findings for t, _ in f.tests[:3]) or pr.removed_reason
         if comment is None:
             act("commented", pr, lambda pr=pr, body=body: gh.comment(pr.number, body), names)
         else:
