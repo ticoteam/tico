@@ -11,6 +11,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 import re
 from . import reach
+from . import pipeline_rights
 from . import views
 
 
@@ -64,11 +65,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 member=member,
                 role=role,
                 snoozed=snoozed,
+                viewer=who.task_actor or who.actor,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
-            visible_sql = auth.task_sql(c, who)
+            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
             typed = None
             if ids is not None:
@@ -111,6 +113,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
                             row["step"].pop("public_name", None)
+                            # A stage's Warn after is the stage's, sent once with the pipeline's steps (task types), not on
+                            # each of a board's cards (pipeline-rail.ts pipelineStepLimit).
+                            row["step"].pop("limit_minutes", None)
                         # A snooze's note (up to 500 characters) is text too; the task's own read keeps it whole.
                         for hold in row.get("holds") or ():
                             if hold["kind"] == "snoozed":
@@ -140,15 +145,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     who.task_actor,
                     sorted(request.query_params.multi_items()),
                 )
-                whole, held = reads.digest("tasks", reads.version(c), reads.names(c), *reader), reads.held(request)
-                for was_whole, was_rows in held:
-                    if was_whole == whole:
-                        return reads.not_modified(reads.list_tag(whole, was_rows))
                 rows, next_offset = visible_tasks(c, who, owner, requester, limit=limit, offset=offset, **filters)
                 brief_rows(rows)
-                part = reads.digest(rows, next_offset, *reader)
-                tag = reads.list_tag(whole, part)
-                if any(was_rows == part for _, was_rows in held):
+                # The validator is the answer itself and the reader's access. A change this reader cannot read (a
+                # hidden ticket, another team's) leaves it as it was, so it sends no new ETag for identical data.
+                tag = reads.etag("tasks", rows, next_offset, *reader)
+                if reads.fresh(request, tag):
                     return reads.not_modified(tag)
                 response.headers["ETag"] = tag
                 result = {"tasks": rows, "next_offset": next_offset, "cursor": reads.cursor(c, visible_sql)}
@@ -283,13 +285,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            visible_sql = auth.task_sql(c, who)
-            tag = reads.etag("labels", reads.version(c), reads.access(visible_sql), reads.names(c), who.actor)
+            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
+            # The tag is of the labels this reader sees, not of the newest task change: an edit to a ticket it cannot
+            # read (on a members-only pipeline) leaves the tag, and the answer, as they were.
+            keys = H.labels_in_use(c, visible_sql)
+            tags = [H.tag_by_key(c, key) for key in keys]
+            tag = reads.etag("labels", reads.access(visible_sql), reads.names(c), who.actor, keys, tags)
             if reads.fresh(request, tag):
                 return reads.not_modified(tag)
-            keys = H.labels_in_use(c, visible_sql)
             response.headers["ETag"] = tag
-            return {"labels": keys, "tags": [H.tag_by_key(c, key) for key in keys]}
+            return {"labels": keys, "tags": tags}
 
     @app.get("/api/v2/tasks/stuck")
     def tasks_stuck(request: Request, hours: int = H.STUCK_HOURS):
@@ -297,12 +302,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         who = request.state.identity
         if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
             raise Problem("forbidden", "The stuck-task sweep is BotOps's and people's", 403)
+        principal = who.task_actor or who.actor
         with store.read() as c:
+            hidden = pipeline_rights.hidden_pipeline_ids(c, principal)
             return {
                 "tasks": [
                     t
                     for t in H.stuck_tasks(c, hours=max(1, hours), hidden=auth.unreadable_bots(c, who))
                     if privacy.task_readable(c, who, H.task(c, t["id"]))
+                    and not pipeline_rights.left_out(hidden, principal, H.task(c, t["id"]) or {})
                 ]
             }
 
@@ -330,6 +338,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             owner = H.resolve_actor(c, owner) if owner else None
             requester = H.resolve_actor(c, requester) if requester else None
             typ = H.type_get(c, type) if type else None
+            # A members-only pipeline is no type to someone outside it: refused as an unknown one is.
+            if typ and not pipeline_rights.may_see(c, who.task_actor or who.actor, typ["id"]):
+                typ = None
             if type and not typ:
                 raise Problem("type", "No task type " + type, 422)
             tz = max(-840, min(840, tz))  # minutes east of UTC; days are the viewer's days
@@ -341,7 +352,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     c,
                     since,
                     tz_minutes=tz,
-                    visible=auth.task_sql(c, who),
+                    visible=pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who)),
                     owner=owner,
                     requester=requester,
                     owner_kind=owner_kind or None,

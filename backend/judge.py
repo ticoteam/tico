@@ -599,13 +599,15 @@ def primary_engine(settings, store=None, vault=None):
 
 def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
-    model at all, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
+    model at all, a demo, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
     (`primary_engine(settings)`, or the test's fake); when they are slow, down or refused, the company's own model answers
     and the result says `fallback`. Each call goes through `metered`, so a batch that reuses one engine (listening,
     learnings) stops at the cap call by call; each result carries `cost_usd`. Another `budget` meters against its own
     cap instead of Decide's."""
     settings = store.settings
-    if settings.rehearsal or over_spend_cap(c, settings, None, budget):
+    # A demo's provider keys are made up (demo_sections/services.py): asking with them is a refused key or a timeout,
+    # never an answer, and a seed that waits on either builds a different company from run to run.
+    if settings.rehearsal or settings.demo or over_spend_cap(c, settings, None, budget):
         return None
     backup = fallback_engine(providers.load(c, settings))
     steps = live(primary, c, settings)

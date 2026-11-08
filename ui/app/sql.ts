@@ -1,0 +1,62 @@
+/* ui/app/sql.ts — SQL page (owner and admins)
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
+'use strict';
+
+// ----------------------------------------------------------------- SQL (owner and admins)
+// Read-only queries over the hub database: POST /api/v2/sql, one SELECT at a time. What a
+// query may see is decided in the database layer (backend/sql.py: per-request views and
+// SQLite's authorizer), never here; this page only sends the text and draws the rows.
+const SQL_EXAMPLES: [string, string][] = [
+  ['Queued work', "SELECT bot_id, count(*) AS queued, min(created_at) AS oldest FROM jobs WHERE state='queued' GROUP BY bot_id ORDER BY queued DESC"],
+  ['Open tasks by owner', "SELECT owner_id, status, count(*) AS n FROM tasks WHERE status IN ('open','doing','waiting') GROUP BY owner_id, status ORDER BY owner_id, status"],
+  ['Last run per bot', "SELECT bot_id AS bot, max(created_at) AS last_turn, sum(exit='ok') AS ok, count(*) AS turns FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) AND created_at > strftime('%Y-%m-%dT%H:%M:%S','now','-7 days') GROUP BY bot_id ORDER BY last_turn DESC"],
+  ['Who asked what today', "SELECT created_at, sender_id, recipient_id, substr(body,1,90) AS ask FROM messages WHERE kind='ask' AND created_at >= strftime('%Y-%m-%d','now') ORDER BY created_at DESC"],
+  ['Routine outcomes', "SELECT s.bot, s.title, o.occurrence, o.outcome, t.status FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id LEFT JOIN tasks t ON t.id=o.task_id ORDER BY o.occurrence DESC LIMIT 50"],
+  ['Tables', "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"],
+];
+
+// The reply POST /api/v2/sql gives. post() is untyped JS, so the shape is declared here, not checked.
+interface SqlResult { columns: string[]; rows: unknown[][]; row_count: number; truncated?: boolean; ms: number; note?: string | null; }
+
+// The `!`: the markup this file just drew always has the element; a missing one throws on first use, as the old lookup did.
+function sqlEl<T extends Element>(root: ParentNode, selector: string): T { return root.querySelector<T>(selector)!; }
+
+function pageSql() {
+  if (S.me && !S.me.can_see_sql) { location.hash = TASKS; return; }
+  let last = ''; try { last = localStorage.getItem('hub.sql.last') || ''; } catch {}
+  sqlEl<HTMLElement>(document, '#main').innerHTML = `<div class="meeting-head"><div><h1>Query the database</h1></div></div>
+    <section class="card">
+      <textarea id="sql-text" class="sql-editor" rows="6" spellcheck="false" aria-label="SQL query" placeholder="SELECT bot, state, focus FROM bot_status">${esc(last)}</textarea>
+      <div class="row sql-bar"><button class="primary" type="button" id="sql-run">Run</button><span class="muted">⌘↩ / Ctrl+Enter</span><span class="mono muted" id="sql-meta" role="status"></span></div>
+      <div class="err" id="sql-error" hidden></div>
+      <div class="sql-results" id="sql-results"></div>
+      <details class="sql-examples"><summary>Examples</summary><p>Read-only, one statement. <a href="${GH}/blob/main/docs/hub-sql.md" target="_blank" rel="noopener">Tables and examples</a></p><ul>${SQL_EXAMPLES.map(([title, sql], i) =>
+        `<li><a href="#" data-sql-example="${i}">${esc(title)}</a><code>${esc(sql)}</code></li>`).join('')}</ul></details>
+    </section>`;
+  sqlEl<HTMLButtonElement>(document, '#sql-run').onclick = () => sqlRun();
+  sqlEl<HTMLTextAreaElement>(document, '#sql-text').addEventListener('keydown', ev => { if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') { ev.preventDefault(); sqlRun(); } });
+  sqlEl<HTMLElement>(document, '.sql-examples').onclick = ev => {
+    const a = eventElement(ev)?.closest<HTMLAnchorElement>('[data-sql-example]'); if (!a) return;
+    ev.preventDefault();
+    // The `!`: the index was written by SQL_EXAMPLES.map above; an out-of-range one throws, as the old lookup did.
+    sqlEl<HTMLTextAreaElement>(document, '#sql-text').value = SQL_EXAMPLES[Number(a.dataset.sqlExample)]![1]; sqlRun();
+  };
+}
+async function sqlRun() {
+  const box = document.querySelector<HTMLTextAreaElement>('#sql-text'), sql = box?.value.trim();
+  if (!sql) return;
+  try { localStorage.setItem('hub.sql.last', sql); } catch {}
+  const btn = sqlEl<HTMLButtonElement>(document, '#sql-run'), meta = sqlEl<HTMLElement>(document, '#sql-meta'), err = sqlEl<HTMLElement>(document, '#sql-error');
+  btn.disabled = true; err.hidden = true; meta.textContent = 'Running…';
+  try {
+    const r: SqlResult = await post('/v2/sql', {sql});
+    if (S.route !== SQL_PAGE) return;
+    const cell = (v: unknown) => v === null ? '<span class="muted">null</span>' : esc(typeof v === 'object' ? JSON.stringify(v) : v);
+    sqlEl<HTMLElement>(document, '#sql-results').innerHTML = r.columns.length ? `<table><thead><tr>${r.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${r.rows.map(row => `<tr>${row.map(v => `<td title="${esc(v ?? '')}">${cell(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '';
+    meta.textContent = `${r.row_count} row${r.row_count === 1 ? '' : 's'}${r.truncated ? ' shown, more available' : ''} · ${r.ms} ms${r.note ? ' · ' + r.note : ''}`;
+  } catch (e) {
+    if (S.route !== SQL_PAGE) return;
+    err.textContent = errorMessage(e, ''); err.hidden = false; meta.textContent = '';
+  } finally { btn.disabled = false; }
+}

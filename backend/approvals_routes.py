@@ -7,7 +7,7 @@ from . import docs_merge, lifecycle, models as M, proposals, strategy_bot, task_
 from .store import H, Problem, encode
 
 
-# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.js).
+# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.ts).
 SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
 
@@ -30,7 +30,7 @@ def register(app, auth, mutate, settings, store):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
-        # The way the web's Send goes (ui/app/pill.js): read by any client; sends that name no delivery ignore it.
+        # The way the web's Send goes (ui/app/pill.ts): read by any client; sends that name no delivery ignore it.
         if key == "compose.send_way" and not (
             body.value in ("steer", "queue") or isinstance(body.value, str) and body.value in SEND_WAY_DEFERS
         ):

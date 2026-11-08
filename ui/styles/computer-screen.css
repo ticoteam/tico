@@ -1,4 +1,4 @@
-/* ui/styles/computer-screen.css — a computer's screen (ui/app/computer-screen.js): the viewer, the Computers row's sign,
+/* ui/styles/computer-screen.css — a computer's screen (ui/app/computer-screen.ts): the viewer, the Computers row's sign,
    its ⋯ menu choice. The cascade runs in the order index.html links these files. */
 /* The viewer takes the whole window on every width, over the rail and the phone's tab bar. */
 body.screen-open{overflow:hidden}

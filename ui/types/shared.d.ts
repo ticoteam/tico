@@ -1,10 +1,10 @@
-// Types for the globals the classic scripts under ui/ share (ui/app/core.js, api.js, state.js, ...). A declaration here is
+// Types for the globals the classic scripts under ui/ share (ui/app/core.ts, api.ts, state.ts, ...). A declaration here is
 // read by the JSDoc on the JavaScript that defines the global, and by the TypeScript files that use it. No file here
 // is a module, so every name below is global, as the scripts' own names are.
 // A field the server sends but the page does not read is left out. A field read on the page is optional when the
 // server or the page may leave it out.
 
-// ---------------------------------------------------------------- the API client's errors (ui/app/api.js)
+// ---------------------------------------------------------------- the API client's errors (ui/app/api.ts)
 
 /** The JSON body of a failed answer: a Problem (`error.code`), a task cap's 409 (`message` beside a code), or FastAPI's validation list. */
 interface ApiFailureBody {
@@ -14,13 +14,13 @@ interface ApiFailureBody {
   [key: string]: unknown;
 }
 
-/** What get, post, put and patch throw for a failed answer (apiFailure in ui/app/api.js): an Error with the body and the HTTP status. */
+/** What get, post, put and patch throw for a failed answer (apiFailure in ui/app/api.ts): an Error with the body and the HTTP status. */
 interface ApiFailure extends Error {
   body: ApiFailureBody;
   status: number;
 }
 
-// ---------------------------------------------------------------- toast (ui/app/api.js)
+// ---------------------------------------------------------------- toast (ui/app/api.ts)
 
 interface ToastAction {
   label: string;
@@ -67,7 +67,7 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
   config?: Partial<AppConfig>;
 }
 
-// ---------------------------------------------------------------- the server's config (S.config, state.js)
+// ---------------------------------------------------------------- the server's config (S.config, state.ts)
 
 /** An available new version, as the config carries it (`update`), or null when none is known. */
 interface ConfigUpdate {
@@ -77,7 +77,7 @@ interface ConfigUpdate {
   [key: string]: unknown;
 }
 
-/** The environment's names and switches: state.js's CONFIG_DEFAULTS, with whatever the server sends over them. */
+/** The environment's names and switches: state.ts's CONFIG_DEFAULTS, with whatever the server sends over them. */
 interface AppConfig {
   environment_id: string;
   company_name: string;
@@ -172,6 +172,10 @@ interface Employee {
   my_access?: AccessLevel;
   machine?: BotMachine | null;
   agent?: BotAgent | null;
+  /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
+  online?: boolean;
+  ready?: boolean;
+  readiness?: { gateway?: string | null } | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
   /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
@@ -241,6 +245,9 @@ interface V2BotState {
   quarantine?: Quarantine | null;
   last_stop?: { text?: string; [key: string]: unknown } | null;
   open_tasks?: number;
+  /** The status tooltip's Needs humans row and Next run row (ui/app/tooltip.ts). */
+  needs_human?: number;
+  next_due_at?: string | null;
   [key: string]: unknown;
 }
 
@@ -284,7 +291,7 @@ interface LastRead {
   [page: string]: unknown;
 }
 
-// ---------------------------------------------------------------- S, the page's shared state (ui/app/state.js)
+// ---------------------------------------------------------------- S, the page's shared state (ui/app/state.ts)
 
 interface AppState {
   emps: Employee[];
@@ -302,4 +309,12 @@ interface AppState {
   updUnread?: number;
   notifyBrowser?: boolean;
   overviewRosterFresh?: boolean;
+}
+
+// ---------------------------------------------------------------- the anchor a script-placed popover carries
+
+/** The element a menu or popover placed by script opens from (settings-bots.js, subscriptions.js, task-props.js set it;
+ *  motion.ts reads it to grow the menu from that side). Absent on everything else. */
+interface HTMLElement {
+  anchor?: Element | null;
 }

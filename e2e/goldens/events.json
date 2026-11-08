@@ -1012,6 +1012,7 @@
           "status": "closed",
           "step": {
             "id": "general-closed",
+            "limit_minutes": null,
             "name": "Closed",
             "position": 5,
             "public_name": "Closed",
@@ -1318,6 +1319,7 @@
           "status": "open",
           "step": {
             "id": "general-open",
+            "limit_minutes": null,
             "name": "Open",
             "position": 0,
             "public_name": "Open",

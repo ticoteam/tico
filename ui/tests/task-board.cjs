@@ -68,7 +68,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
       if (p === '/api/employees') return json(bots);
@@ -408,7 +408,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => TASKS_ST.view === 'list');
     const mobile = await page.evaluate(() => {
       const head = document.querySelector('.tl-head');
-      const tops = new Set([...head.children].filter(c => c.getClientRects().length && c.getBoundingClientRect().width)
+      // The page title is visually hidden on a phone (it sits outside the rows), so it is not a row of the header.
+      const tops = new Set([...head.children].filter(c => c.tagName !== 'H1' && c.getClientRects().length && c.getBoundingClientRect().width)
         .map(c => Math.round(c.getBoundingClientRect().top / 8)));
       return {rows: tops.size, right: head.querySelector('#task-new').getBoundingClientRect().right, edge: head.getBoundingClientRect().right};
     });
@@ -447,7 +448,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => el.matches(':popover-open')), false);
     await page.locator('#task-filter').click();
-    await page.locator('.tl-head h1').click();
+    // An outside tap, at the page title's place (the title is visually hidden on a phone): the sheet closes on the tap, wherever it lands.
+    const title = await page.locator('.tl-head h1').boundingBox();
+    await page.mouse.click(title.x + title.width / 2, title.y + title.height / 2);
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => el.matches(':popover-open')), false, 'outside tap closes the sheet');
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);

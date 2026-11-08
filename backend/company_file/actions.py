@@ -167,12 +167,19 @@ def score(role, text):
     return total
 
 
+# Slugs a bare word must never find: "CRO" is a chief revenue officer as often as a conversion owner, and "pipeline" is
+# the sales pipeline. Their templates are found by their full names ("Conversion Rate Optimization Owner", "Pipeline Owner").
+NOT_BARE = {"cro", "pipeline"}
+
+
 def find_role(text):
     """The template a slug, name or everyday word names exactly, else None. A name is tried whole before its "bot" or
     "agent" ending is dropped, so the built-in's old name ("ceo bot") is an alias and "Strategy Bot" finds its
-    template."""
+    template. A bare word in NOT_BARE names something else in a company's own talk, so it finds nothing."""
     key = re.sub(r"^(an?|the|some|another)\s+", "", str(text).strip().lower()).strip()
     bare = re.sub(r"\s+(bot|agent)$", "", key)
+    if key in NOT_BARE or bare in NOT_BARE:
+        return None
     if key in ALIASES:
         return BY_SLUG.get(ALIASES[key])
     if bare in ALIASES:
@@ -537,7 +544,8 @@ def company_set(draft, args, today, notes):
 
 
 def bot_add(draft, args, today, notes):
-    role = find_role(args["template"])
+    # A template slug is an exact id the chat was given, so it always resolves; a name or a word goes through find_role.
+    role = BY_SLUG.get(args["template"]) or find_role(args["template"])
     if not role:
         near = closest_role(args["template"])
         raise Refusal(
