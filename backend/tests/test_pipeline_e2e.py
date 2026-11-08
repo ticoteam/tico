@@ -1162,7 +1162,7 @@ def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
 def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
     """Finding R1 (D67): a Legal card (members-only) spawns an Engineering ticket owned by Cal, who is not a member of
     Legal. Cal's ticket gets no link to the confidential source, and the skip is logged on the child by requirement name
-    only, never the URL. The ticket's own owner still reads it."""
+    only, never the URL. A child owned by a Legal member gets none either: its company-wide readers include Cal."""
     from backend import pipeline_links
 
     confidential = "https://counsel.example.test/memo"
@@ -1206,7 +1206,8 @@ def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
     co.c.commit()
     pipeline_links._carry(co.c, BUILDER, card, mine, "Review")
     co.c.commit()
-    assert confidential in [link["url"] for link in H.task_links(co.c, mine)]
+    # Owned by a Legal member, but on the company-wide Engineering pipeline Cal reads it too: still nothing carried (F2/F3).
+    assert confidential not in [link["url"] for link in H.task_links(co.c, mine)]
 
 
 def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
