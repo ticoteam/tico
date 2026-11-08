@@ -663,7 +663,9 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     # One VM holds WORKERS x (target - setup) seconds of one-worker test time; never 0 VMs, never past the cap.
     per_python = checks.WORKERS * (checks.JOB_SECONDS - checks.SETUP_SECONDS["python"])
     assert checks.job_count(0, "python") == 1
-    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 2
+    # One VM past the target by a file's worth is still one VM: 1 s more is 0.25 s more wall time on each of its workers.
+    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 1
+    assert checks.job_count(2 * per_python, "python") == 2
     assert checks.job_count(10**9, "python") == checks.MAX_JOBS
     # The cap only stops a runaway plan: Nov 5's default suite (40,000 one-worker seconds in 936 files) held at 16 VMs
     # ran 11-14 minutes per shard. It now splits into VMs of at most TICO_CI_JOB_SECONDS, setup included.
@@ -1014,14 +1016,15 @@ def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default
             if "runs-on=" not in runner:
                 continue
             # The arm64 jobs nest their arch choice inside the switch: "&& (matrix.arch == 'arm64' && ... || ...)".
-            hosted = "${{ vars.TICO_CI_HOSTED == 'true' && "
+            # A release validation's incremental mode (anchor set) is hosted too, so the switch is a hosted-or-mode test.
+            hosted = ("${{ vars.TICO_CI_HOSTED == 'true' && ", "${{ (vars.TICO_CI_HOSTED == 'true' || ")
             assert runner.startswith(hosted) and "'ubuntu-24.04'" in runner, (name, job_name)
             assert "format('runs-on={0}/" in runner, (name, job_name)  # the RunsOn label is the fallback, kept verbatim
             if "arm64" in runner:
                 assert "'ubuntu-24.04-arm'" in runner, (name, job_name)
             for step in job.get("steps", []):
                 if "/opt/ghc" in str(step.get("run", "")):
-                    assert step.get("if") == "vars.TICO_CI_HOSTED == 'true'", (name, job_name)
+                    assert step.get("if", "").startswith("vars.TICO_CI_HOSTED == 'true'"), (name, job_name)
     recorder = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["recorder"]
     assert recorder["runs-on"] == "macos-latest"
 
@@ -1438,3 +1441,42 @@ def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(t
     plan = checks.selection(["ui/app/mapped.ts"], root=tmp_path, core=[])
     assert "mapped-one" in plan["browser"] and "--all" not in plan["browser"]
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
+
+
+def test_a_remainder_under_four_minutes_of_work_a_vm_folds_into_one_vm():
+    # A VM carries at least MIN_JOB_SECONDS of tests (per worker, setup excluded): a 1,100 s selection is one VM
+    # of about 5 minutes, not two VMs of 2.3 minutes that each spend their setup on a small share of tests.
+    assert checks.job_count(1100, "python") == 1
+    assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2, "python") == 2
+    counts = Counter({f"t{i}.py": 1 for i in range(11)})
+    split, loads = checks.groups(counts, {name: 100 for name in counts})
+    assert len(split) == 1 and loads == [1100.0]
+
+
+def test_the_factory_legs_hold_four_minutes_of_work_each():
+    # The sim's work is fixed by its scenarios, not by the selection: its legs fold to the same four-minute minimum.
+    from evals.factory import run as factory
+
+    timings = factory.timings()
+    pairs = [(name, 1) for name in sorted(timings)]
+    total = sum(timings[name] for name, _ in pairs)
+    legs = max(1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * checks.MIN_JOB_SECONDS))))
+    assert len(checks.factory_shards()) == legs
+    assert legs == 1 or total / legs / factory.REMOTE_CPUS >= checks.MIN_JOB_SECONDS
+
+
+def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
+    counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(346)})
+    timings = {name: 6720 / 346 for name in counts}
+    # An ordinary pull request's ceiling is 8 test jobs: 2 fixed jobs and 2 factory legs leave 4 for the Python VMs,
+    # which takes VMs of about 8 minutes (the cap) for a 346-file change.
+    sized = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=8)
+    assert checks.JOB_SECONDS < sized["target"] <= checks.MAX_JOB_SECONDS
+    assert sized["tests"] == len(sized["split"]) + 4 and sized["tests"] <= 8
+    # Already under the ceiling, the target stays at the usual one.
+    small = checks.size_groups(Counter({"a.py": 1}), {"a.py": 100}, fixed=1, shards=0, ceiling=8)
+    assert small["target"] == checks.JOB_SECONDS and small["tests"] == 2
+    # Past the cap the plan keeps the cap's VMs and reports the count it has.
+    big = Counter({f"t{i}.py": 1 for i in range(1000)})
+    capped = checks.size_groups(big, {name: 100 for name in big}, shards=2, ceiling=8)
+    assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
