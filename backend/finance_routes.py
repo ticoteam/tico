@@ -1154,12 +1154,8 @@ def install(app, store, auth, mutate):
         if body.kind in RECEIPT_FILE_KINDS:
             rid = body.payload.get("receipt_id")
             with store.read() as c:
-                got = (
-                    c.execute("SELECT file_id FROM fin_receipts WHERE id=?", (rid,)).fetchone()
-                    if isinstance(rid, str)
-                    else None
-                )
-            ids = [got["file_id"]] if got else []
+                held = finance_receipts_mod.file_of(c, rid) if isinstance(rid, str) else None
+            ids = [held] if held else []
         if not isinstance(ids, list):
             return  # absent or malformed: the action's own checks answer
         files, cache = request.app.state.files, {}

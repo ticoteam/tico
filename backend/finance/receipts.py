@@ -812,6 +812,13 @@ def _listing(
     return out, tab.encode_cursor(after)
 
 
+def file_of(c: sqlite3.Connection, receipt_id: str) -> str | None:
+    """The Library file a receipt holds, or None when there is no such receipt. finance_routes checks that the asker may
+    read that file before a receipt action runs."""
+    row = RS.get(c, receipt_id)
+    return None if row is None else str(row["file_id"])
+
+
 def read(
     c: sqlite3.Connection,
     viewer: str,
