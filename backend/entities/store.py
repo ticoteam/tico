@@ -1,3 +1,4 @@
+# pyright: strict
 """The Directory's store (track 3): every write to the entity tables, and the reads, which all go through the one read rule
 (backend/entities/visible.py).
 
@@ -14,8 +15,11 @@ import base64
 import json
 import math
 import re
+import sqlite3
 import uuid
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
+from typing import Any, NoReturn, cast
 
 from backend import hubdb as H
 from backend.entities import visible as V
@@ -57,6 +61,27 @@ MOVES = {
     ),
 }
 # A single-value field the kept entity lacks moves; one it has stays on the merged row (which redirects to the kept one).
+Row = dict[str, Any]  # one row as a read returns it: column name to value
+
+
+# hubdb's writer gate, refusal and actor helpers are not in the strict set, so their parameters are untyped. store.py
+# calls them through these wrappers, which make the same calls and keep the untyped access in one place.
+def _writer(c: sqlite3.Connection, actor: str) -> None:
+    H._writer(c, actor)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
+
+
+def _refuse(c: sqlite3.Connection, actor: str, rule: str, detail: str) -> NoReturn:
+    H.refuse(c, actor, rule, detail)  # pyright: ignore[reportUnknownMemberType]
+
+
+def _actor_kind(actor: str) -> str | None:
+    return H.actor_kind(actor)  # pyright: ignore[reportUnknownMemberType]
+
+
+def _actor_id(actor: str) -> str | None:
+    return H.actor_id(actor)  # pyright: ignore[reportUnknownMemberType]
+
+
 VALUE_MOVES = (
     "SELECT v.id FROM entity_values v WHERE v.entity_id = :drop AND (v.single_value = 0 OR NOT EXISTS "
     "(SELECT 1 FROM entity_values k WHERE k.entity_id = :keep AND k.entity_attribute_id = v.entity_attribute_id "
@@ -65,98 +90,91 @@ VALUE_MOVES = (
 
 
 # ---------------------------------------------------------------------------------------------------- small helpers
-def _rows(c, sql, args=()):
+def _rows(c: sqlite3.Connection, sql: str, args: Sequence[object] | Mapping[str, object] = ()) -> list[Row]:
     cur = c.execute(sql, args)
     names = [d[0] for d in cur.description]
     return [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
 
 
-def _one(c, sql, args=()):
+def _one(c: sqlite3.Connection, sql: str, args: Sequence[object] | Mapping[str, object] = ()) -> Row | None:
     found = _rows(c, sql, args)
     return found[0] if found else None
 
 
-def _count(c, sql, args=()):
+def _count(c: sqlite3.Connection, sql: str, args: Sequence[object] | Mapping[str, object] = ()) -> int:
     """The one number a count query returns."""
     return int(c.execute(sql, args).fetchone()[0])
 
 
-def _id(prefix):
+def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-def _domain(value):
+def _domain(value: object) -> str:
     return str(value or "").strip().lower()
 
 
-def _limit(limit):
+def _limit(limit: int | None) -> int:
     return max(1, min(int(limit or LIMIT), LIMIT))
 
 
-def _encode(parts):
+def _encode(parts: Sequence[object]) -> str:
     return base64.urlsafe_b64encode(json.dumps(parts).encode()).decode()
 
 
-def _decode(token):
+def _decode(token: object) -> Any:
     try:
         return json.loads(base64.urlsafe_b64decode(str(token).encode()).decode())
     except (ValueError, TypeError) as error:
         raise ValueError("the cursor is not one this list returned") from error
 
 
-def _key(c, actor, key, what):
+def _key(c: sqlite3.Connection, actor: str, key: object, what: str) -> str:
     text = str(key or "").strip()
     if not KEY.match(text):
-        H.refuse(c, actor, "kind", f"a {what} key is lowercase letters, digits and underscores, starting with a letter")
+        _refuse(c, actor, "kind", f"a {what} key is lowercase letters, digits and underscores, starting with a letter")
     return text
 
 
-def _required(c, actor, value, what):
+def _required(c: sqlite3.Connection, actor: str, value: object, what: str) -> str:
     text = str(value or "").strip()
     if not text:
-        H.refuse(c, actor, "lint", f"give the {what}")
+        _refuse(c, actor, "lint", f"give the {what}")
     return text
 
 
-def _author(c, actor):
-    """The author a note or a row carries: the actor's kind and id (`human`, `ana`), from the same key a reader has."""
-    key = V.actor_key(c, actor) or str(actor)
-    kind, _, ident = key.partition(":")
-    return kind, ident
-
-
-def _type(c, actor, key):
+def _type(c: sqlite3.Connection, actor: str, key: str) -> Row:
     row = _one(c, "SELECT * FROM entity_types WHERE key = ?", (key,))
     if row is None:
-        H.refuse(c, actor, "kind", f"{key} is not an entity type; see hub directory types")
+        _refuse(c, actor, "kind", f"{key} is not an entity type; see hub directory types")
     if row["archived_at"]:
-        H.refuse(c, actor, "kind", f"{key} is archived")
+        _refuse(c, actor, "kind", f"{key} is archived")
     return row
 
 
-def _attribute(c, actor, type_key, key):
+def _attribute(c: sqlite3.Connection, actor: str, type_key: str, key: str) -> Row:
     row = _one(
         c, "SELECT * FROM entity_attributes WHERE entity_type = ? AND key = ? AND archived_at IS NULL", (type_key, key)
     )
     if row is None:
-        H.refuse(c, actor, "kind", f"{type_key} has no attribute {key}; add it with hub directory attribute add")
+        _refuse(c, actor, "kind", f"{type_key} has no attribute {key}; add it with hub directory attribute add")
     return row
 
 
-def _live(c, actor, entity_id):
+def _live(c: sqlite3.Connection, actor: str, entity_id: str) -> Row:
     row = _one(c, "SELECT * FROM entities WHERE id = ?", (entity_id,))
     if row is None:
-        H.refuse(c, actor, "not_found", f"no entity {entity_id}")
+        _refuse(c, actor, "not_found", f"no entity {entity_id}")
     if row["status"] == "merged":
-        H.refuse(c, actor, "merged", f"{entity_id} is merged into {row['merged_into_id']}; write to that one")
+        _refuse(c, actor, "merged", f"{entity_id} is merged into {row['merged_into_id']}; write to that one")
     return row
 
 
-def _slug(name):
+def _slug(name: object) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-") or "entity"
 
 
-def _new_entity_id(c, type_key, name):
+def _new_entity_id(c: sqlite3.Connection, type_key: str, name: str) -> str:
     base = f"{type_key}/{_slug(name)}"
     candidate, n = base, 2
     while c.execute("SELECT 1 FROM entities WHERE id = ?", (candidate,)).fetchone():
@@ -164,7 +182,7 @@ def _new_entity_id(c, type_key, name):
     return candidate
 
 
-def _visible_rows(c, r, ids):
+def _visible_rows(c: sqlite3.Connection, r: V.Reader, ids: Sequence[str]) -> list[Row]:
     if not ids:
         return []
     cl, params = V.clause(r)
@@ -175,9 +193,9 @@ def _visible_rows(c, r, ids):
     )
 
 
-def _follow(c, ids):
+def _follow(c: sqlite3.Connection, ids: Iterable[str]) -> list[str]:
     """Each id, or the entity it was merged into (a merged row answers with the kept one, up to five merges)."""
-    out = []
+    out: list[str] = []
     for entity_id in ids:
         current = entity_id
         for _ in range(5):
@@ -189,11 +207,11 @@ def _follow(c, ids):
     return list(dict.fromkeys(out))
 
 
-def _today():
+def _today() -> str:
     return H.now()[:10]
 
 
-def _refresh_self_keys(c, entity_id):
+def _refresh_self_keys(c: sqlite3.Connection, entity_id: str | None) -> None:
     """self_link_keys: every current link from this entity to self, e.g. "customer_of vendor_to"."""
     sid = self_id(c)
     if sid is None or not entity_id:
@@ -210,7 +228,7 @@ def _refresh_self_keys(c, entity_id):
 
 
 # ----------------------------------------------------------------------------------------------------------- self
-def self_id(c):
+def self_id(c: sqlite3.Connection) -> str | None:
     """Our company's id. Market makes company/self at setup; the first read that finds it unflagged flags it self."""
     row = c.execute("SELECT id FROM entities WHERE self = 1").fetchone()
     if row:
@@ -221,7 +239,7 @@ def self_id(c):
     return None
 
 
-def _set_kind(c, entity_id, kind, source_type):
+def _set_kind(c: sqlite3.Connection, entity_id: str, kind: str, source_type: str) -> None:
     """An organization's kind, when it has none. A kind already set is left alone."""
     c.execute(
         "INSERT INTO entity_values (id, entity_id, entity_attribute_id, single_value, option_key, source_type, source_id, "
@@ -231,7 +249,7 @@ def _set_kind(c, entity_id, kind, source_type):
     )
 
 
-def ensure_self(c, *, company_name, domain=""):
+def ensure_self(c: sqlite3.Connection, *, company_name: str | None, domain: str = "") -> str:
     """Our company: the one organization flagged self (a partial unique index). A row Market already holds under
     company/self is flagged, not replaced. Its name is set only when the row is new; its domain only when it has none."""
     domain = _domain(domain)
@@ -260,7 +278,7 @@ def ensure_self(c, *, company_name, domain=""):
     return current
 
 
-def backfill_kinds(c):
+def backfill_kinds(c: sqlite3.Connection) -> None:
     """Organizations Market wrote before they had a kind are companies. Idempotent: a row with a kind is left alone."""
     c.execute(
         "INSERT INTO entity_values (id, entity_id, entity_attribute_id, single_value, option_key, source_type, source_id, "
@@ -271,7 +289,7 @@ def backfill_kinds(c):
     )
 
 
-def boot(c):
+def boot(c: sqlite3.Connection) -> None:
     """The Directory's boot step (called from Store.initialize after Market's seed). Idempotent. It makes no company: Market
     makes company/self at setup, and this flags it as self once it exists and no other row is self. The kind of each
     organization Market wrote without one is backfilled."""
@@ -306,17 +324,19 @@ def seed_link(c: sqlite3.Connection, *, from_id: str, key: str, to_id: str, conf
 
 
 # --------------------------------------------------------------------------------------------- values and kinds
-def _number(c, actor, attr, raw):
+def _number(c: sqlite3.Connection, actor: str, attr: Row, raw: object) -> float:
     try:
+        if not isinstance(raw, (str, int, float)):
+            raise TypeError(f"{type(raw).__name__} is not a number")
         number = float(raw)
     except (TypeError, ValueError):
-        H.refuse(c, actor, "kind", f"{attr['key']} needs a number")
+        _refuse(c, actor, "kind", f"{attr['key']} needs a number")
     if not math.isfinite(number):
-        H.refuse(c, actor, "kind", f"{attr['key']} needs a finite number")
+        _refuse(c, actor, "kind", f"{attr['key']} needs a finite number")
     return number
 
 
-def _coerce(c, actor, attr, raw):
+def _coerce(c: sqlite3.Connection, actor: str, attr: Row, raw: object) -> dict[str, Any]:
     """A raw value as the columns it is stored in, and its canonical form (what history and a read show)."""
     vt = attr["value_type"]
     if vt in TEXT_TYPES:
@@ -326,7 +346,7 @@ def _coerce(c, actor, attr, raw):
         if vt == "domain":
             text = _domain(text)
         if not text:
-            H.refuse(c, actor, "kind", f"{attr['key']} needs a value")
+            _refuse(c, actor, "kind", f"{attr['key']} needs a value")
         return {"cols": {"text_value": text}, "canonical": text}
     if vt in NUMBER_TYPES:
         number = _number(c, actor, attr, raw)
@@ -335,35 +355,39 @@ def _coerce(c, actor, attr, raw):
         flag = str(raw).strip().lower() in ("1", "true", "yes", "y") if isinstance(raw, str) else bool(raw)
         return {"cols": {"number_value": 1.0 if flag else 0.0}, "canonical": flag}
     if vt == "currency":
-        amount, code = (raw.get("amount"), raw.get("currency")) if isinstance(raw, dict) else (raw, "USD")
+        amount: object = raw
+        code: object = "USD"
+        if isinstance(raw, dict):
+            fields = cast(dict[str, object], raw)
+            amount, code = fields.get("amount"), fields.get("currency")
         number = _number(c, actor, attr, amount)
         code = str(code or "USD").strip().upper()
         if not re.fullmatch(r"[A-Z]{3}", code):
-            H.refuse(c, actor, "kind", f"{attr['key']} needs a three-letter currency code")
+            _refuse(c, actor, "kind", f"{attr['key']} needs a three-letter currency code")
         return {"cols": {"number_value": number, "currency": code}, "canonical": {"amount": number, "currency": code}}
     if vt == "date":
         text = str(raw or "").strip()
         try:
             date.fromisoformat(text)
         except ValueError:
-            H.refuse(c, actor, "kind", f"{attr['key']} needs a date as YYYY-MM-DD")
+            _refuse(c, actor, "kind", f"{attr['key']} needs a date as YYYY-MM-DD")
         return {"cols": {"date_value": text}, "canonical": text}
     if vt == "timestamp":
         try:
             stamp = datetime.fromisoformat(str(raw or "").strip().replace("Z", "+00:00")).isoformat()
         except ValueError:
-            H.refuse(c, actor, "kind", f"{attr['key']} needs a timestamp")
+            _refuse(c, actor, "kind", f"{attr['key']} needs a timestamp")
         return {"cols": {"timestamp_value": stamp}, "canonical": stamp}
     if vt in ("select", "status"):
         key = str(raw or "").strip()
         options = {option["key"] for option in json.loads(attr["options"] or "[]")}
         if key not in options:
-            H.refuse(c, actor, "kind", f"{key} is not an option of {attr['key']}")
+            _refuse(c, actor, "kind", f"{key} is not an option of {attr['key']}")
         return {"cols": {"option_key": key}, "canonical": key}
-    H.refuse(c, actor, "kind", f"{vt} is not a value type")
+    _refuse(c, actor, "kind", f"{vt} is not a value type")
 
 
-def _value_of(row, value_type):
+def _value_of(row: Row, value_type: str) -> object:
     """The canonical value a stored row holds (the inverse of _coerce)."""
     if value_type in TEXT_TYPES:
         return row["text_value"]
@@ -382,11 +406,22 @@ def _value_of(row, value_type):
     return None
 
 
-def _cols(values):
+def _cols(values: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(values.get(name) for name in VALUE_COLUMNS)
 
 
-def _set_value(c, actor, entity_id, attr, raw, *, source_type, source_id, evidence_id, confidence):
+def _set_value(
+    c: sqlite3.Connection,
+    actor: str,
+    entity_id: str,
+    attr: Row,
+    raw: object,
+    *,
+    source_type: str,
+    source_id: str,
+    evidence_id: str | None,
+    confidence: float,
+) -> str:
     """Write one value. A single-value field keeps its current row (the new value replaces it) and its old value goes to
     history; a multiple field adds a row. An unchanged value only refreshes its source."""
     now = H.now()
@@ -400,7 +435,7 @@ def _set_value(c, actor, entity_id, attr, raw, *, source_type, source_id, eviden
             (attr["id"], entity_id, cols[column]),
         )
         if clash:
-            H.refuse(c, actor, "duplicate", f"{attr['key']} {cols[column]} is already on {clash['entity_id']}")
+            _refuse(c, actor, "duplicate", f"{attr['key']} {cols[column]} is already on {clash['entity_id']}")
     if attr["multiple"]:
         for row in _rows(
             c,
@@ -460,20 +495,20 @@ def _set_value(c, actor, entity_id, attr, raw, *, source_type, source_id, eviden
     return row_id
 
 
-def _check_evidence(c, actor, evidence_id):
+def _check_evidence(c: sqlite3.Connection, actor: str, evidence_id: str | None) -> None:
     if evidence_id and not c.execute("SELECT 1 FROM market_evidence WHERE id = ?", (evidence_id,)).fetchone():
-        H.refuse(c, actor, "evidence", f"no evidence {evidence_id}; cite a row that exists")
+        _refuse(c, actor, "evidence", f"no evidence {evidence_id}; cite a row that exists")
 
 
 # ------------------------------------------------------------------------------------------------------- writes
-def _match(c, type_key, match):
+def _match(c: sqlite3.Connection, type_key: str, match: Mapping[str, object]) -> list[str]:
     """The live entities of one type a match names: by email, domain or name (an identifier), or by id."""
     if match.get("id"):
         rows = _rows(
             c, "SELECT id FROM entities WHERE id = ? AND type = ? AND status <> 'merged'", (match["id"], type_key)
         )
         return [row["id"] for row in rows]
-    found = []
+    found: list[str] = []
     for kind in ("email", "domain", "name"):
         value = match.get(kind)
         if not value:
@@ -505,11 +540,21 @@ def _match(c, type_key, match):
 
 
 def upsert(
-    c, actor, type_key, *, match, values=None, name=None, evidence_id=None, source_type="", source_id="", confidence=0.6
-):
+    c: sqlite3.Connection,
+    actor: str,
+    type_key: str,
+    *,
+    match: Mapping[str, object],
+    values: Mapping[str, object] | None = None,
+    name: object = None,
+    evidence_id: str | None = None,
+    source_type: str = "",
+    source_id: str = "",
+    confidence: float = 0.6,
+) -> dict[str, Any]:
     """Create or update one entity of a type. `match` names it: {"id"}, {"email"}, {"domain"} or {"name"}. Several matches
     are refused as ambiguous, never guessed. A new entity needs a name (given, or the match value)."""
-    H._writer(c, actor)
+    _writer(c, actor)
     _type(c, actor, type_key)
     _check_evidence(c, actor, evidence_id)
     match = {k: v for k, v in dict(match or {}).items() if v}
@@ -518,7 +563,7 @@ def upsert(
         name = name or values.pop("name")
     found = _match(c, type_key, match)
     if len(found) > 1:
-        H.refuse(c, actor, "ambiguous", f"{', '.join(found)} all match; name one by id")
+        _refuse(c, actor, "ambiguous", f"{', '.join(found)} all match; name one by id")
     created = not found
     if found:
         entity_id = found[0]
@@ -534,7 +579,7 @@ def upsert(
         )
         entity_id = _new_entity_id(c, type_key, label)
         now = H.now()
-        kind_, ident = H.actor_kind(actor), H.actor_id(actor)
+        kind_, ident = _actor_kind(actor), _actor_id(actor)
         primary_email = str(match.get("email") or "").strip().lower() or None
         primary_domain = _domain(match.get("domain")) or None
         c.execute(
@@ -563,11 +608,11 @@ def upsert(
                 )
         if type_key == "organization" and "kind" not in values:
             _set_kind(c, entity_id, "company", "system")
-    changed = []
+    changed: list[str] = []
     for key, raw in values.items():
         attr = _attribute(c, actor, type_key, key)
         if attr["owner_type"] == "connection" and actor != f"connection:{attr['owner_id']}":
-            H.refuse(c, actor, "owner", f"{key} comes from its connection; change it there")
+            _refuse(c, actor, "owner", f"{key} comes from its connection; change it there")
         _set_value(
             c,
             actor,
@@ -584,34 +629,34 @@ def upsert(
 
 
 def link(
-    c,
-    actor,
-    from_id,
-    link_key,
-    to_id,
+    c: sqlite3.Connection,
+    actor: str,
+    from_id: str,
+    link_key: str,
+    to_id: str,
     *,
-    valid_from_on=None,
-    valid_until_on=None,
-    confidence=0.6,
-    source_type="",
-    source_id="",
-    evidence_id=None,
-    properties=None,
-):
+    valid_from_on: str | None = None,
+    valid_until_on: str | None = None,
+    confidence: float = 0.6,
+    source_type: str = "",
+    source_id: str = "",
+    evidence_id: str | None = None,
+    properties: Mapping[str, object] | None = None,
+) -> str:
     """A typed, dated link between two entities. The link type says which ends it may join. A symmetric link is stored
     once, with its ends in order. A link already current is returned, not written twice."""
-    H._writer(c, actor)
+    _writer(c, actor)
     lt = _one(c, "SELECT * FROM link_types WHERE key = ? AND archived_at IS NULL", (link_key,))
     if lt is None:
-        H.refuse(c, actor, "kind", f"{link_key} is not a link type; see hub directory link-type add")
+        _refuse(c, actor, "kind", f"{link_key} is not a link type; see hub directory link-type add")
     _check_evidence(c, actor, evidence_id)
     a, b = _live(c, actor, from_id), _live(c, actor, to_id)
     if a["id"] == b["id"]:
-        H.refuse(c, actor, "kind", "an entity cannot link to itself")
+        _refuse(c, actor, "kind", "an entity cannot link to itself")
     if lt["from_entity_type"] and a["type"] != lt["from_entity_type"]:
-        H.refuse(c, actor, "kind", f"{link_key} starts at a {lt['from_entity_type']}, not a {a['type']}")
+        _refuse(c, actor, "kind", f"{link_key} starts at a {lt['from_entity_type']}, not a {a['type']}")
     if lt["to_entity_type"] and b["type"] != lt["to_entity_type"]:
-        H.refuse(c, actor, "kind", f"{link_key} ends at a {lt['to_entity_type']}, not a {b['type']}")
+        _refuse(c, actor, "kind", f"{link_key} ends at a {lt['to_entity_type']}, not a {b['type']}")
     start, end = (a["id"], b["id"])
     if lt["symmetric"] and end < start:
         start, end = end, start
@@ -642,8 +687,8 @@ def link(
             evidence_id,
             json.dumps(properties or {}, sort_keys=True),
             actor,
-            H.actor_kind(actor) or "",
-            H.actor_id(actor) or "",
+            _actor_kind(actor) or "",
+            _actor_id(actor) or "",
             now,
             now,
         ),
@@ -653,12 +698,12 @@ def link(
     return link_id
 
 
-def unlink(c, actor, link_id):
+def unlink(c: sqlite3.Connection, actor: str, link_id: str) -> str:
     """Ends a link: it stops being current today. The row stays, so its history reads."""
-    H._writer(c, actor)
+    _writer(c, actor)
     row = _one(c, "SELECT * FROM entity_links WHERE id = ?", (link_id,))
     if row is None:
-        H.refuse(c, actor, "not_found", f"no link {link_id}")
+        _refuse(c, actor, "not_found", f"no link {link_id}")
     today = _today()
     if row["valid_until_on"] is None or row["valid_until_on"] > today:
         c.execute("UPDATE entity_links SET valid_until_on = ?, updated_at = ? WHERE id = ?", (today, H.now(), link_id))
@@ -667,13 +712,21 @@ def unlink(c, actor, link_id):
     return link_id
 
 
-def note(c, actor, entity_id, body, *, audience="company", evidence_id=None):
+def note(
+    c: sqlite3.Connection,
+    actor: str,
+    entity_id: str,
+    body: object,
+    *,
+    audience: str = "company",
+    evidence_id: str | None = None,
+) -> str:
     """A note on an entity. A `me` note is visible to its author only, and it is a restricted source the entity is known
     from, so an entity known only from one hides from everyone else."""
-    H._writer(c, actor)
+    _writer(c, actor)
     text = _required(c, actor, body, "note")
     if audience not in ("me", "company"):
-        H.refuse(c, actor, "kind", "a note's audience is me or company")
+        _refuse(c, actor, "kind", "a note's audience is me or company")
     _live(c, actor, entity_id)
     _check_evidence(c, actor, evidence_id)
     key = V.actor_key(c, actor) or str(actor)
@@ -694,15 +747,17 @@ def note(c, actor, entity_id, body, *, audience="company", evidence_id=None):
     return note_id
 
 
-def add_source(c, actor, entity_id, source_type, source_id, *, visibility="company"):
+def add_source(
+    c: sqlite3.Connection, actor: str, entity_id: str, source_type: str, source_id: str, *, visibility: str = "company"
+) -> str:
     """Records a source an entity is known from. `company` shows the entity to everyone; `restricted` shows it to readers
     the source's checker (visible.CHECKERS) names, so a restricted source needs a checker."""
-    H._writer(c, actor)
+    _writer(c, actor)
     _live(c, actor, entity_id)
     if visibility not in ("company", "restricted"):
-        H.refuse(c, actor, "kind", "a source's visibility is company or restricted")
+        _refuse(c, actor, "kind", "a source's visibility is company or restricted")
     if visibility == "restricted" and source_type not in V.CHECKERS:
-        H.refuse(c, actor, "kind", f"{source_type} has no read checker, so it cannot be restricted")
+        _refuse(c, actor, "kind", f"{source_type} has no read checker, so it cannot be restricted")
     source_id = _required(c, actor, source_id, "source id")
     c.execute(
         "INSERT OR IGNORE INTO entity_sources (id, entity_id, source_type, source_id, visibility, created_at) "
@@ -712,22 +767,22 @@ def add_source(c, actor, entity_id, source_type, source_id, *, visibility="compa
     return entity_id
 
 
-def merge(c, actor, keep_id, drop_id):
+def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
     """Merges `drop` into `keep`: the drop's identifiers, links, values, notes, mentions, activities, external refs and
     sources move to the kept entity, and the drop redirects to it. The move is logged (entity_merges) so unmerge reverses
     it exactly. Self cannot be merged away, and the two must be one type."""
-    H._writer(c, actor)
+    _writer(c, actor)
     if keep_id == drop_id:
-        H.refuse(c, actor, "kind", "an entity cannot merge into itself")
+        _refuse(c, actor, "kind", "an entity cannot merge into itself")
     keep = _live(c, actor, keep_id)
     drop = _live(c, actor, drop_id)
     if drop["self"]:
-        H.refuse(c, actor, "kind", "self cannot be merged away")
+        _refuse(c, actor, "kind", "self cannot be merged away")
     if keep["type"] != drop["type"]:
-        H.refuse(c, actor, "kind", f"a {drop['type']} merges only into a {drop['type']}")
+        _refuse(c, actor, "kind", f"a {drop['type']} merges only into a {drop['type']}")
     now = H.now()
     params = {"keep": keep_id, "drop": drop_id}
-    tables = {}
+    tables: dict[str, list[Any]] = {}
     for table, sql in MOVES.items():
         ids = [row[0] for row in c.execute(sql, params)]
         if ids:
@@ -785,8 +840,8 @@ def merge(c, actor, keep_id, drop_id):
             keep_id,
             json.dumps({"tables": tables, "values": values, "links": moved_links}, sort_keys=True),
             json.dumps(prior, sort_keys=True),
-            H.actor_kind(actor) or "",
-            H.actor_id(actor) or "",
+            _actor_kind(actor) or "",
+            _actor_id(actor) or "",
             now,
         ),
     )
@@ -794,16 +849,16 @@ def merge(c, actor, keep_id, drop_id):
     return keep_id
 
 
-def unmerge(c, actor, drop_id):
+def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
     """Reverses the last merge of `drop_id` as logged: its rows go back, its status and counts are restored."""
-    H._writer(c, actor)
+    _writer(c, actor)
     log = _one(
         c,
         "SELECT * FROM entity_merges WHERE entity_id = ? AND undone_at IS NULL ORDER BY created_at DESC LIMIT 1",
         (drop_id,),
     )
     if log is None:
-        H.refuse(c, actor, "not_found", f"{drop_id} has no merge to undo")
+        _refuse(c, actor, "not_found", f"{drop_id} has no merge to undo")
     keep_id = log["into_entity_id"]
     moved, prior = json.loads(log["moved"]), json.loads(log["prior"])
     now = H.now()
@@ -832,19 +887,21 @@ def unmerge(c, actor, drop_id):
     return drop_id
 
 
-def add_type(c, actor, key, name, description, *, plural_name="", icon=""):
+def add_type(
+    c: sqlite3.Connection, actor: str, key: str, name: str, description: str, *, plural_name: str = "", icon: str = ""
+) -> str:
     """A new entity type. Its description is required; a near-duplicate of an existing type is refused with that type."""
-    H._writer(c, actor)
+    _writer(c, actor)
     key = _key(c, actor, key, "type")
     name = _required(c, actor, name, "name")
     description = _required(c, actor, description, "description")
     if _one(c, "SELECT key FROM entity_types WHERE key = ?", (key,)):
-        H.refuse(c, actor, "duplicate", f"the type {key} exists")
+        _refuse(c, actor, "duplicate", f"the type {key} exists")
     stem = key.replace("_", "").rstrip("s")
     for existing in _rows(c, "SELECT key FROM entity_types"):
         if existing["key"].replace("_", "").rstrip("s") == stem:
-            H.refuse(c, actor, "duplicate", f"{existing['key']} is close to {key}; use it")
-    kind_, ident = H.actor_kind(actor) or "", H.actor_id(actor) or ""
+            _refuse(c, actor, "duplicate", f"{existing['key']} is close to {key}; use it")
+    kind_, ident = _actor_kind(actor) or "", _actor_id(actor) or ""
     c.execute(
         "INSERT INTO entity_types (id, key, name, plural_name, icon, built_in, mode, description, created_by_type, "
         "created_by_id, created_at) VALUES (?, ?, ?, ?, ?, 0, 'native', ?, ?, ?, ?)",
@@ -854,39 +911,39 @@ def add_type(c, actor, key, name, description, *, plural_name="", icon=""):
 
 
 def add_attribute(
-    c,
-    actor,
-    type_key,
-    key,
-    name,
-    value_type,
-    description,
+    c: sqlite3.Connection,
+    actor: str,
+    type_key: str,
+    key: str,
+    name: str,
+    value_type: str,
+    description: str,
     *,
-    options=None,
-    multiple=False,
-    unique_value=False,
-    required=False,
-    sensitive=False,
-    owner=None,
-):
+    options: Sequence[Mapping[str, object]] | None = None,
+    multiple: bool = False,
+    unique_value: bool = False,
+    required: bool = False,
+    sensitive: bool = False,
+    owner: str | None = None,
+) -> str:
     """A new attribute of a type. A select or status needs its options; an owner of `connection:<id>` makes the field
     that connection's (only that connection writes it)."""
-    H._writer(c, actor)
+    _writer(c, actor)
     _type(c, actor, type_key)
     key = _key(c, actor, key, "attribute")
     name = _required(c, actor, name, "name")
     description = _required(c, actor, description, "description")
     if value_type not in VALUE_TYPES:
-        H.refuse(c, actor, "kind", f"a value type is {'|'.join(VALUE_TYPES)}, not {value_type}")
+        _refuse(c, actor, "kind", f"a value type is {'|'.join(VALUE_TYPES)}, not {value_type}")
     opts = [dict(option) for option in (options or [])]
     if value_type in ("select", "status") and not opts:
-        H.refuse(c, actor, "kind", f"a {value_type} needs options")
+        _refuse(c, actor, "kind", f"a {value_type} needs options")
     if _one(c, "SELECT id FROM entity_attributes WHERE entity_type = ? AND key = ?", (type_key, key)):
-        H.refuse(c, actor, "duplicate", f"{type_key} already has {key}")
+        _refuse(c, actor, "duplicate", f"{type_key} already has {key}")
     owner_type, owner_id = "tico", ""
     if owner:
         if not str(owner).startswith("connection:"):
-            H.refuse(c, actor, "kind", "an owner is tico or connection:<id>")
+            _refuse(c, actor, "kind", "an owner is tico or connection:<id>")
         owner_type, owner_id = "connection", str(owner).split(":", 1)[1]
     position = _count(c, "SELECT count(*) FROM entity_attributes WHERE entity_type = ?", (type_key,))
     c.execute(
@@ -908,8 +965,8 @@ def add_attribute(
             description,
             int(bool(sensitive)),
             position,
-            H.actor_kind(actor) or "",
-            H.actor_id(actor) or "",
+            _actor_kind(actor) or "",
+            _actor_id(actor) or "",
             H.now(),
         ),
     )
@@ -917,21 +974,21 @@ def add_attribute(
 
 
 def add_link_type(
-    c,
-    actor,
-    key,
-    name,
-    inverse_name,
-    description,
+    c: sqlite3.Connection,
+    actor: str,
+    key: str,
+    name: str,
+    inverse_name: str,
+    description: str,
     *,
-    from_type=None,
-    to_type=None,
-    inherits_rules=False,
-    symmetric=False,
-):
+    from_type: str | None = None,
+    to_type: str | None = None,
+    inherits_rules: bool = False,
+    symmetric: bool = False,
+) -> str:
     """A new link type. `inherits_rules` says whether a rule toward the far end reaches the near end (works_at does; a
     competitor does not). Its description is required."""
-    H._writer(c, actor)
+    _writer(c, actor)
     key = _key(c, actor, key, "link type")
     name = _required(c, actor, name, "name")
     inverse_name = _required(c, actor, inverse_name, "inverse name")
@@ -940,7 +997,7 @@ def add_link_type(
         if end:
             _type(c, actor, end)
     if _one(c, "SELECT key FROM link_types WHERE key = ?", (key,)):
-        H.refuse(c, actor, "duplicate", f"the link type {key} exists")
+        _refuse(c, actor, "duplicate", f"the link type {key} exists")
     c.execute(
         "INSERT INTO link_types (id, key, name, inverse_name, from_entity_type, to_entity_type, inherits_rules, symmetric, "
         "description, built_in, created_by_type, created_by_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
@@ -954,8 +1011,8 @@ def add_link_type(
             int(bool(inherits_rules)),
             int(bool(symmetric)),
             description,
-            H.actor_kind(actor) or "",
-            H.actor_id(actor) or "",
+            _actor_kind(actor) or "",
+            _actor_id(actor) or "",
             H.now(),
         ),
     )
@@ -963,7 +1020,7 @@ def add_link_type(
 
 
 # ------------------------------------------------------------------------------------------------------- reads
-def get(c, who, ref):
+def get(c: sqlite3.Connection, who: str, ref: object) -> list[Row]:
     """The visible entities a reference names: an id, an email, a domain, a name or an external id. More than one is
     ambiguous, and the caller says so. A merged entity answers with the one it was merged into."""
     r = V.reader(c, who)
@@ -985,7 +1042,17 @@ def get(c, who, ref):
     return _visible_rows(c, r, _follow(c, list(dict.fromkeys(ids))))
 
 
-def find(c, who, type_key, *, name=None, status=None, link=None, after=None, limit=LIMIT):
+def find(
+    c: sqlite3.Connection,
+    who: str,
+    type_key: str,
+    *,
+    name: str | None = None,
+    status: str | None = None,
+    link: str | None = None,
+    after: str | None = None,
+    limit: int = LIMIT,
+) -> dict[str, Any]:
     """A page of one type's visible entities, by name (a prefix), status, or a self link key (customer_of). Keyset
     paged on (name_key, id): `after` is the `next` the last page gave. The count stops at COUNT_CAP and says so."""
     r = V.reader(c, who)
@@ -1024,7 +1091,7 @@ def find(c, who, type_key, *, name=None, status=None, link=None, after=None, lim
     }
 
 
-def card(c, who, entity_id):
+def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | None:
     """An entity as its reader sees it: its visible values (with source and age), its current links to visible entities,
     and its notes the reader may read. None when the entity does not show."""
     r = V.reader(c, who)
@@ -1032,7 +1099,7 @@ def card(c, who, entity_id):
     if not found:
         return None
     ent = found[0]
-    values = {}
+    values: dict[str, Any] = {}
     for row in _rows(
         c,
         "SELECT v.*, a.key AS attribute_key, a.value_type AS value_type, a.sensitive AS sensitive, a.multiple AS multiple "
@@ -1090,7 +1157,9 @@ def card(c, who, entity_id):
     }
 
 
-def history(c, who, entity_id, attribute_key, *, after=None, limit=LIMIT):
+def history(
+    c: sqlite3.Connection, who: str, entity_id: str, attribute_key: str, *, after: str | None = None, limit: int = LIMIT
+) -> dict[str, Any] | None:
     """A field's past values, newest first, keyset paged on (active_until, id). None when the entity or the field does
     not show to the reader."""
     r = V.reader(c, who)

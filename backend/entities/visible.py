@@ -1,3 +1,4 @@
+# pyright: strict
 """The one read rule for the Directory (track 3): what a reader sees of an entity, a note and an attribute. Every read
 of the entity tables goes through it (backend/entities/store.py), and a lint test keeps it that way
 (backend/tests/test_entities_visible_lint.py), the way Finance's rule keeps vendor reads honest (backend/finance/visible.py).
@@ -17,10 +18,14 @@ Every read asks the SQL clause this module builds, so a list, a count, a search,
 """
 
 import json
+import sqlite3
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any, cast
 
 from backend import mailbox_access as MA
 from backend.finance import context as FC
+from backend.finance.core import view as VW
 from backend.finance.visible import named_all_time
 
 SYSTEM = "system"
@@ -32,15 +37,23 @@ class Reader:
     key: str  # the form an author and a `me` source carry: "human:<person id>", "bot:<bot id>", SYSTEM, or ""
     system: bool  # the system reads everything
     sensitive: bool  # sensitive attributes show
-    grants: dict  # source type -> None (every source of the type) or a tuple of the source ids the reader can read
+    grants: dict[
+        str, tuple[str, ...] | None
+    ]  # source type -> None (every source of the type) or a tuple of the source ids the reader can read
 
 
-def actor_key(c, who):
+# mailbox_access is not in the strict set, so its functions are untyped at the call. These wrappers make the same calls
+# and give the result a type the strict checks can read.
+def _mailbox_rows(c: sqlite3.Connection, who: str) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], MA.mailboxes_for(c, who))  # pyright: ignore[reportUnknownMemberType]
+
+
+def actor_key(c: sqlite3.Connection, who: object) -> str:
     """The key a note's author and a `me` source carry. A bot's slug resolves to its id, so the same bot has one key."""
     text = str(who or "").strip()
     if text == SYSTEM:
         return SYSTEM
-    p = MA.principal(c, text)
+    p = MA.principal(c, text)  # pyright: ignore[reportUnknownMemberType]
     if p.kind == "person":
         return f"human:{p.id}"
     if p.kind == "bot":
@@ -48,7 +61,7 @@ def actor_key(c, who):
     return ""
 
 
-def _finance(c, actor):
+def _finance(c: sqlite3.Connection, actor: str) -> tuple[FC.Ctx, VW.View] | None:
     """(ctx, view) for this reader when Finance is set up, else None."""
     if not FC.is_set_up(c):
         return None
@@ -56,11 +69,11 @@ def _finance(c, actor):
     return ctx, ctx.view(actor)
 
 
-def _mailboxes(c, r, fin):
-    return tuple(sorted(m["id"] for m in MA.mailboxes_for(c, r.actor) if m.get("id")))
+def _mailboxes(c: sqlite3.Connection, r: Reader, fin: object) -> tuple[str, ...]:
+    return tuple(sorted(str(m["id"]) for m in _mailbox_rows(c, r.actor) if m.get("id")))
 
 
-def _finance_book(c, r, fin):
+def _finance_book(c: sqlite3.Connection, r: Reader, fin: tuple[FC.Ctx, VW.View] | None) -> tuple[str, ...] | None:
     if fin is None:
         return ()
     ctx, view = fin
@@ -75,15 +88,19 @@ def _finance_book(c, r, fin):
     return tuple(sorted(contact for contact, shown in named.items() if shown))
 
 
-def _note_me(c, r, fin):
+def _note_me(c: sqlite3.Connection, r: Reader, fin: object) -> tuple[str, ...]:
     return (r.key,) if r.key else ()
 
 
 # A restricted source type, and who may read it. A type added here needs a checker and a clause the lint test expects.
-CHECKERS = {"mailbox": _mailboxes, "finance_book": _finance_book, "note_me": _note_me}
+CHECKERS: dict[str, Callable[..., tuple[str, ...] | None]] = {
+    "mailbox": _mailboxes,
+    "finance_book": _finance_book,
+    "note_me": _note_me,
+}
 
 
-def reader(c, who):
+def reader(c: sqlite3.Connection, who: str) -> Reader:
     actor = str(who or "").strip()
     key = actor_key(c, actor)
     if actor == SYSTEM:
@@ -96,7 +113,7 @@ def reader(c, who):
     return Reader(actor, key, system=False, sensitive=sensitive, grants=grants)
 
 
-def clause(r, alias="e"):
+def clause(r: Reader, alias: str = "e") -> tuple[str, list[object]]:
     """A WHERE fragment that keeps the entities of `alias` this reader may see, and its parameters."""
     if r.system:
         return "1 = 1", []
@@ -105,8 +122,8 @@ def clause(r, alias="e"):
         f"NOT EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid})",
         f"EXISTS (SELECT 1 FROM entity_sources s WHERE s.entity_id = {eid} AND s.visibility = 'company')",
     ]
-    params = []
-    grants = []
+    params: list[object] = []
+    grants: list[str] = []
     for source_type, ids in r.grants.items():
         if ids is None:
             grants.append("s.source_type = ?")
@@ -122,19 +139,19 @@ def clause(r, alias="e"):
     return "(" + " OR ".join(parts) + ")", params
 
 
-def visible(c, who, entity_id):
+def visible(c: sqlite3.Connection, who: str | Reader, entity_id: str) -> bool:
     """Whether one entity shows to `who` (an actor string, SYSTEM, or a reader from reader())."""
     r = who if isinstance(who, Reader) else reader(c, who)
     cl, params = clause(r)
     return c.execute(f"SELECT 1 FROM entities e WHERE e.id = ? AND {cl}", [entity_id, *params]).fetchone() is not None
 
 
-def note_visible(r, note):
+def note_visible(r: Reader, note: Mapping[str, Any]) -> bool:
     """A note shows to everyone who reads its entity when its audience is company; a `me` note to its author."""
     return r.system or note.get("audience") == "company" or (bool(r.key) and note.get("author_key") == r.key)
 
 
-def attribute_visible(r, attribute):
+def attribute_visible(r: Reader, attribute: Mapping[str, Any]) -> bool:
     """A sensitive attribute shows to Finance's owner and the system; every other attribute shows to every reader who
     reads the entity."""
     return r.sensitive or not attribute.get("sensitive")
