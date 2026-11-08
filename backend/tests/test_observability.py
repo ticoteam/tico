@@ -131,7 +131,7 @@ def events(transport):
 @pytest.fixture
 def reporting_api(request, monkeypatch, recording):
     """The test_api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99."""
-    from backend.tests.helpers import api as test_api
+    from backend.tests import test_api  # the api fixture reads api_settings here
 
     plain = test_api.api_settings
     monkeypatch.setattr(

@@ -289,6 +289,7 @@ def send(gateway, text, judge_answer=None, **kw):
 
 # ----------------------------------------------------------------------------- channels read like an employee reads them
 RELEASE, QUIET = "C0000000002", "C0QUIET"
+CHANNELS.update({RELEASE: {"id": RELEASE, "name": "release_notes"}, QUIET: {"id": QUIET, "name": "quiet"}})
 
 
 USERS["U1"]["profile"]["real_name"] = "Ana Rivera"

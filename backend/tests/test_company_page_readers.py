@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import backend.company_page as package
-import backend.tests.helpers.api as test_api
+import backend.tests.test_api as test_api  # the api fixture reads api_settings here
 from backend import automations, oidc, screening, task_trigger_rules, team_icon, webhooks
 from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render

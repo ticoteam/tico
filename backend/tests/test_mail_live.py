@@ -13,7 +13,7 @@ from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.helpers.google_workspace import personal
 from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail
-from backend.tests.helpers.mail_live import SHARED, assistant_token, live
+from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens
 
 
 def read(api, path, token="ana-test", **params):

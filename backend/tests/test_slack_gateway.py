@@ -387,9 +387,6 @@ def test_a_bot_reply_is_escaped_so_it_cannot_page_the_channel_or_lose_prose(gate
     assert gateway.slack.posts[1]["text"] == "&lt;!everyone&gt; &lt;!here&gt;\n\n(sent from Legal)"
 
 
-CHANNELS.update({RELEASE: {"id": RELEASE, "name": "release_notes"}, QUIET: {"id": QUIET, "name": "quiet"}})
-
-
 def cursors(hub):
     return {(r["channel"], r["reader"]): r for r in rows(hub, "SELECT * FROM slack_reads")}
 

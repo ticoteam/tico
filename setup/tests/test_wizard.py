@@ -5,7 +5,7 @@ from setup import dns, state, verify
 from setup.remote import Result
 from setup.tests import fakes
 from setup.tests.fakes import FakeShell, aws_clients
-from setup.tests.helpers.wizard import BASE, SECRET, go
+from setup.tests.helpers.wizard import BASE, SECRET, go, secret_env
 
 
 def test_dry_run_aws_caddy_google_prints_the_plan_and_changes_nothing(tmp_path):

@@ -14,7 +14,7 @@ import uvicorn
 from fastapi.testclient import TestClient
 from websockets.sync.client import connect
 from backend.app import create_app
-from backend.tests.helpers import api as api_helpers
+from backend.tests import test_api as api_helpers  # the api fixture and the api_settings it reads
 from backend.tests.helpers.api import headers, post, runner
 from backend.tests.helpers.screen import offer
 

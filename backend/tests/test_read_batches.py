@@ -5,6 +5,7 @@ from backend.store import H
 from backend.tests.helpers.api import get
 from backend.tests.test_api import api
 from backend.tests.helpers.task_privacy_reads import traced_get
+from backend.tests.helpers.read_batches import privacy_parties  # noqa: F401  (fixtures)
 
 
 def blob(c, bid):

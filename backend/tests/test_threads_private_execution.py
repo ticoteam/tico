@@ -11,7 +11,7 @@ from backend.store import H
 from backend.tests.helpers.api import headers, runner
 from backend.tests.test_api import api
 from backend.tests.helpers.thread_api import new_thread, say  # noqa: F401
-from backend.tests.helpers.threads_private_execution import private_run, task
+from backend.tests.helpers.threads_private_execution import private_run, task, private_tasks_have_an_unrelated_manager
 
 
 def company_message_by_bot(api, bot="ops", text="Company status"):
