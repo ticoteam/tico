@@ -407,9 +407,31 @@ def _waits_on_checks(conn, task):
         return True
     if task.get("status") != "waiting":
         return False
-    from .question_tasks import waiting_on
+    return not _held_by_person(conn, task)
 
-    return waiting_on(conn, task) is None
+
+# A subtask or blocker a person holds: open, owned by a person, and not a question already answered.
+PERSON_LINK_SQL = (
+    "SELECT 1 FROM task_relations r JOIN tasks t ON t.id=r.from_task WHERE r.to_task=? AND r.kind IN ('parent','blocks') "
+    f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner_id LIKE 'human:%' "
+    "AND (t.questions IS NULL OR t.answer IS NULL) LIMIT 1"
+)
+
+
+def _held_by_person(conn, task):
+    """Whether a person holds the task: an open subtask or blocker a person owns (a question card or any other, private
+    or not: this is never shown, so no one's view of it matters), an undecided approval on it, a Confirm card on it
+    waiting for a click, or an account a person reconnects for it. Each is a seek by the task's id. A bot's subtask or
+    blocker is not: the wake goes in, and the claim holds it as `task_wait` while that task is open."""
+    tid = task["id"]
+    if conn.execute(PERSON_LINK_SQL, (tid, *H.ACTIVE_STATUSES)).fetchone():
+        return True
+    if conn.execute("SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (tid,)).fetchone():
+        return True
+    from .assistant import pending_on_task
+    from .reconnects import pending as reconnect_pending
+
+    return pending_on_task(conn, tid) or reconnect_pending(conn, tid) is not None
 
 
 def _builtins():
