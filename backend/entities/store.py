@@ -51,6 +51,7 @@ VALUE_COLUMNS = ("text_value", "number_value", "currency", "date_value", "timest
 KEY = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 LIMIT = 50  # the most rows a list returns (spec §9.1 item 9)
 COUNT_CAP = 1000  # counts stop here and say they are approximate (spec §9.1 item 7)
+CARD_LINKS = 30  # the links a card shows (spec §6 keeps `get` under about 2k tokens)
 # The tables a merge moves an entity's rows from. entity_sources skips a source the kept entity already has.
 MOVES = {
     "entity_identifiers": "SELECT id FROM entity_identifiers WHERE entity_id = :drop",
@@ -165,8 +166,10 @@ def _attribute(c: sqlite3.Connection, actor: str, type_key: str, key: str) -> Ro
 
 
 def _live(c: sqlite3.Connection, actor: str, entity_id: str) -> Row:
+    """The entity a write names, when the writer can see it. One it cannot see is not found, the same as one that is not
+    there, so a write never confirms that a hidden entity exists."""
     row = _one(c, "SELECT * FROM entities WHERE id = ?", (entity_id,))
-    if row is None:
+    if row is None or not V.visible(c, actor, entity_id):
         _refuse(c, actor, "not_found", f"no entity {entity_id}")
     if row["status"] == "merged":
         _refuse(c, actor, "merged", f"{entity_id} is merged into {row['merged_into_id']}; write to that one")
@@ -276,6 +279,21 @@ def ensure_self(c: sqlite3.Connection, *, company_name: str | None, domain: str 
         c.execute(
             "UPDATE entities SET primary_domain = ? WHERE id = ? AND COALESCE(primary_domain, '') = ''",
             (domain, current),
+        )
+    # The company's primary domain is an identifier too, as upsert makes it for any entity: without one, a reference by
+    # domain (get, an upsert's match) misses our own company and would make a duplicate of it.
+    primary = c.execute("SELECT primary_domain FROM entities WHERE id = ?", (current,)).fetchone()[0]
+    if (
+        primary
+        and not c.execute(
+            "SELECT 1 FROM entity_identifiers WHERE entity_id = ? AND kind = 'domain' AND normalized_value = ?",
+            (current, primary),
+        ).fetchone()
+    ):
+        c.execute(
+            "INSERT INTO entity_identifiers (entity_id, kind, value, normalized_value, primary_identifier, derived) "
+            "VALUES (?, 'domain', ?, ?, 1, 0)",
+            (current, primary, primary),
         )
     _set_kind(c, current, "company", "system")
     return current
@@ -564,7 +582,12 @@ def upsert(
     values = dict(values or {})
     if "name" in values:
         name = name or values.pop("name")
-    found = _match(c, type_key, match)
+    reader = V.reader(c, actor)
+    matched = _match(c, type_key, match)
+    found = [entity_id for entity_id in matched if V.visible(c, reader, entity_id)]
+    if len(found) < len(matched):
+        # A match the writer cannot see is refused without naming it: its id and name are not the writer's to read.
+        _refuse(c, actor, "not_found", "a match exists that you cannot write to; a person can change it")
     if len(found) > 1:
         _refuse(c, actor, "ambiguous", f"{', '.join(found)} all match; name one by id")
     # An identifier erased at its owner's request is not written again: a new entity made from it is refused, and so is
@@ -713,7 +736,8 @@ def unlink(c: sqlite3.Connection, actor: str, link_id: str) -> str:
     """Ends a link: it stops being current today. The row stays, so its history reads."""
     _writer(c, actor)
     row = _one(c, "SELECT * FROM entity_links WHERE id = ?", (link_id,))
-    if row is None:
+    reader = V.reader(c, actor)
+    if row is None or not (V.visible(c, reader, row["from_entity_id"]) and V.visible(c, reader, row["to_entity_id"])):
         _refuse(c, actor, "not_found", f"no link {link_id}")
     today = _today()
     if row["valid_until_on"] is None or row["valid_until_on"] > today:
@@ -732,8 +756,8 @@ def note(
     audience: str = "company",
     evidence_id: str | None = None,
 ) -> str:
-    """A note on an entity. A `me` note is visible to its author only, and it is a restricted source the entity is known
-    from, so an entity known only from one hides from everyone else."""
+    """A note on an entity. A `me` note is visible to its author only. It never changes who sees the entity: the entity
+    exists before the note, and adding a restricted source to one with none would hide it from everyone else."""
     _writer(c, actor)
     text = _required(c, actor, body, "note")
     if audience not in ("me", "company"):
@@ -749,12 +773,6 @@ def note(
         "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
         (note_id, entity_id, author_type, author_id, text, audience, evidence_id, now),
     )
-    if audience == "me":
-        c.execute(
-            "INSERT OR IGNORE INTO entity_sources (id, entity_id, source_type, source_id, visibility, created_at) "
-            "VALUES (?, ?, 'note_me', ?, 'restricted', ?)",
-            (_id("src"), entity_id, key, now),
-        )
     return note_id
 
 
@@ -1077,12 +1095,13 @@ def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
 def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
     """Reverses the last merge of `drop_id` as logged: its rows go back, its status and counts are restored."""
     _writer(c, actor)
+    reader = V.reader(c, actor)
     log = _one(
         c,
         "SELECT * FROM entity_merges WHERE entity_id = ? AND undone_at IS NULL ORDER BY created_at DESC LIMIT 1",
         (drop_id,),
     )
-    if log is None:
+    if log is None or not (V.visible(c, reader, drop_id) and V.visible(c, reader, log["into_entity_id"])):
         _refuse(c, actor, "not_found", f"{drop_id} has no merge to undo")
     keep_id = log["into_entity_id"]
     moved, prior = json.loads(log["moved"]), json.loads(log["prior"])
@@ -1557,10 +1576,131 @@ def find(
         c, f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE {condition} LIMIT ?)", [*args, COUNT_CAP + 1]
     )
     return {
-        "rows": rows,
+        "rows": [brief(row) for row in rows],
         "next": _encode([rows[-1]["name_key"], rows[-1]["id"]]) if more and rows else None,
         "count": min(total, COUNT_CAP),
         "approximate": total > COUNT_CAP,
+    }
+
+
+def brief(row: Row) -> Row:
+    """An entity as a list shows it: what a person scans for, and no more than the list needs to page."""
+    return {
+        "id": row["id"],
+        "type": row["type"],
+        "name": row["name"],
+        "status": row["status"],
+        "self": bool(row["self"]),
+        "primary_email": row["primary_email"],
+        "primary_domain": row["primary_domain"],
+        "links_to_us": (row["self_link_keys"] or "").split(),
+        "last_activity_at": row["last_activity_at"],
+        "mentions_count": row["mentions_count"],
+    }
+
+
+def target(c: sqlite3.Connection, actor: str, ref: object) -> str:
+    """The one entity a write's reference names, as the writer sees it. One the writer cannot see is not found; two that
+    match are ambiguous, and both are named (both are the writer's to see). A merged one answers with the kept one."""
+    found = get(c, actor, ref)
+    if not found:
+        _refuse(c, actor, "not_found", f"no entity {ref} you can write to")
+    if len(found) > 1:
+        _refuse(c, actor, "ambiguous", f"{', '.join(row['id'] for row in found)} all match {ref}; name one by id")
+    return found[0]["id"]
+
+
+def type_exists(c: sqlite3.Connection, key: str) -> bool:
+    return _one(c, "SELECT 1 AS found FROM entity_types WHERE key = ? AND archived_at IS NULL", (key,)) is not None
+
+
+def types(c: sqlite3.Connection) -> list[Row]:
+    """The entity types a reader can use: the built-in ones, then the ones bots and people added (who added each shows)."""
+    return _rows(
+        c,
+        "SELECT key, name, plural_name, description, icon, built_in, mode, created_by_type, created_by_id "
+        "FROM entity_types WHERE archived_at IS NULL ORDER BY built_in DESC, key",
+    )
+
+
+def describe_type(c: sqlite3.Connection, key: str) -> dict[str, Any] | None:
+    """One type: its attributes (who owns each) and the link types that may touch it. A link type with no end type
+    touches every type. None when there is no such type."""
+    row = _one(c, "SELECT * FROM entity_types WHERE key = ? AND archived_at IS NULL", (key,))
+    if row is None:
+        return None
+    attributes = _rows(
+        c,
+        "SELECT key, name, description, value_type, multiple, unique_value, required, sensitive, options, owner_type, "
+        "owner_id FROM entity_attributes WHERE entity_type = ? AND archived_at IS NULL ORDER BY position, key",
+        (key,),
+    )
+    for attr in attributes:
+        owner_type, owner_id = attr.pop("owner_type"), attr.pop("owner_id")
+        attr["owner"] = f"connection:{owner_id}" if owner_type == "connection" else "tico"
+        attr["options"] = json.loads(attr["options"] or "[]")
+        for flag in ("multiple", "unique_value", "required", "sensitive"):
+            attr[flag] = bool(attr[flag])
+    link_types = _rows(
+        c,
+        "SELECT key, name, inverse_name, description, from_entity_type, to_entity_type, inherits_rules, symmetric "
+        "FROM link_types WHERE archived_at IS NULL AND (from_entity_type = ? OR to_entity_type = ? "
+        "OR from_entity_type IS NULL OR to_entity_type IS NULL) ORDER BY key",
+        (key, key),
+    )
+    for link_type in link_types:
+        link_type["inherits_rules"] = bool(link_type["inherits_rules"])
+        link_type["symmetric"] = bool(link_type["symmetric"])
+    return {
+        "type": {k: row[k] for k in ("key", "name", "plural_name", "description", "built_in", "mode", "icon")},
+        "attributes": attributes,
+        "link_types": link_types,
+    }
+
+
+def rules(c: sqlite3.Connection, who: str, entity_id: str) -> list[Row] | None:
+    """The rules that apply to an entity, each with the path it comes by. Rules arrive in track 5 (spec §3, Rules), so
+    until then none apply and the answer is the empty list. None when the entity does not show to the reader."""
+    if not V.visible(c, who, entity_id):
+        return None
+    return []
+
+
+def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
+    """Who we are, for every bot's base context: our company, the places we operate in, and the obligations that bind us
+    (none until rules arrive). It reads the self flag boot set and writes nothing, so it runs on a read connection."""
+    reader = V.reader(c, who)
+    me = _one(c, "SELECT id FROM entities WHERE self = 1")
+    if me is None or not _visible_rows(c, reader, [me["id"]]):
+        return None
+    company = card(c, who, me["id"])
+    if company is None:
+        return None
+    cl, cparams = V.clause(reader, "o")
+    places = _rows(
+        c,
+        "SELECT o.id, o.name FROM entity_links l JOIN entities o "
+        "ON o.id = CASE WHEN l.from_entity_id = ? THEN l.to_entity_id ELSE l.from_entity_id END "
+        "WHERE (l.from_entity_id = ? OR l.to_entity_id = ?) AND l.link_key = 'operates_in' "
+        f"AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) AND o.status <> 'merged' AND {cl} "
+        "ORDER BY o.name LIMIT 50",
+        [me["id"], me["id"], me["id"], _today(), *cparams],
+    )
+    # Each field's value, or the list of values for a field that holds many: the card's source and age are left out.
+    card_values = cast(dict[str, Any], company["values"])
+    values: dict[str, Any] = {}
+    for key, entry in card_values.items():
+        if isinstance(entry, list):
+            values[key] = [item["value"] for item in cast(list[dict[str, Any]], entry)]
+        else:
+            values[key] = entry["value"]
+    return {
+        "id": company["id"],
+        "name": company["name"],
+        "primary_domain": company["primary_domain"],
+        "values": values,
+        "operates_in": places,
+        "obligations": [],
     }
 
 
@@ -1602,8 +1742,15 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         "FROM entity_links l JOIN link_types lt ON lt.key = l.link_key "
         "JOIN entities o ON o.id = CASE WHEN l.from_entity_id = ? THEN l.to_entity_id ELSE l.from_entity_id END "
         "WHERE (l.from_entity_id = ? OR l.to_entity_id = ?) AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) "
-        f"AND o.status <> 'merged' AND {cl} ORDER BY l.link_key, o.name",
+        f"AND o.status <> 'merged' AND {cl} ORDER BY l.link_key, o.name LIMIT {CARD_LINKS}",
         [me, me, me, today, *cparams],
+    )
+    # The records this entity is in other systems (a CRM record, a repository): a pointer, shown with the entity.
+    refs = _rows(
+        c,
+        "SELECT system, external_type, external_id, url, synced_at FROM entity_external_refs "
+        "WHERE entity_id = ? AND status = 'active' ORDER BY system, external_type, external_id LIMIT 50",
+        (me,),
     )
     notes = [
         row
@@ -1626,34 +1773,45 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         "primary_domain": ent["primary_domain"],
         "values": values,
         "links": links,
+        "refs": refs,
         "notes": notes,
     }
 
 
 def history(
-    c: sqlite3.Connection, who: str, entity_id: str, attribute_key: str, *, after: str | None = None, limit: int = LIMIT
+    c: sqlite3.Connection,
+    who: str,
+    entity_id: str,
+    attribute_key: str | None = None,
+    *,
+    after: str | None = None,
+    limit: int = LIMIT,
 ) -> dict[str, Any] | None:
-    """A field's past values, newest first, keyset paged on (active_until, id). None when the entity or the field does
-    not show to the reader."""
+    """Past values, newest first, keyset paged on (active_until, id): one field's when an attribute is named, else every
+    field's the reader may see. None when the entity, or the named field, does not show to the reader."""
     r = V.reader(c, who)
-    if not _visible_rows(c, r, _follow(c, [entity_id])):
+    shown = _visible_rows(c, r, _follow(c, [entity_id]))
+    if not shown:
         return None
-    attr = _one(
-        c,
-        "SELECT a.* FROM entity_attributes a JOIN entities e ON e.id = ? AND e.type = a.entity_type WHERE a.key = ?",
-        (entity_id, attribute_key),
-    )
-    if attr is None or not V.attribute_visible(r, attr):
-        return None
+    me = shown[0]
+    where = "h.entity_id = ? AND (a.sensitive = 0 OR ? = 1)"
+    args: list[object] = [me["id"], int(r.sensitive)]
+    if attribute_key:
+        attr = _one(c, "SELECT * FROM entity_attributes WHERE entity_type = ? AND key = ?", (me["type"], attribute_key))
+        if attr is None or not V.attribute_visible(r, attr):
+            return None
+        where += " AND h.entity_attribute_id = ?"
+        args.append(attr["id"])
     limit = _limit(limit)
-    where, args = "h.entity_id = ? AND h.entity_attribute_id = ?", [entity_id, attr["id"]]
     if after:
         until, row_id = _decode(after)
         where += " AND (h.active_until, h.id) < (?, ?)"
         args += [until, row_id]
     rows = _rows(
         c,
-        f"SELECT h.* FROM entity_value_history h WHERE {where} ORDER BY h.active_until DESC, h.id DESC LIMIT ?",
+        "SELECT h.*, a.key AS attribute_key FROM entity_value_history h "
+        "JOIN entity_attributes a ON a.id = h.entity_attribute_id "
+        f"WHERE {where} ORDER BY h.active_until DESC, h.id DESC LIMIT ?",
         [*args, limit + 1],
     )
     more = len(rows) > limit
