@@ -108,12 +108,12 @@ The entity and the edge that connects it go in the same `apply`, so they share o
 | the team sells to a segment | `company/self sells_to <segment>` |
 | a competitor sells to a segment | `<competitor> sells_to <segment>` |
 | the team or a competitor is reached or discussed in a channel | `<company> distributes_through <channel>` or `mentioned_in` |
-| a person leads or founded an organization | `<company> led_by <person>` or `<person> founded <company>` |
-| an organization is subject to a rule | `<company> regulated_by <regulation>` |
+| a person leads or founded an organization | `<person> works_at <company>` with properties.role = leader, or `<person> founded <company>` |
+| an organization is subject to a rule | `<regulation> regulates <company>` |
 
 Use only the sixteen relations the server knows (`competes_with`, `partners_with`, `integrates_with`,
-`distributes_through`, `sells_to`, `operates_in`, `acquired`, `invested_in`, `employs`, `led_by`, `founded`,
-`formerly`, `regulated_by`, `subject_of`, `member_of`, `mentioned_in`). Do not draw `competes_with` from a
+`distributes_through`, `sells_to`, `operates_in`, `acquired`, `invests_in`, `works_at`, `founded`,
+`formerly`, `regulates`, `subject_of`, `member_of`, `mentioned_in`, `located_in`). Do not draw `competes_with` from a
 name alone. Never delete or retire an entity. If a write is refused, read why and fix that one write: do not
 retry the same call.
 
