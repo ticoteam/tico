@@ -674,6 +674,48 @@ def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts"
         item["attachment"].update(format=fmt, name=view["name"], href=view["href"])
 
 
+@contextmanager
+def _read_snapshot(c: "sqlite3.Connection") -> "Generator[None]":
+    """The page reads open a snapshot of their own (task_privacy.snapshot) and never end it. On an autocommit
+    connection this one ends it, so the caller's connection is left as it was: a snapshot left open keeps reads stale
+    on that connection and holds its later commit back."""
+    if c.in_transaction:
+        yield
+        return
+    c.execute("BEGIN")
+    try:
+        yield
+    finally:
+        c.execute("ROLLBACK")
+
+
+def _redact_attachments(c: "sqlite3.Connection", items: list[Row], who: "Identity", auth: "Auth | None") -> None:
+    """Each review item's attachment is redacted for this reader the way the task view redacts a page
+    (files.readable_page_refs, the function the question view uses): a page the reader cannot open shows the task view's
+    notice in place of its name, and keeps no file id or address. The item stays in the queue, so the counts do not move."""
+    shown = [item for item in items if item["attachment"]]
+    if not shown:
+        return
+    from . import files as file_module
+
+    readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
+    with _read_snapshot(c):
+        views = readable_refs(c, auth, who, [item["attachment"] for item in shown])
+    for item, view in zip(shown, views, strict=True):
+        if view.get("removed") is True:
+            item["attachment"] = {
+                **item["attachment"],
+                "name": view["label"],
+                "format": "file",
+                "href": None,
+                "url": None,
+                "file_id": None,
+                "file_version": None,
+                "blob_id": None,
+                "removed": True,
+            }
+
+
 def _moves_to(
     item: Row,
     live: list[Row],
@@ -829,7 +871,9 @@ def queue_for(
     items = [queue.item(actor, task, requirement, why) for task, requirement, why in waiting]
     _queue_fields(c, actor, items, live, tasks, queue)
     _attachment_views(c, items, facts)
-    items.extend(_held_items(c, actor, pipeline_id, stage_id, visible_sql, who or Identity(actor, "human"), auth))
+    reader = who or Identity(actor, "human")
+    _redact_attachments(c, items, reader, auth)
+    items.extend(_held_items(c, actor, pipeline_id, stage_id, visible_sql, reader, auth))
     _in_queue_order(c, items)
     return items
 
