@@ -187,7 +187,8 @@ const CU_SHOWN = 99;   // backend/thread_rail.py CATCH_UP_SHOWN
 function cuReconcile() {
   const cu = THREADS.cu;
   if (!CU.open || !cu || THREADS.catchUp >= CU_SHOWN) return;
-  for (const it of [...CU.queue, ...CU.later]) {
+  const rows: {thread?: {id?: string; task_id?: string | null}}[] = [...CU.queue, ...CU.later];
+  for (const it of rows) {
     const id = it.thread?.id;
     if (!id || !it.thread?.task_id || cu.has(id) || CU.sending.has(id) || (CU.drafts.get(id) || '').trim()) continue;
     catchUpGone(id, true);
