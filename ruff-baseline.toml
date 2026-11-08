@@ -204,7 +204,6 @@
 "runner_support/release_update.py" = ["BLE001"]
 "runner_support/worktrees.py" = ["B023", "BLE001", "S110"]
 "scripts/app_release.py" = ["BLE001"]
-"scripts/benchmark_sql_history.py" = ["F811"]
 "scripts/benchmark_test_setup.py" = ["PLW1510"]
 "scripts/company_app_publisher.py" = ["F401"]
 "scripts/company_apps.py" = ["BLE001"]
