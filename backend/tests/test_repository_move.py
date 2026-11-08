@@ -3,7 +3,6 @@ would strand the only copy, forgets the old computer's report, and Health and `h
 bot has no repository on its computer."""
 
 from backend.tests.helpers.api import assign, get, post, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.settings_transitions import _company_default
 
 REPO = "Acme/emp-ops"

@@ -5,7 +5,6 @@ messages, search, the cursor, waits, a message and its code. The owner and admin
 Ana owns the company, Ben is an admin (a member after `as_member`), Cara is a member in East, under Sales."""
 
 from backend.tests.helpers.api import as_member, get, headers, put, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.inbound import page
 from backend.tests.helpers.inbound_audience import narrow
 

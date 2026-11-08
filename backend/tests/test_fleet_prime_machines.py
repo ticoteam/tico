@@ -1,7 +1,6 @@
 """fleet_snapshot primes machine() rows once for readable bots."""
 
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.task_privacy_reads import traced
 from backend.tests.helpers.views import as_member
 

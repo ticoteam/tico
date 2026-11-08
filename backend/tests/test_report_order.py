@@ -2,7 +2,6 @@
 server for every viewer, a new report goes last, and only someone who may put reports under that manager orders them."""
 
 from backend.tests.helpers.api import get, headers, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.org_chart import revision, roster
 from backend import bot_settings as BS
 

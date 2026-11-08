@@ -18,7 +18,6 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.observability import Observability, browser_config, public_dsn, sanitize_event
 from backend.store import H, Problem
-from backend.tests.test_api import api
 from backend.tests.helpers.auth import signing
 
 DSN = "https://" + "a" * 32 + "@o123.ingest.us.sentry.io/123"

@@ -13,7 +13,6 @@ import pytest
 
 from backend import docs_import, docs_import_run, docs_import_worker
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 ANA = "ana-test"
 BIG = 1_000_000

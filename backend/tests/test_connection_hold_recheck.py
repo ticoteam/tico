@@ -4,7 +4,6 @@ runs on the new one at once unless that login is held too."""
 from backend import login_holds
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, runner  # noqa: F401 (fixture)
-from backend.tests.test_api import api  # noqa: F401 (fixture)
 from backend.tests.helpers.login_holds import at, limit, providers_on, signed_in
 
 

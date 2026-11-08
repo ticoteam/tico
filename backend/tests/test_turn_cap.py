@@ -5,7 +5,6 @@ toward the bound but takes no start place, so it does not stop other work from s
 from backend import start_places
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend.tests.helpers.turns_at_once import set_computer
 from backend.views import free_turn

@@ -3,7 +3,6 @@
 from backend import github as G
 from backend import hubdb as H
 from backend.repositories import metadata, save_metadata
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.rules import plain_task
 from backend.tests.helpers.wake_rules import jobs, setup
 

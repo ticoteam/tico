@@ -15,7 +15,6 @@ from backend.finance import gateway_sync
 from backend.finance import reads as FR
 from backend.finance.store import tico as finance_tico
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,

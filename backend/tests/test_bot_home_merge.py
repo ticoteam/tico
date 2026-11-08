@@ -15,7 +15,6 @@ from backend.blobs import register
 from backend.files import series
 from backend.store import H, task_message_page
 from backend.tests.helpers.api import headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
-from backend.tests.test_api import api  # noqa: F401  (the fixture; post is a helper)
 from backend.tests.helpers.threads_private_execution import private_run, private_tasks_have_an_unrelated_manager
 from backend.tests.helpers.bot_home_merge import merge, room, store
 

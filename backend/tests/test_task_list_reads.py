@@ -3,7 +3,6 @@ whole read, and the same statements however many tasks the company has."""
 
 from backend import task_privacy
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.status_reads import page
 
 

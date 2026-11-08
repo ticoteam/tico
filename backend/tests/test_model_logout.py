@@ -3,7 +3,6 @@ signed out, even when the company gives every computer a model key."""
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
 from backend.tests.helpers.getting_started import add_bot
 from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401

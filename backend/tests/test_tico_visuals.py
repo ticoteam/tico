@@ -12,7 +12,6 @@ import urllib.request
 from backend import file_metadata, tico_storage
 from backend import visuals as V
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.storage_delivery import task
 from backend.tests.helpers.tico_storage import ADDRESS, SIGNING, Owner, on, tico  # noqa: F401
 from backend.tests.helpers.visuals import task_with_file

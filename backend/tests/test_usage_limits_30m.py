@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from backend import usage_limits
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.usage_limits import finish, fleet, groups, paused, put, start
 
 

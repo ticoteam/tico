@@ -5,7 +5,6 @@ reject"."""
 
 from backend import strategy_bot
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.goal_asks import asks, goal_manager, sync
 from backend.tests.helpers.kpis import goal_with_kpi
 from backend.tests.helpers.goal_cards import inbox_measure, leaks, propose

@@ -12,7 +12,6 @@ from backend.finance import reads as FR
 from backend.finance import tab as TB
 from backend.finance.core.org import Org, Team
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_fixtures import (
     AT,
     GROUPS,

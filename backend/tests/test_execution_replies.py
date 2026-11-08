@@ -9,7 +9,6 @@ from backend import threads
 from backend.models import Completion
 from backend.store import H, encode
 from backend.tests.helpers.api import setup_attempt, post, get, ready, claim, runner, assign, headers
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 
 

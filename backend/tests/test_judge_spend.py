@@ -11,7 +11,6 @@ from backend import providers
 from backend.config import Settings
 from backend.store import Store
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS, FakeJudge, events, fake
 from backend.tests.helpers.slack_gateway import gateway, hub  # noqa: F401
 from clients import judge as J

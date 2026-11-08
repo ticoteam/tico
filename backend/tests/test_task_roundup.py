@@ -18,7 +18,6 @@ from backend import task_relations as TR
 from backend.store import H
 from backend.tests.hold_rows import set_holds
 from backend.tests.helpers.api import claim  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.dev_ticket_rules import dev_type
 from backend.tests.helpers.step_backlog import board as backlog_board, tickets as backlog_tickets
 from backend.tests.helpers.task_lanes import task_bot

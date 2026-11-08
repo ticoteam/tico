@@ -16,7 +16,6 @@ from backend import bookkeeper as BK
 from backend.finance import actions as FA
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 

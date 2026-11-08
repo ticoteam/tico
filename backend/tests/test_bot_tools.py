@@ -5,7 +5,6 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
 from backend.tests.helpers.bot_tools import configure, report

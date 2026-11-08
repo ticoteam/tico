@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from backend.tests.helpers.api import as_member, get, headers, post, put, restrict, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.groups import send
 from backend.tests.helpers.cards import delete, page, patch, place, task
 

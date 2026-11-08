@@ -6,7 +6,6 @@ import time
 
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.org_turns import one_person
 from backend.tests.helpers.start_places import waiters
 

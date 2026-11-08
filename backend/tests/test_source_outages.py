@@ -7,7 +7,6 @@ import pytest
 from backend import login_holds, source_outages
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.login_holds import at, events, limit, done, signed_in
 from backend import bot_settings as BS
 from backend.tests.helpers.source_outages import managers, notices

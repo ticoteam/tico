@@ -5,7 +5,6 @@ import json
 
 from backend import listening as L
 from backend.tests.helpers.api import get, post, put
-from backend.tests.test_api import api
 from backend.tests.helpers.listening import FakeJudge, _bots, _post, _token
 
 

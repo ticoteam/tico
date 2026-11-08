@@ -2,7 +2,6 @@
 
 from backend import botops_act as B
 from backend.tests.helpers.api import post, put, ready  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, call, turn  # noqa: F401  (fixtures)
 

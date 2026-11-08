@@ -9,7 +9,6 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import thread_catchup, threads, updates
 from backend.auth import Identity
 from backend.tests.helpers.api import as_member, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 BEN = Identity("human:ben", "human", "ben@acme.example")
 

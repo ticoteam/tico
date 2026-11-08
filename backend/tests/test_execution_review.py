@@ -4,7 +4,6 @@ import json
 
 import pytest
 from backend.tests.helpers.api import assign, runner, setup_attempt, post, get, expire, ready, claim, headers
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 from backend.tests.helpers.execution_review import (
     add_recovery_reviewer,

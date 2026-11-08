@@ -8,7 +8,6 @@ from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
 from backend.tests.helpers.api import as_member, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.thread_attention import hold, members_thread, say
 
 

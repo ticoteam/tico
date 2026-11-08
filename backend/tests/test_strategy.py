@@ -8,7 +8,6 @@ from backend import strategy as S
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, post, put  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import with_strategy_bot
 from backend.tests.helpers.kpis import goal_with_kpi, log
 from backend.tests.helpers.strategy import add_bet, draft, publish, ready, write

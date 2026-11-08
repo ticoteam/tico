@@ -5,7 +5,6 @@ The org here: ops reports to coo, coo to Ana (the owner). A cap on (ops, Ana) li
 from backend import task_caps
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.migrations import restore_config
 from backend.tests.helpers.task_caps import as_bot
 

@@ -40,7 +40,6 @@ from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
 from backend.store import H, Problem
 from backend.tests.helpers.api import get  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.goal_manager import BASE
 from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.helpers.support import FakeHQ

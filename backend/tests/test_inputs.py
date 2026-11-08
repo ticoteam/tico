@@ -3,7 +3,6 @@ import json
 import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt, expire
-from backend.tests.test_api import api
 from backend.tests.helpers.member_bots import botops, turn, finish
 from backend import bot_settings as BS
 

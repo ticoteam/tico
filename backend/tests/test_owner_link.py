@@ -11,7 +11,6 @@ from backend import identity_proxy, owner_link
 from backend.auth import LOGOUT_PATH
 from backend.config import Settings
 from backend.store import H, digest
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 URL = "https://acme.hosted.example"
 OWNER = "ana@acme.example"

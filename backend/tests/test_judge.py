@@ -4,7 +4,6 @@ import json
 
 from backend import judge as B
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.judge import FakeJudge, QUESTIONS, events, fake
 

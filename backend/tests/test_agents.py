@@ -4,7 +4,6 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.agents import beat, bot_id, credential, hermes_bot
 

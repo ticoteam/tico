@@ -11,7 +11,6 @@ import pytest
 from backend import automation_actions, automations, mailbox_access
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_access import WAKE, flow
 
 

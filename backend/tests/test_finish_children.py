@@ -11,7 +11,6 @@ from backend import task_relations as TR
 from backend.config import Settings
 from backend.store import Store
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

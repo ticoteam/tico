@@ -4,7 +4,6 @@ and the only thing that decides a bot's runtime and model when the bot names non
 import pytest
 
 from backend import providers as P
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend import bot_settings as BS
 
 

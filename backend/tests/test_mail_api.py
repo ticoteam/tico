@@ -1,7 +1,6 @@
 """Stored legacy mail is browsable by people, never by bots. Live Workspace coverage is in test_mail_live."""
 
 from backend.tests.helpers.api import get, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail, seed_org
 
 

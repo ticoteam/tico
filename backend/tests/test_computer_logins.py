@@ -3,7 +3,6 @@
 from backend import execution, login_holds
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.login_holds import at, limit
 from backend.tests.helpers.model_logout import report
 from backend.tests.helpers.subscriptions import set_runtime

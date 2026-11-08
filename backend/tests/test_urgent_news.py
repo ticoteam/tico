@@ -6,7 +6,6 @@ import pytest
 
 from backend import hubdb as H, rules as R, wake_presets as W
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.profiles import put
 from backend.tests.helpers.wake_rules import as_cause
 from backend.tests.helpers.urgent_news import sent_job

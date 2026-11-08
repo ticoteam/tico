@@ -19,7 +19,6 @@ import pytest
 
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, get, headers, post, runner, settled  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from runner_support import engine
 from backend import bot_settings as BS

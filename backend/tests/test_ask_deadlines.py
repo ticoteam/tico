@@ -1,7 +1,6 @@
 """A bot's question task to a person goes ahead on the bot's default when it is safe to, and closes on its date."""
 
 from backend.tests.helpers.api import headers, post  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend import ask_deadlines, question_tasks as QT, team_rules
 from backend.store import H
 

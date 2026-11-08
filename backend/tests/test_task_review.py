@@ -4,7 +4,6 @@ answer."""
 import pytest
 
 from backend.tests.helpers.api import assign, claim, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import question_tasks as QT
 from backend.store import H
 from clients.hubcli import parser

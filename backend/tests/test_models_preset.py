@@ -7,7 +7,6 @@ import pytest
 
 from backend import models_preset, providers
 from backend.tests.helpers.api import assign, claim, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.gateway_connection import KEY, fake_gateway, handed_to, save, setup
 from backend import bot_settings as BS
 from backend.tests.helpers.models_preset import CLAUDE, choose, connected, on_tico, says

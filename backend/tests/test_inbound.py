@@ -10,7 +10,6 @@ from backend import inbound
 from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.helpers.api import headers, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients import hubcli, hubtools, remotecli
 from backend.tests.helpers.inbound import page, seed, no_live_inbound
 

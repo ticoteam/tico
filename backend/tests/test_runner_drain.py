@@ -2,7 +2,6 @@
 
 from backend import runner_versions
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_turn(api):

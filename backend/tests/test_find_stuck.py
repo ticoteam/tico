@@ -12,7 +12,6 @@ import pytest
 from backend import maintenance, maintenance_limits, task_check_backs, task_roundup
 from backend.store import H
 from backend.maintenance_steps import find_stuck as FS
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.task_roundup import (
     DAY,
     NOON,

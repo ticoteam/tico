@@ -15,7 +15,6 @@ import pytest
 from backend import skill_screening as S
 from backend.store import H
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.decide_strict import gateway  # noqa: F401  (fixture)
 from backend.tests.helpers.skills import NEWER, SKILL, approve, bundle, decide, proposal, publish
 from clients import judge as J

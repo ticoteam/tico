@@ -25,8 +25,7 @@ from backend.harnesses import resolve_harness
 from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
 from backend.store import H, P, encode, repo_url
 from backend.tests.helpers import api as T
-from backend.tests import test_api as api_fixture  # the api fixture itself
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.api_app import api_client
 from backend import bot_settings as BS
 from backend.tests.helpers.bot_list_reads import BASE, add_bots
 
@@ -319,7 +318,7 @@ def test_hot_reads_do_not_grow_with_bots(tmp_path, monkeypatch):
     measured = []
     for name, extra in (("few", []), ("many", [f"b{i:02d}" for i in range(23)])):
         (tmp_path / name).mkdir()
-        install = api_fixture.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         try:
             measured.append(costs(next(install), extra))
         finally:

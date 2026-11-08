@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import scheduler, thread_digest, threads
 from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.oidc import CLIENT, provider, signin  # noqa: F401  (the fixtures)
 
 

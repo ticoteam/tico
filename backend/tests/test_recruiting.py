@@ -9,7 +9,6 @@ from backend import recruiting
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.strategy_bot import as_bot
 from backend import bot_settings as BS
 from backend.tests.helpers.recruiting import providers

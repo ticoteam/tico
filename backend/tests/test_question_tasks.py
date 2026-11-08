@@ -8,7 +8,6 @@ import pytest
 from backend import ask_deadlines, still_needed, hubdb as H, task_relations as TR
 
 from backend.tests.helpers.api import get, headers, post, setup_attempt
-from backend.tests.test_api import api
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.question_tasks import (
     _answer,

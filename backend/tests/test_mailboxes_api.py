@@ -11,7 +11,6 @@ from backend import mailboxes, openapi_v2
 from backend.assistant import admits_on_turn
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.store import Problem
 from backend.tests.helpers.openapi_v2 import conforms
 

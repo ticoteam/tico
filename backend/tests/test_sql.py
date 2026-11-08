@@ -13,7 +13,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import as_member, headers, post, ready
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 from backend.tests.helpers.sql import column, query, world
 

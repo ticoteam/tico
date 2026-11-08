@@ -11,7 +11,6 @@ from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, claim, get, headers, post, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.credentials import setup
 from backend import bot_settings as BS
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, machine, on

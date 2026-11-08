@@ -6,7 +6,6 @@ import json
 import pytest
 
 from backend.tests.helpers.api import get
-from backend.tests.test_api import api
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 from backend.tests.helpers.automation_api import NOTE_STEP, as_bot
 from clients import remotecli, hubtools

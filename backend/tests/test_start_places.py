@@ -6,7 +6,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.attempt_contention import fleet
 from backend.tests.helpers.runner_load import point
 from backend.tests.helpers.start_places import memory, overload, waiters

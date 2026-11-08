@@ -14,7 +14,6 @@ import pytest
 from backend import redesign_migration as M
 from backend.store import H, Store
 from backend.tests.helpers.api import api_settings, get  # noqa: F401  (api: the fixture)
-from backend.tests.test_api import api  # noqa: F401  (api: the fixture)
 from backend import usage_limits
 from backend import bot_settings as BS
 

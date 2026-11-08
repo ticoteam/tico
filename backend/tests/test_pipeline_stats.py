@@ -10,7 +10,6 @@ from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
 from backend.tests.helpers.api import assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.hold_rows import set_holds
 
 

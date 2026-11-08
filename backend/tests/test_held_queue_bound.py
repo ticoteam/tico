@@ -8,7 +8,6 @@ import pytest
 from backend import hubdb as H
 from backend.store import Store
 from backend.tests.helpers.api import get, post, restrict, runner, assign, ready, claim, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.member_bots import finish
 from backend import bot_settings as BS
 

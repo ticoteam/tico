@@ -3,7 +3,6 @@ model, and a review handed to a bot set to `review_model: check`, run on another
 
 from backend.store import encode
 from backend.tests.helpers.api import assign, claim, get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.helpers.check_models import GROK, finish, heartbeat, parent_turn
 from backend.tests.usage_rows import segment
 

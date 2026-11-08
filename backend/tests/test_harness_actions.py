@@ -2,7 +2,6 @@
 runner the way the browser sign-in is."""
 
 from backend.tests.helpers.api import assign, get, post, put, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.model_login import stored  # noqa: F401  (a row reader shared with the sign-in tests)
 from backend import bot_settings as BS
 

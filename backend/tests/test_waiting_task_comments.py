@@ -8,7 +8,6 @@ from backend import milestone_waits
 from backend import task_relations as TR
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.task_lanes import task_bot
 from backend.tests.hold_rows import set_holds
 

@@ -9,7 +9,6 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import room
 from backend.tests.helpers.counsel import counsel_on, counsel_run, source
 from backend.tests.helpers.files import turn

@@ -3,7 +3,7 @@ within seconds; each step is timed and on its own, a beat is stored small (the b
 something happened, a repeated failure folded into it; step rows only with a write that happens anyway, a changed result
 or every 5 minutes, their counts held in memory till then), its interval is a setting read each pass, the loop reads as
 alive within one interval and a minute, and GET/PUT /api/v2/heartbeat show and set it.
-Ana owns the team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
+Ana owns the team, Ben is an admin, Cara a member (backend/tests/helpers/api_app.py). Synthetic fixtures only."""
 
 import dataclasses
 import json
@@ -15,7 +15,6 @@ from backend import heartbeat as HB
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.tests.helpers.api import get, put  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.mirror_rows import dead_mirror, live, mirrors, sync
 
 # Two hours ago: a beat's day counts are read against the clock, and every beat below stays inside the day.

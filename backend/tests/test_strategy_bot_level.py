@@ -9,7 +9,6 @@ from backend import strategy_bot, strategy_suggest, goals as G, routines
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import bot, propose_why, with_strategy_bot
 from backend.tests.helpers.goal_asks import asks, goal_manager, raise_level, sync
 from backend.tests.helpers.kpis import goal_with_kpi, log

@@ -4,7 +4,6 @@ is its own thread tree with its own provider session (clients/sessions.py root k
 (`bot_session_epoch`, for the one thread `session: bot` keeps) stays where it was and no other chat is touched."""
 
 from backend.tests.helpers.api import assign, claim, post, ready, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.session_clear import clear, finish
 
 

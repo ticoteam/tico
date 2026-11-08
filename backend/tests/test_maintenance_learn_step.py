@@ -15,7 +15,6 @@ from backend.maintenance_steps import learn as step
 from backend.maintenance_steps import update as update_step
 from backend.store import H
 from backend.tests.helpers.api import claim, headers, post
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 from backend.tests.helpers.bot_contact import bot
 from backend.tests.helpers.mail_api import put_mail

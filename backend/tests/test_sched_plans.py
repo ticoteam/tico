@@ -7,7 +7,6 @@ under the write lock. Each statement must name the partial index that keeps it t
 from backend import turn_fixer
 from backend import wake_presets as W
 from backend.tests.helpers.api import post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend import views
 
 NOW = "2026-10-29T14:00:00.000Z"

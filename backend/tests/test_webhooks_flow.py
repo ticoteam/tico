@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from backend import hook_relay
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.event_rules import rule as rule_row
 from backend.tests.helpers.triggers import hook
 from backend.tests.helpers.triggers_incoming import as_bot

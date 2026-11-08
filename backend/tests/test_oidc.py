@@ -13,7 +13,6 @@ from backend import access as Access
 from backend import hubdb, oidc, people_mirror
 from backend.config import Settings
 from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.oidc import CLIENT, SECRET, _b64, pool_key, provider, signin
 
 

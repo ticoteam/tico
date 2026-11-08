@@ -10,7 +10,6 @@ from backend import audit_log, call_items, call_media, calls, events, live_priva
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
 from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
 from clients import gateway

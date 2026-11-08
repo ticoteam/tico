@@ -19,7 +19,6 @@ import pytest
 from backend import cloud_access, cloud_machines as CM, placement, readiness
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, on

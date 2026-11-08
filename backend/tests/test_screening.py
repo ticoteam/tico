@@ -15,7 +15,6 @@ from backend import automations, screening as S
 from backend.store import H
 from backend.watchers import WatcherEvent
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.inbound import no_live_inbound, page, seed  # noqa: F401
 from backend.tests.helpers.judge_spend import spend
 from backend.tests.helpers.roadmaps import ORIGIN, public_setup

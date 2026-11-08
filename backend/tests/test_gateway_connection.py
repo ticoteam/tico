@@ -10,7 +10,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.decide_gateway import answer_all
 from backend.tests.helpers.judge import QUESTIONS
 from clients import gateway as G

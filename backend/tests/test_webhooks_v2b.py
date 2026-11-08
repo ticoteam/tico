@@ -11,7 +11,6 @@ from backend import hubdb as H
 from backend import trigger_presets as P
 from backend import webhooks as W
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.event_rules import CALL, judge, rule
 from backend.tests.helpers.task_rules import department
 from backend.tests.helpers.triggers import hook, sig

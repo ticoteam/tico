@@ -190,6 +190,16 @@ def pytest_terminal_summary(terminalreporter):
     )
 
 
+@pytest.fixture
+def api(tmp_path, api_database):
+    """A test client on a new hub database with the fictional company (backend/tests/helpers/api_app.py). A test takes
+    it by name and imports nothing for it: only this body imports the app, so the PR test selector does not count every
+    change the app can reach as a change to each test that uses the fixture (scripts/pr_checks.py, rule 2)."""
+    from backend.tests.helpers.api_app import api_client
+
+    yield from api_client(tmp_path, api_database)
+
+
 @pytest.fixture(scope="session")
 def api_database(tmp_path_factory, request):
     """One initialized, fictional database per worker and invocation; never a cache across code changes.

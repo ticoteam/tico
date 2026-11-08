@@ -10,7 +10,6 @@ from pathlib import Path
 from backend import bot_access as A
 from backend import groups as G
 from backend.tests.helpers.api import setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from clients import hubcli
 from backend import bot_settings as BS

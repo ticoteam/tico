@@ -20,7 +20,6 @@ from backend.auth import Identity
 from backend.blobs import register
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.org_rules import as_bot, org
 from backend import bot_settings as BS
 from backend.tests.helpers.counsel import counsel_on, counsel_run, source, store_file

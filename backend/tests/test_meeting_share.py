@@ -3,7 +3,6 @@
 import pytest
 
 from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.live_meetings import attach, chunk, live, settle  # noqa: F401
 from backend.tests.helpers.mcp import call
 

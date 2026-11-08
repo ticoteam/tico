@@ -10,7 +10,6 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.old_asks import with_refs
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.file_reviews import ask as review_ask, answer as review_answer
 from backend.tests.helpers.page_audience import edit
 from backend.tests.helpers.pages import HTML, page

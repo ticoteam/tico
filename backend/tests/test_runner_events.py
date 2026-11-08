@@ -11,7 +11,6 @@ import pytest
 from backend import events as E
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.credential_sharing import JIRA, jira, local
 from backend.tests.helpers.events import live, topic  # noqa: F401
 

@@ -6,7 +6,6 @@ import time
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_api import api  # noqa: F401  (the fixture and its helpers)
 from backend.tests.helpers.org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
 from backend.tests.helpers.org_rules import rule
 from backend import org_rule_check, threads

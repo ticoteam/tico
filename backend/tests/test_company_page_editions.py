@@ -20,7 +20,6 @@ from backend.company_page import schedule as S
 from backend.company_page import stats as ST
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.assistant import asked, assistant_turn
 from backend.tests.helpers.org_rule_check import Judge
 from backend.tests.helpers.org_rules import org, rule

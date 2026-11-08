@@ -7,7 +7,6 @@ import pytest
 
 from backend import google_workspace, mailbox_access
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.helpers.google_workspace import personal

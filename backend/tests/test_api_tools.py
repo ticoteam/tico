@@ -15,7 +15,6 @@ from backend import api_tools
 from backend.config import Settings
 from backend.store import Problem, Store
 from backend.tests.helpers.api import get, headers, post
-from backend.tests.test_api import api
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.api_tools import key, level, tool
 

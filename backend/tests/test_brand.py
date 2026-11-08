@@ -5,7 +5,6 @@ import json
 
 from backend import brand as B
 from backend.tests.helpers.api import get, post, put  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import bot
 
 BRAND = {

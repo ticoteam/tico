@@ -4,7 +4,6 @@ import asyncio
 
 from backend.store import encode
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 
 

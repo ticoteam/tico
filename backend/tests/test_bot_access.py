@@ -13,7 +13,6 @@ from backend import bot_access as BA
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 from backend.tests.helpers.bot_access import EVERYONE, bot, bot_id, set_access, world
 

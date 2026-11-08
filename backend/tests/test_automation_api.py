@@ -4,7 +4,6 @@ delete, built-ins, run now and its run record, and paged lists."""
 import json
 
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_api import NOTE_STEP, as_bot, audit_rows, flow, make, patch
 
 

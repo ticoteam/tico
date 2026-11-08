@@ -5,7 +5,6 @@ import copy
 import pytest
 
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.automation_templates import fill
 

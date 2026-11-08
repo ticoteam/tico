@@ -12,7 +12,6 @@ from backend import google_workspace as workspace
 from backend.store import H
 from backend.tests.helpers import google_connect as connect
 from backend.tests.helpers.api import get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mail_api import seed_org
 from backend.tests.helpers.mail_targets import declare
 from backend.tests.helpers.google_workspace_authz import (

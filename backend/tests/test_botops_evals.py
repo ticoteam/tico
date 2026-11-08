@@ -14,7 +14,6 @@ import pytest
 from backend.mcp import ApiProblem
 from clients import hubtools
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import bot_id, vault
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 

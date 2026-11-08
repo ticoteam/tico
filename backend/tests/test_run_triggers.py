@@ -14,7 +14,6 @@ from backend import run_triggers as RT
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.api import as_member, claim, get, headers, post, ready, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.sql import query
 from backend.tests.helpers.run_triggers import USAGE, finish, machine, start
 

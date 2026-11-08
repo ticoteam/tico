@@ -5,7 +5,6 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend.tests.helpers.api import assign, claim, get, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.bot_access import world  # noqa: F401  (a Legal bot and who may see it)
 
 NOW = datetime.now(timezone.utc)

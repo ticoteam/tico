@@ -46,7 +46,7 @@ import conftest  # noqa: F401  isolates the registry and AWS credentials, as the
 import uvicorn
 
 from backend import hubdb as H
-from backend.tests import test_api as api_fixture  # the api fixture itself
+from backend.tests.helpers.api_app import api_client
 
 WRITE_P95_MS, EVENT_P95_S, BURST_P95_S = 150, 1.0, 2.0
 PRESETS = {"default": {}, "realistic": {"viewers": 50, "writers": 20, "rate": 1.0, "burst": 200}}
@@ -189,7 +189,7 @@ class Profile:
 
 def boot(directory):
     """The test API's app, seeded as the tests seed it, on a loopback port: (generator, server, thread, port, app)."""
-    generator = api_fixture.api.__wrapped__(Path(directory), None)
+    generator = api_client(Path(directory), None)
     client = next(generator)
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))

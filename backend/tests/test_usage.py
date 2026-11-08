@@ -10,7 +10,6 @@ import pytest
 
 from backend import hubdb, providers
 from backend.tests.helpers.api import as_member, headers, post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.usage import complete
 
 DAY = "2026-09-20"

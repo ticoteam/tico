@@ -13,7 +13,6 @@ from backend import reach, task_allocator
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.task_caps import as_bot
 import pytest
 

@@ -13,7 +13,6 @@ import pytest
 from backend import integrations as I
 from backend.config import ROOT
 from backend.tests.helpers.api import assign, get, runner  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 from backend.tests.helpers.bot_tools import configure, report
 
 PAGES = sorted(p for p in (ROOT / "integrations").glob("*.md") if p.name != "README.md")

@@ -12,7 +12,6 @@ from backend import automation_templates as T
 from backend import bot_settings as BS
 from backend.tests.automation_fakes import Services
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_cli import cli
 from backend.tests.helpers.automation_templates import fill
 

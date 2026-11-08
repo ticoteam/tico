@@ -14,7 +14,6 @@ from backend import assistant
 from clients import hubtools
 from backend import hubdb as H
 from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
 from backend.store import Problem

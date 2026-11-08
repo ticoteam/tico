@@ -10,7 +10,6 @@ from clients import sessions
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import as_member, assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.assistant import asked, say, turn_message
 from backend import bot_settings as BS
 from backend.tests.helpers.strategy_bot_chat import personal, strategy_bot, turn

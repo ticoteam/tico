@@ -9,7 +9,6 @@ from backend import hubdb as H
 from backend import pipeline_review
 from backend import pipeline_setup as S
 from backend.tests.helpers.api import get, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 
 def ago(**delta):

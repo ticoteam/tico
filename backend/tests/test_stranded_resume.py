@@ -13,7 +13,6 @@ from backend import stranded_resume as SR
 from backend import task_roundup
 from backend.tests.hold_rows import set_holds
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.profiles import add_bot, put
 
 

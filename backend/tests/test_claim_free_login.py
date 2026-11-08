@@ -7,7 +7,6 @@ from backend import wake_presets as W
 from backend.execution import queued_reasons
 from backend.store import H
 from backend.tests.helpers.api import assign, post, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.login_holds import at, providers_on, signed_in
 from backend.tests.helpers.stop_waiting import task_attempt
 

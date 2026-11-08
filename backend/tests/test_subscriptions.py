@@ -3,7 +3,6 @@
 import json
 
 from backend.tests.helpers.api import assign, claim, get, post, put, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.subscriptions import set_runtime
 
 

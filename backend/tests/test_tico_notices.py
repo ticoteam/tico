@@ -8,7 +8,6 @@ import pytest
 from backend import hook_relay, rules
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.hook_relay import hq, relay_for, service  # noqa: F401
 from backend import bot_settings as BS
 

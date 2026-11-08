@@ -11,7 +11,6 @@ import pytest
 from backend import egress
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.credentials import setup
 
 FULL = "close-synthetic-full-key-4815162342"

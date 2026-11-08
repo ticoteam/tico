@@ -7,7 +7,6 @@ reads them all in one prompt, each with the time it was sent.
 
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def claim(api, r, next_run=True):

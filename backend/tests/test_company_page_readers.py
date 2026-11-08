@@ -25,7 +25,6 @@ from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render
 from backend.store import digest
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"

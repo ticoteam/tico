@@ -5,7 +5,6 @@ from urllib.parse import urlencode
 from backend import hubdb as H, task_references
 from backend.auth import Identity
 from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.meeting_items import add, change, items, record
 from backend.tests.helpers.meeting_task_links import link, remove, task
 

@@ -5,7 +5,6 @@ import pytest
 
 from backend import growth as G
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import bot
 
 

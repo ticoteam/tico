@@ -12,7 +12,6 @@ from backend import requirement_attachments
 from backend import task_relations as TR
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.pipeline_engine import decide
 from backend.tests.helpers.pipeline_foundation import T, insert, rows
 from backend.tests.helpers.pipeline_members_only import make_pipeline, ticket
