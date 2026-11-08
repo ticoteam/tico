@@ -100,3 +100,32 @@ def test_a_move_link_gives_no_chip_and_no_from(tmp_path):
     task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Won", lint=False)["id"]
     E.advance(c, ANA, task)
     assert L.card_handoffs(c, "1=1", [task]) == {task: {"chip": None, "from": None}}
+
+
+def test_a_card_sent_again_shows_its_open_hand_off_and_keeps_both_activity_lines(tmp_path):
+    c, _, _, _ = two(tmp_path)
+    product = H.type_create(
+        c, ANA, "Ideas", [{"name": "Review", "status": "doing"}, {"name": "Ship", "status": "doing"}], mover=True
+    )
+    success = H.type_create(
+        c,
+        ANA,
+        "Delivery",
+        [{"name": "Onboarding", "status": "doing"}, {"name": "Active", "status": "doing"}],
+        mover=True,
+    )
+    for t in (product, success):
+        c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, t["id"]))
+    link = L.create_link(c, ANA, step_id(c, product["id"], "Review"), success["id"], "spawn")
+    parent = H.task_create(c, ANA, "Acme deal", "", ANA, type=product["id"], step="Review", lint=False)["id"]
+    H.task_update(c, ANA, parent, step=step_id(c, product["id"], "Ship"))
+    [first] = L.handoffs(c, link["id"])
+    c.execute("UPDATE pipeline_handoffs SET returned_at=? WHERE id=?", (H.now(), first["id"]))
+    again = H.task_create(c, ANA, "Acme deal, sent again", "", ANA, type=success["id"], step="Onboarding", lint=False)[
+        "id"
+    ]
+    second = L.record_handoff(c, str(link["id"]), parent, again, ANA)
+
+    cards = L.card_handoffs(c, "1=1", [parent])
+    assert cards[parent]["chip"]["handoff_id"] == second and cards[parent]["chip"]["task_id"] == again
+    assert len(rows(c, "SELECT id FROM history_events WHERE subject_id=? AND kind='handoff'", parent)) == 2
