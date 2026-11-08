@@ -331,6 +331,9 @@ jobs:
       # The slowest tests of each part, so a part that outruns the others shows what holds it.
       PYTEST_ADDOPTS: '--durations=25'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - name: Validate inputs before checkout
         env:
           TICO_HOSTED_ENVIRONMENT: ${{ runner.environment }}

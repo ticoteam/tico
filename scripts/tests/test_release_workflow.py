@@ -349,6 +349,12 @@ def test_an_incremental_validation_runs_hosted_except_its_product_and_desktop_pa
     for name in ("native-linux", "images", "factory-sim"):
         step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
         assert step["if"] == "vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''", name
+    # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.
+    gate_step = next(step for step in jobs["gate"]["steps"] if step.get("name", "").startswith("Free disk"))
+    assert gate_step["run"] == "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc"
+    assert gate_step["if"] == (
+        "vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')"
+    )
 
 
 def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
