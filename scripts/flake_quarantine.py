@@ -266,11 +266,12 @@ def flips(observed):
     return found
 
 
-def propose(found, quarantined):
-    """An entry for each flip that no entry covers yet, by test id."""
+def propose(found, quarantined, root=ROOT):
+    """An entry for each flip that no entry covers yet, by test id. A test whose file this checkout lacks (a test only a
+    pull request branch has) is left out: its entry would name a file main does not have."""
     out = []
     for test in sorted(found):
-        if matching(test, quarantined) is not None:
+        if matching(test, quarantined) is not None or not (Path(root) / test.split("::", 1)[0]).is_file():
             continue
         flip = found[test]
         out.append(
@@ -373,13 +374,14 @@ def detect(gh, repo, days, today, quarantined):
     found = flips(observed)
     proposed = propose(found, quarantined)
     lines = [f"Read {len(runs)} PR-check run(s) that could flip, over {days + 1} day(s).", ""]
+    proposed_tests = {p["test"] for p in proposed}
     if found:
         lines += ["| Test | Commit | Failed | Passed | Quarantined |", "| --- | --- | --- | --- | --- |"]
         for test in sorted(found):
             flip = found[test]
             failed = " ".join(f"[job]({u})" for u in flip["failed"])
             passed = " ".join(f"[attempt]({u})" for u in flip["passed"][:3])
-            status = "yes" if matching(test, quarantined) else "proposed"
+            status = "yes" if matching(test, quarantined) else "proposed" if test in proposed_tests else "not on main"
             lines.append(f"| `{test}` | {flip['commit'][:10]} | {failed} | {passed} | {status} |")
     else:
         lines.append("No test failed and passed on the same commit.")

@@ -344,7 +344,11 @@ def test_a_proposal_skips_what_is_already_quarantined_and_writes_one_file_each(t
             "first_seen": "2026-11-06",
         },
     }
-    proposed = quarantine.propose(found, {TEST})
+    # A flip in a test file that only a pull request branch has cannot be an entry on main: its file is not here.
+    found["backend/tests/test_branch_only.py::test_z"] = {**found[TEST], "commit": "c3"}
+    (tmp_path / "backend/tests").mkdir(parents=True)
+    (tmp_path / "backend/tests/test_new.py").write_text("def test_y(): pass\n")
+    proposed = quarantine.propose(found, {TEST}, root=tmp_path)
     assert [p["test"] for p in proposed] == ["backend/tests/test_new.py::test_y"]
     assert proposed[0] == {
         "test": "backend/tests/test_new.py::test_y",
