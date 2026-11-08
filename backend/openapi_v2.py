@@ -771,7 +771,7 @@ STABLE = [
         "post",
         "Tasks",
         "bulkChangeTasks",
-        "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, "
+        "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is step, status, "
         "owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not "
         "change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused "
         "(422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",

@@ -38,6 +38,7 @@ def register(
         names nothing, or more than BULK_CAP matches, is refused."""
         named = (
             f.owner,
+            f.exclude_owner,
             f.requester,
             f.status not in (None, "", "all") or None,
             f.label,
@@ -68,12 +69,26 @@ def register(
             exact=True,
             viewer=who.task_actor or who.actor,
         )
+        exclude_owner = None
+        if f.exclude_owner:
+            # An owner who is nobody would exclude nothing and widen the filter to every task, so it is refused.
+            exclude_owner = H.resolve_actor(c, f.exclude_owner)
+            if not exclude_owner:
+                raise Problem("exclude_owner", "exclude_owner is a person or a bot on the roster", 422)
         # The members-only rule too (pipeline_rights.list_sql): a non-member selects none of a hidden pipeline's tickets.
         visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
         if f.ids is not None:
             _, found = task_idents(c, who, ",".join(f.ids), visible_sql)
             filters["ids"] = [tid for tid in found.values() if tid]
-        rows = H.tasks(c, owner=owner, requester=requester, limit=BULK_CAP + 1, visible=visible_sql, **filters)
+        rows = H.tasks(
+            c,
+            owner=owner,
+            exclude_owner=exclude_owner,
+            requester=requester,
+            limit=BULK_CAP + 1,
+            visible=visible_sql,
+            **filters,
+        )
         if len(rows) > BULK_CAP:
             raise Problem(
                 "too_many",

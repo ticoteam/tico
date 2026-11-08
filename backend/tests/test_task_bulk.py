@@ -350,3 +350,84 @@ def test_a_non_member_bulk_change_touches_no_ticket_of_a_members_only_pipeline(a
     mine = bulk(api, {"owner": "ben"}, "close", token="ben-test")
     assert mine["changed"] == 1
     assert get(api, "tasks/" + own["id"], "ana-test")["task"]["status"] == "closed"
+
+
+def test_everything_not_mine_closes_by_excluding_the_callers_owner(api):
+    """`exclude_owner` is "everything not mine": the caller's own tasks stay, while other people's and bots' tasks in
+    the same filter close. A dry run counts the same set and changes nothing; an owner who is nobody is refused, since
+    an exclusion that names nobody would otherwise read as every task."""
+    mine = [label(api, task(api, f"Ana's note {i}", owner="human:ana"), "sweep") for i in range(2)]
+    theirs = [
+        label(api, task(api, "Draft the cmo brief", owner="cmo"), "sweep"),
+        label(api, task(api, "Ship the ops runbook", owner="ops"), "sweep"),
+        label(api, task(api, "Ben's memo", owner="human:ben"), "sweep"),
+    ]
+    chosen = {"label": "sweep", "exclude_owner": "human:ana", "status": "open,doing,waiting"}
+
+    dry = bulk(api, chosen, "close", dry_run=True)
+    assert (dry["matched"], dry["changed"], dry["skipped"]) == (3, 3, 0)
+    assert {t["id"] for t in dry["tasks"]["changed"]} == {t["id"] for t in theirs}
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in mine + theirs} == {"open"}
+
+    out = bulk(api, chosen, "close", note="Clearing the sweep")
+    assert (out["changed"], out["skipped"]) == (3, 0)
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in theirs} == {"closed"}
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in mine} == {"open"}
+    assert bulk(api, chosen, "close")["matched"] == 0
+
+    # Not owned by me is a filter of its own: with nothing else named it selects, and my tasks are never in it.
+    alone = bulk(api, {"exclude_owner": "human:ana"}, "close", dry_run=True)
+    assert alone["matched"] >= 3 and not {t["id"] for t in mine} & {t["id"] for t in alone["tasks"]["changed"]}
+    # An owner who is nobody is refused, never read as "exclude nobody": that would be every task.
+    refused = bulk(api, {"label": "sweep", "exclude_owner": "nobody-here"}, "close", expected=422)
+    assert refused["error"]["code"] == "exclude_owner"
+    assert get(api, "tasks/" + mine[0]["id"])["task"]["status"] == "open"
+
+
+def test_the_cli_and_the_mcp_tool_leave_out_my_tasks_with_not_owner(api):
+    """The Assistant's `--where-not-owner me` is the route's exclude_owner, with `me` resolved as the caller."""
+    from clients import hubcli, remotecli
+    from backend.tests.test_mcp import call
+
+    sent = []
+
+    class Client:
+        def get(self, path, **query):
+            return {"actor": "human:ana"}
+
+        def post(self, path, body, key=None):
+            sent.append((path, body))
+            return {}
+
+    args = hubcli.parser().parse_args(
+        [
+            "task",
+            "bulk",
+            "close",
+            "--where-not-owner",
+            "me",
+            "--where-status",
+            "open",
+            "--where-status",
+            "doing",
+            "--dry-run",
+        ]
+    )
+    remotecli.via_tool(Client(), args)
+    assert sent == [
+        (
+            "task-bulk",
+            {
+                "filter": {"exclude_owner": "human:ana", "status": "open,doing"},
+                "action": "close",
+                "dry_run": True,
+            },
+        )
+    ]
+
+    mine = label(api, task(api, "Ana's kept note", owner="human:ana"), "kept")
+    theirs = label(api, task(api, "Draft the kept note", owner="cmo"), "kept")
+    err, out = call(api, "hub_task_bulk", {"filter": {"label": "kept", "exclude_owner": "me"}, "action": "close"})
+    assert not err and out["changed"] == 1
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + theirs["id"])["task"]["status"] == "closed"

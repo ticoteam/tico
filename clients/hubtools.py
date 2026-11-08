@@ -1697,9 +1697,10 @@ def task_done(api, args):
     return task_update(api, {**args, "status": "done"})
 
 
-# hub_task_bulk's filter: what hub_task_list filters by, plus ids.
+# hub_task_bulk's filter: what hub_task_list filters by, plus ids. `not_owner` is the CLI's --where-not-owner.
 TASK_BULK_FILTER = (
     "owner",
+    "not_owner",
     "requester",
     "status",
     "lane",
@@ -1719,7 +1720,8 @@ TASK_BULK_FILTER = (
     "hub_task_bulk",
     "One change to every task a filter selects, in one call: move them to a step, set a status or "
     "an owner, add or remove tags, or close them. The filter is hub_task_list's (owner, requester, status, label, "
-    "type, step, ...) plus `ids`, and must name at least one. Each task changes as hub_task_update or hub_task_close "
+    "type, step, ...) plus `ids` and `exclude_owner` (everything not that owner's), and must name at least one. Each task "
+    "changes as hub_task_update or hub_task_close "
     "would change it, with your rights: a task you may not change is skipped with the reason and the rest still "
     "change. At most 200 tasks match a call; more is refused, so narrow the filter. `dry_run` answers the same counts "
     "and changes nothing: run it first.",
@@ -1730,6 +1732,7 @@ TASK_BULK_FILTER = (
             "description": "Which tasks: at least one of these",
             "properties": {
                 "owner": _s("Owner: a bot slug, a human id, or `me`"),
+                "exclude_owner": _s("Not owned by this one (a bot slug, a human id, or `me`): everything not theirs"),
                 "requester": _s("Requester: a bot slug, a human id, or `me`"),
                 "status": {
                     "type": "array",
@@ -1774,7 +1777,9 @@ def task_bulk(api, args):
     for name in TASK_BULK_FILTER:  # the CLI's --where-owner, --where-step, ...
         if args.get("where_" + name) not in (None, []):
             where[name] = args["where_" + name]
-    for name in ("owner", "requester", "member"):
+    if "not_owner" in where:
+        where["exclude_owner"] = where.pop("not_owner")
+    for name in ("owner", "exclude_owner", "requester", "member"):
         if where.get(name):
             where[name] = _target(api, where[name])
     if isinstance(where.get("status"), list):
