@@ -1444,6 +1444,80 @@ async fn fetching_a_bots_repository_clones_it_and_leaves_no_half_clone() {
 }
 
 #[tokio::test]
+async fn a_checkout_that_lost_its_agent_file_fast_forwards_to_github_when_github_has_it_again() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-heal");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-heal");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    assert_eq!(
+        fetchrepo::clone_repository(
+            &path,
+            "org/bot-heal",
+            &env,
+            Some(&bare.display().to_string())
+        )
+        .await,
+        ("cloned", String::new())
+    );
+
+    // The bot's commit deletes AGENT.md and is pushed; then GitHub reverts it.
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Memory from run wipe"]);
+    sh(&path, &["push", "-q", "origin", "HEAD:main"]);
+    sh(&seed, &["pull", "-q"]);
+    sh(&seed, &["revert", "--no-edit", "HEAD"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    assert!(!path.join("AGENT.md").exists());
+
+    assert_eq!(fetchrepo::heal_checkout(&path, &env).await, "");
+    assert!(path.join("AGENT.md").is_file());
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        sh(&path, &["rev-parse", "@{u}"]),
+        "fast-forwarded to GitHub's tip"
+    );
+    assert_eq!(sh(&path, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn a_checkout_with_an_unpushed_commit_is_left_alone_and_still_reports_the_problem() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-local");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-local");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    assert_eq!(
+        fetchrepo::clone_repository(
+            &path,
+            "org/bot-local",
+            &env,
+            Some(&bare.display().to_string())
+        )
+        .await,
+        ("cloned", String::new())
+    );
+
+    // A local commit that deletes AGENT.md and is never pushed; GitHub still has the file.
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let problem = fetchrepo::heal_checkout(&path, &env).await;
+    assert!(
+        !problem.is_empty(),
+        "a checkout with local commits is not healed"
+    );
+    assert!(!path.join("AGENT.md").exists());
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "no commit is dropped"
+    );
+    assert!(path.join(".git").is_dir(), "the folder stays");
+}
+
+#[tokio::test]
 async fn an_attached_worktree_is_certified_then_saved_to_a_wip_branch_when_its_task_closes() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "product");
