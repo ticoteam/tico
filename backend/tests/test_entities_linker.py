@@ -11,7 +11,7 @@ changes.
 from backend import mailbox_access as MA
 from backend.entities import linker as LK
 from backend.entities import store as ES
-from backend.tests.test_api import api  # noqa: F401  (the pytest fixture)
+from backend.tests.test_api import api, get, setup_attempt  # noqa: F401  (api is the pytest fixture)
 
 ANA = "human:ana"
 
@@ -42,6 +42,20 @@ def test_a_run_trace_links_the_entities_its_attempt_read(api):
         assert [(r["entity_id"], r["role"], r["method"], r["confidence"], r["status"]) for r in rows] == [
             (acme, "subject", "run_trace", 0.9, "linked")
         ]
+
+
+def test_a_bot_runs_card_and_rules_reads_are_its_run_trace_and_a_persons_are_not(api):
+    with tx(api) as c:
+        acme = org(c, "acme.example", "Acme Lights")
+        other = org(c, "other.example", "Other Co")
+    _r, _msg, attempt = setup_attempt(api)
+    get(api, "entities/card?ref=acme.example", token=attempt["token"])
+    get(api, "entities/rules?ref=other.example", token=attempt["token"])
+    get(api, "entities/card?ref=acme.example", token=attempt["token"])
+    get(api, "entities/card?ref=other.example")
+    with tx(api) as c:
+        assert ES.run_lookups(c, attempt["id"]) == [acme, other]
+        assert c.execute("SELECT count(*) FROM entity_lookups").fetchone()[0] == 2
 
 
 def test_an_exact_email_and_domain_link_with_their_quote_and_occurrence(api):

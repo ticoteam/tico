@@ -119,6 +119,13 @@ def install(
         auth.domain(who)  # pyright: ignore[reportUnknownMemberType]
         return who.actor
 
+    def trace(request: Request, entity_id: str) -> None:
+        """A bot run's lookup (`get` or `rules`): the run trace the linker links that run's text to."""
+        attempt_id = getattr(request.state.identity, "attempt_id", "") or ""
+        if attempt_id:
+            with store.transaction() as c:
+                ES.record_lookup(cast("sqlite3.Connection", c), attempt_id, entity_id)
+
     def resolve(c: sqlite3.Connection, actor: str, ref: str) -> dict[str, Any] | None:
         """The one visible entity a read's reference names: None when none shows, and the matches when several do."""
         found = ES.get(c, actor, ref)
@@ -194,6 +201,7 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
+        trace(request, found[0]["id"])
         return {"ambiguous": False, **body}
 
     @app.get("/api/v2/entities/rules")
@@ -207,6 +215,7 @@ def install(
             if len(found) > 1:
                 return ambiguous(ref, c, actor)
             applies = ES.rules(c, actor, found[0]["id"])
+        trace(request, found[0]["id"])
         return {"entity": found[0]["id"], "action": action, "as_bot": as_bot, "rules": applies or []}
 
     @app.get("/api/v2/entities/history")
