@@ -8732,8 +8732,9 @@ def _check_finish_children(conn, actor, parent, mover, *, strict=True):
                 continue
             if not isinstance(exc, Refused):
                 raise
-            shown = kid["title"] if task_private_readable(conn, actor, kid) else "a private subtask"
-            why = "" if task_private(conn, kid) else f" ({exc.detail})"
+            # Named, with the reason, only to an actor who may open it (the members-only rule too): else "a subtask".
+            shown = _child_for(conn, actor, kid["id"])
+            why = f" ({exc.detail})" if shown != "a subtask" else ""
             raise Refused(
                 exc.rule,
                 f"The open subtask {shown} is not yours to close{why}. "
