@@ -71,9 +71,14 @@ MAX_NAMED = 8
 GONE = re.compile(r"HTTP 404|HTTP 410")  # an expired or deleted log; anything else is retried next run
 # GitHub's primary and secondary rate limits (HTTP 403 or 429): the run stops reading and writing at once.
 RATE_LIMITED = re.compile(r"rate limit|HTTP 429", re.I)
-# An enqueue GitHub answered with a refusal; any other failure (a timeout, a dropped connection, a garbled reply) may
-# still have queued it, so its marker stays and the head is never re-enqueued again.
-REFUSED = re.compile(r"GraphQL: |HTTP 4\d\d|(?i:not mergeable|already (?:queued|in the merge queue))")
+# An enqueue GitHub answered with a refusal that says why; any other failure (a timeout, a dropped connection, a garbled
+# reply, an internal GraphQL error) may still have queued it, so its marker stays and the head is never re-enqueued.
+REFUSED = re.compile(
+    r"HTTP 4\d\d|(?i:not mergeable|unmergeable|already (?:queued|in the merge queue)|head branch was modified"
+    r"|resource not accessible|does not have permission|could not resolve to a pullrequest)"
+)
+# The removals whose queue run is read for the failing tests. Only failed_checks can be re-enqueued.
+DIAGNOSED = ("failed_checks", "checks_timed_out")
 
 
 class RateLimited(subprocess.CalledProcessError):
@@ -364,9 +369,11 @@ def read_log(lines):
             scenarios.append(scenario)
     if in_summary:
         blockers.append("pytest's summary, cut off")  # the log ends inside it: later failures are unknown
-    if not tests:
-        # A crash pytest never summarised (the session itself went down) still names its test.
+    if not tests and crashes:
+        # A crash pytest never summarised (the session itself went down) still names its test, but what else failed
+        # is unknown: never a flake.
         tests = crashes
+        blockers.append("no pytest summary")
     return list(tests.items()) + [(name, False) for name in blockers if name not in tests], scripts, scenarios
 
 
@@ -406,11 +413,16 @@ def marked(findings):
     out, size = [], 2
     every = list(dict.fromkeys(test for f in findings for test, _ in f.tests))
     for test in every:
-        size += len(json.dumps(test)) + 2
+        size += len(_escaped(json.dumps(test))) + 2
         if size > MAX_MARKED:
             return out, False
         out.append(test)
     return out, True
+
+
+def _escaped(text):
+    """JSON safe inside an HTML comment."""
+    return text.replace("-->", "--\\u003e")
 
 
 def _short(name):
@@ -452,7 +464,7 @@ def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred
     lines = [header or f"The merge queue removed this: {why}."]
     if findings:
         lines += ["", describe(findings, tests)]
-    elif pr.removed_reason == "failed_checks":
+    elif pr.removed_reason in DIAGNOSED:
         lines += ["", "No failed job found in the queue run." if run_url else "No queue run found for it."]
     if run_url:
         lines += ["", f"Queue run: {run_url}"]
@@ -461,7 +473,7 @@ def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred
     failed = marked(findings)[0]
     flags = (" requeued" if requeued else "") + (" deferred" if deferred else "")
     marker = f"queue={pr.queue_commit or 'none'} quarantine={quarantine_key(failed, tests)}{flags}"
-    named = json.dumps(failed).replace("-->", "--\\u003e")
+    named = _escaped(json.dumps(failed))
     lines += ["", f"<!-- stale-pr-keeper:tests {named} -->\n<!-- stale-pr-keeper:comment {pr.head} {marker} -->"]
     return "\n".join(lines)
 
@@ -737,7 +749,7 @@ def keep(gh, tests, now, dry_run=False):
             done["skipped"].append(f"#{pr.number}: already commented on {pr.head[:10]}")
             continue
         try:
-            run = gh.queue_run(pr.queue_commit) if pr.queue_commit and pr.removed_reason == "failed_checks" else None
+            run = gh.queue_run(pr.queue_commit) if pr.queue_commit and pr.removed_reason in DIAGNOSED else None
             if run is not None and run.get("status", "completed") != "completed":
                 done["skipped"].append(f"#{pr.number}: its queue run is still finishing")
                 continue
@@ -749,7 +761,7 @@ def keep(gh, tests, now, dry_run=False):
                 halted.append(pr.number)
             continue
         run_url = run["html_url"] if run else None
-        is_flake = flaky(findings, tests)
+        is_flake = pr.removed_reason == "failed_checks" and flaky(findings, tests)
         if is_flake and not requeued and pr.mergeable != "CONFLICTING" and gh.can_enqueue:
             body = requeue_body(pr, findings, tests, run_url)
             existing = (comment.comment_id, dict(seen[pr.number])[comment.comment_id]) if comment else None

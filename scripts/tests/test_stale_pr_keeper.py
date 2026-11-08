@@ -68,7 +68,13 @@ def requeued_marker(head, queue, tests=QUARANTINE, failed=(RECRUITING, CRASHED))
 
 class FakeGitHub:
     def __init__(
-        self, comments=None, fail=(), can_enqueue=True, status="completed", stderr="GraphQL: {} refused", limited=()
+        self,
+        comments=None,
+        fail=(),
+        can_enqueue=True,
+        status="completed",
+        stderr="GraphQL: Pull request is not mergeable ({})",
+        limited=(),
     ):
         self.pages = json.loads((FIXTURES / "open-prs.json").read_text())
         # {number: [body, ...]}; comment ids are number * 1000 + position
@@ -164,7 +170,9 @@ def test_a_crash_pytest_never_summarised_still_names_its_test():
     lines = [
         line for line in log_lines("worker-crashed.log") if "short test summary" not in line and "FAILED" not in line
     ]
-    assert keeper.read_log(lines)[0] == [(CRASHED, True)]
+    tests = keeper.read_log(lines)[0]
+    assert tests == [(CRASHED, True), ("no pytest summary", False)]
+    assert not keeper.flaky([finding(*tests)], set())  # what else failed is unknown
 
 
 def test_a_failed_line_outside_the_summary_is_test_output_not_a_failure():
@@ -198,7 +206,7 @@ def test_a_test_that_only_quotes_a_worker_crash_is_not_a_crash():
 def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
     line = f"FAILED {test} - worker 'gw1' crashed while running {test!r}"
     assert keeper.read_log(summary(line))[0] == [(test, True)]
-    assert keeper.read_log([f"worker 'gw1' crashed while running {test!r}\n"])[0] == [(test, True)]
+    assert keeper.read_log([f"worker 'gw1' crashed while running {test!r}\n"])[0][0] == (test, True)
 
 
 def test_a_log_that_ends_inside_the_summary_is_never_a_flake():
@@ -579,6 +587,31 @@ def test_huge_test_ids_keep_the_comment_small_and_are_never_a_flake():
     assert not keeper.flaky(findings, set())  # every one a crash, but too many to be flakes
 
 
+def with_reason(gh, number, reason):
+    for page in gh.pages:
+        for node in page["data"]["repository"]["pullRequests"]["nodes"]:
+            if node["number"] == number:
+                node["timelineItems"]["nodes"][-1]["reason"] = reason
+    return gh
+
+
+def test_a_timed_out_removal_names_its_failing_tests_and_is_never_re_enqueued():
+    gh = with_reason(FakeGitHub(), 2984, "checks_timed_out")
+    run(gh)
+    (call,) = written_to(gh, 2984)
+    assert call[0] == "comment" and "its checks timed out" in call[2]
+    assert f"`{RECRUITING}` (quarantined) in [python-5]" in call[2]
+
+
+def test_ids_holding_an_html_comment_end_stay_inside_the_budget():
+    many = [(f"backend/tests/test_x.py::test_y[{i}{'-->' * 160}]", False) for i in range(40)]
+    findings = [finding(*many[n * 8 : n * 8 + 8], job=f"python-{n}") for n in range(5)]
+    pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
+    body = keeper.comment_body(pr, findings, {t for t, _ in many}, "https://x")
+    assert len(body) < 60_000
+    assert not keeper.flaky(findings, {t for t, _ in many})  # quarantined, but not all fit the marker
+
+
 def test_a_requeued_head_whose_comment_is_current_is_done():
     gh = FakeGitHub(comments={2953: [requeued_marker(sha("d3"), sha("8a"))]})
     run(gh)
@@ -663,7 +696,7 @@ def test_a_failed_enqueue_takes_its_marker_back_and_fails_the_run_after_the_rest
     gh = FakeGitHub(fail={"enqueue"})
     text, ok = run(gh)
     assert not ok
-    assert "#2984 requeued: GraphQL: enqueue refused" in text
+    assert "#2984 requeued: GraphQL: Pull request is not mergeable (enqueue)" in text
     assert ("delete_comment", 777) in gh.calls
     assert [c[0] for c in written_to(gh, 3060)] == ["comment", "enqueue"]  # later pull requests were still handled
     assert [c[0] for c in written_to(gh, 3033)] == ["comment"]
@@ -671,7 +704,12 @@ def test_a_failed_enqueue_takes_its_marker_back_and_fails_the_run_after_the_rest
 
 @pytest.mark.parametrize(
     "stderr",
-    ["Post https://api.github.com/graphql: net/http: TLS handshake timeout", "unexpected end of JSON input", ""],
+    [
+        "Post https://api.github.com/graphql: net/http: TLS handshake timeout",
+        "unexpected end of JSON input",
+        "",
+        "GraphQL: Something went wrong while executing your query. (enqueuePullRequest)",
+    ],
 )
 def test_an_enqueue_whose_outcome_is_unknown_keeps_its_marker(stderr):
     gh = FakeGitHub(fail={"enqueue"}, stderr=stderr)
