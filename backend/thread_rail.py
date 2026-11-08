@@ -71,7 +71,7 @@ PINNED_SQL = (
     "(r.pinned_for_everyone_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM thread_pins p WHERE p.thread_id=r.id "
     "AND p.actor=:me AND p.pinned=0)))"
 )
-ROOT_OPEN = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL"
+ROOT_OPEN = f"r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND {T.task_open_sql('r')}"
 ACTIVITY = (
     f"COALESCE((SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id AND {T._SUBTREE_OPEN}),r.last_seq,0)"
 )

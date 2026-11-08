@@ -3868,6 +3868,25 @@ _SUBTREE = "conversations s LEFT JOIN thread_followers f ON f.thread_id=s.id AND
 _SUBTREE_OPEN = "s.archived_at IS NULL AND s.closed_at IS NULL"
 
 
+def task_open_sql(r="r"):
+    """SQL: a thread on a task is open unless its task is done, closed or declined and nobody has posted in its subtree
+    since. A notice (what the task's own changes write into its thread) is not a post. The finish is the task's latest
+    status event, so a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
+    finish = (
+        "COALESCE((SELECT MAX(h.created_at) FROM history_events h WHERE h.subject_type='task' "
+        "AND h.subject_id=t.id AND h.kind='status' AND h.new IN ('done','closed','declined')),"
+        "t.closed_at,t.done_at,t.updated_at)"
+    )
+    posted = (
+        f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
+        f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.created_at>{finish})"
+    )
+    return (
+        f"NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND t.status IN ('done','closed','declined') "
+        f"AND NOT {posted})"
+    )
+
+
 def _subtree_mark(c, v):
     """A viewer's mark in a subtree's row, as SQL: their read point, and at least what the migration carried over, which
     is never unread (`unread`)."""
