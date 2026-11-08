@@ -39,7 +39,7 @@ import sqlite3
 from typing import Any, cast
 
 from . import bot_settings as BS
-from . import hubdb
+from . import company_pause, hubdb
 
 # hubdb is untyped: each of its functions is partially unknown, and a cast cannot clear that on the attribute.
 H: Any = hubdb
@@ -95,6 +95,10 @@ def run(c: sqlite3.Connection, at: str | None = None) -> dict[str, int]:
 
 def plan(c: sqlite3.Connection, at: str) -> tuple[list[str], list[str]]:
     """([task ids to resume], [task ids to stop resuming]), oldest first, within the sweep's limits. Reads only."""
+    if company_pause.record(c) is not None:
+        # While the company is paused no resume is woken, so a turn the pause holds never uses up one of the resumes
+        # (spec item 11). The counts themselves are unchanged.
+        return [], []
     rows = cast(
         list[dict[str, Any]],
         H._rows(
