@@ -1335,7 +1335,7 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
         conn.execute("ROLLBACK TO pipeline_advance")
         conn.execute("RELEASE pipeline_advance")
         if exc.rule == "stage_full":
-            _record_waiting(conn, actor, task_id, exc)
+            record_waiting(conn, actor, task_id, exc)
         return {**none, "reason": str(exc.detail or exc)}
     conn.execute("RELEASE pipeline_advance")
     return {
@@ -1347,9 +1347,10 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
     }
 
 
-def _record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: hubdb.Refused) -> None:
-    """A link's move that waited for room is recorded after its own write is undone, so the refusal outlives the rollback:
-    the pipeline manager lists the ticket as waiting for room (pipeline_manager). Nothing is raised."""
+def record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: hubdb.Refused) -> None:
+    """A move that waited for room (a link's, or an automatic one: hubdb.try_auto_move) is recorded after its own write is
+    undone, so the refusal outlives the rollback: the pipeline manager lists the ticket as waiting for room
+    (pipeline_manager). Nothing is raised."""
     try:
         H.refuse(conn, actor, exc.rule, exc.detail, task=task_id, context=getattr(exc, "context", None))
     except H.Refused:

@@ -4696,6 +4696,10 @@ def try_auto_move(conn, actor, row, *, kind="auto_move_refused", **kw):
         if isinstance(exc, Problem) and not isinstance(exc, Refused) and exc.code != "spawn_refused":
             raise
         history_event(conn, "task", row["id"], actor, kind, note=exc.detail or str(exc))
+        if isinstance(exc, Refused) and exc.rule == "stage_full":
+            from . import pipeline_engine
+
+            pipeline_engine.record_waiting(conn, actor, row["id"], exc)  # the manager lists it as waiting for room
         return False
     except BaseException:
         conn.execute("ROLLBACK TO auto_move")
