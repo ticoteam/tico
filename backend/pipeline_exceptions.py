@@ -48,7 +48,8 @@ def reads_list(c, slug):
 
 
 def _check_children(c, ids):
-    """{child id: ticket id} for the open checks (Review, QA, Security) filed below these tickets."""
+    """{child id: ticket id} for the open checks (Review, QA, Security) filed below these tickets; a check On ice (D69) is
+    parked on purpose, never stuck."""
     from .check_pools import is_check_title
 
     if not ids:
@@ -59,7 +60,7 @@ def _check_children(c, ids):
             "SELECT t.id, t.title, r.to_task, p.type_id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
             "JOIN tasks p ON p.id=r.to_task "
             f"WHERE r.kind='parent' AND r.to_task IN ({','.join('?' * len(part))}) "
-            f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
+            f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND NOT {H.ON_ICE % 't'}",
             (*part, *H.ACTIVE_STATUSES),
         ):
             if is_check_title(c, {"type_id": row["type_id"]}, row["title"]):
@@ -391,7 +392,8 @@ def waiting_room(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
     """The tickets a link, a bot or an automation could not move into a full stage (D68, rule stage_full), as
     {task_id: {type_id, stage_id, created_at}}: the latest refusal of each. There is no time limit: the card waits, where it
     is, until its stage has room, or it moves, or it finishes. A refusal is dropped when the card has a step change after it,
-    when it is no longer active or already in that stage, or when the stage is no longer full."""
+    when it is no longer active or already in that stage, or when the stage is no longer full. A wait to enter another
+    pipeline (a link's) ends once that pipeline takes the card: it is not all On ice and its first stage has room."""
     from . import pipeline_engine
 
     waiting: dict[str, dict[str, str]] = {}
@@ -411,11 +413,24 @@ def waiting_room(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
             or found["step_id"] == stage_id
             or moved is not None
             or pipeline_engine.full_stage(c, stage_id, task_id) is None
+            or _entry_open(c, found["type_id"], stage_id, task_id)
         ):
             waiting.pop(task_id, None)
             continue
         waiting[task_id] = {"type_id": found["type_id"], "stage_id": stage_id, "created_at": event["created_at"]}
     return waiting
+
+
+def _entry_open(c: sqlite3.Connection, type_id: str, stage_id: str, task_id: str) -> bool:
+    """Whether a wait to enter another pipeline than the card's is over: that pipeline is not all On ice
+    (pipeline_engine.frozen_entry) and the stage a link files a ticket at now has room."""
+    from . import pipeline_engine
+
+    found = c.execute("SELECT type_id FROM task_steps WHERE id=?", (stage_id,)).fetchone()
+    if found is None or found["type_id"] == type_id or pipeline_engine.frozen_entry(c, str(found["type_id"])):
+        return False
+    entry = pipeline_engine.first_stage(c, str(found["type_id"]))
+    return entry is not None and pipeline_engine.full_stage(c, str(entry["id"]), task_id) is None
 
 
 def _waiting_for_room(c: sqlite3.Connection, out: _List, rows: list[Any]) -> None:

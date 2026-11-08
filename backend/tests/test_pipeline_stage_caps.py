@@ -888,3 +888,177 @@ def test_an_automation_close_leaves_a_subtask_on_ice_open(api):
         assert H.task(c, loose)["status"] == "closed"
         assert H.task(c, parked)["status"] == "open"
     assert card_stage(api, parked) == steps["On ice"]
+
+
+def _trigger_rule(api, event, action, params, by="human:ana"):
+    """A Task Trigger rule as its maker saved it: it acts as `by`, for every task."""
+    import json
+
+    with api.app.state.store.transaction() as c:
+        row = {
+            "id": "rule-" + H.new_id(),
+            "scope_kind": "team",
+            "scope_id": "",
+            "event": event,
+            "condition": "{}",
+            "then_outcome": "action",
+            "params": json.dumps({"action": action, **params}, sort_keys=True),
+            "enabled": 1,
+            "position": 1,
+            "note": "",
+            "created_by": by,
+            "action_by": by,
+            "created_at": H.now(),
+            "updated_at": H.now(),
+            "revision": 1,
+        }
+        c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+    return row
+
+
+def test_a_task_trigger_move_into_a_full_stage_is_held_and_listed_as_waiting_for_room(api):
+    """A Task Trigger rule acts as its maker, a person, but is an automation: its move into a full stage is refused, the
+    card stays, and the manager lists it as waiting for room."""
+    typ, steps = make_line(api, "TrigFull" + uuid.uuid4().hex[:8])
+    set_cap(api, steps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=typ, step="Doing", lint=False)
+    _trigger_rule(api, "task.created", "move_step", {"step": "Doing"})
+    with api.app.state.store.transaction() as c:
+        card = H.task_create(c, ANA, "Moved by a rule", "", ANA, type=typ, step="Backlog", lint=False)["id"]
+    assert card_stage(api, card) == steps["Backlog"]
+    with api.app.state.store.read() as c:
+        assert X.waiting_room(c)[card]["stage_id"] == steps["Doing"]
+
+
+def test_an_automation_writing_as_its_owner_is_held_to_the_caps_as_an_automation(api):
+    """An automation writes as its human owner, but that is no person's override: a card it files or moves into a full
+    stage, or into or out of On ice, is refused (automation_actions.run holds every action as an automation's)."""
+    from backend import automation_actions as AA
+
+    typ, steps = make_line(api, "OwnerAuto" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    set_cap(api, steps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=typ, step="Doing", lint=False)
+        card = H.task_create(c, ANA, "Owner's card", "", ANA, type=typ, step="Backlog", lint=False)["id"]
+        parked = H.task_create(c, ANA, "Parked", "", ANA, type=typ, step="On ice", lint=False)["id"]
+    seen = []
+
+    def move(c, auto, run_id, args, values):
+        seen.append(E.AUTOMATION.get())
+        H.task_update(c, ANA, args["task"], step=args["step"])
+        return {"ok": True, "detail": "moved"}
+
+    AA.ACTIONS["_test_move"] = move
+    try:
+        with api.app.state.store.transaction() as c:
+            for tid, to in ((card, "Doing"), (card, "On ice"), (parked, "Backlog")):
+                out = AA.run(c, {"id": "auto-1", "flow": {}}, "run-1", "_test_move", {"task": tid, "step": to}, {})
+                assert out["ok"] is False, (tid, to)
+            assert E.AUTOMATION.get() is False
+    finally:
+        del AA.ACTIONS["_test_move"]
+    assert seen == [True, True, True]
+    assert card_stage(api, card) == steps["Backlog"]
+    assert card_stage(api, parked) == steps["On ice"]
+    assert person_move(api, card, "Doing").status_code == 200  # the person herself still may, over the cap
+
+
+def test_a_task_rule_close_and_a_trigger_done_never_close_a_subtask_on_ice(api):
+    """The 24-hour Task Rule close and a Task Trigger's move to Done are automations: a parked subtask stays open On ice."""
+    from backend import task_rules
+
+    typ, steps = make_line(
+        api, "RuleKids" + uuid.uuid4().hex[:8], [*ON_ICE_LINE, {"name": "Closed", "status": "closed"}]
+    )
+    set_cap(api, steps["On ice"], 0)
+    old = H.shift(H.now(), hours=-25)
+    with api.app.state.store.transaction() as c:
+        done = H.task_create(c, ANA, "Done parent", "", ANA, type=typ, step="Doing", lint=False)["id"]
+        kept = H.task_create(c, ANA, "Parked kid", "", ANA, type=typ, step="On ice", parent_id=done, lint=False)["id"]
+        c.execute(
+            "UPDATE tasks SET status='done', step_id=?, done_at=?, created_at=?, updated_at=?, checkpoint_at=NULL "
+            "WHERE id=?",
+            (steps["Done"], old, old, old, done),
+        )
+        c.execute(
+            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id IN (?, ?)",
+            (old, done, kept),
+        )
+    failures = []
+    task_rules.tick(api.app.state.store, H.parse_ts(H.now()), failures)
+    assert not failures
+    with api.app.state.store.read() as c:
+        assert H.task(c, done)["status"] == "closed"
+        assert H.task(c, kept)["status"] == "open"
+    assert card_stage(api, kept) == steps["On ice"]
+
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, ANA, "Trigger parent", "", ANA, type=typ, step="Backlog", lint=False)["id"]
+        kid = H.task_create(c, ANA, "Parked kid 2", "", ANA, type=typ, step="On ice", parent_id=parent, lint=False)[
+            "id"
+        ]
+    _trigger_rule(api, "task.step_changed", "move_step", {"step": "Done"})
+    assert person_move(api, parent, "Doing").status_code == 200
+    with api.app.state.store.read() as c:
+        assert H.task(c, kid)["status"] == "open"
+    assert card_stage(api, kid) == steps["On ice"]
+
+
+def test_an_ended_snooze_on_a_card_on_ice_is_no_missed_start(api):
+    """A parked card's snooze that ended is not "nothing has picked it up": the roundup lists no missed start for it."""
+    from backend import task_roundup as RD
+
+    typ, steps = make_line(api, "IceSnooze" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    at = H.now()
+    with api.app.state.store.transaction() as c:
+        ids = {}
+        for stage in ("Backlog", "On ice"):
+            tid = H.task_create(c, ANA, "Snoozed " + stage, "", ANA, type=typ, step=stage, lint=False)["id"]
+            c.execute("UPDATE tasks SET owner_id='bot:coo' WHERE id=?", (tid,))
+            H._task_event(c, tid, H.KEEPER, "snoozed_until", H.shift(at, hours=-5), None, "snooze over")
+            ids[stage] = tid
+        listed = " ".join(str(line) for line in RD._missed_starts(c, "coo", "bot:coo", at))
+    assert ids["Backlog"][:8] in listed  # the control: an ordinary card is listed
+    assert ids["On ice"][:8] not in listed
+
+
+def test_a_check_subtask_on_ice_is_never_a_stuck_check(api):
+    """A Security check parked On ice under an ordinary ticket waits on purpose: it is not among the open checks the stuck
+    test looks at (pipeline_exceptions._check_children)."""
+    typ, steps = make_line(api, "IceCheck" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        ticket = H.task_create(c, ANA, "Ticket", "", ANA, type=typ, step="Doing", lint=False)["id"]
+        live = H.task_create(c, ANA, "Security: live", "", ANA, type=typ, step="Backlog", parent_id=ticket, lint=False)
+        parked = H.task_create(
+            c, ANA, "Security: parked", "", ANA, type=typ, step="On ice", parent_id=ticket, lint=False
+        )
+        assert X._check_children(c, {ticket}) == {live["id"]: ticket}
+        assert parked["id"] not in X._check_children(c, {ticket})
+
+
+def test_a_wait_to_enter_a_frozen_pipeline_ends_once_any_working_stage_there_opens(tmp_path):
+    """A link's wait into a pipeline all On ice names its first parked stage. Opening another working stage there lets the
+    card in, so the wait ends: the manager no longer lists it as waiting for room."""
+    c, sales, _, _ = two(tmp_path)
+    frozen = H.type_create(
+        c,
+        ANA,
+        "Frozen2",
+        [{"name": "Parked", "status": "open"}, {"name": "Queue", "status": "open"}, {"name": "Done", "status": "done"}],
+        mover=True,
+    )
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, frozen["id"]))
+    parked, queue = step_id(c, frozen["id"], "Parked"), step_id(c, frozen["id"], "Queue")
+    R.set_stage(c, ANA, parked, {"card_cap": 0})
+    R.set_stage(c, ANA, queue, {"card_cap": 0})
+    L.create_link(c, ANA, step_id(c, sales["id"], "Lead"), frozen["id"], "move")
+    task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Lead", lint=False)["id"]
+
+    assert not E.advance(c, H.KEEPER, task)["moved"]
+    assert X.waiting_room(c)[task]["stage_id"] == parked
+    R.set_stage(c, ANA, queue, {"card_cap": None})
+    assert task not in X.waiting_room(c)

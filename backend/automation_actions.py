@@ -78,7 +78,11 @@ def run(c, auto, run_id, do, args, values, step=None):
     nothing but its refusal. `step` is what the action is keyed by: a create_task's producer (automation_engine._filter
     gives each of a filter's actions its own), one occurrence task per producer; a mail action's is the step's own id,
     which orders the step's mail actions on one message into one chain (`_queue_mail`)."""
+    from . import pipeline_engine
+
     c.execute("SAVEPOINT automation_action")
+    # An automation writes as its owner but is held to the stage caps and On ice as an automation (D68, D69).
+    held = pipeline_engine.AUTOMATION.set(True)
     try:
         if do == "create_task":
             result = _create_task(c, auto, run_id, args or {}, values or {}, step=step)
@@ -92,6 +96,8 @@ def run(c, auto, run_id, do, args, values, step=None):
         c.execute("ROLLBACK TO automation_action")
         c.execute("RELEASE automation_action")
         return _fail(getattr(exc, "detail", None) or getattr(exc, "message", None) or exc or type(exc).__name__)
+    finally:
+        pipeline_engine.AUTOMATION.reset(held)
 
 
 # ---------------------------------------------------------------------------------------------------- messages

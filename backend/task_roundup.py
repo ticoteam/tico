@@ -443,7 +443,7 @@ def _missed_starts(c, slug, actor, at):
     """A snooze that ended at its deadline, or a deferred time that passed, within MISSED_START_LOOKBACK and more than
     MISSED_START_GRACE before the run, on a live task the bot owns (a deferral it made on a task it owns), with no turn on the
     task and no delivery to it since that time: one line per such time. A deferred task must still wait for its next run,
-    with no resume condition holding it (H.next_run_waiting)."""
+    with no resume condition holding it (H.next_run_waiting). A card On ice (D69) starts nothing."""
     from . import task_snooze as TS
 
     since = H.shift(at, seconds=-int(MISSED_START_LOOKBACK.total_seconds()))
@@ -454,7 +454,8 @@ def _missed_starts(c, slug, actor, at):
         c.execute(
             f"SELECT e.old AS appointment, t.* FROM history_events e JOIN {H.TASKS} t ON t.id=e.subject_id "
             "WHERE e.subject_type='task' AND e.kind='snoozed_until' AND e.new IS NULL AND e.note='snooze over' "
-            f"AND e.old>? AND e.old<=? AND t.owner_id=? AND t.status IN ({marks}) ORDER BY e.old",
+            f"AND e.old>? AND e.old<=? AND t.owner_id=? AND t.status IN ({marks}) AND NOT {H.ON_ICE % 't'} "
+            "ORDER BY e.old",
             (since, before, actor, *H.ACTIVE_STATUSES),
         )
     )
@@ -462,7 +463,8 @@ def _missed_starts(c, slug, actor, at):
         c.execute(
             f"SELECT d.due_at AS appointment, t.* FROM deferrals d JOIN {H.TASKS} t ON t.id=d.item "
             "WHERE d.kind='task' AND d.bot=? AND t.owner_id=? AND d.settled_at IS NULL AND d.fired_job IS NULL "
-            f"AND d.due_at IS NOT NULL AND d.due_at>? AND d.due_at<=? AND t.status IN ({marks}) ORDER BY d.due_at",
+            f"AND d.due_at IS NOT NULL AND d.due_at>? AND d.due_at<=? AND t.status IN ({marks}) "
+            f"AND NOT {H.ON_ICE % 't'} ORDER BY d.due_at",
             (slug, actor, since, before, *H.ACTIVE_STATUSES),
         )
     )

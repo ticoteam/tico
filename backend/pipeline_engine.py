@@ -991,6 +991,12 @@ def automation() -> "Generator[None, None, None]":
         AUTOMATION.reset(token)
 
 
+def automated(actor: str) -> bool:
+    """Whether a write is a bot's or an automation's, for the stage caps (D68, D69): a bot, a write made for a person
+    (H.VIA: BotOps or the Assistant), or an automation, whoever it writes as (AUTOMATION: its human owner too)."""
+    return not H.is_human(actor) or bool(H.VIA.get()) or AUTOMATION.get()
+
+
 @contextmanager
 def decided_move(actor: str) -> "Generator[None, None, None]":
     """Runs the moves inside it as a decision the actor already made (its authority is checked by the caller)."""
@@ -1118,14 +1124,14 @@ def _room(conn: sqlite3.Connection, actor: str, task_id: str, here: Row | None, 
     says so. Returns False for a stage with room."""
     if target is None:
         return False
-    # Delegated writes are automated too: BotOps or the Assistant writing for a person (H.VIA) gets no person's override.
-    automated = not H.is_human(actor) or bool(H.VIA.get())
-    if automated and here is not None and here["card_cap"] == 0:
+    # Delegated writes are automated too: BotOps or the Assistant writing for a person (H.VIA), or an automation writing
+    # as its owner (AUTOMATION), gets no person's override.
+    if automated(actor) and here is not None and here["card_cap"] == 0:
         raise room_refusal("on_ice", f"Only a person moves a card out of {here['name']}", task_id, str(here["id"]))
     full = full_stage(conn, str(target["id"]), task_id)
     if full is None:
         return False
-    if automated:
+    if automated(actor):
         raise room_refusal("stage_full", full_detail(full), task_id, str(target["id"]))
     return True
 
@@ -1202,7 +1208,7 @@ def may_leave_ice(conn: sqlite3.Connection, actor: str, row: Row, step_id: str |
     An automation that acts as Tico is held all the same (AUTOMATION, for every write of rules._act, a close's cascade to
     subtasks too); a sweep that would close a parked card passes it over instead (ask_deadlines,
     question_tasks.open_rows)."""
-    if (actor == H.KEEPER and not AUTOMATION.get()) or (H.is_human(actor) and not H.VIA.get()):
+    if (actor == H.KEEPER and not AUTOMATION.get()) or not automated(actor):
         return
     here = stage(conn, row.get("step_id"))
     if here is None or here["card_cap"] != 0 or step_id == here["id"]:
@@ -1403,7 +1409,7 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
         frozen = frozen_refusal(conn, str(link["to_pipeline_id"]), task_id, "the ticket")
         if frozen is not None:
             # Every working stage there is On ice: the card stays, and an automated move is listed as waiting for room.
-            if not H.is_human(actor) or H.VIA.get():
+            if automated(actor):
                 record_waiting(conn, actor, task_id, cast("hubdb.Refused", frozen))
             return {**none, "reason": str(cast("hubdb.Refused", frozen).detail)}
         target = first_stage(conn, str(link["to_pipeline_id"]))
