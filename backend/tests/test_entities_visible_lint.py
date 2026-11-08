@@ -16,7 +16,7 @@ EXCLUDED_DIRS = ("migrations", "tests")
 NEW_TABLES = re.compile(
     r"\b(from|join)\s+(entity_types|link_types|entity_attributes|entity_values|entity_value_history|"
     r"entity_external_refs|entity_activities|entity_connections|entity_notes|entity_views|entity_mentions|"
-    r"entity_suppressions|entity_sources|entity_merges)\b",
+    r"entity_suppressions|entity_sources|entity_merges|entity_lookups)\b",
     re.IGNORECASE,
 )
 GRAPH_TABLES = re.compile(r"\b(from|join)\s+(entities|entity_links|entity_identifiers|entity_watches)\b", re.IGNORECASE)

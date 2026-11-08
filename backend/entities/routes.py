@@ -119,6 +119,13 @@ def install(
         auth.domain(who)  # pyright: ignore[reportUnknownMemberType]
         return who.actor
 
+    def trace(request: Request, entity_id: str) -> None:
+        """A bot run's lookup (`get` or `rules`): the run trace the linker links that run's text to."""
+        attempt_id = getattr(request.state.identity, "attempt_id", "") or ""
+        if attempt_id:
+            with store.transaction() as c:
+                ES.record_lookup(cast("sqlite3.Connection", c), attempt_id, entity_id)
+
     def resolve(c: sqlite3.Connection, actor: str, ref: str) -> dict[str, Any] | None:
         """The one visible entity a read's reference names: None when none shows, and the matches when several do."""
         found = ES.get(c, actor, ref)
@@ -150,6 +157,13 @@ def install(
         with read() as c:
             return {"types": ES.types(c)}
 
+    @app.get("/api/v2/entities/counts")
+    def directory_counts(request: Request):
+        """How many entities of each type you can see, each stopping at 1,000 and saying so (`approximate`)."""
+        actor = caller(request)
+        with read() as c:
+            return {"counts": ES.type_counts(c, actor)}
+
     @app.get("/api/v2/entities/types/{type_key}")
     def directory_describe(request: Request, type_key: str):
         """One type: its attributes (each with its owner and options) and the link types that may touch it."""
@@ -169,14 +183,26 @@ def install(
         link: str | None = None,
         after: str | None = None,
         limit: int | None = None,
+        detail: bool = False,
     ):
-        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`."""
+        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`.
+        `detail` adds each row's organization, owner and the sources you can see it is known from (the Directory list)."""
         actor = caller(request)
         with read() as c:
             if not ES.type_exists(c, type_key):
                 raise Problem("not_found", f"No entity type {type_key}; see hub directory types", 404)
             try:
-                return ES.find(c, actor, type_key, name=name, status=status, link=link, after=after, limit=limit or 50)
+                return ES.find(
+                    c,
+                    actor,
+                    type_key,
+                    name=name,
+                    status=status,
+                    link=link,
+                    after=after,
+                    limit=limit or 50,
+                    detail=detail,
+                )
             except ValueError as error:
                 raise page_error(error) from None
 
@@ -194,6 +220,7 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
+        trace(request, found[0]["id"])
         return {"ambiguous": False, **body}
 
     @app.get("/api/v2/entities/rules")
@@ -207,6 +234,7 @@ def install(
             if len(found) > 1:
                 return ambiguous(ref, c, actor)
             applies = ES.rules(c, actor, found[0]["id"])
+        trace(request, found[0]["id"])
         return {"entity": found[0]["id"], "action": action, "as_bot": as_bot, "rules": applies or []}
 
     @app.get("/api/v2/entities/history")
