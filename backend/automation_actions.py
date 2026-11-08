@@ -663,29 +663,33 @@ def start_turn(
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
     due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
-    task = H.task_create(
-        c,
-        actor,
-        title,
-        prompt,
-        H.bot_actor(bot),
-        due=due,
-        lint=False,
-        deduplicate=False,
-        routine=True,
-        trigger="other",
-        trigger_source="automation:" + auto["id"],
-        occurrence=marker,
-        occurrence_step=str(step_id) if marker else None,
-        rule_due_id=occ_refs.get("rule_due_id"),
-        wake_refs={
-            **occ_refs,
-            "automation_run": run_id,
-            "automation_step": step_id,
-            "automation_key": str(key),
-            **_chain_refs(auto),
-        },
-    )
+    from . import pipeline_engine
+
+    # The turn's task is filed by an automation, whoever owns it: held to the stage caps as one (D68).
+    with pipeline_engine.automation():
+        task = H.task_create(
+            c,
+            actor,
+            title,
+            prompt,
+            H.bot_actor(bot),
+            due=due,
+            lint=False,
+            deduplicate=False,
+            routine=True,
+            trigger="other",
+            trigger_source="automation:" + auto["id"],
+            occurrence=marker,
+            occurrence_step=str(step_id) if marker else None,
+            rule_due_id=occ_refs.get("rule_due_id"),
+            wake_refs={
+                **occ_refs,
+                "automation_run": run_id,
+                "automation_step": step_id,
+                "automation_key": str(key),
+                **_chain_refs(auto),
+            },
+        )
     if run_model:
         # The step's model is the task's own (checked when the automation was saved, so kept as it is here).
         task_run_models.set_choice(

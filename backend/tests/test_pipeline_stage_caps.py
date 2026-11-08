@@ -792,7 +792,7 @@ def test_a_spawn_into_a_pipeline_all_on_ice_waits_instead_of_dropping_the_ticket
         with pytest.raises(H.Refused) as refused:
             L.spawn(c, link, card)
     assert refused.value.rule == "stage_full"
-    assert refused.value.context == {"stage": tsteps["Intake"]}
+    assert refused.value.context == {"stage": tsteps["Intake"], "entry": target}
 
 
 def test_an_automatic_move_of_a_private_card_refused_for_room_is_recorded_as_private(api):
@@ -849,7 +849,7 @@ def test_a_spawn_into_a_pipeline_whose_working_stages_are_on_ice_never_files_the
             L.spawn(c, link, card)
         assert not c.execute("SELECT 1 FROM tasks WHERE type_id=?", (target,)).fetchone()
     assert refused.value.rule == "stage_full"
-    assert refused.value.context == {"stage": tsteps["Intake"]}
+    assert refused.value.context == {"stage": tsteps["Intake"], "entry": target}
 
 
 def test_a_move_link_into_a_pipeline_whose_working_stages_are_on_ice_leaves_the_card_waiting_for_room(tmp_path):
@@ -1062,3 +1062,79 @@ def test_a_wait_to_enter_a_frozen_pipeline_ends_once_any_working_stage_there_ope
     assert X.waiting_room(c)[task]["stage_id"] == parked
     R.set_stage(c, ANA, queue, {"card_cap": None})
     assert task not in X.waiting_room(c)
+
+
+def _default_entry(c):
+    """The stage a card with no type named lands at (the default type's first), emptied of other cards' weight."""
+    probe = H.task_create(c, ANA, "Probe", "", ANA, lint=False, deduplicate=False)
+    return probe["id"], probe["step_id"]
+
+
+def test_an_automation_turn_and_an_event_rule_create_task_are_held_to_the_entry_cap(api):
+    """A human-owned automation's turn (automation_actions.start_turn) and a person's event rule that files a task
+    (rules create_task on a sourceless event) are automations: neither files a card into a full or On ice stage."""
+    from backend import automation_actions as AA
+    from backend import rules as RU2
+
+    with api.app.state.store.transaction() as c:
+        _, entry = _default_entry(c)
+        c.execute("UPDATE task_steps SET card_cap=1 WHERE id=?", (entry,))
+        auto = {"id": "auto-" + uuid.uuid4().hex[:8], "flow": {"owner": "person:ana", "name": "Turny"}}
+        c.execute("SAVEPOINT turn")
+        with pytest.raises(H.Refused) as refused:
+            AA.start_turn(c, auto, "run-1", "s1", "bot:coo", "Do the thing", None)
+        c.execute("ROLLBACK TO turn")
+        c.execute("RELEASE turn")
+        assert refused.value.rule == "stage_full"
+        assert c.execute("SELECT count(*) FROM tasks WHERE step_id=?", (entry,)).fetchone()[0] == 1
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (entry,))
+    _trigger_rule(api, "tico.notice", "create_task", {"owner": "coo", "title": "Notice work"})
+    with api.app.state.store.transaction() as c:
+        RU2.judge_event(c, "tico.notice", {"trigger": "t-" + uuid.uuid4().hex[:6]})
+        assert not c.execute("SELECT 1 FROM tasks WHERE title='Notice work'").fetchone()
+
+
+def test_a_parked_card_wakes_no_bot_through_a_backlog_or_a_blocker(api):
+    """On ice is never over its backlog (step_backlog.warnings), and a parked waiting card held by a bot's work is not
+    listed on that bot's roundup (task_roundup._blocked_waits)."""
+    from backend import step_backlog as SB
+    from backend import task_roundup as RD
+    from backend.tests.test_step_backlog import board, tickets
+
+    with api.app.state.store.transaction() as c:
+        typ = board(c, {"over": 1, "notify": ["manager"], "every_hours": 4})
+        tickets(c, typ, "bot:ops", 2)
+        assert SB.warnings(c), "the control: a stage over its backlog warns"
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (typ["steps"][0]["id"],))
+        assert SB.warnings(c) == []
+
+    typ2, steps = make_line(api, "IceBlocked" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    set_cap(api, steps["On ice"], 0)
+    with api.app.state.store.transaction() as c:
+        blocker = H.task_create(c, ANA, "Finish the menu", "", "bot:ops", lint=False)["id"]
+        ids = {}
+        for stage in ("Backlog", "On ice"):
+            tid = H.task_create(c, ANA, "Waits " + stage, "", "bot:finance", type=typ2, step=stage, lint=False)["id"]
+            c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tid,))
+            c.execute(
+                "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'blocks',?,?)",
+                (blocker, tid, ANA, H.now()),
+            )
+            ids[stage] = tid
+        listed = {row["id"] for row, _ in RD._blocked_waits(c, H.now()).get("ops", [])}
+    assert ids["Backlog"] in listed  # the control
+    assert ids["On ice"] not in listed
+
+
+def test_an_automatic_move_into_another_pipelines_full_stage_keeps_waiting_while_its_entry_has_room(api):
+    """A wait for a named stage in another pipeline lasts while that stage is full, though that pipeline's entry stage has
+    room: only a wait to enter a pipeline that was all On ice ends when any stage there opens."""
+    typ, steps = make_line(api, "XFrom" + uuid.uuid4().hex[:8])
+    other, osteps = make_line(api, "XTo" + uuid.uuid4().hex[:8])
+    set_cap(api, osteps["Doing"], 1)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, ANA, "Already doing", "", ANA, type=other, step="Doing", lint=False)
+        card = H.task_create(c, ANA, "Transfer", "", ANA, type=typ, step="Backlog", lint=False)["id"]
+        assert H.try_auto_move(c, "bot:coo", H.task(c, card), type=other, step=osteps["Doing"]) is False
+    with api.app.state.store.read() as c:
+        assert X.waiting_room(c)[card]["stage_id"] == osteps["Doing"]

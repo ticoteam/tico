@@ -2084,10 +2084,10 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
-        # A private task's refusal keeps only what was refused, and the stage a capped move waited for: the actor named
-        # it, and the pipeline manager lists the card as waiting for room from it (pipeline_exceptions.waiting_room),
-        # only to readers of the card.
-        context = {"what": context.get("what"), **({"stage": context["stage"]} if context.get("stage") else {})}
+        # A private task's refusal keeps only what was refused, and the stage (and the pipeline entered, `entry`) a
+        # capped move waited for: the actor named it, and the pipeline manager lists the card as waiting for room from it
+        # (pipeline_exceptions.waiting_room), only to readers of the card.
+        context = {"what": context.get("what"), **{k: context[k] for k in ("stage", "entry") if context.get(k)}}
     row = {
         "id": new_id(),
         "created_at": now(),

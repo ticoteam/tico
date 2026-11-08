@@ -538,7 +538,7 @@ def _blocked_waits(c, at):
     """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
     (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
     task never reaches task_holds. Each recipient's mark suppresses only that recipient's line for this update.
-    Read once per run (the shared reads of discover and of each send)."""
+    Read once per run (the shared reads of discover and of each send). A task On ice (D69) waits on no one."""
     from . import task_holds as TH, task_snooze as TS
 
     out = {}
@@ -546,7 +546,7 @@ def _blocked_waits(c, at):
         c.execute(
             "SELECT tasks.* FROM " + H.TASKS + " tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
             "WHERE tasks.status='waiting' AND tasks.owner_id LIKE 'bot:%' AND b.state='active' "
-            "ORDER BY tasks.updated_at"
+            f"AND NOT {H.ON_ICE % 'tasks'} ORDER BY tasks.updated_at"
         )
     )
     for row in rows:

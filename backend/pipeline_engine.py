@@ -146,11 +146,15 @@ def frozen_entry(conn: sqlite3.Connection, pipeline_id: str) -> Row | None:
 
 
 def frozen_refusal(conn: sqlite3.Connection, pipeline_id: str, task_id: str, what: str) -> Exception | None:
-    """The stage_full refusal for a link into a pipeline whose working stages are all On ice (frozen_entry), or None."""
+    """The stage_full refusal for a link into a pipeline whose working stages are all On ice (frozen_entry), or None. Its
+    context names the pipeline too (`entry`): the wait ends once any working stage there takes the card
+    (pipeline_exceptions.waiting_room), not only the parked stage it names."""
     parked = frozen_entry(conn, pipeline_id)
     if parked is None:
         return None
-    return room_refusal("stage_full", f"{full_detail(parked)}, so {what} waits", task_id, str(parked["id"]))
+    exc: Any = room_refusal("stage_full", f"{full_detail(parked)}, so {what} waits", task_id, str(parked["id"]))
+    exc.context["entry"] = pipeline_id
+    return cast("Exception", exc)
 
 
 def next_stage(conn: sqlite3.Connection, step_id: str | None) -> Row | None:
