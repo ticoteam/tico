@@ -87,7 +87,7 @@ def watch(run, w):
     from backend import pipeline_engine
 
     def wrap(original):
-        def on_step_change(conn, actor, row, type_id, step_id, ts):
+        def on_step_change(conn, actor, row, type_id, step_id, ts, **kw):
             old = conn.execute("SELECT position FROM task_steps WHERE id = ?", (row.get("step_id"),)).fetchone()
             new = conn.execute("SELECT position FROM task_steps WHERE id = ?", (step_id,)).fetchone()
             if old and new and new[0] > old[0] and row.get("type_id") == type_id:
@@ -109,7 +109,7 @@ def watch(run, w):
                             ).fetchone()
                             if not overridden:
                                 run.violations["unmet_exit"].append((w.now(), f"{row['id'][:8]} {name}"))
-            return original(conn, actor, row, type_id, step_id, ts)
+            return original(conn, actor, row, type_id, step_id, ts, **kw)
 
         return on_step_change
 

@@ -1,8 +1,9 @@
 """The pipeline manager on a stalled card (backend/pipeline_manager.py, Track D of the pipeline engine plan).
 
 A "Launch case" pipeline has one stage, Building, with a Warn-after Limit of 30 minutes, and a Screenshot requirement
-that builder-openai reviews by bot. Its one card, owned by ana, has no screenshot from the start. The manager asks
-builder-openai on its first pass; builder-openai takes that wake and never answers (style silent). The card is past its
+that engineering-lead reviews by bot. Its one card, made by ana and assigned to builder-openai, has no screenshot from
+the start. Missing work is asked of its assignee (D30), so the manager asks builder-openai on its first pass;
+builder-openai takes that wake and never answers (style silent). The card is past its
 Limit from 30 minutes on, and the manager does not ask again in that visit. From 10:00 to 10:40 the manager's passes are
 paused (its tick is not run, as if its process were down), so its watchdog opens one BotOps task for the stall, once,
 and the manager runs again after the pause."""
@@ -17,7 +18,8 @@ from evals.factory.world import START
 NAME = "Launch case"
 PERSON = "human:ana"
 MANAGER = "engineering-lead"
-REVIEWER = "bot:builder-openai"
+BUILDER = "bot:builder-openai"
+REVIEWER = "bot:engineering-lead"
 PAUSE_AT = START + at(1)
 PAUSE_UNTIL = PAUSE_AT + timedelta(minutes=40)
 BOTOPS_TITLE = "Pipeline manager stopped: " + NAME
@@ -41,6 +43,8 @@ def setup(run, w, team):
             "UPDATE task_types SET manager=?, manager_every_minutes=10 WHERE id=?",
             (MANAGER, typ["id"]),
         )
+        # The assignment trigger stamps manager_since on the wall clock; the watchdog judges it on the sim's clock.
+        c.execute("UPDATE task_types SET manager_since=? WHERE id=?", (H.now(), typ["id"]))
         c.execute("UPDATE task_steps SET limit_minutes=30 WHERE type_id=? AND name='Building'", (typ["id"],))
         stage = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Building'", (typ["id"],)).fetchone()[0]
         now = H.now()
@@ -50,7 +54,7 @@ def setup(run, w, team):
             "VALUES ('req-launch-screenshot', ?, ?, 'Screenshot', 'attachment', '{}', 'bot', ?, 1, 1, ?, ?, ?)",
             (typ["id"], stage, REVIEWER, PERSON, now, now),
         )
-        card = H.task_create(c, PERSON, "Launch page", "", PERSON, type=typ["id"], step="Building", lint=False)
+        card = H.task_create(c, PERSON, "Launch page", "", BUILDER, type=typ["id"], step="Building", lint=False)
         if c.execute("SELECT 1 FROM stage_visits WHERE task_id=?", (card["id"],)).fetchone() is None:
             # The card entered Building when it was made; a task made without its visit is entered here.
             c.execute(
@@ -87,7 +91,7 @@ def passes(run):
 def first_ask_once(run):
     """The builder is asked once, on the manager's first pass after the card arrives."""
     found = asks(run)
-    ok = len(found) == 1 and found[0]["target_actor"] == REVIEWER
+    ok = len(found) == 1 and found[0]["target_actor"] == BUILDER
     return ok, f"{len(found)} asks to {', '.join(sorted({a['target_actor'] for a in found})) or 'nobody'}"
 
 
