@@ -348,10 +348,18 @@ function threadsAllRead(id: string) {
 }
 // Archive a thread from its row or its header: it leaves Threads and Catch up at once, and a short Undo puts it back.
 // The server refuses anyone who does not manage the thread.
+// An archived thread, here or in another window, leaves Catch up and its count at once; a 1:1 DM's count on its teammate
+// goes too (a DM is not on the list, so only this clears it).
+function threadsArchivedGone(id: string, dm?: string | null) {
+  THREADS.cu?.delete(id);
+  if (typeof catchUpGone === 'function') catchUpGone(id, true);
+  if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
+  threadsSideRender();
+}
 async function threadsArchive(id: string): Promise<void> {
   const view: ThreadRow = await patch(thvPath(id), {archived: true});
   threadsPut(view);
-  if (typeof catchUpGone === 'function') catchUpGone(id, true);
+  threadsArchivedGone(id, threadsRootLearn(view)?.dm);
   toast('Archived', false, {label: 'Undo', run: async () => {
     threadsUnarchived(await patch(thvPath(id), {archived: false}));
   }});
@@ -455,7 +463,8 @@ function threadsSync() {
       // A 1:1 DM is not on the rail: it is learned for its teammate's count; a new one starts that count.
       if (threadIsDm(d.thread) && !threadIsGroupDm(d.thread)) {
         const info = threadsRootLearn(d.thread);
-        if (d.kind === 'created' && info?.dm && info.following && !info.muted && !(info.dm in THREADS.dms)) {
+        if (d.thread.archived_at) threadsArchivedGone(d.thread.id, info?.dm);
+        else if (d.kind === 'created' && info?.dm && info.following && !info.muted && !(info.dm in THREADS.dms)) {
           THREADS.dms = {...THREADS.dms, [info.dm]: threadUnread(d.thread)};
           if (typeof renderTree === 'function') renderTree();
         }
