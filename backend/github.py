@@ -41,6 +41,7 @@ import logging
 import re
 import threading
 import time
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import Request, Response
@@ -315,6 +316,51 @@ def register_worktree_pr(c, pr):
     return made
 
 
+# A pull request names its Dev ticket as "Dev 665", "Dev #665", "Dev ticket 665" or a branch like fix/dev-665-x. A bare
+# "#665" is not read: GitHub's own "(#2851)" suffix and issue references use that form.
+TICKET_NAMED = re.compile(r"(?<![A-Za-z0-9])dev(?:[ _-]ticket)?[ _#-]{1,2}(\d{1,9})(?!\d)", re.I)
+
+
+def named_ticket(c, pr):
+    """The one active Dev ticket a pull request's branch, title or body names, or None. A pull request naming no ticket,
+    two different ones, or a ticket that is finished, not a Dev ticket or already has an open pull request names none."""
+    from .review_gate import engineering
+
+    head = pr.get("head") or {}
+    text = "\n".join(str(x or "") for x in (head.get("ref"), pr.get("title"), pr.get("body")))
+    numbers = {int(n) for n in TICKET_NAMED.findall(text)}
+    if len(numbers) != 1:
+        return None
+    task = H._one(c, "SELECT * FROM tasks WHERE number=?", (numbers.pop(),))
+    if not task or task["status"] not in H.ACTIVE_STATUSES or not engineering(c, task):
+        return None
+    if any(p["kind"] == "pr" and p.get("state") in ("open", "draft", None, "") for p in H.task_links(c, task["id"])):
+        return None
+    return task
+
+
+def register_named_pr(c, pr):
+    """A pull request that names its Dev ticket is linked to it, as `hub task link` would, so a builder who forgot the
+    link does not leave the ticket without one. Same rules as register_worktree_pr: this repository's organization only,
+    a head in the same repository, an open pull request. Returns the ids of the links it made."""
+    url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
+    match = PR_LINK.match(url)
+    if not match or pr.get("state") == "closed" or pr.get("merged"):
+        return set()
+    repo = f"{match.group(1)}/{match.group(2)}"
+    if str(((pr.get("head") or {}).get("repo") or {}).get("full_name") or "").lower() != repo.lower():
+        return set()
+    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    if not app or str(app["org"] or "").lower() != match.group(1).lower():
+        return set()
+    task = named_ticket(c, pr)
+    if not task:
+        return set()
+    link = H.task_link(c, H.KEEPER, task["id"], url)
+    H.event(c, H.KEEPER, "github.pr_linked", task["id"], {"url": url, "named_in": "branch, title or body"})
+    return {link["id"]}
+
+
 def health_wait_reason(link, detail, *, check_flow=False):
     """The PR condition whose age Health measures, from the already synced link only.
 
@@ -416,6 +462,79 @@ def refresh_queue_removals(service):
             _settle_removal(c, r["id"], pr)
 
 
+CONFLICT_READS_PER_PASS = 30
+CONFLICT_UNKNOWN_MINUTES = 5
+CONFLICT_STALE_MINUTES = 30
+CONFLICT_RETRY_S = 1800  # a read GitHub refused or that failed waits half an hour, not one 10 s pass
+_conflict_retry = {}  # link id -> monotonic time a failed read may be tried again
+
+
+def refresh_conflicts(service: Any) -> int:
+    """The maintenance pass's read of open pull requests on active Dev tickets whose mergeability is not known (read again
+    after five minutes: GitHub computes it lazily) or has not been read for thirty (a move of the base branch sends no
+    pull request event). A conflict found wakes the owner once per head, as the webhook's would (`pull_request`). At most
+    CONFLICT_READS_PER_PASS pull requests are read per pass, the longest unread first."""
+    with service.store.read() as c:
+        app = service.row(c)
+        if not app:
+            return 0
+        marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+        rows = H._rows(
+            c.execute(
+                "SELECT l.id,l.url,l.repo,l.number FROM task_links l "
+                "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "JOIN task_types y ON y.id=t.type_id "
+                "WHERE l.kind='pr' AND l.state='open' AND l.number IS NOT NULL AND r.reachable=1 "
+                "AND (y.role='engineering' OR y.name='Dev tickets') "
+                f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) "
+                "AND ((coalesce(l.mergeable,'unknown')='unknown' AND coalesce(l.updated_at,l.created_at)<?) "
+                "OR coalesce(l.updated_at,l.created_at)<?) "
+                "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT ?",
+                (
+                    str(app["org"] or "").lower() + "/%",
+                    *H.ACTIVE_STATUSES,
+                    H.shift(H.now(), minutes=-CONFLICT_UNKNOWN_MINUTES),
+                    H.shift(H.now(), minutes=-CONFLICT_STALE_MINUTES),
+                    500,  # the backing-off ones are dropped below, so they never fill the pass
+                ),
+            )
+        )
+    # A read refreshes the link's updated_at, so it is not due again for half an hour; a failed read writes nothing,
+    # so it waits here instead of being read again every pass.
+    now = time.monotonic()
+    for gone in [k for k, due in _conflict_retry.items() if due <= now]:
+        _conflict_retry.pop(gone, None)
+    rows = [r for r in rows if r["id"] not in _conflict_retry][:CONFLICT_READS_PER_PASS]
+    read = 0
+    for r in rows:
+        _conflict_retry[r["id"]] = now + CONFLICT_RETRY_S
+        try:
+            token, _ = service.mint([r["repo"]], {"pull_requests": "read"})
+            response = service._call(
+                "GET",
+                f"/repos/{quote(r['repo'], safe='/')}/pulls/{r['number']}",
+                headers={"Authorization": "Bearer " + token},
+            )
+            if response.status_code != 200:
+                continue
+            pr = response.json()
+            pr["html_url"] = r["url"]
+        except Exception:
+            logging.getLogger("tico.github").exception("Conflict read failed for %s #%s", r["repo"], r["number"])
+            continue
+        with service.store.transaction() as c:
+            pull_request(
+                c,
+                {"action": "refresh", "pull_request": pr},
+                review_role=service.settings.github_review_role,
+                release_repo=service.settings.release_repo,
+                read_refresh=True,
+            )
+        _conflict_retry.pop(r["id"], None)
+        read += 1
+    return read
+
+
 def _settle_removal(c, link_id, pr):
     """Clear a removal's `verify`; wake its owner once when the pull request is still open at the removed head."""
     found = H._rows(c.execute("SELECT id,task_id,url,detail FROM task_links WHERE id=?", (link_id,)))
@@ -450,6 +569,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
     registered = set() if read_refresh else register_worktree_pr(c, pr)
+    if not read_refresh and action in ("opened", "reopened", "edited", "ready_for_review"):
+        registered |= register_named_pr(c, pr)
     links = _links_for(c, url)
     for link in links:
         task = H.task(c, link["task_id"])
@@ -926,7 +1047,9 @@ def pr_signal(c, event, payload):
     """Checks, commit statuses, reviews and review comments update every attached PR."""
     repo = str((payload.get("repository") or {}).get("full_name") or "")
     pr = payload.get("pull_request") or {}
-    signal = payload.get("check_run") or payload.get("check_suite") or payload
+    signal = payload.get("check_run") or payload.get("check_suite") or payload.get("workflow_run") or payload
+    if event == "workflow_run" and (payload.get("action") != "completed" or not payload.get("workflow_run")):
+        return {"tasks": 0}  # only a finished workflow run is news; a started one is a check still going
     prs = signal.get("pull_requests") or ([pr] if pr else [])
 
     def base_repo(p):
@@ -943,12 +1066,16 @@ def pr_signal(c, event, payload):
     links = []
     for url in urls:
         links.extend(_links_for(c, url))
-    if event == "status" or event in ("check_run", "check_suite") and not prs:
+    if event == "status" or event in ("check_run", "check_suite", "workflow_run") and not prs:
         # Fork checks and commit statuses can omit the PR list.
         sha = payload.get("sha") if event == "status" else signal.get("head_sha")
+        # A workflow run on a push to main has no PR list either: only an open PR's head is its news, never a
+        # merged PR whose head is now main's.
+        still_open = " AND state IN ('open','draft')" if event == "workflow_run" else ""
         links = H._rows(
             c.execute(
-                "SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND json_extract(detail,'$.head_sha')=?",
+                "SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? AND json_extract(detail,'$.head_sha')=?"
+                + still_open,
                 (repo.lower(), sha),
             )
         )
@@ -961,7 +1088,7 @@ def pr_signal(c, event, payload):
         label = link["title"]
         wake, batch, who_key = False, None, ""
         finished_head = None
-        if event in ("check_run", "check_suite", "status"):
+        if event in ("check_run", "check_suite", "status", "workflow_run"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
             state = _check_state(signal.get("conclusion") or signal.get("state") or "pending")
@@ -969,6 +1096,8 @@ def pr_signal(c, event, payload):
             name = (
                 _suite_key(signal, signal)
                 if event == "check_suite"
+                else ("workflow:" + str(signal.get("name") or "run"))[:200]
+                if event == "workflow_run"
                 else str(signal.get("name") or signal.get("context") or "Checks")[:200]
             )
             left_pending = checks.get(name) == "pending" and state != "pending"
@@ -997,7 +1126,9 @@ def pr_signal(c, event, payload):
                     event == "check_suite"
                     and signal.get("status") == "completed"
                     and state != "pending"
-                    or event != "check_suite"
+                    or event == "workflow_run"
+                    and state != "pending"
+                    or event not in ("check_suite", "workflow_run")
                     and left_pending
                     and (suite_done or not any(k.startswith("suite:") for k in checks))
                 )
@@ -1866,7 +1997,14 @@ def install_github(app, settings, store):
                 result = pull_request(
                     c, payload, review_role=settings.github_review_role, release_repo=settings.release_repo
                 )
-            elif event in ("check_run", "check_suite", "status", "pull_request_review", "pull_request_review_comment"):
+            elif event in (
+                "check_run",
+                "check_suite",
+                "status",
+                "pull_request_review",
+                "pull_request_review_comment",
+                "workflow_run",
+            ):
                 result = pr_signal(c, event, payload)
             elif event == "push":
                 result = push(c, payload)

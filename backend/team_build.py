@@ -1,4 +1,4 @@
-"""Build a team (the web page "Build a team", ui/app/team-build.js): a briefing suggests the roles a team needs, and the
+"""Build a team (the web page "Build a team", ui/app/team-build.ts): a briefing suggests the roles a team needs, and the
 picks are hired into that team in one step.
 
 `suggest` answers from the local recommender (backend/recruit_rank.py) only, so the briefing never leaves this server and

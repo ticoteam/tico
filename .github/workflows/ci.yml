@@ -1,5 +1,6 @@
 # One release check for one candidate, split across isolated native VMs that run side by side.
 # The VMs are RunsOn instances in Tico's own AWS account (dispatched runs only, never fork code).
+# TICO_CI_HOSTED=true runs them on GitHub-hosted runners instead (docs/releasing.md#tests-on-a-pr).
 # No PR/push tests, schedule or publication: the release window (train.yml), a hotfix (hotfix.yml) or a person dispatches
 # it for an exact commit and version, and release.yml and the release window find the run by its title.
 # It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
@@ -7,7 +8,7 @@
 # shipped is what was tested. The Mac binaries are built by release.yml after the tag (no gate part runs on a Mac, and a
 # GitHub macOS runner can take 5-15 minutes to start), or carried forward when the runner sources did not change.
 name: Release validation
-run-name: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}
+run-name: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}${{ inputs.plan != '' && format(' (incremental on {0})', inputs.anchor) || '' }}
 
 on:
   workflow_dispatch:
@@ -25,6 +26,16 @@ on:
         description: The version this candidate will be released as (vX.Y.Z); it is built into the images
         required: true
         type: string
+      anchor:
+        description: Incremental only, with a plan; the full commit SHA of the green full validation this one builds on
+        required: false
+        default: ''
+        type: string
+      plan:
+        description: Incremental only, from scripts/release_increment.py; empty runs the full validation
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -34,24 +45,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The ceiling on full validations: at most 10 a UTC day, manual dispatches included, counted from GitHub before any
+  # RunsOn VM starts. A hard backstop: the automatic window already dispatches at most one full validation a day
+  # (scripts/release_increment.py full_within_day). Incremental runs are not counted; every job that starts a VM waits here.
+  ceiling:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - name: Count today's full validations
+        if: inputs.plan == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CAP: '10'
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          count=$(gh api --paginate "repos/$REPO/actions/workflows/ci.yml/runs?event=workflow_dispatch&created=$today&per_page=100" \
+            --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | select(.created_at | startswith(\"$today\")) | select(.display_title | contains(\" (incremental on \") | not) | .id" | wc -l | tr -d ' ')
+          echo "$count full validations started today (UTC $today) besides this one"
+          if [ "$count" -ge "$CAP" ]; then echo "::error::$CAP full runs today; ceiling reached"; exit 1; fi
+
   # What to validate: the requested candidate against the requested published release.
   candidate:
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
+    needs: ceiling
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       previous: ${{ steps.pick.outputs.previous }}
       version: ${{ steps.pick.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - id: pick
         env:
           SHA: ${{ inputs.candidate_sha }}
           PREVIOUS: ${{ inputs.previous_release }}
           VERSION: ${{ inputs.version }}
+          ANCHOR: ${{ inputs.anchor }}
+          PLAN: ${{ inputs.plan }}
         run: |
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::candidate_sha must be a full commit SHA"; exit 1; }
           [[ "$PREVIOUS" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::previous_release must be vX.Y.Z"; exit 1; }
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::version must be vX.Y.Z"; exit 1; }
+          [[ -z "$PLAN" || "$ANCHOR" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::an incremental validation names its anchor commit"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
+      # Controls from the reviewed workflow commit: the gate's VMs are the full validation's, or the incremental plan's.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: validation-control
+          sparse-checkout: |
+            scripts/release_increment.py
+            scripts/pr_checks.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: matrix
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: echo "matrix=$(python3 validation-control/scripts/release_increment.py matrix "$PLAN")" >> "$GITHUB_OUTPUT"
 
   # The runner and screen relay for Linux, built once from the candidate, reusing compiled dependencies from a cache only
   # main writes. Linux builds are static (musl): the images, Linux checkouts and
@@ -63,9 +114,12 @@ jobs:
         include:
           - {arch: x64, name: linux-x86_64, target: x86_64-unknown-linux-musl}
           - {arch: arm64, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-${{ matrix.arch }}${{ matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '' }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}', github.run_id, matrix.arch, matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 20
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -131,13 +185,16 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}${{ matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '' }}/extras=s3-cache
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && (matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.platform == 'arm64' && 'arm64' || 'x64', matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 30
     permissions:
       actions: read   # watches this run's native-linux build
       contents: read
       packages: write
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -225,44 +282,9 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - {name: product, part: product, shard: '', workers: '2', runner: 4cpu-linux-x64}
-          - {name: browser-1, part: browser, shard: '1/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: browser-2, part: browser, shard: '2/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-1, part: python, shard: '1/28', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/28', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-3, part: python, shard: '3/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-4, part: python, shard: '4/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-5, part: python, shard: '5/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-6, part: python, shard: '6/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-7, part: python, shard: '7/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-8, part: python, shard: '8/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-9, part: python, shard: '9/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-10, part: python, shard: '10/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-11, part: python, shard: '11/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-12, part: python, shard: '12/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-13, part: python, shard: '13/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-14, part: python, shard: '14/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-15, part: python, shard: '15/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-16, part: python, shard: '16/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-17, part: python, shard: '17/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-18, part: python, shard: '18/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-19, part: python, shard: '19/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-20, part: python, shard: '20/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-21, part: python, shard: '21/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-22, part: python, shard: '22/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-23, part: python, shard: '23/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-24, part: python, shard: '24/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-25, part: python, shard: '25/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-26, part: python, shard: '26/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-27, part: python, shard: '27/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-28, part: python, shard: '28/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
-          - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
-    runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache
+      # The VMs: the full validation's (release_increment.full_matrix), or an incremental plan's (--plan).
+      matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, matrix.runner) }}
     env:
       CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
       PREVIOUS_RELEASE: ${{ needs.candidate.outputs.previous }}
@@ -270,6 +292,8 @@ jobs:
       TICO_VALIDATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
       TICO_RELEASE_PART: ${{ matrix.part }}
       TICO_RELEASE_SHARD: ${{ matrix.shard }}
+      # An incremental plan's python or browser VM runs its suite (scripts/pr_checks.py run) from the candidate's checkout.
+      TICO_INCREMENT_SUITE: ${{ inputs.plan != '' && matrix.part != 'product' && matrix.part != 'desktop' && matrix.name || '' }}
       TICO_PYTHON_WORKERS: ${{ matrix.workers }}
       TICO_UI_JOBS: '3'
       TICO_UI_SLOWDOWN: '2'
@@ -473,11 +497,17 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
           echo "TICO_UI_TIMINGS=$RUNNER_TEMP/junit/browser-${TICO_RELEASE_SHARD//\//-of-}.json" >> "$GITHUB_ENV"
+      - name: Write the incremental plan this VM runs from
+        if: inputs.plan != ''
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: printf '%s\n' "$PLAN" > "$RUNNER_TEMP/increment-plan.json"
       - name: Run the candidate's unchanged release gate, this part
         # The helper takes its slice only from --part/--shard (argparse), never from the environment.
         run: |
           set -- --part "$TICO_RELEASE_PART"
           [ -z "$TICO_RELEASE_SHARD" ] || set -- "$@" --shard "$TICO_RELEASE_SHARD"
+          [ -z "$TICO_INCREMENT_SUITE" ] || set -- "$@" --plan "$RUNNER_TEMP/increment-plan.json" --suite "$TICO_INCREMENT_SUITE"
           "$RUNNER_TEMP/release-venv/bin/python" validation-control/scripts/hosted_release_check.py run "$@"
       - name: Collect only bounded validation logs
         if: always()
@@ -506,8 +536,10 @@ jobs:
   # frozen before the sim could shard skips it.
   factory-sim:
     needs: candidate
+    # An incremental validation runs the sim only when its plan says a change reaches it (release_increment.plan_for).
+    if: inputs.plan == '' || fromJSON(inputs.plan).factory
     name: factory-sim-${{ matrix.shard }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -516,6 +548,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: '1'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -557,6 +592,8 @@ jobs:
   # (scripts/pr_checks.py durations). Optional: it never changes the release verdict or the run's conclusion.
   test-timings:
     needs: gate
+    # A full validation's timings only: an incremental one measures a part of the gate.
+    if: inputs.plan == ''
     runs-on: ubuntu-24.04
     continue-on-error: true
     timeout-minutes: 5
@@ -592,6 +629,11 @@ jobs:
           GATE: ${{ needs.gate.result }}
           SIM: ${{ needs.factory-sim.result }}
           IMAGES: ${{ needs.images.result }}
+          PLAN: ${{ inputs.plan }}
         run: |
           echo "Release gate parts: $GATE; factory sim: $SIM; images: $IMAGES"
-          test "$GATE" = success && test "$SIM" = success && test "$IMAGES" = success
+          # An incremental validation's plan may leave the factory sim out: a skipped sim is then the plan's choice.
+          sim_ok=false
+          [ "$SIM" = success ] && sim_ok=true
+          [ "$SIM" = skipped ] && [ -n "$PLAN" ] && [ "$(jq -r .factory <<<"$PLAN")" = false ] && sim_ok=true
+          test "$GATE" = success && [ "$sim_ok" = true ] && test "$IMAGES" = success

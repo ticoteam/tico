@@ -164,3 +164,15 @@ def test_a_subtask_that_also_blocks_its_parent_does_not_hold_another_subtasks_re
         TR.relate(c, "bot:ops", still, parent, "blocks")
     (result,) = results(api, parent)
     assert refusal(api, machine, result) is None
+
+
+def test_a_question_a_person_filed_on_the_parent_does_not_hold_a_result(api):
+    """A manager says the ticket waits on her (`--status waiting --on ana`): that files a question task she requested
+    under it, one more open subtask, so the verdict still reaches the builder. Only the owner's own question holds it
+    (the "question" case above)."""
+    machine, parent, done, still = waiting_parent(api, results=1)
+    with api.app.state.store.transaction() as c:
+        card = H._ask_in_subtask(c, "human:ana", H.task(c, parent), "human:ana", "Is the vendor contract signed?")
+        assert card["requester_id"] == "human:ana" and card["questions"]
+    (result,) = results(api, parent)
+    assert refusal(api, machine, result) is None

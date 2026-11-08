@@ -15,8 +15,8 @@
 //! permission prompts (the bot also reaches Tico with the hub CLI over bash). OPENROUTER_API_KEY reaches the process
 //! from the bot's granted credential.
 //!
-//! The Tico AI Gateway's models (a department tier such as `tico-marketing-medium-1.0`, or an old id such as
-//! `tico-mid-1.0`) run on pi too, as pi's custom provider `tico` over the Gateway's OpenAI-chat endpoint: the server hands a run on one the gateway key and URL
+//! The Tico AI Gateway's models (a level and Fast, such as `tico-medium-1.0` or `tico-high-fast-1.0`) run on pi too,
+//! as pi's custom provider `tico` over the Gateway's OpenAI-chat endpoint: the server hands a run on one the gateway key and URL
 //! (TICOAI_GATEWAY_KEY / TICOAI_GATEWAY_URL, backend/gateway_connection.py), and the turn's pi reads a `models.json`
 //! naming that URL and the key's variable, never the key itself.
 
@@ -50,11 +50,19 @@ pub const MODELS: &[(&str, &str)] = &[
 const DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
 /// The Tico AI Gateway's chat models: pi's custom provider `tico` (`gateway_models_json`).
 pub const GATEWAY_PROVIDER: &str = "tico";
+/// Lineup 3's first versions (backend/gateway_tiers.py); another version or tier is added per turn
+/// (`gateway_models_json_for`).
 pub const GATEWAY_MODELS: &[(&str, &str)] = &[
-    ("tico-cheap-1.1", "Tico Cheap 1.1"),
-    ("tico-mid-1.0", "Tico Mid 1.0"),
-    ("tico-power-1.0", "Tico Power 1.0"),
-    ("tico-cheap-1.0", "Tico Cheap 1.0"),
+    ("tico-xlow-1.0", "Tico X-Low 1.0"),
+    ("tico-xlow-fast-1.0", "Tico X-Low Fast 1.0"),
+    ("tico-low-1.0", "Tico Low 1.0"),
+    ("tico-low-fast-1.0", "Tico Low Fast 1.0"),
+    ("tico-medium-1.0", "Tico Medium 1.0"),
+    ("tico-medium-fast-1.0", "Tico Medium Fast 1.0"),
+    ("tico-high-1.0", "Tico High 1.0"),
+    ("tico-high-fast-1.0", "Tico High Fast 1.0"),
+    ("tico-xhigh-1.0", "Tico X-High 1.0"),
+    ("tico-xhigh-fast-1.0", "Tico X-High Fast 1.0"),
 ];
 pub const GATEWAY_KEY_ENV: &str = "TICOAI_GATEWAY_KEY";
 pub const GATEWAY_URL_ENV: &str = "TICOAI_GATEWAY_URL";
@@ -123,7 +131,7 @@ fn gateway_input_for(inputs: &Value, id: &str) -> Vec<&'static str> {
     }
 }
 
-/// `gateway_models_json` that also names `model`, the one this turn asks for, when it is not among the old ids: the
+/// `gateway_models_json` that also names `model`, the one this turn asks for, when it is not among GATEWAY_MODELS: the
 /// Gateway's tiers and versions are not a list the runner is built with (backend/gateway_tiers.py), and pi runs only
 /// a model its `models.json` names. `inputs` is the turn's `gateway_inputs` ({model id: what it reads}), Null when the
 /// server sent none.
@@ -486,7 +494,7 @@ pub fn usage_increment(usage: &Value) -> Value {
     let read = first(usage, &["cacheRead", "cache_read", "cachedTokens"]);
     let inp = first(usage, INPUT) + read + first(usage, &["cacheWrite", "cache_write"]);
     let out = first(usage, OUTPUT);
-    // One assistant message is one model request, so the server prices a long prompt on its own (Tico Cheap 1.1).
+    // One assistant message is one model request, so the server prices a long prompt on its own (Tico Low).
     json!({"input": inp, "cached": read, "output": out, "requests": [[inp - read, read, out]]})
 }
 
@@ -1985,7 +1993,7 @@ mod tests {
 
     /// The events of one turn of a Tico-model bot whose fake pi prints `lines`, and the turn's workspace.
     async fn gateway_turn(lines: &[&str]) -> (Vec<Value>, PathBuf) {
-        gateway_turn_on("tico-mid-1.0", lines).await
+        gateway_turn_on("tico-medium-1.0", lines).await
     }
 
     async fn gateway_turn_on(model: &str, lines: &[&str]) -> (Vec<Value>, PathBuf) {
@@ -2029,7 +2037,7 @@ mod tests {
         let (events, dir) = gateway_turn(&[
             SESSION,
             r#"{"type":"agent_start"}"#,
-            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-mid-1.0","content":[],"stopReason":"error","usage":{"input":0,"output":0,"totalTokens":0},"errorMessage":"429: {\"code\":\"cap_reached\",\"message\":\"The Tico AI Gateway's monthly cap is reached.\",\"type\":\"insufficient_quota\",\"param\":null}"}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-medium-1.0","content":[],"stopReason":"error","usage":{"input":0,"output":0,"totalTokens":0},"errorMessage":"429: {\"code\":\"cap_reached\",\"message\":\"The Tico AI Gateway's monthly cap is reached.\",\"type\":\"insufficient_quota\",\"param\":null}"}}"#,
             r#"{"type":"turn_end","message":{"role":"assistant","content":[]}}"#,
             r#"{"type":"agent_end"}"#,
         ]).await;
@@ -2048,7 +2056,7 @@ mod tests {
             args.lines()
                 .last()
                 .unwrap()
-                .starts_with("--mode rpc --provider tico --model tico-mid-1.0 --thinking high"),
+                .starts_with("--mode rpc --provider tico --model tico-medium-1.0 --thinking high"),
             "{args}"
         );
         // pi's models.json names the Gateway and the key's variable, never the key; pi itself never retries.
@@ -2078,7 +2086,7 @@ mod tests {
         let (events, dir) = gateway_turn(&[
             SESSION,
             r#"{"type":"agent_start"}"#,
-            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-mid-1.0","content":[],"stopReason":"error","usage":{"input":0,"output":0,"totalTokens":0},"errorMessage":"429: {\"code\":\"out_of_credit\",\"message\":\"Tico models are paused: this company is out of credit.\",\"type\":\"insufficient_quota\",\"param\":null}"}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-medium-1.0","content":[],"stopReason":"error","usage":{"input":0,"output":0,"totalTokens":0},"errorMessage":"429: {\"code\":\"out_of_credit\",\"message\":\"Tico models are paused: this company is out of credit.\",\"type\":\"insufficient_quota\",\"param\":null}"}}"#,
             r#"{"type":"turn_end","message":{"role":"assistant","content":[]}}"#,
             r#"{"type":"agent_end"}"#,
         ]).await;
@@ -2096,9 +2104,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_bot_still_on_retired_cheap_1_0_keeps_running_on_the_gateway() {
+    async fn a_low_bot_runs_on_the_gateway_and_the_built_in_ids_are_lineup_3s() {
         let (_, dir) = gateway_turn_on(
-            "tico-cheap-1.0",
+            "tico-low-1.0",
             &[
                 SESSION,
                 r#"{"type":"agent_start"}"#,
@@ -2111,7 +2119,7 @@ mod tests {
             args.lines()
                 .last()
                 .unwrap()
-                .starts_with("--mode rpc --provider tico --model tico-cheap-1.0 "),
+                .starts_with("--mode rpc --provider tico --model tico-low-1.0 "),
             "{args}"
         );
         let models: Value = serde_json::from_str(
@@ -2124,12 +2132,11 @@ mod tests {
             .iter()
             .map(|m| m["id"].as_str().unwrap())
             .collect();
-        assert!(
-            ids.contains(&"tico-cheap-1.0") && ids.contains(&"tico-cheap-1.1"),
-            "{ids:?}"
-        );
-        // What a person is told to pick names only the current lineup.
-        assert!(!plain_error(r#"400: {"code":"unknown_model"}"#).contains("Cheap 1.0"));
+        assert_eq!(ids.len(), GATEWAY_MODELS.len(), "{ids:?}");
+        // Every built-in id is a level, Fast or not, at 1.0: no department and no first-lineup name.
+        let level = regex::Regex::new(r"^tico-(xlow|low|medium|high|xhigh)(-fast)?-1\.0$").unwrap();
+        assert!(ids.iter().all(|id| level.is_match(id)), "{ids:?}");
+        assert!(ids.contains(&"tico-medium-1.0"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2254,7 +2261,7 @@ mod tests {
         ] {
             meter.add(&json!({"usage": usage_increment(&usage)}));
         }
-        let report = meter.report("tico-mid-1.0", "pi", "api").unwrap();
+        let report = meter.report("tico-medium-1.0", "pi", "api").unwrap();
         assert_eq!(
             (
                 report["input_tokens"].clone(),
@@ -2276,7 +2283,7 @@ mod tests {
         let ws = dir.display().to_string();
         let mut s = Settings {
             cwd: ws.clone(),
-            model: Some("tico-mid-1.0".into()),
+            model: Some("tico-medium-1.0".into()),
             ..Default::default()
         };
         for (k, v) in [
@@ -2310,7 +2317,7 @@ mod tests {
             r#"{"type":"agent_start"}"#,
             r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello there, "}}"#,
             r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"friend"}}"#,
-            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-mid-1.0","content":[{"type":"text","text":"Hello there, friend"}],"stopReason":"error","errorMessage":"The model is unavailable. Try again later."}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-medium-1.0","content":[{"type":"text","text":"Hello there, friend"}],"stopReason":"error","errorMessage":"The model is unavailable. Try again later."}}"#,
             r#"{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"Hello there, friend"}]}}"#,
             r#"{"type":"agent_end"}"#,
         ]).await;
@@ -2346,7 +2353,7 @@ mod tests {
             (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
             (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"),
             (429, "out_of_credit", "Tico models are paused: this company is out of credit.", "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)"),
-            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)"),
+            (400, "unknown_model", "Unknown model. Tico models: tico-low-1.0, tico-medium-1.0, tico-high-1.0.", "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)"),
             (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
             (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),
             (400, "upstream_refused", "The model refused this request as it was sent.", "Tico AI Gateway refused the request as sent: The model refused this request as it was sent. (upstream_refused)"),
@@ -2408,16 +2415,15 @@ mod tests {
                 .map(|v| v["id"].as_str().unwrap().to_string())
                 .collect()
         };
-        assert!(ids(Some("tico-marketing-medium-fast-1.0"))
-            .contains(&"tico-marketing-medium-fast-1.0".to_string()));
-        assert_eq!(ids(Some("tico-mid-1.0")).len(), GATEWAY_MODELS.len());
+        assert!(ids(Some("tico-medium-fast-1.1")).contains(&"tico-medium-fast-1.1".to_string()));
+        assert_eq!(ids(Some("tico-medium-1.0")).len(), GATEWAY_MODELS.len());
         assert_eq!(ids(Some("kimi-k3")).len(), GATEWAY_MODELS.len());
         // A Tico-model bot needs no OpenRouter grant on its computer.
         let (state, _) = sign_in(&[
-            json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-mid-1.0"}}),
+            json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-medium-1.0"}}),
         ]);
         assert_eq!(state, "ready");
-        assert!(model_names().contains(&"tico-power-1.0".to_string()));
+        assert!(model_names().contains(&"tico-high-1.0".to_string()));
     }
 
     #[test]
@@ -2431,9 +2437,9 @@ mod tests {
                 .unwrap()["input"]
                 .clone()
         };
-        let sent = json!({"tico-marketing-medium-1.0": ["text", "image", "pdf"],
-                          "tico-marketing-low-fast-1.0": ["text"], "tico-power-1.0": ["text", "image", "pdf"]});
-        let both = ["tico-marketing-medium-1.0", "tico-marketing-low-fast-1.0"];
+        let sent = json!({"tico-medium-1.1": ["text", "image", "pdf"],
+                          "tico-low-fast-1.1": ["text"], "tico-high-1.0": ["text", "image", "pdf"]});
+        let both = ["tico-medium-1.1", "tico-low-fast-1.1"];
         let models = |ask: &str| gateway_models_json_for("", Some(ask), &sent);
         // A Claude-backed tier: text and image (a PDF is not a pi input).
         assert_eq!(
@@ -2442,18 +2448,21 @@ mod tests {
         );
         // Low Fast reads text only.
         assert_eq!(inputs_of(&models(both[1]), both[1]), json!(["text"]));
-        // An old id in the built-in list takes what the server says of it, and text where it says nothing.
+        // An id in the built-in list takes what the server says of it, and text where it says nothing.
         assert_eq!(
-            inputs_of(&models(both[0]), "tico-power-1.0"),
+            inputs_of(&models(both[0]), "tico-high-1.0"),
             json!(["text", "image"])
         );
-        assert_eq!(inputs_of(&models(both[0]), "tico-mid-1.0"), json!(["text"]));
+        assert_eq!(
+            inputs_of(&models(both[0]), "tico-xlow-1.0"),
+            json!(["text"])
+        );
         // No value (an older server), or one that lists no image: text only, for every model.
         for none in [
             Value::Null,
             json!({}),
-            json!({"tico-marketing-medium-1.0": []}),
-            json!({"tico-marketing-medium-1.0": "image"}),
+            json!({"tico-medium-1.1": []}),
+            json!({"tico-medium-1.1": "image"}),
         ] {
             let models = gateway_models_json_for("", Some(both[0]), &none);
             for model in models["providers"]["tico"]["models"].as_array().unwrap() {
@@ -2482,7 +2491,7 @@ mod tests {
         let ws = dir.display().to_string();
         let mut s = Settings {
             cwd: ws.clone(),
-            model: Some("tico-mid-1.0".into()),
+            model: Some("tico-medium-1.0".into()),
             slug: "acme".into(),
             compact_at: json!(150_000),
             ..Default::default()
@@ -2974,7 +2983,7 @@ mod tests {
                     (GATEWAY_DIR_ENV, &agent),
                 ],
             );
-            s.model = Some("tico-mid-1.0".into());
+            s.model = Some("tico-medium-1.0".into());
             s
         };
         let thread = host.start_thread(&gateway("synthetic-turn-1"));

@@ -97,14 +97,14 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
    to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
-   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (level, Fast, version).
    With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Seven built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
-   Bookkeeper and Counsel. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Eight built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
+   Bookkeeper, Counsel and Brand Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -144,7 +144,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
    `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
 5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
-   press **Close task** at the top of the task (it is also in its **…** menu).
+   press **Close** at the top of the task (it is also in its **…** menu).
 
 Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
 Health issue.

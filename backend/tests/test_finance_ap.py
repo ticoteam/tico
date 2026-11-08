@@ -1036,7 +1036,10 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
         assert (took.status, took.code) == ("failed", "invalid")
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         other = _vendor(c, "Globex")
-        c.execute("INSERT INTO fin_vendor_aliases VALUES(?,?,?,?)", (book, vendor, other, AT))  # as if it got in
+        c.execute(
+            "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?)",
+            (book, vendor, other, AT),
+        )  # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
 
 

@@ -1,3 +1,4 @@
+# pyright: strict
 """The Heartbeat (docs/heartbeat.md): one short beat, every 10 s by default, that runs in order the steps that must happen
 within seconds but have no push event to start them:
   - due: time passing (a due date, a snooze's end, an hour gone by);
@@ -13,7 +14,7 @@ What a beat did is stored small (migration 20261106094503_heartbeat): each beat 
 (also the server's liveness, `liveness`); a `heartbeat_beats` row only for a beat where a step did something or failed
 (repeated failures fold); a step's `heartbeat_steps` row only when it did something, failed, changed its result or is
 timed from its last run, else every 5 minutes, its counts kept in memory between (`_Memory`). The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
-quiet repeats folded. Its screen is ui/app/automations-heartbeat.js (GET/PUT /api/v2/heartbeat)."""
+quiet repeats folded. Its screen is ui/app/automations-heartbeat.ts (GET/PUT /api/v2/heartbeat)."""
 
 import json
 import logging
@@ -23,10 +24,25 @@ import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, cast
 
 from . import scheduler as S
 from . import system_routines as SR
 from .store import H, Problem
+
+if TYPE_CHECKING:
+    import sqlite3
+    from collections.abc import Callable, Generator, Sequence
+    from contextlib import AbstractContextManager
+
+    from fastapi import FastAPI
+
+    from .auth import Auth, Identity
+    from .config import Settings
+    from .execution import Execution
+    from .github_app import GitHubApp
+    from .observability import Observability
+    from .store import Store
 
 LOG = logging.getLogger("tico.heartbeat")
 
@@ -57,7 +73,8 @@ class Step:
     name: str
     kind: str  # "due", "recovery" or "poll"
     every: timedelta | None  # None: every beat; else at most this often (today's cadence)
-    run: object  # run(ctx) -> (words, quiet); words None: the step records its own outcome later
+    # run(ctx) -> (words, quiet); words None: the step records its own outcome later
+    run: "Callable[[Context], tuple[str | None, bool]]"  # Context is defined below the dataclass
     failure: str | None = None  # the {name: kind} entry it adds to the pass's failures when it raises, as before
     capture: str | None = None  # the telemetry name a raise went to before; None: it never went, or captures its own
     lasting: bool = False  # timed from its last recorded start, so a restart keeps its hour
@@ -65,7 +82,7 @@ class Step:
     loop: bool = False  # one of the server loop's own (needs the app): never in a bare Scheduler.tick
 
     @property
-    def floor(self):
+    def floor(self) -> timedelta | None:
         """How often it may run at most: `every`, and a poll never more often than POLL_FLOOR."""
         if self.kind == "poll":
             return max(self.every or POLL_FLOOR, POLL_FLOOR)
@@ -76,7 +93,19 @@ class Context:
     """One pass of the server's loop: what a step reads, the pass's failures and write-lock holds (the scheduler's
     service_health row reports them, the rest of Scheduler.tick included), and `locked`, one short write per step."""
 
-    def __init__(self, scheduler, at=None, app=None, telemetry=None):
+    store: "Store"
+    execution: "Execution"
+    github_app: "GitHubApp | None"
+    failures: list[dict[str, str]]
+    holds: list[tuple[float, float, str]]
+
+    def __init__(
+        self,
+        scheduler: S.Scheduler,
+        at: datetime | None = None,
+        app: "FastAPI | None" = None,
+        telemetry: "Observability | None" = None,
+    ) -> None:
         self.scheduler = scheduler
         self.store, self.execution, self.github_app = scheduler.store, scheduler.execution, scheduler.github_app
         self.app, self.telemetry = app, telemetry
@@ -85,15 +114,15 @@ class Context:
         self.started = time.monotonic()
 
     @property
-    def settings(self):
+    def settings(self) -> "Settings":
         return self.store.settings
 
     @property
-    def auth(self):
+    def auth(self) -> "Auth":
         return self.execution.auth
 
     @contextmanager
-    def locked(self, step):
+    def locked(self, step: str) -> "Generator[sqlite3.Connection]":
         # One short write transaction per step and per reminder batch. The pass used to be one transaction, and on
         # a hub with many tasks every request waited 20-30 s behind it (TK-RCZJXEWA). Each step is whole on its
         # own; reminders keep their dedupe rows (task_reminders), checked under the same lock that writes them.
@@ -101,7 +130,7 @@ class Context:
         # writers, not this pass.
         asked, begun = time.monotonic(), None
         try:
-            with self.store.transaction() as c:
+            with cast("AbstractContextManager[sqlite3.Connection]", self.store.transaction()) as c:
                 begun = time.monotonic()
                 yield c
         finally:
@@ -111,12 +140,13 @@ class Context:
 
 # ----------------------------------------------------------------------------- the server loop's own steps
 # These ran beside Scheduler.tick in backend/app.py `schedule_loop`; moved here as they were.
-def github_sync(ctx):
+def github_sync(ctx: Context) -> tuple[str, bool]:
     github_app = ctx.app.state.github_app
     from .github import (
         flush_wakes,
         reconcile_worktree_prs,
         refresh_deployed_tasks,
+        refresh_conflicts,
         refresh_pending_checks,
         refresh_queue_removals,
     )
@@ -128,6 +158,8 @@ def github_sync(ctx):
     refresh_pending_checks(github_app)
     # A merge-queue removal that was not a merge is read afresh before its owner is woken (github.refresh_queue_removals).
     refresh_queue_removals(github_app)
+    # An open pull request's conflict with a moved base sends no event: read the unknown and stale ones (github.refresh_conflicts).
+    refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
     # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
@@ -145,14 +177,14 @@ def github_sync(ctx):
     return "Done", True
 
 
-def personal_alerts(ctx):
+def personal_alerts(ctx: Context) -> tuple[None, bool]:
     # The pass runs on its own thread and records its outcome there (backend/personal_alerts.py `run`). Not started
     # (the last pass still runs, or a demo): no words, so the step's last result stays what the last pass said.
     ctx.app.state.personal_alerts.tick()
     return None, True
 
 
-def repository_waits(ctx):
+def repository_waits(ctx: Context) -> tuple[str, bool]:
     github_app = ctx.app.state.github_app
     from .repositories import daily
 
@@ -172,7 +204,7 @@ def repository_waits(ctx):
     return "Done", True
 
 
-def call_sweeps(ctx):
+def call_sweeps(ctx: Context) -> tuple[str, bool]:
     # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
     # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
     failed = None
@@ -280,7 +312,7 @@ CONTROLLED = {step.control: step for step in STEPS if step.control}
 
 
 # ----------------------------------------------------------------------------- the interval
-def clamp(value):
+def clamp(value: Any) -> int:
     try:
         n = int(value)
     except (TypeError, ValueError):
@@ -288,12 +320,12 @@ def clamp(value):
     return min(max(n, INTERVAL_MIN), INTERVAL_MAX)
 
 
-def interval_of(c):
+def interval_of(c: "sqlite3.Connection") -> int:
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (INTERVAL_KEY,)).fetchone()
     return clamp(row[0]) if row else INTERVAL_DEFAULT
 
 
-def interval(store):
+def interval(store: "Store") -> int:
     """Seconds between beats, read each pass (no restart needed); the default when it cannot be read."""
     try:
         with store.read() as c:
@@ -302,7 +334,7 @@ def interval(store):
         return INTERVAL_DEFAULT
 
 
-def save_interval(c, actor, value):
+def save_interval(c: "sqlite3.Connection", actor: str, value: Any) -> int:
     seconds, before = clamp(value), interval_of(c)
     c.execute(
         "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -314,11 +346,18 @@ def save_interval(c, actor, value):
 
 
 # ----------------------------------------------------------------------------- one beat
-def _due(ctx, step, at, cfgs, lasts):
+def _due(
+    ctx: Context,
+    step: Step,
+    at: datetime,
+    cfgs: dict[str, dict[str, Any]] | None,
+    lasts: dict[str, datetime | None] | None,
+) -> bool:
     """Whether `step` runs this beat. Marked first, as the blocks were, so a failing step retries on its interval."""
     if step.control:
         # Its switch and preset, as Scheduler.due times the controlled jobs.
         return cfgs is not None and ctx.scheduler.due(step.control, at, cfgs, lasts)
+    marks: dict[str, datetime]
     every, marks = step.floor, ctx.scheduler.step_marks
     if every is None:
         return True
@@ -342,16 +381,19 @@ class Ran:
     error: str | None = None
 
     @property
-    def did(self):
+    def did(self) -> bool:
         return self.error is None and bool(self.words) and not self.quiet
 
 
-def beat(ctx):
+def beat(ctx: Context) -> dict[str, list[str]]:
     """Run the steps due now in order, each timed and on its own (one raising never stops the next), then store what
     the beat did. Returns {"ran", "did", "failed"} (step keys)."""
+    ran: list[Ran]
     at, ran = ctx.at, []
     with SR.recording(ctx.store, "heartbeat", ctx.failures) as run:
         timed = [s.key for s in STEPS if s.lasting or s.control]
+        cfgs: dict[str, dict[str, Any]] | None
+        lasts: dict[str, datetime | None] | None
         try:
             with ctx.store.read() as c:
                 cfgs, lasts = SR.config(c), SR.last_started(c, timed)
@@ -394,10 +436,10 @@ def beat(ctx):
     }
 
 
-def _roll(row, at, fields, window_field="window_started_at"):
+def _roll(row: dict[str, Any], at: datetime, fields: tuple[str, ...], window_field: str = "window_started_at") -> None:
     """Move a row's day counts on: a window older than WINDOW becomes the previous one (or is dropped when older
     than two), and a new window starts now."""
-    started = H.parse_ts(row.get(window_field))
+    started: datetime | None = H.parse_ts(row.get(window_field))
     if started is not None and at - started < WINDOW:
         return
     for field in fields:
@@ -430,18 +472,23 @@ class _Memory:
     (a step did something or failed, its result changed, a timed step ran) or after FLUSH_EVERY. The API runs in the
     same process and shows these over the stored rows (`merged_steps`)."""
 
-    def __init__(self):
+    lock: threading.Lock
+    pending: dict[str, dict[str, Any]]
+    stored: dict[str, str | None] | None
+    flushed: datetime | None
+
+    def __init__(self) -> None:
         self.lock = threading.Lock()
         self.pending = {}  # key -> {"runs_count", "did_count", "failed_count": n, "set": {column: value}}
         self.stored = None  # key -> last_result as written; read once
         self.flushed = None  # when the noted numbers were last written
 
 
-_MEMORIES = weakref.WeakKeyDictionary()
+_MEMORIES: "weakref.WeakKeyDictionary[Store, _Memory]" = weakref.WeakKeyDictionary()
 _MEMORIES_LOCK = threading.Lock()
 
 
-def _memory(store):
+def _memory(store: "Store") -> _Memory:
     with _MEMORIES_LOCK:
         mem = _MEMORIES.get(store)
         if mem is None:
@@ -449,7 +496,7 @@ def _memory(store):
         return mem
 
 
-def _note(mem, r, at, counted=True):
+def _note(mem: _Memory, r: Ran, at: datetime, counted: bool = True) -> None:
     """Note one step's outcome in memory (the caller holds mem.lock). An uncounted outcome (one that lands after its
     beat, which counted the run) still moves the last run time and its time taken to when it finished."""
     now = S.stamp(at)
@@ -468,7 +515,7 @@ def _note(mem, r, at, counted=True):
         p["failed_count"] += 1
 
 
-def _merged(old, p, at, key):
+def _merged(old: dict[str, Any] | None, p: dict[str, Any] | None, at: datetime, key: str) -> dict[str, Any]:
     """A step's row with what memory noted since it was written laid over it, its day windows moved on to `at`."""
     row = (
         dict(old)
@@ -488,7 +535,7 @@ def _merged(old, p, at, key):
     return row
 
 
-def _write_steps(c, taken, at):
+def _write_steps(c: "sqlite3.Connection", taken: dict[str, dict[str, Any]], at: datetime) -> None:
     marks = ",".join("?" * len(taken))
     old = {r["key"]: dict(r) for r in c.execute(f"SELECT * FROM heartbeat_steps WHERE key IN ({marks})", tuple(taken))}
     for key, p in taken.items():
@@ -502,7 +549,7 @@ def _write_steps(c, taken, at):
         )
 
 
-def _give_back(mem, taken):
+def _give_back(mem: _Memory, taken: dict[str, dict[str, Any]]) -> None:
     """A write that failed: what it took goes back into memory, under anything noted since (the caller holds mem.lock)."""
     for key, p in taken.items():
         cur = mem.pending.get(key)
@@ -515,7 +562,7 @@ def _give_back(mem, taken):
             cur["set"].setdefault(col, value)
 
 
-def merged_steps(c, store, at=None):
+def merged_steps(c: "sqlite3.Connection", store: "Store", at: datetime | None = None) -> dict[str, dict[str, Any]]:
     """Every stored step row with what memory noted since laid over it ({key: row}), as the screen shows them."""
     at = at or datetime.now(timezone.utc)
     rows = {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
@@ -525,18 +572,18 @@ def merged_steps(c, store, at=None):
     return {key: _merged(rows.get(key), pending.get(key), at, key) for key in {*rows, *pending}}
 
 
-def _timed(key):
+def _timed(key: str) -> bool:
     """A step timed from its last recorded run (the digests, Ask go-ahead): its row is written each run, hourly at most,
     so a restart keeps its hour (system_routines.last_started reads heartbeat_steps.last_run_at)."""
     step = BY_KEY.get(key)
     return bool(step and (step.lasting or step.control))
 
 
-def _signature(lines):
+def _signature(lines: list[dict[str, Any]]) -> list[tuple[Any, Any]]:
     return sorted((line.get("key"), line.get("error")) for line in lines)
 
 
-def _beat_row(c, at, lines, total_ms):
+def _beat_row(c: "sqlite3.Connection", at: datetime, lines: "Sequence[Ran]", total_ms: int) -> None:
     """A working beat's row. A beat where only steps failed, with the same steps and errors as the newest row, folds
     into that row (its repeat count and last time) so one broken step does not push the useful beats out."""
     steps = [{"key": r.key, "text": r.words if r.did else None, "ms": r.ms, "error": r.error} for r in lines]
@@ -573,8 +620,9 @@ def _beat_row(c, at, lines, total_ms):
     )
 
 
-def _state_write(c, at, working):
+def _state_write(c: "sqlite3.Connection", at: datetime, working: bool) -> None:
     now = S.stamp(at)
+    state: dict[str, Any]
     state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
     state = (
         dict(state)
@@ -589,7 +637,7 @@ def _state_write(c, at, working):
     else:
         state["quiet_beats_count"] += 1
         state["quiet_since_at"] = state.get("quiet_since_at") or now
-    pruned = H.parse_ts(state.get("last_pruned_at"))
+    pruned: datetime | None = H.parse_ts(state.get("last_pruned_at"))
     if pruned is None or at - pruned >= PRUNE_EVERY:
         prune(c, at)
         state["last_pruned_at"] = now
@@ -613,12 +661,20 @@ def _state_write(c, at, working):
     )
 
 
-def _commit(store, at, urgent, lines=(), total_ms=0, beat=False):
+def _commit(
+    store: "Store",
+    at: datetime,
+    urgent: bool,
+    lines: "Sequence[Ran]" = (),
+    total_ms: int = 0,
+    beat: bool = False,
+) -> None:
     """One write transaction: the noted step numbers when something is written anyway (`urgent`, a working beat's row),
     a result changed or FLUSH_EVERY passed; the beat's row; and for a beat, `heartbeat_states`."""
+    taken: dict[str, dict[str, Any]]
     mem, taken = _memory(store), {}
     try:
-        with store.transaction() as c:
+        with cast("AbstractContextManager[sqlite3.Connection]", store.transaction()) as c:
             with mem.lock:
                 if mem.stored is None:
                     mem.stored = {k: v for k, v in c.execute("SELECT key, last_result FROM heartbeat_steps")}
@@ -644,7 +700,7 @@ def _commit(store, at, urgent, lines=(), total_ms=0, beat=False):
             mem.stored.update({k: p["set"]["last_result"] for k, p in taken.items() if "last_result" in p["set"]})
 
 
-def record(store, at, ran, total_ms):
+def record(store: "Store", at: datetime, ran: list[Ran], total_ms: int) -> None:
     """Store one beat in one small transaction: `heartbeat_states` always; the beat's row when a step did something or
     failed (else only counted); each step's row only with a write that happens anyway, a changed result or every
     FLUSH_EVERY (`_Memory`); and once an hour the beats past KEEP or KEEP_BEATS pruned."""
@@ -656,7 +712,7 @@ def record(store, at, ran, total_ms):
     _commit(store, at, any(_timed(r.key) for r in ran), working, total_ms, beat=True)
 
 
-def prune(c, at):
+def prune(c: "sqlite3.Connection", at: datetime) -> None:
     c.execute("DELETE FROM heartbeat_beats WHERE coalesce(last_repeated_at, started_at)<?", (S.stamp(at - KEEP),))
     c.execute(
         "DELETE FROM heartbeat_beats WHERE id IN (SELECT id FROM heartbeat_beats ORDER BY started_at DESC, id DESC "
@@ -665,7 +721,15 @@ def prune(c, at):
     )
 
 
-def record_late(store, key, words, quiet, error=None, ms=0, counted=False):
+def record_late(
+    store: "Store",
+    key: str,
+    words: str | None,
+    quiet: bool,
+    error: str | None = None,
+    ms: int = 0,
+    counted: bool = False,
+) -> None:
     """A step's outcome that lands after its beat (Personal alerts' own thread) or outside one (Run now). A quiet
     outcome is noted in memory (its last result, written with the next write) unless `counted` (a run that times the
     step's next one); one that did something or failed is written at once, with a beat row of its own. Never raises."""
@@ -682,7 +746,7 @@ def record_late(store, key, words, quiet, error=None, ms=0, counted=False):
 
 
 # ----------------------------------------------------------------------------- liveness
-def liveness(c, now=None):
+def liveness(c: "sqlite3.Connection", now: datetime | None = None) -> tuple[str | None, float | None, bool]:
     """(last stamp, age in seconds, alive) of the server's loop: the fresher of the scheduler's pass
     (service_health 'scheduler', written by the rest of the pass, at most every 10 s) and the last beat
     (heartbeat_states, every beat). Alive while that is under max(ALIVE_MIN, interval + ALIVE_SLACK) seconds old, so a
@@ -695,7 +759,7 @@ def liveness(c, now=None):
         " (SELECT value FROM registry_metadata WHERE key=?)",
         (INTERVAL_KEY,),
     ).fetchone()
-    parsed = [(H.parse_ts(s), s) for s in (tick, beat) if s and H.parse_ts(s)]
+    parsed: list[tuple[datetime, str]] = [(H.parse_ts(s), s) for s in (tick, beat) if s and H.parse_ts(s)]
     if not parsed:
         return None, None, False
     last, stamp = max(parsed)
@@ -711,10 +775,15 @@ class Rest:
     """When the rest of the server's pass runs (at most every REST_FLOOR seconds, however short the beat), and the
     failures of the beats whose pass it skipped, carried into the next one so they still reach service_health."""
 
-    def __init__(self, floor=REST_FLOOR, clock=time.monotonic):
+    floor: float
+    clock: "Callable[[], float]"
+    at: float | None
+    carried: list[dict[str, str]]
+
+    def __init__(self, floor: float = REST_FLOOR, clock: "Callable[[], float]" = time.monotonic) -> None:
         self.floor, self.clock, self.at, self.carried = floor, clock, None, []
 
-    def due(self, ctx):
+    def due(self, ctx: Context) -> bool:
         if self.at is not None and self.clock() - self.at < self.floor:
             self.carried = (self.carried + list(ctx.failures))[-CARRY_MAX:]
             return False
@@ -724,13 +793,14 @@ class Rest:
         return True
 
 
-def run_now(store, auth, key):
+def run_now(store: "Store", auth: "Auth", key: str) -> None:
     """Run now (Settings > Routines) of a step a person controls: its block once, its outcome on its row. A failure is
     recorded, not raised."""
     step = CONTROLLED[key]
     from .scheduler import Scheduler
 
     class _Execution:  # a step reads only `auth` from the execution
+        auth: "Auth"
         pass
 
     execution = _Execution()
@@ -748,9 +818,9 @@ def run_now(store, auth, key):
 
 
 # ----------------------------------------------------------------------------- the read
-def _day(row, at, field):
+def _day(row: dict[str, Any], at: datetime, field: str) -> int:
     """A count over about the last day: this window and, while it is under a day old, the one before."""
-    started = H.parse_ts(row.get("window_started_at"))
+    started: datetime | None = H.parse_ts(row.get("window_started_at"))
     if started is None or at - started >= 2 * WINDOW:
         return 0
     if at - started >= WINDOW:
@@ -758,7 +828,7 @@ def _day(row, at, field):
     return int(row.get(field) or 0) + int(row.get("previous_" + field) or 0)
 
 
-def every_words(step, cfg=None):
+def every_words(step: Step, cfg: dict[str, Any] | None = None) -> str:
     if step.control and cfg is not None:
         return SR.schedule_words(step.control, cfg) if cfg.get("on") else "Off"
     every = step.floor
@@ -772,7 +842,8 @@ def every_words(step, cfg=None):
     return f"Every {seconds} s"
 
 
-def _beat_view(row):
+def _beat_view(row: dict[str, Any]) -> dict[str, Any]:
+    steps: list[dict[str, Any]]
     try:
         steps = json.loads(row["steps"] or "[]")
     except ValueError:
@@ -791,7 +862,9 @@ def _beat_view(row):
     }
 
 
-def beats(c, limit=PAGE, before=None):
+def beats(
+    c: "sqlite3.Connection", limit: int = PAGE, before: str | None = None
+) -> tuple[list[dict[str, Any]], str | None]:
     """Beats that did something or failed, newest first; `next` is the `before` of the page after."""
     limit = max(1, min(int(limit or PAGE), 100))
     at = None
@@ -811,7 +884,14 @@ def beats(c, limit=PAGE, before=None):
     return [_beat_view(r) for r in shown], nxt
 
 
-def _step_view(step, row, cfg, at, auth, who):
+def _step_view(
+    step: Step,
+    row: dict[str, Any],
+    cfg: dict[str, Any] | None,
+    at: datetime,
+    auth: "Auth | None",
+    who: "Identity | None",
+) -> dict[str, Any]:
     return {
         "key": step.key,
         "name": step.name,
@@ -837,27 +917,35 @@ def _step_view(step, row, cfg, at, auth, who):
     }
 
 
-def step_row(c, key, auth, who):
+def step_row(c: "sqlite3.Connection", key: str, auth: "Auth | None", who: "Identity | None") -> dict[str, Any]:
     """One step's row as GET /api/v2/heartbeat lists it (the answer to its switch, PUT /api/v2/system-routines/{key})."""
     step = CONTROLLED.get(key) or BY_KEY[key]
     row = c.execute("SELECT * FROM heartbeat_steps WHERE key=?", (step.key,)).fetchone()
-    cfg = SR.config(c).get(step.control) if step.control else None
+    cfg: dict[str, Any] | None = SR.config(c).get(step.control) if step.control else None
     return _step_view(step, dict(row) if row else {}, cfg, datetime.now(timezone.utc), auth, who)
 
 
-def listing(c, auth, who, limit=PAGE, before=None, store=None):
+def listing(
+    c: "sqlite3.Connection",
+    auth: "Auth",
+    who: "Identity",
+    limit: int = PAGE,
+    before: str | None = None,
+    store: "Store | None" = None,
+) -> dict[str, Any]:
     """What GET /api/v2/heartbeat returns: the interval, the last beat and the day's count, each step in order with its
     kind, cadence, switch and numbers (with `store`, what this process noted since the rows were written laid over
     them), and a page of the beats that did something."""
     at = datetime.now(timezone.utc)
-    rows = (
+    rows: dict[str, dict[str, Any]] = (
         merged_steps(c, store, at)
         if store is not None
         else {r["key"]: dict(r) for r in c.execute("SELECT * FROM heartbeat_steps")}
     )
+    state: dict[str, Any]
     state = c.execute("SELECT * FROM heartbeat_states WHERE id=1").fetchone()
     state = dict(state) if state else {}
-    cfgs = SR.config(c)
+    cfgs: dict[str, dict[str, Any]] = SR.config(c)
     steps = [
         _step_view(step, rows.get(step.key, {}), cfgs.get(step.control) if step.control else None, at, auth, who)
         for step in STEPS
@@ -879,14 +967,14 @@ def listing(c, auth, who, limit=PAGE, before=None, store=None):
     }
 
 
-def may_change(auth, who):
+def may_change(auth: "Auth", who: "Identity") -> None:
     """An owner or an admin changes the interval, as Maintenance's settings (backend/maintenance.py). Raises a 403."""
     auth.domain(who)
     if getattr(who, "support", None) == "app" or not auth.bot_admin(who):
         raise Problem("forbidden", "Only an owner or an admin changes the Heartbeat", 403)
 
 
-def can_change(auth, who):
+def can_change(auth: "Auth", who: "Identity") -> bool:
     try:
         may_change(auth, who)
         return True
@@ -894,7 +982,7 @@ def can_change(auth, who):
         return False
 
 
-def install(app, store, auth, mutate):
+def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[..., Any]") -> None:
     from fastapi import Request
 
     from . import models as M
@@ -915,7 +1003,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         may_change(auth, who)
 
-        def work(c):
+        def work(c: "sqlite3.Connection") -> None:
             save_interval(c, who.actor, body.interval_s)
 
         mutate(request, body, work)

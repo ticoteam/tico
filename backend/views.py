@@ -1852,7 +1852,7 @@ _NEED_CONNECT = re.compile(
     re.I,
 )
 _NEED_REVIEW = re.compile(r"\b(review|draft|proofread|read over|look over)\b", re.I)
-# The words that open a question asking for a yes or a no (ui/app/decide.js DEC_YES_NO says the same).
+# The words that open a question asking for a yes or a no (ui/app/decide.ts DEC_YES_NO says the same).
 _YES_NO = frozenset(
     "approve can could should shall may do does did is are was were will would ok okay send publish "
     "merge ship go sign confirm proceed accept allow agree have has want renew book buy pay launch post "
@@ -2338,7 +2338,7 @@ def holds_up(c, row, readable):
 
 
 def decide_tier(item, now=None, own=None):
-    """Where a card goes in Decide (ui/app/decide.js): 0 when it holds up something due, or it goes ahead on its
+    """Where a card goes in Decide (ui/app/decide.ts): 0 when it holds up something due, or it goes ahead on its
     own, within SOON_BUSINESS_DAYS working days; 1 when it holds up a roadmap item at Approved or Building; else 2,
     newest first. `own` is the card's task as a roadmap item (roadmap_entry) when it is one: the header never names
     it, but it counts here like the item it holds up. How old a card is never moves it up."""
@@ -2645,7 +2645,7 @@ def needs_page(items, version, limit, cursor):
 
 
 def needs_bots(items, me):
-    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.js
+    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.ts
     needsMeCounts): a task waiting on me goes with the bot that owns it; another task or question with the bot that
     asked; a question asked outside any task with the bot that asked it. A page carries this for the whole list, so
     the sidebar's numbers do not wait for every page."""
@@ -3214,10 +3214,7 @@ def install_views(app, store, auth, mutate, task_view):
             return str(config.get("template") or "") in helpers
 
         from .chat_goals import readable_active
-        from . import gateway_tiers
-        from .task_manager import Chart
 
-        departments = Chart(c, store.settings)  # the Gateway department a bot's model picker starts from
         for bot in bots:
             slug = bot["id"]
             level = access.get(slug, auth.FULL)
@@ -3322,7 +3319,6 @@ def install_views(app, store, auth, mutate, task_view):
                     "turns_at_once": start_places.bot_limit(config),
                     "task_flow": task_flow[slug],
                     "team": P.team_of(slug, configs, people),
-                    "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                     "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
                     **strategy_bot.chart_hidden_row(slug, hide_strategy),
                     "report_position": places.get("bot:" + slug),

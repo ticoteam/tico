@@ -228,6 +228,10 @@ ACTIONS = {
         "send a bot's task waiting on nothing tracked back to open after two hours",
         ("waiting", "stranded", "reopen", "tasks"),
     ),
+    "resume_stranded": (
+        "wake a bot once on its task in progress with no run and nothing to wait on; stop after three runs with no progress",
+        ("doing", "stranded", "resume", "stuck", "tasks"),
+    ),
     "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
@@ -557,6 +561,16 @@ JOBS = [
         "Hourly",
         3600,
         then=("reopen_stranded",),
+    ),
+    Job(
+        "stranded_resume",
+        "Resume stranded work",
+        "Wakes a bot once on its task left in progress with no run and nothing to wait on, 15 minutes after its last run "
+        "ended; after three runs with no progress it stops and lists the task on the bot's manager's task roundup.",
+        HOUSEKEEPING,
+        "Every 10 minutes",
+        600,
+        then=("resume_stranded",),
     ),
     Job(
         "thread_retention",

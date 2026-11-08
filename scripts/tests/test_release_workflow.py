@@ -38,7 +38,11 @@ def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=()):
     condition = re.sub(r"needs\.([\w-]+)\.(?:outputs\.([\w-]+)|result)", value, condition)
     condition = re.sub(r"!(?!=)", " not ", condition).replace("&&", " and ").replace("||", " or ")
     return bool(
-        eval(condition.strip(), {"__builtins__": {}}, {"cancelled": lambda: cancelled, "success": lambda: success})
+        eval(
+            condition.strip(),
+            {"__builtins__": {}},
+            {"cancelled": lambda: cancelled, "success": lambda: success, "always": lambda: True},
+        )
     )
 
 
@@ -117,9 +121,22 @@ def test_cancelled_workflow_never_starts_optional_jobs():
 
 def test_company_publish_survives_skipped_release_and_requires_successful_build():
     jobs = yaml.safe_load((ROOT / ".github/workflows/company-app.yml").read_text())["jobs"]
+    # The icon check sets available=true only when its download works; build and publish both wait for it.
+    passed = {"icon": {"available": "true"}}
     for result in ("success", "failure", "skipped", "cancelled"):
-        assert _runs(jobs, "publish", {"build": result}, {}, inherited=("skipped",)) == (result == "success")
-    assert not _runs(jobs, "publish", {"build": "success"}, {}, cancelled=True)
+        expected = result == "success"
+        assert _runs(jobs, "publish", {"icon": "success", "build": result}, passed, inherited=("skipped",)) == expected
+    assert not _runs(jobs, "publish", {"icon": "success", "build": "success"}, passed, cancelled=True)
+    # A failed or skipped icon job never leaves a build or publish to run, even though its build could succeed.
+    for icon in ("failure", "skipped", "cancelled"):
+        assert not _runs(jobs, "build", {"icon": icon}, {})
+        assert not _runs(jobs, "publish", {"icon": icon, "build": "success"}, {})
+    unavailable = {"icon": {"available": "false"}}
+    assert _runs(jobs, "build", {"icon": "success"}, passed)
+    assert not _runs(jobs, "build", {"icon": "success"}, unavailable)
+    assert not _runs(jobs, "publish", {"icon": "success", "build": "success"}, unavailable)
+    assert jobs["build"]["needs"] == "icon"
+    assert set(jobs["publish"]["needs"]) == {"icon", "build"}
 
 
 @pytest.fixture
@@ -284,9 +301,55 @@ def test_validation_is_dispatch_only_and_keeps_the_title_release_yml_finds():
     assert (
         ci["run-name"]
         == "Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}"
+        "${{ inputs.plan != '' && format(' (incremental on {0})', inputs.anchor) || '' }}"
     )
     assert release_train.title("s", "v", "p") == "Validate s as v from p"
     assert ci["concurrency"] == {"group": "manual-release-validation", "cancel-in-progress": False}
+
+
+def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only_what_it_lists():
+    ci, on = _workflow("ci.yml")
+    inputs = on["workflow_dispatch"]["inputs"]
+    # Both inputs are optional: an empty plan is the full validation, unchanged.
+    assert inputs["anchor"]["default"] == "" and inputs["anchor"].get("required") is not True
+    assert inputs["plan"]["default"] == "" and inputs["plan"].get("required") is not True
+    jobs = ci["jobs"]
+    assert "matrix" in jobs["candidate"]["outputs"]
+    # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
+    assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
+    assert jobs["gate"]["strategy"]["fail-fast"] is False
+    # The full default factory sim and the measured timings run only in a full validation.
+    assert jobs["factory-sim"]["if"] == "inputs.plan == '' || fromJSON(inputs.plan).factory"
+    assert jobs["test-timings"]["if"] == "inputs.plan == ''"
+    steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
+    assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
+
+
+def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
+    """A ceiling of 10 full validations a UTC day, manual dispatches included: a hosted job counts today's full runs
+    before any RunsOn VM starts, and every job that would start a VM waits for it."""
+    ci, on = _workflow("ci.yml")
+    jobs = ci["jobs"]
+    assert jobs["ceiling"]["runs-on"] == "ubuntu-24.04"
+    assert jobs["ceiling"]["permissions"] == {"actions": "read"}
+    step = next(step for step in jobs["ceiling"]["steps"] if "ceiling reached" in step.get("run", ""))
+    assert step["if"] == "inputs.plan == ''" and step["env"]["CAP"] == "10"
+    assert "$CAP full runs today; ceiling reached" in step["run"] and "created=$today" in step["run"]
+
+    def waits_for_ceiling(name):
+        needs = jobs[name].get("needs", [])
+        needs = [needs] if isinstance(needs, str) else needs
+        return "ceiling" in needs or any(waits_for_ceiling(dep) for dep in needs)
+
+    vms = [name for name, job in jobs.items() if "runs-on=" in str(job["runs-on"])]
+    assert "candidate" in vms and all(waits_for_ceiling(name) for name in vms)
+
+
+def test_the_window_checks_out_the_whole_tree_it_diffs_and_never_keeps_its_token():
+    train, _ = _workflow("train.yml")
+    checkout = next(step for step in train["jobs"]["window"]["steps"] if step.get("id") == "checkout")
+    assert checkout["with"] == {"persist-credentials": False, "fetch-depth": 0}
+    assert "sparse-checkout" not in checkout["with"]
 
 
 def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane():
@@ -310,7 +373,15 @@ def test_window_triggers_match_the_script_and_every_acting_job_shares_one_lane()
         assert job["concurrency"] == {"group": "release-train", "cancel-in-progress": False}
         assert job["environment"] == "release"
         assert "github.ref == 'refs/heads/main'" in job["if"]
-        assert job["permissions"] == {"actions": "write", "contents": "write", "issues": "write", "packages": "write"}
+        # Read access to pull requests and checks is for the release notes an approval issue carries.
+        assert job["permissions"] == {
+            "actions": "write",
+            "contents": "write",
+            "issues": "write",
+            "packages": "write",
+            "pull-requests": "read",
+            "checks": "read",
+        }
         for name in ("CANARY_URL", "STABLE_URL", "CANARY_UPDATE_KEY", "STABLE_UPDATE_KEY", "RELEASE_HOLD"):
             assert name in job["env"]
         assert "RELEASE_TAG_TOKEN" not in job["env"]
@@ -357,3 +428,68 @@ def test_a_window_starts_release_yml_on_the_tag_with_inputs_it_declares():
     assert JOBS["desktop-changes"]["steps"][-1]["env"]["FORCE"] == (
         "${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}"
     )
+
+
+@pytest.mark.parametrize(
+    "window, shipped, shots_run",
+    [("success", "true", True), ("failure", "true", True), ("success", "false", False), ("failure", "", False)],
+    ids=["shipped", "shipped-but-window-failed", "not-shipped", "window-died-before-reporting"],
+)
+def test_shots_run_for_a_shipped_candidate_and_never_hold_the_window_or_the_canary(window, shipped, shots_run):
+    train, _ = _workflow("train.yml")
+    jobs = train["jobs"]
+    outputs = {"window": {"shipped": shipped}}
+    results = {"guard": "success", "window": window}
+    assert _runs(jobs, "shots", results, outputs) is shots_run
+    results["shots"] = "success" if shots_run else "skipped"
+    assert _runs(jobs, "approval-shots", results, outputs) is shots_run
+    # The issue says the pictures could not be made when the shots job failed, so it runs after a failed shots job too.
+    results["shots"] = "failure"
+    assert _runs(jobs, "approval-shots", results, outputs) is shots_run
+
+
+def test_shots_and_their_issue_update_are_scoped_jobs_that_nothing_else_waits_for():
+    train, _ = _workflow("train.yml")
+    jobs = train["jobs"]
+    # Only the approval issue update waits for the shots; the window and the canary never do.
+    assert {name for name, job in jobs.items() if "shots" in str(job.get("needs", ""))} == {"approval-shots"}
+    assert jobs["window"]["needs"] == "guard"
+    shots = jobs["shots"]
+    assert shots["needs"] == "window" and shots["uses"] == "./.github/workflows/release-shots.yml"
+    assert shots["with"] == {
+        "base": "${{ needs.window.outputs.base }}",
+        "head": "${{ needs.window.outputs.sha }}",
+        "version": "${{ needs.window.outputs.version }}",
+    }
+    assert shots["permissions"] == {"contents": "write"}
+    assert not {"runs-on", "concurrency", "environment", "steps"} & set(shots)
+    approval = jobs["approval-shots"]
+    assert approval["needs"] == ["window", "shots"] and approval["if"] == shots["if"]
+    assert approval["runs-on"] == "ubuntu-24.04" and approval["timeout-minutes"] <= 10
+    assert approval["permissions"] == {"actions": "read", "contents": "read", "issues": "write"}
+    assert "concurrency" not in approval and "environment" not in approval
+    assert "RELEASE_TAG_TOKEN" not in approval.get("env", {})
+    # The pictures' download is allowed to fail: the issue then says so, with this run.
+    download = next(step for step in approval["steps"] if "download-artifact" in step.get("uses", ""))
+    assert download["continue-on-error"] is True
+    assert download["with"]["name"] == "release-shots-${{ needs.window.outputs.version }}"
+    put = approval["steps"][-1]
+    put_pictures = (
+        'python3 scripts/release_train.py shots-into-approval "$VERSION" "$RUNNER_TEMP/release-shots/release-shots.md"'
+    )
+    assert put["run"] == put_pictures
+    assert put["env"] == {"VERSION": "${{ needs.window.outputs.version }}"}
+
+
+def test_the_pictures_artifact_is_the_one_release_shots_uploads_on_a_spot_4cpu_runner():
+    shots, on = _workflow("release-shots.yml")
+    assert shots["permissions"] == {}
+    job = shots["jobs"]["shots"]
+    assert job["permissions"] == {"contents": "write"}
+    assert job["outputs"]["artifact"] == "release-shots-${{ inputs.version }}"
+    assert on["workflow_call"]["outputs"]["artifact"]["value"] == "${{ jobs.shots.outputs.artifact }}"
+    upload = next(step for step in job["steps"] if "upload-artifact" in step.get("uses", ""))
+    assert upload["with"]["name"] == "release-shots-${{ inputs.version }}"
+    assert "spot=false" not in job["runs-on"] and "runner=4cpu-linux-x64" in job["runs-on"]
+    train, _ = _workflow("train.yml")
+    assert all("macos" not in str(job.get("runs-on", "")) for job in train["jobs"].values())

@@ -62,7 +62,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     // The vendored Markdown and icon font, so the page reads as it does for real.
     const vendor = p.match(/^\/vendor\/((?:fonts\/)?[\w.-]+)$/);
     if (vendor && fs.existsSync(uiFile('vendor/' + vendor[1]))) return route.fulfill({path: uiFile('vendor/' + vendor[1])});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
@@ -159,7 +159,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
       // No routines on the rail: they are Automations now.
       assert.equal(await page.locator('#bot-recurring').count(), 0);
-      // Assigned to others is a tab now, not a folded section; Done Recently is a tab that stays closed.
+      // Assigned to others is a tab now, not a folded section; Done recently is a tab that stays closed.
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
       // The top line keeps no tool icons; the Tools card under More lists them.

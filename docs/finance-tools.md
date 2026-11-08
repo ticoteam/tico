@@ -1,6 +1,6 @@
 # Finance tools
 
-Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
+Six hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
 inputs. Every call runs as its caller, a person or a bot, with that caller's own Finance rights and view: a bot
 without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay private for
 everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else reads or writes the books.
@@ -9,13 +9,12 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account; leave it out to search all but account), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
+| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor; leave it out to search all but account and vendor), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
 | `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
-| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
+| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
 | `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
-| `hub_finance_card_fill` | `hub finance card-fill` | `card_id`, `merchant`, `amount` | not available yet |
 
 The Finance transactions list (its feed read) leaves out an `ignored` row that the bank has ended: its `provider_status`
 is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the list shows `cancelled` as "canceled" and
@@ -23,6 +22,46 @@ is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the 
 reconciliation cleared it keeps its booked status: it stays in the list, does not appear under `failed`, and its
 `provider_status` holds the bank's word. A row a person ignored stays in the list as `ignored` until the bank ends it; then
 it leaves the list like any other row the bank ended.
+
+## Vendors
+
+A bank or card row's vendor is one identity per merchant. Its key strips what the bank adds to a name: a processor
+prefix (`SQ *`, `TST*`, `PAYPAL *`), a reference or store number and case, so `GOOGLE *ADS8812` and `GOOGLE ADS` are one
+vendor. The Transactions read (and `hub_finance_search` on `feed`) gives each bank or card row `vendor: {id, name}`: `id` is
+the contact the key resolves to, else the key, and `name` is the contact's name. Watch's duplicate charge and price
+increase checks group by that vendor and name the finding by it.
+
+Who sees a vendor is one rule (`backend/finance/visible.py`, "Who sees what"). Totals add only the lines in the reader's
+view. A total that lost a hidden (private) line is marked `excl: true`, so nobody can subtract a private line out. A
+vendor's name and aliases show when the reader sees one of its lines in the period, or when the reader sees every contact
+(the payables view, or full detail), or when a vendor attribution rule names them or someone they manage. A vendor whose
+only lines are private never shows its name to a reader without full detail. So a spending bot sees the vendors it pays,
+with only its own spend. `hub_finance_search` `kind: vendor` returns `{id, name, aliases, month: {spend, excl, as_of}}`
+for each vendor whose name shows (this month's spend by default), and leaves the rest out.
+
+`GET /api/v2/finance/unattributed` (and the `unattributed` metric: `{amount, lines, excl}`) is the Unattributed queue: P&L
+lines in the period with no team, teammate or attribution in force, the reader's slice only.
+
+`vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
+them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.
+Spend by vendor, budgets and attribution rules then count the names as `into`. A name already on another contact is
+refused, and the error says which. `vendor_unmerge {into, keys}` takes back a merge: pass the `keys` it returned. A mirrored
+book (QuickBooks, Xero) gets only the aliases; its contacts are left alone.
+
+## Classes, departments and projects
+
+A QuickBooks or Xero book tags its lines with the class, department (location) and project (job) the provider holds.
+Attribution rules match those tags too: `attribution_rule_set` takes `match` kind `class`, `location` or `project` with
+the record's id. `attribution_map {items: [{kind, id, team?, teammate?}]}` sets one rule per class, department or
+project at 100% to the team or teammate, from the earliest line that carries it, so the lines already posted re-roll. An
+item with neither `team` nor `teammate` clears its rule. `GET /api/v2/finance/attribution/dimensions` lists them, largest
+amount first, over the last 12 months. Precedence for a line: a person's or bot's override, then a vendor rule, a
+money-account rule, an account rule, a class rule, a department rule, a project rule, then the line's own tags. Tico
+never writes these to the provider: they are Tico-side, and no outbox row is made.
+
+A book with no bank connection works the same: Watch reads its posted expense entries as the charges for any money
+account that has no feed rows in the window, one charge per entry, grouped by its vendor. A book with feed rows reads
+those rows, as before.
 
 ## Acting
 
@@ -125,7 +164,8 @@ under any of those keys. Both are gated: a bot's `card_save` or `card_unsave` wa
 
 ## Card fill
 
-`hub_finance_card_fill` is listed so agents can find it. It returns "Card fill is not available yet" and never takes
-or returns card details.
+Card fill is not offered: `hub_finance_card_fill` is in no tool list (`hubtools.UNLISTED`) and has no `hub finance`
+command. A call by its name still runs and returns "Card fill is not available yet"; it never takes or returns card
+details.
 
 See also [Bookkeeper](bookkeeper.md).

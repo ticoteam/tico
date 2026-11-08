@@ -2818,7 +2818,8 @@ def obsolete_notices_sql(c):
     entered) once the task is at another step, unless a person's act caused it,
     a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
     the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
-    moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
+    moved it elsewhere), a stranded-task resume once its task has moved on, finished or changed owner since it was written
+    (stranded_resume.obsolete_sql), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
     The legacy per-task wakes (check_back, status_check, stalled, step_status) still queued unstarted are obsolete whatever
     the task says: the task roundup sends one list instead. A turn that started and yielded (a drain's time limit, a shared
     login's hold cap) is never one of them: it is the rest
@@ -2829,6 +2830,8 @@ def obsolete_notices_sql(c):
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
+    from . import stranded_resume
+
     return (
         "FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
         f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
@@ -2851,6 +2854,7 @@ def obsolete_notices_sql(c):
         "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
         "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM history_events "
         "e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.created_at>m.created_at AND e.actor_id<>m.sender_id)) "
+        f"OR ({stranded_resume.obsolete_sql()}) "
         "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
         "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
         "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
@@ -4947,7 +4951,7 @@ class Execution:
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
         subscribed = model_subscriptions.for_claim(c, runner, config)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
-        # Its department's tier (Medium by default) is looked up only when a turn would use it.
+        # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
         config = models_preset.with_gateway_fallback(
             record, here, models_preset.main_config(record, here, config, tier), tier
@@ -6666,12 +6670,17 @@ class Execution:
                 target = source["sender_id"]
                 # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
                 # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
-                # not this rule, bounds bots answering bots there. The reply itself asks nothing back.
+                # not this rule, bounds bots answering bots there. The reply itself asks nothing back. A bot's
+                # needs-action comment on a task only wakes the owner: the work on the task answers it, and posting
+                # the run's text back would wake the commenter (bot_to_bot WAKES) on every nudge, a scheduled-only
+                # lead included (Dev 606). Bots ask bots in a DM.
+                source_refs = H._json(source.get("refs"), {})
+                source_refs = source_refs if isinstance(source_refs, dict) else {}
                 replyable = (
                     not str(target).startswith("bot:")
                     or source["kind"] == "ask"
                     or carried
-                    or bool(H._json(source.get("refs"), {}).get("needs_action"))
+                    or (bool(source_refs.get("needs_action")) and not source_refs.get("comment"))
                 )
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
@@ -7827,7 +7836,7 @@ class Execution:
                 # A safe second computer loss waits for the source, not a person's effects decision.
                 continue
             calls, acted = facts['calls'], facts['acted']
-            # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
+            # `stopped` is what the review card leads with (ui/app/settings.ts executionReview), by the same rule the
             # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if facts['fallback_unknown']:
                 stopped = 'unknown'
@@ -7873,7 +7882,7 @@ class Execution:
                 )
             elif facts['restart'] and facts['starts'] <= 1:
                 # Safe to resume, but the run did reach tools that can change things: the card must
-                # never say it only read (ui/app/settings.js renders each bucket's own words).
+                # never say it only read (ui/app/settings.ts renders each bucket's own words).
                 stopped = 'restarted'
                 reason = (
                     f"{restart_cause(facts)}; no consumed approval or named irreversible outside "

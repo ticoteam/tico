@@ -492,7 +492,17 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 # may reach them (a bot that needs a fix asks BotOps). The Assistant's slug is the install's own (TICO_ASSISTANT_BOT).
 # The built-in bots of Auth.system_bot plus the support helper, except the Health Monitor: its tasks to people far from
 # it are what nearby reach is for, so it is checked like any bot.
-HELPERS = ("botops", "task-manager", "goal-manager", "librarian", "support", "assistant", "bookkeeper", H.COUNSEL)
+HELPERS = (
+    "botops",
+    "task-manager",
+    "goal-manager",
+    "librarian",
+    "support",
+    "assistant",
+    "bookkeeper",
+    H.COUNSEL,
+    H.BRAND_OWNER,
+)
 SOLICITED_DAYS = 7  # how far back a teammate's message to a bot makes the bot's answer to them solicited
 NAMES_SHOWN = 6  # the teammates a refusal names as the ones the bot does reach
 
@@ -610,12 +620,24 @@ class Decision:
 
 
 def decide(
-    ctx, sender, receiver, kind="task", *, system=False, on_task=False, solicited=False, count=None, unseen=frozenset()
+    ctx,
+    sender,
+    receiver,
+    kind="task",
+    *,
+    system=False,
+    on_task=False,
+    solicited=False,
+    own=False,
+    count=None,
+    unseen=frozenset(),
 ):
     """Whether `sender` may reach `receiver` with one write. Pure: the context's roster, configs, settings and lines,
     the write's facts, and `count(scope)` for what was already sent today (scope `("line", line)`, `("task",)` or
     `("chat",)`; none counted when it is None). `kind` is `task` (a task made, handed or asked on) or `chat` (a message
-    or a note). Only a bot is ever refused; the owner as receiver is not exempt."""
+    or a note). Only a bot is ever refused; the owner as receiver is not exempt. A person receiver is only opened by
+    `own` (a reply to their message, a conversation they wrote to the bot in, a task they handed it: person_asked):
+    `on_task` and `solicited` do not open a person."""
     count = count or (lambda scope: 0)
     if not H.is_bot(sender):
         return Decision(True, "person")
@@ -625,9 +647,12 @@ def decide(
         return Decision(True, "system")
     if is_helper(ctx, sender) or is_helper(ctx, receiver):
         return Decision(True, "helper")
-    if on_task:
+    if str(receiver).startswith("human:"):
+        if own:
+            return Decision(True, "solicited")
+    elif on_task:
         return Decision(True, "task")
-    if solicited:
+    elif solicited:
         return Decision(True, "solicited")
     eff = effective(ctx, sender)
     line, why = line_for(ctx, sender, receiver), "open"
@@ -781,22 +806,27 @@ def on_task(c, task_id, sender, receiver, before=None):
     return sender in parties and receiver in parties
 
 
-def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, before=None):
+def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, before=None, person=False):
     """The receiver came to the sender first: it gave the sender an open task, or (in the last SOLICITED_DAYS) wrote
     to it, here when the write names a conversation (addressed to it or @mentioning it), or this is a reply to the
     receiver's message. `conversation_id` and `in_reply_to` may each be several (a sub-thread and its parent thread; a
     reply and the message its sub-thread hangs from). `before`: only what was written before then (the dry-run's
-    history)."""
+    history). `person`: the receiver is a person, so only what they wrote to the sender in these conversations counts
+    (no open task they gave it, nothing written elsewhere). In a DM named by the write, any person's message there
+    counts, so a group DM people opened with the bot keeps working."""
     for message_id in _many(in_reply_to):
         row = c.execute("SELECT sender_id FROM messages WHERE id=?", (message_id,)).fetchone()
         if row and row["sender_id"] == receiver:
             return True
-    if c.execute(
-        "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
-        + (" AND created_at<?" if before else "")
-        + " LIMIT 1",
-        (receiver, sender, *((before,) if before else ())),
-    ).fetchone():
+    if (
+        not person
+        and c.execute(
+            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
+            + (" AND created_at<?" if before else "")
+            + " LIMIT 1",
+            (receiver, sender, *((before,) if before else ())),
+        ).fetchone()
+    ):
         return True
     until = before or H.now()
     since = (H.parse_ts(until) - timedelta(days=SOLICITED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -807,6 +837,8 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
         args.append(sender)
     where += ")"
     places = _many(conversation_id)
+    if person and not places:
+        return False
     if places:
         where += f" AND m.conversation_id IN ({','.join('?' * len(places))})"
         args.extend(places)
@@ -815,14 +847,37 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
     # A DM the bot is in: what the receiver wrote there was written to the bot, and a person who wrote there brought
     # its members together.
     dms = [p for p in places if _is_dm(c, p)]
+    others = "(sender_id=? OR sender_id LIKE 'human:%')"
     return (
         bool(dms)
         and c.execute(
-            f"SELECT 1 FROM messages WHERE (sender_id=? OR sender_id LIKE 'human:%') AND created_at>=? AND created_at<? "
+            f"SELECT 1 FROM messages WHERE {others} AND created_at>=? AND created_at<? "
             f"AND conversation_id IN ({','.join('?' * len(dms))}) LIMIT 1",
             (receiver, since, until, *dms),
         ).fetchone()
         is not None
+    )
+
+
+def handed(c, sender, receiver, task_id, before=None):
+    """The person `receiver` handed `sender` this exact open task: they asked for it and the bot owns it."""
+    return bool(task_id) and (
+        c.execute(
+            "SELECT 1 FROM tasks WHERE id=? AND requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
+            + (" AND created_at<?" if before else ""),
+            (task_id, receiver, sender, *((before,) if before else ())),
+        ).fetchone()
+        is not None
+    )
+
+
+def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_reply_to=None, before=None):
+    """What lets a bot write to a person who is not adjacent to it, and only this: a direct reply to the person's own
+    message, a write in a conversation where the person wrote to the bot in the last SOLICITED_DAYS, or a write on a
+    task the person handed this bot. Being on the task in any other way (reader, former owner, thread member, an
+    ancestor's party) or having given the bot some other task does not count."""
+    return solicited(c, sender, receiver, conversation_id, in_reply_to, before, person=True) or handed(
+        c, sender, receiver, task_id, before
     )
 
 
@@ -939,8 +994,9 @@ def check(
     c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None, exclude=None
 ):
     """Refuse (409, nothing written) a bot's task, hand-off, question or message to a teammate out of its reach. The
-    exemptions that need the database (a task they share, a teammate who came to the bot first) are read only when the
-    write would be refused without them."""
+    exemptions that need the database are read only when the write would be refused without them: for a bot teammate,
+    a task they share or a teammate who came to the bot first; for a person, only person_asked (a reply to them, a
+    conversation they wrote in, a task they handed the bot)."""
     sender = _sender(who)
     receiver = str(receiver or "")
     if not sender or receiver == sender or not receiver.startswith(("bot:", "human:")):
@@ -958,7 +1014,10 @@ def check(
     if found.allowed:
         return
     task_id = task_of(c, task_id, _many(conversation_id)[0] if _many(conversation_id) else None)
-    if (task_id and on_task(c, task_id, sender, receiver)) or solicited(
+    if receiver.startswith("human:"):
+        if person_asked(c, sender, receiver, task_id, conversation_id, in_reply_to):
+            return
+    elif (task_id and on_task(c, task_id, sender, receiver)) or solicited(
         c, sender, receiver, conversation_id, in_reply_to
     ):
         return

@@ -1,6 +1,6 @@
-// The Meetings page (ui/app/meetings.js pageNotes, ui/meeting-importers.js): a header with search and one
+// The Meetings page (ui/app/meetings.ts pageNotes, ui/meeting-importers.ts): a header with search and one
 // "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
-// link (ui/app/meetings-sources.js) whose dialog lists every source with its status and error, Remove and Connect;
+// link (ui/app/meetings-sources.ts) whose dialog lists every source with its status and error, Remove and Connect;
 // filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
 // Fixtures only, no network.
 const {chromium} = require('playwright');
@@ -43,7 +43,7 @@ async function open(browser, viewport, world, options = {}) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});

@@ -71,6 +71,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from .batch_work import isolated
@@ -4004,6 +4005,9 @@ PRIVATE_BY_TEMPLATE = ("general-counsel", "tico-counsel")
 # The built-in Counsel's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
 # "counsel" (a legal team's, say) is never taken for it.
 COUNSEL = "tico-counsel"
+# The built-in Brand Owner's slug (docs/onboarding.md): it keeps the brand book. A company that hired a Brand Manager
+# under this slug before it was built in keeps that bot (backend/onboarding.py `_ensure_builtin`).
+BRAND_OWNER = "brand"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).
@@ -4011,6 +4015,7 @@ PRODUCT_BOT_SLUGS = frozenset(
     {
         FLEET_MAINTAINER,
         COUNSEL,
+        BRAND_OWNER,
         "librarian",
         "goal-manager",
         "task-manager",
@@ -5905,7 +5910,7 @@ def pr_state(links):
 
 def task_tree(conn, task_id, visible_ids=None):
     rows = descendants(conn, task_id)
-    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.js).
+    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.ts).
     nodes = {
         r["id"]: {
             **{k: r[k] for k in ("id", "title", "status", "owner_id")},
@@ -7944,6 +7949,14 @@ def task_update(
         and not verdict_set
         and all(v is None for v in (visibility, public_title, public_summary, size, check_back_at, check_back_note))
     ):
+        # Nothing to write, but a waiting task's Blocked reason still follows its holds: clearing the wait on nothing
+        # tracked (waiting_on "") recomputes it here, in this same write, and a bot's task goes back to open
+        # (task_holds.refresh). An early return skipped that before.
+        if row and row.get("status") == "waiting":
+            from . import task_holds
+
+            task_holds.refresh(conn, task_id, task_holds.WAIT_CLEARED if waiting_on == "" else None)
+            return task(conn, task_id) or row
         return row
     # A person finishing it is news for every bot on it; the bots that asked them open questions are read
     # before the status write supersedes those questions.
@@ -8904,8 +8917,12 @@ def wait_detail(conn, row, *, children=True):
     engineering = review_gate.engineering(conn, row)
     open_children = [dict(r) for r in cached_rows(conn, OPEN_CHILDREN_SQL, (row["id"],))] if children else []
     if not children:
-        # A subtask's result is not held back by its sibling subtasks, but a question a person must answer still is.
-        open_children = [dict(r) for r in conn.execute(OPEN_PERSON_QUESTIONS_SQL, (row["id"],)).fetchall()]
+        # A subtask's result is not held back by its sibling subtasks, but a question its owner asked a person still
+        # is. A question a person filed on the task (a manager's `--status waiting --on`, her own subtask) is one more
+        # open subtask, and the verdict reaches the builder past it.
+        open_children = [
+            dict(r) for r in conn.execute(OPEN_PERSON_QUESTIONS_SQL, (row["id"], row["owner_id"])).fetchall()
+        ]
     check = None
     for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
@@ -9172,7 +9189,7 @@ OPEN_CHILDREN_SQL = (
 OPEN_PERSON_QUESTIONS_SQL = (
     f"SELECT id,owner_id,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) "
     "AND status NOT IN ('done','closed','declined') AND questions IS NOT NULL AND answer IS NULL "
-    "AND owner_id LIKE 'human:%' ORDER BY created_at,id"
+    "AND owner_id LIKE 'human:%' AND requester_id=? ORDER BY created_at,id"
 )
 
 
@@ -9447,8 +9464,9 @@ def next_run_tasks(conn, bot, exclude=None):
     )
 
 
-def chunks(values, size=500):
-    """`values` in slices small enough for one statement's `IN (?,...)`."""
+def chunks[T](values: Iterable[T], size: int = 500) -> list[list[T]]:
+    """`values` in slices small enough for one statement's `IN (?,...)`. Annotated: inferred, its type differed between
+    basedpyright runs on the same code (task_privacy.py:1593 on Nov 7)."""
     values = list(values)
     return [values[start : start + size] for start in range(0, len(values), size)]
 
@@ -11518,7 +11536,7 @@ def unanswered_ask(conn, task_row, *, actor=None):
     return None
 
 
-# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.js holds the same
+# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.ts holds the same
 # number: change both together).
 DECLINED_NEEDS_HOURS = 24
 

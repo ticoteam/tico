@@ -66,7 +66,7 @@ Without a decision model (no gateway key, no TypeSafe key of your own and no AI 
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
 reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
 order, one short HTTP attempt each with no client-side retries on top of the gateway's own: the Tico AI Gateway
-(`tico-decide-1.0`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
+(`tico-decide-low`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
 the next, so an outage costs at most eleven attempts per provider per question batch for a message.
 
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap

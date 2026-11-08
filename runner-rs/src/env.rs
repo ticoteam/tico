@@ -605,7 +605,7 @@ mod tests {
         ]
         .into();
         assert!(vault
-            .for_model(&mut env.clone(), Some("tico-mid-1.0"), true)
+            .for_model(&mut env.clone(), Some("tico-medium-1.0"), true)
             .is_err());
         assert_eq!(
             vault.for_model(&mut env, Some("opus-5-5"), true).unwrap(),

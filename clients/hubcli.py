@@ -531,7 +531,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
     hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
     hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
-    hub gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
+    hub gateway image PROMPT [--model low|high|svg] [--category C] [--quality Q] [--ref FILE]... [--size WxH] [--count N] --out PATH
+    hub gateway video PROMPT [--seconds N] [--resolution R] [--aspect A] [--audio|--no-audio] [--first-frame FILE] [--last-frame FILE]
+    hub gateway video-status ID --out PATH.mp4    check a video job; save it once it is done
                                            make an image (storyboard, photo, character or graphic) and save it;
                                            PATH.json beside it says how it was made
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
@@ -649,7 +651,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
     hub finance action <action-id>         an action's status and result
     hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
-    hub finance card-fill                  fill your card into a checkout (not available yet)
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -2113,14 +2114,16 @@ def parser():
     s.add_argument(
         "--if-no-answer",
         dest="if_no_answer",
-        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence",
+        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence. Only for a step that "
+        "sends, spends or deletes: a reversible, internal default is refused (ask_default_go_ahead), so just do it and "
+        "note it on your task",
     )
     s.add_argument(
         "--default-kind",
         dest="default_kind",
         choices=["reversible", "send", "spend", "delete"],
-        help="what that step is, required with --if-no-answer; only reversible (internal, undoable) goes "
-        "ahead on its own: a send, spending or a delete waits for an answer",
+        help="what that step is, required with --if-no-answer; a reversible (internal, undoable) step is not asked: "
+        "do it and say so in one line on your task. A send, spending or a delete waits for an answer",
     )
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.add_argument(
@@ -3343,7 +3346,12 @@ def parser():
     s = watch.add_parser("add", help="watch one page of an entity")
     s.add_argument("entity_id")
     s.add_argument("url")
-    s.add_argument("--kind", default="other", choices=["pricing", "careers", "changelog", "docs", "home", "other"])
+    s.add_argument(
+        "--kind",
+        default="other",
+        choices=["pricing", "careers", "changelog", "docs", "home", "other", "release"],
+        help="release: the URL is github:owner/repo or a release feed, read through the Gateway",
+    )
     s.set_defaults(fn="market watch add")
     s = watch.add_parser("list", help="the watched pages and when each was last read")
     s.add_argument("--entity", dest="entity_id")
@@ -4383,14 +4391,30 @@ def parser():
         "--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)"
     )
     s.set_defaults(fn="gateway fetch")
+    s = gateway.add_parser("digest", help="group many items into one digest through the Gateway (Low prices)")
+    s.add_argument(
+        "--items-file",
+        dest="items_file",
+        required=True,
+        help='a JSON list of items, each {"title", and optionally "id", "text", "url", "source", "at"}, 1 to 300',
+    )
+    s.add_argument("--focus", help="what the reader cares about; it orders the groups")
+    s.add_argument("--style", choices=("brief", "full"), help="brief (the default) or full")
+    s.set_defaults(fn="gateway digest")
     s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
     s.add_argument("prompt")
     s.add_argument(
-        "--category",
-        required=True,
-        choices=("storyboard", "photo", "character", "graphic"),
-        help="storyboard (fast, keeps references), photo, character (keeps people from --ref), graphic (text and layout)",
+        "--model",
+        choices=("low", "high", "svg"),
+        help="low (fast, keeps --ref; the default), high (--category), svg (a vector image, saved as .svg; --quality)",
     )
+    s.add_argument(
+        "--category",
+        choices=("storyboard", "photo", "character", "graphic"),
+        help="for --model high: photo (the default), graphic (text and layout) or character (keeps people from --ref); "
+        "without --model, the older door's choice (storyboard, photo, character or graphic)",
+    )
+    s.add_argument("--quality", choices=("standard", "pro"), help="for --model svg: standard (the default) or pro")
     s.add_argument(
         "--ref",
         dest="refs",
@@ -4408,6 +4432,19 @@ def parser():
         help="the file for the first image; more are saved as name-2.png, name-3.png...",
     )
     s.set_defaults(fn="gateway image")
+    s = gateway.add_parser("video", help="start a video through the Gateway: its job id, checked with video-status")
+    s.add_argument("prompt")
+    s.add_argument("--seconds", type=int, help="3 to 15 seconds (8 by default)")
+    s.add_argument("--resolution", choices=("360p", "720p", "1080p", "4k"), help="720p by default")
+    s.add_argument("--aspect", choices=("16:9", "9:16"), help="16:9 by default")
+    s.add_argument("--audio", action=argparse.BooleanOptionalAction, default=None, help="with sound (the default)")
+    s.add_argument("--first-frame", dest="first_frame", metavar="FILE", help="a PNG or JPEG the video starts from")
+    s.add_argument("--last-frame", dest="last_frame", metavar="FILE", help="a PNG or JPEG the video ends on")
+    s.set_defaults(fn="gateway video")
+    s = gateway.add_parser("video-status", help="check a video job; once done, save its MP4 to --out")
+    s.add_argument("id", help="the job id the video command printed")
+    s.add_argument("--out", metavar="PATH.mp4", help="the new .mp4 file for a finished video")
+    s.set_defaults(fn="gateway video-status")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(
         dest="sub"
     )
@@ -5091,11 +5128,6 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
-    s = fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)")
-    s.add_argument("card_id", nargs="?", help="your card")
-    s.add_argument("--merchant", help="the checkout's domain")
-    s.add_argument("--amount", type=int, help="minor units")
-    s.set_defaults(fn="finance card-fill")
     manager = sub.add_parser(
         "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
     ).add_subparsers(dest="sub")

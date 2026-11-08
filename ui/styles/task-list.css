@@ -223,7 +223,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-step-age.late{font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
 .bcard .age{min-width:20px;text-align:right}
 
-/* ---- the side peek: the task's own view (ui/app/task-modal.js), narrower */
+/* ---- the side peek: the task's own view (ui/app/task-modal.ts), narrower */
 #task-peek{position:relative;inset:auto;grid-column:2;grid-row:1;width:auto;max-width:none;height:auto;max-height:none;min-height:0;margin:0;padding:0;
   border:0;border-left:1px solid var(--line);border-radius:0;box-shadow:none;background:var(--surface);overflow-y:auto;z-index:4}
 #task-peek:not([open]){display:none}
@@ -238,11 +238,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 #task-peek .task-props{order:-1;margin:2px 0 6px;padding:2px 0 6px;border-bottom:1px solid var(--line)}
 #task-peek .prop{min-height:28px}
 #task-peek .task-rail:not([hidden]){margin:8px 0;border-bottom:1px solid var(--line)}
-.tmodal-head .pill.tstatus{background:none;padding:0;font-size:var(--t-sm);font-weight:600;color:var(--ink)}
 .peek-tools{display:inline-flex;gap:2px;margin-left:4px}
-.peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted)}
+.peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted);flex:none}
 .peek-btn:hover{color:var(--ink)}
-/* Done and Close task in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
+/* Done and Close in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
 .tmodal-act{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:6px;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 .tmodal-act svg{flex:none}
 .tmodal-x svg{width:12px;height:12px}
@@ -355,9 +354,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tmodal:has(.task-layout)>.tmeta{margin:0 16px 8px;font-size:var(--t-sm)}
 /* a bot's task set waiting on you (`--on`) */
 .tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
-.tchip-blocked{flex:none;font-size:var(--t-xs);line-height:16px;padding:0 6px;border-radius:8px;background:var(--idle-bg);color:var(--muted)}
 .peek-pos{flex:none;font-size:var(--t-sm);color:var(--muted);cursor:default}
 .tmodal-age{flex:none}
+/* A phone's header has no room for the age too (its tooltip has it); a snoozed chip shortens rather than pushing the header wider */
+@media (max-width:480px){.tmodal-head .tmodal-age{display:none}}
+#task-modal .tmodal-head>.tchip-snoozed,#task-peek .tmodal-head>.tchip-snoozed{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .task-layout .tdesc{margin:4px 0 10px;font-size:var(--t-base);line-height:var(--lh-read);white-space:normal;background:none;padding:0;max-height:none}
 .task-layout .task-wait{margin:2px 0 10px;color:var(--muted);font-size:var(--t-base)}
 .task-layout .task-wait .lbl{display:inline;margin-right:4px}
@@ -403,7 +404,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
-/* Release now on the Pending Release column (ui/app/settings-release.js) */
+/* Release now on the Pending Release column (ui/app/settings-release.ts) */
 .board-release-slot:empty{display:none}
 .board-release-slot .board-release{padding:2px 8px;font-size:var(--t-sm);min-height:0}
 
@@ -425,7 +426,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .ask-filter-replay{display:grid;gap:8px;margin-top:20px;max-width:none}
 .ask-filter-replay .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .ask-filter-replay input[type=date]{max-width:180px}
-/* Pull to refresh (pull-refresh.js): the spinner slides down over the page, which stays where it is. */
+/* Pull to refresh (pull-refresh.ts): the spinner slides down over the page, which stays where it is. */
 .pull-spin{position:fixed;z-index:30;left:50%;top:calc(env(safe-area-inset-top) - 40px);width:36px;height:36px;display:grid;place-items:center;
   border-radius:50%;border:1px solid var(--line);background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.16);pointer-events:none;
   transform:translate(-50%,var(--pull,0px))}

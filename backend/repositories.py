@@ -352,7 +352,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for grant in body.chosen or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
-            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+            raise Problem('github_repo', 'Choose a repository in the connected account or organization', 422)
         existing = c.execute('SELECT enabled,bot_repo FROM repositories WHERE full_name=?', (name,)).fetchone()
         if legacy and not team_list and (not existing or not existing['enabled']):
             raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > General › Repositories', 422)
@@ -404,7 +404,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for grant in body.all_repos or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
-            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+            raise Problem('github_repo', 'Choose a repository in the connected account or organization', 422)
         named.setdefault(name.lower(), reach.get(name.lower()))
         for flag, _, label, verb, _ in FLAGS:
             value = getattr(grant, flag)
@@ -629,7 +629,7 @@ def card_words(c, settings, auth, who, bot, body):
 
 def plain_change(name, before, result):
     """What a repository access change does, in one or two plain sentences for a person's Confirm card: `Security
-    Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.` `before` is
+    Engineer: read-only on tico (was write). Loses access to tico-pages and tico-recorder.` `before` is
     `access()` before the change, `result` what `set_access` returned."""
     was = {r['full_name'].lower(): r for r in before['effective']}
     now = {r['full_name'].lower(): r for r in result['effective']}

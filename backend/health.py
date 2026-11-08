@@ -1664,6 +1664,8 @@ def token_failure(c):
 
 
 def _github(c, github):
+    from .github_app import account_word
+
     row = github.row(c) if github else None
     failure = token_failure(c) if row else None
     fix = _fix("Open GitHub settings", "#/settings", "cloud")
@@ -1672,7 +1674,9 @@ def _github(c, github):
             "github", "GitHub", "info", "Not connected. Optional: connect it to keep bot work in your GitHub.", [fix]
         )
     if not row["installation_id"]:
-        return _check("github", "GitHub", "warn", "The app is created but not installed on your organization.", [fix])
+        return _check(
+            "github", "GitHub", "warn", f"The app is created but not installed on your {account_word(row)}.", [fix]
+        )
     if failure is not None:
         return _check(
             "github",
@@ -1688,10 +1692,13 @@ def _github(c, github):
 def _github_repo_create(c, github):
     """An App without Administration (write) cannot create bot repositories, so every new bot stops for a person.
     The stored flag follows the installation's live permission whenever Tico asks GitHub, so this reads no network."""
-    row = github.row(c) if github else None
-    if not row or row["administration"]:
-        return None
+    from .github_app import ORGANIZATION, account_kind
     from .repo_waits import fixes, waits
+
+    row = github.row(c) if github else None
+    # A personal account gets no BotOps creation to offer: a person creates each bot's repository there.
+    if not row or row["administration"] or account_kind(row) != ORGANIZATION:
+        return None
 
     waiting = waits(c)
     named = sorted(waiting)
@@ -2695,6 +2702,141 @@ def _unreviewed_runs(c, who, auth):
     )
 
 
+NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is a warning
+NEEDS_PLATE_BAD = 25  # more than this is bad
+NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
+DEV_IDLE_HOURS = 24  # an open Dev ticket unchanged this long, with no run live or queued, is not moving
+DEV_IDLE_BAD = 5  # this many idle Dev tickets is bad, not a warning
+
+
+def _plate_task_view(c):
+    """The task view a Needs you count reads (views.needs_items with count_only): a count needs each card's kind and
+    id and who a task waits on, so only that is derived here; the page's full row shape is not built for a count."""
+    from . import question_tasks
+
+    def view(row, **_):
+        return {**row, "waiting_on": question_tasks.waiting_on(c, row)}
+
+    return view
+
+
+def _plate_people(c, auth):
+    """Everyone on the roster as the identity they sign in with. A person who has left, or whose sign-in is off, has no
+    plate that anyone reads here."""
+    found = []
+    for row in H.humans(c):
+        try:
+            found.append(auth.identity_for_actor(c, "human:" + row["id"]))
+        except Problem:
+            continue
+    return found
+
+
+def _plate_check(c, who, auth, full):
+    """Each person's Needs you count, the number the Tasks You tab shows (views.needs_plate_count). An administrator
+    reads everyone's plate; anyone else reads only their own. Warn over NEEDS_PLATE_WARN items, bad over
+    NEEDS_PLATE_BAD. Only the plates over the warning are listed, each with the bots asking most of its items."""
+    from . import views
+
+    view = _plate_task_view(c)
+    over = []
+    for person in _plate_people(c, auth) if full else [who]:
+        items = views.needs_items(c, auth, person, view, count_only=True)
+        count = views.needs_plate_count(items)
+        if count > NEEDS_PLATE_WARN:
+            over.append((count, person.actor, views.needs_bots(items, person.actor)))
+    if not over:
+        return None
+    rows = []
+    for count, actor, bots in sorted(over, key=lambda row: (-row[0], row[1])):
+        askers = sorted(bots.items(), key=lambda kv: (-kv[1], kv[0]))[:NEEDS_PLATE_ASKERS]
+        asked = [{"bot": bot, "name": H.actor_name(c, bot), "count": n} for bot, n in askers]
+        name = H.actor_name(c, actor)
+        most = ", most asked by " + ", ".join(f"{a['name']} ({a['count']})" for a in asked) if asked else ""
+        rows.append(
+            {
+                "person": actor,
+                "name": name,
+                "count": count,
+                "askers": asked,
+                "text": f"{name}: {count} on Needs you{most}.",
+                "fixes": [_fix("Open tasks", "#/tasks")],
+            }
+        )
+    worst = max(count for count, _, _ in over)
+    return _check(
+        "needs_plate",
+        "Needs you plate",
+        "bad" if worst > NEEDS_PLATE_BAD else "warn",
+        _diagnostic_summary(
+            f"{_plural(len(over), 'person has', 'people have')} more than {NEEDS_PLATE_WARN} items on Needs you.",
+            rows,
+        ),
+        [_fix("Open tasks", "#/tasks")],
+        items=rows,
+    )
+
+
+def _dev_board_check(c, who, auth):
+    """Open Dev tickets a bot owns that nothing has changed on for DEV_IDLE_HOURS, with no run live or queued on them
+    (the live-job test of invariants.task_stuck): the Dev board is not moving. Only tickets the caller may read."""
+    from .invariants import LIVE_JOBS
+
+    now = H.now()
+    rows = c.execute(
+        "SELECT tasks.id,tasks.number,tasks.owner_id,tasks.status,tasks.updated_at,s.name step_name "
+        f"FROM {H.TASKS} tasks JOIN task_types y ON y.id=tasks.type_id "
+        "LEFT JOIN task_steps s ON s.id=tasks.step_id "
+        "WHERE tasks.number IS NOT NULL AND y.numbered=1 AND (y.role='engineering' OR y.name='Dev tickets') "
+        f"AND tasks.owner_id LIKE 'bot:%' AND tasks.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+        "AND tasks.updated_at<? "
+        "AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE j.bot_id=substr(tasks.owner_id,5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
+        f"AND {H.MESSAGE_TASK_SQL}=tasks.id) "
+        f"AND ({auth.task_sql(c, who)}) ORDER BY tasks.updated_at LIMIT ?",
+        (*H.ACTIVE_STATUSES, H.shift(now, hours=-DEV_IDLE_HOURS), *LIVE_JOBS, DIAGNOSTIC_LIMIT),
+    ).fetchall()
+    from . import question_tasks
+
+    waits = question_tasks.waiting_on_many(c, [dict(row) for row in rows])
+    items = []
+    for row in rows:
+        since, until = H.parse_ts(row["updated_at"]), H.parse_ts(now)
+        hours = int((until - since).total_seconds() // 3600) if since and until else 0
+        bot = H.actor_name(c, row["owner_id"])
+        step = row["step_name"] or "no step"
+        waiting = waits.get(row["id"])
+        waits_on = f", waiting on {H.actor_name(c, waiting)}" if waiting else ""
+        items.append(
+            {
+                "task": row["id"],
+                "ticket": row["number"],
+                "waits_on": waiting,
+                "step": row["step_name"] or "",
+                "bot": row["owner_id"],
+                "name": bot,
+                "hours": hours,
+                "text": f"#{row['number']} ({step}), {bot}: nothing changed for {hours} h{waits_on}.",
+                "fixes": [_fix("Open task", "#/tasks/" + row["id"])],
+            }
+        )
+    if not items:
+        return None
+    return _check(
+        "dev_board_idle",
+        "Dev board moving",
+        "bad" if len(items) >= DEV_IDLE_BAD else "warn",
+        _diagnostic_summary(
+            f"{_plural(len(items), 'open Dev ticket', 'open Dev tickets')} unchanged for over {DEV_IDLE_HOURS} hours, "
+            "with no run live or queued.",
+            items,
+        ),
+        [_fix("Open tasks", "#/tasks")],
+        items=items,
+    )
+
+
 def _prime_claims(c, settings=None):
     """What the claim check reads (execution._claim_refusal) for every bot and every computer the page checks, read once
     in set queries (claim_loads.read) and handed to each check the page makes, so the page makes a few statements
@@ -3236,6 +3378,10 @@ def view(c, who, settings, auth, github, config):
         )
     if unreviewed := _unreviewed_runs(c, who, auth):
         checks.append(unreviewed)
+    if kind != "bot" and (plate := _plate_check(c, who, auth, full)):
+        checks.append(plate)
+    if idle := _dev_board_check(c, who, auth):
+        checks.append(idle)
     from .app_delivery import health_problems
 
     for key, summary in health_problems(c, who, auth, online_ids):

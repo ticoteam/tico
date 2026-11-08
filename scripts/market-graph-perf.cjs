@@ -54,7 +54,7 @@ const data = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json')));
           }
         });
       });
-      await page.addScriptTag({content: fs.readFileSync(mode === 'before' ? path.join(dir, 'before.js') : path.join(root, 'ui/market-page.js'), 'utf8')});
+      await page.addScriptTag({content: fs.readFileSync(mode === 'before' ? path.join(dir, 'before.js') : path.join(root, 'build/ui/market-page.js'), 'utf8')});
       await page.evaluate(() => {
         window.addEventListener('hashchange', () => { S.route = location.hash; void pageMarket(); });
         metrics.start = performance.now(); void pageMarket();

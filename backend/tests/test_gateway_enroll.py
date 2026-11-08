@@ -100,7 +100,7 @@ class FakeHQ:
                     status, answer = refused or (
                         200,
                         {
-                            "model": "tico-decide-1.0",
+                            "model": "tico-decide-low",
                             "answers": answer_all(body["questions"]),
                             "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001},
                         },
@@ -229,7 +229,7 @@ def test_the_app_holds_to_the_same_contract_as_hq():
     secret, slug = "gis_" + "k" * 43, "ops"
     expected = "gb_" + hmac.new(secret.encode(), slug.encode(), hashlib.sha256).hexdigest()[:16]
     assert G.bot_id(secret, slug) == expected and re.fullmatch(CONTRACT["patterns"]["bot"], expected)
-    ui = (pathlib.Path(__file__).parents[2] / "ui" / "app" / "settings-providers.js").read_text()
+    ui = (pathlib.Path(__file__).parents[2] / "ui" / "app" / "settings-providers.ts").read_text()
     assert CONTRACT["app"]["settings_line"] in ui
 
 
@@ -273,7 +273,7 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         monkeypatch.setattr(judge, "fallback_engine", lambda *args, **kwargs: own)
         api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)
         asked = post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS})
-        assert asked["model"] == "tico-decide-1.0"
+        assert asked["model"] == "tico-decide-low"
         sent = fake.posts("/decisions")[-1][2]
         assert sent["Authorization"] == "Bearer " + key
         assert (
@@ -282,7 +282,7 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         )
 
         # A bot's run on a Tico model: its runner gets the key and the bot's opaque id for its relay.
-        put_bot_on(api, "ops", "tico-mid-1.0")
+        put_bot_on(api, "ops", "tico-medium-1.0")
         machine = runner(api)
         assign(api, machine, "ops")
         ready(api, machine, ["ops"])

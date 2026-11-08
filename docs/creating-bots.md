@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian and Strategy Bot are the four Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 99 role templates, in nine groups with a Leadership extra, are described in
+The 104 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -634,7 +634,7 @@ Levers set in **Settings → Bots**, not in the repository:
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
   Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, the harness list
-  also offers **Tico AI Gateway**: instead of a model list it shows Department (the bot's group's), Level, Fast and Version,
+  also offers **Tico AI Gateway**: instead of a model list it shows Level, Fast and Version,
   with the model underneath and its price on one line. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
@@ -671,8 +671,8 @@ Levers set in **Settings → Bots**, not in the repository:
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only
   the Doer's window.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
-- **`gateway:`** (optional, in a template's `bot.yaml`): `level: low | medium | high` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
-  template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on its department's pick at that
+- **`gateway:`** (optional, in a template's `bot.yaml`): `level: xlow | low | medium | high | xhigh` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
+  template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It
   is read once when the bot is created and kept in the bot's settings; the pick in **Settings → Bots** replaces it. Left
   out, it is Medium and not Fast. The Inbox, Dispatcher, Issue Triage and Spend Watcher templates use Low;

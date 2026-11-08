@@ -980,6 +980,8 @@ def view(c, settings, roster, proxy_kind, owner_id):
         # "Anyone at <home_domain> can sign in" is that domain on the allow list.
         "home_domain": home,
         "domain_sign_in": bool(home) and home in access["allowed_domains"],
+        # Who can join (Settings > People): "domain" lets anyone with the home domain's Google login in, else "admin".
+        "join": "domain" if home and home in access["allowed_domains"] else "admin",
         # How people get here: a directory source set means Sync, none means they are added by hand.
         "directory": directory.load(c)["source"],
         "proxy": proxy_kind,

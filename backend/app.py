@@ -97,6 +97,7 @@ from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
 from . import bot_status_routes, computers_routes
+from . import brand_icons
 from .approvals_routes import SEND_WAY_DEFERS  # noqa: F401
 from .bot_status_routes import INBOX_LIMIT  # noqa: F401
 from .bot_status_routes import INBOX_PAGE  # noqa: F401
@@ -534,6 +535,8 @@ def create_app(settings=None):
 
                 await asyncio.to_thread(ad_worker.stop)
             telemetry.close()
+            # Every task above has stopped, so no read is in flight: the store's idle connections close with the server.
+            store.close()
 
     app = FastAPI(
         title=settings.app_name + " API",
@@ -667,7 +670,7 @@ def create_app(settings=None):
         telemetry.capture("request", exc, 503, route=error_route(request))
         request.state.telemetry_captured = True
         # The write lock stayed taken past store.WRITE_WAIT: a load answer, not a fault. Clients retry with the same
-        # Idempotency-Key (runner, clients/tico.py, ui/app/api.js), so the write lands once.
+        # Idempotency-Key (runner, clients/tico.py, ui/app/api.ts), so the write lands once.
         if "locked" in str(exc) or "busy" in str(exc):
             return JSONResponse(
                 {"error": {"code": "busy", "detail": "Tico is busy; retry shortly", "retryable": True}},
@@ -799,6 +802,10 @@ def create_app(settings=None):
                 return await call_next(request)
             if request.url.path == "/api/v2/team/icon" and request.method == "GET":
                 return await call_next(request)
+            # The server's icons (backend/brand_icons.py): the two root icons and the brand files a page links, and nothing
+            # else under /assets/.
+            if request.method in ("GET", "HEAD") and brand_icons.public(request.url.path):
+                return brand_icons.harden(await call_next(request))
             # Tico HQ's check that a self-run server is the one at its address (backend/company_server.py): only a
             # digest, and only while an owner's connect is pending.
             if request.url.path == company_server.PROOF_PATH and request.method == "GET":
@@ -1274,8 +1281,8 @@ def create_app(settings=None):
                 and response.status_code in (200, 304)
                 and ui_bundle.versioned(settings.ui_dir, request.url.path, request.query_params.get("v"))
             ):
-                # theme.js and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
-                # year, so an open needs no round trip for them; theme.js holds up the first paint.
+                # theme.ts and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
+                # year, so an open needs no round trip for them; theme.ts holds up the first paint.
                 response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = (

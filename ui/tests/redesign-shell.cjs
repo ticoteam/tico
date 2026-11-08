@@ -1,4 +1,4 @@
-// The redesign's shell (ui/app/redesign.js, ui/app/strategy-budget.js) against fixtures shaped per the redesign CONTRACT
+// The redesign's shell (ui/app/redesign.ts, ui/app/strategy-budget.ts) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
 // redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Bot
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
@@ -62,7 +62,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (url.origin !== 'http://tico-ui.test') return r.abort();
     if (p === '/') return r.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return r.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return r.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (method !== 'GET') sent.push([method, p + url.search, req.postData() ? req.postDataJSON() : null]);
     if (p === '/api/v2/config') return json(config);
