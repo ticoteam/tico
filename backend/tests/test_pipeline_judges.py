@@ -4,6 +4,7 @@ so."""
 
 import hashlib
 import json
+import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -845,3 +846,111 @@ def test_a_marked_met_attachment_on_a_finished_ticket_is_never_asked_the_model(t
     assert P.tick(store) == 0
     assert P.tick(store) == 0
     assert asked == []
+
+
+def _work_fields(**extra):
+    """An attachment dict as the server's waiting read gives it, carrying the work's own fields."""
+    return {
+        **ATTACHMENT,
+        "task_work_version": 3,
+        "task_title": "Dark mode toggle on Settings",
+        "task_spec": "Add a Dark mode toggle to the Settings page.",
+        "task_repo": "acme/app",
+        "task_pr": 91,
+        "task_author": "human:ana",
+        **extra,
+    }
+
+
+def test_the_judge_state_carries_the_work_title_spec_repo_pr_and_author():
+    """The judge checks the evidence against the work: which ticket, repo, PR and author it is about."""
+    work = P._state(REQ, _work_fields())["work"]
+    assert work == {
+        "work_version": 3,
+        "title": "Dark mode toggle on Settings",
+        "spec": "Add a Dark mode toggle to the Settings page.",
+        "repo": "acme/app",
+        "pr": 91,
+        "author": "human:ana",
+    }
+
+
+def test_a_long_spec_is_cut_and_a_work_with_no_pr_leaves_repo_and_pr_out():
+    state = P._state(REQ, _work_fields(task_spec="x" * 5000, task_repo=None, task_pr=None))
+    assert len(state["work"]["spec"]) == P.SPEC_CHARS
+    assert "repo" not in state["work"] and "pr" not in state["work"]
+    assert state["work"]["author"] == "human:ana"
+
+
+def test_an_attachment_with_no_id_is_not_met_and_the_model_is_never_called():
+    """No evidence row: a rule decides, the model is not asked (it used to answer 0.5 on nothing)."""
+    asked = []
+
+    def engine(model, state, questions, label):
+        asked.append(model)
+        return {"p": 0.9, "reason": "met", "provider": "t", "model": model}
+
+    no_evidence = _work_fields()
+    del no_evidence["id"]
+    result = P.judge_once(sqlite3.connect(":memory:"), REQ, no_evidence, "haiku-5.5", engine=engine)
+    assert result["verdict"] == "not_met"
+    assert result["p"] == 0.0 and result["cost_usd"] == 0.0
+    assert result["reason"] == "No evidence is attached."
+    assert asked == []
+
+
+def test_the_waiting_rows_carry_the_work_title_spec_repo_pr_and_author(tmp_path, monkeypatch):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    monkeypatch.setattr(A, "_file_readable", lambda *a, **k: True)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    req = R.add(
+        c,
+        ANA,
+        step_id(c, dev["id"], "Review"),
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "The link opens the page",
+        },
+    )
+    task = H.task_create(
+        c,
+        ANA,
+        "Dark mode toggle on Settings",
+        "Add a Dark mode toggle.",
+        ANA,
+        type=dev["id"],
+        step="Review",
+        lint=False,
+    )
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task["id"],
+        req["id"],
+        {"source": "link", "url": "https://x.example"},
+    )
+    c.execute(
+        "INSERT INTO task_links(id,task_id,kind,url,repo,number,created_at) "
+        "VALUES('pr1',?,'pr','https://github.com/acme/app/pull/91','acme/app',91,?)",
+        (task["id"], H.now()),
+    )
+    c.commit()
+    rows = P._waiting(c, 5)
+    c.close()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["task_title"] == "Dark mode toggle on Settings"
+    assert row["task_spec"] == "Add a Dark mode toggle."
+    assert row["task_repo"] == "acme/app"
+    assert row["task_pr"] == 91
+    assert row["task_author"] == ANA
+    state = P._state({"name": row["name"], "rubric": row["rubric"]}, row)
+    assert state["work"]["repo"] == "acme/app" and state["work"]["pr"] == 91

@@ -33,7 +33,7 @@ def test_a_failed_call_counts_as_unsure_and_never_as_met():
     def broken(case):
         raise J.JudgeError("unavailable", "down")
 
-    result = run.score("broken", broken, run.load()[:3])
+    result = run.score("broken", broken, run.load()[:3], pause=lambda seconds: None)
     assert result["false_met"] == 0 and result["unsure_rate"] == 1.0 and not result["passes_bar"]
 
 
@@ -159,3 +159,60 @@ def test_the_screenshot_cases_are_unsure_because_the_judge_is_shown_no_image_tex
     for case in shots:
         assert case["expected"] == "unsure", case["id"]
         assert adapter.state_for(case)["attachment"]["text"] is None, case["id"]
+
+
+def test_the_eval_judge_is_shown_the_work_it_is_judging():
+    """The eval builds the state through the server's _state, with the case's own work fields."""
+    case = next(c for c in run.load() if c["id"] == "dev-tests-other-pr")
+    work = adapter.state_for(case)["work"]
+    assert work["repo"] == "acme/app" and work["pr"] == 91 and work["author"] == "human:ana"
+    assert work["title"] == case["work"]["title"] and work["spec"] == case["work"]["spec"]
+    missing = next(c for c in run.load() if c["id"] == "mkt-page-live")
+    assert adapter.state_for(missing)["work"]["title"] == "Holiday projectors campaign"
+
+
+def test_a_missing_evidence_case_is_not_met_and_no_model_is_called():
+    case = next(c for c in run.load() if c["id"] == "dev-tests-missing")
+    asked = []
+
+    def engine(model, state, questions, label):
+        asked.append(model)
+        return {"p": 0.9, "reason": "", "provider": "t", "model": model}
+
+    assert adapter.judge_once(engine, case, "haiku-5.5") == (0.0, 0.0, 0)
+    assert asked == []
+
+
+def test_a_failed_call_is_retried_once_after_five_seconds_and_the_retry_is_counted():
+    waits, calls = [], {}
+
+    def flaky(case):
+        calls[case["id"]] = calls.get(case["id"], 0) + 1
+        if calls[case["id"]] == 1:
+            raise J.JudgeError("unavailable", "down")
+        return 0.95 if case["expected"] == "met" else 0.05, 0.0, 5
+
+    cases = run.load()[:3]
+    result = run.score("flaky", flaky, cases, pause=waits.append)
+    assert waits == [5] * 3
+    assert result["retries"] == 3 and all(r["retries"] == 1 for r in result["rows"])
+    assert result["errors"] == []
+
+
+def test_a_call_that_fails_twice_is_still_an_error_and_fails_the_bar():
+    waits = []
+
+    def down(case):
+        raise J.JudgeError("unavailable", "down")
+
+    cases = run.load()[:3]
+    result = run.score("down", down, cases, pause=waits.append)
+    assert waits == [5] * 3
+    assert result["retries"] == 3 and len(result["errors"]) == 3
+    assert not result["passes_bar"] and any("failed calls" in f for f in result["bar_failures"])
+
+
+def test_the_four_cases_the_rubric_says_do_not_count_are_not_met():
+    by_id = {c["id"]: c["expected"] for c in run.load()}
+    for case_id in ("dev-tests-truncated", "dev-review-partial", "mkt-brief-comment", "mkt-page-timeout"):
+        assert by_id[case_id] == "not_met", case_id

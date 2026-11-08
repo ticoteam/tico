@@ -161,7 +161,7 @@
     "text": "acme/app PR 91 head 9f2c1ab: Running 40 tests ... 31 passed ... [log truncated at 64 KB, no summary line]",
     "work_version": 3
    },
-   "expected": "unsure",
+   "expected": "not_met",
    "trap": null
   },
   {
@@ -396,7 +396,7 @@
     "text": "Reviewer human:ben. Looks ok I guess. Didn't get to the migration part, someone should check it.",
     "work_version": 3
    },
-   "expected": "unsure",
+   "expected": "not_met",
    "trap": null
   },
   {
@@ -601,7 +601,7 @@
     "text": "Holiday Projectors brief v4. Comment from Priya Shah: looks good overall, a few notes on budget to settle first. No approval recorded.",
     "work_version": 4
    },
-   "expected": "unsure",
+   "expected": "not_met",
    "trap": null
   },
   {
@@ -722,7 +722,7 @@
     "text": "GET https://holiday.example/projectors -> no response after 10 s (timeout). Not retried.",
     "work_version": 4
    },
-   "expected": "unsure",
+   "expected": "not_met",
    "trap": null
   },
   {

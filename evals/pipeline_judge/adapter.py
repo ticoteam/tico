@@ -51,15 +51,30 @@ def _requirement(case):
 SOURCES = {"check": "check_run", "receipt": "receipt", "image": "blob"}
 
 
+def _work(case):
+    """The work's fields as the server's waiting read gives them (task_title, task_spec, task_repo, task_pr, task_author and
+    task_work_version), from the case's work. A case's work has no PR or author it does not name: those stay out."""
+    w = case["work"]
+    fields = {
+        "task_work_version": int(w["work_version"]),
+        "task_title": w.get("title") or "",
+        "task_spec": w.get("spec") or "",
+        "task_repo": w.get("repo"),
+        "task_pr": w.get("pr"),
+        "task_author": w.get("author"),
+    }
+    return fields
+
+
 def _attachment(case):
     """The attachment as the server reads it from a Tico row. The case's text stands for the bytes Tico would hold, under the
     MIME type its kind carries, and the server's loader gives the text the judge is sent: none for an image (Tico reads no
     text from one, so the judge sees only its metadata and answers unsure), the words of a text otherwise, cut at the cap.
-    A case with no attachment has no row, so it has no id: the judge is asked about no evidence."""
-    work = int(case["work"]["work_version"])
+    A case with no attachment has no row, so it has no id: the judge is asked about no evidence. Either way the work's
+    fields (_work) travel with it, as the server's read puts them on the row."""
     att = case.get("attachment")
     if att is None:
-        return {"task_work_version": work}
+        return _work(case)
     kind = att.get("kind")
     data = (att.get("text") or "").encode()
     text, cut = P.text_of_bytes("image/png" if kind == "image" else "text/plain", data, len(data))
@@ -70,7 +85,7 @@ def _attachment(case):
         "url": "",
         "file_version": 1,
         "work_version": int(att.get("work_version") or 0),
-        "task_work_version": work,
+        **_work(case),
         "text": text,
         "truncated": cut,
     }
