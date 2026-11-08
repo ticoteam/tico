@@ -672,12 +672,16 @@ def watchdog(store: Any, at: Any) -> None:
             members_only = (
                 c.execute("SELECT pipeline_visibility FROM task_types WHERE id=?", (pid,)).fetchone()[0] == "members"
             )
+            # Private alone is not enough: people who manage BotOps read its private tasks, so the text names no
+            # members-only pipeline; the action row below carries the pipeline id for those allowed to follow it.
+            name = "a members-only pipeline" if members_only else row["name"]
             made = H.task_create(
                 c,
                 H.KEEPER,
-                f"Pipeline manager stopped: {row['name']}",
-                f"The manager of {row['name']} has missed {missed} passes; its last pass started {last_pass or 'never'}. "
-                "Check the manager bot and the pipeline's log.",
+                "Pipeline manager stopped" if members_only else f"Pipeline manager stopped: {row['name']}",
+                f"The manager of {name} has missed {missed} passes; its last pass started {last_pass or 'never'}. "
+                + (f"Pipeline id {pid}. " if members_only else "")
+                + "Check the manager bot and the pipeline's log.",
                 BOTOPS,
                 deduplicate=False,
                 lint=False,
