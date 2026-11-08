@@ -165,7 +165,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'Marketing');
     await page.locator('#task-scope').click();
     assert.deepEqual(await page.locator('#task-filter-pop [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent.replace('✓', '')])),
-      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets'], ['marketing', 'Marketing'], ['engineering', 'Engineering']]);
+      [['general', 'General'], ['product-roadmap', 'Product roadmap'], ['dev-tickets', 'Dev tickets'], ['marketing', 'Marketing'], ['engineering', 'Engineering']]);
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('[data-chip="type"]').count(), 0);
     await page.waitForFunction(() => location.hash.includes('type=marketing'));

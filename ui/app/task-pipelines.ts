@@ -51,14 +51,14 @@ function taskPipelineDevType() {
   const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
   return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
-// The types the scope menu lists (task-list.js tasksScopeMenu): General, Roadmap and Engineering (or Dev tickets) by
-// their role, then the team's other types.
+// The types the scope menu lists (task-list.js tasksScopeMenu): General, the product pipeline and Engineering (or Dev
+// tickets) by their role, then the team's other types. Each is listed under its current name.
 function taskPipelineScopeTypes() {
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: 'Roadmap'}] : []),
-    ...(dev ? [{id: dev.id, label: dev.id === 'engineering' ? 'Engineering' : 'Dev tickets'}] : []),
+  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: product.name}] : []),
+    ...(dev ? [{id: dev.id, label: dev.name}] : []),
     ...other.map(type => ({id: type.id, label: type.name, other: true}))];
 }
 const taskPipelineLabel = id => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
