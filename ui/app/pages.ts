@@ -404,8 +404,11 @@ const LF_ICON = {page: 'article', document: 'description', image: 'palette', dat
 const LF_DATES = [['', 'Any time'], ['7', 'Past week'], ['30', 'Past month'], ['365', 'Past year']];
 const LF_FILTERS = ['q', 'kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];
 const LF_COUNTED = ['kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];   // the filter button's count and the chips (not the search)
-let LF = null;                // {root, pop, filter, rows, cursor, seq, groups}
-const lfTeamName = id => id ? (LF?.groups || []).find(g => g.id === id)?.name || teamLabel(id) : '';
+interface LfGroup { id: string; name: string }
+interface LfState { root: HTMLElement; pop: HTMLElement; filter: Record<string, any>; rows: any[]; cursor: string | null; seq: number; groups: LfGroup[] }
+// The open Files page's state; null (typed as the state, as every reader runs while the page is open) until it opens.
+let LF = null as unknown as LfState;
+const lfTeamName = (id: string | undefined) => id ? (LF?.groups || []).find((g: LfGroup) => g.id === id)?.name || teamLabel(id) : '';
 function lfQuery(filter = LF.filter) {
   const q = new URLSearchParams();
   for (const k of LF_FILTERS) if (filter[k]) q.set(k, filter[k] === true ? '1' : filter[k]);
@@ -444,7 +447,7 @@ async function pageLibraryFiles() {
 }
 // The count, the chips and the popover's ticks follow the filters; the search box keeps what is being typed.
 function lfControls() {
-  const root = LF.root, f = LF.filter, q = root.querySelector('.lf-q'), btn = root.querySelector('.lf-fbtn'), badge = btn.querySelector('.lf-fbn');
+  const root = LF.root, f = LF.filter, q = root.querySelector<HTMLInputElement>('.lf-q')!, btn = root.querySelector<HTMLElement>('.lf-fbtn')!, badge = btn.querySelector<HTMLElement>('.lf-fbn')!;
   if (document.activeElement !== q) q.value = f.q;
   const n = LF_COUNTED.filter(k => f[k]).length;
   btn.classList.toggle('active', !!n);
@@ -454,9 +457,9 @@ function lfControls() {
   lfPopSync();
 }
 function lfBarPaint() {
-  const f = LF.filter, bar = LF.root.querySelector('.lf-bar');
+  const f = LF.filter, bar = LF.root.querySelector<HTMLElement>('.lf-bar')!;
   // A chip's name opens the filter popover (its own popovertarget); its ✕ takes the filter off.
-  const chip = (key, label, value) => `<span class="tl-chip"><button type="button" class="tl-chip-main" popovertarget="lf-filter-pop" aria-haspopup="true"`
+  const chip = (key: string, label: string, value: string) => `<span class="tl-chip"><button type="button" class="tl-chip-main" popovertarget="lf-filter-pop" aria-haspopup="true"`
     + ` aria-label="${esc(`${label ? label + ': ' : ''}${value}. Change`)}" title="${esc(label ? `${label}: ${value}` : value)}">`
     + `${label ? `<span class="k">${esc(label)}</span>` : ''}<span class="v">${esc(value)}</span></button>`
     + `<button type="button" class="tl-chip-x" data-lf-clear="${key}" aria-label="${esc(`Remove ${label || value} filter`)}">${TL_ICON.x}</button></span>`;
@@ -475,40 +478,40 @@ function lfBarPaint() {
 function lfWire() {
   const root = LF.root, pop = LF.pop;
   let soon = 0;
-  root.querySelector('.lf-q').oninput = ev => { LF.filter.q = ev.target.value.trim(); clearTimeout(soon); soon = setTimeout(lfChanged, 250); };
+  (root.querySelector<HTMLInputElement>('.lf-q')! as HTMLInputElement).oninput = (ev: Event) => { LF.filter.q = (ev.target as HTMLInputElement).value.trim(); clearTimeout(soon); soon = setTimeout(lfChanged, 250); };
   root.onclick = ev => {
-    if (ev.target.closest('.lf-pop')) return;                // the popover's own handler (below) takes its clicks
-    const clear = ev.target.closest('[data-lf-clear]');
+    if ((ev.target as HTMLElement).closest<HTMLElement>('.lf-pop')) return;                // the popover's own handler (below) takes its clicks
+    const clear = (ev.target as HTMLElement).closest<HTMLElement>('[data-lf-clear]');
     if (clear) { LF.filter[clear.dataset.lfClear] = ''; lfChanged(); return; }
-    if (ev.target.closest('[data-lf-clear-all]')) { for (const k of LF_COUNTED) LF.filter[k] = ''; lfChanged(); return; }
-    if (ev.target.closest('[data-lf-more]')) { void lfLoad(true); return; }
-    const row = ev.target.closest('a.lf-row[data-lf-open="tico"]');
+    if ((ev.target as HTMLElement).closest<HTMLElement>('[data-lf-clear-all]')) { for (const k of LF_COUNTED) LF.filter[k] = ''; lfChanged(); return; }
+    if ((ev.target as HTMLElement).closest<HTMLElement>('[data-lf-more]')) { void lfLoad(true); return; }
+    const row = (ev.target as HTMLElement).closest<HTMLElement>('a.lf-row[data-lf-open="tico"]');
     if (row && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); void openFileLink(row.dataset.id, row.dataset.name); }
   };
-  pop.onclick = ev => {
-    const pick = ev.target.closest('[data-lf-set], [data-lf-toggle]');
+  pop.onclick = (ev: MouseEvent) => {
+    const pick = (ev.target as HTMLElement).closest<HTMLElement>('[data-lf-set], [data-lf-toggle]');
     if (!pick) return;
     if (pick.dataset.lfSet) LF.filter[pick.dataset.lfSet] = pick.dataset.lfValue;
     else LF.filter[pick.dataset.lfToggle] = !LF.filter[pick.dataset.lfToggle];
     lfChanged();
   };
   // A long bot list has a find box: it hides the items that do not match, within its own section.
-  pop.oninput = ev => {
-    const find = ev.target.closest('.tl-menu-q'); if (!find) return;
+  pop.oninput = (ev: Event) => {
+    const find = (ev.target as HTMLElement).closest<HTMLElement>('.tl-menu-q'); if (!find) return;
     const words = find.value.trim().toLowerCase();
     for (const b of find.closest('.lf-sec').querySelectorAll('.tl-mi')) b.hidden = !!words && !b.dataset.label.includes(words);
   };
   pop.onkeydown = tasksMenuKeys;
   // The popover is built as it opens (its teams and bots as they are now), placed under the button, and focused.
-  pop.addEventListener('beforetoggle', ev => { if (ev.newState === 'open') pop.innerHTML = lfPopHTML(); });
-  pop.addEventListener('toggle', ev => {
-    const open = ev.newState === 'open', btn = root.querySelector('.lf-fbtn');
+  pop.addEventListener('beforetoggle', (ev: any) => { if (ev.newState === 'open') pop.innerHTML = lfPopHTML(); });
+  pop.addEventListener('toggle', (ev: any) => {
+    const open = ev.newState === 'open', btn = root.querySelector<HTMLElement>('.lf-fbtn')!;
     btn.setAttribute('aria-expanded', String(open));
     if (!open) return;
     lfMenuPlace(pop, btn);
     // The first pick in force, not the bot find box: a phone would open the keyboard over the sheet, and a
     // focus that scrolls the popover moves Kind out of sight.
-    (pop.querySelector('[aria-checked="true"]') || pop.querySelector('.tl-mi, .lf-pill'))?.focus({preventScroll: true});
+    (pop.querySelector<HTMLElement>('[aria-checked="true"]') || pop.querySelector<HTMLElement>('.tl-mi, .lf-pill'))?.focus({preventScroll: true});
   });
 }
 function lfChanged() {
@@ -518,7 +521,7 @@ function lfChanged() {
   void lfLoad();
 }
 // Under the filter button and inside the window; a phone's popover is the bottom sheet the stylesheet makes it.
-function lfMenuPlace(pop, anchor) {
+function lfMenuPlace(pop: HTMLElement, anchor: Element) {
   if (matchMedia(PHONE).matches) { pop.style.top = pop.style.left = ''; return; }
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8))}px`;
@@ -526,26 +529,26 @@ function lfMenuPlace(pop, anchor) {
 }
 function lfPopHTML() {
   const f = LF.filter;
-  const pill = (key, value, label) => `<button type="button" class="tl-mi lf-pill" role="menuitemradio" aria-checked="${f[key] === value}"`
+  const pill = (key: string, value: string, label: string) => `<button type="button" class="tl-mi lf-pill" role="menuitemradio" aria-checked="${f[key] === value}"`
     + ` data-lf-set="${key}" data-lf-value="${esc(value)}">${esc(label)}</button>`;
-  const item = (key, value, label, face, find) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${f[key] === value}"`
+  const item = (key: string, value: string, label: string, face: string, find: string) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${f[key] === value}"`
     + ` data-lf-set="${key}" data-lf-value="${esc(value)}" data-label="${esc(find.toLowerCase())}">${face ? `<span class="tl-opt-face">${face}</span>` : ''}`
     + `<span class="lf-mi-name">${esc(label)}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
-  const toggle = (key, label) => `<button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${!!f[key]}" data-lf-toggle="${key}">`
+  const toggle = (key: string, label: string) => `<button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${!!f[key]}" data-lf-toggle="${key}">`
     + `<span class="lf-mi-name">${label}</span><span class="tl-mi-on" aria-hidden="true">✓</span></button>`;
   const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => ({id: e.id, name: botDisplayName(e.id)}))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
   const groups = LF.groups || [];
   return `<div class="tl-menu lf-menu" role="group" aria-label="Filters">
     <div class="lf-sec" role="group" aria-label="Kind"><div class="tl-menu-h" aria-hidden="true">Kind</div>
-      <div class="lf-pills">${LF_KINDS.map(([v, l]) => pill('kind', v, l)).join('')}</div></div>
+      <div class="lf-pills">${LF_KINDS.map(([v, l]) => pill('kind', String(v), String(l))).join('')}</div></div>
     <div class="lf-sec" role="group" aria-label="Updated"><div class="tl-menu-h" aria-hidden="true">Updated</div>
-      <div class="lf-pills">${LF_DATES.map(([v, l]) => pill('days', v, l)).join('')}</div></div>
+      <div class="lf-pills">${LF_DATES.map(([v, l]) => pill('days', String(v), String(l))).join('')}</div></div>
     <div class="lf-sec" role="group" aria-label="Bot"><div class="tl-menu-h" aria-hidden="true">Bot</div>
       ${bots.length > 7 ? '<input type="search" class="tl-menu-q" placeholder="Find a bot" aria-label="Find a bot" autocomplete="off" spellcheck="false">' : ''}
       <div class="tl-menu-list">${item('bot', '', 'All bots', '', 'all bots')}${bots.map(b => item('bot', b.id, b.name, avatar(b.id, 16), `${b.name} ${b.id}`)).join('')}</div></div>
     ${groups.length ? `<div class="lf-sec" role="group" aria-label="Team"><div class="tl-menu-h" aria-hidden="true">Team</div>
-      <div class="tl-menu-list">${item('team', '', 'All teams', '', 'all teams')}${groups.map(g => item('team', g.id, g.name, '', g.name)).join('')}</div></div>` : ''}
+      <div class="tl-menu-list">${item('team', '', 'All teams', '', 'all teams')}${groups.map((g: LfGroup) => item('team', g.id, g.name, '', g.name)).join('')}</div></div>` : ''}
     <div class="tl-menu-sep" role="separator"></div>
     <div class="lf-sec" role="group" aria-label="Show">${toggle('pinned', 'Pinned')}${toggle('archived', 'Archived')}</div>
   </div>`;
@@ -553,13 +556,13 @@ function lfPopHTML() {
 // The ticks follow a change while the popover stays open (its find box keeps what was typed).
 function lfPopSync() {
   if (!LF?.pop?.matches(':popover-open')) return;
-  for (const el of LF.pop.querySelectorAll('[data-lf-set]')) el.setAttribute('aria-checked', String(LF.filter[el.dataset.lfSet] === el.dataset.lfValue));
-  for (const el of LF.pop.querySelectorAll('[data-lf-toggle]')) el.setAttribute('aria-checked', String(!!LF.filter[el.dataset.lfToggle]));
+  for (const el of LF.pop.querySelectorAll<HTMLElement>('[data-lf-set]')) el.setAttribute('aria-checked', String(LF.filter[el.dataset.lfSet] === el.dataset.lfValue));
+  for (const el of LF.pop.querySelectorAll<HTMLElement>('[data-lf-toggle]')) el.setAttribute('aria-checked', String(!!LF.filter[el.dataset.lfToggle]));
 }
 // Search (the box) asks GET /api/v2/files/search and narrows its hits by kind and bot here; the list asks
 // GET /api/v2/files with every filter, a page at a time.
 async function lfLoad(more = false) {
-  const state = LF, seq = ++state.seq, f = state.filter, list = state.root.querySelector('.lf-list');
+  const state = LF, seq = ++state.seq, f = state.filter, list = state.root.querySelector<HTMLElement>('.lf-list')!;
   if (!more) list.innerHTML = skelRows(6);
   try {
     if (f.q) {
@@ -576,8 +579,8 @@ async function lfLoad(more = false) {
     }
   } catch (e) {
     if (LF === state && seq === state.seq) {
-      state.root.querySelector('.lf-cols').hidden = true;
-      list.innerHTML = `<p class="err lf-pad">${esc(e.message)}</p>`;
+      state.root.querySelector<HTMLElement>('.lf-cols')!.hidden = true;
+      list.innerHTML = `<p class="err lf-pad">${esc((e as Error).message)}</p>`;
     }
     return;
   }
@@ -596,7 +599,7 @@ function lfRowHTML(f) {
   const archived = f.archived ? '<span class="lf-pins">Archived</span>' : '';
   const excerpt = f.excerpt ? `<span class="lf-excerpt">${esc(f.excerpt)}</span>` : '';
   return `<a class="lf-row" href="${esc(url)}"${attrs}>
-    <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
+    <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind as keyof typeof LF_ICON] || 'inventory_2'}</span>
     <span class="lf-name"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(f.title)}</span>${pins}${archived}</span>
       <span class="lf-meta">${esc(kindName)} · ${esc(bot)} · ${esc(when)}</span>${excerpt}</span>
     <span class="lf-kind">${esc(kindName)}</span>
@@ -605,9 +608,9 @@ function lfRowHTML(f) {
     <span class="lf-when" title="${esc(fmt(f.last_activity_at))}">${esc(when)}</span></a>`;
 }
 function lfDraw() {
-  const root = LF.root, list = root.querySelector('.lf-list'), rows = LF.rows;
+  const root = LF.root, list = root.querySelector<HTMLElement>('.lf-list')!, rows = LF.rows;
   const any = LF_FILTERS.some(k => LF.filter[k]);
-  root.querySelector('.lf-cols').hidden = !rows.length;
+  root.querySelector<HTMLElement>('.lf-cols')!.hidden = !rows.length;
   list.innerHTML = rows.length ? rows.map(lfRowHTML).join('') + (LF.cursor ? '<button type="button" class="ghost lf-more" data-lf-more>More</button>' : '')
     : `<p class="muted lf-pad">${any ? 'Nothing matches.' : 'No files yet.'}</p>`;
 }
