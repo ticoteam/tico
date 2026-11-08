@@ -23,7 +23,8 @@ class RenameConflict(RuntimeError):
 
 def pending(conn, waves=None):
     """The (kind, table, old, new) renames this database still needs, in order: tables first, then columns. `waves`
-    limits the columns to those waves (all of the map's when None)."""
+    names the waves that run: a table rename only when its wave is named, a column rename when its wave is named or
+    `waves` is None (every column wave)."""
     columns = {}
     for table, column in conn.execute(
         "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type='table'"
@@ -31,7 +32,7 @@ def pending(conn, waves=None):
         columns.setdefault(table, set()).add(column)
     todo = []
     for old, new, wave in TABLES:
-        if waves is not None and wave not in waves:
+        if wave not in (waves or ()):
             continue
         if old in columns and new not in columns:
             todo.append(("table", old, old, new))
