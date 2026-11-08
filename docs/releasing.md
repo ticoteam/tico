@@ -434,14 +434,17 @@ Main takes changes only through its merge queue. Mark the pull request ready for
 then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
-- **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
-  gate. A draft runs nothing.
+- **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
   the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
   pull request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
-  browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
-  recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan (which also checks the merge commit's migration timestamps,
+  OpenAPI document and runner wire contract), the selected Python and browser tests, the Caddy image when the change
+  reaches it, Rust lint and the desktop app when those changed, the macOS recorder tests when `recorder/` changed, and
+  the `checks` gate. A job the change does not reach starts no VM. The group's base is the head of the group ahead of it,
+  so it selects from its own pull request's change. Its tests pack into at most about 6 test jobs of up to 12 minutes
+  each (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in `scripts/pr_checks.py`): every group shares the organisation's concurrent
+  hosted jobs.
 - **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario

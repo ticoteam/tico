@@ -74,12 +74,19 @@ JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
 # A VM carries at least MIN_JOB_SECONDS of tests per worker, setup excluded: below that, setup is most of its time, so a
-# small remainder folds into the VMs before it. A plan raises the target toward MAX_JOB_SECONDS to keep its test jobs
-# (the matrix plus the factory legs) within CEILING, which is about; the cap is the longest VM a plan asks for.
-MIN_JOB_SECONDS = 240
+# small remainder folds into the VMs before it (a selection under 2 x 5 minutes of 4-worker time is one VM). A plan
+# raises the target toward its cap to keep its test jobs (the matrix plus the factory legs) within CEILING, which is
+# about; the cap is the longest VM a plan asks for. Every queue group and pull request shares the organisation's ~60
+# concurrent hosted jobs, so a queue group packs into fewer, longer VMs (QUEUE_MAX_JOB_SECONDS): each VM spends about
+# two minutes booting and installing, and fewer VMs is fewer job-minutes for the same tests.
+MIN_JOB_SECONDS = 300
 MAX_JOB_SECONDS = 480
+QUEUE_MAX_JOB_SECONDS = 720
 TARGET_STEP_SECONDS = 30
-CEILING = {"pull_request": 8, "merge_group": 12}
+CEILING = {"pull_request": 8, "merge_group": 6}
+# The factory sim's legs keep their own four-minute minimum: its measured legs run 6-7 minutes each on a hosted VM, and
+# one leg would run about 13.
+FACTORY_LEG_SECONDS = 240
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
 # tests spread across the workers.
@@ -1263,11 +1270,11 @@ def groups(counts, timings, total=None, kind="python", fallback=1.0, target=JOB_
     return [sorted(g) for g in out], loads
 
 
-def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILING["pull_request"]):
+def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILING["pull_request"], cap=MAX_JOB_SECONDS):
     """The Python and browser VM groups of a plan at the smallest target that keeps its test jobs within `ceiling`.
     `browser` is (the scripts as a Counter, their measured times), `fixed` the jobs that always run (conformance and
     contracts), `shards` the factory legs. The target starts at JOB_SECONDS and rises by TARGET_STEP_SECONDS up to
-    MAX_JOB_SECONDS; past that the plan keeps the cap's VMs, and its count may exceed the ceiling."""
+    `cap`; past that the plan keeps the cap's VMs, and its count may exceed the ceiling."""
     target = JOB_SECONDS
     while True:
         split, loads = groups(counts, timings, target=target)
@@ -1278,7 +1285,7 @@ def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILIN
         else:
             browser_split, browser_loads = [], []
         tests = sum(1 for group in split + browser_split if group) + fixed + shards
-        if tests <= ceiling or target >= MAX_JOB_SECONDS:
+        if tests <= ceiling or target >= cap:
             return {
                 "split": split,
                 "loads": loads,
@@ -1287,7 +1294,7 @@ def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILIN
                 "target": target,
                 "tests": tests,
             }
-        target = min(MAX_JOB_SECONDS, target + TARGET_STEP_SECONDS)
+        target = min(cap, target + TARGET_STEP_SECONDS)
 
 
 def merge_parent(base, head="HEAD", root=None):
@@ -1363,9 +1370,25 @@ def factory_shards():
     timings = factory.timings()
     pairs = [(name, 1) for name in timings]
     total = sum(timings[name] for name, _ in pairs)
-    # The sim's work is fixed by its scenarios, so its legs fold to the same four-minute minimum a test VM carries.
-    count = max(1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * MIN_JOB_SECONDS))))
+    # The sim's work is fixed by its scenarios, so its legs fold to a four-minute minimum (FACTORY_LEG_SECONDS).
+    count = max(1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * FACTORY_LEG_SECONDS))))
     return [f"{index}/{count}" for index in range(1, count + 1)]
+
+
+# The Rust lint, desktop app and recorder jobs check their own folders, so a merge queue group starts their VMs only when
+# its change touches one (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs them all.
+QUEUE_JOB_PATHS = {
+    "rust_lint": re.compile(
+        r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
+    ),
+    "desktop": re.compile(r"app/"),
+    "recorder": re.compile(r"recorder/"),
+}
+
+
+def queue_jobs(changed):
+    """Which of QUEUE_JOB_PATHS' jobs a change runs: those whose folders it touches, or all of them for an empty diff."""
+    return {job: not changed or any(paths.match(name) for name in changed) for job, paths in QUEUE_JOB_PATHS.items()}
 
 
 def factory_plan(event, changed):
@@ -1416,6 +1439,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         fixed=fixed,
         shards=len(factory["shards"]) if factory["run"] else 0,
         ceiling=ceiling,
+        cap=QUEUE_MAX_JOB_SECONDS if event == "merge_group" else MAX_JOB_SECONDS,
     )
     split, loads, target = sized["split"], sized["loads"], sized["target"]
     if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * target:
@@ -1441,6 +1465,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         **picked,
         "changed": changed,
         "factory": factory,
+        "queue_jobs": queue_jobs(changed),
         "matrix": {"include": jobs},
         "estimated_seconds": loads,
         "timed_files": len(set(counts) & timings.keys()),
@@ -1457,6 +1482,8 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
             stream.write("caddy=" + str(plan["caddy"]).lower() + "\n")
             stream.write("factory=" + str(plan["factory"]["run"]).lower() + "\n")
             stream.write("factory_shards=" + json.dumps(plan["factory"]["shards"]) + "\n")
+            for job, on in plan["queue_jobs"].items():
+                stream.write(f"{job}={str(on).lower()}\n")
     return plan
 
 
