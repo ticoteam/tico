@@ -1164,6 +1164,7 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("entity_identifiers", "DELETE FROM entity_identifiers WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_notes", "DELETE FROM entity_notes WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_mentions", "DELETE FROM entity_mentions WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_lookups", "DELETE FROM entity_lookups WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_activities", "DELETE FROM entity_activities WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_connections", "DELETE FROM entity_connections WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_external_refs", "DELETE FROM entity_external_refs WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
@@ -1955,3 +1956,148 @@ def has_sources(c: sqlite3.Connection, entity_id: str) -> bool:
     """Whether an entity records any source. One with none shows to everyone, so a restricted source added to it would
     narrow it. Ingest checks this before it adds one to an entity it did not just create."""
     return _count(c, "SELECT count(*) FROM entity_sources WHERE entity_id = ?", (entity_id,)) > 0
+
+
+# ----------------------------------------------------------------------------------------- the linker (track 6b, §7.1)
+# What the linker (backend/entities/linker.py) reads and writes. Matches come from entity_identifiers' index, a batch at a
+# time, never from a scan of the entities. A linker write is a system write, as seed_link is: no roster actor, and only
+# the mention rows the linker itself found (method run_trace or exact) are replaced.
+LINKER_METHODS = ("run_trace", "exact")
+IN_CHUNK = 400  # values per json_each lookup, so one statement never carries an unbounded list
+# The linker links only to what a company member may see. Text is read by company members and by narrower audiences, so
+# a company-visible entity is one every reader of the text may be shown. A restricted entity is never linked from text.
+COMPANY_READER = V.Reader(actor="", key="", system=False, sensitive=False, grants={})
+
+
+def record_lookup(c: sqlite3.Connection, attempt_id: str, entity_id: str) -> None:
+    """The entity an attempt read (`hub directory get` or `rules`): the run trace the linker links that attempt's text to.
+    Once per attempt and entity."""
+    c.execute(
+        "INSERT OR IGNORE INTO entity_lookups (id, attempt_id, entity_id, created_at) VALUES (?, ?, ?, ?)",
+        (_id("lkp"), attempt_id, entity_id, H.now()),
+    )
+
+
+def run_lookups(c: sqlite3.Connection, attempt_id: str) -> list[str]:
+    """The entities an attempt read, merges followed, oldest first. Who may see them is the caller's question."""
+    ids = [
+        row["entity_id"]
+        for row in _rows(
+            c,
+            "SELECT entity_id FROM entity_lookups WHERE attempt_id = ? ORDER BY created_at, id",
+            (attempt_id,),
+        )
+    ]
+    return _follow(c, ids)
+
+
+def identifier_entities(c: sqlite3.Connection, pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], list[str]]:
+    """The kept entities each (kind, normalized value) names, merges followed. Every entity counts, whoever may see it: a
+    name two entities share is ambiguous to the linker, and it stays ambiguous when one of them is hidden. A scoped
+    identifier (a Finance book's alias, scope_type set) is not company-wide, so it is not matched at all."""
+    by_kind: dict[str, list[str]] = {}
+    for kind, value in dict.fromkeys(pairs):
+        by_kind.setdefault(kind, []).append(value)
+    found: dict[tuple[str, str], list[str]] = {}
+    for kind, values in by_kind.items():
+        for start in range(0, len(values), IN_CHUNK):
+            chunk = values[start : start + IN_CHUNK]
+            for row in _rows(
+                c,
+                "SELECT i.normalized_value, i.entity_id FROM entity_identifiers i "
+                "JOIN entities e ON e.id = i.entity_id "
+                "WHERE i.kind = ? AND i.normalized_value IN (SELECT value FROM json_each(?)) "
+                "AND i.scope_type IS NULL AND e.deleted_at IS NULL",
+                (kind, json.dumps(chunk)),
+            ):
+                found.setdefault((kind, row["normalized_value"]), []).append(row["entity_id"])
+    return {key: _follow(c, ids) for key, ids in found.items()}
+
+
+def company_visible(c: sqlite3.Connection, ids: Iterable[str]) -> set[str]:
+    """The entities among `ids` that a company member sees whatever else they hold (the read rule for a reader with no
+    grants). A merged or deleted entity is not one."""
+    unique = list(dict.fromkeys(ids))
+    if not unique:
+        return set()
+    cl, params = V.clause(COMPANY_READER)
+    rows = _rows(
+        c,
+        "SELECT e.id FROM entities e WHERE e.id IN (SELECT value FROM json_each(?)) "
+        f"AND e.deleted_at IS NULL AND e.status <> 'merged' AND {cl}",
+        [json.dumps(unique), *params],
+    )
+    return {row["id"] for row in rows}
+
+
+def replace_link_mentions(
+    c: sqlite3.Connection,
+    mentionable_type: str,
+    mentionable_id: str,
+    revision: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Replaces the linker's mention rows for one text with `rows` (entity_id, role, quote, occurrence, confidence, method,
+    status). Mentions another method wrote (an inline link, a person's) stay. The mention counts of every entity the old
+    or new rows name are recounted, and a linked mention moves the entity's last activity forward."""
+    before = [
+        row["entity_id"]
+        for row in _rows(
+            c,
+            "SELECT DISTINCT entity_id FROM entity_mentions WHERE mentionable_type = ? AND mentionable_id = ? "
+            "AND method IN ('run_trace', 'exact')",
+            (mentionable_type, mentionable_id),
+        )
+    ]
+    c.execute(
+        "DELETE FROM entity_mentions WHERE mentionable_type = ? AND mentionable_id = ? AND method IN ('run_trace', 'exact')",
+        (mentionable_type, mentionable_id),
+    )
+    now = H.now()
+    for row in rows:
+        c.execute(
+            "INSERT INTO entity_mentions (id, mentionable_type, mentionable_id, mentionable_revision, entity_id, role, "
+            "quote, occurrence, confidence, method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _id("men"),
+                mentionable_type,
+                mentionable_id,
+                revision,
+                row["entity_id"],
+                row["role"],
+                row["quote"],
+                row["occurrence"],
+                row["confidence"],
+                row["method"],
+                row["status"],
+                now,
+            ),
+        )
+    touched = list(dict.fromkeys([*before, *(row["entity_id"] for row in rows)]))
+    if not touched:
+        return
+    c.execute(
+        "UPDATE entities SET mentions_count = (SELECT COUNT(*) FROM entity_mentions m "
+        "WHERE m.entity_id = entities.id AND m.status = 'linked') WHERE id IN (SELECT value FROM json_each(?))",
+        (json.dumps(touched),),
+    )
+    linked = list(dict.fromkeys(row["entity_id"] for row in rows if row["status"] == "linked"))
+    if linked:
+        c.execute(
+            "UPDATE entities SET last_activity_at = ? WHERE id IN (SELECT value FROM json_each(?)) "
+            "AND (last_activity_at IS NULL OR last_activity_at < ?)",
+            (now, json.dumps(linked), now),
+        )
+
+
+def mentions(c: sqlite3.Connection, who: str, mentionable_type: str, mentionable_id: str) -> list[Row]:
+    """The mentions of one text whose entity shows to the reader (the read rule). A suggested mention is returned too; the
+    caller says it renders as plain text."""
+    r = V.reader(c, who)
+    cl, params = V.clause(r)
+    return _rows(
+        c,
+        "SELECT m.*, e.name AS entity_name FROM entity_mentions m JOIN entities e ON e.id = m.entity_id "
+        f"WHERE m.mentionable_type = ? AND m.mentionable_id = ? AND {cl} ORDER BY m.created_at, m.id",
+        [mentionable_type, mentionable_id, *params],
+    )
