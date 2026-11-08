@@ -1110,3 +1110,12 @@ class SkillDeviceCodeRow(TypedDict):
     created_at: str
     updated_at: str
     client_hash: str | None
+
+
+class SetupHandoffRow(TypedDict):
+    token_hash: str
+    created_at: str
+    expires_at: str
+    used_at: str | None
+    revoked_at: str | None
+    human_token_id: str | None
