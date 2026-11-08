@@ -2462,6 +2462,11 @@ SCHEMAS = {
                 "type": ["integer", "null"],
                 "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
             },
+            "card_cap": {
+                "type": ["integer", "null"],
+                "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
+                "its cards wake no one), or null for no cap",
+            },
             "flow": {
                 "type": "object",
                 "description": "What the step does with a ticket (docs/tasks.md, Step "
