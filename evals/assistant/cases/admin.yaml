@@ -95,14 +95,105 @@
   must_not:
     - '^task close\b'
     - '^task bulk close\b.*2c7e9f04'
-    - '^task bulk close\b.*--where-status'
+    - '^task bulk close\b.*(--where-status|"status")'
   no_invalid: true
   reply: |
     Dana wants her list cleared: the 4 test pings and the 3 per-release docs tasks go, the Spring launch date and the Harbor Co
     renewal stay. The turn closes the 7 named tasks in ONE `hub task bulk close` call with their ids (a dry run of the same
-    first is fine), not one `hub task close` at a time, and does not close by a status filter. It does not touch the 2 real
+    first is fine), not one `hub task close` at a time. It closes by the 7 ids it names, not by a status filter, which would
+    also catch the 2 real
     tasks. No shell loops, no help lookups, no re-reading the list. Reply: counts (9 open before, 7 closed, 2 left), the links
     to the two tasks that stay, and "say undo to put it back". Short.
+
+- id: admin-close-all-except-mine
+  group: admin
+  prompt: "Close all team tasks, keep mine."
+  hub:
+    - match: '^task bulk close\b.*--dry-run'
+      out: {dry_run: true, matched: 4, changed: 4, skipped: 0, tasks: {changed: [{id: 7b3e9a10-9600-4000-8000-000000000001, number: 412, title: "Draft the Spring launch email", status: open}, {id: 7b3e9a10-9600-4000-8000-000000000002, number: 418, title: "Pick the launch hero image", status: doing}, {id: 7b3e9a10-9600-4000-8000-000000000003, number: 420, title: "Review the Harbor Co quote", status: waiting}, {id: 7b3e9a10-9600-4000-8000-000000000004, number: 425, title: "Update the pricing page", status: open}], skipped: []}}
+    - match: '^task bulk close'
+      out: {dry_run: false, matched: 4, changed: 4, skipped: 0}
+  must:
+    - '^task bulk close\b(?=.*--dry-run)(?=.*(--where-not-owner\b|exclude_owner))'
+  must_not:
+    - '^task bulk close\b(?!.*--dry-run)'
+    - '^task bulk close\b.*(--where-owner\b|"owner")'
+    - '^(bot (pause|resume)|rules add|assistant learn)\b'
+    - '^approval (approve|decline)\b'
+    - '^message send\b'
+  reply: |
+    Dana wants every team task closed except her own. The turn counts first: one `hub task bulk close` with
+    `--where-not-owner me` (`exclude_owner: me` over MCP) and `--dry-run`, which covers bot-owned tasks too. It says the count in one line (4 tasks, all but
+    hers, with the four named or linked) and asks her to say yes. It closes nothing yet, and it does not close her own
+    tasks, pause any bot, add a rule or learn anything. Short.
+
+- id: admin-close-all-yes-after-count
+  group: admin
+  prompt: "yes"
+  history:
+    - {from: "human:dana", body: "Close all team tasks, keep mine."}
+    - {from: "assistant", body: "4 tasks are not yours: Draft the Spring launch email, Pick the launch hero image, Review the Harbor Co quote and Update the pricing page. Close them? Say yes."}
+  hub:
+    - match: '^task bulk close\b.*--dry-run'
+      out: {dry_run: true, matched: 4, changed: 4, skipped: 0, tasks: {changed: [{id: 7b3e9a10-9600-4000-8000-000000000001, number: 412, title: "Draft the Spring launch email", status: open}, {id: 7b3e9a10-9600-4000-8000-000000000002, number: 418, title: "Pick the launch hero image", status: doing}, {id: 7b3e9a10-9600-4000-8000-000000000003, number: 420, title: "Review the Harbor Co quote", status: waiting}, {id: 7b3e9a10-9600-4000-8000-000000000004, number: 425, title: "Update the pricing page", status: open}], skipped: []}}
+    - match: '^task bulk close'
+      out: {dry_run: false, matched: 4, changed: 4, skipped: 0}
+  must:
+    - '^task bulk close\b(?!.*--dry-run)(?=.*(--where-not-owner\b|exclude_owner))'
+  must_not:
+    - '^task bulk close\b.*(--where-owner\b|"owner")'
+    - '^(bot (pause|resume)|rules add|assistant learn)\b'
+    - '^approval (approve|decline)\b'
+  reply: |
+    Dana said yes to closing the four tasks that are not hers. The turn closes them in ONE `hub task bulk close` with
+    `--where-not-owner me` (`exclude_owner: me` over MCP) and no `--dry-run`, and leaves her own tasks alone. The reply is two or three short lines: 4 closed,
+    with links, and "say undo to reopen them". It pauses no bot and adds no rule.
+
+- id: admin-close-all-and-stop-bots
+  group: admin
+  prompt: "Close all team tasks, keep mine, and tell the bots to stop working."
+  hub:
+    - match: '^task bulk close\b.*--dry-run'
+      out: {dry_run: true, matched: 4, changed: 4, skipped: 0, tasks: {changed: [{id: 7b3e9a10-9600-4000-8000-000000000001, number: 412, title: "Draft the Spring launch email", status: open}, {id: 7b3e9a10-9600-4000-8000-000000000002, number: 418, title: "Pick the launch hero image", status: doing}, {id: 7b3e9a10-9600-4000-8000-000000000003, number: 420, title: "Review the Harbor Co quote", status: waiting}, {id: 7b3e9a10-9600-4000-8000-000000000004, number: 425, title: "Update the pricing page", status: open}], skipped: []}}
+    - match: '^task bulk close'
+      out: {dry_run: false, matched: 4, changed: 4, skipped: 0}
+  must:
+    - '^task bulk close\b(?=.*--dry-run)(?=.*(--where-not-owner\b|exclude_owner))'
+  must_not:
+    - '^task bulk close\b(?!.*--dry-run)'
+    - '^bot (pause|resume)\b'
+    - '^rules add\b'
+    - '^assistant learn\b'
+    - '^message send\b'
+  reply: |
+    Dana asks for two things in one message. Closing the team's tasks except hers is a filter close: the turn counts it first with
+    a dry run (`hub task bulk close --where-not-owner me --dry-run`, or `exclude_owner: me` with `dry_run` over MCP), says the count in one line, and asks for one yes. It closes
+    nothing yet. Stopping the bots is a separate question: this turn pauses no bot, and it asks in one line whether she wants
+    the bots paused, and which. Closing tasks is not a stop order, so the turn adds no rule and learns nothing.
+
+- id: admin-close-over-cap-splits
+  group: admin
+  prompt: "Close every open task that isn't mine."
+  hub:
+    - match: '^task bulk close\b(?=.*--dry-run)(?!.*doing)(?=.*(--where-status\s+open\b|"status":\s*\[?"open"))'
+      out: {dry_run: true, matched: 150, changed: 150, skipped: 0}
+    - match: '^task bulk close\b(?=.*--dry-run)(?!.*open)(?=.*(--where-status\s+doing\b|"status":\s*\[?"doing"))'
+      out: {dry_run: true, matched: 60, changed: 60, skipped: 0}
+    - match: '^task bulk close\b.*--dry-run'
+      out: "error: too_many: More than 200 tasks match; a bulk change takes at most 200: narrow the filter"
+      exit: 1
+  must:
+    - '^task bulk close\b(?=.*--dry-run)'
+  must_not:
+    - '^task bulk close\b(?!.*--dry-run)'
+    - '^task bulk close\b.*(--where-owner\b|"owner")'
+    - '^bot (pause|resume)\b'
+  reply: |
+    Dana asks to close every open task that is not hers. One call over the whole filter is refused (too_many: more than 200
+    match), so the turn splits the filter by status, counts each part with a dry run (open 150, doing 60), and gives one total in
+    one line: 210 tasks, all but hers, bots' included. It asks for one yes. It closes nothing in this turn, and it does not
+    close 200 ids one at a time or pause any bot. Once she says yes, it closes part by part, and the reply says the counts and
+    "say undo to reopen them".
 
 - id: admin-org-move-to-group
   group: admin

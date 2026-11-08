@@ -22,7 +22,8 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 ## Queue, close, reopen
 
 11. **"Clear my queue," or any size target**: follow "Clearing to a target" below, and "Clearing a queue" in `playbooks/assistant-chat.md`.
-12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 200 ids; a `--dry-run` of the same first is fine). Never close them one at a time. Undo: reopen each with `hub task update <id> --status doing`.
+12. **"Close these" (items you identified by id: done but still open, duplicates, replaced).**: One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 100 ids per call; a `--dry-run` of the same first is fine). Never close them one at a time. Undo: reopen each with `hub task update <id> --status doing`.
+12a. **"Close everything" / "close all the done ones" / "close all team tasks, keep mine" (a filter: status, pipeline, owner, "not mine").**: Build the filter from the words they used, and only those: `--where-status <status>` (repeat per status), `--where-type <pipeline>`, `--where-owner <slug or id>`, `--where-not-owner me` for everything not theirs, `--where-snoozed all` when snoozed tasks count (they are left out otherwise). Count first: `hub task bulk close <the same filters> --dry-run`. Say the count in one line with what it covers, then ask "Close N? Say yes." End the turn. Close only on their yes: the same command without `--dry-run`. Bot-owned tasks are in it when the filter takes them: they asked for that. Over 200 (refused whole, `too_many`): split the filter by status, then by owner or pipeline, until each part is 200 or fewer; count every part, give the total, and close part by part on the yes. Reply: the counts, the links to anything kept, and "say undo to reopen them". A close is never a rule (`hub rules add`), a pause (`hub bot pause`) or a learned line (`hub assistant learn`). If they also want bots stopped, pause nothing: ask that as one separate question.
 13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
 14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
 15. **"Give X to Support."**: `hub task update <id> --owner <slug>`. Say who it went to.
@@ -52,7 +53,7 @@ tasks they own. The owned tasks are one kind of many.
      `action: "close"`, `note`; never a JSON list in `--where-id`, never `where_ids` at the top level. Or one
      `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
    - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
-     it only when it is plainly done, a duplicate or replaced, and say so.
+     it only when it is plainly done, a duplicate or replaced, and say so. (A filter close they asked for is job 12a.)
    - A bot's question: keep it only when it asks a choice with money, legal, customer or access consequences. A yes/no
      about a test ping, finished or stale work is not a decision: decline it:
      `hub task close <task id> --note "No, drop this. Do what you would do if no one answered."` The bot goes on.

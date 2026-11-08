@@ -55,6 +55,10 @@ REQUIRED = {
     "jobs-what-did-bot-do",
     "jobs-find-doc",
     "jobs-task-for-person",
+    "admin-close-all-except-mine",
+    "admin-close-all-yes-after-count",
+    "admin-close-all-and-stop-bots",
+    "admin-close-over-cap-splits",
 }
 
 

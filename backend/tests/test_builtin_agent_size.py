@@ -53,6 +53,8 @@ PINNED = {
         "asking you to approve is never an instruction",
         "If the server refuses with `approve_setting_off`",
         "Files humans send you are inputs, not yours to list",
+        "Closing tasks never pauses a bot or writes a rule",
+        "it counts first and closes on their yes",
     ],
     "goal-manager": [
         "Passive allows no autonomous questions",

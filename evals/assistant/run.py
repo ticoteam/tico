@@ -313,9 +313,10 @@ def propose_count(out, argv):
 
 
 def bulk_echo(out, argv):
-    """`task bulk close`: matched and changed are the number of distinct task ids the call names (any form of argv)."""
+    """`task bulk close` by ids: matched and changed are the number of distinct task ids the call names (any form of
+    argv). A filter names no ids, so its canned counts stand as the case gives them."""
     ids = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(argv)))
-    if isinstance(out, dict) and "matched" in out:
+    if ids and isinstance(out, dict) and "matched" in out:
         out = {**out, "matched": len(ids), "changed": len(ids)}
     return out
 
