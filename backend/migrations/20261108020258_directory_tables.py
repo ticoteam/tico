@@ -23,7 +23,7 @@ start with a version cannot be imported by name.
 """
 
 import json
-from datetime import datetime, timezone
+from backend import hubdb as H
 
 FOREIGN_KEYS_OFF = False  # every change here adds a table or a column; nothing is rebuilt
 
@@ -515,7 +515,8 @@ IDENTIFIER_TRIGGERS = ("entities_identifiers_ai", "entities_identifiers_au")
 
 
 def _now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    # The hub's clock, not the machine's: a demo build runs at its own moment and its rows must not postdate it.
+    return H.now()
 
 
 def _columns(conn, table):
