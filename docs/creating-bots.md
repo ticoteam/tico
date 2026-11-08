@@ -765,10 +765,11 @@ has nothing to do with `bot-sales` in another's. Paths in instructions should th
 relative to the repository, or relative to the environment's workspace, never hard-coded to one
 computer's home directory.
 
-GitHub is optional. A plain git repository in the environment's workspace is enough for a bot to
-run: the runner reads the checkout on the computer, and the bot commits into it. A remote buys backup,
-review, and editing from somewhere other than the runner's computer, which is why preflight flags a
-missing remote. The bot's repository link is recorded on the bot in **Settings**, and that same
+GitHub is optional for a bot to run. A plain git repository in the environment's workspace is enough: the
+runner reads the checkout on the computer, and the bot commits into it. A remote buys backup, review, and editing
+from somewhere other than the runner's computer, which is why preflight flags a missing remote. Until GitHub is
+connected in **Tools**, under GitHub, a bot's files and memory exist only on its computer, with no backup, and Health
+and the bot's page say so. The bot's repository link is recorded on the bot in **Settings**, and that same
 repository can be cloned into another environment's workspace as a starting point there.
 
 Two consequences when you run more than one environment:
