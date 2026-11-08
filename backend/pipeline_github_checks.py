@@ -197,13 +197,19 @@ def publish_open(store: "Store", limit: int = PUBLISH_BATCH) -> int:
 def _record_batch(store: "Store", token: str, limit: int) -> int:
     with cast(Any, store).read() as conn:
         after = _cursor_of(conn)
+        # A ticket is covered when a live requirement is in its current stage or a stage it visited and left (the engine's
+        # scope), or when it already has check rows: a check recorded "met" must follow its standing when that changes.
+        # The label filter is left to task_standings, so this selects a superset.
         ids = [
             str(r[0])
             for r in conn.execute(
                 "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                "WHERE l.kind='pr' AND json_extract(l.detail,'$.head_sha') IS NOT NULL AND t.step_id IS NOT NULL "
-                "AND EXISTS (SELECT 1 FROM stage_requirements r WHERE r.pipeline_stage_id=t.step_id "
-                "AND r.retired_at IS NULL) AND l.task_id>? ORDER BY l.task_id LIMIT ?",
+                "WHERE l.kind='pr' AND json_extract(l.detail,'$.head_sha') IS NOT NULL AND l.task_id>? AND ("
+                "EXISTS (SELECT 1 FROM stage_requirements r WHERE r.pipeline_stage_id=t.step_id AND r.retired_at IS NULL) "
+                "OR EXISTS (SELECT 1 FROM stage_visits v JOIN stage_requirements r ON r.pipeline_stage_id=v.pipeline_stage_id "
+                "AND r.retired_at IS NULL WHERE v.task_id=t.id AND v.left_at IS NOT NULL) "
+                "OR EXISTS (SELECT 1 FROM pipeline_check_runs c WHERE c.task_id=t.id)) "
+                "ORDER BY l.task_id LIMIT ?",
                 (after, limit),
             ).fetchall()
         ]
