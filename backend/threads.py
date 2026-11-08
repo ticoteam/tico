@@ -3902,7 +3902,7 @@ def revived_roots(c, v, roots=None):
         message = H.message(c, message_id, include_deleted=False)
         if message and message_readable(c, v, message):
             found.add(root_id)
-    return found
+    return frozenset(found)
 
 
 def task_open_sql(c, v, r="r", revived=frozenset()):
@@ -4414,7 +4414,7 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
             out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
         # The rail hides a root its finished task hides; a single view says so, for the live stream to match the list.
         # A list's rows are the rail's own, already filtered, so they are not asked again (summary is set).
-        if summary is None and root.get("task_id") and task_hidden(c, v, root["id"]):
+        if summary is None and root is not None and root.get("task_id") and task_hidden(c, v, root["id"]):
             out["task_hidden"] = True
     return out
 
