@@ -1072,6 +1072,22 @@ def test_a_spawn_whose_pool_has_no_role_holder_on_the_roster_goes_to_the_filer_n
     assert owner == H.task(co.c, card)["owner_id"]
 
 
+def test_a_spawn_on_a_stage_with_no_assign_rule_goes_to_the_filer_not_the_manager(co):
+    """Spec A5, as Engineering is set up in the Hub: its first stage (On Deck) has no assign rule, and its manager is
+    another bot on the roster. No role holder resolves (task_types.role holds a role key, and no stored record links a
+    bot to it), so the ticket is owned by its filer, never by the pipeline's manager."""
+    H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    owner = H.task(co.c, d41)["owner_id"]
+    assert owner != "bot:pipeline-manager"
+    assert owner == H.task(co.c, card)["owner_id"]
+
+
 def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):
     """O1: the approval filed the Engineering subtask. Undone while nobody has picked it up, the subtask closes and its
     handoff is returned; a new approval files a new one. Once it is picked up, the undo is refused and nothing changes."""

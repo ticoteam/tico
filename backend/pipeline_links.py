@@ -181,10 +181,10 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
     that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
-    over its slots. The pool is the pipeline's role holder (spec A5), and no stored record names any other holder: a
-    bot-to-role link does not exist, and a holder the hub refuses cannot own a ticket. So when no pool bot is available
-    the filer owns the ticket, and a stage with an assign pool never gives it to the pipeline's manager. A pipeline with
-    no assign pool goes to its manager when it is on the roster, else the filer, since a ticket always has an owner."""
+    over its slots. The pool is the pipeline's role holder (spec A5). A first stage with no assign rule has no pool, and the
+    role holder would resolve only through task_types.role, which holds a role key, not a bot: no stored record links a
+    bot to a role. So when no role holder resolves, the filer owns the ticket. The pipeline's manager is never chosen
+    (spec A5: a manager change does not move a Dev ticket), on a stage with a pool or without one."""
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
@@ -195,12 +195,7 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
         if step and rule:
             picked = _pool_bot(conn, step, rule) or _pool_bot(conn, step, rule, within_slots=False)
             return f"bot:{picked}" if picked else filer
-    found = _rows(conn, "SELECT manager FROM task_types WHERE id = ?", (pipeline_id,))
-    slug = str(found[0]["manager"] or "") if found else ""
-    if not slug:
-        return filer
-    candidate = slug if slug.startswith(("bot:", "human:")) else f"bot:{slug}"
-    return candidate if H.resolve_actor(conn, candidate) else filer
+    return filer
 
 
 def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row, *, within_slots: bool = True) -> str | None:
