@@ -263,5 +263,28 @@ let browser = null;
     await page.close();
   }
 
+  // A 1:1 DM archived in another window leaves the viewer's Catch up card, the Catch up badge and the teammate's unread
+  // count in the sidebar (the DM is not on the list, so its archive comes only as this event).
+  if (!only || only === 'live-dm-archive') {
+    const dmWorld = {'t-dm': {id: 't-dm', title: '', audience: 'personal', root_id: 't-dm', path: ['t-dm'], parent_id: null, last_seq: 4, last_unread_seq: 4,
+      last_message_at: at(5), dm_with: [{actor: 'human:ben', name: 'Ben'}], dm_with_count: 1, members: [{actor: 'human:ana'}, {actor: 'human:ben'}],
+      me: me({unread: 2, activity: true}), pinned_for_everyone: false}};
+    const {page, seen, send, block, threads} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads: dmWorld});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.tree-dm').waitFor();
+    await page.locator('[data-tr-catch]').click();
+    await page.locator('.cu-card[data-thread="t-dm"]').waitFor();
+    assert.equal(await page.locator('#nav-threads .nav-badge').textContent(), '1');
+
+    threads['t-dm'].archived_at = at(0);
+    await send(block('threads', {kind: 'archived', thread_id: 't-dm', root_id: 't-dm', thread: view(threads['t-dm'])}));
+    await until(async () => (await page.locator('.cu-card[data-thread="t-dm"]').count()) === 0, 'an archived DM leaves the open Catch up');
+    await until(async () => page.locator('#nav-threads .nav-badge').isHidden(), 'the Catch up badge clears');
+    await until(async () => (await page.locator('.tree-dm').count()) === 0, "the teammate's unread count clears");
+    assert.equal(await page.evaluate(() => THREADS.dms['human:ben'] || 0), 0);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+  }
+
   console.log('PASS: Threads archive: a phone row shows Archive for a managed thread (44px, always shown), taking it and its Catch up count off at once with an Undo that brings it back; the open thread\'s header archives it back to the list, and Unarchive restores it in place; a thread the viewer does not manage has neither; no sideways scroll at 390px; on a desktop the row Archive shows on hover and keyboard focus');
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => browser?.close());
