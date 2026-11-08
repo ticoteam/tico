@@ -709,6 +709,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Logo",
                 "title": "Logo",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -747,6 +751,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Logo",
                 "title": "Logo",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -774,6 +782,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Sent",
                 "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -812,6 +824,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Sent",
                 "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -839,6 +855,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Done",
                 "title": "Done",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -866,6 +886,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Badge",
                 "title": "Badge",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -904,6 +928,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Poster",
                 "title": "Poster",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -942,6 +970,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Poster",
                 "title": "Poster",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -969,6 +1001,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Backup",
                 "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1007,6 +1043,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Backup",
                 "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1034,6 +1074,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Blank",
                 "title": "Blank",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1063,6 +1107,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Sent",
                 "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1101,6 +1149,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Backup",
                 "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1376,6 +1428,97 @@ def test_an_llm_judges_reason_shows_on_the_queue_row(world):
     w.decide(w.mockup, "unsure", judge="llm", reason="The logo is blurry")
     (item,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
     assert item["bot_note"] == "The logo is blurry"
+
+
+def test_a_queue_item_carries_the_card_and_the_names_its_buttons_reach(world):
+    """With nothing attached the review screen shows the card: its body, acceptance criteria and checkpoint. The item names
+    who the two Message buttons reach, the owner bot and the pipeline's manager bot, by display name."""
+    w = world
+    people = {"people": [{"id": p, "email": f"{p}@acme.example"} for p in ("ana", "ben", "chris")]}
+    H.sync_registry(
+        w.c,
+        {
+            "cmo": {"name": "cmo", "display_name": "Pipeline Manager", "runtime": "fake", "status": "active"},
+            "builder": {"name": "builder", "display_name": "Product Manager", "runtime": "fake", "status": "active"},
+        },
+        people,
+    )
+    w.c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (w.pipeline,))
+    w.c.execute(
+        "UPDATE tasks SET owner_id='bot:builder', body=?, acceptance=?, checkpoint=? WHERE id=?",
+        (
+            "Let the assistant approve a spec.",
+            json.dumps(["Approved in one tap", "Works on a phone"]),
+            "Shot 2 is cropped.",
+            w.task,
+        ),
+    )
+    w.c.execute("UPDATE requirement_attachments SET removed_at=? WHERE task_id=?", (H.now(), w.task))
+
+    def signoff():
+        (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+        return item
+
+    item = signoff()
+    assert item["title"] == "Logo" and item["attachment"] is None
+    assert item["body"] == "Let the assistant approve a spec."
+    assert item["acceptance_criteria"] == ["Approved in one tap", "Works on a phone"]
+    assert item["checkpoint"] == "Shot 2 is cropped."
+    assert (item["requirement"], item["pipeline"]) == ("Sign-off", "Design")
+    assert item["assignee"] == {"id": "bot:builder", "name": "Product Manager"}
+    assert item["manager"] == {"id": "bot:cmo", "name": "Pipeline Manager"}
+
+    w.c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (w.pipeline,))
+    assert signoff()["manager"] is None
+
+
+def _ticket_file(w, name, content_type):
+    blob = f"blob-{name}"
+    w.c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+        (blob, "bot:cmo", "sha256:file", 42, name, content_type, H.now()),
+    )
+    w.c.execute("INSERT INTO task_assets (task_id, blob_id) VALUES (?,?)", (w.task, blob))
+    return blob
+
+
+@pytest.mark.parametrize(
+    ("name", "content_type", "expected"),
+    [
+        ("Pipeline manager spec v1.md", "text/markdown", "text"),
+        ("notes.txt", "", "text"),
+        ("shot.png", "image/png", "image"),
+    ],
+)
+def test_a_file_on_the_ticket_is_the_items_attachment_when_the_requirement_has_none(
+    world, name, content_type, expected
+):
+    """A ticket's own file is what the reviewer reads when nothing is attached to the requirement. It is shown (markdown and
+    plain text as text, an image as an image) but it is not the requirement's evidence: the item has no digest, and an
+    Approve of what was seen still goes through."""
+    w = world
+    blob = _ticket_file(w, name, content_type)
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+    shown = item["attachment"]
+    assert (shown["id"], shown["source"], shown["format"], shown["name"], shown["href"]) == (
+        blob,
+        "ticket",
+        expected,
+        name,
+        f"/api/v2/files/{blob}",
+    )
+    assert item["attachment_digest"] is None
+    w.approve(w.signoff)
+    assert w.signoff not in {i["requirement_id"] for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task}
+
+
+def test_the_requirement_attachment_wins_over_a_file_on_the_ticket(world):
+    w = world
+    _ticket_file(w, "spec.md", "text/markdown")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.mockup]
+    assert item["attachment"]["source"] == "link"
+    assert item["attachment"]["url"] == "https://example.test/mockup"
+    assert item["attachment_digest"] == "d1"
 
 
 def test_a_requirement_for_one_label_is_not_asked_of_a_ticket_without_that_label(world):

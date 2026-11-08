@@ -60,6 +60,8 @@ def _review_of(requirement: dict[str, Any]) -> str:
 
 Row = dict[str, Any]
 CURRENT: Any = object()  # approve(): no version named, so the current one is taken (a caller inside the engine)
+TICKET_SOURCE = "ticket"  # a queue item's attachment that is a file on the ticket, not the requirement's own evidence
+TEXT_NAMES = (".md", ".markdown", ".txt")  # a ticket file read as text when its content type says nothing
 
 
 class Declined(Problem, cast(Any, H).Refused):
@@ -130,6 +132,17 @@ def _clip(text: str | None) -> str | None:
     if not value:
         return None
     return value.encode("utf-8")[:NOTE_BYTES].decode("utf-8", "ignore")
+
+
+def _criteria(raw: Any) -> list[str]:
+    """A ticket's acceptance criteria, stored as JSON text, as the list the review card shows (blank ones dropped)."""
+    try:
+        value: Any = json.loads(raw) if isinstance(raw, str) and raw else (raw or [])
+    except ValueError:
+        return []
+    if not isinstance(value, list):
+        return []
+    return [text for text in (str(item).strip() for item in cast(list[Any], value)) if text]
 
 
 def _person(actor: str) -> str:
@@ -269,6 +282,9 @@ class _Facts:
         self.standing: dict[str, dict[str, str]] = {}  # ticket id -> {requirement id: the engine's state}
         self.decisions: dict[Key, list[Row]] = {}
         self.attachments: dict[Key, Row] = {}
+        self.task_files: dict[
+            str, Row
+        ] = {}  # ticket id -> its newest file (task_assets), shown when nothing is attached
         self.visits: dict[str, Row] = {}
         self.labels: dict[str, set[str]] = {}  # ticket id -> its label keys (a requirement may apply to one label)
         self.asked: set[Key] = set()  # (visit id, requirement id) the manager asked the backup about
@@ -295,6 +311,14 @@ class _Facts:
             reqs,
         ):
             facts.attachments.setdefault((attachment["task_id"], attachment["stage_requirement_id"]), attachment)
+        for asset in _read(
+            c,
+            "SELECT a.task_id AS task_id, b.id AS id, b.name AS name, b.content_type AS content_type "
+            "FROM task_assets a JOIN blobs b ON b.id = a.blob_id WHERE a.task_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY b.created_at DESC, b.id DESC",
+            tasks,
+        ):
+            facts.task_files.setdefault(asset["task_id"], asset)
         for visit in _read(
             c, "SELECT * FROM stage_visits WHERE left_at IS NULL AND task_id IN (SELECT value FROM json_each(?))", tasks
         ):
@@ -398,6 +422,47 @@ def _bot_note(decisions: list[Row], work_version: int) -> str:
     return ""
 
 
+def _manager_of(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
+    """The pipeline's manager bot, as the item's Message manager button names it: its actor id and display name."""
+    bot_id = _hub().type_manager(c, {"type_id": pipeline_id})
+    if not bot_id:
+        return None
+    return {"id": f"bot:{bot_id}", "name": str(_hub().actor_name(c, f"bot:{bot_id}"))}
+
+
+def _attachment_of(attachment: Row | None, ticket_file: Row | None) -> Row | None:
+    """The attachment a queue item shows: the requirement's own evidence, else the ticket's newest file. A ticket file is
+    shown only. It is not the requirement's evidence, so the item carries no digest for it and its id never reaches
+    approve or Not validated."""
+    if attachment is not None:
+        return {
+            "id": attachment["id"],
+            "source": attachment["source"],
+            "url": attachment["url"],
+            "blob_id": attachment["blob_id"],
+            "file_id": attachment["file_id"],
+            "file_version": attachment["file_version"],
+            "commit_sha": attachment["commit_sha"],
+        }
+    if ticket_file is not None:
+        return {
+            "id": ticket_file["id"],
+            "source": TICKET_SOURCE,
+            "url": None,
+            "blob_id": ticket_file["id"],
+            "file_id": None,
+            "file_version": None,
+            "commit_sha": None,
+        }
+    return None
+
+
+def _is_text(asset: Row) -> bool:
+    """Whether a ticket file reads as text: a text content type, or a markdown or plain-text name."""
+    name = str(asset.get("name") or "").lower()
+    return str(asset.get("content_type") or "").lower().startswith("text/") or name.endswith(TEXT_NAMES)
+
+
 class _Queue:
     """What the queue reads for all its rows at once, one read per kind and chunk: the unexpired claims, the stage and
     pipeline names, the stages' Warn-after limits, and when each ticket not in a visit last stepped. Each row is built
@@ -470,12 +535,16 @@ class _Queue:
     def item(self, actor: str, task: Row, requirement: Row, why: str) -> Row:
         key = (task["id"], requirement["id"])
         attachment = self.facts.attachments.get(key)
+        ticket_file = None if attachment else self.facts.task_files.get(task["id"])
         claim_row = self.claims.get(key)
         since = self.since(task)
         stage = self.stages.get(requirement["pipeline_stage_id"]) or {}
         return {
             "task_id": task["id"],
             "title": task.get("title") or "",
+            "body": str(task.get("body") or ""),
+            "acceptance_criteria": _criteria(task.get("acceptance")),
+            "checkpoint": str(task.get("checkpoint") or ""),
             "number": task.get("number"),
             "pipeline_id": requirement["pipeline_id"],
             "pipeline": self.types.get(requirement["pipeline_id"]) or "",
@@ -486,19 +555,7 @@ class _Queue:
             "requirement_version": requirement["version"],
             "kind": requirement["kind"],
             "work_version": _revision(task),
-            "attachment": (
-                {
-                    "id": attachment["id"],
-                    "source": attachment["source"],
-                    "url": attachment["url"],
-                    "blob_id": attachment["blob_id"],
-                    "file_id": attachment["file_id"],
-                    "file_version": attachment["file_version"],
-                    "commit_sha": attachment["commit_sha"],
-                }
-                if attachment
-                else None
-            ),
+            "attachment": _attachment_of(attachment, ticket_file),
             "attachment_digest": attachment["digest"] if attachment else None,
             "why": why,
             "since": since,
@@ -512,7 +569,7 @@ class _Queue:
 def _queue_fields(
     c: "sqlite3.Connection", actor: str, items: list[Row], live: list[Row], tasks: dict[str, Row], queue: _Queue
 ) -> None:
-    """Adds assignee, bot_note, reviewer_id, can_mark_met, can_not_validate and moves_to to each queue item. The people
+    """Adds assignee, manager, bot_note, reviewer_id, can_mark_met, can_not_validate and moves_to to each queue item. The people
     and bots, the move links and the pipelines' steps are each read once over all the items; `may_edit_rules` runs once
     per pipeline; Not validated's route is read per ticket at its stage (it follows the ticket's own handoff)."""
     if not items:
@@ -550,6 +607,7 @@ def _queue_fields(
     names = {s["id"]: s["name"] for s in steps}
     requirements = {r["id"]: r for r in live}
     rights = {p: pipeline_rights.may_edit_rules(c, actor, p) for p in pipeline_ids}
+    managers = {p: _manager_of(c, p) for p in pipeline_ids}
     candidates: dict[
         tuple[str, str], tuple[Row, list[Row], str | None] | None
     ] = {}  # Not validated's candidates per stage, read once
@@ -578,15 +636,33 @@ def _queue_fields(
         # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
         # Another reviewer's claim holds the item: Not validated is theirs to send, so it is not offered to anyone else.
         item["can_not_validate"] = at_stage and item["claimed_by"] is None and _route_ok(item)
+        item["manager"] = managers.get(item["pipeline_id"])
         item["moves_to"] = _moves_to(item, live, queue.facts, links, steps, names, blocked) if at_stage else None
 
 
 def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
-    """Adds each shown attachment's format, name and href (its immutable content address), one media lookup for all."""
+    """Adds each shown attachment's format, name and href (its immutable content address), one media lookup for all. A
+    ticket file that reads as text is format text, so the review shows it as text rather than a bare file."""
     shown = [item for item in items if item["attachment"]]
-    rows = [facts.attachments[(item["task_id"], item["requirement_id"])] for item in shown]
+    rows = [
+        (
+            {
+                "source": "blob",
+                "blob_id": item["attachment"]["blob_id"],
+                "file_id": None,
+                "file_version": None,
+                "url": None,
+            }
+            if item["attachment"]["source"] == TICKET_SOURCE
+            else facts.attachments[(item["task_id"], item["requirement_id"])]
+        )
+        for item in shown
+    ]
     for item, view in zip(shown, requirement_attachments.views(c, rows), strict=True):
-        item["attachment"].update(format=view["format"], name=view["name"], href=view["href"])
+        fmt = view["format"]
+        if item["attachment"]["source"] == TICKET_SOURCE and _is_text(facts.task_files[item["task_id"]]):
+            fmt = "text"
+        item["attachment"].update(format=fmt, name=view["name"], href=view["href"])
 
 
 def _moves_to(
