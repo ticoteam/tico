@@ -1153,6 +1153,56 @@ def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
     assert standing_names(co, card)["Engineering shipped"] == "met"
 
 
+def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
+    """Finding R1 (D67): a Legal card (members-only) spawns an Engineering ticket owned by Cal, who is not a member of
+    Legal. Cal's ticket gets no link to the confidential source, and the skip is logged on the child by requirement name
+    only, never the URL. The ticket's own owner still reads it."""
+    from backend import pipeline_links
+
+    confidential = "https://counsel.example.test/memo"
+    card = co.ticket("Legal", "Review", "NDA with Acme")
+    H.task_link(co.c, ANA, card, confidential, "Counsel memo")
+    child = H.task_create(
+        co.c,
+        ANA,
+        "Build the NDA intake",
+        "",
+        CAL,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    pipeline_links._carry(co.c, BUILDER, card, child, "Review")
+    co.c.commit()
+    assert confidential not in [link["url"] for link in H.task_links(co.c, child)]
+    skipped = co.c.execute(
+        "SELECT new, note FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", (child,)
+    ).fetchall()
+    assert (
+        len(skipped) == 1
+        and confidential not in str(tuple(skipped[0]))
+        and "Counsel memo" not in str(tuple(skipped[0]))
+    )
+
+    mine = H.task_create(
+        co.c,
+        ANA,
+        "Owned by the Legal owner",
+        "",
+        ANA,
+        type=co.type["Engineering"],
+        step=co.stage("Engineering", "Todo"),
+        parent_id=card,
+        lint=False,
+    )["id"]
+    co.c.commit()
+    pipeline_links._carry(co.c, BUILDER, card, mine, "Review")
+    co.c.commit()
+    assert confidential in [link["url"] for link in H.task_links(co.c, mine)]
+
+
 def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
     """Finding 6: a subtask closed with its card is gone. d41 shipped through its Done visit; d42 closed with the card.
     The shipped one meets the requirement and the cascade-closed one neither counts nor blocks."""

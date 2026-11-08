@@ -239,13 +239,25 @@ def _evidence(conn: sqlite3.Connection, source_id: str, stage_id: str | None) ->
         (source_id,),
     )
     carried: list[Row] = []
-    for view in requirement_attachments.views(conn, attached):
+    for row in attached:
+        view = requirement_attachments.views(conn, [row])[0]
         href = str(view.get("href") or "")
         if view.get("source") == "link":
             url, title = href, ""
         else:
             url, title = (hub_origin + href if hub_origin and href else ""), str(view.get("name") or "")
-        carried.append({"url": url, "title": title, "requirement": view["requirement"], "stage": view["stage"]})
+        # The file, blob and version say what the carry must check the new owner may read (_item_readable).
+        carried.append(
+            {
+                "url": url,
+                "title": title,
+                "requirement": view["requirement"],
+                "stage": view["stage"],
+                "blob_id": row["blob_id"],
+                "file_id": row["file_id"],
+                "file_version": row["file_version"],
+            }
+        )
     ordinary = _rows(
         conn,
         "SELECT url, title, '' AS requirement, NULL AS stage FROM task_links "
@@ -272,16 +284,50 @@ def _spec_first(rows: list[Row], leaving_stage: str | None) -> list[Row]:
     return [spec, *(r for r in rows if r is not spec)]
 
 
+def _readable_ticket(conn: sqlite3.Connection, owner: str, source: Row) -> bool:
+    """Whether the new ticket's owner may read the source ticket: its own privacy, and the pipeline rule (a members-only
+    pipeline shows to its members, its owner, its manager and the company owner; the ticket's own owner and requester
+    still read it, D67)."""
+    hidden = pipeline_rights.hidden_pipeline_ids(conn, owner)
+    return H.task_private_readable(conn, owner, source) and not pipeline_rights.left_out(hidden, owner, source)
+
+
+def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
+    """Whether the owner may read an attachment the spawn would carry: the company file's version (and its attempt) or the
+    blob behind it. A link has no file to check, so the ticket's readability decides it alone."""
+    from . import task_privacy
+
+    if row.get("file_id"):
+        versions = _rows(
+            conn,
+            "SELECT blob_id, attempt_id FROM bot_file_versions WHERE file_id = ? AND version = ?",
+            (row["file_id"], row["file_version"]),
+        )
+        if not versions:
+            return False
+        for version in versions:
+            if version["blob_id"] and not task_privacy.blob_readable(conn, owner, version["blob_id"]):
+                return False
+            if version["attempt_id"] and not task_privacy.attempt_readable(conn, owner, version["attempt_id"]):
+                return False
+        return True
+    if row.get("blob_id"):
+        return bool(task_privacy.blob_readable(conn, owner, row["blob_id"]))
+    return True
+
+
 def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, leaving_stage: str | None) -> None:
     """The source's links become links of the spawned ticket through the link API (H.task_link), spec first, at most
-    MAX_CARRIED. A link the child's owner cannot read is not carried; a file or blob has no link API for a ticket and is
-    not carried either. Each skip is logged on the source."""
+    MAX_CARRIED. A link the child's owner may not read is not carried (D67: the pipeline rule, the source's privacy, and
+    each file's or blob's readers). A file or blob has no link API for a ticket and is not carried either. Each skip is
+    logged on the child as `carry_skipped`, naming only the requirement (never the URL or title)."""
     source = H.task(conn, source_id)
     child = H.task(conn, child_id)
     if source is None or child is None:
         return
     owner = str(child["owner_id"])
-    if not H.task_private_readable(conn, owner, source):
+    ticket_ok = _readable_ticket(conn, owner, source)
+    if not ticket_ok:
         H._task_event(  # pyright: ignore[reportPrivateUsage]
             conn,
             source_id,
@@ -291,11 +337,15 @@ def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, 
             child_id,
             "The new ticket's owner cannot read this one",
         )
-        return
     carried: list[str] = []
     for row in _spec_first(_evidence(conn, source_id, leaving_stage), leaving_stage):
         url = str(row["url"] or "").strip()
         if not url or url in carried:
+            continue
+        if not ticket_ok or not _item_readable(conn, owner, row):
+            H._task_event(  # pyright: ignore[reportPrivateUsage]
+                conn, child_id, H.KEEPER, "carry_skipped", None, str(row["requirement"] or "") or "A link", ""
+            )
             continue
         if len(carried) >= MAX_CARRIED:
             break
