@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb as H
 from .auth import validate_identity
-from .github_app import GitHubApp, LIVE_TTL, REFRESH_MARGIN, account_kind, account_word, repo_of
+from .github_app import GitHubApp, LIVE_TTL, REFRESH_MARGIN, account_kind, repo_of
 from .store import Problem, digest, encode
 
 
@@ -89,7 +89,7 @@ class ReviewerApp(GitHubApp):
         ):
             raise Problem(
                 "github_reviewer_installation",
-                f"The reviewer App must be installed on the connected GitHub {account_word(row)}",
+                "The reviewer App must be installed on the connected GitHub account or organization",
                 409,
             )
         with self.lock:

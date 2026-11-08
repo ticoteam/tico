@@ -976,7 +976,7 @@ async fn check_for_update(app: &App) {
     CHECKING.store(false, Ordering::SeqCst);
 }
 
-/// Tells the page how a check went (`window.ticoAppUpdate` in ui/app/notices.js), so a failed update is
+/// Tells the page how a check went (`window.ticoAppUpdate` in ui/app/notices.ts), so a failed update is
 /// shown with its reason instead of only reaching the log.
 fn report_update(app: &App, state: &str, detail: &str) {
     match state {

@@ -1,4 +1,4 @@
-// Tools > GitHub with a personal account (ui/github-connect.js). Until the owner authorizes Tico for the account, the card
+// Tools > GitHub with a personal account (ui/github-connect.ts). Until the owner authorizes Tico for the account, the card
 // says Let Tico create repositories, with one Authorize button, and names the callback URL only when the App was set up
 // without it. Once authorized it says Tico can create them. Either way it names the waiting bot's repository and links to the App's
 // settings and the uninstall page on github.com/settings. Without a connection, the form asks for one account or organization

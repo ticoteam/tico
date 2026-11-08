@@ -211,7 +211,7 @@ def register(app, auth):
         active()
         if set(request.query_params) - {"next", "signed_out"}:
             # The secret goes after #, never in the query, where logs in front of the server would keep it. The app's
-            # own `next` (ui/app/session.js: where to come back to) and sign-out's marker are all a query may carry.
+            # own `next` (ui/app/session.ts: where to come back to) and sign-out's marker are all a query may carry.
             return oidc._page(settings, 400, "This sign-in link is not valid", ASK)
         if signed_out:
             return oidc._page(settings, 200, "Signed out", "You are signed out. " + ASK)

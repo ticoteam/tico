@@ -1,4 +1,4 @@
-// No browser: Ask's rules (ui/app/ask-rules.js). A turn at work with no words yet says how long it has run and its
+// No browser: Ask's rules (ui/app/ask-rules.ts). A turn at work with no words yet says how long it has run and its
 // newest step.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const context = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/ask-rules.js'), 'utf8')
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/ask-rules.js'), 'utf8')
   + '\n;globalThis.api = {askToolStep, askWorkingLine};', context);
 const {askToolStep, askWorkingLine} = context.api;
 const now = 1_800_000_000_000;

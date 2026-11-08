@@ -8,6 +8,9 @@ extend = "ruff-baseline.toml"
 # Tico Recorder's benchmarks are uv scripts that shell out to `security` and to paid speech APIs. They are run by hand
 # (recorder/bench/README.md), not part of the product, and their subprocess calls are left as written.
 extend-exclude = ["recorder/bench"]
+# Excluded files stay excluded when a tool names them (scripts/check.sh passes changed files): a shipped migration
+# was reformatted that way and installs refused to start on it.
+force-exclude = true
 target-version = "py312"
 line-length = 120
 

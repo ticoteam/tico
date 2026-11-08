@@ -199,7 +199,7 @@ def test_a_browser_without_a_session_is_sent_to_the_link_page_and_the_api_names_
 
 
 def test_the_apps_next_is_taken_and_the_owner_comes_back_there_but_a_query_secret_is_still_refused(hosted):
-    # ui/app/session.js sends a lapsed or first-401 browser to sign_in + "?next=" + where it was.
+    # ui/app/session.ts sends a lapsed or first-401 browser to sign_in + "?next=" + where it was.
     here = "/?a=1#/tasks"
     landing = hosted.browser.get(owner_link.LINK_PATH, params={"next": here})
     assert landing.status_code == 200 and "Open the sign-in link Tico sent you" in landing.text

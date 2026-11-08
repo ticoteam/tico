@@ -68,9 +68,9 @@ async function scenario(browser, engine, mode, edit, editedBefore = false) {
       const json = (body, status = 200) => reply(JSON.stringify(body), 'application/json', status);
       const identity = () => json({error: {code: 'identity', detail: 'Sign in again', sign_in: '/auth/login'}}, 401);
       if (p === '/auth/login') return reply('<title>Fixture sign-in</title><a id="return" style="display:inline-block;padding:8px" href="' + url.searchParams.get('next') + '">Return after sign-in</a>', 'text/html');
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return reply(fs.readFileSync(uiFile(ui[1]), 'utf8'), ui[1].endsWith('.css') ? 'text/css' : 'application/javascript');
-      if (p.endsWith('.js')) return reply('', 'application/javascript');
+      if (/\.(?:js|ts)$/.test(p)) return reply('', 'application/javascript');
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/v2/me' && expired) return identity();
       if (p === '/api/me' || p === '/api/v2/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});

@@ -1,4 +1,4 @@
-/* ui/app/growth-charts.ts — The Growth cards' small trend lines (ui/app/growth-page.js), hand-written SVG in the app's
+/* ui/app/growth-charts.ts — The Growth cards' small trend lines (ui/app/growth-page.ts), hand-written SVG in the app's
    tokens. A null value is unknown: the line breaks there and is never drawn as 0.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    TypeScript: npm run build:ui compiles it to build/ui/app/growth-charts.js, which the page runs in this file's place. */

@@ -151,3 +151,33 @@ def test_a_ref_with_only_the_empty_folder_marker_has_an_empty_baseline(tmp_path,
     git(tmp_path, "commit", "-q", "-m", "clean")
     assert ui_baseline.layout_at("HEAD", "biome") == {}
     assert ui_baseline.layout_at("HEAD", "tsc") is None
+
+
+def test_typescript_findings_belong_to_the_strict_ratchet_not_the_loose_one():
+    assert ui_baseline.is_typescript("ui/app/a.ts")
+    assert not ui_baseline.is_typescript("ui/types/api.d.ts")
+    assert not ui_baseline.is_typescript("ui/app/a.js")
+
+
+def test_run_tsc_drops_typescript_findings_but_counts_them_as_diagnostics(monkeypatch):
+    out = (
+        "ui/app/a.ts(1,1): error TS2304: Cannot find name 'x'.\nui/app/b.js(2,3): error TS2304: Cannot find name 'y'.\n"
+    )
+    done = subprocess.CompletedProcess(["tsc"], 2, stdout=out, stderr="")
+    monkeypatch.setattr(ui_baseline.subprocess, "run", lambda *args, **kwargs: done)
+    findings, _ = ui_baseline.run_tsc()
+    assert [f.file for f in findings] == ["ui/app/b.js"]
+
+
+def test_run_tsc_with_only_typescript_findings_is_not_a_crash(monkeypatch):
+    out = "ui/app/a.ts(1,1): error TS2304: Cannot find name 'x'.\n"
+    done = subprocess.CompletedProcess(["tsc"], 2, stdout=out, stderr="")
+    monkeypatch.setattr(ui_baseline.subprocess, "run", lambda *args, **kwargs: done)
+    assert ui_baseline.run_tsc()[0] == []
+
+
+def test_run_tsc_that_exits_with_no_diagnostics_fails(monkeypatch):
+    done = subprocess.CompletedProcess(["tsc"], 2, stdout="", stderr="crash")
+    monkeypatch.setattr(ui_baseline.subprocess, "run", lambda *args, **kwargs: done)
+    with pytest.raises(SystemExit):
+        ui_baseline.run_tsc()

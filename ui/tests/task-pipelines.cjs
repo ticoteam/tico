@@ -54,7 +54,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/me') return json(me);
       if (p === '/api/employees') return json(bots);
@@ -127,9 +127,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
     assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
-    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-3"] [data-step-age].late').allTextContents(), ['5h in step']);
-    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-1"] [data-step-age]:not(.late)').allTextContents(), ['30m in step']);
-    assert.equal(await page.locator('#task-body [data-step-age]').count(), 2, 'only a ticket with a step clock shows one');
+    assert.equal(await page.locator('#task-body [data-step-age]').count(), 0, 'time in step shows only past the stage limit');
     // An unfolded finished strip is remembered: a fresh page opened straight on the board, before Done or Closed was ever
     // visited, reads the finished tasks for it, and the ordinary refresh keeps them current.
     const boardLoaded = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
@@ -163,11 +161,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.waitForFunction(() => TASKS_ST.view === 'board');
     await page.locator('#task-body .bcol').first().waitFor();
     assert.equal(await page.locator('#task-body').getByText('General task', {exact: true}).count(), 0);
-    // The saved type appears in the header, and the address carries it.
+    // The saved type appears in the header, and the address carries it. Each pipeline goes by its own name.
     assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'Marketing');
     await page.locator('#task-scope').click();
     assert.deepEqual(await page.locator('#task-filter-pop [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent.replace('✓', '')])),
-      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets'], ['marketing', 'Marketing'], ['engineering', 'Engineering']]);
+      [['general', 'General'], ['product-roadmap', 'Product roadmap'], ['dev-tickets', 'Dev tickets'], ['marketing', 'Marketing'], ['engineering', 'Engineering']]);
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('[data-chip="type"]').count(), 0);
     await page.waitForFunction(() => location.hash.includes('type=marketing'));
@@ -386,11 +384,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.setViewportSize({width, height: 900});
       await page.evaluate(() => { location.hash = '#/tasks?view=board&type=dev-tickets'; });
       await page.waitForFunction(() => TASKS_ST?.type === 'dev-tickets' && document.querySelector('[data-task-key="tdev-held"]'));
-      assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['On Deck', 'Blocked', 'In Progress', 'Review 1']);
+      if (width === 375) {
+        // A phone shows one stage at a time, with a chip for each; the stage with tickets is the one on show.
+        assert.deepEqual(await page.locator('#task-body .pchips [data-pipe-chip]').evaluateAll(els => els.map(el => el.dataset.pipeChip)),
+          ['dev-deck', 'dev-blocked', 'dev-building', 'dev-review']);
+        // The phone's stage has no column box: its name is the stage line, and its tickets sit under it.
+        assert.deepEqual(await page.locator('#task-body .pipe-stage-name').allTextContents(), ['Blocked']);
+      } else {
+        assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(), ['On Deck', 'Blocked', 'In Progress', 'Review 1']);
+        assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
+      }
       assert.equal(await page.locator('[data-col="dev-blocked"] [data-task-key="tdev-held"]').count(), 1);
-      assert.equal(await page.locator('[data-col="dev-building"] .bcard').count(), 0);
       assert.equal(await page.locator('[data-col="dev-blocked"] [data-board-select]').isVisible(), true, 'select all in a column at every width');
-      assert.equal(await page.locator('[data-col="dev-building"] [data-board-select]').count(), 0, 'an empty column has nothing to select');
+      if (width !== 375) assert.equal(await page.locator('[data-col="dev-building"] [data-board-select]').count(), 0, 'an empty column has nothing to select');
       assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').innerText(), /^Blocked \d+d: Waiting for a test machine <script>$/);
       assert.match(await page.locator('[data-task-key="tdev-held"] .bcard-blocked').getAttribute('title'), /^Waiting for a test machine <script> · since /);
       assert.equal(await page.locator('[data-task-key="tdev-held"] script').count(), 0);
