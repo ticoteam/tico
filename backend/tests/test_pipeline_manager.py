@@ -524,3 +524,16 @@ def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api
     picked = [sorted(listing)[0], sorted(listing)[1], "not-late"]
     _, listing, more = selects(set(picked))
     assert sorted(listing) == sorted(picked[:2]) and more is False
+
+
+def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
+    """R4: the watchdog's first tick after an update found no ok pass and judged the pipeline from its creation, so every
+    managed pipeline got a "stopped" task. A manager with no run yet is not behind."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        botops_roster(c)
+        type_id = pipeline(c)
+        c.execute("UPDATE task_types SET created_at=? WHERE id=?", (stamp(now() - timedelta(days=3)), type_id))
+    PM.watchdog(store, now())
+    with store.read() as c:
+        assert botops_tasks(c) == 0

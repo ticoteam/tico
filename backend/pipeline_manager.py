@@ -124,11 +124,28 @@ def _due(c: "sqlite3.Connection", pipeline: dict[str, Any], when: datetime) -> b
     return started is None or when - started >= timedelta(minutes=_every(pipeline))
 
 
+def stall_clock(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
+    """The pass that starts the clock on missed passes: the last ok one, else the first attempt (a failed pass), else None.
+    A manager with no run yet is not behind: its first pass is due on the next tick. Its creation time is no clock, so a
+    manager set on an old pipeline is not judged from when the pipeline was made (the watchdog's first tick after an
+    update opened a "stopped" task for every one)."""
+    last = last_ok_run(c, pipeline_id)
+    if last is not None:
+        return last
+    rows = H._rows(
+        c.execute(
+            "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? ORDER BY started_at, id LIMIT 1", (pipeline_id,)
+        )
+    )
+    return rows[0] if rows else None
+
+
 def stalled(c: "sqlite3.Connection", pipeline: dict[str, Any], at: Any) -> int:
-    """How many passes this manager has missed: the whole intervals since its last ok pass started, less the one that is due."""
+    """How many passes this manager has missed: the whole intervals since its clock started (stall_clock), less the one
+    that is due. Missing passes count from one run interval plus MISSED_RUNS after that start."""
     when = when_of(at)
-    last = last_ok_run(c, pipeline["id"])
-    base = H.parse_ts(last["started_at"]) if last else H.parse_ts(pipeline.get("created_at") or "")
+    clock = stall_clock(c, pipeline["id"])
+    base = H.parse_ts(clock["started_at"]) if clock else None
     if base is None:
         return 0
     intervals = int((when - base).total_seconds() // (_every(pipeline) * 60))
@@ -565,7 +582,8 @@ def watchdog(store: Any, at: Any) -> None:
             if missed < MISSED_RUNS:
                 continue
             last = last_ok_run(c, pid)
-            base = last["started_at"] if last else (row.get("created_at") or "")
+            clock = stall_clock(c, pid)
+            base = clock["started_at"] if clock else ""
             opened = c.execute(
                 "SELECT 1 FROM pipeline_manager_actions WHERE pipeline_id=? AND action='open_botops' AND created_at>? "
                 "LIMIT 1",
