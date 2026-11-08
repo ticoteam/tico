@@ -135,7 +135,7 @@ function ruleHoldsWire(slot: HTMLElement, id: string | undefined,
 
 // ----------------------------------------------------------------- a held reply in a chat
 // The keeper's one line where a bot's reply would have been: the rule, never the text (execution.complete).
-function ruleHeldNoteHTML(m: {id?: string | null; body?: string | null; created_at?: WhenInput}) {
+function ruleHeldNoteHTML(m: {id?: string | null | undefined; body?: string | null | undefined; created_at?: WhenInput}) {
   return `<div class="chat-system rh-note" data-message="${esc(m.id || '')}"><span class="rh-note-dot" aria-hidden="true"></span>${
     esc(plainActors(m.body))}<div class="chat-meta"><time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div></div>`;
 }
