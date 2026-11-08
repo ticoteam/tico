@@ -1611,3 +1611,12 @@ class FinStatementPreviewRow(TypedDict):
     created_at: str
     created_by: str
     expires_at: str
+
+
+class SetupHandoffRow(TypedDict):
+    token_hash: str
+    created_at: str
+    expires_at: str
+    used_at: str | None
+    revoked_at: str | None
+    human_token_id: str | None

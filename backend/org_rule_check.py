@@ -87,7 +87,11 @@ RULES_TARGET = B.RULES_TARGET  # the judge.call rows a rule check writes (`rule-
 # The most one check waits for its answer, by Decide level (Low is Jev; Medium and High are language models).
 DEADLINES = {"low": 5, "medium": 10, "high": 15}
 CONCURRENCY = 8  # calls at once, per process, when the setting names none
-BUDGET = ("rules_monthly_usd", "rules.spend")  # backend/judge.py: its own cap and spend rows, apart from Decide's
+# backend/judge.py: its env cap, its spend rows, and the key its saved cap sits under in Automations > Maintenance.
+BUDGET = ("rules_monthly_usd", "rules.spend", "rules_monthly_cap_usd")
+# Rule checks ask Jev only: the Gateway at Low (`tico-decide-low`), or a customer's own TypeSafe key. Never a higher Decide
+# level and never the company's own model, so a check is always a Jev call or unchecked (`RULE_LEVEL`).
+RULE_LEVEL = "low"
 STRICT = {"warn": 1, "block": 2, "escalate": 3}
 REPEAT_BLOCKS = 3  # the 3rd block of one rule by one bot in a UTC day escalates for the rest of that day
 REVIEW_LABEL = "rule-review"
@@ -499,7 +503,7 @@ def check_as(
             if where is None and callable(place):
                 where = place(c, author, recipients)  # a held write keeps its place, whether or not a rule reads it
             output = output if isinstance(output, str) else json.dumps(output, sort_keys=True, default=str)
-            level = store.settings.rule_check_level or "medium"
+            level = RULE_LEVEL
             qset = J.load_set(QUESTION_SET)
             key = digest(operation, author, recipients, output, obj, rules, qset["label"], level, context)
             verdict = {
@@ -545,7 +549,7 @@ def check_as(
             }
             if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
                 return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
-            engine = B.server_engine(store, c, primary, BUDGET)
+            engine = B.server_engine(store, c, primary, BUDGET, backup=False)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings, None, BUDGET)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
@@ -569,6 +573,7 @@ def check_as(
             "questions": len(questions),
             "operation": operation,
             "level": level,
+            "rules": [r["id"] for r in rules[: J.MAX_QUESTIONS]],
             **({"draft": True} if draft else {}),
             **({"people": True} if is_person else {}),
         }
@@ -759,13 +764,17 @@ def _structured_apply(c, verdict, payload, replay, tell):
         "cached": bool(judged and judged["cached"]),
         "call": judged.get("call") if judged else None,
     }
+    # The same repeat rule as a judged block (`apply`): the 3rd block of this rule by this author in a day escalates.
+    mode, repeat = strictest["if_broken"], False
+    if mode == "block" and strictest["id"] and _repeats(c, verdict["author"], strictest["id"]) >= REPEAT_BLOCKS - 1:
+        mode, repeat = "escalate", True
     return _write_hold(
         c,
         hold_verdict,
         broken,
         strictest,
-        strictest["if_broken"],
-        False,
+        mode,
+        repeat,
         False,
         payload,
         replay,
@@ -954,7 +963,7 @@ def outside_edition(store, primary, output, to=""):
                 return result("held", "checks_off")
             if len(rules) > J.MAX_QUESTIONS:
                 return result("held", "too_many_rules")
-            level = store.settings.rule_check_level or "medium"
+            level = RULE_LEVEL
             qset = J.load_set(QUESTION_SET)
             key = digest("outside_edition", "", [to], output, "", rules, qset["label"], level)
             hit = c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
@@ -972,7 +981,7 @@ def outside_edition(store, primary, output, to=""):
             }
             if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
                 return result("held", "too_large")
-            engine = B.server_engine(store, c, primary, BUDGET)
+            engine = B.server_engine(store, c, primary, BUDGET, backup=False)
             if engine is None:
                 return result("held", "budget" if B.over_spend_cap(c, store.settings, None, BUDGET) else "no_engine")
             if calls_today(c) >= B.daily_cap(store.settings, "bot"):
@@ -996,6 +1005,7 @@ def outside_edition(store, primary, output, to=""):
                     "questions": len(questions),
                     "operation": "outside_edition",
                     "level": level,
+                    "rules": [r["id"] for r in rules[: J.MAX_QUESTIONS]],
                     "broken": len(broken),
                     **B.audit_detail(answer),
                 },
@@ -2382,7 +2392,7 @@ def stats(c, settings):
         ).fetchone()[0]
 
     hits = count("rules.blocked", "rules.escalated", "rules.warned")
-    cap = float(settings.rules_monthly_usd or 0)
+    cap = float(B.budget_cap(c, settings, BUDGET))
     left = None if cap <= 0 else round(max(0.0, cap - B.spent_this_month(c, None, BUDGET)), 2)
     # What the people's checks cost this month, out of the same budget: the judge.call rows carry each call's cost.
     month = H.now()[:7] + "-01T00:00:00"

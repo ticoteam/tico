@@ -1,0 +1,38 @@
+{
+    "files": {
+        "./backend/assigned_start.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 53,
+                    "endColumn": 58,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 69,
+                    "endColumn": 74,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 88,
+                    "endColumn": 93,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

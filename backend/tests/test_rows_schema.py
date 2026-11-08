@@ -117,6 +117,7 @@ TABLES = {
     rows.LinkTypeRow: "link_types",
     rows.FinStatementUploadRow: "fin_statement_uploads",
     rows.FinStatementPreviewRow: "fin_statement_previews",
+    rows.SetupHandoffRow: "setup_handoffs",
 }
 
 

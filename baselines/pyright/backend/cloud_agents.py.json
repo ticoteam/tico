@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/cloud_agents.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

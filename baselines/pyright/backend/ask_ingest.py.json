@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/ask_ingest.py": [
+            {
+                "code": "reportOptionalIterable",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 94,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

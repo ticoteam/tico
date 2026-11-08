@@ -10,7 +10,9 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from scripts import flake_quarantine as quarantine
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -392,7 +394,10 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         calls = log.read_text()
         assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
         if suite == "python":
-            assert calls.splitlines() == ["npm ci --fetch-retries=1", "npm run --silent build:ui"]
+            assert calls.splitlines() == [
+                "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
+                "npm run --silent build:ui",
+            ]
         else:
             assert "--no-download install" in calls and "playwright install chromium webkit" in calls
 
@@ -493,8 +498,10 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
     # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
     # seconds each) run for any test file change too.
+    # The three baseline test modules come with it too: the OWNED_DATA table in pr_checks.py names them by path, and a
+    # test-file change reaches that table (34 with the table, 31 without). Still far from the suite.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 32
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 35
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
@@ -720,6 +727,8 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     command, env = calls[-1]
     assert command == ["node", "scripts/ui-tests.cjs", "-j", str(checks.WORKERS), "chat"]
     assert env["TICO_UI_TIMINGS"] == str(tmp_path / "ci-results" / "browser-1.json")
+    # The UI helpers import the backend through TICO_PYTHON: the suite's own interpreter, never a bare python3.
+    assert env["TICO_PYTHON"] == sys.executable
     with pytest.raises(RuntimeError, match="nonempty"):
         checks.run(tmp_path / "plan.json", "browser-2")
     recorded = tmp_path / "browser-1.json"
@@ -909,6 +918,53 @@ def test_a_merge_group_diffs_its_queue_base_to_its_queue_head_not_the_checkout(t
     assert checks.changed_files(base, root=tmp_path) == []
 
 
+def test_a_queue_group_diffs_the_same_files_its_pull_request_run_did_plus_the_changes_queued_ahead(tmp_path, mapped):
+    """PR checks == queue checks. A pull request run diffs its merge commit from main as it was then (merge_parent, even
+    when the event's base sha is stale); its queue group diffs the group's head from the group's base. For the same
+    change the two lists match, and a group behind another holds the union, so the queue never selects less."""
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    def commit(name, text, message):
+        (tmp_path / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-qm", message)
+        return git("rev-parse", "HEAD")
+
+    git("init", "-q", "-b", "main")
+    stale = commit("app.py", "x = 1\n", "Start")
+    git("checkout", "-qb", "one")
+    commit("one.py", "a = 1\n", "One")
+    git("checkout", "-qb", "two", "main")
+    commit("two.py", "b = 1\n", "Two")
+    git("checkout", "-q", "main")
+    base = commit("other.py", "c = 1\n", "Main moves on")
+    # GitHub's refs/pull/N/merge: the branch merged into main as main is when the run starts.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    pr_merge = git("rev-parse", "HEAD")
+    pr_base = checks.merge_parent(stale, pr_merge, root=tmp_path)
+    assert pr_base == base
+    pr_files = checks.changed_files(pr_base, pr_merge, root=tmp_path)
+    # Alone in its group: the group's head is the same merge onto the same base.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    alone = git("rev-parse", "HEAD")
+    assert checks.changed_files(base, alone, root=tmp_path) == pr_files == ["two.py"]
+    # Behind `one` in a group: its head carries both changes, so it selects at least what its pull request run did.
+    git("checkout", "-q", "--detach", base)
+    git("merge", "-q", "--no-ff", "--no-edit", "one")
+    git("merge", "-q", "--no-ff", "--no-edit", "two")
+    behind = git("rev-parse", "HEAD")
+    assert checks.changed_files(base, behind, root=tmp_path) == ["one.py", "two.py"]
+    for files in (["backend/task_loops.py"], ["conftest.py"], ["ui/app/chat.ts"], [checks.PR_WORKFLOW]):
+        pr, queue = checks.selection(files, "pull_request"), checks.selection(files, "merge_group")
+        assert pr == queue, files
+
+
 def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_gates(tmp_path, monkeypatch, mapped):
     files = {"backend/tests/test_task_loops.py": 2, "backend/tests/test_auth.py": 10}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
@@ -953,16 +1009,33 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "caddy-linux": "${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
     }
     assert {name: job["runs-on"] for name, job in jobs.items()} == expected
-    # A ready pull request and a merge queue group run the tests and the factory sim.
-    for name in ("tests", "factory-sim"):
-        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
-        assert "github.event_name == 'pull_request'" in jobs[name]["if"], name
-    # Everything else runs in the merge queue alone.
-    queue_only = ("rust-lint", "desktop-app", "recorder", "caddy-linux", "timings")
-    for name in queue_only:
-        assert "github.event_name == 'merge_group'" in str(jobs[name]["if"]), name
-        assert "github.event_name == 'pull_request'" not in str(jobs[name]["if"]), name
-    assert set(jobs) == {"plan", "static", "tests", "factory-sim", "checks", *queue_only}
+    # PR checks == queue checks: every job the gate needs runs on a ready pull request from this repository as well as
+    # in a queue group, under the same condition, so a failure shows on the pull request before it is enqueued.
+    ready = (
+        "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
+        "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
+    )
+    for name in ("tests", "factory-sim", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+        assert ready in jobs[name]["if"], name
+    for name, output in (("factory-sim", "factory"), ("recorder", "recorder"), ("caddy-linux", "caddy")):
+        assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
+    # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
+    assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
+    assert "github.event_name == 'pull_request'" not in jobs["timings"]["if"]
+    queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
+    assert queue_only == {"timings"}
+    assert set(jobs) == {
+        "plan",
+        "static",
+        "tests",
+        "factory-sim",
+        "checks",
+        "rust-lint",
+        "desktop-app",
+        "recorder",
+        "caddy-linux",
+        "timings",
+    }
 
 
 def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
@@ -1432,6 +1505,76 @@ def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
 
 
+OWNED_TESTS = {  # each test the baselines/ table lists, and the module it tests
+    "scripts/tests/test_lint_baseline.py": "lint_baseline",
+    "scripts/tests/test_pyright_baseline.py": "pyright_baseline",
+    "scripts/tests/test_baseline_files.py": "baseline_files",
+}
+
+
+def test_a_baseline_piece_runs_only_the_tests_that_own_its_folder():
+    # One piece used to select 930 Python tests through the generic data path: every module that globs *.json on an
+    # unknown folder reaches conftest. The owners' tests are the whole answer for a piece, however it changed.
+    owners = sorted(checks.OWNED_DATA["baselines/"])
+    assert set(owners) == set(OWNED_TESTS)
+    for changed in (
+        ["baselines/ruff/backend/hubdb.py.json"],  # changed
+        ["baselines/pyright/backend/store.py.json"],  # changed, in the other baseline
+        ["baselines/ruff/backend/removed.py.json"],  # deleted: the piece is no longer in the tree
+        ["baselines/ruff/backend/old.py.json", "baselines/ruff/backend/new.py.json"],  # renamed: old and new names
+    ):
+        plan = checks.selection(changed)
+        assert plan["python"] == owners, changed
+        assert plan["browser"] == [] and plan["uncertain"] == [], changed
+        assert not plan["caddy"] and not plan["contracts"], changed
+        assert plan["reason"] == "owned data: baselines/ runs its owners' tests", changed
+
+
+def test_a_ui_piece_runs_only_the_test_its_folder_lists(monkeypatch):
+    # No ui/ folder has an owner yet, so the table lists none. The same rule holds for any folder it does list.
+    monkeypatch.setitem(checks.OWNED_DATA, "ui/baselines/", ("scripts/tests/test_baseline_files.py",))
+    plan = checks.selection(["ui/baselines/chat.json", "ui/baselines/chat-two.json"])
+    assert plan["python"] == ["scripts/tests/test_baseline_files.py"]
+    assert plan["browser"] == [] and plan["uncertain"] == []
+
+
+def test_a_json_outside_the_owned_folders_keeps_the_generic_path(tmp_path, mapped, monkeypatch):
+    # A data file that no owner lists still runs the test that reads it, and the table changes nothing for it.
+    source(tmp_path, "backend/__init__.py", "")
+    source(tmp_path, "backend/tests/fixtures/contract.json", "{}\n")
+    source(
+        tmp_path,
+        "backend/tests/test_reads_contract.py",
+        "def test_x():\n    open('backend/tests/fixtures/contract.json').read()\n",
+    )
+    smoke_tree(tmp_path)
+    changed = ["backend/tests/fixtures/contract.json"]
+    plan = checks.selection(changed, root=tmp_path, core=[], added=[])
+    assert "backend/tests/test_reads_contract.py" in plan["python"]
+    monkeypatch.setattr(checks, "OWNED_DATA", {})
+    assert checks.selection(changed, root=tmp_path, core=[], added=[]) == plan
+
+
+TOP_BASELINES = re.compile(r"(?<![\w./-])baselines/")
+
+
+def test_owned_folders_list_existing_tests_of_their_scripts_and_only_the_owners_read_them():
+    for test, module in OWNED_TESTS.items():
+        assert (ROOT / test).is_file(), f"{test} is listed for baselines/ but does not exist"
+        assert module in (ROOT / test).read_text(encoding="utf-8"), f"{test} does not test {module}"
+    # The non-test Python files that name the baselines/ folder: the two owning scripts, and pr_checks.py (this table).
+    # Only the top-level folder: ui/baselines/ is the UI's own per-file counts (scripts/ui_baseline.py), not owned here.
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "*.py"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    readers = {
+        name
+        for name in tracked
+        if "tests/" not in name and TOP_BASELINES.search((ROOT / name).read_text(encoding="utf-8", errors="replace"))
+    }
+    assert readers == {"scripts/lint_baseline.py", "scripts/pyright_baseline.py", "scripts/pr_checks.py"}
+
+
 def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(tmp_path, monkeypatch):
     # A script converted from ui/app/mapped.js to ui/app/mapped.ts keeps its UI_MAP entry: the map is keyed by the .js name.
     smoke_tree(tmp_path)
@@ -1507,3 +1650,61 @@ def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_req
     assert "cancel-superseded" in step["run"] and "--head-ref" in step["run"] and "--run-number" in step["run"]
     # Pull requests keep their own group, keyed on the number, so no queue group can share it.
     assert doc["concurrency"]["group"] == "pr-checks-${{ github.event.pull_request.number || github.ref }}"
+
+
+def junit(*skips):
+    cases = "".join(
+        f'<testcase classname="t" name="n{i}">'
+        + (f'<skipped type="{kind}" message="m"/>' if kind else "")
+        + "</testcase>"
+        for i, kind in enumerate(skips)
+    )
+    return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
+
+
+def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
+    tmp_path, monkeypatch
+):
+    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
+    which JUnit writes as a skipped element too, and must not make the suite fail."""
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    report = {}
+
+    def fake(command, **kw):
+        (tmp_path / "ci-results/python-1.xml").write_text(report["xml"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(checks.subprocess, "run", fake)
+    report["xml"] = junit("pytest.xfail")
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", None)
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    report["xml"] = junit("pytest.skip", "pytest.skip")
+    with pytest.raises(RuntimeError, match="skip every test"):
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
+
+
+def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
+    plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
+    (tmp_path / "fixture_tests").mkdir(parents=True)
+    (tmp_path / "fixture_tests/test_x.py").touch()
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    calls = []
+    monkeypatch.setattr(
+        checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
+    )
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
+    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
+    assert "--quarantine" in calls[-1] and calls[-1][-1] == "fixture_tests/test_x.py"
+    # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
+    assert quarantine.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
+    workflows = ROOT / ".github/workflows"
+    tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
+    step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
+    assert "scripts/pr_checks.py run --quarantine" in step["run"]
+    for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
+        assert "quarantine" not in (workflows / name).read_text(), name

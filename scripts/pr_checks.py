@@ -852,6 +852,36 @@ FACTORY_TEMPLATES = ("templates/catalog/",)
 FACTORY_PINS = re.compile(r"backend/requirements[\w.-]*\.(txt|in)")
 
 
+# Data folders that one tool owns. A changed, added or deleted file under one of these folders runs exactly the tests
+# listed for it, and no other test. The generic data path would instead run every module that globs *.json on an
+# unknown folder, and those reach conftest: one baseline piece selected 930 Python tests. The gates do not depend on
+# this table. The static job in .github/workflows/pr-checks.yml runs scripts/lint.sh (ruff against its baseline) and
+# scripts/check_types.sh (basedpyright against its baseline) on every pull request that is not a draft, and on every
+# merge group. A draft skips the static job until it is marked ready. The table chooses only the tests. No ui/ folder
+# has an owner yet, so none is listed.
+OWNED_DATA = {
+    "baselines/": (
+        "scripts/tests/test_lint_baseline.py",  # scripts/lint_baseline.py: baselines/ruff
+        "scripts/tests/test_pyright_baseline.py",  # scripts/pyright_baseline.py and check_pyright_ratchet.py
+        "scripts/tests/test_baseline_files.py",  # scripts/baseline_files.py: the folders the two scripts share
+    ),
+}
+
+
+def owned_data(name):
+    """(folder, owning tests) for a file under an OWNED_DATA folder, else None."""
+    for folder, tests in OWNED_DATA.items():
+        if name.startswith(folder):
+            return folder, tests
+    return None
+
+
+def owned_reason(owned):
+    """The reason line for the changed files that OWNED_DATA covers."""
+    folders = sorted({owned_data(name)[0] for name in owned})
+    return f"owned data: {', '.join(folders)} runs its owners' tests"
+
+
 def unread(name):
     """No test or script reads screenshots, retired designs or the top-level pages other than CHANGELOG.md."""
     return name.startswith(("docs/images/", "docs/history/")) or (
@@ -957,6 +987,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
     from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
 
+    0. A file under an OWNED_DATA folder runs the tests listed for that folder, and no other test.
     1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests and browser scripts that name,
        import or read it directly. Data that code reads (docs, CHANGELOG.md, GitHub files) runs the tests that read it.
        A gone file that code other than a check names or reads adds the smoke set.
@@ -1009,7 +1040,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         uncertain.append("empty diff: nothing to map")
         return plan(*smoke(root), reason="empty diff: smoke set")
     names = [n for n in changed if not unread(n)]
+    owned = [n for n in names if owned_data(n)]  # OWNED_DATA first: these never reach the generic data path
+    owned_tests = {test for n in owned for test in owned_data(n)[1]}
+    names = [n for n in names if n not in owned]
     if not names:
+        if owned:
+            return plan(owned_tests, reason=owned_reason(owned))
         return plan(reason="documentation that no test or script reads")
     graph = graph or DependencyMap(root)
     added = set(names) if added is None else set(added)
@@ -1120,6 +1156,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             python |= set(smoke_tests)
         if smoke_browser:
             browser |= set(smoke_scripts)
+    if owned:
+        python |= owned_tests
+        notes.append(owned_reason(owned))
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
@@ -1470,9 +1509,11 @@ def browser_scripts(args, root=ROOT):
     return out
 
 
-def run(plan_path, suite, root=None):
+def run(plan_path, suite, root=None, quarantine=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
-    `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value)."""
+    `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
+    `quarantine` (PR checks and the merge queue only, never release validation) runs the tests in ci/quarantine/ as
+    non-strict xfail (scripts/flake_quarantine.py)."""
     root = ROOT if root is None else Path(root)
     plan = json.loads(Path(plan_path).read_text())
     # A merge queue plan lists its VMs as matrix.include (suite); an incremental release plan lists them as jobs (name).
@@ -1489,7 +1530,13 @@ def run(plan_path, suite, root=None):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
-        env = {**os.environ, "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json")}
+        # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cjs); this interpreter has the
+        # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
+        env = {
+            **os.environ,
+            "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json"),
+            "TICO_PYTHON": sys.executable,
+        }
     else:
         if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
@@ -1507,13 +1554,18 @@ def run(plan_path, suite, root=None):
         ]
         if suite in ("conformance", "contracts"):
             command += ["-m", "slow"]
+        if quarantine:
+            command.append("--quarantine")
         command += files
+        print("Test files: " + " ".join(files), flush=True)  # flake_quarantine.test_files: what a rerun ran again
     (root / "ci-results").mkdir(exist_ok=True)
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
     result = subprocess.run(command, cwd=root, env=env)
     if result.returncode == 0 and not suite.startswith("browser-"):
         cases = list(ET.parse(root / "ci-results" / f"{suite}.xml").iter("testcase"))
-        if not any(t.find("skipped") is None for t in cases):
+        # A test that ran: no skipped element, or an xfail (a quarantined failure is one), which JUnit writes as one.
+        ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
+        if not ran:
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
     return result.returncode or rust
 
@@ -1638,6 +1690,11 @@ def main():
     execute.add_argument("suite")
     execute.add_argument("--plan", default="ci-plan.json")
     execute.add_argument("--root", default=str(ROOT), help="the checkout the suite runs in")
+    execute.add_argument(
+        "--quarantine",
+        action="store_true",
+        help="run ci/quarantine/ tests as non-strict xfail (PR checks and the queue)",
+    )
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -1660,7 +1717,7 @@ def main():
     if args.action == "plan":
         prepare(args.event, args.base, args.output, args.timings, args.head)
     elif args.action == "run":
-        return run(args.plan, args.suite, Path(args.root))
+        return run(args.plan, args.suite, Path(args.root), quarantine=args.quarantine)
     elif args.action == "durations":
         measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:
