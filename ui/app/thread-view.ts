@@ -514,6 +514,10 @@ async function thvOlder(view: ThvView, button: HTMLButtonElement) {
 }
 // ----------------------------------------------------------------- drawing
 const thvCanPost = (view: ThvView) => view.opts.canPost ?? (view.thread ? !!view.thread.me?.can_post : view.state === 'empty' && !!view.opts.dm);
+// Archive on a root thread the viewer manages (not a Home): it leaves Threads and Catch up (threadsArchive). An archived
+// one offers Unarchive.
+const thvArchivable = (t: ThvThread | null | undefined) => !!t && !t.parent_id && t.audience !== 'home' && !!t.me?.can_manage;
+const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive aria-label="${t.archived_at ? 'Unarchive' : 'Archive'}" title="${t.archived_at ? 'Unarchive' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${t.archived_at ? 'unarchive' : 'archive'}</span></button>` : '';
 function thvActsHTML(view: ThvView) {
   const t = view.thread!, list = view.memberList;
   const members = !t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience);
@@ -523,7 +527,7 @@ function thvActsHTML(view: ThvView) {
       list.slice(0, 3).map(m => actorAvatar(m.actor, 22)).join('')}<span class="thv-people-n">${n}${more}</span></button>`
     : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
   return `${callHeadHTML(view)}
-      ${people}
+      ${people}${thvArchiveHTML(t)}
       ${view.opts.menu === false ? '' : `<button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
@@ -568,6 +572,24 @@ async function thvPinToggle(view: ThvView, button: HTMLButtonElement) {
     const r: ThvThread | null = on ? await put(thvPath(t.id) + '/pin', {}) : await writeRequest('DELETE', thvPath(t.id) + '/pin');
     view.thread = {...t, ...(r?.id ? r : {}), me: {...t.me, ...(r?.me || {}), pinned: r?.me ? !!r.me.pinned : on}};
     threadsPut(view.thread);
+    thvDraw(view);
+  } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
+}
+// The header's Archive takes the thread off the list and goes back to it (Undo is in the toast); on an archived thread
+// Unarchive brings it back here.
+async function thvArchive(view: ThvView, button: HTMLButtonElement) {
+  const t = view.thread; if (!t) return;
+  button.disabled = true;
+  try {
+    if (!t.archived_at) {
+      await threadsArchive(t.id);
+      if (threadsLastGet() === t.id) threadsLastSet('');
+      location.hash = THREADS_ROUTE;
+      return;
+    }
+    const r: ThvThread = await patch(thvPath(t.id), {archived: false});
+    view.thread = {...t, ...r};
+    threadsUnarchived(view.thread);
     thvDraw(view);
   } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
 }
@@ -1535,6 +1557,8 @@ async function thvClick(view: ThvView, ev: Event) {
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
   const pin = t.closest<HTMLButtonElement>('[data-thv-pin]');
   if (pin) { void thvPinToggle(view, pin); return; }
+  const arch = t.closest<HTMLButtonElement>('[data-thv-archive]');
+  if (arch) { void thvArchive(view, arch); return; }
   const call = t.closest<HTMLElement>('[data-call]');
   if (call) { void callAction(view, call.dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadSettingsOpen(view); return; }

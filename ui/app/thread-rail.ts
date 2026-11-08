@@ -51,6 +51,7 @@ function threadsShell() {
   rail.onclick = ev => {
     const b = ev.target.closest('button'); if (!b) return;
     if (b.matches('[data-tr-new]')) threadNewOpen();
+    else if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch).catch(e => { b.disabled = false; toast(e.message, true); }); }
     else if (b.matches('[data-tr-catch]')) void catchUpOpen();
     else if (b.matches('[data-tr-browse]')) void threadBrowseOpen();
     else if (b.matches('[data-tr-more]')) { b.disabled = true; threadsMore().catch(e => toast(e.message, true)).finally(() => { b.disabled = false; }); }
@@ -101,8 +102,9 @@ function pageThread(id) {
 const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0]) : '';
 function railRowHTML(t, cur) {
   const n = threadUnread(t), bold = n > 0 || !!t.me?.activity, here = t.id === cur;
-  return `<li><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
-    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a></li>`;
+  const arch = t.me?.can_manage ? `<button type="button" class="tr-arch" data-tr-arch="${esc(t.id)}" aria-label="Archive" title="Archive"><span class="nav-icon" aria-hidden="true">archive</span></button>` : '';
+  return `<li class="tr-item"><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
+    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
 }
 function railRender() {
   const rail = $('#thread-rail'); if (!rail?.isConnected) return;

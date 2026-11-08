@@ -294,6 +294,7 @@ const threadsEach = (fn: (t: ThreadRow) => ThreadRow | null | undefined) => {
 // `recheck` (a members event): whether the viewer is still in it decides, not whether it is listed.
 function threadsPut(view: ThreadRow, {recheck = false} = {}) {
   if (!view?.id || view.parent_id) return;
+  if (view.archived_at) THREADS.cu?.delete(view.id);
   let row: ThreadRow | null = null;
   threadsEach(t => {
     if (t.id !== view.id) return;
@@ -336,6 +337,24 @@ function threadsAllRead(id: string) {
   const dm = THREADS.roots[id]?.dm;
   if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
   threadsSideRender();
+}
+// Archive a thread from its row or its header: it leaves Threads and Catch up at once, and a short Undo puts it back.
+// The server refuses anyone who does not manage the thread.
+async function threadsArchive(id: string): Promise<void> {
+  const view: ThreadRow = await patch(thvPath(id), {archived: true});
+  threadsPut(view);
+  if (typeof catchUpGone === 'function') catchUpGone(id, true);
+  toast('Archived', false, {label: 'Undo', run: async () => {
+    threadsUnarchived(await patch(thvPath(id), {archived: false}));
+  }});
+  threadsRecount();
+}
+// A thread taken back out of the archive (Undo, or Unarchive in its header): it is back in its list, and Catch up counts
+// it again at once when it has unread messages. The rail read after this says what the server counts.
+function threadsUnarchived(back: ThreadRow) {
+  threadsPut(back);
+  if (THREADS.cu && threadUnread(back) > 0) THREADS.cu.add(back.id);
+  threadsRecount();
 }
 const threadsRow = (id: string | undefined): ThreadRow | null => [...THREADS.pinned, ...THREADS.threads].find(t => t.id === id) || null;
 // What a root not on the rail is, read alone once (GET /v2/threads/{id}): a 1:1 DM counts on its teammate.
@@ -422,7 +441,11 @@ function threadsSync() {
           THREADS.dms = {...THREADS.dms, [info.dm]: threadUnread(d.thread)};
           if (typeof renderTree === 'function') renderTree();
         }
-      } else threadsPut(d.thread, {recheck: d.kind === 'members'});
+      } else {
+        threadsPut(d.thread, {recheck: d.kind === 'members'});
+        // Archived, here or in another window: its Catch up card goes too.
+        if (d.thread.archived_at && typeof catchUpGone === 'function') catchUpGone(d.thread.id, true);
+      }
     }
     // A paused root is a Needs you row with no `needs` event of its own, so that list is read whole, as if one had come.
     if (d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
