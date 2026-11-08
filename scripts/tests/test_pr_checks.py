@@ -980,6 +980,8 @@ def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
 def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_request_runs_the_checks():
     """Builders push a draft freely: no job runs on it. Marking it ready runs the pull request jobs, and so does each
     later push while it stays ready. `checks` is skipped on a draft, and GitHub never enqueues a draft."""
+    import yaml
+
     doc = workflow_jobs()
     assert {"ready_for_review", "synchronize", "opened", "reopened"} <= set(doc[True]["pull_request"]["types"])
     for name, job in doc["jobs"].items():
@@ -990,6 +992,16 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
     assert doc["jobs"]["static"]["if"] == "${{ !github.event.pull_request.draft }}"
     assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
+    # Every other workflow that runs on a pull request holds its jobs back on a draft too (a push to main still runs).
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        other = yaml.safe_load(path.read_text())
+        triggers = other.get(True) or other.get("on") or {}
+        if path.name == "pr-checks.yml" or "pull_request" not in triggers:
+            continue
+        assert "ready_for_review" in triggers["pull_request"].get("types", []), path.name
+        for name, job in other["jobs"].items():
+            condition = str(job.get("if", ""))
+            assert "!github.event.pull_request.draft" in condition, f"{path.name}:{name}"
 
 
 def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
