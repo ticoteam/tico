@@ -5165,6 +5165,16 @@ STABLE.extend(
             "FinanceConnectionResult",
         ),
         (
+            "/api/v2/finance/subscriptions",
+            "get",
+            "Finance",
+            "listFinanceSubscriptions",
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
+            "monthly total of the active ones. status narrows them",
+            "FinanceSubscriptions",
+        ),
+        (
             "/api/v2/finance/campaigns",
             "get",
             "Finance",
@@ -6321,6 +6331,40 @@ SCHEMAS.update(
                 "view_version": "i",
             },
             required=["lines", "start", "end", "as_of", "view_version"],
+        ),
+        "FinanceSubscriptionRow": obj(
+            {
+                "id": "s",
+                "vendor": obj({"id": "s", "name": "s"}),
+                "status": "s",
+                "cadence": "s",
+                "amount": "i",
+                "monthly": "i",
+                "seats": {"type": ["integer", "null"]},
+                "next_charge_on": "n",
+                "card": {
+                    "type": ["object", "null"],
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                },
+                "attribution": items(obj({"to": "s", "share": "f"})),
+                "source": "s",
+                "as_of": "s",
+            },
+            required=[
+                "id",
+                "vendor",
+                "status",
+                "cadence",
+                "amount",
+                "monthly",
+                "next_charge_on",
+                "card",
+                "attribution",
+            ],
+        ),
+        "FinanceSubscriptions": obj(
+            {"rows": items(ref("FinanceSubscriptionRow")), "monthly_total": "i", "as_of": "s"},
+            required=["rows", "monthly_total", "as_of"],
         ),
         "FinanceCampaigns": obj(
             {
