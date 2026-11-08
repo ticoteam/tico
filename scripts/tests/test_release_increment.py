@@ -77,11 +77,23 @@ def unnamed(record):
     return None  # a red validation whose failures no log names
 
 
-def test_the_anchor_is_the_newest_green_full_validation_of_the_last_day():
+def test_the_anchor_is_the_newest_green_validation_of_the_last_day_full_or_incremental():
     records = [record(3, C, incremental=True), record(2, B, hours=3), record(1, A, hours=5)]
-    assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 2
+    assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 3
     assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["failed"] == set()
-    assert ri.anchor_of(records, NOW, lambda sha: sha != B, unnamed)["id"] == 1
+    assert ri.anchor_of(records, NOW, lambda sha: sha not in (B, C), unnamed)["id"] == 1
+
+
+def test_an_incremental_anchor_chains_the_next_candidate_from_the_newest_green_incremental():
+    # Full A (5 h ago), incremental B (3 h ago, green), incremental C (1 h ago, red, failures named): C anchors next.
+    records = [
+        record(3, C, conclusion="failure", incremental=True),
+        record(2, B, hours=3, incremental=True),
+        record(1, A, hours=5),
+    ]
+    anchor = ri.anchor_of(records, NOW, lambda sha: True, lambda item: {"backend/tests/test_a.py"})
+    assert anchor["id"] == 3 and anchor["failed"] == {"backend/tests/test_a.py"}
+    assert ri.full_within_day(records, NOW)["id"] == 1, "the day's full run is still the one that holds the day"
 
 
 def test_the_anchor_is_the_newest_by_finish_time_not_by_list_order():
@@ -277,8 +289,21 @@ def test_a_carried_factory_failure_runs_the_factory_sim():
     assert plan_of(selected(), carried={ri.FACTORY}, smoke=(), gone=())["factory"] is True
 
 
-def test_a_plan_too_big_for_a_dispatch_input_is_refused():
-    assert ri.plan_json({"jobs": [{"name": "python-1", "files": ["x" * 70000]}]}) is None
+def test_a_docs_only_incremental_plans_no_factory_jobs_when_the_control_checkout_is_sparse(tmp_path):
+    # The planner runs from validation-control's sparse checkout, which has no evals/factory/call_path.json. The sim's
+    # recorded paths come from the candidate's checkout, so a docs-only change plans no factory jobs.
+    candidate = tmp_path / "candidate"
+    (candidate / "evals" / "factory").mkdir(parents=True)
+    (candidate / pr_checks.FACTORY_CALL_PATH).write_text((pr_checks.ROOT / pr_checks.FACTORY_CALL_PATH).read_text())
+    plan = plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=candidate)
+    assert plan["factory"] is False
+    # Where the recorded paths cannot be read, the sim runs: a missing measurement never skips the check.
+    assert plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=tmp_path)["factory"]
+
+
+def test_a_plan_of_any_size_is_made_because_release_validation_makes_it_itself():
+    big = {"jobs": [{"name": "python-1", "files": ["x" * 70000]}]}
+    assert json.loads(ri.plan_json(big)) == big
     assert json.loads(ri.plan_json({"jobs": []})) == {"jobs": []}
 
 

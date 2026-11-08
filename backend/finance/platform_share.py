@@ -7,7 +7,7 @@ the order they posted, so consecutive windows never share a day and no day's spe
 P&L line whose entry is not a reversal and not reversed; a reversal takes its original's shares as they stood.
 
 The shares: each bot's platform spend over the window (store/ads.live_spend, the accounts of the platform's enabled
-import, summed by bot) against the platform's whole spend, as basis points by largest remainder (CA.allocate over
+import, summed by the owner each campaign's spend counts for) against the platform's whole spend, as basis points by largest remainder (CA.allocate over
 WHOLE). The spend no current bot owns (accounts with no bot, or a bot no longer a teammate) is the unattributed rest, so
 the parts add up to less than WHOLE. At most MAX_BOTS bots get a share; the rest of the spend joins the rest. No spend in
 the window, spend in another currency than the book's, or spend no current bot owns gives no share: the line counts as
@@ -139,17 +139,22 @@ def shares(ctx: Ctx, platform: str, first: str, last: str) -> tuple[CA.Split, ..
     total = sum(r.amount for r in rows)
     if total <= 0:
         return ()
-    by_bot: dict[str, int] = {}
+    # Spend counts for its campaign's owner (a teammate and/or a team; store/ads.live_spend), the account's bot when the
+    # campaign names none. An owner no longer on the org chart joins the unattributed rest.
+    by_owner: dict[tuple[str, str], int] = {}
     for r in rows:
-        mate = f"bot:{r.bot_slug}" if r.bot_slug else ""
-        if mate and mate in ctx.org.bots:
-            by_bot[mate] = by_bot.get(mate, 0) + r.amount
-    kept = sorted(((a, m) for m, a in by_bot.items() if a > 0), key=lambda x: (-x[0], x[1]))[:MAX_BOTS]
+        if r.mate and r.mate not in ctx.org.bots and r.mate not in ctx.org.humans:
+            continue
+        if r.team and r.team not in ctx.org.teams:
+            continue
+        if r.mate or r.team:
+            by_owner[(r.mate, r.team)] = by_owner.get((r.mate, r.team), 0) + r.amount
+    kept = sorted(((a, o) for o, a in by_owner.items() if a > 0), key=lambda x: (-x[0], x[1]))[:MAX_BOTS]
     if not kept:
         return ()
     rest = total - sum(a for a, _ in kept)
     bps = CA.allocate(CA.WHOLE, [a for a, _ in kept] + [rest])
-    return tuple(CA.Split(m, "", share) for (_, m), share in zip(kept, bps, strict=False) if share > 0)
+    return tuple(CA.Split(mate, team, share) for (_, (mate, team)), share in zip(kept, bps, strict=False) if share > 0)
 
 
 def claim_at_posting(ctx: Ctx, keys: Sequence[str], day: str) -> Any:

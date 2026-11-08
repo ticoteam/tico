@@ -1,11 +1,11 @@
-/* Strategy content with the redesign on (ui/app/redesign-org.js, ui/app/redesign-market.js): the org chart, Market's
+/* Strategy content with the redesign on (ui/app/redesign-org.ts, ui/app/redesign-market.ts): the org chart, Market's
    Briefing and Listening. Every rule keys off a class only that code adds, so with the setting off none of it applies. */
 
 /* ---------------------------------------------------------------- Org: the chart */
 #main.rd-org-layout{display:flex;flex-direction:column}
 .rdo-wrap{position:relative;flex:none}
 .rdo-pane{position:relative;isolation:isolate;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 164px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
-/* The sizer is the scaled chart's size (ui/app/redesign-org.js rdoLayout); the chart inside keeps its own layout box and
+/* The sizer is the scaled chart's size (ui/app/redesign-org.ts rdoLayout); the chart inside keeps its own layout box and
    is scaled from its top left, so zooming moves only a transform. */
 .rdo-sz{position:relative;min-width:100%}
 .rdo-cv{position:absolute;top:0;left:0;width:max-content;padding:18px 14px 28px;transform-origin:0 0;transition:transform var(--dur) var(--ease)}
@@ -121,7 +121,7 @@
 }
 @media (prefers-reduced-motion:reduce){.rdo-cv{transition:none}}
 
-/* ---------------------------------------------------------------- Market › What are buyers saying? (ui/app/redesign-market.js) */
+/* ---------------------------------------------------------------- Market › What are buyers saying? (ui/app/redesign-market.ts) */
 .rdm-hd{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:24px}
 .rdm-leg{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;font-size:var(--t-xs);color:var(--muted)}
 .rdm-leg>span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}

@@ -1035,7 +1035,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         'base',
         [],
         {
-            'ui/app/refresh.js': code,
+            'ui/app/refresh.ts': code,
             'ui/app/pricing.js': 'price = 10\n',
             'app/flag.py': 'x=1\n',
             'app/loop.py': 'for item in items:\n    work(item)\ndone()\n',

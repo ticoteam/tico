@@ -47,10 +47,11 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 
 ## Release windows
 
-Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays, two at weekends), run by
+Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 15 a day), run by
 `.github/workflows/train.yml` and `scripts/release_train.py`. No one tags by hand.
 
-- **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
+- **When.** Windows open every hour on the hour, 07:00 to 21:00 Los Angeles time, every day. A window releases only when
+  main has moved since the newest release and the candidate's validation is green: no new commit, no release.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
 - **At the open**, the canary's release is promoted to stable once it is approved and nothing holds it (see
@@ -83,7 +84,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
 
-Triggers: the window schedules (one UTC cron per window start under either offset), every push to main, every
+Triggers: the window schedules (one UTC cron per hour that a window can start at under either offset, 14 to 23 and 0 to
+5 UTC), every push to main, every
 finished Release validation run, a manual run, and a backstop schedule every 20 minutes
 (at :05, :25 and :45, never a window's minute) that takes a step in an open window
 if an event was missed (it never opens a window; it promotes an approved release). A small read-only job decides first, so a push with
@@ -104,11 +106,13 @@ A window validates a head in one of two ways. A **full** validation is the whole
 
 - **One full validation a day.** At most one full validation is dispatched automatically in any 24 hours, whatever its
   outcome (a cancelled one, and a red one with unnamed failures, count too). The window dispatches a full validation
-  only when no full validation finished in the last 24 hours (by finish time).
-- **Anchor.** The anchor is the newest full validation of the last 24 hours that ran the suite to an answer: a green
-  one, or a red one that names its failed tests, of a commit main still contains. It is the anchor whichever release it
-  validated, and the candidates after it are incremental from it. A plan too big to dispatch (or one that cannot be
-  made) waits until the anchor is a day old rather than running a second full validation.
+  only when no full validation finished in the last 24 hours (by finish time), even when an incremental one anchors the chain.
+- **Anchor.** The anchor is the newest validation, full or incremental, of the last 24 hours that ran the suite to an
+  answer: a green one, or a red one that names its failed tests, of a commit main still contains. It is the anchor
+  whichever release it validated, so each incremental validation covers only its own diff from the previous green one
+  and its carried failures. The window dispatches only the anchor, the carried failed tests and the anchor's release;
+  Release validation makes the plan from its own checkout. If the plan cannot be made (a commit missing from the
+  checkout), the window waits and says why.
 - **A cancelled or unnamed full run holds the day.** A cancelled full validation, and a red one whose failures no log
   names (a build, a VM, a startup failure), is no anchor, and no second full validation follows it. The window waits
   and says so on the release-train issue: `a full validation already ran in the last 24h (<run>, <conclusion>): a person
@@ -362,8 +366,7 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 Run tests on your computer while you work, and run the test files your change touches with `scripts/remote.py` before
 you mark the PR ready for review. A push to a pull request runs the cheap checks on free GitHub-hosted runners:
 lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
-the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on
-RunsOn with the queue's labels; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
+the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
 only. The merge queue runs the tests again: once per queue group,
 it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
@@ -381,15 +384,14 @@ crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. 
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
-(`pr-cache.yml`) keeps the main-branch caches the queue restores from fresh; hosted PR runs cannot read RunsOn's cache,
-so they start cold. A pull request's superseded run is canceled; a queue group is never canceled.
+(`pr-cache.yml`) keeps the main-branch GitHub caches that PR and queue runs restore from fresh. The repository's caches share 10 GB, and an entry unused for seven days is evicted. A pull request's superseded run is canceled; a queue group is never canceled.
 
-**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `pr-checks.yml`, `pr-cache.yml`, `ci.yml` and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), so restores start cold more often, and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
+**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `ci.yml` (release validation) and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default there. `pr-checks.yml` and `pr-cache.yml` always run on GitHub-hosted runners and never read the variable. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU RunsOn Spot VMs in Tico's own AWS account (x64 labels take the m and r families of generations 6–8, arm64 labels are unchanged); PR pushes run on GitHub-hosted runners. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
+one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
 finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
@@ -428,13 +430,13 @@ checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
   gate. A draft runs nothing.
-- **A ready pull request from this repository** (RunsOn Spot, the queue's labels): the selected Python and browser tests and
+- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
   the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
   pull request runs none of them.
-- **A queue group** (RunsOn Spot, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
   browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
   recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
-- **The factory simulation** (RunsOn Spot, one 4-vCPU VM per group): seed 1 of every scenario, in a queue group or on a ready
+- **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
   check fails the group. Release validation runs seeds 1-3 as before.

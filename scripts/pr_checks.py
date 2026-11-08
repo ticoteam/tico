@@ -21,7 +21,15 @@ UI_MAP = {
     "ui/app/chat-outline.js": ["chat", "imported-history"],
     "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
     "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
+    "ui/github-connect.js": ["github-personal", "settings-forms"],
 }
+
+
+def ui_map_key(name):
+    """The UI_MAP key for a ui/ file. A script converted to TypeScript (ui/app/x.ts) keeps the entry its .js name has."""
+    return name[:-3] + ".js" if name.startswith("ui/") and name.endswith(".ts") else name
+
+
 CONFORMANCE = "runner_support/tests/test_conformance.py"
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
@@ -61,6 +69,13 @@ WORKERS = 4
 JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
 SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
+# A VM carries at least MIN_JOB_SECONDS of tests per worker, setup excluded: below that, setup is most of its time, so a
+# small remainder folds into the VMs before it. A plan raises the target toward MAX_JOB_SECONDS to keep its test jobs
+# (the matrix plus the factory legs) within CEILING, which is about; the cap is the longest VM a plan asks for.
+MIN_JOB_SECONDS = 240
+MAX_JOB_SECONDS = 480
+TARGET_STEP_SECONDS = 30
+CEILING = {"pull_request": 8, "merge_group": 12}
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
 # tests spread across the workers.
@@ -671,7 +686,7 @@ class DependencyMap:
         return users
 
     def listed_by(self, name, added):
-        """The files whose listing of a folder holds a changed file: `ui/*.js` lists ui/app/x.js too only when recursive
+        """The files whose listing of a folder holds a changed file: `ui/*.ts` lists ui/app/x.js too only when recursive
         (`rglob`, `**`), and a listing that uses only names sees it only when it is new."""
         folder = str(Path(name).parent)
         return {
@@ -897,7 +912,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        reads, adds the smoke set; the tests below it are not reached through it.
     3. A Python file the map cannot parse, or does not know, runs the checks that name its path, else the smoke set.
     4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
-       it directly or run a module that lists its folder (a test that globs ui/*.js is reached through the module it
+       it directly or run a module that lists its folder (a test that globs ui/*.ts is reached through the module it
        runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
        a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
@@ -1000,12 +1015,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             uncertain.append(f"rule 3: unknown {name}: smoke set")
     if unknown:
         notes.append("rule 3: unknown files")
-    unmapped = [n for n in live if n not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
+    unmapped = [n for n in live if ui_map_key(n) not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
     seeds -= set(unmapped)
     for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
-        if name in UI_MAP:
-            missing = [s for s in UI_MAP[name] if not (root / "ui/tests" / f"{s}.cjs").is_file()]
-            browser |= set(UI_MAP[name]) - set(missing)
+        if ui_map_key(name) in UI_MAP:
+            scripts = UI_MAP[ui_map_key(name)]
+            missing = [s for s in scripts if not (root / "ui/tests" / f"{s}.cjs").is_file()]
+            browser |= set(scripts) - set(missing)
             if missing:
                 smoke_browser = True
                 uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
@@ -1013,7 +1029,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
         browser |= {Path(p).stem for p in linked if is_browser(p)}
         python |= {p for p in linked if is_test(p)}
-        # A module that lists the folder (scripts/build-icon-font.py globs ui/*.js) reaches the tests that run it.
+        # A module that lists the folder (scripts/build-icon-font.py globs ui/*.ts) reaches the tests that run it.
         python |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
         if is_browser(name):  # a changed browser script runs itself: it is the check that changed
             browser.add(Path(name).stem)
@@ -1172,22 +1188,52 @@ def weights(counts, timings, fallback=1.0):
     return {n: known.get(n, counts[n] * seconds_per_test) for n in counts}
 
 
-def job_count(seconds, kind):
-    """VMs needed for `seconds` of one-worker test time to finish near JOB_SECONDS each."""
-    per_job = WORKERS * max(JOB_SECONDS - SETUP_SECONDS[kind], 30)
-    return max(1, min(MAX_JOBS, math.ceil(seconds / per_job)))
+def job_count(seconds, kind, target=JOB_SECONDS):
+    """VMs for `seconds` of one-worker test time: each near `target` seconds, setup included, and each with at least
+    MIN_JOB_SECONDS of tests unless the whole selection is smaller (a remainder folds into the VMs before it)."""
+    per_job = WORKERS * max(target - SETUP_SECONDS[kind], 30)
+    by_target = math.ceil(seconds / per_job)
+    by_minimum = math.floor(seconds / (WORKERS * MIN_JOB_SECONDS))
+    return max(1, min(MAX_JOBS, by_target, by_minimum))
 
 
-def groups(counts, timings, total=None, kind="python", fallback=1.0):
+def groups(counts, timings, total=None, kind="python", fallback=1.0, target=JOB_SECONDS):
     seconds = weights(counts, timings, fallback)
     if total is None:
-        total = job_count(sum(seconds.values()), kind)
+        total = job_count(sum(seconds.values()), kind, target)
     out, loads = [[] for _ in range(total)], [0.0] * total
     for name in sorted(counts, key=lambda n: (-seconds[n], n)):
         i = min(range(total), key=lambda i: (loads[i], i))
         out[i].append(name)
         loads[i] += seconds[name]
     return [sorted(g) for g in out], loads
+
+
+def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILING["pull_request"]):
+    """The Python and browser VM groups of a plan at the smallest target that keeps its test jobs within `ceiling`.
+    `browser` is (the scripts as a Counter, their measured times), `fixed` the jobs that always run (conformance and
+    contracts), `shards` the factory legs. The target starts at JOB_SECONDS and rises by TARGET_STEP_SECONDS up to
+    MAX_JOB_SECONDS; past that the plan keeps the cap's VMs, and its count may exceed the ceiling."""
+    target = JOB_SECONDS
+    while True:
+        split, loads = groups(counts, timings, target=target)
+        if browser:
+            browser_split, browser_loads = groups(
+                browser[0], browser[1], kind="browser", fallback=UNTIMED_SCRIPT_SECONDS, target=target
+            )
+        else:
+            browser_split, browser_loads = [], []
+        tests = sum(1 for group in split + browser_split if group) + fixed + shards
+        if tests <= ceiling or target >= MAX_JOB_SECONDS:
+            return {
+                "split": split,
+                "loads": loads,
+                "browser": browser_split,
+                "browser_loads": browser_loads,
+                "target": target,
+                "tests": tests,
+            }
+        target = min(MAX_JOB_SECONDS, target + TARGET_STEP_SECONDS)
 
 
 def merge_parent(base, head="HEAD", root=None):
@@ -1261,7 +1307,10 @@ def factory_shards():
     from evals.factory import run as factory
 
     timings = factory.timings()
-    count = factory.groups_for([(name, 1) for name in timings], timings)
+    pairs = [(name, 1) for name in timings]
+    total = sum(timings[name] for name, _ in pairs)
+    # The sim's work is fixed by its scenarios, so its legs fold to the same four-minute minimum a test VM carries.
+    count = max(1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * MIN_JOB_SECONDS))))
     return [f"{index}/{count}" for index in range(1, count + 1)]
 
 
@@ -1297,22 +1346,34 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
         paths = sorted(source.rglob("durations.json")) if source.is_dir() else ([source] if source.is_file() else [])
         for path in paths:
             timings.update(json.loads(path.read_text()))
-    split, loads = groups(counts, timings)
-    if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * JOB_SECONDS:
-        # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
-        print(
-            f"::warning::A Python VM is planned for {max(loads) / WORKERS + SETUP_SECONDS['python']:.0f}s against the "
-            f"{JOB_SECONDS:.0f}s target ({len(split)} VMs, cap {MAX_JOBS}): raise TICO_CI_MAX_JOBS or split the file"
-        )
-    jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
+    factory = factory_plan(event, changed)
+    browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
         browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}
-        browser_split, browser_loads = groups(
-            Counter(dict.fromkeys(scripts, 1)), browser_times, kind="browser", fallback=UNTIMED_SCRIPT_SECONDS
+        browser = (Counter(dict.fromkeys(scripts, 1)), browser_times)
+    fixed = int(bool(picked["conformance"])) + int(bool(picked["contracts"]))
+    ceiling = CEILING["merge_group" if event == "merge_group" else "pull_request"]
+    sized = size_groups(
+        counts,
+        timings,
+        browser=browser,
+        fixed=fixed,
+        shards=len(factory["shards"]) if factory["run"] else 0,
+        ceiling=ceiling,
+    )
+    split, loads, target = sized["split"], sized["loads"], sized["target"]
+    if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * target:
+        # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
+        print(
+            f"::warning::A Python VM is planned for {max(loads) / WORKERS + SETUP_SECONDS['python']:.0f}s against the "
+            f"{target:.0f}s target ({len(split)} VMs, cap {MAX_JOBS}): raise TICO_CI_MAX_JOBS or split the file"
         )
+    jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
+    if browser:
+        browser_split = sized["browser"]
         jobs += [{"suite": f"browser-{i + 1}", "files": names} for i, names in enumerate(browser_split) if names]
-        loads += browser_loads
+        loads += sized["browser_loads"]
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
     if picked["contracts"]:
@@ -1324,10 +1385,14 @@ def prepare(event, base, output, timings_path=None, head="HEAD"):
     plan = {
         **picked,
         "changed": changed,
-        "factory": factory_plan(event, changed),
+        "factory": factory,
         "matrix": {"include": jobs},
         "estimated_seconds": loads,
         "timed_files": len(set(counts) & timings.keys()),
+        # The ceiling's arithmetic for the receipt: matrix jobs plus factory legs against the ceiling.
+        "test_jobs": len(jobs) + (len(factory["shards"]) if factory["run"] else 0),
+        "ceiling": ceiling,
+        "job_target_seconds": target,
     }
     Path(output).write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps(plan, indent=2))
@@ -1484,6 +1549,27 @@ def receipt_jobs(text):
     return jobs, incomplete
 
 
+def superseded_runs(runs, head_ref, run_number):
+    """Ids of the older merge queue runs of the same pull request as `head_ref` (refs/heads/gh-readonly-queue/<base>/
+    pr-<number>-<sha>). A rebuilt queue entry has a new head, so its older group is superseded. Pull request runs, other
+    queue groups and runs numbered `run_number` or later (this run and any newer one) are never returned."""
+    found = re.search(r"/pr-(\d+)-", head_ref or "")
+    if not found:
+        return []
+    number = found.group(1)
+    ids = []
+    for run in runs:
+        branch = re.search(r"/pr-(\d+)-", run.get("head_branch") or "")
+        if (
+            run.get("event") == "merge_group"
+            and run.get("run_number", 0) < run_number
+            and branch
+            and branch.group(1) == number
+        ):
+            ids.append(run["id"])
+    return ids
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -1500,6 +1586,10 @@ def main():
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
+    cancel = sub.add_parser("cancel-superseded")
+    cancel.add_argument("--head-ref", required=True)
+    cancel.add_argument("--run-number", type=int, required=True)
+    cancel.add_argument("pages", nargs="+", help="gh api --paginate --slurp output files of the runs to consider")
     args = parser.parse_args()
     if args.action == "plan" and not os.environ.get("GITHUB_ACTIONS") and not os.environ.get("TICO_PLAN_LOCAL"):
         # plan collects every test with pytest: minutes of load, and on a Mac without the CI packages it fails.
@@ -1521,6 +1611,20 @@ def main():
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
+    elif args.action == "cancel-superseded":
+        # Never this run: it is numbered below its own run number and its id is excluded here as well.
+        runs = [
+            run
+            for path in args.pages
+            for page in json.loads(Path(path).read_text())
+            for run in page.get("workflow_runs", [])
+        ]
+        own = os.environ.get("GITHUB_RUN_ID", "")
+        for run_id in superseded_runs(runs, args.head_ref, args.run_number):
+            if str(run_id) == own:
+                continue
+            print(f"Cancelling superseded merge queue run {run_id}")
+            subprocess.run(["gh", "run", "cancel", str(run_id), "--repo", os.environ["GITHUB_REPOSITORY"]], check=False)
     elif args.action == "smoke-check":
         problems = smoke_check()
         for problem in problems:

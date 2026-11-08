@@ -1,4 +1,4 @@
-// The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.js myChatBot): the
+// The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.ts myChatBot): the
 // page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
 // Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
@@ -26,7 +26,7 @@ async function open(browser, me, view, strategyName) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
@@ -38,7 +38,7 @@ async function open(browser, me, view, strategyName) {
     if (p === '/api/v2/conversations') return json({conversations: []});
     for (const answer of helpers.map(h => h(p, url, route.request().method()))) if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(view);
-    // A send: words as JSON, files as a form, like any bot chat (ui/app/api.js cloudCompose).
+    // A send: words as JSON, files as a form, like any bot chat (ui/app/api.ts cloudCompose).
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
       const request = route.request(), form = !p.includes('/uploads/');
       sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer().toString('latin1')});

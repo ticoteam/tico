@@ -371,7 +371,7 @@ def _ask(conn, item, manager=strategy_bot.NAME):
     return title, body
 
 
-# The goal suggestions whose asks use their card's words (ui/goals-kpis.js goalPropHtml), never "Confirm or reject".
+# The goal suggestions whose asks use their card's words (ui/goals-kpis.ts goalPropHtml), never "Confirm or reject".
 GOAL_KINDS = ("goal_kpi", "kpi_target", "kpi_definition", "goal_wording", "flag")
 OLD_WORDS = "Confirm or reject "
 
