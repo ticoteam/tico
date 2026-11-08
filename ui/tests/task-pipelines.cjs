@@ -101,7 +101,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
           Object.assign(task, {type: {id: type.id, name: type.name}, step: step || null, step_id: step?.id || null,
             status: step?.status || body.status || task.status, version: task.version + 1});
         }
-        return json({task, children: [], parent: null, comments: [], events: [], messages: [], mover: me.mover});
+        // task-1 was sent to Engineering on a gate's approval: its activity says so, with the approval in the note.
+        const events = one[1] === 'task-1' ? [{id: 'ev-handoff', task_id: 'task-1', created_at: '2026-11-07T12:00:00Z', actor: 'bot:engineering-lead',
+          field: 'handoff', old: null, new: 'engineering', note: 'approved by Lead (met) at Review', via: null}] : [];
+        return json({task, children: [], parent: null, comments: [], events, messages: [], mover: me.mover});
       }
       // A bulk change by filter: this mock runs the filter, refuses the one task the caller may not change, and changes the rest.
       if (p === '/api/v2/task-bulk' && req.method() === 'POST') {
@@ -207,6 +210,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await unreadable.waitFor();
     assert.equal(await unreadable.evaluate(el => el.tagName), 'SPAN', 'a chip the reader cannot follow is not a link');
     assert.equal(await unreadable.innerText(), 'Engineering');
+    // Its activity lists the hand-off to Engineering and the approval that let it go.
+    const sent = page.locator('.tmark', {hasText: 'sent it to Engineering'});
+    await sent.first().waitFor();
+    assert.match(await sent.first().innerText(), /approved by Lead \(met\) at Review/);
     // The stage a spawn link leaves is headed by the pipeline it sends to, with its count.
     await page.locator('#task-body section[data-col="copy"] h2', {hasText: 'In Engineering'}).waitFor();
     assert.match(await page.locator('#task-body section[data-col="copy"] .cnt').innerText(), /^· \d+$/);
