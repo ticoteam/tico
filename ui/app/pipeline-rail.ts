@@ -44,6 +44,9 @@ const pipelineLateClocks = new Map<string, PipelineLateClock>();
 /** The pipeline on screen whose Late list is held, when it was last read, and the pending live reload and poll. */
 let pipelineLateFor = '';
 let pipelineLateAt = 0;
+/** The ticket ids the last Late read asked for (joined), and the read's sequence: only the latest read's answer is shown. */
+let pipelineLateIds = '';
+let pipelineLateSeq = 0;
 let pipelineLateTimer = 0;
 let pipelineLatePoll = 0;
 /** Ends the current follow (its timers, its listeners, its list). A read that was in flight when it ended is ignored. */
@@ -241,19 +244,39 @@ function pipelineLateSame(a: Map<string, PipelineLateClock>, b: Map<string, Pipe
   return true;
 }
 
-/** Reads the Late list of the pipeline on screen, rail open or not, and repaints the cards when it changed. A hidden tab
-    reads nothing; it reads once when it is shown again. */
+/** The ids of the tickets on screen (their rows and cards on the Tasks page), sorted. A row's key is "t" plus the id. */
+function pipelineShownIds(): string[] {
+  const ids = new Set<string>();
+  document.querySelectorAll<HTMLElement>('#task-body [data-task-key]').forEach(el => {
+    const key = el.dataset.taskKey ?? '';
+    if (key.startsWith('t') && el.getClientRects().length) ids.add(key.slice(1));
+  });
+  return [...ids].sort();
+}
+
+/** Reads the Late clocks of the tickets on screen, rail open or not, and repaints the cards when they changed. Only those
+    tickets are asked for, so the server's cap on a pipeline-wide list never hides a card. A hidden tab reads nothing; it
+    reads once when it is shown again. */
 async function pipelineLateLoad(): Promise<void> {
   const pipelineId = pipelineLateFor, gen = pipelineLateGen;
   if (!pipelineId || document.hidden) return;
   pipelineLateAt = Date.now();
+  const ids = pipelineShownIds();
+  pipelineLateIds = ids.join(',');
+  const seq = ++pipelineLateSeq;
   let next: Map<string, PipelineLateClock>;
-  try { next = await pipelineLateTickets(pipelineId); } catch { return; }
-  if (gen !== pipelineLateGen) return;
+  try { next = await pipelineLateTickets(pipelineId, ids); } catch { return; }
+  if (gen !== pipelineLateGen || seq !== pipelineLateSeq) return;
   const changed = !pipelineLateSame(next, pipelineLateClocks);
   pipelineLateClocks.clear();
   next.forEach((clock, id) => pipelineLateClocks.set(id, clock));
   if (changed && TASKS_ST) tasksRender(TASKS_ST);
+}
+
+/** After a draw: when the tickets on screen are not the ones the last read asked for, their Late clocks are read again. */
+function pipelineLateShownSync(): void {
+  if (!pipelineLateFor || document.hidden) return;
+  if (pipelineShownIds().join(',') !== pipelineLateIds) void pipelineLateLoad();
 }
 
 /** Follows the pipeline on screen: its Late list is read when it shows and again every 5 minutes, so a card's time moves
@@ -373,6 +396,7 @@ function pipelineRailSync(state: PipelineTasksState): void {
   const manager = ref ? 'bot:' + (botByRef(ref)?.id ?? ref) : '';
   const page = document.querySelector('.tasks-page');
   pipelineLateFollow(type?.id ?? '', state.layoutAbort?.signal);
+  pipelineLateShownSync();
   if (type) void pipelineMineSync(type.id);
   if (!type || !manager || !page) { pipelineRailLeave(); return; }
   if (!pipelineRail || pipelineRail.pipelineId !== type.id || pipelineRail.manager !== manager || !pipelineRail.host.isConnected) {

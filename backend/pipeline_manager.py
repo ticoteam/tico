@@ -124,11 +124,28 @@ def _due(c: "sqlite3.Connection", pipeline: dict[str, Any], when: datetime) -> b
     return started is None or when - started >= timedelta(minutes=_every(pipeline))
 
 
+def stall_clock(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
+    """The pass that starts the clock on missed passes: the last ok one, else the first attempt (a failed pass), else None.
+    A manager with no run yet is not behind: its first pass is due on the next tick. Its creation time is no clock, so a
+    manager set on an old pipeline is not judged from when the pipeline was made (the watchdog's first tick after an
+    update opened a "stopped" task for every one)."""
+    last = last_ok_run(c, pipeline_id)
+    if last is not None:
+        return last
+    rows = H._rows(
+        c.execute(
+            "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? ORDER BY started_at, id LIMIT 1", (pipeline_id,)
+        )
+    )
+    return rows[0] if rows else None
+
+
 def stalled(c: "sqlite3.Connection", pipeline: dict[str, Any], at: Any) -> int:
-    """How many passes this manager has missed: the whole intervals since its last ok pass started, less the one that is due."""
+    """How many passes this manager has missed: the whole intervals since its clock started (stall_clock), less the one
+    that is due. Missing passes count from one run interval plus MISSED_RUNS after that start."""
     when = when_of(at)
-    last = last_ok_run(c, pipeline["id"])
-    base = H.parse_ts(last["started_at"]) if last else H.parse_ts(pipeline.get("created_at") or "")
+    clock = stall_clock(c, pipeline["id"])
+    base = H.parse_ts(clock["started_at"]) if clock else None
     if base is None:
         return 0
     intervals = int((when - base).total_seconds() // (_every(pipeline) * 60))
@@ -146,6 +163,22 @@ def _visits(c: "sqlite3.Connection", pipeline_id: str) -> list[dict[str, Any]]:
             (pipeline_id, *H.ACTIVE_STATUSES),
         )
     )
+
+
+BIND_CHUNK = 500  # ids per SQL statement: well under SQLite's bind-parameter limit, whatever the pipeline's size
+
+
+def _by_ids(
+    c: "sqlite3.Connection", ids: list[str], sql: str, tail: list[Any] | tuple[Any, ...] = ()
+) -> list[dict[str, Any]]:
+    """Run `sql` once per BIND_CHUNK of `ids`: `{marks}` in it becomes the placeholders, and `tail` follows them. A ticket
+    is in one chunk only, so each ticket keeps its rows in the order the SQL sorts them."""
+    out: list[dict[str, Any]] = []
+    for start in range(0, len(ids), BIND_CHUNK):
+        part = ids[start : start + BIND_CHUNK]
+        statement = sql.replace("{marks}", ",".join("?" * len(part)))
+        out.extend(H._rows(c.execute(statement, (*part, *tail))))
+    return out
 
 
 def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -> dict[str, dict[str, Any]]:
@@ -169,25 +202,21 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
     if not live:
         return {}
     ids = [r["id"] for r in live]
-    marks = ",".join("?" * len(ids))
     entered = {
         r["task_id"]: r["entered_at"]
-        for r in H._rows(
-            c.execute(
-                f"SELECT task_id, entered_at FROM stage_visits WHERE left_at IS NULL AND task_id IN ({marks})", ids
-            )
+        for r in _by_ids(
+            c, ids, "SELECT task_id, entered_at FROM stage_visits WHERE left_at IS NULL AND task_id IN ({marks})"
         )
     }
     # A ticket with no open visit (a pipeline with no requirements has none) started its stage at its latest step move
     # into that step, not when it was made (Fix L2-4).
     into_step = {
         (r["task_id"], r["step_id"]): r["at"]
-        for r in H._rows(
-            c.execute(
-                "SELECT subject_id AS task_id, new AS step_id, max(created_at) AS at FROM history_events "
-                f"WHERE subject_type='task' AND kind='step' AND subject_id IN ({marks}) GROUP BY subject_id, new",
-                ids,
-            )
+        for r in _by_ids(
+            c,
+            ids,
+            "SELECT subject_id AS task_id, new AS step_id, max(created_at) AS at FROM history_events "
+            "WHERE subject_type='task' AND kind='step' AND subject_id IN ({marks}) GROUP BY subject_id, new",
         )
     }
     began: dict[str, datetime] = {}
@@ -202,21 +231,19 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
     # The paused spans of each ticket: every hold (open ones run to now) and every stretch in status waiting, which pauses
     # the clock with or without a hold row (product roadmap moves make none).
     paused: dict[str, list[tuple[datetime, datetime]]] = {}
-    for hold in H._rows(
-        c.execute(f"SELECT task_id, created_at, released_at FROM task_holds WHERE task_id IN ({marks})", ids)
-    ):
+    for hold in _by_ids(c, ids, "SELECT task_id, created_at, released_at FROM task_holds WHERE task_id IN ({marks})"):
         start = H.parse_ts(hold["created_at"])
         end = H.parse_ts(hold["released_at"]) or now
         if start is not None:
             paused.setdefault(hold["task_id"], []).append((start, end))
     earliest = stamp_of(min(began.values()))
     waiting_since: dict[str, datetime] = {}
-    for event in H._rows(
-        c.execute(
-            "SELECT subject_id AS task_id, old, new, created_at FROM history_events WHERE subject_type='task' "
-            f"AND kind='status' AND subject_id IN ({marks}) AND created_at >= ? ORDER BY created_at, rowid",
-            (*ids, earliest),
-        )
+    for event in _by_ids(
+        c,
+        ids,
+        "SELECT subject_id AS task_id, old, new, created_at FROM history_events WHERE subject_type='task' "
+        "AND kind='status' AND subject_id IN ({marks}) AND created_at >= ? ORDER BY created_at, rowid",
+        [earliest],
     ):
         ticket = str(event["task_id"])
         when = H.parse_ts(event["created_at"])
@@ -262,28 +289,35 @@ def late_listing(
     """The Late tickets of a pipeline that `actor` may see, as the endpoint returns them, and whether the list was cut at
     LATE_CAP. Visibility is one query over the late ids (pipeline_rights.list_sql), so the query count does not grow with
     the number of late tickets. `wanted` limits the answer to those ids."""
-    found = over_limit(c, pipeline_id, at)
-    if wanted is not None:
-        found = [item for item in found if item["task_id"] in wanted]
-    if not found:
-        return {}, False
-    marks = ",".join("?" * len(found))
     readable = pipeline_rights.list_sql(c, actor, visible_sql)
-    seen = {
-        str(r["id"])
-        for r in H._rows(
-            c.execute(
-                f"SELECT id FROM tasks WHERE id IN ({marks}) AND {readable}",
-                [item["task_id"] for item in found],
-            )
-        )
-    }
-    visible = [item for item in found if item["task_id"] in seen]
-    more = len(visible) > LATE_CAP
+    # Visibility and the asked ids narrow the tickets before any clock is computed: only those rows are evaluated.
+    if wanted is not None:
+        found = _late_found(c, _live_rows(c, pipeline_id, ids=sorted(wanted), readable=readable), at)
+        more = len(found) > LATE_CAP
+    else:
+        found, more = _late_page(c, pipeline_id, at, readable)
     return {
         item["task_id"]: {"since": item["since"], "hours": item["hours"], "limit_hours": item["limit_hours"]}
-        for item in visible[:LATE_CAP]
+        for item in found[:LATE_CAP]
     }, more
+
+
+LATE_PAGE = 500  # live tickets evaluated per page of the pipeline-wide Late list
+
+
+def _late_page(c: "sqlite3.Connection", pipeline_id: str, at: Any, readable: str) -> tuple[list[dict[str, Any]], bool]:
+    """The pipeline-wide Late list, read a page of LATE_PAGE live tickets at a time (by id) until LATE_CAP + 1 late ones
+    are found. The work is bounded by the pages read; `more` says whether a late ticket was left out of the answer."""
+    found: list[dict[str, Any]] = []
+    after = ""
+    while len(found) <= LATE_CAP:
+        page = _live_rows(c, pipeline_id, after=after, readable=readable, limit=LATE_PAGE)
+        found.extend(_late_found(c, page, at))
+        if len(page) < LATE_PAGE:
+            break
+        after = str(page[-1]["id"])
+    found.sort(key=lambda item: (item["since"], item["task_id"]))
+    return found, len(found) > LATE_CAP
 
 
 def _paused_minutes(spans: list[tuple[datetime, datetime]], start: datetime, now: datetime) -> float:
@@ -301,16 +335,41 @@ def _paused_minutes(spans: list[tuple[datetime, datetime]], start: datetime, now
     return total
 
 
+def _live_rows(
+    c: "sqlite3.Connection",
+    pipeline_id: str,
+    *,
+    ids: list[str] | None = None,
+    readable: str | None = None,
+    after: str = "",
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """The narrow rows of a pipeline's live tickets that the Late rule and the rail need: all of them, or only `ids` (in
+    chunks), or one page by id after `after`. `readable` (pipeline_rights.list_sql) narrows them to what a reader may open."""
+    statuses = ",".join("?" * len(H.ACTIVE_STATUSES))
+    where = f"type_id=? AND status IN ({statuses})"
+    tail: list[Any] = [pipeline_id, *H.ACTIVE_STATUSES]
+    if readable:
+        where += f" AND ({readable})"
+    columns = "SELECT id, type_id, step_id, status, title, created_at FROM tasks WHERE "
+    if ids is not None:
+        return _by_ids(c, ids, columns + f"id IN ({{marks}}) AND {where}", tail)
+    sql = columns + f"id > ? AND {where} ORDER BY id"
+    args: list[Any] = [after, *tail]
+    if limit is not None:
+        sql += " LIMIT ?"
+        args.append(limit)
+    return H._rows(c.execute(sql, args))
+
+
 def over_limit(c: "sqlite3.Connection", pipeline_id: str, at: Any) -> list[dict[str, Any]]:
-    """The live tickets of a pipeline past their stage's Warn after, oldest first (late_tickets). Reads only the columns
-    the Late rule and the rail need, and the stage names in one query."""
-    rows = H._rows(
-        c.execute(
-            "SELECT id, type_id, step_id, status, title, created_at FROM tasks WHERE type_id=? "
-            f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
-            (pipeline_id, *H.ACTIVE_STATUSES),
-        )
-    )
+    """The live tickets of a pipeline past their stage's Warn after, oldest first (late_tickets). For the rail, which counts
+    every one of them."""
+    return _late_found(c, _live_rows(c, pipeline_id), at)
+
+
+def _late_found(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -> list[dict[str, Any]]:
+    """The late ones among `rows` (task rows from _live_rows), oldest first, with their stage names in one query."""
     late = late_tickets(c, rows, at)
     if not late:
         return []
@@ -565,7 +624,8 @@ def watchdog(store: Any, at: Any) -> None:
             if missed < MISSED_RUNS:
                 continue
             last = last_ok_run(c, pid)
-            base = last["started_at"] if last else (row.get("created_at") or "")
+            clock = stall_clock(c, pid)
+            base = clock["started_at"] if clock else ""
             opened = c.execute(
                 "SELECT 1 FROM pipeline_manager_actions WHERE pipeline_id=? AND action='open_botops' AND created_at>? "
                 "LIMIT 1",
