@@ -150,6 +150,13 @@ def install(
         with read() as c:
             return {"types": ES.types(c)}
 
+    @app.get("/api/v2/entities/counts")
+    def directory_counts(request: Request):
+        """How many entities of each type you can see, each stopping at 1,000 and saying so (`approximate`)."""
+        actor = caller(request)
+        with read() as c:
+            return {"counts": ES.type_counts(c, actor)}
+
     @app.get("/api/v2/entities/types/{type_key}")
     def directory_describe(request: Request, type_key: str):
         """One type: its attributes (each with its owner and options) and the link types that may touch it."""
@@ -169,14 +176,26 @@ def install(
         link: str | None = None,
         after: str | None = None,
         limit: int | None = None,
+        detail: bool = False,
     ):
-        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`."""
+        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`.
+        `detail` adds each row's organization, owner and the sources you can see it is known from (the Directory list)."""
         actor = caller(request)
         with read() as c:
             if not ES.type_exists(c, type_key):
                 raise Problem("not_found", f"No entity type {type_key}; see hub directory types", 404)
             try:
-                return ES.find(c, actor, type_key, name=name, status=status, link=link, after=after, limit=limit or 50)
+                return ES.find(
+                    c,
+                    actor,
+                    type_key,
+                    name=name,
+                    status=status,
+                    link=link,
+                    after=after,
+                    limit=limit or 50,
+                    detail=detail,
+                )
             except ValueError as error:
                 raise page_error(error) from None
 
