@@ -431,3 +431,65 @@ def test_the_cli_and_the_mcp_tool_leave_out_my_tasks_with_not_owner(api):
     assert not err and out["changed"] == 1
     assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
     assert get(api, "tasks/" + theirs["id"])["task"]["status"] == "closed"
+
+
+def test_a_bulk_close_never_takes_a_subtask_the_change_leaves_out(api):
+    """Closing a parent closes its open subtasks as well, so a bulk close must not take one the filter leaves out: the
+    caller's own (excluded by exclude_owner), or a private one the caller cannot read. Such a parent is skipped with its
+    reason and its subtasks stay open. A parent whose whole tree is in the change closes with all of it, and the counts
+    name every task that closed, the subtasks it took with it included."""
+    chosen = {"label": "subtree", "exclude_owner": "human:ana", "status": "open,doing,waiting"}
+    left = task(api, "Launch the spring campaign", owner="cmo", labels=["subtree"], token="priya-test")
+    mine = task(
+        api,
+        "Ana's launch checklist",
+        owner="human:ana",
+        labels=["subtree"],
+        relations=[{"task": left["id"], "kind": "parent"}],
+    )
+    secret = task(
+        api,
+        "Priya's contract note",
+        owner="human:priya",
+        labels=["subtree"],
+        private=True,
+        token="priya-test",
+        relations=[{"task": left["id"], "kind": "parent"}],
+    )
+    right = task(api, "Ship the ops runbook", owner="cmo", labels=["subtree"])
+    kid = task(
+        api, "Ops follow-up", owner="ops", labels=["subtree"], relations=[{"task": right["id"], "kind": "parent"}]
+    )
+
+    dry = bulk(api, chosen, "close", dry_run=True)
+    assert (dry["matched"], dry["changed"], dry["skipped"]) == (3, 2, 1)
+    assert {t["id"] for t in dry["tasks"]["changed"]} == {right["id"], kid["id"]}
+    assert [(t["id"], t["code"]) for t in dry["tasks"]["skipped"]] == [(left["id"], "subtasks_left_out")]
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in (left, mine, right, kid)} == {"open"}
+
+    out = bulk(api, chosen, "close", note="Closing the ops runbook")
+    assert (out["matched"], out["changed"], out["skipped"]) == (3, 2, 1)
+    assert {t["id"] for t in out["tasks"]["changed"]} == {right["id"], kid["id"]}
+    assert get(api, "tasks/" + left["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + secret["id"], token="priya-test")["task"]["status"] == "open"
+    assert get(api, "tasks/" + right["id"])["task"]["status"] == "closed"
+    assert get(api, "tasks/" + kid["id"])["task"]["status"] == "closed"
+
+
+def test_a_bulk_close_leaves_the_callers_own_subtask_open(api):
+    """The parent cascade closes an open subtask the filter excluded: a bulk close of a bot's task must leave Ana's own
+    subtask open, and skip the parent with its reason."""
+    solo = task(api, "Plan the spring webinar", owner="cmo", labels=["solo"])
+    mine = task(
+        api,
+        "Ana's webinar slides",
+        owner="human:ana",
+        labels=["solo"],
+        relations=[{"task": solo["id"], "kind": "parent"}],
+    )
+    out = bulk(api, {"label": "solo", "exclude_owner": "human:ana", "status": "open"}, "close")
+    assert (out["matched"], out["changed"], out["skipped"]) == (1, 0, 1)
+    assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
+    assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"

@@ -199,6 +199,14 @@ def register(
             # Chosen again under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
             changed, unchanged, skipped, judged = [], [], [], {}
+            # A close takes a task's open subtasks with it. One the change leaves out (or the caller cannot read) would be
+            # closed anyway, so its parent is skipped; a subtask the change closes through its parent counts as changed.
+            selected = set(ids)
+            opened = (
+                {tid for tid in ids if (H.task(c, tid) or {}).get("status") != "closed"}
+                if body.action == "close"
+                else set()
+            )
             # Work queued to run after commit (a webhook's doorbell) goes with the rows a rollback takes back.
             queued = len(c.after_commit)
             if body.dry_run:
@@ -211,8 +219,24 @@ def register(
                     skipped.append((tid, "invalid", exc.errors()[0]["msg"]))
                     continue
                 if change is None:
-                    unchanged.append(tid)
+                    (changed if tid in opened else unchanged).append(tid)
                     continue
+                if body.action == "close":
+                    left = [
+                        k["id"]
+                        for k in H.descendants(c, tid)
+                        if k["status"] in H.ACTIVE_STATUSES and k["id"] not in selected
+                    ]
+                    if left:
+                        skipped.append(
+                            (
+                                tid,
+                                "subtasks_left_out",
+                                "Its open subtasks are not in this change, so closing it would close them too. "
+                                "Close them first, or take this task out of the change",
+                            )
+                        )
+                        continue
                 c.execute("SAVEPOINT bulk_task")
                 before = len(c.after_commit)
                 try:
