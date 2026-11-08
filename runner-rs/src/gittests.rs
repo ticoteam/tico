@@ -1039,6 +1039,57 @@ async fn a_memory_pass_keeps_a_file_staged_in_one_version_and_edited_in_another(
 }
 
 #[tokio::test]
+async fn a_dirty_checkout_still_catches_up_pushes_its_memory_commit_and_keeps_its_edit() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-dirty");
+    commit_and_push(&seed, "notes.txt", "base\n");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-dirty");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+
+    // An unrelated tracked edit stays in the tree while the memory commit is made.
+    std::fs::write(main.join("notes.txt"), "unrelated edit\n").unwrap();
+    std::fs::create_dir_all(main.join("memory")).unwrap();
+    std::fs::write(main.join("memory/lesson.md"), "keep tests fast\n").unwrap();
+    assert_eq!(sessions::finish(&main, "run-5", &env, &[], true).await, "");
+
+    // Another lane pushes meanwhile: the push is refused as behind, and the catch-up must still land.
+    commit_and_push(&seed, "other.md", "another lane\n");
+    let (ahead, error) = execute::push_repo(&main, &env).await;
+    assert_eq!((ahead, error.as_str()), (1, "non-fast-forward"));
+    assert_eq!(sessions::catch_up(&main, &env).await, "");
+    assert_eq!(execute::push_repo(&main, &env).await.1, "");
+
+    let pushed = sh(
+        &tmp.0,
+        &[
+            "--git-dir",
+            bare.to_str().unwrap(),
+            "log",
+            "--format=%B",
+            "main",
+        ],
+    );
+    assert!(pushed.contains("Memory from run run-5"), "{pushed}");
+    assert_eq!(
+        std::fs::read_to_string(main.join("notes.txt")).unwrap(),
+        "unrelated edit\n",
+        "the edit survives the catch-up"
+    );
+    assert!(main.join("other.md").is_file());
+}
+
+#[tokio::test]
 async fn a_memory_pass_checkout_drops_its_edits_and_commits_and_leaves_main_alone() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "bot-pass");
@@ -1663,6 +1714,45 @@ async fn a_missing_agent_file_inside_the_retry_window_answers_from_the_cache_wit
     // retry window the recorded answer comes back, and those checks (which run git) are never reached.
     std::os::unix::fs::symlink(crate::env::root(), &path).unwrap();
     assert_eq!(runner.fetch_repository(&bot, &entry, &path).await, first);
+}
+
+#[tokio::test]
+async fn a_slow_heal_fetch_does_not_hold_the_checkouts_lock() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[("protocol.ext.allow", "always")]);
+    let (path, _seed) = wiped_clone(&tmp.0, "bot-slowfetch", &env).await;
+    let bare = tmp.0.join("bot-slowfetch.git");
+
+    // The origin is served through a helper that waits a second before it serves, so the heal's fetch is slow.
+    let helper = tmp.0.join("slow-serve.sh");
+    std::fs::write(&helper, "#!/bin/sh\nsleep 1\nexec git upload-pack \"$2\"\n").unwrap();
+    std::fs::set_permissions(&helper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    sh(
+        &path,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            &format!("ext::{} %S {}", helper.display(), bare.display()),
+        ],
+    );
+
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    let lanes = crate::sessions::Lanes::new(std::sync::Arc::new(
+        crate::repositories::Repositories::new(&tmp.0, &tmp.0, client),
+    ));
+    let heal = fetchrepo::heal_free_checkout(&lanes, "bot-slowfetch", &path, &env);
+    let probe = async {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        lanes.try_checkout("bot-slowfetch").is_some()
+    };
+    let (problem, free_during_fetch) = tokio::join!(heal, probe);
+    assert!(
+        free_during_fetch,
+        "a turn can take the checkout while the fetch runs"
+    );
+    assert_eq!(problem, "");
+    assert!(path.join("AGENT.md").is_file());
 }
 
 #[tokio::test]

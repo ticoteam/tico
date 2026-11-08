@@ -188,39 +188,64 @@ pub async fn clone_repository(
 /// Fast-forwards a checkout that has lost its AGENT.md to GitHub's tip, when that tip has the file and the local
 /// HEAD is an ancestor of it. Never resets, never drops a local commit, never removes the folder. "" when the file
 /// is there afterwards, else why the checkout was left as it is.
+/// The heal without the checkout lock, for tests; the readiness check uses heal_free_checkout.
+#[cfg(test)]
 pub async fn heal_checkout(path: &Path, env: &Env) -> String {
     if path.join("AGENT.md").is_file() {
         return String::new();
     }
     let env = crate::safegit::environment(env);
-    match fast_forward(path, &env).await {
-        Ok(()) if path.join("AGENT.md").is_file() => String::new(),
-        Ok(()) => "fast-forwarded, but still has no AGENT.md".into(),
-        Err(why) => why,
+    if let Err(why) = fetch_origin(path, &env).await {
+        return why;
     }
+    finish_heal(path, &env).await
 }
 
-/// heal_checkout under the bot's checkout lock, held for the whole heal: a turn holding the checkout (or a person
-/// waiting for it) is never raced, since a turn may switch branches under the heal. A busy checkout is skipped.
+/// heal_checkout for the runner's readiness check. The fetch (up to 120 s) runs without the bot's checkout lock, so
+/// a turn is never queued behind it. Then the lock is taken, and the conditions are rechecked against the fetched
+/// upstream before anything is merged. A busy checkout is skipped.
 pub async fn heal_free_checkout(
     lanes: &crate::sessions::Lanes,
     bot: &str,
     path: &Path,
     env: &Env,
 ) -> String {
+    if path.join("AGENT.md").is_file() {
+        return String::new();
+    }
+    let env = crate::safegit::environment(env);
+    if let Err(why) = fetch_origin(path, &env).await {
+        return why;
+    }
     let Some(_checkout) = lanes.try_checkout(bot) else {
         return "its checkout is busy with a turn; it is healed at a later check".into();
     };
-    heal_checkout(path, env).await
+    finish_heal(path, &env).await
 }
 
-async fn fast_forward(path: &Path, env: &Env) -> Result<(), String> {
+async fn fetch_origin(path: &Path, env: &Env) -> Result<(), String> {
     let fetched = gitrun::git_as_bot(path, env, &["fetch", "--quiet", "--no-tags"], 120)
         .await
         .map_err(|f| fault_text(&f))?;
     if !fetched.ok() {
         return Err(format!("fetch failed: {}", failure_text(&fetched, env)));
     }
+    Ok(())
+}
+
+/// The locked part of a heal, against the upstream as it is now: "" when AGENT.md is there afterwards.
+async fn finish_heal(path: &Path, env: &Env) -> String {
+    if path.join("AGENT.md").is_file() {
+        return String::new();
+    }
+    match fast_forward(path, env).await {
+        Ok(()) if path.join("AGENT.md").is_file() => String::new(),
+        Ok(()) => "fast-forwarded, but still has no AGENT.md".into(),
+        Err(why) => why,
+    }
+}
+
+async fn fast_forward(path: &Path, env: &Env) -> Result<(), String> {
     let tip = gitrun::git_as_bot(path, env, &["rev-parse", "--verify", "--quiet", "@{u}"], 15)
         .await
         .map_err(|f| fault_text(&f))?;

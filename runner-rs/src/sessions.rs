@@ -1066,10 +1066,9 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
         let up = Some(g(path, &env, &["rev-parse", "--abbrev-ref", "@{u}"], 15).await?.stdout.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| "its upstream".into());
         let behind = Some(g(path, &env, &["rev-list", "--count", "HEAD..@{u}"], 15).await?.stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "some".into());
         let missing = format!("{up} has {behind} commits this checkout doesn't");
-        if !dirty.stdout.trim().is_empty() {
-            return Ok(format!("{missing}, and uncommitted changes kept the runner from rebasing; in {}, commit them, then `git pull --rebase` and push", path.display()));
-        }
-        if !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
+        // A dirty tree gets a plain merge, never a rebase or an autostash (which git restores without its index).
+        // git refuses that merge only when it would overwrite a local change, and then nothing is touched.
+        if !dirty.stdout.trim().is_empty() || !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
             step = "merge";
         }
         let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
