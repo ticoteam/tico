@@ -216,6 +216,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-owner:hover,.bcard-owner[aria-expanded="true"]{box-shadow:0 0 0 2px var(--g4)}
 .bcard-owner:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bcard-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+.handoff-chip{display:inline-flex;align-items:center;max-width:100%;min-height:20px;padding:0 6px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+button.handoff-chip{cursor:pointer}
+button.handoff-chip:hover{color:var(--ink)}
+button.handoff-chip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .bcard-chips .tl-due{display:none}
 .bcard-rel{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted)}
 .bcard-rel svg{flex:none}

@@ -461,6 +461,35 @@ function taskStepAge(t: TaskRow) {
   const words = `At ${t.step?.name || 'this step'} for ${age}: past its limit`;
   return `<span class="bcard-step-age tnum" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
 }
+// The hand-off a card was sent by a spawn link (GET /api/v2/pipeline-links/handoffs): its chip names the card it went to
+// and that card's stage, to a reader who may open it. Read for the cards on the board; the board repaints when a read
+// changes a chip.
+interface HandoffChip { handoff_id: string; pipeline: string | null; task_id: string | null; stage: string | null; readable: boolean; }
+const HANDOFF_CHIP = new Map<string, {chip: HandoffChip | null; at: number}>();
+const HANDOFF_CHIP_TTL = 60_000;
+const HANDOFF_CHIP_ASK = 200;   // the cards one read asks about (backend HANDOFF_CARDS)
+function handoffChipHTML(id: string) {
+  const chip = HANDOFF_CHIP.get(id)?.chip;
+  if (!chip) return '';
+  const label = [chip.pipeline || 'Card', chip.readable && chip.stage ? chip.stage : ''].filter(Boolean).join(' · ');
+  return chip.readable && chip.task_id
+    ? `<button type="button" class="handoff-chip" data-open-task="t${esc(chip.task_id)}" title="${esc(`Open ${label}`)}">${esc(label)}</button>`
+    : `<span class="handoff-chip" title="${esc(label)}">${esc(label)}</span>`;
+}
+// Reads the chips the board's cards do not have yet or have from an old read; a read that changes one repaints the board.
+async function handoffChipsLoad(ids: string[]): Promise<void> {
+  const now = Date.now();
+  const want = [...new Set(ids)].filter(id => { const hit = HANDOFF_CHIP.get(id); return !hit || now - hit.at > HANDOFF_CHIP_TTL; }).slice(0, HANDOFF_CHIP_ASK);
+  if (!want.length) return;
+  const res: {cards: Record<string, {chip: HandoffChip | null} | undefined>} = await get(`/v2/pipeline-links/handoffs?tasks=${want.map(id => encodeURIComponent(id)).join(',')}`, {fresh: true});
+  let changed = false;
+  for (const id of want) {
+    const chip = res.cards[id]?.chip ?? null, old = HANDOFF_CHIP.get(id)?.chip ?? null;
+    if (JSON.stringify(chip) !== JSON.stringify(old)) changed = true;
+    HANDOFF_CHIP.set(id, {chip, at: Date.now()});
+  }
+  if (changed && TASKS_ST) tasksRender(TASKS_ST);
+}
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
 // question, the owner's face and the age.
 function taskCard(it: TaskItem) {
@@ -472,7 +501,7 @@ function taskCard(it: TaskItem) {
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${taskBuilderNotices(taskBuilderActors(t))}
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? pipelineDotsHTML(t) + taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? handoffChipHTML(t.id) + pipelineDotsHTML(t) + taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}

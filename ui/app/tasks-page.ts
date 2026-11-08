@@ -641,6 +641,7 @@ function tasksRender(state) {
   const paged = tasksNeedsQueue(state) && !state.loading;
   if (paged) html += needsMoreButton();
   tasksPatch(el, html);
+  void handoffChipsLoad(items.map((it: TaskItem) => it.task?.id).map((id: unknown) => String(id ?? '')).filter((id: string) => id !== '')).catch(() => { /* the cards keep no chip */ });
   if (state.view === 'board') boardReleaseSlots();
   needsMoreWatch(paged ? el : null);
   if (focusWhat && !el.contains(document.activeElement)) {
