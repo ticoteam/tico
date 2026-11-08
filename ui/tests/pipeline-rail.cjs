@@ -223,6 +223,22 @@ const composerInside = async (page, panel) => {
       await context.close();
     }
 
+    // F15: a card's late time comes from the Late clocks of the tickets on screen, asked for by id. A pipeline-wide list
+    // is capped at 500 tickets; this one has 600 late tickets before D17, so D17 is past the cap and shows only when the
+    // page asks for its id.
+    {
+      const {context, page, errors} = await newPage(browser, {width: 1440, height: 940});
+      const filler = Array.from({length: 600}, (_, i) => ({task_id: 'X' + i, title: 'Filler ' + i, stage: 'Build', hours: 50, limit_hours: 48, since: new Date().toISOString()}));
+      const state = await install(page, {late: [...filler, {task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 3, limit_hours: 1, since: new Date().toISOString()}]});
+      await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
+      await page.waitForSelector('[data-task-key="tD17"] [data-step-age]', {timeout: t(8000)});
+      assert.equal((await page.locator('[data-task-key="tD17"] [data-step-age]').innerText()).trim(), '3h in step', 'the late time shows past the cap');
+      assert.ok(state.lateAsks.some(ids => ids && ids.split(',').includes('D17')), 'the page asked for the ticket on screen by id');
+      assert.ok(state.lateAsks.every(ids => ids === null || ids.split(',').length <= 100), 'each request asks for at most 100 ids');
+      assert.deepEqual(errors, [], 'late by id: no page errors');
+      await context.close();
+    }
+
     // E-extra: the phone's one-stage view is for a pipeline with requirements; a pipeline without them keeps the board.
     for (const [has, label] of [[false, 'no requirements'], [true, 'with requirements']]) {
       const {context, page, errors} = await newPage(browser, {width: 390, height: 844}, {hasTouch: true});
