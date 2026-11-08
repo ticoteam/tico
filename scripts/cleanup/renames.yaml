@@ -2,7 +2,7 @@
 # in cleanup-spec.md. Do not edit by hand: change the tables in gen_map.py and regenerate.
 # `# CHECK` marks a name the integration owner should confirm before the map is frozen.
 base: 29fcaaf6e
-applied_waves: [1, 2, 2s, 2b, 3, 4, 5]
+applied_waves: [1, 2, 2s, 2b, 3, 4, 5, directory]
 tables:
   market_entities: {new: entities, wave: directory}  # the Directory entity table; the market graph's nodes
   market_edges: {new: entity_links, wave: directory}  # the links between entities (a relation is a link_key)
