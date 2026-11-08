@@ -1980,6 +1980,21 @@ def test_an_install_return_with_a_code_and_no_state_is_refused_and_revoked_for_a
     assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
 
 
+def test_an_install_return_declined_with_no_state_goes_back_to_tools_and_changes_nothing(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    declined = api.get(
+        "/api/v2/github/app/authorized",
+        params={"installation_id": "77", "setup_action": "install", "error": "access_denied"},
+        headers=auth(),
+    )
+    assert declined.status_code == 302 and declined.headers["location"] == "/#/tools/github?github=declined", (
+        declined.text
+    )
+    assert gh.issued == 0  # nothing was exchanged
+    assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
+
+
 def test_an_install_return_with_no_state_is_refused_for_an_app_that_recorded_no_owner_id(api, gh):
     personal(gh, "ana-dev")
     gh.conversion_owner = {"login": "ana-dev", "type": "User"}  # GitHub did not say whose account the App was made for

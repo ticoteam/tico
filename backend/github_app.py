@@ -1972,9 +1972,12 @@ def install_github_app(app, settings, store):
         fresh, except an install's return with no state: that one is taken only for an installation on the owner's own
         account, and with a code only when the token is the owner's too (installed_without_state). An install's return runs
         the install step first, and an installation_id must be the App's own installation. A return without a code (the
-        owner declined, or the install asked for no authorization) goes back to Tools after that."""
+        owner declined, or the install asked for no authorization) goes back to Tools after that. An error with no state
+        (the owner declined on GitHub's page) goes back to Tools as well, with nothing changed."""
         who = owner(request)
-        if installation_id and not (state or error):
+        if error and not state:
+            return RedirectResponse("/#/tools/github?github=declined", status_code=302)
+        if installation_id and not state:
             return installed_without_state(who, installation_id, code)
         with store.transaction() as c:
             found = c.execute("SELECT * FROM github_user_states WHERE nonce=?", (state,)).fetchone() if state else None
