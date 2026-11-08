@@ -172,7 +172,7 @@ def remove_segment(c, actor, segment_id):
         _end(c, actor, edge, ev)
         if parent:
             MK.create_edge(c, actor, src=edge["src"], rel="member_of", dst=parent, since=today, evidence_ids=ev)
-    for edge in _current(c, "src=? OR dst=?", (segment_id, segment_id)):
+    for edge in _current(c, "from_entity_id=? OR to_entity_id=?", (segment_id, segment_id)):
         _end(c, actor, edge, ev)
     props = MK.entity(c, segment_id)["properties"]
     if "next" in props:  # added again later, it is not Next until someone says so
