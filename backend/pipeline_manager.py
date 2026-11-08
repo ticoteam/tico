@@ -297,7 +297,9 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
     return out
 
 
-LATE_CAP = 500
+LATE_CAP = 500  # the most late tickets one answer lists
+LATE_SCAN = 2000  # the most live tickets one request evaluates for the pipeline-wide list; `next` reads on from there
+LATE_PAGE = 500  # live tickets per clock evaluation (one page of _live_rows)
 
 
 def late_listing(
@@ -307,39 +309,48 @@ def late_listing(
     pipeline_id: str,
     at: Any,
     wanted: set[str] | None = None,
-) -> tuple[dict[str, dict[str, Any]], bool]:
-    """The Late tickets of a pipeline that `actor` may see, as the endpoint returns them, and whether the list was cut at
-    LATE_CAP. Visibility is one query over the late ids (pipeline_rights.list_sql), so the query count does not grow with
-    the number of late tickets. `wanted` limits the answer to those ids."""
+    after: str = "",
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    """The Late tickets of a pipeline that `actor` may see, as the endpoint returns them, and the cursor (`next`) that reads
+    on, or None when the list is complete. Visibility is one query over the late ids (pipeline_rights.list_sql), so the
+    query count does not grow with the number of late tickets. `wanted` limits the answer to those ids. Without it, one
+    call reads at most LATE_SCAN live tickets after the id `after` (F10); pass the returned cursor back to read the rest."""
     readable = pipeline_rights.list_sql(c, actor, visible_sql)
     # Visibility and the asked ids narrow the tickets before any clock is computed: only those rows are evaluated.
     if wanted is not None:
         found = _late_found(c, _live_rows(c, pipeline_id, ids=sorted(wanted), readable=readable), at)
-        more = len(found) > LATE_CAP
+        cursor = None
     else:
-        found, more = _late_page(c, pipeline_id, at, readable)
+        found, cursor = _late_scan(c, pipeline_id, at, readable, after)
     return {
         item["task_id"]: {"since": item["since"], "hours": item["hours"], "limit_hours": item["limit_hours"]}
         for item in found[:LATE_CAP]
-    }, more
+    }, cursor
 
 
-LATE_PAGE = 500  # live tickets evaluated per page of the pipeline-wide Late list
-
-
-def _late_page(c: "sqlite3.Connection", pipeline_id: str, at: Any, readable: str) -> tuple[list[dict[str, Any]], bool]:
-    """The pipeline-wide Late list, read a page of LATE_PAGE live tickets at a time (by id) until LATE_CAP + 1 late ones
-    are found. The work is bounded by the pages read; `more` says whether a late ticket was left out of the answer."""
+def _late_scan(
+    c: "sqlite3.Connection", pipeline_id: str, at: Any, readable: str, after: str
+) -> tuple[list[dict[str, Any]], str | None]:
+    """The pipeline-wide Late list from the id `after` on: the live tickets are read in id order, a page of LATE_PAGE at a
+    time, up to LATE_SCAN of them. Returns the late ones (at most LATE_CAP, the first by id) and the cursor that continues
+    the scan: the last id read, or the last id listed when more than LATE_CAP were late, and None when no ticket is left."""
     found: list[dict[str, Any]] = []
-    after = ""
-    while len(found) <= LATE_CAP:
-        page = _live_rows(c, pipeline_id, after=after, readable=readable, limit=LATE_PAGE)
+    cursor = after
+    scanned = 0
+    exhausted = False
+    while scanned < LATE_SCAN and not exhausted:
+        want = min(LATE_PAGE, LATE_SCAN - scanned)
+        page = _live_rows(c, pipeline_id, after=cursor, readable=readable, limit=want)
         found.extend(_late_found(c, page, at))
-        if len(page) < LATE_PAGE:
-            break
-        after = str(page[-1]["id"])
-    found.sort(key=lambda item: (item["since"], item["task_id"]))
-    return found, len(found) > LATE_CAP
+        scanned += len(page)
+        exhausted = len(page) < want
+        if page:
+            cursor = str(page[-1]["id"])
+    found.sort(key=lambda item: str(item["task_id"]))
+    if len(found) > LATE_CAP:
+        found = found[:LATE_CAP]
+        return found, str(found[-1]["task_id"])
+    return found, None if exhausted else cursor
 
 
 def _paused_minutes(spans: list[tuple[datetime, datetime]], start: datetime, now: datetime) -> float:
@@ -792,10 +803,14 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
         return out
 
     @app.get("/api/v2/pipelines/{pipeline_id}/late")
-    def pipeline_late(request: Request, pipeline_id: str, ids: str | None = None) -> dict[str, Any]:
+    def pipeline_late(
+        request: Request, pipeline_id: str, ids: str | None = None, after: str | None = None
+    ) -> dict[str, Any]:
         """The Late list the pipeline's cards read for their "Nh in step" time: the live tickets of the pipeline past
         their Warn after (late_tickets), only the ones the reader may see. `ids` (a comma list, the cards on screen) asks
-        for those; without it the list is capped at LATE_CAP and `more` says whether it was cut."""
+        for those. Without it, one request reads at most LATE_SCAN live tickets and lists at most LATE_CAP late ones.
+        `next` is the cursor to pass back as `after` for the rest (null when the list is complete); `more` is true when
+        `next` is."""
         who = request.state.identity
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots read the pipeline's Late list", 403)
@@ -808,12 +823,13 @@ def install(app: "FastAPI", store: Any, mutate: "Callable[..., Any]", auth: "Aut
             seen = pipeline_rights.may_see(c, who.task_actor or who.actor, pipeline_id)
             if not seen:
                 raise Problem("not_found", "No such pipeline", 404)
-            late, more = late_listing(
+            late, cursor = late_listing(
                 c,
                 who.task_actor or who.actor,
                 auth.task_sql(c, who),  # pyright: ignore[reportUnknownMemberType]
                 pipeline_id,
                 datetime.now(timezone.utc),
                 wanted,
+                after or "",
             )
-        return {"late": late, "more": more}
+        return {"late": late, "more": cursor is not None, "next": cursor}

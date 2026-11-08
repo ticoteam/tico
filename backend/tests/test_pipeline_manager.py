@@ -508,26 +508,26 @@ def test_the_late_list_costs_the_same_queries_for_many_tickets_and_is_capped(api
             statements: list[str] = []
             c.set_trace_callback(statements.append)
             try:
-                listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, wanted)
+                listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, wanted)
             finally:
                 c.set_trace_callback(None)
-        return sum(1 for s in statements if s.lstrip().upper().startswith("SELECT")), listing, more
+        return sum(1 for s in statements if s.lstrip().upper().startswith("SELECT")), listing, cursor
 
     add(4, 0)
-    few, listing, more = selects()
-    assert len(listing) == 4 and more is False
+    few, listing, cursor = selects()
+    assert len(listing) == 4 and cursor is None
     add(96, 4)
-    many, listing, more = selects()
-    assert len(listing) == 100 and more is False
+    many, listing, cursor = selects()
+    assert len(listing) == 100 and cursor is None
     assert many == few and many < 15
 
     add(401, 100)
-    _, listing, more = selects()
-    assert len(listing) == PM.LATE_CAP == 500 and more is True
+    _, listing, cursor = selects()
+    assert len(listing) == PM.LATE_CAP == 500 and cursor is not None
 
     picked = [sorted(listing)[0], sorted(listing)[1], "not-late"]
-    _, listing, more = selects(set(picked))
-    assert sorted(listing) == sorted(picked[:2]) and more is False
+    _, listing, cursor = selects(set(picked))
+    assert sorted(listing) == sorted(picked[:2]) and cursor is None
 
 
 def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api, monkeypatch):
@@ -553,15 +553,15 @@ def test_one_asked_ticket_among_5000_is_the_only_row_whose_clock_is_computed(api
 
     monkeypatch.setattr(PM, "late_tickets", counting)
     with store.read() as c:
-        listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[4321]})
-    assert list(listing) == [ids[4321]] and more is False
+        listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, {ids[4321]})
+    assert list(listing) == [ids[4321]] and cursor is None
     assert sum(evaluated) == 1
 
     evaluated.clear()
     with store.read() as c:
-        listing, more = PM.late_listing(c, ANA, "1=1", type_id, base, None)
-    assert len(listing) == PM.LATE_CAP and more is True
-    assert max(evaluated) <= PM.LATE_PAGE
+        listing, cursor = PM.late_listing(c, ANA, "1=1", type_id, base, None)
+    assert len(listing) == PM.LATE_CAP and cursor is not None
+    assert max(evaluated) <= PM.LATE_PAGE and sum(evaluated) <= PM.LATE_SCAN
 
 
 def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
@@ -667,3 +667,69 @@ def test_the_migration_backfills_existing_managed_pipelines_to_the_migration_tim
         stamps = dict(c.execute("SELECT id, manager_since FROM task_types WHERE id IN (?, ?)", (managed, unmanaged)))
     assert H.parse_ts(stamps[managed]) >= before
     assert stamps[unmanaged] is None
+
+
+def test_the_pipeline_wide_late_list_reads_a_bounded_window_and_a_cursor_visits_every_ticket_once(api, monkeypatch):
+    """F10 (Codex): 5,000 live tickets, none late. One request evaluates at most LATE_SCAN of them and returns a `next`
+    cursor; following the cursors evaluates every ticket exactly once."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        ids = [
+            H.task_create(c, ANA, f"Fresh {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
+            for n in range(5000)
+        ]
+        for ticket in ids:
+            visit(c, ticket, type_id, "Building", base - timedelta(minutes=5))
+    evaluated: list[str] = []
+    real = PM.late_tickets
+
+    def counting(c, rows, at):
+        evaluated.extend(str(r["id"]) for r in rows)
+        return real(c, rows, at)
+
+    monkeypatch.setattr(PM, "late_tickets", counting)
+    per_request: list[int] = []
+    cursor = None
+    while True:
+        before = len(evaluated)
+        query = "" if cursor is None else f"?after={cursor}"
+        body = get(api, f"pipelines/{type_id}/late{query}")
+        per_request.append(len(evaluated) - before)
+        assert body["late"] == {}
+        cursor = body["next"]
+        if cursor is None:
+            break
+    assert per_request[0] == PM.LATE_SCAN and max(per_request) <= PM.LATE_SCAN
+    assert len(per_request) == 3
+    assert len(evaluated) == len(set(evaluated)) == 5000 and set(evaluated) == set(ids)
+
+
+def test_more_late_tickets_than_the_cap_are_listed_across_cursors_without_a_gap_or_a_repeat(api):
+    """F10: 600 late tickets: the first answer lists LATE_CAP of them and a cursor; the cursor's answer lists the rest."""
+    store = api.app.state.store
+    base = now()
+    with store.transaction() as c:
+        type_id = pipeline(c)
+        c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (step(c, type_id, "Building"),))
+        ids = [
+            H.task_create(c, ANA, f"Overdue {n}", "", ANA, type=type_id, step="Building", lint=False)["id"]
+            for n in range(600)
+        ]
+        for ticket in ids:
+            visit(c, ticket, type_id, "Building", base - timedelta(hours=2))
+    listed: list[str] = []
+    cursor = None
+    requests = 0
+    while True:
+        with store.read() as c:
+            listing, cursor_out = PM.late_listing(c, ANA, "1=1", type_id, base, None, cursor or "")
+        requests += 1
+        listed.extend(listing)
+        cursor = cursor_out
+        if cursor is None:
+            break
+    assert requests == 2
+    assert len(listed) == len(set(listed)) == 600 and set(listed) == set(ids)
