@@ -92,6 +92,13 @@ PR_LINK = (
 WORK_KEYS = ("title", "spec", "repo", "pr", "author")  # the work context a judge's verdict is bound to (work_digest)
 DIGEST_SQL = "tico_judge_work_digest"  # _digest_of_row as a SQL function on _waiting's connection
 # The decision that stands on a waiting attachment's requirement, as the engine reads it: the newest one not undone.
+# Whether a judge's decision d still stands for the work version, as pipeline_engine._standing reads it: always where the
+# requirement needs evidence newer than the change (the decision keeps the evidence's version, which a change does not
+# move), and for a met; otherwise (recorded for the work version: _decision_version) only on that version.
+JUDGE_VERSION_STANDS = (
+    "(d.work_version IS NULL OR d.work_version = t.work_revision OR d.verdict = 'met' "
+    "OR json_type(r.needs, '$.newer_than_change') IS NOT 'false')"
+)
 LATEST_DECISION = (
     "SELECT x.rowid FROM stage_decisions x WHERE x.task_id = a.task_id "
     "AND x.stage_requirement_id = a.stage_requirement_id AND x.undone_at IS NULL "
@@ -481,11 +488,12 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     not for the work as it is now (none, one for another title, spec or PR: work_digest, or one from before the digest),
     and that no person was routed to (route_next_to: a bot does not judge what a person now answers). A judge's route
     holds the judge off only while its verdict stands: it is the requirement's latest decision (LATEST_DECISION, as the
-    engine reads it), on this attachment, and its digest is the work's now. A judge's answer on this attachment counts
+    engine reads it), on this attachment, its digest is the work's now, and it stands for this work version. A judge's answer on this attachment counts
     only while it is the latest decision, the one the engine reads: after newer evidence was ruled on and taken away, or
     after a person's ruling that no longer stands, the requirement waits and the judge answers again. On a requirement
     that does not need evidence newer than the change, its answer is recorded for the work version (_decision_version),
-    and a not met or unsure stands only for that version, as in the engine: a new commit has it answered again. A person's or a
+    and a not met or unsure (and its route) stands only for that version, as in the engine: a new commit has it answered
+    again (JUDGE_VERSION_STANDS). A person's or a
     rule's ruling that is the latest decision, on this attachment, and still standing in the engine (this work version,
     or a met on a requirement that does not need evidence newer than the change: _fresh_needed), holds it off too, so
     re-judging never replaces a person's verdict, whatever evidence the judge saw before. An attachment that newer
@@ -534,7 +542,8 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                                AND d.route_next_to IS NOT NULL
                                AND (COALESCE(d.judge, '') <> 'llm' OR d.requirement_attachment_id IS NULL
                                     OR (d.rowid = ({latest}) AND d.requirement_attachment_id = a.id
-                                        AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail))))
+                                        AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail)
+                                        AND {version_stands})))
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.rowid = ({latest}) AND COALESCE(d.judge, '') <> 'llm'
                                AND (d.verdict = 'override' OR d.requirement_attachment_id IS NULL
@@ -546,12 +555,11 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                                               WHERE x.requirement_attachment_id = a.id AND x.judge = 'llm'
                                               ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1)
                                AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail)
-                               AND d.rowid = ({latest})
-                               AND (d.work_version IS NULL OR d.work_version = t.work_revision OR d.verdict = 'met'
-                                    OR json_type(r.needs, '$.newer_than_change') IS NOT 'false'))
+                               AND d.rowid = ({latest}) AND {version_stands})
            ORDER BY a.created_at, a.id
            LIMIT ?""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES)))
         .replace("{latest}", LATEST_DECISION)
+        .replace("{version_stands}", JUDGE_VERSION_STANDS)
         .replace("{pr_link}", PR_LINK.format(task="a.task_id"))
         .replace("{digest}", DIGEST_SQL),
         (*H.ACTIVE_STATUSES, limit),

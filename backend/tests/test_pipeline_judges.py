@@ -1586,3 +1586,31 @@ def test_a_judges_not_met_that_lapses_with_a_new_commit_is_judged_again(tmp_path
     with store.transaction() as c:
         c.execute("UPDATE tasks SET work_revision = work_revision + 1 WHERE id=?", (task_id,))
     assert _standing(store, task_id, req_id) == "met" and P.tick(store) == 0
+
+
+def test_a_judges_routed_not_met_that_lapses_with_a_new_commit_does_not_stop_the_judge(tmp_path, monkeypatch):
+    """Codex round 10, P2: a judge's route lapses with its verdict. On a bot_then_person requirement that does not need
+    evidence newer than the change, a not met routed to the reviewer stands only for its work version; after a new commit
+    (digest unchanged) the engine waits, so the old route does not keep the judge from answering for the work now."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    _older_evidence_ok(store, req_id)
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE stage_requirements SET reviewed_by='bot_then_person', reviewer_id=? WHERE id=?", (BEN, req_id)
+        )
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    with store.transaction() as c:
+        assert (
+            c.execute(
+                "SELECT route_next_to FROM stage_decisions WHERE task_id=? AND stage_requirement_id=?",
+                (task_id, req_id),
+            ).fetchone()[0]
+            == BEN
+        )
+        c.execute("UPDATE tasks SET work_revision = work_revision + 1 WHERE id=?", (task_id,))
+    assert _standing(store, task_id, req_id) == "waiting"
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    assert P.tick(store) == 0
