@@ -64,7 +64,7 @@ SCENARIOS += _pipeline_manager
 
 # Every scenario carries the stuck-work invariant, whatever checks it lists (a case may leave BASE out). It runs here,
 # after the last case, because this package finishes last whichever module is imported first.
-from evals.factory.scenarios import STUCK_CHECK, no_stuck_work  # noqa: E402
+from evals.factory.scenarios import STUCK_CHECK, no_stuck_work
 
 for _scenario in SCENARIOS:
     if not any(fn is no_stuck_work for _, _, fn in _scenario.checks):
