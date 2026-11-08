@@ -323,11 +323,16 @@ def _identity(conn: sqlite3.Connection, actor: str) -> "Identity":
     return Identity(actor, "owner" if actor == pipeline_rights.company_owner(conn) else "human")
 
 
-def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
-    """Whether an attachment the spawn would carry may go to `owner`'s ticket. A company file must pass the file and page policy
-    for the owner (files.file_visible: audience, pipeline and task privacy), its version's blob and attempt must be readable
-    to the owner, and a page with an audience is not carried at all: its other readers cannot be listed here, so when unsure
-    it is skipped. A blob is checked by its privacy alone. A link has no file, so the sharing decision decides it."""
+NO_RIGHTS = (
+    "human:no-rights"  # a plain company member with no rights of their own: the reader every open file must admit
+)
+
+
+def _policy_reads(conn: sqlite3.Connection, actor: str, row: Row) -> bool:
+    """Whether `actor` may read an attachment's content: a company file must pass the file and page policy (files.file_visible:
+    audience, task privacy, scope), its version's blob and attempt must be readable to them, and a page with an audience is not
+    carried at all (its other readers cannot be listed here). A blob is checked by its privacy alone. A link has no file, so
+    there is nothing here to check. When unsure, it is not readable."""
     from . import files, task_privacy
     from .auth import Auth
 
@@ -348,20 +353,83 @@ def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
         if not versions:
             return False
         for version in versions:
-            if version["blob_id"] and not blob_readable(conn, owner, version["blob_id"]):
+            if version["blob_id"] and not blob_readable(conn, actor, version["blob_id"]):
                 return False
-            if version["attempt_id"] and not attempt_readable(conn, owner, version["attempt_id"]):
+            if version["attempt_id"] and not attempt_readable(conn, actor, version["attempt_id"]):
                 return False
-        return bool(file_visible(conn, read_policy(conn), _identity(conn, owner), file, {}))
+        return bool(file_visible(conn, read_policy(conn), _identity(conn, actor), file, {}))
     if row.get("blob_id"):
-        return blob_readable(conn, owner, row["blob_id"])
+        return blob_readable(conn, actor, row["blob_id"])
     return True
+
+
+def _pipeline_tasks(conn: sqlite3.Connection, row: Row) -> list[str]:
+    """The tasks an attachment sits on: its file's task and scope task, and the tasks of every blob it reads (task_assets)."""
+    task_ids: list[str] = []
+    blobs: list[str] = [str(row["blob_id"])] if row.get("blob_id") else []
+    if row.get("file_id"):
+        file = _one(conn, "SELECT task_id, scope FROM bot_files WHERE id = ?", (row["file_id"],))
+        if file is not None:
+            if file["task_id"]:
+                task_ids.append(str(file["task_id"]))
+            if str(file["scope"] or "").startswith("task:"):
+                task_ids.append(str(file["scope"])[5:])
+        blobs += [
+            str(r["blob_id"])
+            for r in _rows(
+                conn,
+                "SELECT blob_id FROM bot_file_versions WHERE file_id = ? AND blob_id IS NOT NULL",
+                (row["file_id"],),
+            )
+        ]
+    for blob in blobs:
+        task_ids += [
+            str(r["task_id"]) for r in _rows(conn, "SELECT task_id FROM task_assets WHERE blob_id = ?", (blob,))
+        ]
+    return task_ids
+
+
+def _on_open_pipelines(conn: sqlite3.Connection, task_ids: list[str], child_type: str, members_child: bool) -> bool:
+    """Whether every task sits on no members-only pipeline, or (for a members-only child) on the child's own pipeline. A task
+    that cannot be found is unsure, so it is not carried."""
+    for task_id in task_ids:
+        found = _one(conn, "SELECT type_id FROM tasks WHERE id = ?", (task_id,))
+        if found is None:
+            return False
+        type_id = str(found["type_id"] or "")
+        if _members_only(conn, type_id) and not (members_child and type_id == child_type):
+            return False
+    return True
+
+
+def _item_readable(conn: sqlite3.Connection, owner: str, child: Row, row: Row) -> bool:
+    """Whether an attachment the spawn would carry may go to `child`, which every one of its readers may then read (D64, D67).
+    The child's owner must read the item (_policy_reads), as before. Then the child's audience decides:
+    - an open child (company-wide, not private) or a private one: the item must be open to a plain member with no rights of
+      its own, and sit on no members-only pipeline (a private child's readers are its own list, and an open item suits all).
+    - a members-only child: the item must be open to a plain member, and may sit on that same pipeline (its members read it with
+      the child); the child's requester, who also reads the child, must read it too.
+    A link has no file and is decided by the sharing check alone. Anything not shown to be covered is skipped."""
+    if not _policy_reads(conn, owner, row):
+        return False
+    if not _policy_reads(conn, NO_RIGHTS, row):
+        return False
+    child_type = str(child["type_id"] or "")
+    task_ids = _pipeline_tasks(conn, row)
+    if H.task_private(conn, child) or not _members_only(conn, child_type):
+        return _on_open_pipelines(conn, task_ids, child_type, members_child=False)
+    requester = str(child["requester_id"] or "")
+    return (
+        bool(requester)
+        and _policy_reads(conn, requester, row)
+        and _on_open_pipelines(conn, task_ids, child_type, members_child=True)
+    )
 
 
 def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, leaving_stage: str | None) -> None:
     """The source's links become links of the spawned ticket through the link API (H.task_link), spec first, at most
     MAX_CARRIED. Nothing is carried unless everyone who can read the child may read the source (_shares_source); then each
-    file or blob must pass _item_readable for the child's owner. A file or blob has no link API for a ticket and is not carried
+    file or blob must pass _item_readable, which covers every reader of the child, not only its owner. A file or blob has no link API for a ticket and is not carried
     as one. Each skip is logged on the child as `carry_skipped`, naming only the requirement (never the URL or title); a child
     that gets no content from the source gets one such event naming "A link"."""
     source = H.task(conn, source_id)
@@ -388,7 +456,7 @@ def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, 
         url = str(row["url"] or "").strip()
         if not url or url in carried:
             continue
-        if not _item_readable(conn, owner, row):
+        if not _item_readable(conn, owner, child, row):
             H._task_event(  # pyright: ignore[reportPrivateUsage]
                 conn, child_id, H.KEEPER, "carry_skipped", None, str(row["requirement"] or "") or "A link", ""
             )

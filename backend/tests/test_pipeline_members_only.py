@@ -502,3 +502,128 @@ def test_a_spawn_carries_no_restricted_page_its_child_owner_or_readers_may_not_o
         skipped = rows(c, "SELECT new FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", child)
     assert [s["new"] for s in skipped] == ["Memo"]
     assert memo not in json.dumps(skipped)
+
+
+def add_company_file(c, file_id, scope, title, blob_id):
+    """A company file with one version, its blob owned by Ana, under `scope` (a task's or a company one)."""
+    bot = "b-" + file_id
+    insert(c, "bots", id=bot, slug=bot, display_name=bot, state="active", created_at=T)
+    insert(
+        c,
+        "bot_files",
+        id=file_id,
+        bot_id=bot,
+        scope=scope,
+        identity=file_id,
+        title=title,
+        kind="file",
+        mime="text/html",
+        locator="tico_blob",
+        current_version=1,
+        first_activity_at=T,
+        last_activity_at=T,
+    )
+    insert(
+        c,
+        "blobs",
+        id=blob_id,
+        owner="human:ana",
+        digest="sha-" + blob_id,
+        size=10,
+        name="memo.html",
+        content_type="text/html",
+        created_at=T,
+    )
+    insert(
+        c,
+        "bot_file_versions",
+        file_id=file_id,
+        version=1,
+        blob_id=blob_id,
+        digest="sha-" + blob_id,
+        size=10,
+        name="memo.html",
+        mime="text/html",
+        actor="human:ana",
+        created_at=T,
+    )
+
+
+def ship_with_file(api, ssteps, link, source, file_id):
+    """Ana attaches the company file to `source`, the requirement is decided, and the source ships to its link's target.
+    Returns the spawned child's id."""
+    with api.app.state.store.transaction() as c:
+        req = R.add(
+            c,
+            "human:ana",
+            ssteps["Doing"],
+            {
+                "name": "Memo",
+                "kind": "attachment",
+                "needs": {"formats": ["file"]},
+                "reviewed_by": "person",
+                "reviewer_id": "human:ana",
+            },
+        )
+        requirement_attachments.attach(
+            c,
+            api.app.state.auth,
+            Identity("human:ana", "human"),
+            source,
+            req["id"],
+            {"source": "file", "file_id": file_id},
+        )
+        decide(c, source, req["id"])
+        H.task_update(c, "human:ana", source, step=ssteps["Done"])
+        [handoff] = L.handoffs(c, link["id"])
+    return handoff["target_task_id"]
+
+
+def test_a_spawn_carries_no_file_of_a_members_only_pipeline_to_a_child_a_non_member_reads(api, monkeypatch):
+    """Codex B2: a public Sales ticket attaches a members-only Legal file. Ana (a Legal member) owns the public Engineering
+    child, so Cal, who is not on Legal, reads the child. Neither the file's name nor its version URL reaches Cal through the
+    child; the skip is logged by requirement name only."""
+    monkeypatch.setattr(L, "hub_origin", "https://hub.example.test")
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Legal" + tag, private=True)
+    sales, ssteps = make_pipeline(api, "Sales" + tag)
+    eng, _ = make_pipeline(api, "Engineering" + tag)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET manager=? WHERE id=?", ("human:ana", eng))
+        link = L.create_link(c, "human:ana", ssteps["Doing"], eng, "spawn")
+    legal_task = ticket(api, legal, "Legal work " + tag, owner="human:ana")
+    memo = "Privileged memo " + tag
+    with api.app.state.store.transaction() as c:
+        add_company_file(c, "file-legal-" + tag, "task:" + legal_task, memo, "blob-legal-" + tag)
+    source = ticket(api, sales, "Public " + tag, owner="human:ana")
+    child = ship_with_file(api, ssteps, link, source, "file-legal-" + tag)
+
+    with api.app.state.store.read() as c:
+        assert H.task(c, child)["owner_id"] == "human:ana"
+    listed = json.dumps(get(api, f"tasks/{child}", "cara-test"))
+    assert "file-legal-" + tag not in listed and memo not in listed and "hub.example.test" not in listed
+    with api.app.state.store.read() as c:
+        assert rows(c, "SELECT url FROM task_links WHERE task_id = ?", child) == []
+        skipped = rows(c, "SELECT new FROM history_events WHERE subject_id = ? AND kind = 'carry_skipped'", child)
+    assert [s["new"] for s in skipped] == ["Memo"]
+    assert memo not in json.dumps(skipped)
+
+
+def test_a_spawn_still_carries_a_company_file_every_reader_of_the_child_may_open(api, monkeypatch):
+    """A company-wide file on a company-wide ticket is carried to a public child as a link to its version."""
+    monkeypatch.setattr(L, "hub_origin", "https://hub.example.test")
+    tag = uuid.uuid4().hex[:8]
+    sales, ssteps = make_pipeline(api, "Sales" + tag)
+    eng, _ = make_pipeline(api, "Engineering" + tag)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET manager=? WHERE id=?", ("human:ana", eng))
+        link = L.create_link(c, "human:ana", ssteps["Doing"], eng, "spawn")
+    source = ticket(api, sales, "Public " + tag, owner="human:ana")
+    with api.app.state.store.transaction() as c:
+        add_company_file(c, "file-open-" + tag, "task:" + source, "Open memo " + tag, "blob-open-" + tag)
+    child = ship_with_file(api, ssteps, link, source, "file-open-" + tag)
+
+    with api.app.state.store.read() as c:
+        carried = rows(c, "SELECT url, title FROM task_links WHERE task_id = ?", child)
+    assert len(carried) == 1 and carried[0]["url"].startswith("https://hub.example.test/")
+    assert carried[0]["title"] == "memo.html"  # a company file's link is titled by its version's name
