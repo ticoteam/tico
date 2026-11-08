@@ -1028,14 +1028,21 @@ def check_move(
     if not step_id or not task_id:
         return
     now = _one(conn, "SELECT type_id, step_id FROM tasks WHERE id = ?", (task_id,))
-    if now is None or not now["step_id"] or step_id == now["step_id"]:
+    if now is None or step_id == now["step_id"]:
         return
     pipeline_id = str(now["type_id"])
-    here, target = stage(conn, str(now["step_id"])), stage(conn, step_id)
-    if here is None:
+    here = stage(conn, str(now["step_id"])) if now["step_id"] else None
+    target = stage(conn, step_id)
+    entering = target is not None and str(target["type_id"]) != str(now["type_id"] or "")
+    if here is None and not entering:
         return
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
-    if target is not None and target["type_id"] == here["type_id"] and target["position"] < here["position"]:
+    if (
+        here is not None
+        and target is not None
+        and target["type_id"] == here["type_id"]
+        and target["position"] < here["position"]
+    ):
         if (
             has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor and _DECIDED_MOVE.get() != actor
         ):  # the off switch: no rules, no gate
@@ -1047,6 +1054,31 @@ def check_move(
                 task=task_id,
             )
         return
+    if entering and target is not None:
+        # A card that enters a pipeline at a stage is held to the exit requirements of every stage of that pipeline before
+        # it, as a move inside the pipeline would be, and to the stages it came from (its visits, and its stage if any).
+        scope = (
+            _forward_scope(conn, task_id, here, None)
+            if here is not None
+            else dict(_visited(conn, [task_id]).get(task_id, {}))
+        )
+        for before in stages(conn, str(target["type_id"])):
+            if before["position"] < target["position"]:
+                scope.setdefault(str(before["id"]), None)
+        if not scope:
+            return
+        _hold(
+            conn,
+            actor,
+            task_id,
+            str(target["type_id"]),
+            f"Can't enter {target['name']} yet",
+            scope,
+            override,
+            override_note,
+        )
+        return
+    assert here is not None
     scope = _forward_scope(conn, task_id, here, target)
     _hold(conn, actor, task_id, pipeline_id, f"Can't leave {here['name']} yet", scope, override, override_note)
 

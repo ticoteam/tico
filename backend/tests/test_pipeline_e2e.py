@@ -1639,3 +1639,57 @@ def test_not_validated_files_one_engineering_ticket_when_specifying_and_review_b
     ).fetchone()[0]
     assert filed == review_link and filed != specifying_link
     assert co.where(card) == ("Product", "In development")
+
+
+def test_a_card_moved_into_product_review_from_outside_is_held_to_the_spec_page(co):
+    """Codex GB2 finding 2: a General card moved into Product at Review skipped Specifying's exit requirement, because the
+    gate read only the card's source stages. A bot is refused; the card is let in once its spec page is attached and met."""
+    from types import SimpleNamespace
+
+    from backend import requirement_attachments
+
+    card = H.task_create(co.c, ANA, "Dark mode from outside", "", BUILDER, lint=False)["id"]
+    co.c.commit()
+    with pytest.raises(H.Refused) as refused:
+        H.task_update(co.c, BUILDER, card, type=co.type["Product"], step="Review")
+    assert refused.value.rule == "requirement"
+    assert co.c.execute("SELECT type_id FROM tasks WHERE id=?", (card,)).fetchone()[0] != co.type["Product"]
+
+    co.move(card, "Specifying", actor=ANA, type=co.type["Product"])
+    assert co.where(card) == ("Product", "Specifying")
+    file_id = tico_spec_page(co, card)
+    requirement_attachments.attach(
+        co.c,
+        _Guard(),
+        SimpleNamespace(actor=ANA, role="human", task_actor=None),
+        card,
+        co.requirement("Product", "Specifying", "Spec page"),
+        {"source": "file", "file_id": file_id},
+    )
+    co.c.commit()
+    co.spec(card)
+    co.move(card, "Review", actor=BUILDER)
+    assert co.where(card) == ("Product", "Review")
+
+
+def test_a_pipeline_editor_may_still_override_the_spec_page_when_a_card_enters_review(co):
+    """The override the gate gives a pipeline editor is unchanged: Ana moves a card in from outside past the Spec page with a
+    note, and the override is written."""
+    card = H.task_create(co.c, ANA, "Dark mode, moved by Ana", "", BUILDER, lint=False)["id"]
+    co.c.commit()
+    H.task_update(
+        co.c,
+        ANA,
+        card,
+        type=co.type["Product"],
+        step="Review",
+        mover=True,
+        override_requirements=True,
+        note="The spec is in the meeting notes",
+    )
+    co.c.commit()
+    assert co.where(card) == ("Product", "Review")
+    overrides = co.c.execute(
+        "SELECT COUNT(*) FROM stage_decisions WHERE task_id=? AND verdict='override'", (card,)
+    ).fetchone()[0]
+    assert overrides >= 1
