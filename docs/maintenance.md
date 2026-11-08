@@ -31,6 +31,9 @@ A held queued job does not hide a due follow-up from Find stuck's task list.
 - Day: once per company day, after 05:00.
 - Week: seven days after the step's last attempt.
 - Custom: every N hours or days, counted from the step's last attempt. A failed attempt counts, so a broken step does not retry on every run.
+- Week and Custom count as due up to five minutes early. A step's clock is its run's start, which lands a few seconds
+  into a schedule bucket; without the slack a run a few seconds earlier in its bucket than the last one finds the step
+  not due and puts it off a whole bucket (on Nov 8 a 6-hour Find stuck ran 7 hours apart).
 
 Suggest waits at least 24 hours between successful fetches, measured from the request time. A skip inside that window keeps its daily attempt for a later run that day.
 
