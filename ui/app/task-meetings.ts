@@ -1,6 +1,31 @@
 'use strict';
 
-function taskMeetingsRender(d) {
+type TmMeeting = import('../types/api').TaskMeeting;
+type TmPage = import('../types/api').TaskMeetings;
+// The meetings a task's dialog lists: the rows read so far, the cursor of the next page, and the live changes that arrived
+// while a read was out (taskMeetingsPatch applies them on top of the rows). opening is the dialog opening it was read for.
+interface TmReading {
+  rows: TmMeeting[];
+  next: string | null;
+  changes: Map<string, TmMeeting | null | undefined>;
+  loading: boolean;
+  opening?: unknown;
+}
+// The task dialog with its meetings slot (tmEl), the slot's reading (tmRead) and the opening counter the page keeps on it.
+interface TmDialog extends TaskDialog {
+  tmEl?: HTMLElement | null;
+  tmRead?: TmReading | null;
+  taskOpening?: unknown;
+}
+// A live event about a task: meeting_links lists the changed links when the server sends them.
+interface TmLiveEvent {
+  id?: unknown;
+  kind?: string;
+  kinds?: string[];
+  meeting_links?: {meeting_id: string; meeting?: TmMeeting | null}[] | null;
+}
+
+function taskMeetingsRender(d: TmDialog) {
   const slot = d.tmEl, reading = d.tmRead;
   if (!slot?.isConnected || !reading) return;
   slot.hidden = !reading.rows.length;
@@ -25,35 +50,37 @@ function taskMeetingsRender(d) {
     more.onclick = () => taskMeetingsLoad(d, reading.next).catch(error => toast(error.message, true));
   }
 }
-function taskMeetingsPatch(rows, changes) {
-  const byId = new Map(rows.map(row => [row.meeting_id, row]));
+function taskMeetingsPatch(rows: TmMeeting[], changes: Map<string, TmMeeting | null | undefined>): TmMeeting[] {
+  const byId = new Map(rows.map((row): [string, TmMeeting] => [row.meeting_id, row]));
   for (const [id, meeting] of changes) {
     if (meeting) byId.set(id, meeting);
     else byId.delete(id);
   }
   return [...byId.values()];
 }
-async function taskMeetingsLoad(d, cursor = null) {
+async function taskMeetingsLoad(d: TmDialog, cursor: string | null = null) {
   const slot = d.tmEl, reading = d.tmRead;
   if (!reading || reading.loading) return;
+  if (!slot) throw new Error('The task meetings slot is missing.');
   reading.loading = true;
   reading.changes.clear();
   taskMeetingsRender(d);
   // A recovery read retains the number of pages the person expanded.
   const target = cursor ? 0 : Math.max(20, reading.rows.length);
-  let rows = cursor ? reading.rows : [], next = cursor;
+  let rows: TmMeeting[] = cursor ? reading.rows : [], next = cursor;
   try {
     do {
       const query = new URLSearchParams({limit: '20'});
       if (next) query.set('cursor', next);
-      const result = await get(`/v2/tasks/${encodeURIComponent(slot.dataset.task)}/meetings?${query}`);
+      const result = await get<TmPage>(`/v2/tasks/${encodeURIComponent(String(slot.dataset.task))}/meetings?${query}`);
       if (d.tmRead !== reading || !slot.isConnected) return;
       rows = taskMeetingsPatch([...rows, ...(result.meetings || [])], reading.changes);
       next = result.next_cursor;
     } while (!cursor && next && rows.length < target);
     reading.rows = rows; reading.next = next;
   } catch (error) {
-    if (d.tmRead === reading && [403, 404].includes(error.status)) {
+    const status = errorStatus(error);
+    if (d.tmRead === reading && (status === 403 || status === 404)) {
       reading.rows = []; reading.next = null;
     } else throw error;
   } finally {
@@ -62,7 +89,7 @@ async function taskMeetingsLoad(d, cursor = null) {
   }
 }
 // Keep expanded rows when the task dialog redraws for an unrelated task change.
-function taskMeetingsAdopt(d, task) {
+function taskMeetingsAdopt(d: TmDialog, task: {id: unknown}) {
   let slot = $('[data-task-meetings]', d);
   if (!slot) return;
   const id = String(task.id);
@@ -79,9 +106,9 @@ function taskMeetingsAdopt(d, task) {
   taskMeetingsLoad(d).catch(() => {});
 }
 
-liveOn('tasks', event => {
+liveOn('tasks', (event: TmLiveEvent) => {
   if (event.kind !== 'meetings' && !event.kinds?.includes('meetings')) return;
-  for (const dialog of document.querySelectorAll('dialog[open][data-task]')) {
+  for (const dialog of document.querySelectorAll<TmDialog>('dialog[open][data-task]')) {
     if (String(event.id) !== dialog.dataset.task || !dialog.tmRead) continue;
     if (!Array.isArray(event.meeting_links)) {
       liveSoon('task-meetings:' + dialog.id, () => { if (dialog.open) taskMeetingsLoad(dialog).catch(() => {}); }, 200);
@@ -94,7 +121,7 @@ liveOn('tasks', event => {
   }
 });
 liveOn('reset', () => {
-  for (const dialog of document.querySelectorAll('dialog[open][data-task]')) {
+  for (const dialog of document.querySelectorAll<TmDialog>('dialog[open][data-task]')) {
     if (dialog.tmRead) { dialog.tmRead.changes.clear(); taskMeetingsLoad(dialog).catch(() => {}); }
   }
 });
