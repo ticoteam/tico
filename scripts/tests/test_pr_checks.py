@@ -983,8 +983,9 @@ def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
         cancel = job["steps"][-1]
         assert cancel["if"] == "failure()" and cancel["run"] == 'gh run cancel "$GITHUB_RUN_ID"', name
         assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
-    # Only the two heavy legs may cancel; every other job keeps the workflow's read-only token.
-    assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim"}
+    # Only the two heavy legs and the plan (which cancels superseded queue groups) may cancel; every other job keeps the
+    # workflow's read-only token.
+    assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim", "plan"}
     # The required gate still runs after a cancel, and a cancelled timing receipt never waits for a runner.
     assert "always()" in jobs["checks"]["if"] and "tests" in jobs["checks"]["needs"]
     assert "!cancelled()" in jobs["timings"]["if"]
@@ -1480,3 +1481,29 @@ def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
     big = Counter({f"t{i}.py": 1 for i in range(1000)})
     capped = checks.size_groups(big, {name: 100 for name in big}, shards=2, ceiling=8)
     assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
+
+
+def test_a_queue_group_supersedes_only_the_older_queue_groups_of_its_own_pull_request():
+    runs = [
+        {"id": 1, "run_number": 10, "event": "merge_group", "head_branch": "gh-readonly-queue/main/pr-2905-aaa111"},
+        {"id": 2, "run_number": 11, "event": "merge_group", "head_branch": "gh-readonly-queue/main/pr-2905-bbb222"},
+        {"id": 3, "run_number": 11, "event": "merge_group", "head_branch": "gh-readonly-queue/main/pr-2906-ccc333"},
+        {"id": 4, "run_number": 13, "event": "merge_group", "head_branch": "gh-readonly-queue/main/pr-2905-ddd444"},
+        {"id": 5, "run_number": 9, "event": "pull_request", "head_branch": "pr-2905-push"},
+    ]
+    head = "refs/heads/gh-readonly-queue/main/pr-2905-eee555"
+    assert checks.superseded_runs(runs, head, 12) == [1, 2]
+    assert checks.superseded_runs(runs, "refs/heads/some-branch", 12) == []
+
+
+def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_request_run_is_affected():
+    import yaml
+
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())
+    plan = doc["jobs"]["plan"]
+    assert plan["permissions"]["actions"] == "write"
+    step = next(s for s in plan["steps"] if s.get("name") == "Cancel older queue groups for this pull request")
+    assert "github.event_name == 'merge_group'" in step["if"] and step.get("continue-on-error") is True
+    assert "cancel-superseded" in step["run"] and "--head-ref" in step["run"] and "--run-number" in step["run"]
+    # Pull requests keep their own group, keyed on the number, so no queue group can share it.
+    assert doc["concurrency"]["group"] == "pr-checks-${{ github.event.pull_request.number || github.ref }}"

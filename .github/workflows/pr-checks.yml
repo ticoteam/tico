@@ -45,6 +45,9 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: write # cancels the older merge queue groups of the same pull request
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
@@ -89,6 +92,21 @@ jobs:
             case $log in *'failed permanently'*) ;; *) break ;; esac
           done
           [ -f previous-timings/durations.json ] || echo "No measured timings yet; use collected counts this run"
+      # A merge queue group supersedes the older groups of its pull request: a rebuilt queue entry has a new head. The
+      # concurrency group cannot key on the number (an expression cannot read it from head_ref), so this step cancels
+      # those older queued and running runs. It runs for merge_group only, so a pull request's own runs are never listed,
+      # and it never cancels its own run. Continue-on-error: a failed cancel leaves the older group to finish alone.
+      - name: Cancel older queue groups for this pull request
+        if: github.event_name == 'merge_group'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          for status in queued in_progress; do
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/pr-checks.yml/runs?event=merge_group&status=$status&per_page=100" > "$RUNNER_TEMP/runs-$status.json"
+          done
+          "$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py cancel-superseded --head-ref "$HEAD_REF" --run-number "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/runs-queued.json" "$RUNNER_TEMP/runs-in_progress.json"
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         env:

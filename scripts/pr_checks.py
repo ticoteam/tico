@@ -1604,6 +1604,27 @@ def receipt_jobs(text):
     return jobs, incomplete
 
 
+def superseded_runs(runs, head_ref, run_number):
+    """Ids of the older merge queue runs of the same pull request as `head_ref` (refs/heads/gh-readonly-queue/<base>/
+    pr-<number>-<sha>). A rebuilt queue entry has a new head, so its older group is superseded. Pull request runs, other
+    queue groups and runs numbered `run_number` or later (this run and any newer one) are never returned."""
+    found = re.search(r"/pr-(\d+)-", head_ref or "")
+    if not found:
+        return []
+    number = found.group(1)
+    ids = []
+    for run in runs:
+        branch = re.search(r"/pr-(\d+)-", run.get("head_branch") or "")
+        if (
+            run.get("event") == "merge_group"
+            and run.get("run_number", 0) < run_number
+            and branch
+            and branch.group(1) == number
+        ):
+            ids.append(run["id"])
+    return ids
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -1620,6 +1641,10 @@ def main():
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
+    cancel = sub.add_parser("cancel-superseded")
+    cancel.add_argument("--head-ref", required=True)
+    cancel.add_argument("--run-number", type=int, required=True)
+    cancel.add_argument("pages", nargs="+", help="gh api --paginate --slurp output files of the runs to consider")
     args = parser.parse_args()
     if args.action == "plan" and not os.environ.get("GITHUB_ACTIONS") and not os.environ.get("TICO_PLAN_LOCAL"):
         # plan collects every test with pytest: minutes of load, and on a Mac without the CI packages it fails.
@@ -1641,6 +1666,20 @@ def main():
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))
+    elif args.action == "cancel-superseded":
+        # Never this run: it is numbered below its own run number and its id is excluded here as well.
+        runs = [
+            run
+            for path in args.pages
+            for page in json.loads(Path(path).read_text())
+            for run in page.get("workflow_runs", [])
+        ]
+        own = os.environ.get("GITHUB_RUN_ID", "")
+        for run_id in superseded_runs(runs, args.head_ref, args.run_number):
+            if str(run_id) == own:
+                continue
+            print(f"Cancelling superseded merge queue run {run_id}")
+            subprocess.run(["gh", "run", "cancel", str(run_id), "--repo", os.environ["GITHUB_REPOSITORY"]], check=False)
     elif args.action == "smoke-check":
         problems = smoke_check()
         for problem in problems:
