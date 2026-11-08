@@ -30,6 +30,7 @@ from . import (
     mirror,
     receipts,
     payments,
+    subscriptions,
 )
 from . import prepaids, purchasing, topups
 from . import posting
@@ -144,6 +145,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     **attribution.PLANNERS,
     **campaigns.PLANNERS,
     **receipts.PLANNERS,
+    **subscriptions.PLANNERS,
     **vendors.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
@@ -960,6 +962,7 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 amortize_prepaids = jobs.amortize
 watch_documents = jobs.watch
+detect_subscriptions = subscriptions.detect  # the daily look (scheduler finance_tick)
 grant_defaults = rights.grant_defaults
 RIGHT_RULES = R.RULES  # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
 
@@ -1134,6 +1137,7 @@ DEV_COPY_KEPT = (
     "fin_ad_warnings",
     "fin_attributions",
     "fin_attribution_rules",
+    "fin_subscriptions",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
 # inbox, cards and their authorizations, payees and payments, the ad spend imports) and spend holds. In the order they

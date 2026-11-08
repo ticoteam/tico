@@ -23,6 +23,7 @@ from .finance import books_link
 from .finance import brief as finance_brief_mod
 from .finance import receipts as finance_receipts_mod
 from .finance import reads as finance_reads
+from .finance import subscriptions as finance_subscriptions
 from .models import ID, Contract
 from .store import Problem
 
@@ -62,6 +63,7 @@ Report = Literal[
     "ar_aging",
     "spend_by",
     "campaigns",
+    "subscriptions",
 ]
 Metric = Literal[
     "cash",
@@ -80,6 +82,7 @@ Metric = Literal[
     "unattributed",
     "ad_spend",
     "per_conversion",
+    "subscriptions_monthly",
 ]
 
 
@@ -241,6 +244,18 @@ def install(app, store, auth, mutate):
         `at` in the period holding that day: the amount of the version in effect then."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+
+    @app.get("/api/v2/finance/subscriptions")
+    def finance_subscriptions_list(
+        request: Request,
+        status: Literal["suggested", "active", "ignored", "cancelled"] | None = None,
+        view_as: str | None = None,
+    ):
+        """The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each
+        with its cadence, expected amount, monthly cost, next charge, card, seats and attribution, and the monthly total of
+        the active ones. `status` narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_subscriptions.read(c, actor, status))
 
     @app.get("/api/v2/finance/brief")
     def finance_brief(request: Request, view_as: str | None = None):
@@ -833,6 +848,7 @@ def install(app, store, auth, mutate):
             "account",
             "vendor",
             "campaign",
+            "subscription",
         ]
         | None = None,
         q: str = Query("", max_length=100),

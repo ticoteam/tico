@@ -109,6 +109,9 @@ ALL = (
     # ad campaigns: the teammate or team a campaign's spend counts for (backend/finance/campaigns.py)
     "campaign_owner_set",
     "campaign_owner_undo",
+    # subscriptions: confirm a suggested recurring charge, or put back what it was (backend/finance/subscriptions.py)
+    "subscription_confirm",
+    "subscription_undo",
     # vendor identity: one vendor per merchant (backend/finance/vendors.py)
     "vendor_merge",
     "vendor_unmerge",
@@ -199,6 +202,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     "attribution_map": R.ATTRIBUTION,
     "campaign_owner_set": R.ATTRIBUTION,
     "campaign_owner_undo": R.ATTRIBUTION,
+    "subscription_confirm": R.BOOK,
+    "subscription_undo": R.BOOK,
     "vendor_merge": R.BOOK,
     "vendor_unmerge": R.BOOK,
 }
@@ -670,6 +675,14 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("feed_id?", "str", "or another bank or card row to attach it to (accept)"),
     ),
     "receipt_match_undo": (("receipt_id", "str", "the receipt whose latest accept is put back"),),
+    "subscription_confirm": (
+        ("subscription_id", "str", "a subscription the daily look suggested, or one already confirmed"),
+        ("status", "active|ignored|cancelled", "active: it is one; ignored: it is not; cancelled: it has ended"),
+        ("amount?", "minor", "the expected amount each charge is judged against (a price rise shows as a finding)"),
+        ("cadence?", "monthly|annual", "how often it is charged"),
+        ("seats?", "int", "how many seats it covers (null: none)"),
+    ),
+    "subscription_undo": (("subscription_id", "str", "the fields before the latest confirmation are put back"),),
     "vendor_merge": (
         ("into", "str", "the vendor contact the others become"),
         ("merge", "list[str]", "vendor names (as a bank row reads them) or vendor contact ids to fold into it"),
@@ -912,6 +925,8 @@ WORDS: dict[str, str] = {
     "receipt_read": "Set a receipt's amount, date and vendor as read from its file.",
     "receipt_match": "Accept a receipt's suggested bank or card row (attaches the file), or refuse the suggestion.",
     "receipt_match_undo": "Put back a receipt's match: detach the file and restore the suggestion it had.",
+    "subscription_confirm": "Confirm a recurring charge as a subscription, ignore it, or mark it cancelled.",
+    "subscription_undo": "Put back a subscription's fields from before its latest confirmation.",
     "vendor_merge": "Fold names and vendor contacts into one vendor: their rows, bills and budgets count as it.",
     "vendor_unmerge": "Undo a vendor merge: each name goes back where it was, and archived contacts come back.",
     "invoice_create": "Draft an invoice.",

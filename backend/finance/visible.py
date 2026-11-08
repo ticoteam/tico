@@ -26,6 +26,7 @@ from typing import Any
 from . import attribution as ATTR
 from . import platform_share as PS
 from .context import Ctx
+from .core import attribution as CA
 from .core import view as VW
 from .core.errors import invalid
 from .core.org import manager_of
@@ -264,3 +265,32 @@ def receipts_visible(ctx: Ctx, viewer: str, rows: Sequence[Any]) -> set[str]:
     own = {str(r["id"]) for r in rows if str(r["created_by"]) == viewer}
     shown = feed_rows_visible(ctx, viewer, [str(r["match_feed_id"]) for r in rows if r["match_feed_id"]])
     return own | {str(r["id"]) for r in rows if r["match_feed_id"] and str(r["match_feed_id"]) in shown}
+
+
+def _owns(ctx: Ctx, viewer: str, split: CA.Split, under: frozenset[str], led: frozenset[str], own_team: str) -> bool:
+    """Whether a share in force on a subscription's latest charge names the viewer: the teammate itself, someone under
+    them, or the manager of that teammate; or a team the viewer leads or belongs to (below the team)."""
+    if split.teammate:
+        return split.teammate == viewer or split.teammate in under or manager_of(ctx.org, split.teammate) == viewer
+    if split.team:
+        return split.team in led or own_team in ctx.org.below(split.team)
+    return False
+
+
+def subscriptions_visible(ctx: Ctx, viewer: str, items: Iterable[tuple[str, Sequence[CA.Split], bool]]) -> set[str]:
+    """The subscription kind of the view rule (subscriptions.py): which subscriptions the viewer sees. Subscriptions are
+    not ledger cells, so the rule works on each one's owners and its latest charge: items are (id, the attribution in force
+    on its latest charge line, whether the viewer sees that line). A full-detail reader sees all. Otherwise the viewer sees
+    a subscription whose owners name them (campaigns_visible's owner rule), or who sees its latest charge line."""
+    view = ctx.view(viewer)
+    rows = list(items)
+    if view.everything:
+        return {sid for sid, _, _ in rows}
+    under = ctx.org.reports(viewer)
+    led = ctx.org.led_by(viewer)
+    own_team = ctx.org.team_of.get(viewer, "")
+    return {
+        sid
+        for sid, splits, line_seen in rows
+        if line_seen or any(_owns(ctx, viewer, sp, under, led, own_team) for sp in splits)
+    }

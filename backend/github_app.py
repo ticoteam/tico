@@ -135,7 +135,7 @@ MAX_EXTRA_REPOS = 20
 # A refusal about one bot's repository (not on GitHub yet, or not shared with the app), or a rehearsal that never calls GitHub. The bot's own readiness
 # and Health already name it; it says nothing about whether the App works, so it never marks the token unhealthy.
 BOT_SCOPED = ("github_repo_missing", "github_repo_not_accessible", "rehearsal")
-RECONNECT = "Reconnect GitHub in Settings."
+RECONNECT = "Reconnect GitHub in Tools."
 
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
 TRANSPORT = None
@@ -1614,7 +1614,7 @@ def install_github_app(app, settings, store):
                 log.warning("Repository sync failed: %s", exc.code)
         with store.transaction() as c:
             H.event(c, who.actor, "github.app_installed", "", {"installed": bool(found)})
-        return RedirectResponse("/#/settings?github=" + ("connected" if found else "pending"), status_code=302)
+        return RedirectResponse("/#/tools/github?github=" + ("connected" if found else "pending"), status_code=302)
 
     @app.post("/api/v2/github/app/disconnect")
     def disconnect(request: Request):
@@ -1874,7 +1874,7 @@ def install_github_app(app, settings, store):
             value, expires = tokens[0]['token'], tokens[0]['expires_at']
         except Problem as problem:
             if issuer is service and problem.code not in BOT_SCOPED:
-                note_github_token(store, problem.detail, "Open Settings > Tools and check the GitHub connection.")
+                note_github_token(store, problem.detail, "Open Tools and check the GitHub connection.")
             raise
         newly_minted = [item for item in tokens if not item["cached"]]
         if issuer is service and (newly_minted or any(item["reachability_changed"] for item in tokens)):
