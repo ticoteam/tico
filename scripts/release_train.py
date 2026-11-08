@@ -91,6 +91,8 @@ UNFINISHED = {"queued", "pending", "waiting", "requested", "in_progress"}
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 ISSUE_LABEL = "release-train"
 BLOCKER_LABEL = "release-blocker"
+# ci.yml's ceiling: 10 full validations a UTC day, manual ones included. A run it stops is a hold, not a failure.
+CEILING_HOLD = "Full runs: ceiling reached (10/day) · next after 00:00 UTC"
 APPROVAL_LABEL = "release-approval"
 APPROVED = "approved"
 HOLD = "hold"
@@ -283,6 +285,19 @@ def validation_record(run):
     }
 
 
+def ceiling_stops(gh, runs, now):
+    """The day's validation runs that ci.yml's ceiling stopped: failed runs created on this UTC day whose ceiling job said
+    so. The count only grows until 00:00 UTC, so one stopped today means the day's ceiling is reached."""
+    day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    return [
+        run
+        for run in runs
+        if (run.get("created_at") or "").startswith(day)
+        and run.get("conclusion") == "failure"
+        and gh.ceiling_stopped(run)
+    ]
+
+
 class GitHub:
     """The few REST calls the release jobs make, with the Actions token."""
 
@@ -365,6 +380,14 @@ class GitHub:
         return self.get("actions/workflows/ci.yml/runs?branch=main&event=workflow_dispatch&per_page=100")[
             "workflow_runs"
         ]
+
+    def ceiling_stopped(self, run):
+        """Whether ci.yml's ceiling job stopped this validation run: that job failed on the ceiling's message (an API
+        error would fail it too, so the message is what counts)."""
+        for entry in self.pages("actions/runs/%d/jobs?per_page=100" % run["id"], key="jobs"):
+            if entry.get("name") == "ceiling" and entry.get("conclusion") == "failure":
+                return "ceiling reached" in self.job_log(entry["id"])
+        return False
 
     def recent_runs(self, workflow):
         """A workflow's newest runs on any branch: whether one is still queued or running."""
@@ -774,7 +797,11 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         return plan
     version = next_patch(newest)
     plan["version"] = version
-    if finished and finished["conclusion"] in FAILED:
+    runs = gh.validation_runs()
+    # A run the ceiling stopped ran no suite: it is no red candidate, no anchor and no full run.
+    stopped = ceiling_stops(gh, runs, now)
+    stopped_urls = {run.get("html_url") for run in stopped}
+    if finished and finished["conclusion"] in FAILED and finished["url"] not in stopped_urls:
         parsed = parse_title(finished["title"])
         if parsed and parsed[1:] == (version, newest):
             plan["red"] = {"sha": parsed[0], "conclusion": finished["conclusion"], "url": finished["url"]}
@@ -785,9 +812,9 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         return plan
     head_failed = None
     records = []  # every release's validations, newest first: the anchor and the red validation are read from them
-    for run in gh.validation_runs():
+    for run in runs:
         parsed = parse_title(run.get("display_title"))
-        if not parsed:
+        if not parsed or run.get("html_url") in stopped_urls:
             continue
         records.append(validation_record(run))
         if parsed[1:] != (version, newest) or run.get("status") != "completed":
@@ -812,6 +839,10 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             head_failed = run
     if head_failed and not manual and not plan["red"]:
         plan["red"] = {"sha": head, "conclusion": head_failed.get("conclusion"), "url": head_failed.get("html_url")}
+    if stopped:
+        # The ceiling holds full validations until 00:00 UTC; a real red above is still reported, a stop is only a hold.
+        plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), CEILING_HOLD))
+        return plan
     busy = next((run for run in gh.recent_runs("ci.yml") if run.get("status") in UNFINISHED), None)
     if busy:
         plan.update(action="wait", why="window open since %s; waiting for %s" % (hhmm(start), busy.get("html_url")))

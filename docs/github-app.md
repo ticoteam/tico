@@ -1,7 +1,7 @@
 # GitHub App
 
 Your team gets GitHub access through a GitHub App that the owner creates in the team's own
-GitHub organization. Tico holds no shared token: for every run Tico asks GitHub for a token that
+GitHub account or organization. Tico holds no shared token: for every run Tico asks GitHub for a token that
 works on that bot's own repository and its effective repository grants and expires within the hour. Without a connected app nothing
 changes; bots keep using whatever git access their computer already has.
 
@@ -85,11 +85,11 @@ it on:
 
 ## Set up
 
-1. As the owner, open Tools, GitHub. Enter the organization and optionally rename
-   the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
+1. As the owner, open Tools, GitHub. Enter the GitHub account or organization (a personal account
+   works too; Tico tells which one it is) and optionally rename the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
    create every bot's repository by hand. Select Connect GitHub.
 2. GitHub shows the app to create. Confirm it. GitHub returns to Tico, which stores the app's
-   credentials and sends you to install the app on the organization.
+   credentials and sends you to install the app on the account or organization.
 3. On the install page, choose **All repositories** (recommended). Bots then get new repositories
    automatically, with nothing to add each time a bot is created. This does not widen what a bot can
    touch: each bot's token names its own repository plus its repository access (below), and
@@ -101,8 +101,29 @@ repositories and connect that one. "All repositories" then covers only what bots
 mistake in a token's scope cannot expose the rest. The app itself can reach whatever it is installed on;
 the per-bot limit is enforced by Tico when it asks GitHub for a token.
 
-Bots' repositories must live in the connected organization. A bare repository name is completed by
-`TICO_GITHUB_OWNER`, then by the connected organization.
+Bots' repositories must live in the connected account or organization. A bare repository name is completed by
+`TICO_GITHUB_OWNER`, then by the connected account or organization.
+
+## Personal accounts
+
+The app can be made under a personal GitHub account instead of an organization. Tico asks GitHub which kind of
+account the name is, and the setup and settings links go to that account's pages (`github.com/settings/apps/...`
+rather than `github.com/organizations/<org>/settings/apps/...`). GitHub makes the app for whoever is signed in,
+so the connected account is the one GitHub reports, which may differ from the name typed.
+
+What works the same as for an organization: connecting, installing on **All repositories**, each bot's run token
+(scoped to its own repository and its grants), and the bot's work in its own repository.
+
+What does not work yet:
+
+- **Creating repositories.** Tico does not create a bot's repository in a personal account, even with
+  Administration on. A new bot waits for a person: create `<login>/bot-<slug>` as an empty private repository from
+  the link on the Needs-you task (or in Tools, GitHub) and the bot finishes on its own once it exists.
+- **Product repositories** and **deleting repositories** are not offered for a personal account.
+
+The one-time Administration change does nothing for a personal account yet, so Tools shows the waiting bots and their
+create links instead of the Administration fix. Tico already requests **Administration** when it makes a personal account's
+app, so one acceptance covers automatic repository creation once that lands; until then Tico does not use it there.
 
 ## Separate identity for reviewers
 
@@ -250,7 +271,7 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix from **Settings → General → Repositories**
+An Owner can create an exact product repository without the `bot-` prefix (not yet in a personal account) from **Settings → General → Repositories**
 → **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
 name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
@@ -365,7 +386,7 @@ Settings, Bots says the same); fix the cause and the next run publishes.
 
 ## Where the key lives
 
-The Team Owner can delete a repository in the connected organization with
+The Team Owner can delete a repository in the connected organization (not yet in a personal account) with
 `hub api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
 This runs directly and uses a repository-scoped GitHub App token with Administration (write).
 The App must have access to that repository and the installation must accept Administration permission.
@@ -419,7 +440,7 @@ app and reconnect, so Tico stores a key GitHub still accepts. Cached tokens keep
 ## Disconnect and uninstall
 
 Disconnect in Tico only forgets the app locally; bots fall back to their computers' git access. To
-revoke access on GitHub, uninstall the app from the organization's installed apps page, or delete the
+revoke access on GitHub, uninstall the app from the account's or organization's installed apps page, or delete the
 app from its settings page.
 
 ## Task PR events
