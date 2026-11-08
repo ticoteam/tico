@@ -35,7 +35,7 @@ STEPS = [
 class World:
     """A Design pipeline: Making, Review (a Mockup attachment and a Sign-off approval, both ana's) and Shipped."""
 
-    def __init__(self, path, reviewed_by="person", conn=None):
+    def __init__(self, path, reviewed_by="person", conn=None, steps=STEPS):
         self.path = path
         if conn is None:
             Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
@@ -53,7 +53,7 @@ class World:
             },
         )
         c = self.c
-        self.pipeline = H.type_create(c, ANA, "Design", STEPS, mover=True)["id"]
+        self.pipeline = H.type_create(c, ANA, "Design", steps, mover=True)["id"]
         c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, self.pipeline))
         self.making, self.review, self.shipped = (self.step(n) for n in ("Making", "Review", "Shipped"))
         self.mockup = self.requirement("Mockup", "attachment", reviewed_by)
@@ -1219,6 +1219,33 @@ def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_
         w.c, ANA, w.task, w.mockup, "Screenshots never validated", work_version=rev, requirement_version=1
     )
     assert done["moved_back_to"] == "Making" and done["follow_up"]
+
+
+def test_not_validated_files_through_the_earliest_live_handoff_not_the_nearest_stage(tmp_path):
+    """Two spawn links sit before Validate: Planning's (Engineering) and Making's (Support). Both filed a subtask before
+    Not validated, and the Planning handoff came first. The follow-up goes to Engineering, the link whose handoff came
+    first, not Support, which is the nearest stage."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
+    eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
+    support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")["id"]
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    # Each handoff's follow-up is finished before the next is filed: an open twin for the same source is refused.
+    first = L.spawn(w.c, w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (eng_link,)).fetchone(), w.task)
+    assert first is not None
+    H.task_close(w.c, ANA, first, note="Done")
+    second = L.spawn(w.c, w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (support_link,)).fetchone(), w.task)
+    assert second is not None
+    H.task_close(w.c, ANA, second, note="Done")
+    # Make the Planning handoff the earlier one regardless of clock resolution.
+    w.c.execute("UPDATE pipeline_handoffs SET created_at='0000' WHERE pipeline_link_id=?", (eng_link,))
+    rev = w.revision()
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=rev, requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making"
+    assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == engineering
 
 
 def test_an_approval_refuses_an_attachment_attached_before_the_last_change(world):

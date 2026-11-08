@@ -561,7 +561,7 @@ def _queue_fields(
         if key not in candidates:
             candidates[key] = _route_candidates(c, actor, *key)
         found = candidates[key]
-        return found is not None and _pick_link(found[1], handed.get(item["task_id"], set())) is not None
+        return found is not None and _pick_link(found[1], handed.get(item["task_id"], [])) is not None
 
     for item in items:
         key = (item["task_id"], item["requirement_id"])
@@ -1187,24 +1187,27 @@ def _route_candidates(
     return (back, links) if links else None
 
 
-def _handed_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, set[str]]:
-    """{ticket id: the spawn link ids whose live handoff filed that ticket's subtasks}, from one read."""
-    out: dict[str, set[str]] = {}
+def _handed_links(c: "sqlite3.Connection", task_ids: "Iterable[str]") -> dict[str, list[str]]:
+    """{ticket id: the spawn link ids whose live handoffs filed that ticket's subtasks, the earliest handoff first}, from
+    one read."""
+    out: dict[str, list[str]] = {}
     for part in _chunks(task_ids):
         for row in _rows(
             c,
-            "SELECT source_task_id AS task_id, pipeline_link_id AS link_id FROM pipeline_handoffs "
-            "WHERE returned_at IS NULL AND source_task_id IN (SELECT value FROM json_each(?))",
+            "SELECT source_task_id AS task_id, pipeline_link_id AS link_id, MIN(created_at) AS first_at "
+            "FROM pipeline_handoffs WHERE returned_at IS NULL AND source_task_id IN (SELECT value FROM json_each(?)) "
+            "GROUP BY source_task_id, pipeline_link_id ORDER BY first_at, pipeline_link_id",
             (part,),
         ):
-            out.setdefault(str(row["task_id"]), set()).add(str(row["link_id"]))
+            out.setdefault(str(row["task_id"]), []).append(str(row["link_id"]))
     return out
 
 
-def _pick_link(links: list[Row], handed: set[str]) -> Row | None:
-    """The spawn link the follow-up goes through: the one whose handoff filed this ticket's subtasks (D64), else the nearest
-    live spawn link before the stage (a ticket no handoff filed)."""
-    return next((link for link in links if str(link["id"]) in handed), links[0] if links else None)
+def _pick_link(links: list[Row], handed: list[str]) -> Row | None:
+    """The spawn link the follow-up goes through: the link of the earliest live handoff that filed this ticket's subtasks
+    (D64), not the nearest stage. A ticket no handoff filed takes the nearest live spawn link before the stage."""
+    by_id = {str(link["id"]): link for link in links}
+    return next((by_id[link_id] for link_id in handed if link_id in by_id), links[0] if links else None)
 
 
 def _not_validated_route(
@@ -1217,7 +1220,7 @@ def _not_validated_route(
     if found is None:
         return None
     back, links = found
-    link = _pick_link(links, _handed_links(c, [task_id]).get(task_id, set()))
+    link = _pick_link(links, _handed_links(c, [task_id]).get(task_id, []))
     return (back, link) if link is not None else None
 
 
