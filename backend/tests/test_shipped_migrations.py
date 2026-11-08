@@ -24,4 +24,3 @@ def test_no_shipped_migration_changed_or_went_missing():
         "refuse to start: restore the released bytes (git show <tag>:backend/migrations/<file>) and make the change "
         "in a new migration."
     )
-
