@@ -312,10 +312,34 @@ def propose_count(out, argv):
     return out
 
 
+def named_ids(argv):
+    """The task ids a call names: the values of its `--where-id` flags, and the `ids` of an MCP `--filter` JSON. A UUID
+    under any other flag (a pipeline's `--where-type`, say) names no task."""
+    values, filters = [], []
+    for i, arg in enumerate(argv):
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if arg == "--where-id" and nxt is not None:
+            values.append(nxt)
+        elif arg.startswith("--where-id="):
+            values.append(arg.split("=", 1)[1])
+        elif arg == "--filter" and nxt is not None:
+            filters.append(nxt)
+        elif arg.startswith("--filter="):
+            filters.append(arg.split("=", 1)[1])
+    for text in filters:
+        try:
+            named = json.loads(text).get("ids")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(named, list):
+            values.extend(str(v) for v in named)
+    return set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(values)))
+
+
 def bulk_echo(out, argv):
-    """`task bulk close` by ids: matched and changed are the number of distinct task ids the call names (any form of
-    argv). A filter names no ids, so its canned counts stand as the case gives them."""
-    ids = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(argv)))
+    """`task bulk close` by ids: matched and changed are the number of distinct task ids the call names (named_ids). A
+    filter names no ids, so its canned counts stand as the case gives them."""
+    ids = named_ids(argv)
     if ids and isinstance(out, dict) and "matched" in out:
         out = {**out, "matched": len(ids), "changed": len(ids)}
     return out
