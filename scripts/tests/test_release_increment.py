@@ -289,6 +289,18 @@ def test_a_carried_factory_failure_runs_the_factory_sim():
     assert plan_of(selected(), carried={ri.FACTORY}, smoke=(), gone=())["factory"] is True
 
 
+def test_a_docs_only_incremental_plans_no_factory_jobs_when_the_control_checkout_is_sparse(tmp_path):
+    # The planner runs from validation-control's sparse checkout, which has no evals/factory/call_path.json. The sim's
+    # recorded paths come from the candidate's checkout, so a docs-only change plans no factory jobs.
+    candidate = tmp_path / "candidate"
+    (candidate / "evals" / "factory").mkdir(parents=True)
+    (candidate / pr_checks.FACTORY_CALL_PATH).write_text((pr_checks.ROOT / pr_checks.FACTORY_CALL_PATH).read_text())
+    plan = plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=candidate)
+    assert plan["factory"] is False
+    # Where the recorded paths cannot be read, the sim runs: a missing measurement never skips the check.
+    assert plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=tmp_path)["factory"]
+
+
 def test_a_plan_of_any_size_is_made_because_release_validation_makes_it_itself():
     big = {"jobs": [{"name": "python-1", "files": ["x" * 70000]}]}
     assert json.loads(ri.plan_json(big)) == big

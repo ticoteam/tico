@@ -191,7 +191,7 @@ def red_rule(red, head, since_red):
     )
 
 
-def selection_tokens(selected, changed):
+def selection_tokens(selected, changed, factory_root=pr_checks.ROOT):
     """What a selection runs, as the same tokens failure_tokens reads from a log. Smoke scripts are not included: they
     run on every incremental validation, so they cannot be the commit that fixes a failure."""
     tokens = set(selected["python"]) | {f"ui/tests/{name}.cjs" for name in selected["browser"]}
@@ -203,7 +203,7 @@ def selection_tokens(selected, changed):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
-    if pr_checks.factory_reason(list(changed)) is not None:
+    if pr_checks.factory_reason(list(changed), root=factory_root) is not None:
         tokens.add(FACTORY)
     return tokens
 
@@ -237,7 +237,15 @@ def job(name, part, files=(), workers="4", **extra):
 
 
 def plan_for(
-    selected, changed, carried, exists, smoke_browser, tables, has_slow=lambda path: False, previous_changed=False
+    selected,
+    changed,
+    carried,
+    exists,
+    smoke_browser,
+    tables,
+    has_slow=lambda path: False,
+    previous_changed=False,
+    factory_root=pr_checks.ROOT,
 ):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
@@ -276,7 +284,7 @@ def plan_for(
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
     product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
-    factory = pr_checks.factory_reason(list(changed)) is not None or FACTORY in carried
+    factory = pr_checks.factory_reason(list(changed), root=factory_root) is not None or FACTORY in carried
     jobs = build_jobs(
         python, browser, contract_files, conformance, selected.get("rust") or [], product, desktop, tables
     )
@@ -419,7 +427,7 @@ class Checkout:
             changed, selected = self.selected(base, head)
         except Exception:  # noqa: BLE001 - an unreadable diff is a fact the window logs, not a crash
             return None
-        return selection_tokens(selected, changed)
+        return selection_tokens(selected, changed, self.root)
 
     def plan(self, base, head, carried, previous_changed=False):
         """The incremental plan for base..head with the carried failures, as JSON text. Raises when it cannot be made (a
@@ -437,6 +445,7 @@ class Checkout:
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,
+            factory_root=self.root,
         )
         return plan_json(plan)
 
