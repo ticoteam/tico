@@ -192,4 +192,4 @@ def test_a_turn_that_starts_after_the_half_hour_reached_its_cap_fails():
 
 def test_a_window_that_never_reached_the_cap_fails_so_the_check_cannot_pass_on_nothing():
     passed, detail = spend_under(3, at(1, 30), at(1, 42))(turns_run([turn(at(1, 30), at(1, 35), 0.5)]))
-    assert not passed and "short of the $1.5 window cap" in detail, detail
+    assert not passed and "short of the $1.5 half-hour cap" in detail, detail

@@ -2,7 +2,7 @@
    Next on the first saves the website and the line (PUT /api/v2/setup) and starts the research
    (POST /api/v2/strategy/draft-from, backend/strategy_setup.py). The second polls it, then shows the bets it proposed as
    claims to keep, edit or strike, with the draft filling in beside them. The bet form and its rules are the Strategy
-   page's (ui/strategy-page.js). Nothing here publishes: the steps write the draft only.
+   page's (ui/strategy-page.ts). Nothing here publishes: the steps write the draft only.
    Classic script: its globals are shared with the other files under ui/, loaded in the order index.html lists them. */
 'use strict';
 const SS_POLL_MS = 1500;
@@ -93,8 +93,8 @@ interface SsWizard {
   strat: SsStrat;
 }
 
-/** The bet form's named controls (strategyBetFormHtml, ui/strategy-page.js): TypeScript does not type a form's named fields. */
-interface SsBetFormFields extends HTMLFormControlsCollection {
+/** The bet form's named controls (strategyBetFormHtml, ui/strategy-page.ts): TypeScript does not type a form's named fields. */
+interface SsBetFormFields extends StratWrongControls {
   statement: HTMLInputElement;
   why: HTMLTextAreaElement;
   rules_out: HTMLTextAreaElement;
@@ -125,7 +125,7 @@ const ssSource = (job: SsJob | null): string => {
   if (!job?.url) return 'your description';
   try { return new URL(job.url).hostname.replace(/^www\./, ''); } catch { return job.url; }
 };
-// The HTTP status of a failed answer (apiFailure, ui/app/api.js), or undefined for any other thrown value.
+// The HTTP status of a failed answer (apiFailure, ui/app/api.ts), or undefined for any other thrown value.
 const ssStatus = (error: unknown): unknown => (typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined);
 const ssOnStep = (state: SsWizard): boolean => ssOpen() === state && state.steps[state.step] === 'bets' && !!document.querySelector('#ss');
 // Why the step cannot be left yet, in the Strategy page's words for Publish, or ''.

@@ -177,7 +177,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
             c.execute(
-                "INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
+                "INSERT INTO entity_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
                 (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()),
             )
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
@@ -326,7 +326,7 @@ def test_with_the_gateway_a_watch_is_registered_once_and_its_change_files_like_a
     [ident] = signals.watches
     assert ("register", "page", PAGE) in signals.calls
     with seeded.app.state.store.read() as c:
-        assert c.execute("SELECT signal_watch_id FROM market_watches").fetchone()[0] == ident
+        assert c.execute("SELECT signal_watch_id FROM entity_watches").fetchone()[0] == ident
     monkeypatch.setattr(W, "fetch_page", lambda url: pytest.fail("the Gateway reads the page, not the server"))
     signals.read(ident)
     assert check(seeded) == {"read": 1, "changed": 0, "errors": 0}
@@ -350,7 +350,7 @@ def test_ending_a_watch_ends_it_at_hq_on_the_spot(signals, seeded):
     post(seeded, f"market/watches/{made['id']}/stop", {})
     assert signals.watches == {} and ("end", ident) in signals.calls
     with seeded.app.state.store.read() as c:
-        assert c.execute("SELECT signal_watch_id FROM market_watches").fetchone()[0] is None
+        assert c.execute("SELECT signal_watch_id FROM entity_watches").fetchone()[0] is None
 
 
 def test_without_the_gateway_the_pages_are_read_here_as_before(seeded, monkeypatch):

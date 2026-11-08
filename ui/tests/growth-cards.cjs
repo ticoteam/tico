@@ -1,4 +1,4 @@
-// The Growth page's cards (ui/app/growth-page.js on ui/app/dashboard.js's grid, backend/cards.py place `growth`) against
+// The Growth page's cards (ui/app/growth-page.ts on ui/app/dashboard.ts's grid, backend/cards.py place `growth`) against
 // a fake server shaped as GET /api/v2/places/growth[?month=], /api/v2/cards/choices?place=growth, POST /api/v2/cards and
 // /api/v2/growth/*: the head has the North Star line, the month picker, the Growth board link and Settings; the five
 // cards draw (a Number's value, change and trend; the Funnel's five stages, its North Star and the loop; Channels with
@@ -118,7 +118,7 @@ async function open(browser, {viewport = DESKTOP, hash = '#/growth', me = OWNER,
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events' || p.endsWith('/watch')) return;
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});

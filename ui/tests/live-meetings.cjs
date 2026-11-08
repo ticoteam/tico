@@ -54,7 +54,7 @@ async function main() {
       const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
-      const asset = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const asset = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (asset && fs.existsSync(uiFile(asset[1]))) return route.fulfill({
         contentType: asset[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(asset[1]), 'utf8')});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
