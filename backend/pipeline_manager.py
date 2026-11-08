@@ -7,8 +7,8 @@ A pass reads the pipeline's open tickets in SQL and lists the exceptions:
   included): the assignee is asked when work is missing or out of date, the reviewer when work waits for a decision,
   once per visit (`ask`);
 - a person reviewer's requirement with the card past the stage's Limit: the backup is asked, once per visit (`ask_backup`);
-- a requirement that failed twice in the same visit: the manager is woken once for a judgment, once per visit and
-  requirement (plain event dedupe; the budget);
+- a requirement that failed twice in the same visit: the active manager is woken once for a judgment, once per visit,
+  requirement and manager (plain event dedupe; the budget);
 - a card past the Limit ("Warn after"), read with pipeline_manager.late_tickets, so time on hold does not count;
 - failed decisions in the visit (listed only).
 
@@ -484,23 +484,34 @@ def _ask_once(
     return True
 
 
+def manager_bot(c: "sqlite3.Connection", pipeline: dict[str, Any]) -> str | None:
+    """The id of the active bot that manages the pipeline, or None when there is no manager, the manager is missing, or it
+    is archived (or otherwise not active). The stored value is a bare bot id (setup writes that); the settings route writes
+    `bot:<id>`, so resolve_bot strips one such prefix before it looks the bot up (by id, or by slug)."""
+    found = H.resolve_bot(c, pipeline.get("manager"))
+    if found is None or (found.get("state") or "active") != "active":
+        return None
+    return str(found["id"])
+
+
 def _judgment_once(
     c: "sqlite3.Connection",
     *,
     pipeline: dict[str, Any],
+    manager: str | None,
     task: dict[str, Any],
     visit_id: str,
     requirement: dict[str, Any],
     failures: int,
 ) -> bool:
-    """Wake the pipeline's manager once for a requirement that keeps failing in one visit. The budget: one wake per visit
-    and requirement, kept as an event so a later pass does not repeat it. The wake carries the pipeline's goal (D58)."""
-    manager = pipeline.get("manager")
-    key = f"{visit_id}:{requirement['id']}"
-    if (
-        not manager
-        or c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (JUDGMENT_EVENT, key)).fetchone()
-    ):
+    """Wake the pipeline's manager once for a requirement that keeps failing in one visit. The budget: one wake per visit,
+    requirement and manager, kept as an event so a later pass does not repeat it. The manager is part of the key, so a
+    manager set after the first wake is woken for it, and the one before gets no more. No active manager (`manager` None)
+    means no wake. The wake carries the pipeline's goal (D58) and goes to the bot's actor, `bot:<id>`."""
+    if manager is None:
+        return False
+    key = f"{visit_id}:{requirement['id']}:{manager}"
+    if c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (JUDGMENT_EVENT, key)).fetchone():
         return False
     goal = f" Goal: {pipeline['goal']}" if pipeline.get("goal") else ""
     text = (
@@ -514,7 +525,13 @@ def _judgment_once(
         is None
     ):
         return False
-    H.event(c, H.KEEPER, JUDGMENT_EVENT, key, {"pipeline": pipeline["id"], "task": task["id"], "failures": failures})
+    H.event(
+        c,
+        H.KEEPER,
+        JUDGMENT_EVENT,
+        key,
+        {"pipeline": pipeline["id"], "task": task["id"], "manager": manager, "failures": failures},
+    )
     return True
 
 
@@ -593,6 +610,7 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
                         at=stamp,
                     )
                 )
+    manager = manager_bot(c, pipeline)  # None for an archived or missing manager: the pass runs, no judgment wake
     for failed in H._rows(
         c.execute(
             "SELECT d.stage_visit_id AS visit_id, d.stage_requirement_id AS requirement_id, v.task_id AS task_id, "
@@ -615,6 +633,7 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
             _judgment_once(
                 c,
                 pipeline=pipeline,
+                manager=manager,
                 task=task_row,
                 visit_id=failed["visit_id"],
                 requirement={"id": req_row[0], "name": req_row[1]},

@@ -331,6 +331,8 @@ HISTORY = {
     "entity_value_history": "active_from",
     "entity_activities": "occurred_at",
     "entity_mentions": "created_at",
+    # The linker's run trace: the entities a bot run looked up.
+    "entity_lookups": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -526,7 +528,6 @@ KEEP = (
             "rule_due_dates",
             "rule_due_status",
             "rule_reads",
-            "rule_sources",
             "rule_suggestions",
             "rules",
             "run_backoff",

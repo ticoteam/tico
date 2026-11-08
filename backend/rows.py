@@ -1430,6 +1430,13 @@ class EntityExternalRefRow(TypedDict):
     status: str
 
 
+class EntityLookupRow(TypedDict):
+    id: str
+    attempt_id: str
+    entity_id: str
+    created_at: str
+
+
 class EntityMentionRow(TypedDict):
     id: str
     mentionable_type: str

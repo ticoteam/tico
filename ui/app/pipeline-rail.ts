@@ -150,6 +150,19 @@ function pipelineRailBar(): HTMLElement | null {
   return document.getElementById('pipe-rail-bar');
 }
 
+/** A manager's name as Hub has it now: its display name, read each time the panel or the bar draws, so a rename needs no release.
+    The roster is looked up by the bot's row (botDisplayName takes an id, not a slug). */
+function pipelineManagerName(manager: string): string {
+  const row = botByRef(manager);
+  return row ? botDisplayName(row.id) : actorLabel(manager);
+}
+
+/** The bar's line as the person reads it: a line that begins "ask:" shows without the prefix, its first letter capitalised. */
+function pipelineActivityText(text: string): string {
+  const bare = text.replace(/^ask:\s*/, '');
+  return bare === text ? text : bare.charAt(0).toUpperCase() + bare.slice(1);
+}
+
 /** The manager's panel: head, tabs, Late and the tab's list; and the phone's bar. Chat is mounted beside it and never
     redrawn here. */
 function pipelineRailPaint(state: PipelineTasksState | null): void {
@@ -158,11 +171,11 @@ function pipelineRailPaint(state: PipelineTasksState | null): void {
   const view = rail.view;
   const tasks = pipelineRailTasks(state, rail);
   const phone = pipelinePhone();
-  const signature = JSON.stringify([view, rail.tab, rail.sheet, pipelineRailHidden, phone, tasks.map(task => [task.id, task.title])]);
+  const name = pipelineManagerName(rail.manager);
+  const signature = JSON.stringify([view, rail.tab, rail.sheet, pipelineRailHidden, phone, name, tasks.map(task => [task.id, task.title])]);
   if (signature === rail.drawn) return;
   rail.drawn = signature;
   const host = rail.host;
-  const name = actorLabel(rail.manager);
   const status = pipelineRailStatus(view);
   host.classList.toggle('collapsed', pipelineRailHidden && !phone);
   host.classList.toggle('sheet-open', rail.sheet && phone);
@@ -193,7 +206,7 @@ function pipelineRailPaint(state: PipelineTasksState | null): void {
   if (bar) {
     const late = view?.late.length || 0;
     bar.innerHTML = `<span class="pr-face">${actorFace(rail.manager, 28)}</span>
-      <span class="pr-bar-text"><b>${esc(name)}</b><span>${esc(view?.log[0]?.text || status)}</span></span>
+      <span class="pr-bar-text"><b>${esc(name)}</b><span>${esc(pipelineActivityText(view?.log[0]?.text || status))}</span></span>
       ${late ? `<span class="pr-bar-late">${late} late</span>` : ''}<span class="pr-chev" aria-hidden="true">⌃</span>`;
     bar.setAttribute('aria-label', `${name}${late ? `, ${late} late` : ''}`);
   }
@@ -421,6 +434,7 @@ function pipelinePhoneBoard(state: PipelineTasksState, columns: PipelinePhoneCol
       + `${esc(column.name)}<span class="tnum pchip-n">${boardCountText(column)}</span>${waiting ? '<span class="pchip-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
   }).join('');
   const after = stages[stages.indexOf(active) + 1];
+  requestAnimationFrame(() => document.querySelectorAll<HTMLElement>('.pchips').forEach(pipelineChipsEdges));
   return {
     column: active,
     chips: `<div class="pchips" role="group" aria-label="Stages">${chips}</div>`,
@@ -435,6 +449,20 @@ function pipelinePhoneShow(stageId: string): void {
   tasksRender(state);
   requestAnimationFrame(() => document.querySelector('.pchip.on')?.scrollIntoView({ inline: 'center', block: 'nearest' }));
 }
+
+/** A chip row fades on each edge where chips are cut off, and on no edge with nothing beyond it (the .fade-l and .fade-r classes). */
+function pipelineChipsEdges(row: HTMLElement): void {
+  const box = row.getBoundingClientRect();
+  const chips = [...row.children];
+  const first = chips[0]?.getBoundingClientRect(), last = chips.at(-1)?.getBoundingClientRect();
+  row.classList.toggle('fade-l', !!first && first.left < box.left - 1);
+  row.classList.toggle('fade-r', !!last && last.right > box.right + 1);
+}
+// A scroll of any chip row (scroll does not bubble, so the capture listener sees it) updates its fades.
+document.addEventListener('scroll', (event: Event) => {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (target?.classList.contains('pchips')) pipelineChipsEdges(target);
+}, {capture: true, passive: true});
 
 /** Steps to the next (1) or the previous (-1) stage; the ends stay put. */
 function pipelinePhoneStep(delta: number): void {

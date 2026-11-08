@@ -738,3 +738,90 @@ def test_more_late_tickets_than_the_cap_are_listed_across_cursors_without_a_gap_
             break
     assert requests == 2
     assert len(listed) == len(set(listed)) == 600 and set(listed) == set(ids)
+
+
+def judgment_wakes(sent):
+    return [target for target, source, _wake in sent if source == "pipeline_manager.judgment"]
+
+
+def fail_twice(store, base, manager, reviewer="human:ben"):
+    """A ticket in an open visit whose one requirement has failed REPEATED_FAILURES times. Returns the pipeline id."""
+    with store.transaction() as c:
+        type_id = pipeline(c, manager=manager)
+        req = requirement(c, type_id, "Building", reviewer=reviewer)
+        task = ticket(c, type_id, created=base - timedelta(hours=2))
+        visit(c, task["id"], type_id, "Building", base - timedelta(hours=2))
+        visit_id = c.execute(
+            "SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (task["id"],)
+        ).fetchone()[0]
+        for n in range(PM.REPEATED_FAILURES):
+            c.execute(
+                "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, stage_visit_id, "
+                "work_version, judge, verdict, created_at) VALUES (?,?,?,?,?,?,'llm','failed',?)",
+                (f"fail-{manager}-{n}", task["id"], step(c, type_id, "Building"), req, visit_id, 0, stamp(base)),
+            )
+    return type_id
+
+
+def test_a_stored_bot_prefixed_manager_is_woken_as_the_bare_bot(api, woken):
+    """A7: the settings route stores `bot:<id>`. The judgment wake goes to bot:<id>, not bot:bot:<id>."""
+    store = api.app.state.store
+    base = now()
+    fail_twice(store, base, "bot:coo")
+    PM.tick(store, base)
+    assert judgment_wakes(woken) == ["bot:coo"]
+
+
+def test_a_stored_bot_prefixed_manager_gets_its_judgment_wake_delivered_to_the_bot(api):
+    """A7 on the real wake: the message is addressed to bot:<id> and is written, not just logged."""
+    store = api.app.state.store
+    base = now()
+    fail_twice(store, base, "bot:coo")
+    PM.tick(store, base)
+    with store.read() as c:
+        recipients = [
+            r[0]
+            for r in c.execute(
+                "SELECT recipient_id FROM messages WHERE refs LIKE ? AND recipient_id LIKE 'bot:%'",
+                ('%"wake": "pipeline_manager"%',),
+            ).fetchall()
+        ]
+        judged = c.execute("SELECT COUNT(*) FROM events WHERE action=?", (PM.JUDGMENT_EVENT,)).fetchone()[0]
+    assert judged == 1
+    assert recipients == ["bot:coo"]
+
+
+def test_a_manager_change_restarts_the_clock_and_the_new_manager_gets_the_next_judgment(api, woken):
+    """A4: after a change the new active bot is woken for a stuck task, and the old one gets no more wakes."""
+    store = api.app.state.store
+    base = now()
+    pid = fail_twice(store, base, "coo")
+    PM.tick(store, base)
+    with store.transaction() as c:
+        c.execute("UPDATE task_types SET manager='ops' WHERE id=?", (pid,))
+        changed = c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0]
+    assert H.parse_ts(changed) >= base
+    PM.tick(store, base + timedelta(minutes=10))
+    PM.tick(store, base + timedelta(minutes=20))
+    assert judgment_wakes(woken) == ["bot:coo", "bot:ops"]
+
+
+def test_an_archived_manager_is_not_woken_but_the_pass_still_runs(api, woken):
+    store = api.app.state.store
+    base = now()
+    pid = fail_twice(store, base, "coo")
+    with store.transaction() as c:
+        c.execute("UPDATE bots SET state='archived' WHERE id='coo'")
+    PM.tick(store, base)
+    with store.read() as c:
+        [run] = runs(c, pid)
+    assert judgment_wakes(woken) == []
+    assert run["status"] == "ok"
+
+
+def test_a_missing_manager_is_not_woken(api, woken):
+    store = api.app.state.store
+    base = now()
+    fail_twice(store, base, "no-such-bot")
+    PM.tick(store, base)
+    assert judgment_wakes(woken) == []

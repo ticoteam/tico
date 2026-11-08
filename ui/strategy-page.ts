@@ -106,11 +106,10 @@ interface StratSeg {
   next?: boolean;
   parent?: string | null | undefined;
   depth?: number;
-  rolled_usd?: {spend_usd?: number | string};
+  rolled_usd?: {spend_usd?: number | string | null} | null;
   /** The selected size and the evidence behind it (market_spend.py). */
   size?: {spend_usd?: number | string | null; evidence?: {source_url?: string}[]} | null;
 }
-interface StratSpend { segments?: StratSeg[]; definition?: unknown; total?: {spend_usd?: number | string} }
 interface StratRival { id: string; name: string; url?: string }
 interface StratNews { tag: string; title?: string | undefined; url?: string | undefined; source?: string | undefined; at: string }
 /** A top segment with its sized parts (mktTree, ui/market-spend.ts). */
@@ -123,7 +122,7 @@ interface StratInsights { insights?: {about?: string; status?: string; claim?: s
 
 /** The market cards' reads, each undefined while it loads and null when it could not be read. */
 interface StratMkt {
-  spend?: StratSpend | null;
+  spend?: MktSpend | null;
   rivals?: StratRival[] | null;
   news?: StratNews[] | null;
   growth?: {brand: unknown} | null;
@@ -607,6 +606,7 @@ function strategyPaintMarket(key: string) {
     return;
   }
   const box = ({spend: '#strat-where', rivals: '#strat-rivals', news: '#strat-news'} as Record<string, string>)[key];
+  if (!box) return;   // only spend, rivals and news reach here (strategyMarketRead); any other key found no element anyway
   const el = $(box);
   if (!el) return;
   patchHTML(el, key === 'spend' ? strategyWhereHtml(owner) : key === 'rivals' ? strategyRivalsHtml(owner) : strategyNewsHtml());

@@ -64,14 +64,14 @@ function taskPipelineDevType() {
   const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
   return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
-// The types the scope menu lists (task-list.js tasksScopeMenu): General, Roadmap and Engineering (or Dev tickets) by
-// their role, then the team's other types.
+// The types the scope menu lists (task-list.js tasksScopeMenu): General, the product and engineering pipelines by
+// their role, then the team's other types. Each goes by its own current name.
 function taskPipelineScopeTypes() {
   const dev = taskPipelineDevType();
   const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: 'Roadmap'}] : []),
-    ...(dev ? [{id: dev.id, label: dev.id === 'engineering' ? 'Engineering' : 'Dev tickets'}] : []),
+  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: product.name}] : []),
+    ...(dev ? [{id: dev.id, label: dev.name}] : []),
     ...other.map(type => ({id: type.id, label: type.name, other: true}))];
 }
 const taskPipelineLabel = id => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
@@ -103,10 +103,9 @@ function taskPipelineBoard(items, state, head = '') {
   const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
   let lead = 0;
   while (lead < working.length && working[lead].status === 'open') lead++;
-  // A pipeline with no requirements keeps the board as it always was; the one-stage phone layout is for pipelines with them.
-  const phone = pipelinePhone() && !!type.has_requirements;
+  // A phone shows every pipeline one stage at a time, with a chip per stage, requirements or not.
+  const phone = pipelinePhone();
   const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
-  if (phone) folds.backlog = false;               // a phone shows one stage at a time: every backlog stage is a chip
   const inStep = step => items.filter(item => item.task.step_id === step.id);
   const stepColumn = (step: import('../types/api').TaskStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null, held: pipelineStageHeld(state.tasks || [], step)});
   const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
@@ -131,21 +130,25 @@ function taskPipelineBoard(items, state, head = '') {
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
   const one = phone ? pipelinePhoneBoard(state, columns) : null;
-  if (one) return head + one.chips + pipePhoneStageHTML(one.column, type) + one.next;
+  if (one) return head + one.chips + pipePhoneStageHTML(one.column, type, one.next);
   return boardColumnsHTML(columns, {head});
 }
-// A phone's one stage: its name and "warn after" limit, with the compact ▶ N and select-all on the right, then its cards
-// full width. The column box and its header do not show; the stage chips above name the stage.
-function pipePhoneStageHTML(column: BoardColumn, type: import('../types/api').TaskType) {
-  const limit = column.limit ? ` · warn after ${pipelineLimit(column.limit)}` : '';
+// A phone's one stage: its cards full width, under a quiet line with the "warn after" limit, the compact ▶ N and select-all.
+// The stage's name is on its chip only, so the line does not repeat it. The column box and its header do not show.
+// The "Swipe for <next stage>" hint sits under the last card, and only on a stage with cards.
+function pipePhoneStageHTML(column: BoardColumn, type: import('../types/api').TaskType, next = '') {
+  const limit = column.limit ? `warn after ${pipelineLimit(column.limit)}` : '';
   const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
   const all = column.items.length && tasksCanSelect()
     ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
+  const play = pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true);
+  const release = RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : '';
+  const line = limit || play || release || all
+    ? `<div class="pipe-stage-line">${limit ? `<span class="pipe-stage-limit">${esc(limit)}</span>` : ''}${play}${release}${all}</div>` : '';
   const notices = taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true);
   const cards = column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>';
   return `<div class="pipe-phone"><section class="pipe-stage" data-col="${esc(column.id)}" aria-label="${esc(column.name)}">
-    <div class="pipe-stage-line"><span class="pipe-stage-name">${esc(column.name + limit)}</span>${pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true)}${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}</div>
-    ${notices}<div class="pipe-stage-cards">${cards}</div></section></div>`;
+    ${line}${notices}<div class="pipe-stage-cards">${cards}</div>${column.items.length ? next : ''}</section></div>`;
 }
 const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
   || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));

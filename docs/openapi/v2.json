@@ -72543,6 +72543,26 @@
             "type": "array",
             "maxItems": 20,
             "title": "Where"
+          },
+          "toward_scope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Toward Scope"
+          },
+          "applies_when": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applies When"
           }
         },
         "additionalProperties": false,

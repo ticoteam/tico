@@ -54,10 +54,11 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 
 ## Release windows
 
-Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays, two at weekends), run by
+Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 15 a day), run by
 `.github/workflows/train.yml` and `scripts/release_train.py`. No one tags by hand.
 
-- **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
+- **When.** Windows open every hour on the hour, 07:00 to 21:00 Los Angeles time, every day. A window releases only when
+  main has moved since the newest release and the candidate's validation is green: no new commit, no release.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
 - **At the open**, the canary's release is promoted to stable once it is approved and nothing holds it (see
@@ -90,7 +91,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
 
-Triggers: the window schedules (one UTC cron per window start under either offset), every push to main, every
+Triggers: the window schedules (one UTC cron per hour that a window can start at under either offset, 14 to 23 and 0 to
+5 UTC), every push to main, every
 finished Release validation run, a manual run, and a backstop schedule every 20 minutes
 (at :05, :25 and :45, never a window's minute) that takes a step in an open window
 if an event was missed (it never opens a window; it promotes an approved release). A small read-only job decides first, so a push with
@@ -111,11 +113,13 @@ A window validates a head in one of two ways. A **full** validation is the whole
 
 - **One full validation a day.** At most one full validation is dispatched automatically in any 24 hours, whatever its
   outcome (a cancelled one, and a red one with unnamed failures, count too). The window dispatches a full validation
-  only when no full validation finished in the last 24 hours (by finish time).
-- **Anchor.** The anchor is the newest full validation of the last 24 hours that ran the suite to an answer: a green
-  one, or a red one that names its failed tests, of a commit main still contains. It is the anchor whichever release it
-  validated, and the candidates after it are incremental from it. A plan too big to dispatch (or one that cannot be
-  made) waits until the anchor is a day old rather than running a second full validation.
+  only when no full validation finished in the last 24 hours (by finish time), even when an incremental one anchors the chain.
+- **Anchor.** The anchor is the newest validation, full or incremental, of the last 24 hours that ran the suite to an
+  answer: a green one, or a red one that names its failed tests, of a commit main still contains. It is the anchor
+  whichever release it validated, so each incremental validation covers only its own diff from the previous green one
+  and its carried failures. The window dispatches only the anchor, the carried failed tests and the anchor's release;
+  Release validation makes the plan from its own checkout. If the plan cannot be made (a commit missing from the
+  checkout), the window waits and says why.
 - **A cancelled or unnamed full run holds the day.** A cancelled full validation, and a red one whose failures no log
   names (a build, a VM, a startup failure), is no anchor, and no second full validation follows it. The window waits
   and says so on the release-train issue: `a full validation already ran in the last 24h (<run>, <conclusion>): a person
