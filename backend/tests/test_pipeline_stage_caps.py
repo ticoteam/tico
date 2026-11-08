@@ -1239,3 +1239,64 @@ def test_a_card_on_ice_is_never_stuck_stranded_or_a_stuck_blocker(api):
         assert SR2.stranded(c, H.task(c, doing), H.now())  # the control
         c.execute("UPDATE tasks SET step_id=? WHERE id=?", (steps["On ice"], doing))
         assert not SR2.stranded(c, H.task(c, doing), H.now())
+
+
+def test_a_follow_up_queued_for_a_card_parked_mid_turn_is_not_taken_into_the_running_turn(api):
+    """A steer queued for a card's running turn waits once a person parks the card On ice: the turn's inputs pass it
+    over and its job stays queued, as the claim leaves it (execution.job_refusal "on_ice")."""
+    from backend.tests.test_api import claim, post
+    from backend.tests.test_comment_delivery import inputs, job_state, world
+
+    typ, steps = make_line(api, "IceInputs" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    machine, tid = world(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (typ, steps["Doing"], tid))
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "plan"}, machine["token"])
+    first = post(api, f"tasks/{tid}/comments", {"text": "Use the August numbers.", "delivery": "steer"})["comment"][
+        "id"
+    ]
+    assert first in inputs(api, machine, attempt)  # the control
+    second = post(api, f"tasks/{tid}/comments", {"text": "And the July ones.", "delivery": "steer"})["comment"]["id"]
+    assert job_state(api, second) == "queued"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (steps["Doing"],))  # a person parks its stage
+    assert second not in inputs(api, machine, attempt)
+    assert job_state(api, second) == "queued"
+
+
+def test_no_task_manager_item_names_a_card_on_ice_as_the_other_of_a_pair(api, monkeypatch):
+    """A duplicate pair never names a parked card (the next open one is the first of the pair), and no item whose line
+    names a parked card (a review ticket's parent, a duplicate's first) reaches the report."""
+    from backend import task_manager as TM
+
+    typ, steps = make_line(api, "IcePairs" + uuid.uuid4().hex[:8], ON_ICE_LINE)
+    with api.app.state.store.transaction() as c:
+        same = []
+        for n in range(3):
+            tid = H.task_create(c, ANA, f"Lamps {n}", "", "bot:coo", type=typ, step="Backlog", lint=False)["id"]
+            c.execute(  # the same title, as a pair made before the duplicate check would be
+                "UPDATE tasks SET title='Order the lamps', private=0, created_at=? WHERE id=?",
+                (H.shift(H.now(), minutes=n - 10), tid),
+            )
+            same.append(tid)
+        first, second, third = same
+        pairs = [(i["task"], i["about"]) for i in TM._duplicates(c)]
+        assert pairs == [(second, [first]), (third, [first])]  # the control
+        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (steps["On ice"], first))
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (steps["On ice"],))
+        assert [(i["task"], i["about"]) for i in TM._duplicates(c)] == [(third, [second])]
+    at = H.now()
+
+    def reviews(c):
+        return [
+            TM._item("review_duplicate", H.task(c, mine), f"a second ticket for {other}", "close it", about=(other,))
+            for mine, other in ((third, second), (second, first))
+        ]
+
+    monkeypatch.setattr(TM, "_reviews", reviews)
+    monkeypatch.setattr(TM, "_duplicates", lambda c: [])
+    with api.app.state.store.read() as c:
+        by, _ = TM.collect(c, api.app.state.store.settings, at)
+    reported = [item for items in by.values() for item in items if item["kind"] == "review_duplicate"]
+    assert [(item["task"], item["about"]) for item in reported] == [(third, [second])]

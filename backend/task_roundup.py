@@ -535,14 +535,19 @@ def _person_held(c, row):
     """Whether a person holds the task: a hold on a person, on nobody, or on a task the reader cannot see (backend/task_holds.py)."""
     from . import task_holds as TH
 
-    return any(h["on"] is None or H.is_human(h["on"]) or h["kind"] == "private" for h in TH.holds(c, row))
+    found = TH.holds(c, row)
+    if any(h["on"] is None or H.is_human(h["on"]) or h["kind"] == "private" for h in found):
+        return True
+    # A subtask or blocker On ice (D69) waits on the person who parked it.
+    return bool(H.on_ice_ids(c, [h.get("task") for h in found]))
 
 
 def _blocked_waits(c, at):
     """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
     (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
     task never reaches task_holds. Each recipient's mark suppresses only that recipient's line for this update.
-    Read once per run (the shared reads of discover and of each send). A task On ice (D69) waits on no one."""
+    Read once per run (the shared reads of discover and of each send). A task On ice (D69) waits on no one, and no one
+    is asked about a hold that is On ice."""
     from . import task_holds as TH, task_snooze as TS
 
     out = {}
@@ -559,6 +564,9 @@ def _blocked_waits(c, at):
         found = TH.holds(c, row)
         if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"]) for h in found):
             continue
+        # A subtask or blocker On ice waits on the person who parked it, so its owner is not asked about it.
+        parked = H.on_ice_ids(c, [h.get("task") for h in found])
+        found = [h for h in found if h.get("task") not in parked]
         whats = {}
         for hold in found:
             whats.setdefault(H.actor_id(hold["on"]), hold["what"])

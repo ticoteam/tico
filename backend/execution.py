@@ -6097,7 +6097,7 @@ class Execution:
         channel. The runner calls this endpoint only for hosts that advertise steering support.
         Re-deliver until acknowledged; a crash remains uncertain, not a new turn.
         """
-        from . import threads
+        from . import enqueue, threads
 
         attempt = self.attempt(c, who, aid, active=not if_idle)
         if if_idle and (
@@ -6195,6 +6195,8 @@ class Execution:
             # After the checks above: this reads the thread and its root, and a poll passes over a whole backlog.
             if not threads.still_addressed(c, H.message(c, row["id"]), "bot:" + attempt["bot_id"]):
                 continue  # left queued: its own claim settles it
+            if enqueue.parked(c, row["id"]):
+                continue  # a card On ice (D69) takes nothing in either: left queued, as the claim leaves it
             if attempt["bot_id"] == H.FLEET_MAINTAINER:
                 refs = json.loads(row["refs"] or "{}")
                 origin = c.execute(
