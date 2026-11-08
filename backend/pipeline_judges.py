@@ -497,7 +497,8 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                   r.version AS requirement_version, r.pipeline_id, r.pipeline_stage_id, r.reviewed_by, r.reviewer_id,
                   (SELECT goal FROM task_types WHERE id = r.pipeline_id) AS goal,
                   (SELECT pipeline_owner_id FROM task_types WHERE id = r.pipeline_id) AS pipeline_owner_id,
-                  COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest, b.size AS blob_size
+                  COALESCE(v.mime, b.content_type, '') AS mime, b.digest AS blob_digest, b.size AS blob_size,
+                  (SELECT COALESCE(max(rowid), 0) FROM stage_decisions) AS seen_decisions
            FROM requirement_attachments a
            JOIN stage_requirements r ON r.id = a.stage_requirement_id AND r.retired_at IS NULL
            JOIN tasks t ON t.id = a.task_id
@@ -653,10 +654,14 @@ def _superseded(c: sqlite3.Connection, job: dict[str, Any]) -> str | None:
     # A stale requirement of a stage the ticket has left is judged in place: the ticket moving on does not supersede it.
     if on_stage and _open_visit(c, job["task_id"]) != job.get("visit_id"):
         return "the ticket moved on"
+    # A ruling made since the read: stamped after it, or one the read could not see (`seen_decisions`, the newest
+    # stage_decisions rowid in the statement that chose the job; the table is append-only and has one writer, so a
+    # ruling committed after that statement has a larger rowid, even when its created_at is older than read_at).
+    seen = job.get("seen_decisions")
     ruled = c.execute(
         "SELECT 1 FROM stage_decisions WHERE task_id=? AND stage_requirement_id=? AND COALESCE(judge,'')<>'llm' "
-        "AND created_at>? LIMIT 1",
-        (job["task_id"], job["stage_requirement_id"], job.get("read_at") or ""),
+        "AND (created_at>? OR (? IS NOT NULL AND rowid>?)) LIMIT 1",
+        (job["task_id"], job["stage_requirement_id"], job.get("read_at") or "", seen, seen),
     ).fetchone()
     if ruled is not None:
         return "a person ruled on it since"
@@ -693,6 +698,22 @@ def _audit_superseded(c: sqlite3.Connection, job: dict[str, Any], result: dict[s
             "why": why,
         },
     )
+
+
+def _decision_version(c: sqlite3.Connection, job: dict[str, Any]) -> int:
+    """The work version a judge's verdict is recorded for. The evidence's own version, as before, so evidence older than
+    the work is out of date whatever the judge said, except on a requirement that does not need evidence newer than the
+    change (needs.newer_than_change false): there the evidence stays current, the judge was shown the work as it is now
+    (task_work_version), and its verdict is for that work. Recorded at the evidence's older version, a not met or unsure
+    there would say nothing to the engine (a verdict on changed work) while its digest kept the judge from asking again."""
+    evidence, work = int(job.get("work_version") or 0), int(job.get("task_work_version") or 0)
+    if evidence == work:
+        return evidence
+    found = c.execute(
+        "SELECT json_type(needs, '$.newer_than_change') FROM stage_requirements WHERE id=?",
+        (job["stage_requirement_id"],),
+    ).fetchone()
+    return work if found is not None and found[0] == "false" else evidence
 
 
 def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) -> str:
@@ -734,7 +755,7 @@ def _record(c: sqlite3.Connection, job: dict[str, Any], result: dict[str, Any]) 
             job["requirement_version"],
             job["id"],
             job["digest"],
-            job["work_version"],
+            _decision_version(c, job),
             result.get("model") or "",
             decision,
             result["p"],

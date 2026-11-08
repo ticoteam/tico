@@ -1374,6 +1374,74 @@ def test_a_persons_met_that_stands_across_a_change_is_never_judged_over(tmp_path
     assert P.tick(store) == 0 and _standing(store, task_id, req_id) == "met"
 
 
+def test_a_ruling_written_before_the_read_but_committed_after_it_is_never_answered_over(tmp_path, monkeypatch):
+    """Codex round 7, P2: a Mark met stamped before the judge's read but committed after it is invisible to the read and
+    older than read_at; the answer is still not recorded over it (the read notes the newest decision it could see)."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    held = hub(path)
+    revision, stage = held.execute("SELECT work_revision, step_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    held.execute("BEGIN IMMEDIATE")
+    held.execute(
+        "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, requirement_version, "
+        "work_version, judge, judge_actor, verdict, created_at) VALUES ('held',?,?,?,1,?,'person',?,'override',?)",
+        (task_id, stage, req_id, revision, ANA, H.now()),
+    )
+    read = P._waiting
+
+    def committed_after_the_read(c, limit):
+        jobs = read(c, limit)
+        assert jobs  # the read could not see the ruling
+        held.commit()
+        return jobs
+
+    monkeypatch.setattr(P, "_waiting", committed_after_the_read)
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    P.tick(store)
+    held.close()
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM stage_decisions WHERE judge='llm'").fetchone()[0] == 0
+    assert _standing(store, task_id, req_id) == "met"
+
+
+def test_a_rejudged_not_met_on_evidence_that_need_not_be_newer_counts_for_the_work_now(tmp_path, monkeypatch):
+    """Codex round 7, P2: on a requirement that does not need evidence newer than the change, a re-judged not met is for
+    the work as it is now, so it stands (failed) instead of being ignored as a verdict on older work while its digest
+    keeps the judge from asking again."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE stage_requirements SET needs=json_set(needs, '$.newer_than_change', json('false')) WHERE id=?",
+            (req_id,),
+        )
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET body='Add a Dark mode toggle, and a Light one.' WHERE id=?", (task_id,))
+    assert _standing(store, task_id, req_id) == "waiting"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    assert P.tick(store) == 0
+
+
+def test_a_judges_met_on_evidence_older_than_the_work_is_still_out_of_date_when_newer_evidence_is_needed(
+    tmp_path, monkeypatch
+):
+    """The decision keeps the evidence's own version when the requirement needs evidence newer than the change, so a met
+    on old evidence reads out of date whatever the judge said."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET body='Add a Dark mode toggle, and a Light one.' WHERE id=?", (task_id,))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    P.tick(store)
+    assert _standing(store, task_id, req_id) == "out_of_date"
+
+
 def _more_tickets(path, n, body=""):
     c = hub(path)
     dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]
