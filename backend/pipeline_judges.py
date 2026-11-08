@@ -356,8 +356,10 @@ def _cannot_see(attachment: dict[str, Any], state: dict[str, Any]) -> bool:
 
 
 def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
-    """Attachments on a bot-reviewed requirement of their ticket's current stage that no judge has answered, and that no
-    person was routed to (route_next_to: a bot does not judge what a person now answers)."""
+    """The current attachment on each bot-reviewed requirement of their ticket's current stage that no judge has answered,
+    and that no person was routed to (route_next_to: a bot does not judge what a person now answers). An attachment that
+    newer evidence replaced is not judged. A Mark met stands only for the work it was made on (the decision's version),
+    so one made before a change does not stop the judge (R8)."""
     rows = c.execute(
         """SELECT a.id AS id, a.task_id, a.stage_requirement_id, a.digest, a.work_version, a.source, a.url, a.file_version,
                   t.work_revision AS task_work_version, t.owner_id AS task_owner_id, r.name, r.rubric,
@@ -371,12 +373,17 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
            LEFT JOIN blobs b ON b.id = a.blob_id
            LEFT JOIN bot_file_versions v ON v.file_id = a.file_id AND v.version = a.file_version
            WHERE a.removed_at IS NULL
+             AND a.rowid = (SELECT x.rowid FROM requirement_attachments x
+                            WHERE x.task_id = a.task_id AND x.stage_requirement_id = a.stage_requirement_id
+                              AND x.removed_at IS NULL
+                            ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1)
              AND r.kind = 'attachment' AND r.reviewed_by IN ('bot', 'bot_then_person')
              AND r.rubric IS NOT NULL
              AND t.status IN ({active})
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.task_id = a.task_id AND d.stage_requirement_id = a.stage_requirement_id
                                AND d.verdict = 'override'
+                               AND (d.work_version IS NULL OR d.work_version = t.work_revision)
                                AND d.rowid = (SELECT x.rowid FROM stage_decisions x
                                               WHERE x.task_id = a.task_id AND x.stage_requirement_id = a.stage_requirement_id
                                               ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1))

@@ -295,6 +295,54 @@ def test_the_decide_models_go_through_the_engine_seam_and_the_ids_are_the_gatewa
     assert (P.MET_AT, P.NOT_MET_AT) == (0.8, 0.2)
 
 
+def test_a_stale_mark_met_does_not_stop_the_judge_once_the_work_changed(tmp_path, monkeypatch):
+    """Finding R8: Mark met on a live ticket, then the work changes and fresh evidence is attached. The mark stood for the
+    old work only, so the judge reads the new attachment: one judge job, not none."""
+    from backend import pipeline_engine, pipeline_review
+
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    req = R.add(
+        c,
+        ANA,
+        step_id(c, dev["id"], "Review"),
+        {
+            "name": "Live link",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "The link opens the page",
+        },
+    )
+    task = H.task_create(c, ANA, "Ship", "", ANA, type=dev["id"], step="Review", lint=False)
+    attach = SimpleNamespace(task=lambda *a: None)
+    A.attach(
+        c, attach, SimpleNamespace(actor=ANA), task["id"], req["id"], {"source": "link", "url": "https://x.example"}
+    )
+    pipeline_review.mark_met(c, ANA, task["id"], req["id"], "Checked by hand")
+    pipeline_engine.work_changed(c, task["id"])
+    A.attach(
+        c, attach, SimpleNamespace(actor=ANA), task["id"], req["id"], {"source": "link", "url": "https://y.example"}
+    )
+    c.commit()
+    c.close()
+
+    store = Store(_settings(path))
+    asked = []
+
+    def ask(model, state, questions, label):
+        asked.append(state["requirement"])
+        return {"p": 0.95, "reason": "The page opens", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", ask)
+    P.tick(store)
+    assert len(asked) == 1
+
+
 def _waiting_store(tmp_path):
     path = tmp_path / "hub.sqlite"
     boot(path)
