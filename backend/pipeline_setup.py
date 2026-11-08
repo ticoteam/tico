@@ -58,7 +58,8 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Declined", "closed"),
                 ),
                 # Every hub boots with the roadmap seed (roadmap_flow.ensure). Its stages take the preset's names in place,
-                # so their cards stay; Approved is retired into In development and goes once it is empty.
+                # so their cards stay; Approved is retired into In development and Ready to ship into Done, and each goes
+                # once it is empty.
                 "adopt": {
                     "renamed": {
                         "Suggested": "Ideas",
@@ -67,9 +68,17 @@ PRESETS: dict[str, dict[str, Any]] = {
                         "Building": "In development",
                         "Shipped": "Done",
                     },
-                    "retired": {"Approved": "In development"},
+                    "retired": {"Approved": "In development", "Ready to ship": "Done"},
                 },
                 "requirements": [
+                    {
+                        "stage": "Specifying",
+                        "name": "Spec page",
+                        "kind": "attachment",
+                        "needs": {"formats": ["page"]},
+                        "reviewed_by": "bot_then_person",
+                        "rubric": "The page says what we're building, how we'll know it worked, and how it gets validated.",
+                    },
                     {"stage": "Review", "name": "Spec approved", "kind": "approval", "reviewed_by": "person"},
                     {
                         "stage": "In development",
@@ -88,7 +97,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                         "rubric": "The page says whether the spec's 'how we'll know' measures held, each with its number.",
                     },
                 ],
-                "manager": ["Product Manager", "Product Factory Manager"],
+                "manager": ["Product Pipeline Manager", "Product Manager", "Product Factory Manager"],
             },
             {
                 "name": "Engineering",
@@ -104,7 +113,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Shipped", "done"),
                     ("Closed", "closed"),
                 ),
-                "manager": ["Engineering Manager", "Engineering Factory Manager"],
+                "manager": ["Engineering Pipeline Manager", "Engineering Manager", "Engineering Factory Manager"],
             },
             {
                 "name": "Marketing",
@@ -114,7 +123,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                 "stages": _stages(
                     ("Targets", "open"), ("Outreach", "doing"), ("Replies", "review"), ("Qualified", "done")
                 ),
-                "manager": ["Marketing Manager", "Marketing Factory Manager"],
+                "manager": ["Marketing Pipeline Manager", "Marketing Manager", "Marketing Factory Manager"],
             },
             {
                 "name": "Sales",
@@ -129,7 +138,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Won", "done"),
                     ("Lost", "closed"),
                 ),
-                "manager": ["Sales Manager", "Sales Factory Manager"],
+                "manager": ["Sales Pipeline Manager", "Sales Manager", "Sales Factory Manager"],
             },
             {
                 "name": "Success",
@@ -143,7 +152,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Referred", "done"),
                     ("Closed", "closed"),
                 ),
-                "manager": ["Success Manager", "Success Factory Manager"],
+                "manager": ["Success Pipeline Manager", "Success Manager", "Success Factory Manager"],
             },
             {
                 "name": "Legal",
@@ -158,7 +167,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Done", "done"),
                     ("Closed", "closed"),
                 ),
-                "manager": ["Legal Manager", "Counsel"],
+                "manager": ["Legal Pipeline Manager", "Legal Manager", "Counsel"],
             },
         ],
         "links": [
@@ -213,7 +222,8 @@ def _existing(conn: sqlite3.Connection, spec: Row) -> Row | None:
 
 
 def _manager(conn: sqlite3.Connection, names: list[str]) -> str | None:
-    """The slug of the active bot named like one of `names` (a display name or a slug), or None."""
+    """The slug of the active bot named like one of `names` (a display name or a slug), or None. The names are tried in
+    order: "<X> Pipeline Manager" first, then the older "<X> Manager" and "<X> Factory Manager"."""
     for name in names:
         found = _one(
             conn,
@@ -224,6 +234,15 @@ def _manager(conn: sqlite3.Connection, names: list[str]) -> str | None:
         if found is not None:
             return str(found["slug"])
     return None
+
+
+def _active_manager(conn: sqlite3.Connection, slug: object) -> bool:
+    """Whether a pipeline's manager is a bot that works: an archived, paused, quarantined or planned bot, or one that
+    does not exist, counts as none, so setup may replace it."""
+    if not slug:
+        return False
+    found = H.resolve_bot(conn, str(slug))
+    return found is not None and str(found.get("state") or "active") == "active"
 
 
 def _pipeline_stages(spec: Row) -> list[dict[str, str]]:
@@ -416,8 +435,24 @@ def _requirement(
     made.append(f"requirement {spec['name']} on {spec['stage']}")
 
 
+def _public_names(conn: sqlite3.Connection, ident: str, name: str, made: list[str]) -> None:
+    """Every stage's public name is its stage name (the Product roadmap's public page shows them). Only the stages that
+    differ are written, so a second run changes nothing."""
+    if _one(conn, "SELECT 1 FROM task_steps WHERE type_id = ? AND public_name <> name LIMIT 1", (ident,)) is None:
+        return
+    conn.execute("UPDATE task_steps SET public_name = name WHERE type_id = ? AND public_name <> name", (ident,))
+    conn.execute("UPDATE task_types SET updated_at = ? WHERE id = ?", (H.now(), ident))
+    made.append(f"public names of {name} follow its stages")
+
+
 def _pipeline(
-    conn: sqlite3.Connection, actor: str, spec: Row, factories: dict[str, str], replace: bool, made: list[str]
+    conn: sqlite3.Connection,
+    actor: str,
+    spec: Row,
+    factories: dict[str, str],
+    replace: bool,
+    made: list[str],
+    unresolved: list[str],
 ) -> str:
     existing = _existing(conn, spec)
     if existing is None:
@@ -435,6 +470,7 @@ def _pipeline(
     if existing is not None and spec.get("adopt"):
         _adopt(conn, actor, row, spec, made)
     ident = str(row["id"])
+    _public_names(conn, ident, spec["name"], made)
     current = (
         _one(
             conn,
@@ -455,10 +491,15 @@ def _pipeline(
         updates["factory_id"] = factories[spec["factory"]]
     if not current.get("pipeline_owner_id"):
         updates["pipeline_owner_id"] = actor
-    if not current.get("manager"):
+    # An active manager is never replaced. Any other manager (archived, paused, missing, or not yet set up) counts as
+    # none: the matching bot takes its place, or the pipeline is reported as having no active manager. An unset manager is
+    # left unset, as it always was.
+    if not _active_manager(conn, current.get("manager")):
         manager = _manager(conn, spec["manager"])
         if manager:
             updates["manager"] = manager
+        elif current.get("manager"):
+            unresolved.append(f"{spec['name']} has no active manager: name a bot {spec['manager'][0]}")
     if spec.get("private"):
         updates["pipeline_visibility"] = "members"
     changed = {k: v for k, v in updates.items() if current.get(k) != v}
@@ -536,12 +577,14 @@ def apply_factory_setup(
 ) -> dict[str, Any]:
     """Make the preset's factories, pipelines, stages, links and goals. Idempotent: what exists is adopted (and given a
     goal, prefix, factory or manager only where it has none), never duplicated or overwritten. A manager bot is set when
-    one named like "<Name> Manager" exists, else left unset. `replace=True` also closes the open cards of an existing,
-    role-less pipeline and makes its stages the preset's. A link whose stage cannot be made is refused (422, nothing is
-    written) with replace; without it the link is left out and named under `unresolved`.
+    one named like "<Name> Pipeline Manager" (or "<Name> Manager", "<Name> Factory Manager") exists. A manager that is not
+    an active bot (archived, paused, missing) is replaced by such a match; if there is none, the pipeline is named under
+    `unresolved`, as are the links left out. `replace=True` also closes the open cards of an existing, role-less pipeline
+    and makes its stages the preset's. A link whose stage cannot be made is refused (422, nothing is written) with
+    replace; without it the link is left out and named under `unresolved`. Every stage's public name follows its name.
 
     {"preset", "factories": {name: id}, "pipelines": {name: id}, "changes": [what was made or changed],
-    "unresolved": [links left out]}."""
+    "unresolved": [what could not be resolved]}."""
     from .store import Problem
 
     if preset not in PRESETS:
@@ -552,11 +595,13 @@ def apply_factory_setup(
     c.execute("SAVEPOINT pipeline_setup")
     try:
         factories = {f["name"]: _factory(c, actor, f, i, made) for i, f in enumerate(spec["factories"])}
-        pipelines = {p["name"]: _pipeline(c, actor, p, factories, replace, made) for p in spec["pipelines"]}
+        pipelines = {p["name"]: _pipeline(c, actor, p, factories, replace, made, unresolved) for p in spec["pipelines"]}
+        missing_links: list[str] = []
         for link in spec["links"]:
             missing = _link(c, actor, link, pipelines, made)
             if missing:
-                unresolved.append(missing)
+                missing_links.append(missing)
+        unresolved.extend(missing_links)
         if replace:
             _retire_obsolete(c, actor, spec, pipelines, made)
         # A factory's output stage (D56): the completion stage of its last pipeline, unless one is already set.
@@ -573,10 +618,10 @@ def apply_factory_setup(
         for pipe in spec["pipelines"]:
             for req in pipe.get("requirements", []):
                 _requirement(c, actor, pipelines[pipe["name"]], req, made, pipelines)
-        if unresolved and replace:
+        if missing_links and replace:
             raise Problem(
                 "unresolved",
-                "These links name a stage the setup does not make: " + "; ".join(unresolved),
+                "These links name a stage the setup does not make: " + "; ".join(missing_links),
                 422,
             )
     except BaseException:

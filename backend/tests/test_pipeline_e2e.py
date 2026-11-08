@@ -78,8 +78,17 @@ class Company:
         return found[0]
 
     def ticket(self, pipeline, stage, title="A ticket"):
-        row = H.task_create(self.c, ANA, title, "", BUILDER, type=self.type[pipeline], step=stage, lint=False)
+        """A ticket at `stage`. The app makes a ticket at its pipeline's first stage and then moves it, so a Product ticket
+        past Specifying is made at Ideas, moved to Specifying and given its Spec page (`spec`) before it moves on."""
+        past_spec = pipeline == "Product" and stage not in ("Ideas", "Specifying")
+        row = H.task_create(
+            self.c, ANA, title, "", BUILDER, type=self.type[pipeline], step=None if past_spec else stage, lint=False
+        )
         self.c.commit()
+        if past_spec:
+            self.move(row["id"], "Specifying", actor=ANA)
+            self.spec(row["id"])
+            self.move(row["id"], stage, actor=ANA)
         return row["id"]
 
     def move(self, task_id, stage, actor=BUILDER, **kw):
@@ -102,6 +111,13 @@ class Company:
         result = pipeline_review.mark_met(self.c, actor, task_id, requirement_id, note)
         self.c.commit()
         return result
+
+    def spec(self, task_id):
+        """The Spec page of a ticket at Specifying is met, so the ticket may leave Specifying. The owner marks it met; the
+        bot's review and a person's are the production path, and a scenario about them does its own."""
+        self.mark_met(
+            ANA, task_id, self.requirement("Product", "Specifying", "Spec page"), "Spec page written in the test"
+        )
 
     def where(self, task_id):
         """(pipeline name, stage name) of a ticket now."""
@@ -364,6 +380,32 @@ def primary_session(co, task_id):
 def owner_and_session(co, card):
     """What must not change across the stages: the owner, the primary session link and the session root."""
     return (H.task(co.c, card)["owner_id"], session_links(co, card), H.session_root(co.c, "builder", card))
+
+
+def tico_spec_page(co, card):
+    """A Tico page on the card, written by a spec bot: its file, one version and its page row, so the file satisfies a
+    page format. Returns the file id."""
+    co.c.execute(
+        "INSERT INTO bots(id,slug,display_name,created_at) VALUES('bot-spec','spec','Spec writer',?)", (H.now(),)
+    )
+    co.c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,"
+        "last_activity_at) VALUES('file-dark-spec','bot-spec',?,'spec','Dark mode spec','file','text/html',"
+        "'tico_blob',1,?,?)",
+        ("task:" + card, H.now(), H.now()),
+    )
+    co.c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
+        "VALUES('blob-dark-spec',?,'sha-spec',10,'dark-spec.html','text/html',?)",
+        (ANA, H.now()),
+    )
+    co.c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES('file-dark-spec',1,'blob-dark-spec','sha-spec',10,'dark-spec.html','text/html',?,?)",
+        (ANA, H.now()),
+    )
+    co.c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES('file-dark-spec',?,?)", (H.now(), H.now()))
+    return "file-dark-spec"
 
 
 def review_card(co, title="Dark mode"):
@@ -960,24 +1002,33 @@ class _Guard:
         return SimpleNamespace(actor=actor, role="bot", task_actor=None)
 
 
-def test_the_spawned_ticket_carries_the_spec_page_first_and_then_the_ordinary_links(co):
-    """Fix V-5: the spec is attached through the real attachment API on a requirement named "Spec page", and an ordinary
-    link is added to the card. Approving Review files D41 with both as its links, the spec first, so both show on D41."""
+def test_the_spawned_ticket_carries_the_spec_page_first_and_then_the_ordinary_links(co, monkeypatch):
+    """Fix V-5: the spec is a Tico page attached through the real attachment API on the Specifying stage's "Spec page", and
+    an ordinary link is added to the card. Approving Review files D41 with both as its links, the spec first."""
     from types import SimpleNamespace
 
     from backend import requirement_attachments
 
+    # A page's link needs the hub's origin.
+    monkeypatch.setattr(pipeline_links, "hub_origin", "https://hub.example.test")
     card = co.ticket("Product", "Specifying", "Dark mode")
-    spec_req = co.require("Product", "Specifying", "Spec page", needs={"formats": ["link"]})
+    file_id = tico_spec_page(co, card)
     requirement_attachments.attach(
-        co.c, _Guard(), SimpleNamespace(actor=BUILDER), card, spec_req, {"source": "link", "url": SPEC}
+        co.c,
+        _Guard(),
+        SimpleNamespace(actor=ANA, role="human", task_actor=None),
+        card,
+        co.requirement("Product", "Specifying", "Spec page"),
+        {"source": "file", "file_id": file_id},
     )
     H.task_link(co.c, BUILDER, card, NOTES)
     co.c.commit()
+    co.spec(card)
     co.move(card, "Review")
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    assert [link["url"] for link in H.task_links(co.c, d41)] == [SPEC, NOTES]
+    spec_url = f"https://hub.example.test/api/v2/files/{file_id}/versions/1"
+    assert [link["url"] for link in H.task_links(co.c, d41)] == [spec_url, NOTES]
 
 
 def test_a_card_whose_spawn_the_rules_refuse_stays_in_review_and_files_nothing(co):
@@ -1070,26 +1121,7 @@ def test_the_spawned_ticket_carries_a_tico_page_attached_to_the_spec_first(co, m
 
     monkeypatch.setattr(pipeline_links, "hub_origin", "https://hub.example.test")
     card = co.ticket("Product", "Review", "Dark mode")
-    co.c.execute(
-        "INSERT INTO bots(id,slug,display_name,created_at) VALUES('bot-spec','spec','Spec writer',?)", (H.now(),)
-    )
-    co.c.execute(
-        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,"
-        "last_activity_at) VALUES('file-dark-spec','bot-spec',?,'spec','Dark mode spec','file','text/html',"
-        "'tico_blob',1,?,?)",
-        ("task:" + card, H.now(), H.now()),
-    )
-    co.c.execute(
-        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
-        "VALUES('blob-dark-spec',?,'sha-spec',10,'dark-spec.html','text/html',?)",
-        (ANA, H.now()),
-    )
-    co.c.execute(
-        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
-        "VALUES('file-dark-spec',1,'blob-dark-spec','sha-spec',10,'dark-spec.html','text/html',?,?)",
-        (ANA, H.now()),
-    )
-    co.c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES('file-dark-spec',?,?)", (H.now(), H.now()))
+    file_id = tico_spec_page(co, card)
     spec_req = co.require("Product", "Review", "Spec", needs={"formats": ["page"]}, reviewed_by="person")
     requirement_attachments.attach(
         co.c,
@@ -1097,7 +1129,7 @@ def test_the_spawned_ticket_carries_a_tico_page_attached_to_the_spec_first(co, m
         SimpleNamespace(actor=ANA, role="human", task_actor=None),
         card,
         spec_req,
-        {"source": "file", "file_id": "file-dark-spec"},
+        {"source": "file", "file_id": file_id},
     )
     H.task_link(co.c, BUILDER, card, NOTES)
     co.attach(card, co.requirement("Product", "Review", "Spec approved"), url=SPEC)
@@ -1106,7 +1138,7 @@ def test_the_spawned_ticket_carries_a_tico_page_attached_to_the_spec_first(co, m
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
     links = [link["url"] for link in H.task_links(co.c, d41)]
-    assert links[0] == "https://hub.example.test/api/v2/files/file-dark-spec/versions/1"
+    assert links[0] == f"https://hub.example.test/api/v2/files/{file_id}/versions/1"
     assert NOTES in links
 
 
@@ -1532,6 +1564,7 @@ def _card_with_marketing_and_engineering(co):
     engineering subtask)."""
     card = co.ticket("Product", "Specifying", "Dark mode")
     co.create_spawn_link("Product", "Specifying", "Marketing")
+    co.spec(card)
     co.move(card, "Review", actor=ANA)
     (lead,) = subtasks(co, card)
     assert co.where(lead)[0] == "Marketing"
@@ -1578,6 +1611,7 @@ def test_not_validated_files_one_engineering_ticket_when_specifying_and_review_b
         "SELECT id FROM pipeline_links WHERE from_pipeline_stage_id=? AND mode='spawn'",
         (co.stage("Product", "Specifying"),),
     ).fetchone()[0]
+    co.spec(card)
     co.move(card, "Review", actor=ANA)
     (lead,) = subtasks(co, card)
     H.task_update(co.c, ANA, lead, owner=BEN)  # an open twin under the same owner would be refused as a duplicate
