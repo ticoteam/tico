@@ -267,11 +267,16 @@ which does not start its own open work. A sweep every 10 minutes wakes at most 2
 and five per computer. It skips a bot that is paused, held, draining, busy with another run, or whose computer is offline.
 A task is resumed at most six times a day.
 
+A bot's Dev ticket in review at a check step (Review 1, Review 2, In QA) is resumed the same way once its check is
+over: the builder owns the next move (merge once CI is green, fix or re-run CI that failed or was cancelled, ask for the
+check again). It needs no check open, no CI going and no merge queued on its pull request, and nothing changed on it or
+on a check under it for an hour.
+
 Progress is a status, step or owner change, a note, comment or message by the bot on the task, or a subtask or question
 filed under it. After three resumes in a row with no progress, Tico stops resuming the task and lists it once on the
 task roundup of the bot's manager (another bot on the org chart), or on the bot's own roundup when it has none. A person
-is never told. Progress makes the task eligible again. People's tasks, and tasks that are open, waiting or in review, are
-never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
+is never told. Progress makes the task eligible again. People's tasks, tasks that are open or waiting, and tasks in
+review anywhere but a check step are never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
 
 ## Work that is waiting
 

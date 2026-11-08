@@ -403,3 +403,121 @@ def test_health_stuck_task_check_leaves_a_task_the_sweep_just_resumed_to_it(api)
         assert SR.run(c, H.now())["resumed"] == 1
         finish(c, "ops")
         assert tid not in I.task_stuck(c, I.Ctx(now=H.now(), at=None))
+
+
+DEV_STEPS = [
+    ("On Deck", "open"),
+    ("In Progress", "doing"),
+    ("Review 1", "review"),
+    ("Review 1 Fixes", "doing"),
+    ("In QA", "review"),
+    ("QA Fixes", "doing"),
+    ("Pending Release", "review"),
+    ("Post Release QA", "review"),
+    ("Done", "done"),
+]
+
+
+def dev_ticket(api, title, step="In QA", n=412, checks="failing", check=None):
+    """A Dev ticket `ops` builds, at `step`, with an open pull request whose CI reads `checks`. `check`: the status of
+    a QA check filed under it by `cpo`, or None for no check."""
+    from backend import rules
+
+    with api.app.state.store.transaction() as c:
+        found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
+        typ = (
+            found[0]
+            if found
+            else H.type_create(
+                c, H.KEEPER, "Dev tickets", [{"name": name, "status": status} for name, status in DEV_STEPS]
+            )["id"]
+        )
+        rules.seed_dev(c)
+    url = f"https://github.com/ticoteam/tico/pull/{n}"
+    tid = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": title,
+            "body": "Build " + title + ".",
+            "type": typ,
+            "step": "In Progress",
+            "links": [url],
+        },
+    )["id"]
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:ops", tid, step=step)
+        c.execute("UPDATE task_links SET state='open', checks=? WHERE task_id=? AND kind='pr'", (checks, tid))
+        if check:
+            kid = H.task_create(c, "bot:ops", f"QA: PR #{n}", "Check it.", "bot:cpo", parent_id=tid, lint=False)
+            c.execute("UPDATE tasks SET status=? WHERE id=?", (check, kid["id"]))
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+    return tid
+
+
+def strand_review(c, tid, hours=2):
+    """The ticket left in review since `hours` ago, its runs over, nothing said or changed on it or under it since."""
+    then = H.shift(H.now(), hours=-hours)
+    row = H.task(c, tid)
+    assert row["status"] == "review", row["status"]
+    kids = [r[0] for r in c.execute("SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent'", (tid,))]
+    for one in [tid, *kids]:
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (then, one))
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (then, H.task(c, one)["conversation_id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, one))
+    c.execute("UPDATE task_relations SET created_at=? WHERE to_task=?", (then, tid))
+    finish(c, H.actor_id(row["owner_id"]))
+
+
+def test_a_bot_ticket_left_at_a_check_step_after_its_check_is_resumed(api):
+    """Nov 8, PR 3055: QA passed, CI was cancelled and the failure never reached the builder; the ticket sat at In QA
+    for hours. With its check over, no CI going and nothing recorded to wait on, its builder hears of it."""
+    online(api, "ops")
+    tid = dev_ticket(api, "Pipeline manager 1/3", check="done")
+    with api.app.state.store.transaction() as c:
+        strand_review(c, tid)
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        assert wakes(c, "ops", tid) == 1 and resumes(c, tid) == ["1"]
+        body = c.execute(
+            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state='queued' "
+            "AND json_extract(m.refs,'$.stranded')=1"
+        ).fetchone()[0]
+        assert "at In QA" in body and "re-run CI" in body
+        assert SR.handles(c, H.task(c, tid)), "the roundup's quiet line leaves it to the sweep"
+
+
+def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
+    """An open check, CI still going, a merge queued, a check that finished within the hour, a step that is not a
+    check (Pending Release), and a review with no flow (a person's look) all wait on someone else."""
+    online(api, "ops")
+    checking = dev_ticket(api, "Check open", n=1, check="doing")
+    ci = dev_ticket(api, "CI going", n=2, checks="pending")
+    queued = dev_ticket(api, "Merge queued", n=3, checks="passing")
+    fresh = dev_ticket(api, "Check just finished", n=4, check="done")
+    release = dev_ticket(api, "Merged", n=5, step="Pending Release", checks="passing")
+    look = new_task(api, "A person's look")
+    plain = dev_ticket(api, "Nothing to wait on", n=6, check="done")
+    held = (checking, ci, queued, fresh, release, look)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='review' WHERE id=?", (look,))
+        c.execute(
+            "UPDATE task_links SET detail=json_set(coalesce(detail,'{}'),'$.merge_queue',json('{\"state\":\"queued\"}')) "
+            "WHERE task_id=?",
+            (queued,),
+        )
+        for tid in held:
+            strand_review(c, tid, hours=3)
+        strand_review(c, plain, hours=2)  # the newest: the held ones come first and must not use up the bot's resume
+        kid = c.execute("SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent'", (fresh,)).fetchone()[
+            0
+        ]
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), minutes=-20), kid))
+        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
+        assert wakes(c, "ops", plain) == 1
+        for tid in held:
+            assert resumes(c, tid) == [], H.task(c, tid)["title"]
+        assert not SR.handles(c, H.task(c, release)) and not SR.handles(c, H.task(c, look))
+        assert SR.state(c, H.task(c, fresh), H.shift(H.now(), minutes=SR.REVIEW_QUIET_MINUTES)), (
+            "an hour after its check finished, it is stranded"
+        )

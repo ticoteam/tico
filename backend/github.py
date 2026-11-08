@@ -969,8 +969,10 @@ _pending_lock = threading.Lock()
 def refresh_pending_checks(service):
     """The background pass's read of checks that have sat pending with no word from GitHub for `STUCK_SUITE_MINUTES`,
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
-    so a suite that never started stops holding a green head (Dev 646). A link whose stored copy dropped a non-passing
-    check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
+    so a suite that never started stops holding a green head (Dev 646). A failed head whose stored copy still has a
+    pending check is read too: a failure outranks pending, so such a link reads "failing", but the pending suite keeps
+    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A link whose stored
+    copy dropped a non-passing check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
     a read only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first.
     Returns the ids of pending links that left pending."""
     with service.store.read() as c:
@@ -984,7 +986,9 @@ def refresh_pending_checks(service):
                 "FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
-                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL) AND l.number IS NOT NULL AND r.reachable=1 "
+                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
+                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending')) "
+                "AND l.number IS NOT NULL AND r.reachable=1 "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
                 "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
                 (
@@ -1021,13 +1025,14 @@ def apply_checks(c, link_id, head, checks, since=None):
     """Rebuild a PR link's checks from a fresh read (`read_checks`) at the head the link is at now. Checks that leave
     pending this way finish the head as a webhook's last check would (`_finish`, then verdict_moves.checks_done).
     `since` is the link's updated stamp when the read began: a link written after it (a webhook during the read) keeps
-    its checks, which are newer than the read. Returns the link's checks state, or None when the read no longer
-    applies (another head, a closed PR, a write since)."""
+    its checks, which are newer than the read. A failed head whose stored copy had a pending check and whose read has
+    none finishes too, though it read "failing" before and after: the pending check is what kept it from finishing.
+    Returns the link's checks state, or None when the read no longer applies (another head, a closed PR, a write since)."""
     row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
     link = dict(row) if row else None
     detail = H._json(link.get("detail"), {}) or {} if link else {}
     task = link and H.task(c, link["task_id"])
-    if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
+    if not checks or link is None or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
     if since is not None and link.get("updated_at") != since:
         return None
@@ -1036,15 +1041,17 @@ def apply_checks(c, link_id, head, checks, since=None):
     dropped = _dropped(checks, kept)
     if detail.get("checks") == kept and link.get("checks") == state and detail.get("checks_dropped") == dropped:
         return state
+    held = "pending" in (detail.get("checks") or {}).values() and "pending" not in checks.values()
     detail["checks"] = kept
     _set_dropped(detail, dropped)
-    finished = state != "pending" and state != link.get("checks")
+    changed = state != link.get("checks")
+    finished = state != "pending" and (changed or held)
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
     c.execute(
         "UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?", (state, json.dumps(detail), H.now(), link_id)
     )
-    if state != link.get("checks"):
+    if changed:
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     if finished_head:

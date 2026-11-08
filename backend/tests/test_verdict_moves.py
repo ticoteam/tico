@@ -1078,6 +1078,71 @@ def test_a_finished_suite_with_no_check_run_keeps_its_failure(api, monkeypatch):
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
 
 
+def _failed_checks(api):
+    with api.app.state.store.transaction() as c:
+        from backend import github as G
+
+        G.flush_wakes(c)
+    return [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "failed_check"]
+
+
+def test_a_failed_head_behind_a_suite_that_never_started_hands_the_failure_to_the_builder(api, monkeypatch):
+    """Nov 8, PR 3055: QA passed at the head, the Actions run was cancelled, and App suites never started. The failure
+    outranks the pending suites, so the link read "failing", the pending sweep skipped it, and the stale pending suites
+    kept the webhook from finishing the head: no failed-check hand-off came, and the ticket sat for hours."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)  # requested with the push, never started
+    _suite(api, "github-actions", "completed", "cancelled", sha=HEAD, id=1)
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "failing"
+    assert not _failed_checks(api), "the head never finished"
+    service, _ = _github(
+        api,
+        monkeypatch,
+        [
+            _suite_row(1, "github-actions", "completed", "cancelled", runs=2),
+            _suite_row(STUCK, "tico-team-bots", "queued"),
+        ],
+        [{"name": "tests", "status": "completed", "conclusion": "cancelled"}],
+    )
+    _quiet(api, task)
+    assert G.refresh_pending_checks(service) == []  # not a pending link: it was failing and still is
+    link = _link(api, task)
+    assert link["checks"] == "failing"
+    assert "pending" not in H._json(link["detail"], {})["checks"].values()
+    failed = _failed_checks(api)
+    assert len(failed) == 1 and (failed[0]["refs"]["pr_head"], failed[0]["refs"]["pr_result"]) == (HEAD, "fail")
+    # Nothing is pending any more: the next pass reads nothing and hands nothing over again.
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert len(_failed_checks(api)) == 1
+
+
+def test_a_failed_head_with_a_check_still_running_on_github_is_not_finished_by_the_sweep(api, monkeypatch):
+    """A suite that is really going (a re-run of the failed job) keeps the failed head unfinished: its result may
+    still change, and the webhook finishes it when it lands."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)  # requested with the push, never started
+    _suite(api, "github-actions", "completed", "failure", sha=HEAD, id=1)
+    service, _ = _github(
+        api,
+        monkeypatch,
+        [
+            _suite_row(1, "github-actions", "completed", "failure", runs=2),
+            _suite_row(STUCK, "tico-team-bots", "in_progress", runs=1),
+        ],
+        [{"name": "tests", "status": "completed", "conclusion": "failure"}],
+    )
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert "pending" in H._json(_link(api, task)["detail"], {})["checks"].values()
+    assert not _failed_checks(api)
+
+
 def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_the_read(api, monkeypatch):
     """The read began before a failed suite's webhook landed: its older green must not replace the failure."""
     from backend import github as G

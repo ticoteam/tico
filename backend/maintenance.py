@@ -117,18 +117,25 @@ def day_start(at):
     return start if local >= start else start - timedelta(days=1)
 
 
+# How early a week or custom step still counts as due: a run starts a few seconds into its bucket.
+DUE_SLACK = timedelta(minutes=5)
+
+
 def due(row, at):
     """Whether a step is due at `at` by its "How often". The clock counts from its last attempt, not its last success:
-    a step that failed does not retry every run."""
+    a step that failed does not retry every run. A week or custom cadence is due DUE_SLACK early: a step's clock is its
+    run's start, which lands a few seconds into a bucket, so an exact comparison misses the bucket it was meant for by
+    seconds and slips a whole bucket (a 6-hour Find stuck ran 7 hours apart)."""
     if row["frequency"] == "run" or not row["last_started_at"]:
         return True
     last = H.parse_ts(row["last_started_at"])
     if row["frequency"] == "day":
         return last < day_start(at)
     if row["frequency"] == "week":
-        return at - last >= timedelta(days=7)
+        return at - last >= timedelta(days=7) - DUE_SLACK
     every = row["custom_every"] or 1
-    return at - last >= (timedelta(hours=every) if row["custom_unit"] == "hours" else timedelta(days=every))
+    gap = timedelta(hours=every) if row["custom_unit"] == "hours" else timedelta(days=every)
+    return at - last >= gap - DUE_SLACK
 
 
 def bucket(schedule, at):
