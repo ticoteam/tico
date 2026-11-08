@@ -1,9 +1,14 @@
 """Scenarios kept one per file: each module's `SCENARIOS` list joins scenarios.SCENARIOS, after the built-in ones.
 A case module imports what it needs from evals.factory.scenarios (Scenario, standard, tickets, the checks) and adds
 its own setup and checks beside them; add one import line below for it. The imports are literal so the PR checks'
-dependency map (scripts/pr_checks.py) sees exactly which files the sim runs."""
+dependency map (scripts/pr_checks.py) sees exactly which files the sim runs.
 
-SCENARIOS = []
+The cases extend scenarios.SCENARIOS itself, so the list is whole whichever module is imported first. Copying this
+package's own list from scenarios.py read it half built when a case module was imported first (a test importing
+evals.factory.cases.freezes before anything imported scenarios): scenarios.SCENARIOS then lacked every case."""
+
+from evals.factory.scenarios import SCENARIOS  # the built-ins: scenarios.py defines them before it imports this package
+
 # One line per case, in name order:  from .<name> import SCENARIOS as _<name>; SCENARIOS += _<name>
 from .freezes import SCENARIOS as _freezes
 
@@ -44,3 +49,23 @@ SCENARIOS += _source_outages
 from .stranded_doing import SCENARIOS as _stranded_doing
 
 SCENARIOS += _stranded_doing
+from .pipeline_requirements import SCENARIOS as _pipeline_requirements
+
+SCENARIOS += _pipeline_requirements
+from .pipeline_attach import SCENARIOS as _pipeline_attach
+
+SCENARIOS += _pipeline_attach
+from .pipeline_review import SCENARIOS as _pipeline_review
+
+SCENARIOS += _pipeline_review
+from .pipeline_manager import SCENARIOS as _pipeline_manager
+
+SCENARIOS += _pipeline_manager
+
+# Every scenario carries the stuck-work invariant, whatever checks it lists (a case may leave BASE out). It runs here,
+# after the last case, because this package finishes last whichever module is imported first.
+from evals.factory.scenarios import STUCK_CHECK, no_stuck_work  # noqa: E402
+
+for _scenario in SCENARIOS:
+    if not any(fn is no_stuck_work for _, _, fn in _scenario.checks):
+        _scenario.checks.insert(0, (STUCK_CHECK, None, no_stuck_work))

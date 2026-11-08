@@ -266,7 +266,7 @@ function pageFinance() {
   FIN_VIEW_AS = FIN.q.get('view_as') || '';
   const main = $('#main');
   main.classList.add('strategy-layout', 'finance-layout');
-  main.innerHTML = finHeadHtml() + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = finHeadHtml() + '<div id="fin-brief"></div>' + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
   const state = FIN;
   void (async () => {
     let acc = null, error = null;
@@ -287,6 +287,7 @@ function finShow(state) {
     return;
   }
   finHeadDraw();
+  void finBriefLoad(state);
   if (state.tab === 'line') finLinePage(state.arg);
   else if (tab === 'pnl') finPnlPage();
   else if (tab === 'budgets') finBudgetsPage();

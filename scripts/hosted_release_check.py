@@ -181,6 +181,8 @@ def main():
     parser.add_argument("mode", choices=("prepare", "run", "collect"))
     parser.add_argument("--part", choices=PARTS, help="run: this VM's slice of the candidate's gate")
     parser.add_argument("--shard", help="run --part python or browser: group K/N")
+    parser.add_argument("--plan", help="run --suite: the incremental plan (scripts/release_increment.py)")
+    parser.add_argument("--suite", help="run: one VM of an incremental plan, by its name (python-1, browser-2, ...)")
     args = parser.parse_args()
     hosted(os.environ)
     sha, previous = inputs(os.environ)
@@ -208,6 +210,8 @@ def main():
         },
         "part": args.part,
         "shard": args.shard,
+        "suite": args.suite,
+        "plan": args.plan,
         "gate_started": False,
         "success": False,
     }
@@ -228,7 +232,24 @@ def main():
         if args.mode == "prepare":
             receipt["success"] = True
             return 0
-        command = gate_command(root, previous, args.part, args.shard)
+        if args.suite:
+            # An incremental VM: the merge queue's suite runner, from the candidate's checkout (scripts/pr_checks.py run).
+            require(
+                args.plan and args.part in ("python", "browser"),
+                "a suite runs with --plan, in a python or browser part",
+            )
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("pr_checks.py")),
+                "run",
+                args.suite,
+                "--plan",
+                args.plan,
+                "--root",
+                str(root),
+            ]
+        else:
+            command = gate_command(root, previous, args.part, args.shard)
         if command is None:
             note = (
                 "candidate predates the desktop part; it has no desktop test"

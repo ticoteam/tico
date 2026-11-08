@@ -144,7 +144,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
    `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
 5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
-   press **Close task** at the top of the task (it is also in its **…** menu).
+   press **Close** at the top of the task (it is also in its **…** menu).
 
 Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
 Health issue.

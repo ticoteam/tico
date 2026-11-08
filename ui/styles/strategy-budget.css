@@ -1,4 +1,4 @@
-/* ui/styles/strategy-budget.css — Strategy > Budget (ui/app/strategy-budget.js): the org chart as one tree of one-line rows,
+/* ui/styles/strategy-budget.css — Strategy > Budget (ui/app/strategy-budget.ts): the org chart as one tree of one-line rows,
    each indented by its depth with a thin bar under it, and the editor, a panel on the right (a sheet on a phone). */
 
 .bt-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}

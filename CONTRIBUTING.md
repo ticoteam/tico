@@ -27,13 +27,14 @@ npx playwright install chromium
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request. GitHub Actions lints the pull request again (the PR checks workflow), and the merge queue runs the selected
-tests on the merged result before a change lands, so a failure shows there too. The default run leaves out
+Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
+the merge queue runs them again on the merged result before a change lands. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
 list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
 for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
-there.
+there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
+the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
 ## Before you push
 
@@ -61,10 +62,16 @@ generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writ
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
-The UI's JavaScript has a type check and a Biome lint, both seconds long: `bash scripts/check_ui_types.sh` and
-`bash scripts/check_ui_lint.sh`. Each counts findings per file against `ui/types-baseline.json` or
-`ui/lint-baseline.json`. The counts only shrink: after you fix findings, lower the baseline with
-`python3 scripts/ui_baseline.py tsc --write` (or `biome`).
+The UI's scripts have a strict type check (`python3 scripts/check_ui_strict.py`, run by `scripts/check.sh`), a loose
+type check of the `.js` files left (`bash scripts/check_ui_types.sh`) and a Biome lint (`bash scripts/check_ui_lint.sh`),
+all seconds long. Each counts findings per file against its own baseline file: `ui/baselines/strict/<path>.json` for a
+`.ts` file with strict findings (a new `.ts` file must be at zero), `ui/baselines/tsc/<path>.json` for a `.js` file, or
+`ui/baselines/biome/<path>.json` (a file with no findings has none). Flipping a `.js` file to `.ts` is
+`python3 scripts/ui_flip.py`: it moves the file and its baselines, and changes its references and its script tag in
+`ui/index.html`, which keeps a blank line between script tags so that flips of different files do not conflict in a
+merge. The counts only shrink: after you fix findings, lower the baseline with
+`python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
+`ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
@@ -147,9 +154,10 @@ company already owns, so their commits need no sign-off, and their pull requests
 ## How we work
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
-- Draft PRs run no CI. Mark the PR ready for review to start the lint checks; each later push runs only those.
-- Once the PR is reviewed and the tests you touched pass with `scripts/remote.py`, enqueue it with
+- Draft PRs run no CI. Mark the PR ready for review to start its checks (lint and the selected tests); each later push runs them again.
+- Once the PR is reviewed, its `checks` pass, and the tests you touched pass with `scripts/remote.py`, enqueue it with
   `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- After a queue failure, fix it and get green PR checks before you enqueue again.
 - Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
 - If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
   both skip the queue.

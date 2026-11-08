@@ -72,6 +72,16 @@ EMPTY = (
     "google_signin_refusals",
     # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
     "quarantine_holds",
+    # Pipeline routing: a live link sends a ticket on to another pipeline when its stage is reached, a handoff is one
+    # it did and may still return, and a review claim is one person's lock on a requirement. The copy starts with none.
+    "pipeline_links",
+    "pipeline_handoffs",
+    "review_claims",
+    # GitHub checks: a check run is one post the copy could make, the cursor a pass's lease. The copy starts with none.
+    "pipeline_check_runs",
+    "pipeline_check_cursor",
+    # A note a migration leaves for the first start (seed the roadmap types once); a copy of a started hub has none.
+    "first_start_seeds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -308,9 +318,21 @@ HISTORY = {
     "skill_usage_dailies": "used_on",
     "unlisted_skill_usage_dailies": "used_on",
     "skill_suggestions": "created_at",
+    "stage_decisions": "created_at",
+    # A manager action points at its run: the action is cut first.
+    "pipeline_manager_actions": "created_at",
+    "pipeline_manager_runs": "started_at",
+    "factory_manager_actions": "created_at",
+    "factory_manager_runs": "started_at",
     # Run steps before their runs: a step row points at its run.
     "maintenance_run_steps": "started_at",
     "maintenance_runs": "started_at",
+    # The Directory's logs: a value's past values, what happened with an entity, and the mentions a message or evidence made.
+    "entity_value_history": "active_from",
+    "entity_activities": "occurred_at",
+    "entity_mentions": "created_at",
+    # The linker's run trace: the entities a bot run looked up.
+    "entity_lookups": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -330,6 +352,12 @@ KEEP = (
             "postal_mail_grants",
             "postal_mail_settings",  # access and routing settings cannot send in rehearsal mode
             "maintenance_steps",  # each step's switch, "How often" and cursor: a copy keeps the team's settings
+            "factories",
+            "pipeline_members",
+            "stage_requirements",
+            "stage_requirement_versions",
+            "requirement_attachments",
+            "stage_visits",
             "agents",
             "approvals",
             "archives",
@@ -444,15 +472,28 @@ KEEP = (
             "mail_messages",
             "main_pushes",
             "market_citations",
-            "market_edges",
-            "market_entities",
-            "market_entity_keys",
+            "entity_links",
+            "entities",
+            "entity_identifiers",
+            # The Directory's tables (the store's own; backend/entities/store.py): the types, attributes and values
+            # the team set, what each entity is known from, notes, views, merges and external references.
+            "entity_types",
+            "link_types",
+            "entity_attributes",
+            "entity_values",
+            "entity_external_refs",
+            "entity_connections",
+            "entity_notes",
+            "entity_views",
+            "entity_suppressions",
+            "entity_sources",
+            "entity_merges",
             "market_evidence",
             "market_figures",
             "market_insights",
             "market_sizes",
             "market_sources",
-            "market_watches",
+            "entity_watches",
             "market_briefings",
             "market_pages",
             "market_turn_sources",
@@ -487,7 +528,6 @@ KEEP = (
             "rule_due_dates",
             "rule_due_status",
             "rule_reads",
-            "rule_sources",
             "rule_suggestions",
             "rules",
             "run_backoff",
