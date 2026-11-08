@@ -681,7 +681,7 @@ def watchdog(store: Any, at: Any) -> None:
                 "Pipeline manager stopped" if members_only else f"Pipeline manager stopped: {row['name']}",
                 f"The manager of {name} has missed {missed} passes; its last pass started {last_pass or 'never'}. "
                 + (f"Pipeline id {pid}. " if members_only else "")
-                + "Check the manager bot and the pipeline's log.",
+                + "Check the Pipeline Manager and the pipeline's log.",
                 BOTOPS,
                 deduplicate=False,
                 lint=False,
