@@ -405,7 +405,9 @@ const LF_DATES = [['', 'Any time'], ['7', 'Past week'], ['30', 'Past month'], ['
 const LF_FILTERS = ['q', 'kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];
 const LF_COUNTED = ['kind', 'bot', 'team', 'task', 'days', 'pinned', 'archived'];   // the filter button's count and the chips (not the search)
 interface LfGroup { id: string; name: string }
-interface LfState { root: HTMLElement; pop: HTMLElement; filter: Record<string, any>; rows: any[]; cursor: string | null; seq: number; groups: LfGroup[] }
+// Every filter is always present: '' (or false) when off. lfQuery writes them to the address and back.
+interface LfFilter { q: string; kind: string; bot: string; team: string; task: string; days: string; pinned: boolean; archived: boolean; [k: string]: string | boolean | undefined }
+interface LfState { root: HTMLElement; pop: HTMLElement; filter: LfFilter; rows: unknown[]; cursor: string | null; seq: number; groups: LfGroup[] }
 // The open Files page's state; null (typed as the state, as every reader runs while the page is open) until it opens.
 let LF = null as unknown as LfState;
 const lfTeamName = (id: string | undefined) => id ? (LF?.groups || []).find((g: LfGroup) => g.id === id)?.name || teamLabel(id) : '';
@@ -417,7 +419,7 @@ function lfQuery(filter = LF.filter) {
 }
 function lfApiQuery(cursor) {
   const f = LF.filter, q = new URLSearchParams({limit: '50'});
-  for (const k of ['kind', 'bot', 'team', 'task']) if (f[k]) q.set(k, f[k]);
+  for (const k of ['kind', 'bot', 'team', 'task']) if (f[k]) q.set(k, String(f[k]));
   if (f.days) q.set('since', new Date(Date.now() - Number(f.days) * 864e5).toISOString());
   if (f.pinned) q.set('pinned', 'true');
   if (f.archived) q.set('archived', 'true');
@@ -426,7 +428,7 @@ function lfApiQuery(cursor) {
 }
 async function pageLibraryFiles() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
-  const filter = Object.fromEntries(LF_FILTERS.map(k => [k, ['pinned', 'archived'].includes(k) ? params.get(k) === '1' : params.get(k) || '']));
+  const filter = Object.fromEntries(LF_FILTERS.map(k => [k, ['pinned', 'archived'].includes(k) ? params.get(k) === '1' : params.get(k) || ''])) as LfFilter;
   if (filter.bot) filter.bot = botByRef(filter.bot)?.id || filter.bot;     // an old link names the bot by slug
   const same = LF && document.body.contains(LF.root);
   if (!same) {
@@ -503,9 +505,9 @@ function lfWire() {
   };
   pop.onkeydown = tasksMenuKeys;
   // The popover is built as it opens (its teams and bots as they are now), placed under the button, and focused.
-  pop.addEventListener('beforetoggle', (ev: any) => { if (ev.newState === 'open') pop.innerHTML = lfPopHTML(); });
-  pop.addEventListener('toggle', (ev: any) => {
-    const open = ev.newState === 'open', btn = root.querySelector<HTMLElement>('.lf-fbtn')!;
+  pop.addEventListener('beforetoggle', (ev: Event) => { if ((ev as ToggleEvent).newState === 'open') pop.innerHTML = lfPopHTML(); });
+  pop.addEventListener('toggle', (ev: Event) => {
+    const open = (ev as ToggleEvent).newState === 'open', btn = root.querySelector<HTMLElement>('.lf-fbtn')!;
     btn.setAttribute('aria-expanded', String(open));
     if (!open) return;
     lfMenuPlace(pop, btn);
