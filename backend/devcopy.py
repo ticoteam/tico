@@ -77,6 +77,11 @@ EMPTY = (
     "pipeline_links",
     "pipeline_handoffs",
     "review_claims",
+    # GitHub checks: a check run is one post the copy could make, the cursor a pass's lease. The copy starts with none.
+    "pipeline_check_runs",
+    "pipeline_check_cursor",
+    # A note a migration leaves for the first start (seed the roadmap types once); a copy of a started hub has none.
+    "first_start_seeds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -317,6 +322,8 @@ HISTORY = {
     # A manager action points at its run: the action is cut first.
     "pipeline_manager_actions": "created_at",
     "pipeline_manager_runs": "started_at",
+    "factory_manager_actions": "created_at",
+    "factory_manager_runs": "started_at",
     # Run steps before their runs: a step row points at its run.
     "maintenance_run_steps": "started_at",
     "maintenance_runs": "started_at",
@@ -340,6 +347,7 @@ KEEP = (
             "postal_mail_settings",  # access and routing settings cannot send in rehearsal mode
             "maintenance_steps",  # each step's switch, "How often" and cursor: a copy keeps the team's settings
             "factories",
+            "pipeline_members",
             "stage_requirements",
             "stage_requirement_versions",
             "requirement_attachments",
