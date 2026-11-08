@@ -522,13 +522,23 @@ jobs:
       - name: Actual pinned Linux Caddy runtime and lifecycle
         env:
           TICO_CADDY_TEST_OUTPUT: ${{ runner.temp }}/caddy-runtime-evidence
-        run: '"$RUNNER_TEMP/venv/bin/python" -m pytest -q -m slow -n 0 backend/tests/test_caddy_container.py'
+        # --quarantine: as in the python legs (scripts/flake_quarantine.py). The JUnit report is the per-test evidence a
+        # later run reads, uploaded below as results-<job>.
+        run: 'mkdir -p ci-results && "$RUNNER_TEMP/venv/bin/python" -m pytest -q -m slow -n 0 --quarantine --junitxml=ci-results/caddy-linux-${{ matrix.arch }}.xml backend/tests/test_caddy_container.py'
       - name: Preserve fixture receipts and redacted failure logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: caddy-runtime-${{ matrix.arch }}
           path: ${{ runner.temp }}/caddy-runtime-evidence/
+          if-no-files-found: warn
+      - name: Upload the JUnit report (quarantine evidence)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: results-caddy-linux-${{ matrix.arch }}
+          path: ci-results/*
+          retention-days: 7
           if-no-files-found: warn
 
   timings:

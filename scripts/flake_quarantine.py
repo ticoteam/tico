@@ -22,11 +22,14 @@ quarantined tests as before. The fix for a quarantined test deletes its entry fi
 import argparse
 from datetime import date, datetime, timedelta, timezone
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 QUARANTINE = "ci/quarantine"
@@ -36,7 +39,7 @@ MAX_AGE_DAYS = 14
 MAX_FAILURES_PER_JOB = 5
 WORKFLOW = "pr-checks.yml"
 # The PR-check legs that run pytest (scripts/pr_checks.py run). Browser legs and the factory sim name no pytest ids.
-TEST_JOB = re.compile(r"python-\d+|contracts|conformance")
+TEST_JOB = re.compile(r"python-\d+|contracts|conformance|caddy-linux-(?:amd64|arm64)")
 FIELDS = ("test", "first_seen", "commit", "runs", "ticket", "reason")
 REQUIRED = ("test", "first_seen", "runs", "ticket")
 REASON = "failed and passed on the same commit"
@@ -220,10 +223,20 @@ def observations(gh, repo, runs):
             jobs = gh.api(f"repos/{repo}/actions/runs/{r['id']}/attempts/{attempt}/jobs?per_page=100")["jobs"]
             plan = next((j["id"] for j in jobs if j["name"] == "plan"), None)
             legs = [
-                {"id": j["id"], "name": j["name"], "conclusion": j["conclusion"], "url": j["html_url"]}
+                {
+                    "id": j["id"],
+                    "name": j["name"],
+                    "conclusion": j["conclusion"],
+                    "url": j["html_url"],
+                    "started_at": j.get("started_at"),
+                    "completed_at": j.get("completed_at"),
+                }
                 for j in jobs
                 if TEST_JOB.fullmatch(j["name"])
             ]
+            for leg in legs:
+                if leg["conclusion"] == "success":
+                    leg["passed"] = gh.results(r["id"], leg)
             failed, crowded = {}, []
             for leg in legs:
                 if leg["conclusion"] != "failure":
@@ -261,33 +274,14 @@ def observations(gh, repo, runs):
 
 
 # The suites pr_checks.run selects with `-m slow` (scripts/pr_checks.py); the others run `not slow`.
-SLOW_SUITES = ("conformance", "contracts")
+def _passed(test, other):
+    """Whether `other` (an attempt of the same commit) passed `test`: one of its legs' JUnit reports shows that exact
+    testcase as passed. A file that passed, or a sibling test in it, proves nothing about `test`."""
+    return any(leg["conclusion"] == "success" and test in (leg.get("passed") or ()) for leg in other["legs"])
 
 
-def _passed(test, failure, failing, other, files):
-    """Whether `other` (an attempt of the same commit) passed `test`: a leg of it that ran the test's file passed. A
-    leg's log names its files; an older log does not, and then only the same leg of the same plan job counts (a
-    "re-run failed jobs" attempt keeps the plan job, so each leg runs the files it ran before)."""
-    path = test.split("::")[0]
-    for leg in other["legs"]:
-        if leg["conclusion"] != "success":
-            continue
-        # pytest runs only `-m slow` in the conformance and contracts suites and deselects them everywhere else, so a leg
-        # of the other kind never ran this test: a slow test that fails every time is not proven passing by a python leg.
-        if (leg["name"].split("-")[0] in SLOW_SUITES) != (failure["leg"].split("-")[0] in SLOW_SUITES):
-            continue
-        same_plan = other["run"] == failing["run"] and other["plan"] is not None and other["plan"] == failing["plan"]
-        if same_plan and leg["name"] == failure["leg"]:
-            return True
-        listed = files(leg["id"])
-        if listed is not None and path in listed:
-            return True
-    return False
-
-
-def flips(observed, files):
-    """The tests that failed in one observation and passed in another of the same commit, by test id. `files(job id)`
-    is the list of files a leg ran, or None when its log does not say."""
+def flips(observed):
+    """The tests that failed in one observation and passed in another of the same commit, by test id."""
     by_key = {}
     for o in observed:
         by_key.setdefault(o["key"], []).append(o)
@@ -295,7 +289,7 @@ def flips(observed, files):
     for key, group in by_key.items():
         for o in group:
             for test, failure in o["failed"].items():
-                passes = [p["url"] for p in group if p is not o and _passed(test, failure, o, p, files)]
+                passes = [p["url"] for p in group if p is not o and _passed(test, p)]
                 if not passes:
                     continue
                 flip = found.setdefault(test, {"commit": key, "failed": [], "passed": [], "first_seen": o["created"]})
@@ -365,6 +359,26 @@ def report(entries, issues, today, max_age=MAX_AGE_DAYS):
     return "\n".join(lines) + "\n", bool(stale or issues)
 
 
+def nodeid_of(classname, name):
+    """The pytest node id of a JUnit testcase: its classname is the dotted module path, then any classes (capitalized)."""
+    files, classes = [], []
+    for part in classname.split(".") if classname else []:
+        (classes if classes or part[:1].isupper() else files).append(part)
+    if not files:
+        return name
+    return "/".join(files) + ".py" + "".join(f"::{c}" for c in classes) + f"::{name}"
+
+
+def passed_tests(report):
+    """The node ids a JUnit report shows as passed: a testcase with no failure, error or skipped child."""
+    passed = set()
+    for case in ET.fromstring(report).iter("testcase"):
+        if any(child.tag in ("failure", "error", "skipped") for child in case):
+            continue
+        passed.add(nodeid_of(case.get("classname", ""), case.get("name", "")))
+    return passed
+
+
 class GitHub:
     """Read-only `gh api` calls. Job logs, which never change, are cached in `cache` when it is given."""
 
@@ -374,6 +388,39 @@ class GitHub:
 
     def api(self, path):
         return json.loads(subprocess.run(["gh", "api", path], capture_output=True, text=True, check=True).stdout)
+
+    def results(self, run_id, leg):
+        """The node ids a leg's JUnit report shows as passed, from its `results-<leg>` artifact (uploaded by the leg, so
+        it was made while the job ran: a re-run attempt makes its own). None when there is no report, and a leg with no
+        report proves no test passed."""
+        listed = self.api(f"repos/{self.repo}/actions/runs/{run_id}/artifacts?name=results-{leg['name']}&per_page=100")
+        made = [
+            a
+            for a in listed.get("artifacts", [])
+            if not a.get("expired")
+            and leg.get("started_at")
+            and leg.get("completed_at")
+            and leg["started_at"] <= a["created_at"] <= leg["completed_at"]
+        ]
+        if not made:
+            return None
+        fetched = subprocess.run(["gh", "api", made[-1]["archive_download_url"]], capture_output=True, check=False)
+        if fetched.returncode:
+            return None
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(fetched.stdout))
+        except zipfile.BadZipFile:
+            return None
+        passed = None
+        for name in archive.namelist():
+            if not name.endswith(".xml"):
+                continue
+            try:
+                found = passed_tests(archive.read(name).decode(errors="replace"))
+            except ET.ParseError:
+                continue
+            passed = (passed or set()) | found
+        return passed
 
     def log(self, job_id):
         cached = self.cache / f"{job_id}.log" if self.cache else None
@@ -413,15 +460,7 @@ def detect(gh, repo, days, today, quarantined):
     """(markdown, proposed entries)."""
     runs = candidates(runs_since(gh, repo, days, today))
     observed = observations(gh, repo, runs)
-    listed = {}
-
-    def files(job_id):
-        if job_id not in listed:
-            log = gh.log(job_id)
-            listed[job_id] = test_files(log) if log else None
-        return listed[job_id]
-
-    found = flips(observed, files)
+    found = flips(observed)
     proposed = propose(found, quarantined)
     lines = [f"Read {len(runs)} PR-check run(s) that could flip, over {days + 1} day(s).", ""]
     proposed_tests = {p["test"] for p in proposed}
