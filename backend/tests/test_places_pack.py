@@ -43,7 +43,7 @@ def test_ensure_places_writes_only_the_requested_places_and_their_ancestors_and_
     created = pack.ensure_places(conn, ["place:us-ca-0644000"], adapter)
     assert sorted(created) == ["place:us", "place:us-ca", "place:us-ca-06037", "place:us-ca-0644000"]
     assert _count(conn, "entities") == 4
-    assert conn.execute("SELECT count(*) FROM entities WHERE type = 'geography'").fetchone()[0] == 4
+    assert conn.execute("SELECT count(*) FROM entities WHERE type = 'place'").fetchone()[0] == 4
     links = _rows(conn, "SELECT from_entity_id, to_entity_id FROM entity_links WHERE link_key = 'located_in'")
     assert sorted(links) == sorted(
         [
@@ -75,7 +75,7 @@ def test_ensure_places_fills_the_directory_columns_of_a_migrated_hub(hub):
         hub,
         "SELECT id, type, name, name_key, merged_into_id, primary_domain, created_by_type, created_by_id "
         "FROM entities WHERE id = 'place:us-ca'",
-    ) == [("place:us-ca", "geography", "California", "california", None, None, "system", "places-pack")]
+    ) == [("place:us-ca", "place", "California", "california", None, None, "system", "places-pack")]
     assert _rows(
         hub,
         "SELECT from_entity_id, link_key, to_entity_id, confidence, created_by_type, created_by_id "
