@@ -121,7 +121,9 @@ def _charge(c, money: str, day: str, cents: int, name: str, card: str | None = N
 
 def _library_file(c, fid: str, text: str | None, bot: str = "coder") -> None:
     """A Library file of `bot`, its indexed text at version 1 (none for a PDF or an image: they are read by someone)."""
-    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (bot, bot, bot.title()))
+    # The bots_identity_insert trigger fires before OR IGNORE's key check, so insert a bot only when it is not there.
+    if c.execute("SELECT 1 FROM bots WHERE id=?", (bot,)).fetchone() is None:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (bot, bot, bot.title()))
     c.execute(
         "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,first_activity_at,"
         "last_activity_at) VALUES(?,?,'bot',?,'receipt.pdf','file','',1,?,?)",
