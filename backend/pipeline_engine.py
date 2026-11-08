@@ -505,6 +505,13 @@ def verdict_binds_attachment(decision: Row, attachment: Row | None) -> bool:
     return attachment is not None and str(attachment["id"]) == str(decision["requirement_attachment_id"])
 
 
+def _rule_source(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts, task: Row) -> str:
+    """The state a field or run requirement's source gives the ticket now, as its rule reads it."""
+    if requirement["kind"] == "field":
+        return _field_state(task, requirement, facts)
+    return _run_state(task_id, requirement, facts, conn)
+
+
 def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts) -> Standing:
     task = facts.tasks.get(task_id) or {"id": task_id, "work_revision": 0}
     revision = int(task.get("work_revision") or 0)
@@ -514,6 +521,11 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
         decision = None  # the evidence it judged was replaced or taken away
     if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
         decision = None  # no override stands in for a named person's approval (D10, D34)
+    if decision is not None and requirement["kind"] in ("field", "run") and decision["verdict"] == "met":
+        # A person's approval of a field or run stands only while its source is still true: a date cleared after it was
+        # approved, or a run that stopped passing, is not met (the requirement waits on the rule again).
+        if _rule_source(conn, task_id, requirement, facts, task) != "met":
+            decision = None
     if decision is not None:
         verdict = str(decision["verdict"])
         same = decision.get("work_version") is None or int(decision["work_version"]) == revision

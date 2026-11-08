@@ -1122,6 +1122,24 @@ def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(
     assert co.where(card) == ("Product", "Validate")
 
 
+def test_a_person_approved_due_date_stops_standing_once_the_date_is_cleared(co):
+    """Finding R6: Ben approves a populated due-date requirement, Ana clears the date, and the requirement is no longer met.
+    The card does not move on with the spec approval, and the due-date dot shows the requirement as not met. The person's
+    approval stood only while the date did."""
+    due = co.require(
+        "Product", "Review", "Due date", kind="field", reviewed_by="person", reviewer_id=BEN, needs={"field": "due"}
+    )
+    card = review_card(co)
+    H.task_update(co.c, ANA, card, due="2026-11-20T17:00:00.000000Z")
+    co.c.commit()
+    co.approve(card, due, actor=BEN)
+    H.task_update(co.c, ANA, card, due="")
+    co.c.commit()
+    approve_spec(co, card)
+    assert co.where(card) == ("Product", "Review")
+    assert co.dots(card)["Due date"]["state"] != "met"
+
+
 def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
     """Finding R5: a subtask marked done ships the card, and closing it afterwards does not take the shipment back. The
     done history is the evidence, so the requirement stays met on the card."""
