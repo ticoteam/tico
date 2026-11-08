@@ -23,6 +23,9 @@ nothing. The task roundup (backend/task_roundup.py) lists each entry on the mana
 none of them.
 """
 
+import sqlite3
+from typing import Any
+
 from . import task_privacy as privacy
 from .store import H
 
@@ -384,7 +387,7 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
 
-def waiting_room(c, at):
+def waiting_room(c: sqlite3.Connection, at: str) -> dict[str, dict[str, str]]:
     """The tickets a link or a bot could not move into a full stage (D68, rule stage_full) in the last REFUSAL_HOURS and that
     are still outside that stage, as {task_id: {type_id, stage_id, created_at}}: the latest refusal of each. The card stays
     where it is until the stage has room and someone moves it."""
@@ -406,7 +409,7 @@ def waiting_room(c, at):
     return waiting
 
 
-def _waiting_for_room(c, out, rows, at):
+def _waiting_for_room(c: sqlite3.Connection, out: _List, rows: list[Any], at: str) -> None:
     """The waiting tickets among these rows, for the manager's list (waiting_room)."""
     tickets = {r["id"]: r for r in rows}
     if not tickets:

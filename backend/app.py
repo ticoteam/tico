@@ -4000,6 +4000,7 @@ def create_app(settings=None):
             # The warning line goes on the change itself, where the recipient reads it.
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
+        over_cap = False
         if body.close:
             if any(
                 v is not None
@@ -4113,7 +4114,7 @@ def create_app(settings=None):
             if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
-            over_cap = after.get("over_cap")
+            over_cap = bool(after and after.get("over_cap"))
             for verdict, gate in waits:
                 # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
                 # their Needs you, so the gate's row names it.

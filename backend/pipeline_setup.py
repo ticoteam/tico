@@ -424,7 +424,8 @@ def _seed_caps(conn: sqlite3.Connection, type_id: str, spec: Row) -> None:
     """The preset's default caps (D68, D69) on the stages that have no cap and that no person has ever set a cap on (the
     stage.cap event the route writes). A stage that is capped, or that a person has set, is never changed, so a run that
     finds the defaults in place changes nothing. The default is written without an event: it is the setup's, not a person's."""
-    for name, cap in (spec.get("caps") or {}).items():
+    caps: dict[str, int | None] = spec.get("caps") or {}
+    for name, cap in caps.items():
         stage = _one(
             conn, "SELECT id, card_cap FROM task_steps WHERE type_id = ? AND name = ? COLLATE NOCASE", (type_id, name)
         )

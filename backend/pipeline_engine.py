@@ -1316,7 +1316,7 @@ def advance(conn: sqlite3.Connection, actor: str, task_id: str) -> dict[str, Any
     }
 
 
-def _record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: H.Refused) -> None:
+def _record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: hubdb.Refused) -> None:
     """A link's move that waited for room is recorded after its own write is undone, so the refusal outlives the rollback:
     the pipeline manager lists the ticket as waiting for room (pipeline_manager). Nothing is raised."""
     try:
