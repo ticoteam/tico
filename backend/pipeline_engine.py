@@ -423,13 +423,14 @@ def _mark_stage(conn: sqlite3.Connection, actor: str, task_id: str, kind: str, s
     )
 
 
-def _subtasks_state(task_id: str, facts: _Facts) -> str:
-    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into. A subtask shipped when it is
+def _subtasks_state(task_id: str, facts: _Facts, pipeline: str | None = None) -> str:
+    """Engineering shipped: the ticket has subtasks in the pipelines its pipeline spawns into, or only in `pipeline` when the
+    requirement names one (D64: a subtask in another pipeline neither meets nor blocks it). A subtask shipped when it is
     done or visited its pipeline's output stage (its Done, whatever its status column says). A subtask closed with its
     card or declined is gone: it neither counts as shipped nor blocks. Every live subtask must be finished, and at least
     one must have shipped; a set that is all closed with none shipped is failed (the PM is asked), never passed."""
     card = facts.tasks.get(task_id) or {}
-    wanted = facts.spawns.get(str(card.get("type_id") or ""), set())
+    wanted = {pipeline} if pipeline else facts.spawns.get(str(card.get("type_id") or ""), set())
     kids = [child for child in facts.children.get(task_id, []) if str(child["type_id"]) in wanted]
     if not kids:
         return "none"
@@ -446,7 +447,8 @@ def _run_state(task_id: str, requirement: Row, facts: _Facts, conn: sqlite3.Conn
     """The state a run requirement's source gives the work as it is now."""
     source = requirement["needs"].get("source")
     if source == "subtasks":
-        return _subtasks_state(task_id, facts)
+        named = requirement["needs"].get("pipeline")
+        return _subtasks_state(task_id, facts, str(named) if named else None)
     prs = [link for link in facts.links.get(task_id, []) if link["state"] != "closed"]
     if not prs:
         return "none"
