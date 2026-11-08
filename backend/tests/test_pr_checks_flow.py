@@ -43,6 +43,22 @@ def test_finished_checks_wake_the_owner_at_a_working_step_and_are_a_note_elsewhe
         assert (msg["refs"]["rule"], jobs(c, "cpo")) == ("awaited_wake_once", 1)
 
 
+def test_finished_checks_wake_an_owner_whose_card_waits_on_them_and_not_one_waiting_on_a_person(api):
+    # A manager sets its card to waiting while CI runs: the result is what it waits for, so it wakes the owner at once.
+    # A card waiting on a person's answer stays a note: the person's answer is what wakes it.
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = plain_task(c)
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (task["id"],))
+        msg = sent(c, H.task(c, task["id"]))
+        assert (msg["refs"]["rule"], jobs(c, "cpo")) == ("pr_checks_done", 1)
+        c.execute("DELETE FROM jobs")
+        H.task_update(c, "bot:cpo", task["id"], status="waiting", note="Which color?", waiting_on="human:ana")
+        assert H.task(c, task["id"])["status"] == "waiting"
+        msg = sent(c, H.task(c, task["id"]), head="b" * 40)
+        assert (msg["refs"]["rule"], jobs(c, "cpo")) == ("pr_checks_note", 0)
+
+
 def test_a_review_that_is_not_a_persons_is_a_note(api):
     setup(api)
     with api.app.state.store.transaction() as c:

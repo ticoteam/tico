@@ -359,7 +359,8 @@ def notice_only(message):
 
 # Pull request checks (backend/github.py): the webhook writes no message for one check finishing (`pr_check`), and one
 # `pr_checks_done` per head when every check on it has finished. It wakes the owner of the ticket the pull request is
-# linked to while the ticket is at a working step (WORKING), or when the link was armed with `wake_once` (the same
+# linked to while the ticket is at a working step (WORKING) or waiting with no person's answer outstanding (the owner
+# parked it for the checks), or when the link was armed with `wake_once` (the same
 # event: the arming is what the bot asked to be told); anywhere else it is a note. A review or comment on the pull
 # request that is not from a person is a note; a person's keeps the batched review wake. Rows in the table override
 # these as they do any built-in.
@@ -370,13 +371,14 @@ PR_RULES = (
         "pr_checks_done",
         "pr_checks_done",
         WAKE,
-        "every check on a pull request head finished, on a ticket the bot owns at a working step or a link it armed",
+        "every check on a pull request head finished, on a ticket the bot owns at a working step or waiting on the checks, or "
+        "a link it armed",
     ),
     (
         "pr_checks_note",
         "pr_checks_done",
         NOTE,
-        "every check on a pull request head finished, on a ticket not at a working step or not the bot's",
+        "every check on a pull request head finished, on a ticket in review, waiting on a person, or not the bot's",
     ),
     ("pr_review_note", "pr_review", NOTE, "a review or review comment on a pull request that is not from a person"),
 )
@@ -393,9 +395,21 @@ def _pr_decision(conn, event, target, refs, conv):
         return Decision(WAKE, "awaited_wake_once")
     tid = H.message_task_id({"refs": refs}, conv)
     task = H.task(conn, tid) if tid else None
-    if task and task.get("owner_id") == target and task.get("status") in WORKING:
+    if task and task.get("owner_id") == target and _waits_on_checks(conn, task):
         return Decision(WAKE, "pr_checks_done")
     return Decision(NOTE, "pr_checks_note", HOLD_ROW)
+
+
+def _waits_on_checks(conn, task):
+    """Whether the owner is working on the ticket or waiting for its checks: a working step, or waiting with no person's
+    answer outstanding (a manager parks its card while CI runs; the result is what it waits for)."""
+    if task.get("status") in WORKING:
+        return True
+    if task.get("status") != "waiting":
+        return False
+    from .question_tasks import waiting_on
+
+    return waiting_on(conn, task) is None
 
 
 def _builtins():
