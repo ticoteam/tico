@@ -115,9 +115,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
           tasks: {changed: changed.map(row), skipped: skipped.map(task => ({...row(task), code: 'identity', reason: 'not yours to change'}))}});
       }
       // task-1 was sent from task-0 (a spawn link) and was itself sent on to task-2; both cards are readable.
-      if (p === '/api/v2/pipeline-links/handoffs') return json({cards: {'task-1': {
-        chip: {handoff_id: 'h2', pipeline: 'Engineering', task_id: 'task-2', stage: 'Copy review', readable: true},
-        from: {pipeline: 'Marketing', task_id: 'task-0', title: 'Write the campaign', readable: true}}}});
+      // task-0 went to an Engineering card this reader cannot open: its chip names the pipeline only, with no stage or link.
+      if (p === '/api/v2/pipeline-links/handoffs') return json({cards: {
+        'task-0': {chip: {handoff_id: 'h3', pipeline: 'Engineering', task_id: null, stage: null, readable: false}, from: null},
+        'task-1': {chip: {handoff_id: 'h2', pipeline: 'Engineering', task_id: 'task-2', stage: 'Copy review', readable: true},
+          from: {pipeline: 'Marketing', task_id: 'task-0', title: 'Write the campaign', readable: true}}}});
       if (p === '/api/v2/pipeline-links') return json({next: null, links: url.searchParams.get('pipeline') === 'marketing'
         ? [{id: 'link-copy', from_pipeline_id: 'marketing', from_pipeline_stage_id: 'copy', to_pipeline_id: 'engineering', mode: 'spawn'}] : []});
       if (p === '/api/v2/conversations') return json({conversations: []});
@@ -201,6 +203,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // The card on the board names the card it went to and that card's stage (its chip opens that card).
     await page.locator('#task-body .bcard[data-task-key="ttask-1"] .handoff-chip').waitFor();
     assert.equal(await page.locator('#task-body .bcard[data-task-key="ttask-1"] .handoff-chip').innerText(), 'Engineering · Copy review');
+    const unreadable = page.locator('#task-body .bcard[data-task-key="ttask-0"] .handoff-chip');
+    await unreadable.waitFor();
+    assert.equal(await unreadable.evaluate(el => el.tagName), 'SPAN', 'a chip the reader cannot follow is not a link');
+    assert.equal(await unreadable.innerText(), 'Engineering');
     // The stage a spawn link leaves is headed by the pipeline it sends to, with its count.
     await page.locator('#task-body section[data-col="copy"] h2', {hasText: 'In Engineering'}).waitFor();
     assert.match(await page.locator('#task-body section[data-col="copy"] .cnt').innerText(), /^· \d+$/);
