@@ -72,7 +72,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, NoReturn
 
 from .batch_work import isolated
 from . import delivery
@@ -2063,7 +2063,7 @@ def writing_refusal(rule, detail):
     )
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""

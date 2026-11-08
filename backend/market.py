@@ -15,6 +15,7 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import yaml
@@ -309,7 +310,7 @@ def _name_key(name):
     return str(name or "").strip().lower()
 
 
-def _domain(external_ids):
+def _primary_domain(external_ids):
     return str((external_ids or {}).get("domain") or "").strip().lower() or None
 
 
@@ -339,7 +340,7 @@ def _insert_entity(conn, row):
             "status": row.get("status") or "active",
             "merged_into_id": row.get("merged_into"),
             "last_verified_at": row.get("last_verified_at"),
-            "primary_domain": _domain(row.get("external_ids")),
+            "primary_domain": _primary_domain(row.get("external_ids")),
             "created_by": row["created_by"],
             "created_by_type": kind,
             "created_by_id": who,
@@ -350,8 +351,6 @@ def _insert_entity(conn, row):
 
 
 def _entity_row(row):
-    if not row:
-        return None
     row = dict(row)
     row.pop("seq", None)
     row.pop("name_key", None)
@@ -365,8 +364,6 @@ def _entity_row(row):
 
 def _edge_row(row):
     """A link row under the API's names: src, rel, dst, and the confidence label."""
-    if not row:
-        return None
     row = dict(row)
     for column, api in (("from_entity_id", "src"), ("link_key", "rel"), ("to_entity_id", "dst")):
         if column in row:
@@ -377,11 +374,13 @@ def _edge_row(row):
 
 
 def entity(conn, entity_id):
-    return _entity_row(H._one(conn, "SELECT * FROM entities WHERE id=?", (entity_id,)))
+    row = H._one(conn, "SELECT * FROM entities WHERE id=?", (entity_id,))
+    return _entity_row(row) if row else None
 
 
 def edge(conn, edge_id):
-    return _edge_row(H._one(conn, "SELECT * FROM entity_links WHERE id=?", (edge_id,)))
+    row = H._one(conn, "SELECT * FROM entity_links WHERE id=?", (edge_id,))
+    return _edge_row(row) if row else None
 
 
 def evidence(conn, evidence_id_):
@@ -962,7 +961,7 @@ def update_entity(
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
     row = _need_entity(conn, actor, entity_id)
-    changes = {}
+    changes: dict[str, Any] = {}
     if name is not None and str(name).strip() and str(name).strip() != row["name"]:
         changes["name"] = str(name).strip()
     if aliases is not None:
@@ -1016,7 +1015,7 @@ def update_entity(
         args["name_key"] = _name_key(changes["name"])
         assignments.append("name_key=:name_key")
     if "external_ids" in changes:
-        args["primary_domain"] = _domain(changes["external_ids"])
+        args["primary_domain"] = _primary_domain(changes["external_ids"])
         assignments.append("primary_domain=:primary_domain")
     conn.execute(f"UPDATE entities SET {', '.join(assignments)}, updated_at=:updated_at WHERE id=:id", args)
     if ids and actor != SEED_ACTOR:
@@ -1110,7 +1109,7 @@ def update_edge(
     row = edge(conn, edge_id)
     if not row:
         H.refuse(conn, actor, "not-found", f"no edge {edge_id}")
-    changes = {}
+    changes: dict[str, Any] = {}
     if rel is not None and rel != row["rel"]:
         if rel not in RELATIONS and rel not in LEGACY_RELATIONS:
             H.refuse(conn, actor, "kind", f"a relation is {'|'.join(RELATIONS)}, not {rel}")
