@@ -10,7 +10,7 @@ from backend import pipeline_links as L
 from backend import pipeline_requirements as R
 from backend import task_relations as TR
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_pipeline_foundation import T, insert
 
 STEPS = [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
@@ -326,3 +326,36 @@ def test_an_edit_to_a_ticket_a_non_member_cannot_read_leaves_her_labels_etag_as_
         c.execute("UPDATE tasks SET title=? WHERE id=?", ("Renamed " + tag, hidden_ticket))
     again = api.get("/api/v2/tasks/labels", headers={**headers("cara-test"), "If-None-Match": first.headers["etag"]})
     assert again.status_code == 304
+
+
+def test_a_subtask_summary_in_a_parents_history_names_only_the_subtasks_the_reader_may_open(api):
+    # Closing a readable parent closes its subtask on a members-only pipeline. Its summary names the subtask by id, so a
+    # reader who may not open it reads "a subtask", and the title shows to the pipeline's owner. Deleted, too.
+    tag = uuid.uuid4().hex[:8]
+    legal, _ = make_pipeline(api, "Counsel" + tag, private=True)
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ben", "Launch " + tag, "", "human:ben", lint=False)
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (parent["id"],))
+        child = H.task_create(
+            c,
+            "human:ben",
+            "CONFIDENTIAL COUNSEL " + tag,
+            "",
+            "human:ben",
+            type=legal,
+            step="Doing",
+            parent_id=parent["id"],
+            lint=False,
+        )
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (child["id"],))
+        H.task_close(c, "human:ben", parent["id"], note="Cancelled")
+
+    def summaries(token):
+        events = get(api, "tasks/" + parent["id"], token)["events"]
+        return [e["new"] for e in events if e["field"] == "children"], json.dumps(events)
+
+    labels, raw = summaries("cara-test")
+    assert labels == ["Closed with it: a subtask"] and "CONFIDENTIAL" not in raw
+    assert summaries("ana-test")[0] == ["Closed with it: CONFIDENTIAL COUNSEL " + tag]
+    post(api, "tasks/" + child["id"] + "/delete", {}, token="ana-test")
+    assert summaries("ana-test")[0] == ["Closed with it: a subtask"]

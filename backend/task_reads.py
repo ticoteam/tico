@@ -70,8 +70,10 @@ def not_modified(tag):
 
 
 def changed(c, after, visible_sql):
-    """({task id: [earlier readers as JSON]}, new cursor) for the tasks changed since `after`, or
-    None when the client must read in full."""
+    """({task id: [the snapshot the reader last had]}, new cursor) for the tasks changed since `after`, or None when the
+    client must read in full. The snapshot is the task's first one after `after` (events.py `_WAS`): the state before the
+    first change to its access, pipeline included. Later snapshots are states no reader saw, since one write may move a
+    ticket twice."""
     seq, _, tag = str(after).partition(".")
     if not seq.isdigit() or tag != access(visible_sql):
         return None
@@ -80,15 +82,15 @@ def changed(c, after, visible_sql):
     if seq > newest or seq < floor:
         return None
     was = {}
-    for subject, ref, kind, at in c.execute(
-        "SELECT subject_id, ref, kind, created_at FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
+    for subject, ref, kind in c.execute(
+        "SELECT subject_id, ref, kind FROM changes WHERE topic='tasks' AND seq>? ORDER BY seq", (seq,)
     ):
         if kind == "bulk":  # one change to many tasks (events.FAN_CAP): read in full
             return None
         if subject:
             was.setdefault(subject, [])
-            if ref:
-                was[subject].append((ref, at))  # the snapshot and when it was replaced: its pipeline is then
+            if ref and not was[subject]:
+                was[subject].append(ref)
     if len(was) > CAP:
         return None
     return was, f"{newest}.{tag}"
@@ -112,7 +114,7 @@ def around(c, ids):
 
 def gone(c, visible_sql, was, matched):
     """The changed ids not in `matched` that the caller could have read: now (it left the filters)
-    or under an earlier owner, requester or privacy the log kept."""
+    or under the snapshot the log kept for it (owner, requester, privacy, readers and pipeline)."""
     out = []
     missing = [tid for tid in was if tid not in matched]
     if not missing:
@@ -125,9 +127,47 @@ def gone(c, visible_sql, was, matched):
         )
     }
     for tid in missing:
-        if tid in readable or any(_could_read(c, visible_sql, tid, ref, at) for ref, at in was[tid]):
+        if tid in readable or any(_could_read(c, visible_sql, tid, ref) for ref in was[tid]):
             out.append(tid)
     return out
+
+
+_SUMMARY_LABELS = {"closed": "Closed with it", "open": "Still open", "kept": "Still closed from when it closed"}
+
+
+def children_text(c, visible_sql, history):
+    """The task's history with each subtask summary's text written for this reader. A summary keeps the ids of its
+    subtasks, not their titles (hubdb._finish_children): a title shows only where the reader may open that subtask
+    (`visible_sql`, the list rule), and "a subtask" otherwise, a deleted one too. A summary written before ids were kept
+    keeps only its label, since its text names subtasks the reader may not see."""
+    summaries = []
+    for event in history:
+        if event.get("field", event.get("kind")) != "children":  # app rows name it field, history rows kind
+            continue
+        try:
+            data = json.loads(event.get("data") or "{}")
+        except (TypeError, ValueError):
+            data = {}
+        key = next(
+            (k for k in ("closed", "open", "kept") if isinstance(data, dict) and isinstance(data.get(k), list)), None
+        )
+        if key is None:
+            event["new"] = str(event.get("new") or "").split(":", 1)[0]
+            continue
+        summaries.append((event, _SUMMARY_LABELS[key], [str(tid) for tid in data[key]]))
+    wanted = sorted({tid for _, _, ids in summaries for tid in ids})
+    if not wanted:
+        return history
+    shown = {
+        row[0]: row[1]
+        for row in c.execute(
+            f"SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(wanted),),
+        )
+    }
+    for event, label, ids in summaries:
+        event["new"] = label + ": " + "; ".join(shown.get(tid, "a subtask") for tid in ids)
+    return history
 
 
 def _pipeline_of(c, tid):
@@ -151,46 +191,27 @@ def _pipeline_of(c, tid):
     return private is None, None
 
 
-def _type_at(c, tid, at):
-    """(known, type_id): the pipeline a ticket was on just before `at`, from its type history (the type events name each
-    change of pipeline; creation writes none). With no type history the ticket never moved, so it is the pipeline it is on
-    (or, deleted, the one its trash kept)."""
-    # The change log stamps milliseconds, truncated, and the history event that made this change lands within a
-    # millisecond or two of that stamp: a type event that near is the change's own, so the pipeline before it is
-    # the one this snapshot names.
-    before = c.execute(
-        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='type' "
-        "AND julianday(created_at)<julianday(?)-0.002/86400.0 ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        (tid, at),
-    ).fetchone()
-    if before is not None:
-        return True, before[0]
-    first = c.execute(
-        "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='type' "
-        "ORDER BY created_at, rowid LIMIT 1",
-        (tid,),
-    ).fetchone()
-    if first is not None:  # every change of pipeline writes one: the first one's old is where it began (None = untyped)
-        return True, first[0]
-    # Creation writes no type event, so no history means the ticket never changed pipeline: it was on the one it is on.
-    return _pipeline_of(c, tid)
-
-
-def _could_read(c, visible_sql, tid, ref, at=None):
-    """Whether the snapshot `ref` (owner, requester, privacy, readers) let its reader open the ticket. `at` is when that
-    snapshot was replaced: the pipeline then is the one the ticket was on, not the one it is on now."""
+def _could_read(c, visible_sql, tid, ref):
+    """Whether the snapshot `ref` (owner, requester, privacy, readers, pipeline: events.py `_WAS`) let its reader open the
+    ticket. A snapshot from before the pipeline was kept names it; an older one does not, and then the ticket's pipeline
+    now (or, deleted, its trash's) stands for it."""
     try:
-        # (owner, requester, private, readers): an older change has three parts, or a one-person `guest` fourth.
-        owner, requester, private, readers = (json.loads(ref) + [None])[:4]
+        parts = json.loads(ref)
     except (TypeError, ValueError):
         return False
+    if not isinstance(parts, list):
+        return False
+    owner, requester, private, readers = (parts + [None] * 4)[:4]
     if isinstance(readers, list):
         readers = json.dumps(readers)
     elif isinstance(readers, str) and readers and not readers.startswith("["):
         readers = json.dumps([readers])
     elif not isinstance(readers, str):
         readers = None
-    known, type_id = _type_at(c, tid, at) if at is not None else _pipeline_of(c, tid)
+    if len(parts) >= 5:
+        known, type_id = True, parts[4]  # the pipeline it was on, NULL for an untyped ticket
+    else:
+        known, type_id = _pipeline_of(c, tid)
     if not known:  # the pipeline rule (pipeline_rights.list_sql) cannot be applied: the ticket is not read
         return False
     return (

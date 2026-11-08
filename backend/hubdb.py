@@ -8254,7 +8254,7 @@ def task_update(
                 else f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}"
             )
             + (f"\n{note}" if note and not quiet else "")
-            + _children_said(ended),
+            + _children_said(conn, ended, after["requester_id"] if after else None),
             refs={
                 **(refs or {}),
                 "news": "task_done" if status == "done" else "task_declined",
@@ -8292,7 +8292,7 @@ def task_update(
                 who,
                 _marked_done(conn, actor, after["title"])
                 + (f"\n{note}" if note and not quiet else "")
-                + _children_said(ended),
+                + _children_said(conn, ended, who),
                 {"news": "task_done"},
                 quiet_bots=True,
                 quiet=idle,
@@ -8695,9 +8695,15 @@ def _check_task_close(conn, actor, row, note, mover=None, step=None, type=None, 
         CLOSE_PROBE.reset(token)
 
 
-def _child_name(conn, kid):
-    """A parent's readers need not be readers of its private descendants."""
-    return "a private subtask" if task_private(conn, kid) else kid["title"]
+def _child_for(conn, who, tid):
+    """A subtask's title for `who` (a person or a bot): shown only where `who` may open it, else "a subtask". A parent's
+    readers need not be readers of its descendants, and a deleted one has no title to show."""
+    from .auth import actor_reads_task
+
+    row = task(conn, tid)
+    if row and actor_reads_task(conn, who, row):
+        return row["title"]
+    return "a subtask"
 
 
 def _closed_with_note(parent):
@@ -8741,7 +8747,8 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
     """Close every open descendant through task_close, leaving finished tasks and parent links untouched."""
     from . import task_trigger_rules
 
-    changed = {"closed": []}
+    # The summary keeps ids only: each reader's text names what that reader may open (_children_said, task_reads).
+    changed = {"closed": [], "open": []}
     kids = descendants(conn, parent["id"])
     # A dependent inside this cascade needs no new run just before it closes. Keep removing its blocker links.
     closing_tasks = {parent["id"]} | {
@@ -8781,27 +8788,31 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
                         "Automatic descendant close failed for %s", kid["id"], exc_info=True
                     )
         if not closed:
-            changed.setdefault("open", []).append(_child_name(conn, kid))
+            changed["open"].append(kid["id"])
             _wake(
                 conn,
                 kid,
                 kid["requester_id"],
-                f"Still open: {kid['title']}\nIts parent finished; please close this subtask when ready.",
+                f"Still open: {_child_for(conn, kid['requester_id'], kid['id'])}\n"
+                "Its parent finished; please close this subtask when ready.",
                 refs={"finish_left_open": parent["id"], "needs_action": True},
             )
         else:
-            changed["closed"].append(_child_name(conn, kid))
+            changed["closed"].append(kid["id"])
+    # The event names no subtask: a reader who may not open one sees "a subtask" (task_reads.children_text).
     if changed["closed"]:
-        _task_event(conn, parent["id"], KEEPER, "children", None, "Closed with it: " + "; ".join(changed["closed"]), "")
-    if changed.get("open"):
-        _task_event(conn, parent["id"], KEEPER, "children", None, "Still open: " + "; ".join(changed["open"]), "")
+        _task_event(
+            conn, parent["id"], KEEPER, "children", None, "Closed with it", "", data={"closed": changed["closed"]}
+        )
+    if changed["open"]:
+        _task_event(conn, parent["id"], KEEPER, "children", None, "Still open", "", data={"open": changed["open"]})
     return changed
 
 
-def _children_said(changed):
-    """Name closed and left-open subtasks once in the parent's completion notice."""
+def _children_said(conn, changed, who):
+    """Name closed and left-open subtasks once in a parent's completion notice, as `who` may see them."""
     return "".join(
-        "\n" + label + ": " + "; ".join(changed[key])
+        "\n" + label + ": " + "; ".join(_child_for(conn, who, tid) for tid in changed[key])
         for key, label in (("closed", "Closed with it"), ("open", "Still open"))
         if changed and changed.get(key)
     )
@@ -8811,7 +8822,7 @@ def _children_kept_closed(conn, task_id):
     """A reopened task leaves the subtasks that closed with it closed; its record names those still closed, so whoever
     reopened it sees what to reopen by hand."""
     kept = [
-        _child_name(conn, kid)
+        kid["id"]
         for kid in descendants(conn, task_id)
         if kid["status"] == "closed"
         and _one(
@@ -8822,7 +8833,9 @@ def _children_kept_closed(conn, task_id):
         )
     ]
     if kept:
-        _task_event(conn, task_id, KEEPER, "children", None, "Still closed from when it closed: " + "; ".join(kept), "")
+        _task_event(
+            conn, task_id, KEEPER, "children", None, "Still closed from when it closed", "", data={"kept": kept}
+        )
 
 
 @private_task_write
@@ -8891,7 +8904,7 @@ def task_close(
             **({"with_parent": with_parent} if with_parent else {}),
         },
     )
-    after = task(conn, task_id)
+    after = task(conn, task_id) or {}  # the task just closed: a row
     # A person closing a subtask under a bot's task: the bot hears it once, on the parent.
     subtask_told = None if with_parent else _subtask_wake(conn, actor, after, row["status"], note, quiet)
     # Closing an open ask card (_ask_in_subtask) settles the ask like a decline: each task blocked on it opens again.
@@ -8905,7 +8918,7 @@ def task_close(
     if subtask_told:
         answered.add(TR.parent_of(conn, task_id))
     _unblock(conn, after, told=answered | set(closing_tasks))
-    said = f"Closed: {after['title']}" + (f"\n{note}" if note else "") + _children_said(changed)
+    said_head = f"Closed: {after['title']}" + (f"\n{note}" if note else "")
     # Closing work that was already done, with nothing said, is acceptance: news, not work. It
     # goes to the bot's inbox without a run. Hundreds of runs were a bot
     # waking to read "Closed:" and saying "acknowledged", hours of agent time. The keeper's
@@ -8941,7 +8954,7 @@ def task_close(
             conn,
             after,
             who,
-            said,
+            said_head + _children_said(conn, changed, who),
             {"news": "task_done", **({"wake_batch": "completion"} if batch else {})},
             quiet_bots=True,
             quiet=accepted or bool(finished and who == after["owner_id"] and not new_note),

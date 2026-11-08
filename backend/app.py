@@ -3174,6 +3174,10 @@ def create_app(settings=None):
                 }
                 hidden_refs = known - readable
                 history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden_refs)]
+            # A subtask summary's text names its subtasks only where the reader may open them (task_reads.children_text).
+            from . import task_reads
+
+            history = task_reads.children_text(c, related_sql, history)
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out
