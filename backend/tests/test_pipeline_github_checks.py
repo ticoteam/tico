@@ -238,3 +238,102 @@ def test_new_work_in_a_later_stage_puts_the_checks_of_the_stage_it_left_back_to_
         _attach_link(w, build, "https://example.test/build")
     assert states(app)[w.mockup] == "waiting"
     assert states(app)[w.signoff] == "waiting"
+
+
+def _pr_tickets(app):
+    """The tickets the scheduler's pass covers, in its order (a pull request with a head and a stage that has requirements)."""
+    with app.store.read() as c:
+        return [
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT task_id FROM pipeline_check_runs UNION SELECT task_id FROM task_links WHERE kind='pr' AND json_extract(detail,'$.head_sha') IS NOT NULL ORDER BY 1"
+            )
+        ]
+
+
+def _recorded(app):
+    with app.store.read() as c:
+        return {r[0] for r in c.execute("SELECT DISTINCT task_id FROM pipeline_check_runs")}
+
+
+def _cursor(app):
+    with app.store.read() as c:
+        return c.execute("SELECT task_id FROM pipeline_check_cursor").fetchone()[0]
+
+
+def _add_pr_tickets(app, w, count):
+    with app.store.transaction() as c:
+        w.c = c
+        for i in range(count):
+            task = w.ticket(f"Extra {i}")
+            c.execute(
+                "INSERT INTO task_links (id, task_id, kind, url, repo, number, detail, created_at) VALUES "
+                "(?,?,'pr',?,'Acme/app',?,?,?)",
+                (
+                    f"lx{i}",
+                    task,
+                    f"https://github.com/Acme/app/pull/{i + 50}",
+                    i + 50,
+                    '{"head_sha": "%040x"}' % (i + 50),
+                    H.now(),
+                ),
+            )
+
+
+def test_a_failure_on_one_ticket_leaves_the_cursor_on_the_ticket_before_it(setup, monkeypatch):
+    """W5: a ticket's checks and the cursor step commit together, so a failure on the third ticket leaves the cursor on the
+    second and nothing of the third is recorded."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    _add_pr_tickets(app, w, 3)
+    ids = sorted(_pr_tickets(app))
+    broken, real = ids[2], C.publish_affected
+
+    def flaky(conn, task_id):
+        if task_id == broken:
+            raise RuntimeError("the record of this ticket fails")
+        return real(conn, task_id)
+
+    monkeypatch.setattr(C, "publish_affected", flaky)
+    C.publish_open(app.store)
+    assert _cursor(app) == ids[1]
+    assert {ids[0], ids[1]} <= _recorded(app) and broken not in _recorded(app)
+
+
+def test_a_second_publisher_during_a_lease_records_nothing(setup):
+    """W5: while another pass holds the cursor's lease in the database, this pass does nothing and leaves the lease alone."""
+    app, fake, gh, w = setup
+    with app.store.transaction() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO pipeline_check_cursor (id, task_id, lease_until, lease_token) VALUES (1, '', ?, 'other-pass')",
+            (H.shift(H.now(), minutes=5),),
+        )
+    assert C.publish_open(app.store) == 0
+    assert _recorded(app) == set()
+    with app.store.read() as c:
+        assert c.execute("SELECT lease_token FROM pipeline_check_cursor").fetchone()[0] == "other-pass"
+
+
+def test_a_ticket_that_keeps_failing_is_skipped_after_its_passes_so_later_tickets_are_reached(setup, monkeypatch):
+    """W5: a ticket that fails pass after pass stops the pass before it, and is skipped once it has failed MAX_FAILED_PASSES
+    passes in a row, so the tickets after it are still reached."""
+    app, fake, gh, w = setup
+    gh.permissions = {"checks": "write", "metadata": "read"}
+    _add_pr_tickets(app, w, 3)
+    ids = sorted(_pr_tickets(app))
+    broken, real = ids[1], C.publish_affected
+
+    def flaky(conn, task_id):
+        if task_id == broken:
+            raise RuntimeError("the record of this ticket fails")
+        return real(conn, task_id)
+
+    monkeypatch.setattr(C, "publish_affected", flaky)
+    for _ in range(C.MAX_FAILED_PASSES - 1):
+        C.publish_open(app.store, limit=10)
+        assert _cursor(app) == ids[0] and not set(ids[2:]) & _recorded(app)
+    C.publish_open(
+        app.store, limit=10
+    )  # the third failed pass: the ticket is skipped, the rest recorded, the cursor wraps
+    assert set(ids[2:]) <= _recorded(app) and broken not in _recorded(app)
+    assert _cursor(app) == ""

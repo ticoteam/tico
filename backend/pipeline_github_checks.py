@@ -21,6 +21,8 @@ from .store import H, Problem
 LOG = logging.getLogger("tico.pipeline_github_checks")
 _running = threading.Lock()
 PUBLISH_BATCH = 200  # tickets recorded per pass; the rest wait for the next one
+CURSOR_LEASE_SECONDS = 120  # a pass's hold on the cursor; a pass that dies gives it up after this
+MAX_FAILED_PASSES = 3  # a ticket that fails this many passes in a row is logged and skipped
 
 if TYPE_CHECKING:
     import sqlite3
@@ -125,11 +127,74 @@ def _cursor_of(conn: "sqlite3.Connection") -> str:
     return str(row[0]) if row else ""
 
 
+class _LeaseLost(Exception):
+    """This pass no longer holds the cursor's lease (it ran out and another pass took it): it writes nothing more."""
+
+
+def _take_cursor_lease(store: "Store") -> str | None:
+    """Takes the cursor's lease for CURSOR_LEASE_SECONDS, in the database, so two publishers never overlap. Returns the
+    token that every later write of this pass must carry, or None while another pass holds the lease."""
+    token = uuid.uuid4().hex
+    now = _now()
+    with cast(Any, store).transaction() as conn:
+        conn.execute("INSERT OR IGNORE INTO pipeline_check_cursor (id, task_id) VALUES (1, '')")
+        taken = conn.execute(
+            "UPDATE pipeline_check_cursor SET lease_until=?, lease_token=? WHERE id=1 AND (lease_until IS NULL OR lease_until<=?)",
+            (_shift(now, seconds=CURSOR_LEASE_SECONDS), token, now),
+        ).rowcount
+    return token if taken else None
+
+
+def _release_cursor_lease(store: "Store", token: str) -> None:
+    with cast(Any, store).transaction() as conn:
+        conn.execute(
+            "UPDATE pipeline_check_cursor SET lease_until=NULL, lease_token=NULL WHERE id=1 AND lease_token=?", (token,)
+        )
+
+
+def _move_cursor(conn: "sqlite3.Connection", task_id: str, token: str) -> None:
+    """Stores the cursor at `task_id` and clears its failure count, inside the caller's transaction. A pass whose lease is
+    gone raises instead of moving it."""
+    moved = conn.execute(
+        "UPDATE pipeline_check_cursor SET task_id=?, failed_task_id='', failed_passes=0 WHERE id=1 AND lease_token=?",
+        (task_id, token),
+    ).rowcount
+    if not moved:
+        raise _LeaseLost()
+
+
+def _count_failure(store: "Store", task_id: str, token: str) -> int:
+    """Counts one more pass that failed on `task_id` (the count restarts when a different ticket fails). Returns the count."""
+    with cast(Any, store).transaction() as conn:
+        conn.execute(
+            "UPDATE pipeline_check_cursor SET failed_passes=CASE WHEN failed_task_id=? THEN failed_passes+1 ELSE 1 END, "
+            "failed_task_id=? WHERE id=1 AND lease_token=?",
+            (task_id, task_id, token),
+        )
+        row = conn.execute("SELECT failed_passes FROM pipeline_check_cursor WHERE id=1").fetchone()
+    return int(row[0]) if row else 0
+
+
 def publish_open(store: "Store", limit: int = PUBLISH_BATCH) -> int:
     """Records the checks of the tickets that have a pull request and a stage with requirements: one batch of tickets after
-    the stored cursor, one transaction each, then the cursor moves past them. A short batch stores '' so the next pass
-    starts from the first ticket. The cursor is in the database, so a restart or another process resumes the same way.
-    Returns how many checks were recorded."""
+    the stored cursor. Each ticket's checks and the cursor move to it in one transaction, so a crash never repeats or skips a
+    recorded ticket. The pass holds the cursor's lease, so two publishers never overlap; while another holds it this does
+    nothing. A ticket that fails stops the pass with the cursor before it, so the next pass tries it again; after
+    MAX_FAILED_PASSES failed passes it is logged and skipped. A short batch stores '' so the next pass starts from the first
+    ticket again. Returns how many checks were recorded."""
+    token = _take_cursor_lease(store)
+    if token is None:
+        return 0
+    try:
+        return _record_batch(store, token, limit)
+    except _LeaseLost:
+        LOG.warning("The pipeline check pass lost its lease; the next pass resumes from the stored cursor")
+        return 0
+    finally:
+        _release_cursor_lease(store, token)
+
+
+def _record_batch(store: "Store", token: str, limit: int) -> int:
     with cast(Any, store).read() as conn:
         after = _cursor_of(conn)
         ids = [
@@ -144,13 +209,28 @@ def publish_open(store: "Store", limit: int = PUBLISH_BATCH) -> int:
         ]
     recorded = 0
     for task_id in ids:
+        try:
+            with cast(Any, store).transaction() as conn:
+                recorded += publish_affected(conn, task_id)
+                _move_cursor(conn, task_id, token)
+        except _LeaseLost:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the ticket's checks and its cursor step roll back together
+            passes = _count_failure(store, task_id, token)
+            if passes < MAX_FAILED_PASSES:
+                LOG.warning(
+                    "The pipeline check pass could not record ticket %s (pass %d): %s",
+                    task_id,
+                    passes,
+                    type(exc).__name__,
+                )
+                return recorded  # the cursor stays before this ticket, so the next pass tries it again
+            LOG.warning("Skipping ticket %s after %d failed passes: %s", task_id, passes, type(exc).__name__)
+            with cast(Any, store).transaction() as conn:
+                _move_cursor(conn, task_id, token)
+    if len(ids) < limit:
         with cast(Any, store).transaction() as conn:
-            recorded += publish_affected(conn, task_id)
-    with cast(Any, store).transaction() as conn:
-        conn.execute(
-            "INSERT INTO pipeline_check_cursor (id, task_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id",
-            (ids[-1] if len(ids) >= limit else "",),
-        )
+            _move_cursor(conn, "", token)  # the batch reached the end: wrap to the first ticket
     return recorded
 
 
