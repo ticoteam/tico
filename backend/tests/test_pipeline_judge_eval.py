@@ -203,7 +203,7 @@ def test_a_failed_call_is_retried_once_after_five_seconds_and_the_retry_is_count
 
 def test_a_retry_cannot_hide_a_slow_case_from_the_p95_bar():
     """Codex round 3, P3: a failed call, the pause and a 29 s retry take over 30 s, so the case fails the p95 bar."""
-    calls, ticks = {}, iter([0.0, 1.0] * 3)
+    calls, ticks = {}, iter([0.0, 1.0, 1.0] * 3)  # per case: the start, the failed call's end, the retry's start
 
     def flaky(case):
         calls[case["id"]] = calls.get(case["id"], 0) + 1
@@ -223,9 +223,12 @@ def test_a_call_that_fails_twice_is_still_an_error_and_fails_the_bar():
         raise J.JudgeError("unavailable", "down")
 
     cases = run.load()[:3]
-    result = run.score("down", down, cases, pause=waits.append)
+    ticks = iter([0.0, 2.0, 2.0, 3.0] * 3)  # per case: the start, the first call fails 2 s in, the retry fails 1 s in
+    result = run.score("down", down, cases, pause=waits.append, clock=lambda: next(ticks))
     assert waits == [5] * 3
     assert result["retries"] == 3 and len(result["errors"]) == 3
+    # Codex round 6, P3: both failed calls and the pause count in the latency, so the case is not left out of the p95.
+    assert all(r["ms"] == 8000 for r in result["rows"]) and result["p95_ms"] == 8000
     assert not result["passes_bar"] and any("failed calls" in f for f in result["bar_failures"])
 
 

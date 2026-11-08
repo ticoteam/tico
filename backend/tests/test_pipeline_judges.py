@@ -1354,6 +1354,26 @@ def test_evidence_back_after_newer_evidence_was_ruled_on_and_taken_away_is_judge
     assert P.tick(store) == 0
 
 
+def test_a_persons_met_that_stands_across_a_change_is_never_judged_over(tmp_path, monkeypatch):
+    """Codex round 6, P2: on a requirement that does not need evidence newer than the change, a person's approval stands
+    after the body is edited (the engine keeps it met), so the judge does not answer over it."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE stage_requirements SET needs=json_set(needs, '$.newer_than_change', json('false')) WHERE id=?",
+            (req_id,),
+        )
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "failed"
+    _person_rules(path, task_id, req_id, "met", attachment=_attachment_id(store, task_id))
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET body='Add a Dark mode toggle, and a Light one.' WHERE id=?", (task_id,))
+    assert _standing(store, task_id, req_id) == "met"
+    assert P.tick(store) == 0 and _standing(store, task_id, req_id) == "met"
+
+
 def _more_tickets(path, n, body=""):
     c = hub(path)
     dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]

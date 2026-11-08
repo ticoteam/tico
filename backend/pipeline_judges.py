@@ -481,7 +481,8 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     engine reads it), on this attachment, and its digest is the work's now. A judge's answer on this attachment no
     longer counts once the latest decision is about other evidence (the engine then reads none for it), as when newer
     evidence was ruled on and then taken away. A person's or a rule's ruling that is the latest decision, on this
-    attachment and this work version, holds it off too, so re-judging never replaces a person's verdict, whatever
+    attachment, and still standing in the engine (this work version, or a met on a requirement that does not need
+    evidence newer than the change: _fresh_needed), holds it off too, so re-judging never replaces a person's verdict, whatever
     evidence the judge saw before. An attachment that newer evidence replaced is not judged. A Mark met stands only for
     the work it was made on (the decision's version), so one made before a change does not stop the judge (R8). The
     digest is compared in SQL through DIGEST_SQL, a function registered on this connection, so only `limit` rows are
@@ -531,7 +532,8 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
                              WHERE d.rowid = ({latest}) AND COALESCE(d.judge, '') <> 'llm'
                                AND (d.verdict = 'override' OR d.requirement_attachment_id IS NULL
                                     OR d.requirement_attachment_id = a.id)
-                               AND (d.work_version IS NULL OR d.work_version = t.work_revision))
+                               AND (d.work_version IS NULL OR d.work_version = t.work_revision
+                                    OR (d.verdict = 'met' AND json_type(r.needs, '$.newer_than_change') = 'false')))
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.rowid = (SELECT x.rowid FROM stage_decisions x
                                               WHERE x.requirement_attachment_id = a.id AND x.judge = 'llm'
