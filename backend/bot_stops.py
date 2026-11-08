@@ -16,7 +16,7 @@ holds file for the bot's operator (`raise_item`, `close_item`).
 
 import logging
 
-from . import run_backoff, turn_budgets
+from . import company_pause, run_backoff, turn_budgets
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,10 @@ def overlay(c, row):
     wait in words as `backoff` for the pages to show beside them."""
     if not row or row.get("state") in ("running", "quarantined"):
         return row
+    # The company pause (backend/company_pause.py) is the outer stop: it reads as paused before any hold.
+    company = company_pause.overlay(c, row)
+    if company is not row:
+        return company
     found = hold(c, row["bot"])
     if found:
         return {**row, "state": "paused", "focus": found["words"], "stopped": found["kind"]}
