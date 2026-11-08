@@ -44,7 +44,7 @@ function vmFail(card: HTMLElement, reason: string | undefined): void {
 // After the card is in the page: ready on metadata; on an error, first try the newest address the thread handed
 // the card (visualKeep keeps a playing card and copies the new tree's src to data-fresh-src) at the same position
 // and play state; only then show the reason and Download.
-function vmWire(card: HTMLElement): void {
+function vmWire(card: HTMLElement) {
   const cant = card.querySelector<HTMLElement>('.vm-cant');
   if (cant) return vmFail(card, cant.dataset.vmReason);
   const m = card.querySelector<HTMLMediaElement>('video[data-vm-src], audio[data-vm-src]');
