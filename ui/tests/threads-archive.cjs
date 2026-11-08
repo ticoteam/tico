@@ -6,7 +6,7 @@
 // The page holds the live stream (GET /api/v2/events) open, and `send` answers it with the blocks the server would send:
 // a task's thread leaves Threads when its task finishes, a rename does not bring it back, a post after the finish does;
 // an open Catch up drops a card whose task finished; a 1:1 DM archived in another window leaves Catch up and its count.
-// Screenshots go to TICO_SCREENSHOT_DIR (default: the gd-shots folder in the scratchpad).
+// Screenshots go to TICO_SCREENSHOT_DIR (default: a threads-archive folder in the OS temp directory).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -14,7 +14,7 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-const shots = process.env.TICO_SCREENSHOT_DIR || '/private/tmp/claude-501/-Volumes-PNYRP60PSSD-orca-workspaces-emp-tico-open-source-AWS-Spend/2d002655-83b9-402a-ad61-b8f812cf5eb3/scratchpad/gd-shots';
+const shots = process.env.TICO_SCREENSHOT_DIR || path.join(require('node:os').tmpdir(), 'threads-archive-shots');
 const at = min => new Date(Date.now() - min * 60000).toISOString();
 const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 2, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
 const thread = (id, title, extra = {}) => ({id, title, audience: 'members', root_id: id, path: [id], parent_id: null, last_seq: 4, last_unread_seq: 4,
