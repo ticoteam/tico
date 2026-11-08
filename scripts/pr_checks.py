@@ -1491,7 +1491,13 @@ def run(plan_path, suite, root=None, quarantine=False):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
         command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
-        env = {**os.environ, "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json")}
+        # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cjs); this interpreter has the
+        # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
+        env = {
+            **os.environ,
+            "TICO_UI_TIMINGS": str(root / "ci-results" / f"{suite}.json"),
+            "TICO_PYTHON": sys.executable,
+        }
     else:
         if not files or any(not (root / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")

@@ -722,6 +722,8 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     command, env = calls[-1]
     assert command == ["node", "scripts/ui-tests.cjs", "-j", str(checks.WORKERS), "chat"]
     assert env["TICO_UI_TIMINGS"] == str(tmp_path / "ci-results" / "browser-1.json")
+    # The UI helpers import the backend through TICO_PYTHON: the suite's own interpreter, never a bare python3.
+    assert env["TICO_PYTHON"] == sys.executable
     with pytest.raises(RuntimeError, match="nonempty"):
         checks.run(tmp_path / "plan.json", "browser-2")
     recorded = tmp_path / "browser-1.json"
