@@ -96,7 +96,7 @@ SERVICE_NAMES = {
     "xai": "xAI",
     "gemini": "Gemini",
 }
-# The logo a service is drawn with: a Simple Icons slug for a mark ui/tool-icons.js bundles (or fireflies, which
+# The logo a service is drawn with: a Simple Icons slug for a mark ui/tool-icons.ts bundles (or fireflies, which
 # Simple Icons lacks: a frontend without one draws the name's first two letters). Anything else has none.
 LOGO_KEYS = {
     "github": "github",

@@ -65,7 +65,7 @@ CSV_ROWS = 50
 BACKFILL_BATCH = 100
 PURGE_ATTEMPTS = 10
 # What holds a blob apart from a message or a file (`release_message_files`): a task's attachment, one in the trash, a
-# meeting's media, a scanned letter, a piece of market evidence.
+# meeting's media, a scanned letter, a piece of market evidence, a requirement's attached evidence.
 BLOB_HOLDERS = (
     ("message_assets", "blob_id"),
     ("task_assets", "blob_id"),
@@ -76,6 +76,8 @@ BLOB_HOLDERS = (
     ("letters", "source_blob_id"),
     ("letters", "original_blob_id"),
     ("letter_proofs", "blob_id"),
+    # Evidence attached to a stage requirement (backend/requirement_attachments.py): it keeps its bytes while it counts.
+    ("requirement_attachments", "blob_id"),
 )
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}

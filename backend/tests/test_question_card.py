@@ -1,4 +1,4 @@
-"""One question card (ui/app/question-card.js): the asking rules a bot's question to a person keeps when it is asked
+"""One question card (ui/app/question-card.ts): the asking rules a bot's question to a person keeps when it is asked
 (hubdb.lint_question), the "not this one" a bot hears for each unticked pick, and what a Needs you item carries for
 the card's header and Decide's order (views.holds_up, views.card_why, views.decide_tier)."""
 

@@ -262,7 +262,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
@@ -275,7 +275,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     let m0;
     if (method !== 'GET') writes.push({method, path: p, body});
 
-    // System jobs beside Maintenance (ui/app/settings-recurring.js draws them): two of Tico's own jobs.
+    // System jobs beside Maintenance (ui/app/settings-recurring.ts draws them): two of Tico's own jobs.
     if (db.maint && p === '/api/v2/system-routines' && method === 'GET') {
       const job = (key, name, extra) => ({key, name, what: name + '.', schedule: 'Every hour', when: ['every hour'], then: [name.toLowerCase()],
         department: {name: 'Engineering'}, records: true, last: null, next: null, presets: [], search: name.toLowerCase(), ...extra});

@@ -241,7 +241,7 @@ def _card_accounts(ctx: Ctx) -> dict[str, str]:
     return {bid: b.account_id for bid, b in budgets.items()}
 
 
-def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, list[Row]]) -> Row:
+def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, list[Row]], vendor: Row) -> Row:
     m = money.get(str(r["money_account_id"]))
     return {
         "kind": "feed",
@@ -250,6 +250,7 @@ def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, li
         "amount": int(r["amount"]),
         "currency": str(r["currency"]),
         "counterparty": str(r["counterparty"]),
+        "vendor": vendor,  # {id, name}: the vendor the row's merchant resolves to (backend/finance/vendors.py)
         "description": str(r["description"]),
         "status": str(r["status"]),
         "pending": bool(r["pending"]),
@@ -437,7 +438,9 @@ def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[st
                         "tags": dict(line.tags),
                     }
                 )
-    names = vendor_labels(ctx, view, [str(x["vendor"]) for xs in out.values() for x in xs])
+    # A vendor on a line the viewer sees shows its name (visible.py): every key here is on a visible line.
+    keys = [str(x["vendor"]) for xs in out.values() for x in xs]
+    names = vendor_labels(ctx, view, keys, shown={k: True for k in keys})
     for xs in out.values():
         for x in xs:
             x["vendor_name"] = names.get(str(x["vendor"]), "")
@@ -506,7 +509,8 @@ def transactions(
     left out of the rest), line, dates, a search and `org` (keeps a line's team and teammate); `next` is the cursor for
     the following page."""
     ctx = load(c, at)
-    from .tab_ap import vendor_labels
+    from . import vendors as VN
+    from .tab_ap import sees_contact_kind, vendor_labels
 
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
@@ -558,6 +562,13 @@ def transactions(
         cut = private_feed(ctx, view, rows)
         rows = [r for r in rows if str(r["id"]) not in cut]
         lines = _visible_lines(ctx, view, [str(r["entry_id"]) for r in rows if r["entry_id"]])
+        vendors = VN.feed_vendors(
+            c,
+            ctx.book.id,
+            rows,
+            lambda kind: sees_contact_kind(ctx, view, kind),
+            lines_shown=lambda r: bool(lines.get(str(r["entry_id"] or ""))),
+        )
         out: list[tuple[tuple[str, str], Row]] = []
         for r in rows:
             mine = lines.get(str(r["entry_id"] or ""), [])
@@ -567,7 +578,7 @@ def transactions(
                 continue
             if org is not None and not _org_keeps(org, pick):
                 continue
-            out.append((_key_of(r), _feed_row(ctx, r, money, lines)))
+            out.append((_key_of(r), _feed_row(ctx, r, money, lines, vendors[str(r["id"])])))
         return out
 
     hidden = set(private_cut(ctx, view))

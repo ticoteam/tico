@@ -578,6 +578,53 @@ def rollup_lines(
     ).fetchall()
 
 
+def vendor_slices(c: sqlite3.Connection, book_id: str, keys: Sequence[str]) -> list[tuple[str, str, str]]:
+    """The (account, team, teammate) slices a vendor's lines sit in, over all time: what a contact list asks of a vendor
+    with no period (visible.named_all_time). `keys` are the vendor's keys (store/ap.vendor_keys)."""
+    if not keys:
+        return []
+    marks = ",".join("?" * len(keys))
+    return [
+        (str(r[0]), str(r[1]), str(r[2]))
+        for r in c.execute(
+            f"SELECT DISTINCT account_id, team, teammate FROM fin_rollups WHERE book_id=? AND vendor IN ({marks})",
+            [book_id, *keys],
+        ).fetchall()
+    ]
+
+
+def unattributed_lines(
+    c: sqlite3.Connection,
+    book_id: str,
+    start: str,
+    end: str,
+    account_ids: Sequence[str],
+    after: tuple[str, str] | None,
+    most: int,
+) -> list[Any]:
+    """P&L lines in the window with no team or teammate tag and no attribution in force (the Unattributed queue), newest
+    first by (entry date, line id), `most` of them after `after` (an entry date and a line id). Reversed entries and the
+    reversals of them are left out: each pair nets to nothing. Each row carries its entry's memo and source."""
+    if not account_ids:
+        return []
+    sql = (
+        "SELECT l.id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, l.description, e.memo, e.source "
+        "FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+        "WHERE l.book_id=? AND l.entry_date>=? AND l.entry_date<=? "
+        f"AND l.account_id IN ({','.join('?' * len(account_ids))}) "
+        "AND e.status='posted' AND e.reverses_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM fin_line_tags t WHERE t.line_id=l.id AND t.kind IN ('team','teammate')) "
+        "AND NOT EXISTS (SELECT 1 FROM fin_attributions a WHERE a.line_id=l.id AND a.superseded_at IS NULL)"
+    )
+    args: list[object] = [book_id, start, end, *sorted(account_ids)]
+    if after is not None:
+        sql += " AND (l.entry_date < ? OR (l.entry_date = ? AND l.id < ?))"
+        args += [after[0], after[0], after[1]]
+    sql += " ORDER BY l.entry_date DESC, l.id DESC LIMIT ?"
+    args.append(most)
+    return c.execute(sql, args).fetchall()
+
+
 def entries_on(
     c: sqlite3.Connection,
     book_id: str,

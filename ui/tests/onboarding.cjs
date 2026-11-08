@@ -183,7 +183,7 @@ function recruitFor({department, briefing, share}) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
-    // The app is dark unless the browser saved another theme (ui/theme.js): screenshots take the one asked for.
+    // The app is dark unless the browser saved another theme (ui/theme.ts): screenshots take the one asked for.
     if (shots) await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
     let setupGets = 0;
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
@@ -210,10 +210,10 @@ function recruitFor({department, briefing, share}) {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      // The page's own modules come from disk: the page shares state with them (docs-page.js
+      // The page's own modules come from disk: the page shares state with them (docs-page.ts
       // declares DOC_POLL, which route() clears on every navigation), so an empty stub would
       // break every route. Everything else that ends in .js still stubs out.
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
         const file = uiFile(module[1]);
         if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
@@ -308,7 +308,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], scheduler_enabled: true});
       if (p === '/api/v2/models') return json({models: [{id: 'gpt-6-sol', label: 'Sol', runtime: 'codex', efforts: ['high', 'xhigh'], default_effort: 'high'}], harnesses});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

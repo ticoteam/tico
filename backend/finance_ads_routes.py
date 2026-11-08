@@ -8,6 +8,7 @@ from pydantic import Field
 from .finance import ad_import
 from .finance import ads as finance_ads
 from .finance import actions as finance
+from .finance import campaigns as finance_campaigns
 from .finance_routes import problem
 from .models import Contract
 
@@ -58,6 +59,18 @@ def install(app, store, auth, mutate):
         def read():
             with store.read() as c:
                 return finance_ads.view(c, who.actor, tool_id)
+
+        return guarded(read)
+
+    @app.get("/api/v2/finance/campaigns")
+    def finance_campaigns_month(request: Request, month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$")):
+        """The ad campaigns the viewer sees for a month (YYYY-MM), each with its owner, its spend, clicks, conversions
+        and cost per conversion, by spend; the totals over them. Cut to the viewer like every read."""
+        who = viewer(request)
+
+        def read():
+            with store.read() as c:
+                return finance_campaigns.read(c, who.actor, month)
 
         return guarded(read)
 
