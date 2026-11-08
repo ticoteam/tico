@@ -57,7 +57,8 @@ function ofNodeHTML(p: OfPipeline, inputs: OfInput[], out: OfEdge[], names: Map<
     p.live ? `<span class="of-run tnum">${p.live} running</span>` : '',
   ].filter(Boolean).join(' · ');
   const chips = inputs.map(i => `<span class="of-in-chip tnum">${esc(i.label)} ${i.count}</span>`).join('');
-  const onward = out.map(e => `<span class="of-onward tnum">${esc(ofEdgeText(e))} to ${esc(names.get(e.to) || '')}</span>`).join('');
+  // On a phone the arrow is this count: tapping it opens the cards behind it, not the pipeline link around it.
+  const onward = out.map(e => `<span class="of-onward of-edge-btn tnum" role="button" tabindex="0" data-of-edge data-of-from="${esc(e.from)}" data-of-to="${esc(e.to)}" data-of-mode="${esc(e.mode)}" data-of-name="${esc(`${p.name} → ${names.get(e.to) || ''}`)}">${esc(ofEdgeText(e))} to ${esc(names.get(e.to) || '')}</span>`).join('');
   return `<div class="of-node" data-of-pl="${esc(p.id)}"><a class="of-link" href="${ofPipelineHref(p.id)}"${p.goal ? ` title="${esc(p.goal)}"` : ''}>
     <span class="of-name">${esc(p.name)}</span>
     <span class="of-stats">${stats}</span>
@@ -109,6 +110,7 @@ function ofLines(map: OfMap): void {
   const origin = stage.getBoundingClientRect();
   svg.setAttribute('width', String(origin.width)); svg.setAttribute('height', String(origin.height));
   const rect = (id: string): DOMRect | null => stage.querySelector(`[data-of-pl="${CSS.escape(id)}"]`)?.getBoundingClientRect() ?? null;
+  const nameOf = (id: string): string => map.pipelines.find(p => p.id === id)?.name || '';
   const max = Math.max(1, ...map.edges.map(e => e.count), ...map.inputs.map(i => i.count));
   const width = (n: number): string => (1.5 + 4.5 * n / max).toFixed(2);
   let paths = '';
@@ -121,7 +123,9 @@ function ofLines(map: OfMap): void {
     const d = back ? `M${x1},${y1} C${x1},${y1 + 48} ${x2},${y2 + 48} ${x2},${y2}` : `M${x1},${y1} C${x1 + 40},${y1} ${x2 - 40},${y2} ${x2},${y2}`;
     paths += `<path class="of-edge${e.mode === 'spawn' ? ' of-edge-spawn' : ''}" d="${d}" style="stroke-width:${width(e.count)}"></path>`;
     const mx = (x1 + x2) / 2, my = back ? Math.max(y1, y2) + 36 : (y1 + y2) / 2 - 8;
-    paths += `<text class="of-edge-l tnum" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle">${esc(ofEdgeText(e))}</text>`;
+    const arrow = `${nameOf(e.from)} → ${nameOf(e.to)}`;
+    const label = `${arrow}: ${e.count} cards in the period. List them`;
+    paths += `<text class="of-edge-l of-edge-btn tnum" x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle" role="button" tabindex="0" aria-label="${esc(label)}" data-of-edge data-of-from="${esc(e.from)}" data-of-to="${esc(e.to)}" data-of-mode="${esc(e.mode)}" data-of-name="${esc(arrow)}">${esc(ofEdgeText(e))}</text>`;
   }
   // A loop is a line back from its last pipeline to its first, labelled like the others: laps · median lap.
   for (const loop of map.loops ?? []) {
@@ -140,6 +144,58 @@ function ofLines(map: OfMap): void {
     paths += `<path class="of-edge of-edge-in" d="M${x1},${y1} C${x1 + 40},${y1} ${x2 - 40},${y2} ${x2},${y2}" style="stroke-width:${width(i.count)}"></path>`;
   }
   svg.innerHTML = paths;
+}
+
+/** The arrow whose cards the list under the map shows; null when no list is open. */
+interface OfArrow { from: string; to: string; mode: string; name: string; }
+/** One card that crossed the arrow: the same rows the arrow's count is taken from (backend/pipeline_overview.py). */
+interface OfCrossCard { handoff_id: string; task_id: string; title: string | null; crossed_at: string; approval: string | null; }
+let OF_ARROW: OfArrow | null = null;
+let OF_CROSS_RUN = 0;
+const OF_PERIOD_WORD: Record<string, string> = {'1d': 'Day', '7d': 'Week', '30d': 'Month'};
+
+function ofPeriodNow(): string {
+  return document.querySelector<HTMLElement>('[data-of-period][aria-pressed="true"]')?.dataset['ofPeriod'] || '7d';
+}
+
+// The cards that crossed the open arrow in the period, newest first. The count and this list come from one query.
+async function ofCrossLoad(period: string): Promise<void> {
+  const box = document.getElementById('of-cross');
+  const arrow = OF_ARROW;
+  if (!box || !arrow) return;
+  const run = ++OF_CROSS_RUN;
+  const head = `<header><h2>${esc(arrow.name)} · ${esc(OF_PERIOD_WORD[period] || period)}</h2>`
+    + `<button type="button" class="ghost" data-of-cross-close aria-label="Close this list">Close</button></header>`;
+  box.hidden = false;
+  box.innerHTML = `${head}<p class="muted">Loading…</p>`;
+  try {
+    const query = `from_id=${encodeURIComponent(arrow.from)}&to_id=${encodeURIComponent(arrow.to)}`
+      + `&mode=${encodeURIComponent(arrow.mode)}&period=${encodeURIComponent(period)}`;
+    const res: {cards: OfCrossCard[]} = await get(`/v2/pipelines/overview/crossings?${query}`, {fresh: true});
+    if (run !== OF_CROSS_RUN || !document.getElementById('of-cross')) return;
+    box.innerHTML = head + (res.cards.length
+      ? `<ol class="of-cross-rows">${res.cards.map(c => `<li><button type="button" class="linkish" data-open-task="t${esc(c.task_id)}">${esc(c.title || 'A card')}</button>`
+        + ` <time class="muted tnum">${esc(fmt(c.crossed_at))}</time>${c.approval ? ` <span class="muted">${esc(c.approval)}</span>` : ''}</li>`).join('')}</ol>`
+      : '<p class="of-empty muted">No cards crossed this arrow in this period.</p>');
+  } catch {
+    if (run !== OF_CROSS_RUN) return;
+    box.innerHTML = `${head}<p class="of-empty" role="alert">Couldn't load these cards. Try again.</p>`
+      + `<button type="button" class="ghost" data-of-cross-retry>Try again</button>`;
+  }
+}
+
+function ofCrossOpen(el: HTMLElement): void {
+  const d = el.dataset;
+  if (!d['ofFrom'] || !d['ofTo'] || !d['ofMode']) return;
+  OF_ARROW = {from: d['ofFrom'], to: d['ofTo'], mode: d['ofMode'], name: d['ofName'] || ''};
+  void ofCrossLoad(ofPeriodNow());
+}
+
+function ofCrossShut(): void {
+  OF_ARROW = null;
+  OF_CROSS_RUN++;
+  const box = document.getElementById('of-cross');
+  if (box) { box.hidden = true; box.innerHTML = ''; }
 }
 
 async function ofLoad(period: string): Promise<void> {
@@ -174,6 +230,7 @@ function pageOverviewFactories(): void {
   OF_ABORT = new AbortController();
   ofRailShut();             // a thread the last visit mounted goes before its page is replaced
   OF_CHAT_NODES = [];
+  OF_ARROW = null;
   const main = $('#main'); main.classList.add('overview-layout');
   let period = ofPeriodRead();
   main.innerHTML = `<section class="overview-page of-page" aria-label="Factories">
@@ -191,7 +248,7 @@ function pageOverviewFactories(): void {
         <header class="of-rail-head"><div class="of-chips" id="of-chips" role="group" aria-label="Managers"></div>
           <button type="button" class="ghost of-rail-hide" data-of-rail-hide aria-label="Hide" title="Hide">${PIPELINE_RAIL_HIDE_ICON}</button></header>
         <div class="of-rail-chat" id="of-rail-chat"></div>
-      </aside></div></section>`;
+      </aside></div><section class="of-cross" id="of-cross" aria-live="polite" hidden></section></section>`;
   document.getElementById('of-rail')?.addEventListener('click', ev => {
     const t = eventElement(ev);
     if (t?.closest('[data-of-rail-hide]')) { ofRailShut(); return; }
@@ -201,6 +258,20 @@ function pageOverviewFactories(): void {
   document.getElementById('of-body')?.addEventListener('click', ev => {
     const chat = eventElement(ev)?.closest<HTMLElement>('[data-of-chat]');
     if (chat?.dataset['ofChat']) ofRailShow(chat.dataset['ofChat']);
+    const edge = eventElement(ev)?.closest<HTMLElement>('[data-of-edge]');
+    if (edge) { ev.preventDefault(); ofCrossOpen(edge); }
+  });
+  document.getElementById('of-body')?.addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const edge = eventElement(ev)?.closest<HTMLElement>('[data-of-edge]');
+    if (!edge) return;
+    ev.preventDefault();
+    ofCrossOpen(edge);
+  });
+  document.getElementById('of-cross')?.addEventListener('click', ev => {
+    const t = eventElement(ev);
+    if (t?.closest('[data-of-cross-close]')) { ofCrossShut(); return; }
+    if (t?.closest('[data-of-cross-retry]') && OF_ARROW) void ofCrossLoad(ofPeriodNow());
   });
   document.getElementById('of-period')?.addEventListener('click', ev => {
     const pick = eventElement(ev)?.closest<HTMLElement>('[data-of-period]');
@@ -209,6 +280,7 @@ function pageOverviewFactories(): void {
     ofPeriodKeep(period);
     for (const b of document.querySelectorAll<HTMLElement>('[data-of-period]')) b.setAttribute('aria-pressed', String(b.dataset['ofPeriod'] === period));
     void ofLoad(period);
+    if (OF_ARROW) void ofCrossLoad(period);
   });
   document.getElementById('of-new-b')?.addEventListener('click', () => ofNewToggle(true));
   document.querySelector('[data-of-new-cancel]')?.addEventListener('click', () => ofNewToggle(false));

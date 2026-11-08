@@ -19,6 +19,12 @@
 .of-new label{display:flex;flex-direction:column;gap:4px;font-size:12px}
 .of-new-acts{display:flex;gap:8px}
 .of-edge-l{fill:var(--muted);font-size:11px;stroke:var(--surface);stroke-width:3px;paint-order:stroke}
+.of-edge-btn{pointer-events:auto;cursor:pointer}
+.of-edge-btn:focus-visible{outline:var(--focus-ring);outline-offset:2px}
+.of-cross{margin-top:var(--s4);border:1px solid var(--line);border-radius:var(--r-card, 8px);background:var(--surface);padding:var(--s3)}
+.of-cross header{display:flex;align-items:baseline;gap:var(--s3);margin:0 0 var(--s2)}
+.of-cross h2{margin:0;font-size:var(--t-md, 14px);font-weight:600}
+.of-cross-rows{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:var(--t-sm)}
 @media (prefers-reduced-motion:no-preference){
   .of-edge{animation:of-flow 1.6s linear infinite}
 }

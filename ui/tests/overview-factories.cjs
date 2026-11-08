@@ -13,6 +13,11 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
+// The cards behind an arrow (GET /api/v2/pipelines/overview/crossings): set per test, with a failure switch.
+let crossFixture = {cards: []};
+let crossFail = false;
+const crossCalls = [];
+
 const map = {
   factories: [{id: 'f1', name: 'Lead factory', goal: null, manager_id: 'bot:lead', done: 12, overdue: 2, live: 1}],
   pipelines: [
@@ -20,7 +25,7 @@ const map = {
     {id: 'sales', name: 'Sales', goal: null, manager_id: 'sales', factory_id: 'f1', cards: 9, overdue: 0, for_you: 0, live: 0},
     {id: 'help', name: 'Help desk', goal: null, manager_id: null, factory_id: null, cards: 3, overdue: 0, for_you: 0, live: 0},
   ],
-  edges: [{from: 'camp', to: 'sales', count: 38, median_age_minutes: 2880}],
+  edges: [{from: 'camp', to: 'sales', mode: 'move', count: 38, median_age_minutes: 2880}],
   inputs: [{label: 'Ads', count: 14, to: 'camp'}],
 };
 
@@ -46,6 +51,10 @@ async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/o
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Ruiz', role: 'owner'}], teams: {}, org_groups: []});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/pipelines/overview') { periods.push(url.searchParams.get('period')); return json(data); }
+    if (p === '/api/v2/pipelines/overview/crossings') {
+      crossCalls.push(Object.fromEntries(url.searchParams));
+      return crossFail ? json({detail: 'down'}, 500) : json(crossFixture);
+    }
     if (p === '/api/v2/factories') {
       if (req.method() !== 'POST') return json({factories: []});
       factories.push(JSON.parse(req.postData() || '{}'));
@@ -168,6 +177,37 @@ async function makeFactory(browser) {
   await member.page.close();
 }
 
+// Tap an arrow: the cards behind it, in the period, with the count and the list from one read; a period change
+// re-reads the list; no cards, an error with a retry, and Close each leave a way out.
+async function arrowList(browser) {
+  crossFixture = {cards: [{handoff_id: 'h1', task_id: 'task-a', title: 'Spring offer', crossed_at: '2026-11-07T10:00:00Z', approval: 'approved by Lead (met) at Review'}]};
+  crossCalls.length = 0;
+  const {page, errors} = await open(browser);
+  await page.locator('.of-edge-l').click();
+  await page.locator('#of-cross .of-cross-rows li').first().waitFor();
+  assert.equal(await page.locator('#of-cross h2').innerText(), 'Campaigns → Sales · Week');
+  assert.match(await page.locator('#of-cross .of-cross-rows').innerText(), /Spring offer[\s\S]*approved by Lead \(met\) at Review/);
+  assert.deepEqual(crossCalls.at(-1), {from_id: 'camp', to_id: 'sales', mode: 'move', period: '7d'});
+  await page.locator('[data-of-period="30d"]').click();
+  await page.waitForFunction(() => document.querySelector('#of-cross h2')?.textContent?.includes('Month'));
+  assert.deepEqual(crossCalls.at(-1), {from_id: 'camp', to_id: 'sales', mode: 'move', period: '30d'});
+  crossFixture = {cards: []};
+  await page.locator('.of-edge-l').click();
+  await page.locator('#of-cross .of-empty').waitFor();
+  assert.equal(await page.locator('#of-cross .of-empty').innerText(), 'No cards crossed this arrow in this period.');
+  crossFail = true;
+  await page.locator('.of-edge-l').click();
+  await page.locator('#of-cross [role=alert]').waitFor();
+  assert.equal(await page.locator('#of-cross [role=alert]').innerText(), "Couldn't load these cards. Try again.");
+  crossFail = false;
+  await page.locator('[data-of-cross-retry]').click();
+  await page.locator('#of-cross .of-empty').waitFor();
+  await page.locator('[data-of-cross-close]').click();
+  assert.equal(await page.locator('#of-cross').isHidden(), true);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
 async function reducedMotion(browser) {
   const {page} = await open(browser, {reduce: true});
   await page.waitForSelector('.of-edge', {state: 'attached'});
@@ -196,5 +236,5 @@ async function phone(browser) {
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  try { await desktop(browser); await mapExtras(browser); await noLinks(browser); await makeFactory(browser); await reducedMotion(browser); await phone(browser); console.log('overview-factories: ok'); } finally { await browser.close(); }
+  try { await desktop(browser); await mapExtras(browser); await noLinks(browser); await makeFactory(browser); await arrowList(browser); await reducedMotion(browser); await phone(browser); console.log('overview-factories: ok'); } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
