@@ -1207,8 +1207,8 @@ def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_
     link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
     first_follow_up = L.spawn(w.c, link_row, w.task)
     assert first_follow_up is not None
-    # The first follow-up is finished before Not validated files a second one: an open twin would be refused as a duplicate.
-    H.task_close(w.c, ANA, first_follow_up, note="Done")
+    # The first follow-up ships before Not validated files a second one: an open twin would be refused as a duplicate.
+    _ship(w, first_follow_up)
     assert item()["can_not_validate"] is True
     assert R._not_validated_route(w.c, "bot:cmo", w.pipeline, w.review, w.task) is None, "a bot never gets the route"
     # A stale work version or requirement version refuses, inside the transaction.
@@ -1221,23 +1221,37 @@ def test_not_validated_is_offered_only_after_an_in_development_stage_that_waits_
     assert done["moved_back_to"] == "Making" and done["follow_up"]
 
 
-def test_not_validated_files_through_the_earliest_live_handoff_not_the_nearest_stage(tmp_path):
-    """Two spawn links sit before Validate: Planning's (Engineering) and Making's (Support). Both filed a subtask before
-    Not validated, and the Planning handoff came first. The follow-up goes to Engineering, the link whose handoff came
-    first, not Support, which is the nearest stage."""
+def _reassign(w, child):
+    """An open subtask gets its own owner, so the next spawn of the same ticket is not a duplicate of it (same title and
+    owner under one parent)."""
+    H.task_update(w.c, ANA, child, owner="human:ben")
+
+
+def _ship(w, child):
+    """A subtask shipped: moved into the Shipped stage of its pipeline, the output stage the engine reads as shipment."""
+    shipped = w.c.execute(
+        "SELECT s.id FROM task_steps s JOIN tasks t ON t.type_id = s.type_id WHERE t.id = ? AND s.name = 'Shipped'",
+        (child,),
+    ).fetchone()[0]
+    H.task_update(w.c, ANA, child, step=shipped, mover=True)
+
+
+def test_not_validated_files_through_the_link_that_delivered_shipped_work_not_the_earlier_handoff(tmp_path):
+    """Two spawn links sit before Validate: Planning's (Engineering) and Making's (Support). Planning's handoff came first,
+    but its subtask is still open; Making's came later and shipped. Not validated files through Support, the link whose
+    shipped subtask satisfied the run: a handoff's chronology does not decide it."""
     w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
     engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
     support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
     eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")["id"]
     support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")["id"]
     w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
-    # Each handoff's follow-up is finished before the next is filed: an open twin for the same source is refused.
     first = L.spawn(w.c, w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (eng_link,)).fetchone(), w.task)
     assert first is not None
-    H.task_close(w.c, ANA, first, note="Done")
+    _reassign(w, first)
     second = L.spawn(w.c, w.c.execute("SELECT * FROM pipeline_links WHERE id=?", (support_link,)).fetchone(), w.task)
     assert second is not None
-    H.task_close(w.c, ANA, second, note="Done")
+    _ship(w, second)
     # Make the Planning handoff the earlier one regardless of clock resolution.
     w.c.execute("UPDATE pipeline_handoffs SET created_at='0000' WHERE pipeline_link_id=?", (eng_link,))
     rev = w.revision()
@@ -1245,7 +1259,59 @@ def test_not_validated_files_through_the_earliest_live_handoff_not_the_nearest_s
         w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=rev, requirement_version=1
     )
     assert done["moved_back_to"] == "Making"
+    assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == support
+
+
+def test_not_validated_follows_the_engineering_link_after_a_marketing_spawn_from_an_earlier_stage(tmp_path):
+    """Codex R3 F8: Specifying spawns Marketing discovery work, and later Planning (Product's Review exit) spawns Engineering.
+    After the Engineering subtask ships, Not validated files into Engineering, not Marketing, whatever came first."""
+    w = World(
+        tmp_path / "hub.sqlite",
+        steps=[{"name": "Specifying", "status": "doing"}, {"name": "Planning", "status": "doing"}, *STEPS],
+    )
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    marketing = H.type_create(w.c, ANA, "Marketing Team", STEPS, mover=True)["id"]
+    mkt_link = L.create_link(w.c, ANA, w.step("Specifying"), marketing, mode="spawn")
+    eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    discovery = L.spawn(w.c, mkt_link, w.task)
+    _reassign(w, discovery)
+    build = L.spawn(w.c, eng_link, w.task)
+    assert discovery is not None and build is not None
+    _ship(w, build)  # the Marketing discovery stays open
+    done = R.not_validated(
+        w.c, ANA, w.task, w.mockup, "Screens never validated", work_version=w.revision(), requirement_version=1
+    )
+    assert done["moved_back_to"] == "Making"
     assert w.c.execute("SELECT type_id FROM tasks WHERE id=?", (done["follow_up"],)).fetchone()[0] == engineering
+
+
+def test_not_validated_refuses_unless_exactly_one_spawn_link_delivered_shipped_work(tmp_path):
+    """No shipped subtask through any spawn link refuses, and so does shipped work through two links: the route is not
+    guessed, the queue does not offer it, and nothing is written."""
+    w = World(tmp_path / "hub.sqlite", steps=[{"name": "Planning", "status": "doing"}, *STEPS])
+    w.attach()
+    engineering = H.type_create(w.c, ANA, "Build Team", STEPS, mover=True)["id"]
+    support = H.type_create(w.c, ANA, "Support Team", STEPS, mover=True)["id"]
+    eng_link = L.create_link(w.c, ANA, w.step("Planning"), engineering, mode="spawn")
+    support_link = L.create_link(w.c, ANA, w.making, support, mode="spawn")
+    w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
+    eng_child = L.spawn(w.c, eng_link, w.task)
+    _reassign(w, eng_child)
+    support_child = L.spawn(w.c, support_link, w.task)
+    rev = w.revision()
+    item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
+    assert item()["can_not_validate"] is False
+    refused(
+        "development_link", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    _ship(w, eng_child)
+    _ship(w, support_child)
+    assert item()["can_not_validate"] is False
+    refused(
+        "development_link", R.not_validated, w.c, ANA, w.task, w.mockup, "No", work_version=rev, requirement_version=1
+    )
+    assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
 
 
 def test_an_approval_refuses_an_attachment_attached_before_the_last_change(world):
@@ -1438,7 +1504,7 @@ def test_not_validated_is_not_offered_while_another_reviewer_holds_the_claim(wor
     L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
     w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
     link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
-    H.task_close(w.c, ANA, L.spawn(w.c, link_row, w.task), note="Done")
+    _ship(w, L.spawn(w.c, link_row, w.task))  # the route follows shipped work, so the subtask ships
     item = lambda: next(i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup)  # noqa: E731
     assert item()["can_not_validate"] is True
     w.c.execute(
@@ -1458,7 +1524,7 @@ def test_not_validated_refuses_an_attachment_or_a_visit_the_reviewer_did_not_see
     L.create_link(w.c, ANA, w.making, engineering, mode="spawn")
     w.requirement("Subtasks", "run", "bot", stage=w.making, needs=json.dumps({"source": "subtasks"}))
     link_row = w.c.execute("SELECT * FROM pipeline_links WHERE from_pipeline_stage_id=?", (w.making,)).fetchone()
-    H.task_close(w.c, ANA, L.spawn(w.c, link_row, w.task), note="Done")
+    _ship(w, L.spawn(w.c, link_row, w.task))  # the route follows shipped work, so the subtask ships
     w.visit()
     visit = w.c.execute("SELECT id FROM stage_visits WHERE task_id=? AND left_at IS NULL", (w.task,)).fetchone()[0]
     seen = w.c.execute(
