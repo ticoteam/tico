@@ -1212,6 +1212,62 @@ def test_a_route_from_a_judge_verdict_that_no_longer_stands_does_not_stop_the_ju
     assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
 
 
+def test_a_persons_approval_of_new_evidence_is_never_judged_over(tmp_path, monkeypatch):
+    """Codex round 4, P2: after the work changed and new evidence came, a person approved it before the judge's next pass;
+    the judge does not judge that evidence and replace their approval."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1
+    c = hub(path)
+    c.execute("UPDATE tasks SET title='Light mode toggle' WHERE id=?", (task_id,))
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task_id,
+        req_id,
+        {"source": "link", "url": "https://y.example"},
+    )
+    newest = c.execute(
+        "SELECT id FROM requirement_attachments WHERE task_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()[0]
+    revision, stage = c.execute("SELECT work_revision, step_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    c.execute(
+        "INSERT INTO stage_decisions (id, task_id, pipeline_stage_id, stage_requirement_id, requirement_version, "
+        "requirement_attachment_id, work_version, judge, judge_actor, verdict, created_at) "
+        "VALUES ('approved',?,?,?,1,?,?,'person',?,'met',?)",
+        (task_id, stage, req_id, newest, revision, ANA, H.now()),
+    )
+    c.commit()
+    c.close()
+    assert _standing(store, task_id, req_id) == "met"
+    monkeypatch.setattr(P, "ENGINE", _engine(0.05))
+    assert P.tick(store) == 0 and _standing(store, task_id, req_id) == "met"
+
+
+def test_a_route_from_an_answer_a_newer_judge_answer_replaced_does_not_come_back(tmp_path, monkeypatch):
+    """Codex round 4, P2: an unsure answer for title A routed to a person; the judge said met for title B; with the title
+    back to A, the met no longer stands, and the old route (its digest matches again) does not hold the judge off."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    monkeypatch.setattr(P, "ENGINE", _engine(0.5))
+    assert P.tick(store) == 1
+    with store.transaction() as c:
+        title = c.execute("SELECT title FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        c.execute("UPDATE tasks SET title='Light mode toggle' WHERE id=?", (task_id,))
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET title=? WHERE id=?", (title, task_id))
+    assert _standing(store, task_id, req_id) == "waiting"
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    assert P.tick(store) == 0
+
+
 def _more_tickets(path, n, body=""):
     c = hub(path)
     dev = c.execute("SELECT type_id FROM tasks").fetchone()[0]

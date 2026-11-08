@@ -90,6 +90,12 @@ PR_LINK = (
 )
 WORK_KEYS = ("title", "spec", "repo", "pr", "author")  # the work context a judge's verdict is bound to (work_digest)
 DIGEST_SQL = "tico_judge_work_digest"  # _digest_of_row as a SQL function on _waiting's connection
+# The decision that stands on a waiting attachment's requirement, as the engine reads it: the newest one not undone.
+LATEST_DECISION = (
+    "SELECT x.rowid FROM stage_decisions x WHERE x.task_id = a.task_id "
+    "AND x.stage_requirement_id = a.stage_requirement_id AND x.undone_at IS NULL "
+    "ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1"
+)
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
 # latency_ms}. None, with no installed store, asks no one, so every answer is unsure until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
@@ -470,10 +476,11 @@ def _cannot_see(attachment: dict[str, Any], state: dict[str, Any]) -> bool:
 def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
     """The current attachment on each bot-reviewed requirement of their ticket's current stage whose latest judge answer is
     not for the work as it is now (none, one for another title, spec or PR: work_digest, or one from before the digest),
-    and that no person was routed to (route_next_to: a bot does not judge what a person now answers). A route from a judge
-    verdict that no longer stands (its digest is not the work's now) does not hold the judge off. A person's or a rule's
-    ruling after the latest judge answer does: the judge never answers over it, though that answer was for other work, so
-    re-judging never replaces a person's verdict. An attachment that newer evidence replaced is not judged. A Mark met stands only for the work it was made on (the decision's version), so
+    and that no person was routed to (route_next_to: a bot does not judge what a person now answers). A judge's route holds
+    the judge off only while its verdict stands: it is the requirement's latest decision (LATEST_DECISION, as the engine
+    reads it) and its digest is the work's now. A person's or a rule's ruling that is the latest decision, on this
+    attachment and this work version, holds it off too, so re-judging never replaces a person's verdict, whatever evidence
+    the judge saw before. An attachment that newer evidence replaced is not judged. A Mark met stands only for the work it was made on (the decision's version), so
     one made before a change does not stop the judge (R8). The digest is compared in SQL through DIGEST_SQL, a function
     registered on this connection, so only `limit` rows are read."""
     c.create_function(DIGEST_SQL, 5, _digest_of_row, deterministic=True)
@@ -514,21 +521,22 @@ def _waiting(c: sqlite3.Connection, limit: int) -> list[dict[str, Any]]:
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.task_id = a.task_id AND d.stage_requirement_id = a.stage_requirement_id
                                AND d.route_next_to IS NOT NULL
-                               AND NOT (d.judge = 'llm' AND d.requirement_attachment_id IS NOT NULL
-                                        AND d.work_digest IS NOT {digest}(t.title, t.body, pl.repo, pl.number, pl.detail)))
+                               AND (COALESCE(d.judge, '') <> 'llm' OR d.requirement_attachment_id IS NULL
+                                    OR (d.rowid = ({latest})
+                                        AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail))))
+             AND NOT EXISTS (SELECT 1 FROM stage_decisions d
+                             WHERE d.rowid = ({latest}) AND COALESCE(d.judge, '') <> 'llm'
+                               AND (d.verdict = 'override' OR d.requirement_attachment_id IS NULL
+                                    OR d.requirement_attachment_id = a.id)
+                               AND (d.work_version IS NULL OR d.work_version = t.work_revision))
              AND NOT EXISTS (SELECT 1 FROM stage_decisions d
                              WHERE d.rowid = (SELECT x.rowid FROM stage_decisions x
                                               WHERE x.requirement_attachment_id = a.id AND x.judge = 'llm'
                                               ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1)
-                               AND (d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail)
-                                    OR EXISTS (SELECT 1 FROM stage_decisions p
-                                               WHERE p.task_id = a.task_id
-                                                 AND p.stage_requirement_id = a.stage_requirement_id
-                                                 AND COALESCE(p.judge, '') <> 'llm' AND p.undone_at IS NULL
-                                                 AND (p.created_at > d.created_at
-                                                      OR (p.created_at = d.created_at AND p.rowid > d.rowid)))))
+                               AND d.work_digest = {digest}(t.title, t.body, pl.repo, pl.number, pl.detail))
            ORDER BY a.created_at, a.id
            LIMIT ?""".replace("{active}", ",".join("?" * len(H.ACTIVE_STATUSES)))
+        .replace("{latest}", LATEST_DECISION)
         .replace("{pr_link}", PR_LINK.format(task="a.task_id"))
         .replace("{digest}", DIGEST_SQL),
         (*H.ACTIVE_STATUSES, limit),
