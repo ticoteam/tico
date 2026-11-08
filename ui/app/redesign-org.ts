@@ -117,7 +117,7 @@ function rdoGroupBlock(by, g, ctx, depth) {
     <button type="button" class="rdo-tab" data-rdo-fold="${esc(g.id)}" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(g.name)}"><span class="rdo-cx" aria-hidden="true">›</span><span class="rdo-tn">${esc(g.name)}</span><span class="rdo-n">${count}</span></button>
     <div class="rdo-gb">${body}</div></section>`;
 }
-function rdoChartHtml(by = rdoTree(), ctx = {seen: new Set()}) {
+function rdoChartHtml(by = rdoTree(), ctx: {seen: Set<unknown>; group?: typeof rdoGroupBlock} = {seen: new Set()}) {
   const top = rdoTop(by);
   const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => rdoKey(n) !== rdoKey(top))] : (by[''] || []);
   if (top) ctx.seen.add(rdoKey(top));

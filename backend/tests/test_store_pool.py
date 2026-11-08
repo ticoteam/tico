@@ -491,3 +491,24 @@ def test_app_shutdown_closes_the_store_pool(tmp_path):
     for c in idle:
         with pytest.raises(sqlite3.ProgrammingError):
             c.execute("SELECT 1")
+
+
+def test_a_pooled_connection_whose_setup_fails_is_closed_before_the_error_reaches_the_caller(tmp_path):
+    opened = []
+
+    class FailsOnSetup(sqlite3.Connection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            opened.append(self)
+
+        def execute(self, statement, *args):
+            if statement.startswith("PRAGMA journal_size_limit"):
+                raise sqlite3.OperationalError("injected setup failure")
+            return super().execute(statement, *args)
+
+    s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    with pytest.raises(sqlite3.OperationalError, match="injected setup failure"):
+        s.connect(factory=FailsOnSetup)
+    (c,) = opened
+    with pytest.raises(sqlite3.ProgrammingError):  # a closed connection refuses every operation
+        c.total_changes

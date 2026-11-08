@@ -13,7 +13,7 @@ function prStateBadge(state) {
 }
 // A review or QA subtask's verdict (`verdict`, `verdict_head`, docs/tasks.md): green for approve and pass, red for
 // changes and fail, and the head it judged as a short sha. Nothing until a verdict is recorded.
-const VERDICT_WORDS = {approve: ['Approved', 'ok'], pass: ['Passed', 'ok'], changes: ['Changes', 'fail'], fail: ['Failed', 'fail']};
+const VERDICT_WORDS: Record<string, [string, string]> = {approve: ['Approved', 'ok'], pass: ['Passed', 'ok'], changes: ['Changes', 'fail'], fail: ['Failed', 'fail']};
 function taskVerdictHTML(t) {
   const v = VERDICT_WORDS[t?.verdict]; if (!v) return '';
   const head = String(t.verdict_head || '').slice(0, 7);
