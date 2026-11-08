@@ -124,4 +124,3 @@ def preview_delete(c: sqlite3.Connection, token_hash: str) -> None:
 def preview_purge(c: sqlite3.Connection, at: str) -> None:
     """Forget the previews that have expired by `at`."""
     c.execute("DELETE FROM fin_statement_previews WHERE expires_at<?", (at,))
-

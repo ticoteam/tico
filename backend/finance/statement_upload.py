@@ -270,7 +270,7 @@ def statement_post(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "undo that upload to post it again",
         )
     judged = _judge(ctx, who, money, gl.id, parsed)
-    skip = set(V.texts(p, "skip", SF.MAX_ROWS)) if p.get("skip") else set()
+    skip: set[str] = set(V.texts(p, "skip", SF.MAX_ROWS)) if p.get("skip") else set()
     unknown = skip - {j.row.external_id for j in judged}
     if unknown:
         raise invalid(f"{len(unknown)} skipped row(s) are not in this file")
@@ -473,7 +473,7 @@ def preview(ctx: Ctx, who: str, p: V.Payload) -> dict[str, Any]:
     judged = _judge(ctx, who, money, gl.id, parsed)
     tie = _tie(ctx, money, gl.id, parsed, [j.row.amount for j in judged])
     token = secrets.token_urlsafe(24)
-    expires = (datetime.strptime(ctx.at, FORMAT) + PREVIEW_TTL).strftime(FORMAT)
+    expires = (datetime.fromisoformat(ctx.at.replace("Z", "+00:00")) + PREVIEW_TTL).strftime(FORMAT)
     SS.preview_purge(ctx.c, ctx.at)
     SS.preview_put(
         ctx.c,

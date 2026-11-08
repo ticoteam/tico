@@ -20,8 +20,9 @@ import hashlib
 import html
 import io
 import re
+import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 MAX_BYTES = 4 * 1024 * 1024
@@ -145,7 +146,8 @@ def csv_date(text: str) -> str:
     else:
         for fmt in _NAMED_DATE_FORMATS:
             try:
-                found = datetime.strptime(s, fmt).date()
+                t = time.strptime(s, fmt)
+                found = date(t.tm_year, t.tm_mon, t.tm_mday)
                 break
             except ValueError:
                 continue
