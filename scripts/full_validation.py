@@ -9,8 +9,8 @@ gated it: its merge queue group's (pr-checks.yml on the merge commit) and its pu
 whose plans all left the test out is one the selector skipped it for; one with no plan to read is listed as unknown.
 The run summary lists both, and the issue ISSUE_TITLE gets the test, the commit range and those pull requests (a new
 issue, or a comment on the open one). Nothing is reverted. Each run's record (its commit, failures and passes) is the
-next run's previous one, written only once the run has reported; a suite with no results keeps its tests' previous
-passes in it.
+next run's previous one, written only once the run has reported; a run where a suite left no results keeps the
+previous commit and passes as its baseline.
 """
 
 import argparse
@@ -285,10 +285,13 @@ def report(plan_path, results, record_path, gh, env, git_log):
 
 
 def record(failed, passed, missing, previous, head):
-    """This run's record. When a suite left no results, its tests were not seen: the ones that passed on the previous
-    run stay passed, so a later failure of one is still new (a partial run must not erase the baseline)."""
+    """This run's record. When a suite left no results, its tests were not seen, so the baseline does not move: the
+    record keeps the previous commit and the previous passes (less what fails now). A later failure of an unseen test
+    is still new, and its commit range still starts where it last passed. Passes seen now join under that older commit,
+    which only widens their range."""
     if missing and previous is not None:
-        passed = passed | (set(previous.get("passed", ())) - failed)
+        passed = (passed | set(previous.get("passed", ()))) - failed
+        head = previous["sha"]
     return {"sha": head, "failed": sorted(failed), "passed": sorted(passed)}
 
 

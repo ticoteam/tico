@@ -123,7 +123,7 @@ def test_a_new_failure_names_the_prs_that_skipped_it_and_files_one_issue(tmp_pat
     assert "`backend/tests/test_a.py::test_broke`" in issue and "merged without running it: #7" in issue
     assert f"Commit range: {PREV[:12]}..{HEAD[:12]}" in issue
     saved = json.loads(record.read_text())
-    assert saved["sha"] == HEAD and "backend/tests/test_a.py::test_ok" in saved["passed"]
+    assert saved["sha"] == PREV and "backend/tests/test_a.py::test_ok" in saved["passed"]  # python-2 is missing
     assert "backend/tests/test_a.py::test_broke" in saved["failed"]
 
 
@@ -166,15 +166,23 @@ def test_a_failed_report_leaves_no_record_so_the_next_run_compares_with_the_olde
     assert not record.exists()
 
 
-def test_a_suite_without_results_keeps_its_tests_previous_passes_in_the_record(tmp_path):
+def test_a_run_with_a_suite_missing_keeps_the_previous_commit_and_passes_as_the_baseline(tmp_path):
     # python-2 (test_b) left no results: test_b's earlier pass stays, so its failure on a later run is still new.
     previous = {"sha": PREV, "passed": ["backend/tests/test_b.py::test_later", "backend/tests/test_a.py::test_broke"]}
     record = tmp_path / "record.json"
     fv.report(_plan(tmp_path), results(tmp_path), record, FakeGitHub(previous, {}), ENV, lambda b, h: "")
     saved = json.loads(record.read_text())
+    assert saved["sha"] == PREV  # the range of a later failure still starts where test_b last passed
     assert "backend/tests/test_b.py::test_later" in saved["passed"]
+    assert "backend/tests/test_a.py::test_ok" in saved["passed"]
     assert "backend/tests/test_a.py::test_broke" in saved["failed"]
     assert "backend/tests/test_a.py::test_broke" not in saved["passed"]
+    # A complete run moves the baseline to its own commit and its own passes.
+    junit(tmp_path / "ci-results" / "python-2.xml", [("backend.tests.test_b", "test_now", "")])
+    fv.report(_plan(tmp_path), tmp_path / "ci-results", record, FakeGitHub(previous, {}), ENV, lambda b, h: "")
+    saved = json.loads(record.read_text())
+    assert saved["sha"] == HEAD and "backend/tests/test_b.py::test_now" in saved["passed"]
+    assert "backend/tests/test_b.py::test_later" not in saved["passed"]
 
 
 def test_a_missing_artifact_is_none_but_a_failed_download_raises(monkeypatch):
