@@ -875,11 +875,14 @@ def test_the_judge_state_carries_the_work_title_spec_repo_pr_and_author():
     }
 
 
-def test_a_long_spec_is_cut_and_a_work_with_no_pr_leaves_repo_and_pr_out():
-    state = P._state(REQ, _work_fields(task_spec="x" * 5000, task_repo=None, task_pr=None))
+def test_a_long_spec_is_cut_and_flagged_and_a_work_with_no_pr_leaves_repo_pr_and_author_out():
+    assert P.SPEC_CHARS == 6000
+    state = P._state(REQ, _work_fields(task_spec="x" * 9000, task_repo=None, task_pr=None, task_author=None))
     assert len(state["work"]["spec"]) == P.SPEC_CHARS
-    assert "repo" not in state["work"] and "pr" not in state["work"]
-    assert state["work"]["author"] == "human:ana"
+    assert state["work"]["spec_truncated"] is True
+    assert "repo" not in state["work"] and "pr" not in state["work"] and "author" not in state["work"]
+    whole = P._state(REQ, _work_fields(task_spec="x" * P.SPEC_CHARS))["work"]
+    assert "spec_truncated" not in whole and len(whole["spec"]) == P.SPEC_CHARS
 
 
 def test_an_attachment_with_no_id_is_not_met_and_the_model_is_never_called():
@@ -951,6 +954,195 @@ def test_the_waiting_rows_carry_the_work_title_spec_repo_pr_and_author(tmp_path,
     assert row["task_spec"] == "Add a Dark mode toggle."
     assert row["task_repo"] == "acme/app"
     assert row["task_pr"] == 91
-    assert row["task_author"] == ANA
+    assert row["task_author"] is None  # no GitHub author is known for this PR; the ticket's owner is not its author
     state = P._state({"name": row["name"], "rubric": row["rubric"]}, row)
     assert state["work"]["repo"] == "acme/app" and state["work"]["pr"] == 91
+    assert "author" not in state["work"]
+
+
+def _judged_world(tmp_path, *, title="Dark mode toggle on Settings", body="Add a Dark mode toggle."):
+    """A bot-reviewed link requirement on a ticket owned by Ana, with its link attached. Returns (path, task id, req id)."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    dev = H.type_create(
+        c, ANA, "Dev", [{"name": "Review", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    req = R.add(
+        c,
+        ANA,
+        step_id(c, dev["id"], "Review"),
+        {
+            "name": "Review",
+            "kind": "attachment",
+            "needs": {"formats": ["link"]},
+            "reviewed_by": "bot",
+            "rubric": "A review by someone other than the author, with an approval",
+        },
+    )
+    task = H.task_create(c, ANA, title, body, ANA, type=dev["id"], step="Review", lint=False)
+    A.attach(
+        c,
+        SimpleNamespace(task=lambda *a: None),
+        SimpleNamespace(actor=ANA),
+        task["id"],
+        req["id"],
+        {"source": "link", "url": "https://x.example"},
+    )
+    c.commit()
+    c.close()
+    return path, task["id"], req["id"]
+
+
+def _pr_link(c, task_id, number, state, *, author=None, at=None):
+    detail = json.dumps({"author_login": author}) if author else None
+    c.execute(
+        "INSERT INTO task_links(id,task_id,kind,url,repo,number,state,detail,created_at) VALUES(?,?,'pr',?,?,?,?,?,?)",
+        (
+            f"pr-{number}",
+            task_id,
+            f"https://github.com/acme/app/pull/{number}",
+            "acme/app",
+            number,
+            state,
+            detail,
+            at or H.now(),
+        ),
+    )
+
+
+def test_the_author_is_the_pr_links_github_author_never_the_tickets_owner(tmp_path):
+    """Codex P1: the ticket's owner is whoever holds it now (a reviewer it was handed to), not who wrote the change. The
+    author the judge is told is the GitHub login that opened the PR, from the PR link's detail, or none."""
+    path, task_id, _ = _judged_world(tmp_path)
+    c = hub(path)
+    c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (BEN, task_id))  # handed to an independent reviewer
+    _pr_link(c, task_id, 91, "open", author="octo-ana")
+    c.commit()
+    rows = P._waiting(c, 5)
+    c.close()
+    assert rows[0]["task_author"] == "octo-ana"
+    assert P._state(REQ, rows[0])["work"]["author"] == "octo-ana"
+
+
+def _chosen_pr(tmp_path, links):
+    path, task_id, _ = _judged_world(tmp_path)
+    c = hub(path)
+    for i, (number, state) in enumerate(links):
+        _pr_link(c, task_id, number, state, at=f"2026-11-0{i + 1}T00:00:00.000Z")
+    c.commit()
+    rows = P._waiting(c, 5)
+    c.close()
+    return rows[0]["task_pr"]
+
+
+@pytest.mark.parametrize(
+    ("links", "chosen"),
+    [
+        ([(91, "open"), (92, "closed")], 91),  # Codex's repro: an abandoned newer PR does not displace the open one
+        ([(91, "draft"), (92, "closed")], 91),
+        ([(91, "merged"), (92, "closed")], 91),
+        ([(91, "merged"), (92, "open")], 92),
+        ([(91, "open"), (92, "merged")], 91),  # the open PR is the work in flight
+        ([(91, "shipped"), (92, "closed")], 91),
+        ([(91, "closed"), (92, "closed")], 92),  # only closed ones: the newest
+        ([(91, "open"), (92, "draft")], 92),  # two in flight: the newest
+    ],
+)
+def test_the_pr_judged_against_is_the_newest_open_else_merged_else_closed(tmp_path, links, chosen):
+    assert _chosen_pr(tmp_path, links) == chosen
+
+
+def test_a_met_on_a_cut_spec_is_unsure_and_a_not_met_stays_not_met(tmp_path):
+    """Codex P2: a rubric may need the whole spec, and the judge saw only its start: its met is not trusted."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    c = hub(path)
+    settings = _settings(path)
+    long = _work_fields(task_spec="Acceptance: " + "x" * P.SPEC_CHARS)
+    met = P.judge_once(c, REQ, long, "haiku-5.5", settings=settings, engine=_engine(0.95))
+    assert met["verdict"] == "unsure" and met["p"] == 0.5 and met["reason"] == P.SPEC_CUT
+    assert P.judge_once(c, REQ, long, "haiku-5.5", settings=settings, engine=_engine(0.05))["verdict"] == "not_met"
+    whole = _work_fields(task_spec="x" * P.SPEC_CHARS)
+    assert P.judge_once(c, REQ, whole, "haiku-5.5", settings=settings, engine=_engine(0.95))["verdict"] == "met"
+
+
+def test_the_question_set_says_a_missing_author_is_unknown_and_a_cut_spec_is_flagged():
+    instructions = P._questions()["met"]["instructions"]
+    assert "work.author" in instructions and "not given" in instructions
+    assert "spec_truncated" in instructions
+    assert "owner" not in P.JUDGE_SYSTEM
+
+
+def _standing(store, task_id, req_id):
+    with store.read() as c:
+        return E.task_standings(c, [task_id])[task_id][req_id]
+
+
+@pytest.mark.parametrize("change", ["title", "pr"])
+def test_an_answer_for_work_that_changed_while_it_was_asked_is_not_recorded(tmp_path, monkeypatch, change):
+    """Codex P2: a title or PR change during the model call supersedes the answer, as a work_version change (a spec edit
+    is a body edit, which bumps work_revision) already does."""
+    path, task_id, _ = _judged_world(tmp_path)
+    store = Store(_settings(path))
+
+    def ask(model, state, questions, label):
+        with store.transaction() as c:
+            if change == "title":
+                c.execute("UPDATE tasks SET title='Light mode toggle' WHERE id=?", (task_id,))
+            else:
+                _pr_link(c, task_id, 92, "open")
+        return {"p": 0.95, "reason": "ok", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", ask)
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)
+    assert P.tick(store) == 0
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM stage_decisions").fetchone()[0] == 0
+        why = [
+            json.loads(r[0])["why"]
+            for r in c.execute("SELECT detail FROM events WHERE action='requirement.judge_superseded'").fetchall()
+        ]
+    assert why == ["the work changed"]
+
+
+def test_a_judges_met_stands_only_for_the_title_spec_and_pr_it_saw_and_a_change_is_judged_again(tmp_path, monkeypatch):
+    """Codex P2: a met judged for one PR or campaign does not stand once the ticket's title, spec or PR changes; the judge
+    reads the evidence again against the new work."""
+    path, task_id, req_id = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    asked = []
+
+    def ask(model, state, questions, label):
+        asked.append(state["work"])
+        return {"p": 0.95, "reason": "ok", "provider": "t", "model": model}
+
+    monkeypatch.setattr(P, "ENGINE", ask)
+    monkeypatch.setattr(P, "_cannot_see", lambda attachment, state: False)  # stand-in for readable evidence
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    assert P.tick(store) == 0  # nothing changed: not asked again
+
+    # (A spec edit is a body edit, which already bumps work_revision: tasks_body_work_revision.)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET title='Light mode toggle' WHERE id=?", (task_id,))
+    assert _standing(store, task_id, req_id) == "waiting"
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    with store.transaction() as c:
+        _pr_link(c, task_id, 92, "open", author="octo-ana")
+    assert _standing(store, task_id, req_id) == "waiting"
+    assert P.tick(store) == 1 and _standing(store, task_id, req_id) == "met"
+    assert asked[-1]["pr"] == 92 and asked[-1]["author"] == "octo-ana"
+    assert len(asked) == 3
+    with store.read() as c:
+        digests = [r[0] for r in c.execute("SELECT work_digest FROM stage_decisions ORDER BY rowid").fetchall()]
+    assert len(set(digests)) == 3 and all(digests)
+
+
+def test_a_decisions_work_digest_never_changes(tmp_path, monkeypatch):
+    path, _, _ = _judged_world(tmp_path)
+    store = Store(_settings(path))
+    monkeypatch.setattr(P, "ENGINE", _engine(0.95))
+    assert P.tick(store) == 1
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        with store.transaction() as c:
+            c.execute("UPDATE stage_decisions SET work_digest='other'")

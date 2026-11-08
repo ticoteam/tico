@@ -239,6 +239,8 @@ class _Facts:
     children: dict[str, list[Row]]  # a ticket's subtasks: id, status, type_id, cascaded (closed with its parent)
     spawns: dict[str, set[str]]  # a pipeline id -> the pipelines its spawn links file tickets into
     shipped: set[str] = field(default_factory=set)  # subtask ids that visited their pipeline's output stage
+    # A ticket id -> its work digest, read once per evaluation (_judged_current).
+    work_digests: dict[str, str] = field(default_factory=dict)
 
 
 def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[str], kinds: set[str]) -> _Facts:
@@ -533,6 +535,20 @@ def _rule_source(conn: sqlite3.Connection, task_id: str, requirement: Row, facts
     return _run_state(task_id, requirement, facts, conn)
 
 
+def _judged_current(conn: sqlite3.Connection, task_id: str, decision: Row, facts: _Facts) -> bool:
+    """Whether a judge's verdict is about the ticket's work as it is now: the title, spec, PR and PR author it was told
+    (stage_decisions.work_digest, backend/pipeline_judges.py). A verdict with no digest (a person's, or a judge's from before
+    the digest) is not bound to one."""
+    digest = decision.get("work_digest")
+    if decision.get("judge") != "llm" or not digest:
+        return True
+    from . import pipeline_judges
+
+    if task_id not in facts.work_digests:
+        facts.work_digests[task_id] = pipeline_judges.work_digest(pipeline_judges.work_context(conn, task_id))
+    return facts.work_digests[task_id] == str(digest)
+
+
 def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts) -> Standing:
     task = facts.tasks.get(task_id) or {"id": task_id, "work_revision": 0}
     revision = int(task.get("work_revision") or 0)
@@ -540,6 +556,9 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
     decision, attachment = facts.decisions.get(key), facts.attachments.get(key)
     if decision is not None and not verdict_binds_attachment(decision, attachment):
         decision = None  # the evidence it judged was replaced or taken away
+    if decision is not None and not _judged_current(conn, task_id, decision, facts):
+        # A judge's verdict on another title, spec or PR says nothing about this work; it is judged again.
+        decision = None
     if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
         decision = None  # no override stands in for a named person's approval (D10, D34)
     if decision is not None and requirement["kind"] in ("field", "run") and decision["verdict"] == "met":

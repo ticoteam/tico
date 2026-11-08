@@ -216,3 +216,22 @@ def test_the_four_cases_the_rubric_says_do_not_count_are_not_met():
     by_id = {c["id"]: c["expected"] for c in run.load()}
     for case_id in ("dev-tests-truncated", "dev-review-partial", "mkt-brief-comment", "mkt-page-timeout"):
         assert by_id[case_id] == "not_met", case_id
+
+
+def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monkeypatch):
+    """Codex P1: production knows a work's author only as the GitHub login on its PR link (detail.author_login), so the eval
+    passes the case's author the same way, through the server's own reader of a PR link."""
+    import json
+
+    from backend import pipeline_judges as P
+
+    seen = []
+    real = P.pr_work
+    monkeypatch.setattr(P, "pr_work", lambda link: seen.append(link) or real(link))
+    case = next(c for c in run.load() if c["id"] == "dev-review-self")
+    work = adapter.state_for(case)["work"]
+    assert work["author"] == "human:ana" and work["pr"] == 91
+    assert seen and json.loads(seen[-1]["detail"])["author_login"] == "human:ana"
+    no_pr = {**case, "work": {k: v for k, v in case["work"].items() if k not in ("repo", "pr")}}
+    with pytest.raises(ValueError, match="PR"):
+        adapter.state_for(no_pr)

@@ -53,17 +53,22 @@ SOURCES = {"check": "check_run", "receipt": "receipt", "image": "blob"}
 
 def _work(case):
     """The work's fields as the server's waiting read gives them (task_title, task_spec, task_repo, task_pr, task_author and
-    task_work_version), from the case's work. A case's work has no PR or author it does not name: those stay out."""
+    task_work_version), from the case's work. Its repo, PR and author come as production's do: from a PR link row, through
+    the server's own reader (`pr_work`), with the author as the GitHub login on the link's detail. A case's work has no PR
+    or author it does not name: those stay out. An author with no PR has no source in production, so it is refused."""
     w = case["work"]
-    fields = {
+    if w.get("author") and w.get("repo") is None and w.get("pr") is None:
+        raise ValueError(f"{case['id']}: an author is known only from a PR link; give the work a repo and PR")
+    link = None
+    if w.get("repo") is not None or w.get("pr") is not None:
+        detail = json.dumps({"author_login": w["author"]}) if w.get("author") else None
+        link = {"repo": w.get("repo"), "number": w.get("pr"), "detail": detail}
+    return {
         "task_work_version": int(w["work_version"]),
         "task_title": w.get("title") or "",
         "task_spec": w.get("spec") or "",
-        "task_repo": w.get("repo"),
-        "task_pr": w.get("pr"),
-        "task_author": w.get("author"),
+        **P.pr_work(link),
     }
-    return fields
 
 
 def _attachment(case):
