@@ -2,6 +2,7 @@
 Limit, pauses the Limit while a ticket is on hold, opens one BotOps task when its passes stop, and takes no action
 outside the allowed set. An empty exception list makes no model call."""
 
+import importlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -30,8 +31,10 @@ def stamp(at):
 
 
 def pipeline(c, manager="coo", every=10, name="Launch"):
+    """A pipeline whose manager was assigned a day ago, so the watchdog's clock starts before the test's own times."""
     typ = H.type_create(c, ANA, name, STAGES, mover=True)
     c.execute("UPDATE task_types SET manager=?, manager_every_minutes=? WHERE id=?", (manager, every, typ["id"]))
+    c.execute("UPDATE task_types SET manager_since=? WHERE id=?", (stamp(now() - timedelta(days=1)), typ["id"]))
     return typ["id"]
 
 
@@ -253,6 +256,7 @@ def test_a_pass_that_raises_is_recorded_as_a_failed_run_and_the_others_still_run
     store = api.app.state.store
     failures: list[dict[str, str]] = []
     with store.transaction() as c:
+        botops_roster(c)
         broken = pipeline(c, name="Broken")
         healthy = pipeline(c, name="Healthy")
 
@@ -566,7 +570,7 @@ def test_a_manager_set_on_an_old_pipeline_is_not_judged_on_its_first_tick(api):
     store = api.app.state.store
     with store.transaction() as c:
         botops_roster(c)
-        type_id = pipeline(c)
+        type_id = assign_manager(c)  # assigned now; the pipeline itself is three days old
         c.execute("UPDATE task_types SET created_at=? WHERE id=?", (stamp(now() - timedelta(days=3)), type_id))
     PM.watchdog(store, now())
     with store.read() as c:
@@ -594,3 +598,72 @@ def test_a_members_only_pipelines_stopped_task_names_it_to_no_one_outside_botops
     get(api, f"tasks/{tid}", "cara-test", expected=404)
     assert "Pipeline manager stopped: Legal" not in str(get(api, "tasks", "cara-test"))
     assert "Pipeline manager stopped: Legal" not in str(get(api, "history?limit=200", "cara-test"))
+
+
+def assign_manager(c, name="Launch"):
+    """A pipeline given a manager now: the manager_since trigger stamps the assignment."""
+    typ = H.type_create(c, ANA, name, STAGES, mover=True)
+    c.execute("UPDATE task_types SET manager=?, manager_every_minutes=10 WHERE id=?", ("coo", typ["id"]))
+    return typ["id"]
+
+
+def test_a_manager_that_never_ran_is_stalled_once_its_grace_from_the_assignment_has_passed(api):
+    """F11 (Codex repro 1): a manager assigned ten days ago and never run is stalled. Its clock is the assignment, and
+    nothing is missed until one run interval and the stall limit have passed."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        botops_roster(c)
+        since = now()
+        pid = assign_manager(c)
+    with store.read() as c:
+        row = dict(c.execute(PM.SELECT_PIPELINE + " WHERE id=?", (pid,)).fetchone())
+        assert PM.stalled(c, row, since + timedelta(minutes=30)) == 0
+        assert PM.stalled(c, row, since + timedelta(days=10)) >= PM.MISSED_RUNS
+    PM.watchdog(store, since + timedelta(days=10))
+    with store.read() as c:
+        assert botops_tasks(c) == 1
+
+
+def test_a_run_from_before_the_assignment_is_no_health_history_for_the_new_manager(api):
+    """F11 (Codex repro 2): a manager assigned to a pipeline whose last pass was twelve hours ago is not stalled on its
+    first tick. The old pass is not this manager's, so it starts no clock."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        botops_roster(c)
+        since = now()
+        pid = assign_manager(c)
+    PM.tick(store, since - timedelta(hours=12))  # a pass from before the assignment
+    with store.read() as c:
+        row = dict(c.execute(PM.SELECT_PIPELINE + " WHERE id=?", (pid,)).fetchone())
+        assert PM.stalled(c, row, since + timedelta(minutes=1)) == 0
+    PM.watchdog(store, since + timedelta(minutes=1))
+    with store.read() as c:
+        assert botops_tasks(c) == 0
+
+
+def test_a_reassigned_manager_starts_a_new_clock_and_clearing_it_stops_the_clock(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        pid = assign_manager(c)
+        first = c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0]
+        assert first is not None
+        c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (pid,))
+        assert c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0] is None
+        c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (pid,))
+        again = c.execute("SELECT manager_since FROM task_types WHERE id=?", (pid,)).fetchone()[0]
+        assert H.parse_ts(again) >= H.parse_ts(first)
+
+
+def test_the_migration_backfills_existing_managed_pipelines_to_the_migration_time(api):
+    """F11: a pipeline managed before the migration is stamped with the upgrade's time, not left without a clock."""
+    migration = importlib.import_module("backend.migrations.20261108011313_pipeline_manager_since")
+    store = api.app.state.store
+    with store.transaction() as c:
+        managed = assign_manager(c, name="Managed")
+        unmanaged = H.type_create(c, ANA, "Unmanaged", STAGES, mover=True)["id"]
+        c.execute("UPDATE task_types SET manager_since=NULL WHERE id=?", (managed,))
+        before = now()
+        migration.up(c)
+        stamps = dict(c.execute("SELECT id, manager_since FROM task_types WHERE id IN (?, ?)", (managed, unmanaged)))
+    assert H.parse_ts(stamps[managed]) >= before
+    assert stamps[unmanaged] is None

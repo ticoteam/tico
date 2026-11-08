@@ -17,8 +17,10 @@ ask, ask_backup and open_botops. refile is wired with the check pools (M2), so i
 in the pass: the manager is woken only for judgment (a wake, once per requirement and visit), so an empty exception list
 makes no model call.
 
-The watchdog: a manager whose passes stopped (MISSED_RUNS missed runs) opens one BotOps task per stall. Only a pass that
-finished ok counts as healthy; run_due runs the watchdog before the pass, so a pass recorded after an outage cannot hide it.
+The watchdog: a manager whose passes stopped (MISSED_RUNS missed runs) opens one BotOps task per stall. Its clock is the
+manager's assignment (task_types.manager_since): passes from before it are not counted, and nothing is missed before one
+run interval plus MISSED_RUNS intervals have passed. Only a pass that finished ok counts as healthy; run_due runs the
+watchdog before the pass, so a pass recorded after an outage cannot hide it.
 
 `run_due` is the one guarded dispatcher the scheduler calls: each step's failure is recorded and the others still run.
 Each pipeline's pass is its own transaction, and a pass that raised is recorded as its own failed run.
@@ -124,31 +126,51 @@ def _due(c: "sqlite3.Connection", pipeline: dict[str, Any], when: datetime) -> b
     return started is None or when - started >= timedelta(minutes=_every(pipeline))
 
 
+def assigned_stamp(c: "sqlite3.Connection", pipeline_id: str) -> str:
+    """When the pipeline's current manager was assigned (task_types.manager_since, kept by a trigger), as a stamp, or ""."""
+    found = c.execute("SELECT manager_since FROM task_types WHERE id=?", (pipeline_id,)).fetchone()
+    return str(found[0] or "") if found else ""
+
+
 def stall_clock(c: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any] | None:
     """The pass that starts the clock on missed passes: the last ok one, else the first attempt (a failed pass), else None.
-    A manager with no run yet is not behind: its first pass is due on the next tick. Its creation time is no clock, so a
-    manager set on an old pipeline is not judged from when the pipeline was made (the watchdog's first tick after an
-    update opened a "stopped" task for every one)."""
-    last = last_ok_run(c, pipeline_id)
-    if last is not None:
-        return last
+    Only passes that started at or after the manager's assignment count (F11): a pass from before it belongs to whoever
+    managed the pipeline then. A manager with no pass since its assignment is judged from the assignment (stalled)."""
+    since = assigned_stamp(c, pipeline_id)
+    if not since:
+        return None
+    last = H._rows(
+        c.execute(
+            "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? AND status='ok' AND started_at>=? "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
+            (pipeline_id, since),
+        )
+    )
+    if last:
+        return last[0]
     rows = H._rows(
         c.execute(
-            "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? ORDER BY started_at, id LIMIT 1", (pipeline_id,)
+            "SELECT * FROM pipeline_manager_runs WHERE pipeline_id=? AND started_at>=? ORDER BY started_at, id LIMIT 1",
+            (pipeline_id, since),
         )
     )
     return rows[0] if rows else None
 
 
 def stalled(c: "sqlite3.Connection", pipeline: dict[str, Any], at: Any) -> int:
-    """How many passes this manager has missed: the whole intervals since its clock started (stall_clock), less the one
-    that is due. Missing passes count from one run interval plus MISSED_RUNS after that start."""
+    """How many passes this manager has missed. Nothing is missed until one run interval and MISSED_RUNS more have passed
+    since the assignment (F11, so a manager is not judged from older history). After that, the missed passes are the whole
+    intervals since the clock (stall_clock, or the assignment when no pass has run since), less the one that is due."""
     when = when_of(at)
-    clock = stall_clock(c, pipeline["id"])
-    base = H.parse_ts(clock["started_at"]) if clock else None
-    if base is None:
+    assigned = H.parse_ts(assigned_stamp(c, pipeline["id"]))
+    if assigned is None:
         return 0
-    intervals = int((when - base).total_seconds() // (_every(pipeline) * 60))
+    every = _every(pipeline)
+    if when < assigned + timedelta(minutes=every * (1 + MISSED_RUNS)):
+        return 0
+    clock = stall_clock(c, pipeline["id"])
+    base = (H.parse_ts(clock["started_at"]) if clock else None) or assigned
+    intervals = int((when - base).total_seconds() // (every * 60))
     return max(0, intervals - 1)
 
 
@@ -625,7 +647,9 @@ def watchdog(store: Any, at: Any) -> None:
                 continue
             last = last_ok_run(c, pid)
             clock = stall_clock(c, pid)
-            base = clock["started_at"] if clock else ""
+            last_pass = clock["started_at"] if clock else ""
+            # One task per stall: a stall is judged from its last pass, or from the assignment when none has run since.
+            base = last_pass or assigned_stamp(c, pid)
             opened = c.execute(
                 "SELECT 1 FROM pipeline_manager_actions WHERE pipeline_id=? AND action='open_botops' AND created_at>? "
                 "LIMIT 1",
@@ -641,7 +665,7 @@ def watchdog(store: Any, at: Any) -> None:
                 c,
                 H.KEEPER,
                 f"Pipeline manager stopped: {row['name']}",
-                f"The manager of {row['name']} has missed {missed} passes; its last pass started {base or 'never'}. "
+                f"The manager of {row['name']} has missed {missed} passes; its last pass started {last_pass or 'never'}. "
                 "Check the manager bot and the pipeline's log.",
                 BOTOPS,
                 deduplicate=False,
