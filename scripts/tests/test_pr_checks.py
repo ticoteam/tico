@@ -394,7 +394,10 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         calls = log.read_text()
         assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
         if suite == "python":
-            assert calls.splitlines() == ["npm ci --fetch-retries=1", "npm run --silent build:ui"]
+            assert calls.splitlines() == [
+                "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
+                "npm run --silent build:ui",
+            ]
         else:
             assert "--no-download install" in calls and "playwright install chromium webkit" in calls
 
