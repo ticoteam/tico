@@ -204,16 +204,20 @@ def cost_usd(settings, model, usage):
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
     if model in J.GATEWAY_MODELS:
-        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks.
-        listed = providers.price_of(model)
-        rate_in, rate_out = (listed[0], listed[2]) if listed else GATEWAY_USD_PER_MTOK
+        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks. Cached
+        # input is billed at the catalog's cached rate, as `providers.estimate` bills every other model's.
+        if (listed := providers.price_of(model)) is None:
+            listed = (GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[1])
+        rate_in, rate_cached, rate_out = listed
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
+        rate_cached = rate_in
     elif priced(settings, model) and (listed := _list_cost(model, fresh, cached, out, usage)) is not None:
         return round(listed, 6)
     else:
         rate_in, rate_out = CEILING
-    return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
+        rate_cached = rate_in
+    return round((fresh * rate_in + cached * rate_cached + out * rate_out) / 1_000_000, 6)
 
 
 # The month's total per (database file, month): (total, rowid of the newest judge.spend row counted, that row's id). A call
