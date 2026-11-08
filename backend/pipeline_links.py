@@ -292,6 +292,28 @@ def _readable_ticket(conn: sqlite3.Connection, owner: str, source: Row) -> bool:
     return H.task_private_readable(conn, owner, source) and not pipeline_rights.left_out(hidden, owner, source)
 
 
+NEUTRAL_TITLE = "New request"  # a spawned ticket's title when the source's content may not be copied (D64, D67)
+NEUTRAL_BODY = "Made from a ticket you may not open."
+
+
+def _members_only(conn: sqlite3.Connection, type_id: object) -> bool:
+    found = _one(conn, "SELECT pipeline_visibility FROM task_types WHERE id = ?", (str(type_id or ""),))
+    return bool(found) and str(found["pipeline_visibility"] or "company") == "members"
+
+
+def _shares_source(conn: sqlite3.Connection, owner: str, source: Row, pipeline_id: str) -> bool:
+    """Whether everyone who can read a new ticket on `pipeline_id` (owned by `owner`) may read `source`, so its title, label,
+    body and links may be copied onto it. A company-wide source with no privacy is read by everyone. A members-only source
+    is read by its pipeline's members, so it is shared only onto that same pipeline and only when the owner reads it too. A
+    private source's readers are its own list, so it is shared to no one. When unsure, it is not shared."""
+    private = H.task_private(conn, source)
+    if not private and not _members_only(conn, source["type_id"]):
+        return True
+    if private:
+        return False
+    return str(source["type_id"] or "") == pipeline_id and _readable_ticket(conn, owner, source)
+
+
 def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
     """Whether the owner may read an attachment the spawn would carry: the company file's version (and its attempt) or the
     blob behind it. A link has no file to check, so the ticket's readability decides it alone."""
@@ -320,16 +342,16 @@ def _item_readable(conn: sqlite3.Connection, owner: str, row: Row) -> bool:
 
 def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, leaving_stage: str | None) -> None:
     """The source's links become links of the spawned ticket through the link API (H.task_link), spec first, at most
-    MAX_CARRIED. A link the child's owner may not read is not carried (D67: the pipeline rule, the source's privacy, and
-    each file's or blob's readers). A file or blob has no link API for a ticket and is not carried either. Each skip is
-    logged on the child as `carry_skipped`, naming only the requirement (never the URL or title)."""
+    MAX_CARRIED. Nothing is carried unless everyone who can read the child may read the source (_shares_source); then each
+    file or blob must pass _item_readable for the child's owner. A file or blob has no link API for a ticket and is not carried
+    as one. Each skip is logged on the child as `carry_skipped`, naming only the requirement (never the URL or title); a child
+    that gets no content from the source gets one such event naming "A link"."""
     source = H.task(conn, source_id)
     child = H.task(conn, child_id)
     if source is None or child is None:
         return
     owner = str(child["owner_id"])
-    ticket_ok = _readable_ticket(conn, owner, source)
-    if not ticket_ok:
+    if not _shares_source(conn, owner, source, str(child["type_id"] or "")):
         H._task_event(  # pyright: ignore[reportPrivateUsage]
             conn,
             source_id,
@@ -337,14 +359,18 @@ def _carry(conn: sqlite3.Connection, filer: str, source_id: str, child_id: str, 
             "spawn_links_skipped",
             None,
             child_id,
-            "The new ticket's owner cannot read this one",
+            "The new ticket's readers cannot read this one",
         )
+        H._task_event(  # pyright: ignore[reportPrivateUsage]
+            conn, child_id, H.KEEPER, "carry_skipped", None, "A link", ""
+        )
+        return
     carried: list[str] = []
     for row in _spec_first(_evidence(conn, source_id, leaving_stage), leaving_stage):
         url = str(row["url"] or "").strip()
         if not url or url in carried:
             continue
-        if not ticket_ok or not _item_readable(conn, owner, row):
+        if not _item_readable(conn, owner, row):
             H._task_event(  # pyright: ignore[reportPrivateUsage]
                 conn, child_id, H.KEEPER, "carry_skipped", None, str(row["requirement"] or "") or "A link", ""
             )
@@ -368,8 +394,9 @@ def spawn(
     conn: sqlite3.Connection, link: Row, source_id: str, *, again: bool = False, note: str | None = None
 ) -> str | None:
     """File the ticket a `spawn` link makes when `source_id` leaves the linked stage: a subtask of the source, in the target
-    pipeline's first stage, titled as the source, with a line pointing back at it, owned as the target's first stage
-    assigns it (_owner_for) and requested by the source's owner. The source's links are carried over (_carry). Once per
+    pipeline's first stage, titled and labelled as the source when everyone who can read the new ticket may read the source
+    (_shares_source), else with neutral text (NEUTRAL_TITLE, NEUTRAL_BODY). It is owned as the target's first stage assigns it
+    (_owner_for) and requested by the source's owner. The source's links are carried over (_carry). Once per
     (link, source ticket): while a handoff for that pair is live (not returned), nothing is filed again. A returned (undone)
     handoff allows a new one. `again=True` is a deliberate second spawn (Validate's "Not validated"), which skips that check
     and is recorded as its own handoff; `note` leads its body as "Follow-up: <note>".
@@ -396,16 +423,21 @@ def spawn(
     if first is None or source is None:
         return None
     filer = str(source["owner_id"])
+    owner = _owner_for(conn, target, filer)
     lead = f"Follow-up: {note}. " if note else ""
-    body = f"{lead}Made from {_label(conn, source_id)}: {source['title']}. Its links are attached."
+    if _shares_source(conn, owner, source, target):
+        title = str(source["title"])
+        body = f"{lead}Made from {_label(conn, source_id)}: {source['title']}. Its links are attached."
+    else:  # the new ticket's readers may not open the source: nothing of it is copied (Codex F2)
+        title, body = NEUTRAL_TITLE, f"{lead}{NEUTRAL_BODY}"
     conn.execute("SAVEPOINT pipeline_spawn")
     try:
         child = H.task_create(
             conn,
             filer,
-            str(source["title"]),
+            title,
             body,
-            _owner_for(conn, target, filer),
+            owner,
             parent_id=source_id,
             type=target,
             step=str(first["id"]),
