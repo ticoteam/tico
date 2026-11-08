@@ -179,6 +179,7 @@ class Builder:
             self.settings,
             demo=False,
             demo_public=False,
+            demo_seeding=True,
             local_owner_token_file=None,
             test_identities={
                 OWNER: Identity("human:ana", "owner", D.PEOPLE[0]["email"]),

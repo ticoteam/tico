@@ -607,7 +607,7 @@ def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
     settings = store.settings
     # A demo's provider keys are made up (demo_sections/services.py): asking with them is a refused key or a timeout,
     # never an answer, and a seed that waits on either builds a different company from run to run.
-    if settings.rehearsal or settings.demo or over_spend_cap(c, settings, None, budget):
+    if settings.rehearsal or settings.demo or settings.demo_seeding or over_spend_cap(c, settings, None, budget):
         return None
     backup = fallback_engine(providers.load(c, settings))
     steps = live(primary, c, settings)

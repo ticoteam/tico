@@ -348,3 +348,11 @@ def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
             while at["parent_id"] and steps < 10:
                 at, steps = goals[at["parent_id"]], steps + 1
             assert at["id"] == company["id"], f"{goal['title']} rolls up to the company goal"
+
+
+def test_building_the_demo_makes_no_outbound_call(tmp_path):
+    """A demo build never reaches the network: its rule checks and replies run with no model, a fixed result, the same
+    on every machine. Any connection to another computer (a model's API, the Gateway) is refused and recorded."""
+    with demo.network_blocked() as attempts:
+        demo.build(tmp_path / "company", now=NOW)
+    assert attempts == [], f"the demo build tried to connect: {sorted(set(attempts))}"

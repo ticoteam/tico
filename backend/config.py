@@ -407,6 +407,9 @@ class Settings:
     # demo is one someone put on a non-loopback address on purpose; it is read-only.
     demo: bool = False
     demo_public: bool = False
+    # True only while the demo's seed (backend/demo_seed.py) talks to its own app as the owner: that app is not a demo
+    # (its writes need the owner), but it asks no decision model either, as a demo does (judge.server_engine).
+    demo_seeding: bool = False
     # TICO_REHEARSAL=1: a copy of real data run to see whether a migration works. Nothing runs on a timer and nothing
     # leaves the server: no scheduler, directory sync, backups, release check, usage count, support or HQ calls,
     # GitHub or Slack, telemetry or updater (docs/install.md, "Rehearse a migration"). Migrations run as usual.
