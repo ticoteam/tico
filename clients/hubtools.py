@@ -4248,8 +4248,7 @@ def _clean(fields):
 
 @tool(
     "hub_directory_self",
-    "Who we are in the Directory: our company, the places we operate in, and the obligations that bind us. "
-    "Every bot's base context carries it.",
+    "Who we are in the Directory: our company, the places we operate in, and the obligations that bind us.",
     {},
 )
 def directory_self(api, args):
@@ -4313,7 +4312,7 @@ def directory_get(api, args):
 
 @tool(
     "hub_directory_rules",
-    "The rules that apply to an entity, each with the path it comes by. Rules arrive in a later release, so none apply yet.",
+    "The rules that apply to an entity, each with the path it comes by.",
     {
         "ref": DIRECTORY_REF,
         "action": _s("What you would do, like email"),
@@ -13537,6 +13536,10 @@ COUNSEL_TOOLS = frozenset(
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
 ASSISTANT_HIDDEN = frozenset(
     {
+        # The Directory's schema and field history: a person's Assistant reads entities (get, find, rules, self).
+        "hub_directory_types",
+        "hub_directory_describe",
+        "hub_directory_history",
         "hub_credential_grant",
         "hub_credential_revoke",
         "hub_credential_delete",
