@@ -1047,7 +1047,44 @@ def check_move(
                 task=task_id,
             )
         return
-    scope = _forward_scope(conn, task_id, here, target)
+    _hold(conn, actor, task_id, pipeline_id, here, _forward_scope(conn, task_id, here, target), override, override_note)
+
+
+def is_completion(row: Row, effective: str | None) -> bool:
+    """Whether a write marks the ticket done now: a `done` status event, which ships it (_shipments)."""
+    return effective == "done" and row.get("status") != "done"
+
+
+def check_completion(
+    conn: sqlite3.Connection, actor: str, row: Row, override: bool = False, override_note: str | None = None
+) -> None:
+    """A ticket marked done where it stands (no move: it already sits in its Done stage, for instance after a Close put it
+    there, or its pipeline has no Done stage) is held to everything a finish is held to: its current stage and every stage
+    it visited and left, as check_move holds a forward move. Without this, Close into Done then `status=done` shipped work
+    whose approval was still waiting."""
+    task_id = str(row.get("id") or "")
+    now = _one(conn, "SELECT type_id, step_id FROM tasks WHERE id = ?", (task_id,)) if task_id else None
+    if now is None or not now["step_id"]:
+        return
+    here = stage(conn, str(now["step_id"]))
+    if here is None:
+        return
+    scope = _forward_scope(conn, task_id, here, None)
+    _hold(conn, actor, task_id, str(now["type_id"]), here, scope, override, override_note)
+
+
+def _hold(
+    conn: sqlite3.Connection,
+    actor: str,
+    task_id: str,
+    pipeline_id: str,
+    here: Row,
+    scope: dict[str, str | None],
+    override: bool,
+    override_note: str | None,
+) -> None:
+    """Refuse (rule "requirement") unless every requirement of `scope` is met, or a rule editor overrides the ones that
+    are not (never a protected approval)."""
     by_stage = _requirements(conn, _pipelines_of(conn, list(scope)) or [pipeline_id])
     if not any(by_stage.get(stage_id) for stage_id in scope):
         return  # the off switch: nothing this move is held to has requirements

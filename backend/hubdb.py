@@ -4782,6 +4782,9 @@ def _set_status(
     )
     if held_to and held_to != row.get("step_id"):
         pipeline_engine.check_forward(conn, actor, row, type_id, held_to)
+    elif row is not None and pipeline_engine.is_completion(row, effective):
+        # Marked done where it stands (already in its Done stage, or a pipeline with none): held all the same.
+        pipeline_engine.check_completion(conn, actor, row)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
@@ -7726,6 +7729,8 @@ def task_update(
             pipeline_engine.check_move(
                 conn, actor, {**row, "type_id": type_id}, held_to, override_requirements, override_note=note
             )
+        elif row and pipeline_engine.is_completion(row, effective):
+            pipeline_engine.check_completion(conn, actor, row, override_requirements, override_note=note)
 
         if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):
             from . import review_gate

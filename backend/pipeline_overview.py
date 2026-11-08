@@ -390,7 +390,7 @@ def _loops(c: "sqlite3.Connection", ordered: list[str], links: list[Row], seen: 
 def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str) -> dict[str, int]:
     """Per output stage: the cards that shipped into it in the period (a factory's done count). The candidates are the cards
     that entered the stage in the period, read from the step history, which every move writes, so a pipeline with no stage
-    requirements counts too. A candidate counts only when its shipment (pipeline_engine.shipped_at, the first time it
+    requirements counts too, and the cards of its pipeline marked done in the period (a status write moves no step). A candidate counts only when its shipment (pipeline_engine.shipped_at, the first time it
     shipped) is in the period: a card shipped last month, reopened and cancelled this week is not a done card this week, and
     a Close that lands an unfinished card in the output stage is not one either. A card that re-enters a stage counts once."""
     if not stages:
@@ -400,6 +400,16 @@ def _done(c: "sqlite3.Connection", stages: dict[str, str], seen: str, since: str
         "SELECT DISTINCT e.new AS sid, e.subject_id AS tid FROM history_events e "
         f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({_marks(list(stages.values()))}) "
         f"AND e.created_at>=? AND e.subject_id IN (SELECT id FROM tasks WHERE ({seen}))",
+        [*stages.values(), since],
+    )
+    # A card finished by `status=done` writes no step entry (booted Engineering's Done is closed, so it stays where it was),
+    # and it shipped all the same: its pipeline's output stage takes it as a candidate too.
+    rows += _rows(
+        c,
+        "SELECT DISTINCT s.id AS sid, e.subject_id AS tid FROM history_events e "
+        "JOIN tasks t ON t.id = e.subject_id JOIN task_steps s ON s.type_id = t.type_id "
+        f"WHERE e.subject_type='task' AND e.kind='status' AND e.new='done' AND s.id IN ({_marks(list(stages.values()))}) "
+        f"AND e.created_at>=? AND t.id IN (SELECT id FROM tasks WHERE ({seen}))",
         [*stages.values(), since],
     )
     shipments = pipeline_engine.shipped_at(c, sorted({str(r["tid"]) for r in rows}))
