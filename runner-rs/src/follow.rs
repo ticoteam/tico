@@ -1704,14 +1704,8 @@ scope['main'](sys.argv[1:])
             }
             let module = args.iter().position(|a| a == "-m").unwrap();
             assert_eq!(args[module + 1], "runner_support.release_update");
-            // Execute only origin/main's real parser, without starting an update or touching its status.
-            // A checkout without an origin/main ref (a release candidate's clone) reads the checkout's own parser instead.
-            let checkout_parser = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("runner_support/release_update.py");
-            // The launch arguments must parse with origin/main's updater parser where origin/main exists, and with the
-            // checkout's own parser where it does not (a release candidate's clone).
+            // Execute only origin/main's real parser, without starting an update or touching its status. A checkout without an
+            // origin/main ref (a release candidate's clone) reads the checkout's own parser instead.
             let checkout_parser = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
