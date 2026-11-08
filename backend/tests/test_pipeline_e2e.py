@@ -27,6 +27,7 @@ from backend import (
     pipeline_review,
     pipeline_rights,
     pipeline_setup,
+    task_allocator,
     task_relations as TR,
 )
 from backend.config import Settings
@@ -1011,6 +1012,80 @@ def test_the_spawned_ticket_is_owned_as_the_engineering_intake_pool_assigns_it(c
     (d41,) = subtasks(co, card)
     assert H.task(co.c, d41)["owner_id"] == "bot:eng"
     assert H.task(co.c, d41)["requester_id"] == BUILDER
+
+
+def test_a_spawn_with_no_free_pool_slot_goes_to_the_pool_not_the_manager(co):
+    """Spec A5: a manager change on Engineering does not move a Dev ticket away from the Engineering role holder. The
+    pool bot with no free slot still holds it; the pipeline's manager is not chosen while the stage has a pool."""
+    H.sync_registry(co.c, {"eng": {}}, None)
+    co.c.execute(
+        "UPDATE task_steps SET flow = ? WHERE id = ?",
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 0}}), co.stage("Engineering", "Todo")),
+    )
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    assert H.task(co.c, d41)["owner_id"] == "bot:eng"
+
+
+def test_a_spawn_with_no_pool_bot_available_goes_to_the_filer_not_the_manager(co):
+    """Spec A5: Engineering's only pool bot is still being set up (active, but onboarding, so the hub refuses it as an
+    owner), so no pool bot is available and no role holder resolves: the ticket is owned by its filer, never by the
+    pipeline's manager, which is on the roster here so that choosing it would show."""
+    H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute(
+        "INSERT INTO bot_config(bot, owner_id, onboarding_state) VALUES(?, ?, ?)", ("eng", "ana", "needs_setup")
+    )
+    co.c.commit()
+    assert not task_allocator._available(co.c, "eng")  # the precondition: no pool bot is available
+    co.c.execute(
+        "UPDATE task_steps SET flow = ? WHERE id = ?",
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Todo")),
+    )
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    owner = H.task(co.c, d41)["owner_id"]
+    assert owner != "bot:pipeline-manager"
+    assert owner == H.task(co.c, card)["owner_id"]
+
+
+def test_a_spawn_whose_pool_has_no_role_holder_on_the_roster_goes_to_the_filer_not_the_manager(co):
+    """Spec A5: with no available bot in Engineering's pool and none of its pool bots on the roster (archived), no role
+    holder resolves, so the ticket is owned by its filer, never by the pipeline's manager."""
+    H.sync_registry(co.c, {"eng": {"status": "archived"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute(
+        "UPDATE task_steps SET flow = ? WHERE id = ?",
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Todo")),
+    )
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    owner = H.task(co.c, d41)["owner_id"]
+    assert owner != "bot:pipeline-manager"
+    assert owner == H.task(co.c, card)["owner_id"]
+
+
+def test_a_spawn_on_a_stage_with_no_assign_rule_goes_to_the_filer_not_the_manager(co):
+    """Spec A5, as Engineering is set up in the Hub: its first stage (On Deck) has no assign rule, and its manager is
+    another bot on the roster. No role holder resolves (task_types.role holds a role key, and no stored record links a
+    bot to it), so the ticket is owned by its filer, never by the pipeline's manager."""
+    H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    owner = H.task(co.c, d41)["owner_id"]
+    assert owner != "bot:pipeline-manager"
+    assert owner == H.task(co.c, card)["owner_id"]
 
 
 def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):
