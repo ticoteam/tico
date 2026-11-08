@@ -590,11 +590,16 @@ def test_a_members_only_pipelines_stopped_task_names_it_to_no_one_outside_botops
     PM.tick(store, t0)
     PM.watchdog(store, t0 + timedelta(minutes=40))
     with store.read() as c:
-        [(tid, private)] = c.execute(
-            "SELECT id, private FROM tasks WHERE owner_id='bot:botops' AND title='Pipeline manager stopped: Legal'"
+        rows = c.execute(
+            "SELECT id, private, title, body FROM tasks WHERE owner_id='bot:botops' "
+            "AND title LIKE 'Pipeline manager stopped%' AND body LIKE ?",
+            (f"%{pid}%",),
         ).fetchall()
+        [(tid, private, title, body)] = rows
         assert private == 1
         assert H.task_private_readable(c, "bot:botops", H.task(c, tid))
+        # BotOps's managers read its private tasks: the text itself must not name the pipeline (r4 B3).
+        assert "Legal" not in title and "Legal" not in body and pid in body
     get(api, f"tasks/{tid}", "cara-test", expected=404)
     assert "Pipeline manager stopped: Legal" not in str(get(api, "tasks", "cara-test"))
     assert "Pipeline manager stopped: Legal" not in str(get(api, "history?limit=200", "cara-test"))

@@ -115,3 +115,19 @@ def test_a_new_hub_starts_with_its_product_and_engineering_pipelines(tmp_path):
     c.close()
     again = H.connect(str(tmp_path / "fresh.db"))  # a second start adds nothing
     assert again.execute("SELECT COUNT(*) FROM task_types WHERE role IS NOT NULL AND role<>''").fetchone()[0] == 2
+
+
+def test_a_hub_that_deleted_its_product_pipeline_does_not_get_it_back_on_restart(tmp_path):
+    """r4 follow-up: the first start was guessed from "no Product pipeline and no managed pipeline", so an existing hub
+    that had deleted Product and cleared its managers got both role pipelines back on every start. The migration's own
+    note is the evidence now, cleared once the hub has seeded."""
+    c = H.connect(str(tmp_path / "hub.db"))
+    assert c.execute("SELECT COUNT(*) FROM first_start_seeds").fetchone()[0] == 0
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    c.execute("UPDATE task_types SET manager=NULL")
+    c.execute("DELETE FROM task_steps WHERE type_id=?", (product,))
+    c.execute("DELETE FROM task_types WHERE id=?", (product,))
+    c.close()
+    again = H.connect(str(tmp_path / "hub.db"))
+    assert roadmap_flow.role_type(again, roadmap_flow.PRODUCT) is None
+    again.close()
