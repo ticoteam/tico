@@ -27,6 +27,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -74,6 +77,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "PENDING"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -121,6 +127,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -168,6 +177,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "FAILURE"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -212,6 +224,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -259,6 +274,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -289,7 +307,10 @@
          {
           "commit": {
            "committedDate": "2026-10-20T09:00:00Z",
-           "statusCheckRollup": null
+           "statusCheckRollup": null,
+           "checkSuites": {
+            "nodes": []
+           }
           }
          }
         ]
@@ -321,6 +342,9 @@
            "committedDate": "2026-10-30T09:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -349,6 +373,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -410,6 +437,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -457,6 +487,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -504,6 +537,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -551,6 +587,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -579,6 +618,9 @@
            "committedDate": "2026-11-08T10:00:00Z",
            "statusCheckRollup": {
             "state": "SUCCESS"
+           },
+           "checkSuites": {
+            "nodes": []
            }
           }
          }
@@ -605,6 +647,44 @@
           }
          }
         ]
+       }
+      },
+      {
+       "number": 2975,
+       "title": "Old commit pushed today",
+       "url": "https://github.com/ticoteam/tico/pull/2970",
+       "isDraft": false,
+       "baseRefName": "main",
+       "headRefOid": "abababababababababababababababababababab",
+       "mergeable": "MERGEABLE",
+       "isInMergeQueue": false,
+       "labels": {
+        "nodes": []
+       },
+       "commits": {
+        "nodes": [
+         {
+          "commit": {
+           "committedDate": "2026-10-01T09:00:00Z",
+           "statusCheckRollup": {
+            "state": "PENDING"
+           },
+           "checkSuites": {
+            "nodes": [
+             {
+              "createdAt": "2026-11-07T21:00:00Z"
+             },
+             {
+              "createdAt": "2026-11-07T20:00:00Z"
+             }
+            ]
+           }
+          }
+         }
+        ]
+       },
+       "timelineItems": {
+        "nodes": []
        }
       }
      ]

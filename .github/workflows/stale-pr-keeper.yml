@@ -2,13 +2,13 @@
 # - dropped by the merge queue for failed checks where every failure is a quarantined test (ci/quarantine/) or a crashed
 #   pytest-xdist worker: re-enqueued (`gh pr merge N`), at most once per head sha;
 # - dropped for any other failure: one comment per head sha naming the failing test;
-# - conflicting with main and its own checks not green: labelled needs-main-merge (removed once it merges cleanly).
+# - conflicting with main and its own checks red: labelled needs-main-merge (removed once it merges cleanly).
 # It closes nothing and never merges main into a branch. The run summary lists pull requests with no push in 7 days.
 # GitHub calls stay few (one rate limit covers everything): one GraphQL page per 50 open pull requests, and the queue
 # run, its jobs and its failed jobs' logs only for a pull request it has not commented on for its head yet.
-# The queue may not start a merge_group run for an entry the workflow's own GITHUB_TOKEN made (GitHub starts no workflow
-# for most events that token causes). Set the STALE_PR_KEEPER_TOKEN secret (a GitHub App or fine-grained token with
-# contents, pull requests and issues write) and the keeper uses it instead.
+# Enqueueing needs a GitHub App or personal token (GitHub refuses the workflow's own token for the merge queue): the
+# STALE_PR_KEEPER_TOKEN secret, with pull requests and contents write. Without it the keeper still comments and labels,
+# and a flake's comment says to re-enqueue by hand.
 name: Stale PR keeper
 
 on:
@@ -23,8 +23,8 @@ on:
         type: boolean
 
 permissions:
-  contents: write # gh pr merge (enqueue)
-  pull-requests: write # enqueue, comments and labels
+  contents: read
+  pull-requests: write # comments and labels
   issues: write # comments and labels through the issues API
   actions: read # queue runs, jobs and logs
 
@@ -45,7 +45,8 @@ jobs:
           python-version: '3.15'
       - name: Bring back pull requests the queue dropped for a flake
         env:
-          GH_TOKEN: ${{ secrets.STALE_PR_KEEPER_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_TOKEN: ${{ secrets.STALE_PR_KEEPER_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           set -o pipefail
