@@ -174,10 +174,12 @@ class Builder:
     def build(self):
         from .app import create_app
 
-        # The seed talks to its own app as the owner; the demo that people open has no such token.
+        # The seed talks to its own app as the owner; the demo that people open has no such token. It asks no decision
+        # model either (`demo_build`): the keys it saves are made up, and an answer would depend on the network.
         seeding = dataclasses.replace(
             self.settings,
             demo=False,
+            demo_build=True,
             demo_public=False,
             local_owner_token_file=None,
             test_identities={
